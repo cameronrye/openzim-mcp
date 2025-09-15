@@ -113,6 +113,61 @@ uv run pre-commit run --all-files
 - Include examples in docstrings where helpful
 - Update README.md for user-facing changes
 
+### Commit Messages
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) for automated versioning and changelog generation.
+
+#### Format
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+#### Types
+
+- **`feat:`** - New features (triggers minor version bump)
+- **`fix:`** - Bug fixes (triggers patch version bump)
+- **`perf:`** - Performance improvements (triggers patch version bump)
+- **`docs:`** - Documentation changes (no version bump)
+- **`style:`** - Code style changes (no version bump)
+- **`refactor:`** - Code refactoring (no version bump)
+- **`test:`** - Test changes (no version bump)
+- **`chore:`** - Maintenance tasks (no version bump)
+- **`ci:`** - CI/CD changes (no version bump)
+- **`build:`** - Build system changes (no version bump)
+
+#### Breaking Changes
+
+For breaking changes, use:
+- **`feat!:`** or **`fix!:`** with exclamation mark
+- Or include **`BREAKING CHANGE:`** in the footer
+
+#### Examples
+
+```bash
+feat: add search suggestions endpoint
+fix: resolve path traversal vulnerability
+feat!: change API response format
+docs: update installation instructions
+perf: optimize ZIM file caching
+test: add integration tests for new endpoint
+chore: update dependencies
+```
+
+#### Scope (Optional)
+
+You can add a scope to provide more context:
+
+```bash
+feat(api): add new search endpoint
+fix(security): resolve path traversal issue
+docs(readme): update installation guide
+```
+
 ## 🧪 Testing
 
 ### Test Categories

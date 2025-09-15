@@ -1100,13 +1100,54 @@ OpenZIM MCP provides built-in monitoring capabilities:
 
 ---
 
+## 🔄 Versioning
+
+This project uses [Semantic Versioning](https://semver.org/) with automated version management through [release-please](https://github.com/googleapis/release-please).
+
+### Automated Releases
+
+Version bumps and releases are automated based on [Conventional Commits](https://www.conventionalcommits.org/):
+
+- **`feat:`** - New features (minor version bump)
+- **`fix:`** - Bug fixes (patch version bump)
+- **`feat!:`** or **`BREAKING CHANGE:`** - Breaking changes (major version bump)
+- **`perf:`** - Performance improvements (patch version bump)
+- **`docs:`**, **`style:`**, **`refactor:`**, **`test:`**, **`chore:`** - No version bump
+
+### Release Process
+
+1. **Automatic**: Push commits with conventional commit messages to `main`
+2. **Release PR**: release-please creates a PR with version updates and changelog
+3. **Release**: Merge the release PR to automatically create a new release
+4. **Manual**: Use workflow dispatch for emergency releases
+
+### Commit Message Format
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+**Examples:**
+```bash
+feat: add search suggestions endpoint
+fix: resolve path traversal vulnerability
+feat!: change API response format
+docs: update installation instructions
+```
+
+---
+
 ## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
 4. Run tests (`make check`)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
+5. **Use conventional commit messages** (`git commit -m 'feat: add amazing feature'`)
 6. Push to the branch (`git push origin feature/amazing-feature`)
 7. Open a Pull Request
 
@@ -1116,6 +1157,7 @@ OpenZIM MCP provides built-in monitoring capabilities:
 - Add type hints to all functions
 - Write tests for new functionality
 - Update documentation as needed
+- **Use conventional commit messages** for automatic versioning
 - Ensure all tests pass before submitting
 
 ---

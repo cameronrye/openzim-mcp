@@ -1,0 +1,101 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "openzim-mcp",
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "### Added",
+          "hidden": false
+        },
+        {
+          "type": "fix",
+          "section": "### Fixed",
+          "hidden": false
+        },
+        {
+          "type": "perf",
+          "section": "### Performance",
+          "hidden": false
+        },
+        {
+          "type": "deps",
+          "section": "### Dependencies",
+          "hidden": false
+        },
+        {
+          "type": "revert",
+          "section": "### Reverted",
+          "hidden": false
+        },
+        {
+          "type": "docs",
+          "section": "### Documentation",
+          "hidden": false
+        },
+        {
+          "type": "style",
+          "section": "### Style",
+          "hidden": true
+        },
+        {
+          "type": "refactor",
+          "section": "### Refactored",
+          "hidden": false
+        },
+        {
+          "type": "test",
+          "section": "### Tests",
+          "hidden": true
+        },
+        {
+          "type": "build",
+          "section": "### Build System",
+          "hidden": true
+        },
+        {
+          "type": "ci",
+          "section": "### CI/CD",
+          "hidden": true
+        },
+        {
+          "type": "chore",
+          "section": "### Maintenance",
+          "hidden": true
+        }
+      ],
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "openzim_mcp/__init__.py",
+          "glob": false
+        }
+      ],
+      "version-file": "openzim_mcp/__init__.py",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": false,
+      "draft": false,
+      "prerelease": false,
+      "draft-pull-request": false,
+      "include-component-in-tag": false,
+      "include-v-in-tag": true,
+      "pull-request-title-pattern": "chore: release ${version}",
+      "pull-request-header": "🤖 **Automated Release**\n\nThis PR was created automatically by release-please based on conventional commits since the last release.\n\n**Changes included:**",
+      "separate-pull-requests": false,
+      "tag-separator": "-",
+      "skip-github-release": false,
+      "release-search-depth": 400,
+      "commit-search-depth": 500
+    }
+  },
+  "bootstrap-sha": "HEAD",
+  "last-release-sha": "HEAD",
+  "always-link-local": false,
+  "separate-pull-requests": false,
+  "group-pull-request-title-pattern": "chore: release ${version}",
+  "sequential-calls": false,
+  "release-search-depth": 400,
+  "commit-search-depth": 500
+}

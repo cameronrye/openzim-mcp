@@ -1,0 +1,96 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Type of release to create'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      pr: ${{ steps.release.outputs.pr }}
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          # Release type for Python packages
+          release-type: python
+          
+          # Configuration file location
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          
+          # Token for creating PRs and releases
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+          # Override release type if manually specified
+          release-as: ${{ github.event.inputs.release_type != 'auto' && github.event.inputs.release_type || '' }}
+
+  # Optional: Add a job to notify about release PR creation
+  notify-release-pr:
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: needs.release-please.outputs.pr && !needs.release-please.outputs.release_created
+    steps:
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = '${{ needs.release-please.outputs.pr }}'.split('/').pop();
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: `🤖 **Automated Release PR Created**
+              
+              This PR was automatically created by release-please based on conventional commits.
+              
+              **What this PR does:**
+              - Updates version numbers in all relevant files
+              - Updates CHANGELOG.md with new release notes
+              - Prepares for automated release when merged
+              
+              **To release:**
+              1. Review the changes in this PR
+              2. Merge this PR to automatically create a new release
+              
+              **To modify:**
+              - Edit the files directly in this PR if needed
+              - The release will use the final state when merged
+              
+              For more information, see the [versioning documentation](README.md#versioning).`
+            });
+
+  # Optional: Add a job to notify about successful release
+  notify-release-created:
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: needs.release-please.outputs.release_created
+    steps:
+      - name: Notify release created
+        run: |
+          echo "🎉 Release ${{ needs.release-please.outputs.tag_name }} created!"
+          echo "Version: ${{ needs.release-please.outputs.version }}"
+          echo "The existing release workflow will now handle building and publishing."
