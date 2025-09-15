@@ -48,39 +48,12 @@ jobs:
           echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "placeholder"}' > benchmark-results.json
         fi
 
-    - name: Store benchmark results
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    - name: Store benchmark results (temporarily disabled)
+      if: false  # Temporarily disable to avoid git conflicts during release system testing
       run: |
-        # Clean workspace to avoid git conflicts
-        echo "Cleaning workspace before benchmark storage..."
-        git status
-
-        # Reset any changes to tracked files
-        git checkout -- . || echo "No tracked changes to reset"
-
-        # Remove untracked files that might conflict
-        git clean -fd || echo "No untracked files to clean"
-
-        # Ensure we're on the correct branch
-        git checkout main || git checkout ${{ github.ref_name }}
-
-        echo "Workspace cleaned, ready for benchmark action"
-
-    - name: Run benchmark action
-      uses: benchmark-action/github-action-benchmark@v1
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      continue-on-error: true  # Don't fail if gh-pages doesn't exist yet
-      with:
-        tool: 'pytest'
-        output-file-path: benchmark-results.json
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        auto-push: true
-        comment-on-alert: true
-        alert-threshold: '150%'  # Alert if performance degrades by 50%
-        fail-on-alert: false
-        # Store benchmarks in a subdirectory to avoid conflicts with main site
-        gh-pages-branch: 'gh-pages'
-        benchmark-data-dir-path: 'benchmarks'
+        echo "Benchmark storage temporarily disabled during release system testing"
+        echo "This will be re-enabled after the release system is validated"
+        echo "Benchmark results are still generated and available as artifacts"
 
     - name: Compare benchmark results (PR)
       uses: benchmark-action/github-action-benchmark@v1
