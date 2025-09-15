@@ -90,7 +90,7 @@ body:
       placeholder: |
         - OS: [e.g., Ubuntu 22.04, Windows 11, macOS 14]
         - Python version: [e.g., 3.12.1]
-        - zimp version: [e.g., 0.2.0]
+        - openzim-mcp version: [e.g., 0.2.0]
         - Deployment context: [e.g., local development, production server]
 
   - type: textarea
@@ -107,4 +107,4 @@ body:
         
         **Remember:** For sensitive security vulnerabilities, please use private reporting channels as described in our [SECURITY.md](../../SECURITY.md) file.
         
-        Thank you for helping to keep zimp secure! 🔒
+        Thank you for helping to keep OpenZIM MCP secure! 🔒

@@ -1,8 +1,28 @@
 # OpenZIM MCP Server
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<!-- Build and Quality Badges -->
+[![CI](https://github.com/cameronrye/openzim-mcp/workflows/CI/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/cameronrye/openzim-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/cameronrye/openzim-mcp)
+[![CodeQL](https://github.com/cameronrye/openzim-mcp/workflows/CodeQL/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/codeql.yml)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=cameronrye_openzim-mcp&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=cameronrye_openzim-mcp)
+
+<!-- Package and Version Badges -->
+[![PyPI version](https://badge.fury.io/py/openzim-mcp.svg)](https://badge.fury.io/py/openzim-mcp)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/openzim-mcp)](https://pypi.org/project/openzim-mcp/)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/openzim-mcp)](https://pypi.org/project/openzim-mcp/)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/cameronrye/openzim-mcp)](https://github.com/cameronrye/openzim-mcp/releases)
+
+<!-- Code Quality and Standards -->
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Imports: isort](https://img.shields.io/badge/%20imports-isort-%231674b1?style=flat&labelColor=ef8336)](https://pycqa.github.io/isort/)
+[![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy-blue)](https://mypy-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+<!-- Community and Contribution -->
+[![GitHub issues](https://img.shields.io/github/issues/cameronrye/openzim-mcp)](https://github.com/cameronrye/openzim-mcp/issues)
+[![GitHub pull requests](https://img.shields.io/github/issues-pr/cameronrye/openzim-mcp)](https://github.com/cameronrye/openzim-mcp/pulls)
+[![GitHub contributors](https://img.shields.io/github/contributors/cameronrye/openzim-mcp)](https://github.com/cameronrye/openzim-mcp/graphs/contributors)
+[![GitHub stars](https://img.shields.io/github/stars/cameronrye/openzim-mcp?style=social)](https://github.com/cameronrye/openzim-mcp/stargazers)
 
 ## 🧠 Built for LLM Intelligence
 

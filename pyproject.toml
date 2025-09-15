@@ -51,13 +51,13 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/cameronrye/zimp"
-Repository = "https://github.com/cameronrye/zimp.git"
-Issues = "https://github.com/cameronrye/zimp/issues"
-Changelog = "https://github.com/cameronrye/zimp/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/cameronrye/zimp#readme"
-"Security Policy" = "https://github.com/cameronrye/zimp/blob/main/SECURITY.md"
-"Contributing" = "https://github.com/cameronrye/zimp/blob/main/CONTRIBUTING.md"
+Homepage = "https://github.com/cameronrye/openzim-mcp"
+Repository = "https://github.com/cameronrye/openzim-mcp.git"
+Issues = "https://github.com/cameronrye/openzim-mcp/issues"
+Changelog = "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/cameronrye/openzim-mcp#readme"
+"Security Policy" = "https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md"
+"Contributing" = "https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md"
 
 [project.scripts]
 openzim-mcp = "openzim_mcp.__main__:main"

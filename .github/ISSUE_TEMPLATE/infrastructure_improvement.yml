@@ -1,0 +1,218 @@
+name: 🏗️ Infrastructure Improvement
+description: Suggest improvements to project infrastructure, CI/CD, or development tools
+title: "[INFRA] "
+labels: ["infrastructure", "enhancement"]
+assignees:
+  - cameronrye
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an infrastructure improvement! 🏗️
+        
+        This template is for improvements to:
+        - CI/CD workflows and automation
+        - Development tools and processes
+        - Repository configuration
+        - Documentation infrastructure
+        - Security and compliance tools
+        - Performance monitoring
+        - Community management tools
+
+  - type: textarea
+    id: improvement-description
+    attributes:
+      label: Infrastructure Improvement Description
+      description: Describe the infrastructure improvement you're suggesting
+      placeholder: |
+        Example: Add automated dependency vulnerability scanning with Snyk integration
+        
+        Provide a clear description of:
+        - What infrastructure component needs improvement
+        - Why this improvement is needed
+        - How it would benefit the project
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: What type of infrastructure improvement is this?
+      options:
+        - CI/CD Workflows
+        - Security and Compliance
+        - Development Tools
+        - Documentation Infrastructure
+        - Performance Monitoring
+        - Community Management
+        - Repository Configuration
+        - Dependency Management
+        - Testing Infrastructure
+        - Release Management
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority Level
+      description: How important is this improvement?
+      options:
+        - Low - Nice to have enhancement
+        - Medium - Would improve developer experience
+        - High - Important for project quality
+        - Critical - Security or compliance requirement
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-state
+    attributes:
+      label: Current State
+      description: Describe the current state of the infrastructure component
+      placeholder: |
+        Example: Currently using basic dependency scanning with Dependabot only
+        
+        Describe:
+        - What currently exists (if anything)
+        - What limitations or issues exist
+        - Why the current approach is insufficient
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: Describe your proposed solution in detail
+      placeholder: |
+        Example: Integrate Snyk for advanced vulnerability scanning
+        
+        Include:
+        - Specific tools or approaches to implement
+        - Configuration details if known
+        - Integration points with existing infrastructure
+        - Expected outcomes and benefits
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation-plan
+    attributes:
+      label: Implementation Plan
+      description: Outline the steps needed to implement this improvement
+      placeholder: |
+        Example implementation steps:
+        1. Research and evaluate Snyk integration options
+        2. Create Snyk account and configure repository
+        3. Add Snyk workflow to GitHub Actions
+        4. Configure security policies and thresholds
+        5. Update documentation and README badges
+        6. Test integration with sample vulnerabilities
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Solutions
+      description: Are there alternative approaches to consider?
+      placeholder: |
+        Example alternatives:
+        - Use GitHub's built-in dependency scanning
+        - Integrate with SonarCloud for security analysis
+        - Use CodeQL for additional security scanning
+        
+        List any alternative solutions you've considered and why you prefer your proposed approach.
+    validations:
+      required: false
+
+  - type: textarea
+    id: impact-assessment
+    attributes:
+      label: Impact Assessment
+      description: What impact will this improvement have?
+      placeholder: |
+        Consider impact on:
+        - Developer workflow and experience
+        - CI/CD pipeline performance
+        - Project security posture
+        - Community contribution process
+        - Maintenance overhead
+        - Cost implications (if any)
+    validations:
+      required: true
+
+  - type: textarea
+    id: success-criteria
+    attributes:
+      label: Success Criteria
+      description: How will we know this improvement is successful?
+      placeholder: |
+        Example success criteria:
+        - Vulnerability detection time reduced by 50%
+        - Zero false positives in security scanning
+        - Integration completes within existing CI time limits
+        - Documentation updated with new badges and processes
+        
+        Define measurable criteria for success.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: compatibility
+    attributes:
+      label: Compatibility Considerations
+      description: Check all that apply to your proposed improvement
+      options:
+        - label: Compatible with existing CI/CD workflows
+        - label: Maintains current development workflow
+        - label: No breaking changes to existing processes
+        - label: Backward compatible with current tooling
+        - label: Supports all target platforms (Linux, Windows, macOS)
+        - label: Works with all supported Python versions (3.12, 3.13)
+
+  - type: textarea
+    id: resources-required
+    attributes:
+      label: Resources Required
+      description: What resources are needed to implement this improvement?
+      placeholder: |
+        Consider:
+        - Time investment for implementation
+        - External service accounts or subscriptions
+        - Additional GitHub Actions minutes
+        - Documentation updates required
+        - Testing and validation effort
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other relevant information
+      placeholder: |
+        Add any additional context, links to relevant documentation, examples from other projects, or other information that would help evaluate this improvement.
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        
+        **Thank you for helping improve OpenZIM MCP's infrastructure!** 🚀
+        
+        Your suggestion will be reviewed and prioritized based on:
+        - Impact on project quality and security
+        - Implementation complexity and maintenance overhead
+        - Alignment with project goals and roadmap
+        - Community benefit and developer experience
+        
+        We appreciate your contribution to making OpenZIM MCP a best-in-class open source project!
