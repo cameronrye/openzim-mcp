@@ -1,0 +1,117 @@
+name: Deploy Website
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'website/**'
+      - '.github/workflows/deploy-website.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Build website
+        run: |
+          # Create build directory
+          mkdir -p _site
+          
+          # Copy website files
+          cp -r website/* _site/
+          
+          # Create a simple build info file
+          echo "Built on: $(date)" > _site/build-info.txt
+          echo "Commit: ${{ github.sha }}" >> _site/build-info.txt
+          echo "Branch: ${{ github.ref_name }}" >> _site/build-info.txt
+          
+          # Validate HTML (basic check)
+          if command -v tidy &> /dev/null; then
+            echo "Validating HTML..."
+            tidy -q -e _site/index.html || echo "HTML validation warnings (non-critical)"
+          fi
+          
+          # List built files for debugging
+          echo "Built files:"
+          find _site -type f -name "*.html" -o -name "*.css" -o -name "*.js" -o -name "*.svg" | head -20
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # Optional: Update benchmark results page to include link to main site
+  update-benchmark-integration:
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: success()
+    steps:
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add navigation to benchmark page
+        run: |
+          # Check if there's a benchmark index.html and add navigation
+          if [ -f "index.html" ] && grep -q "benchmark" "index.html"; then
+            echo "Adding navigation link to main site in benchmark page..."
+            
+            # Create a simple navigation header if it doesn't exist
+            if ! grep -q "main-site-nav" "index.html"; then
+              # Add navigation at the top of the body
+              sed -i '/<body[^>]*>/a\
+              <div id="main-site-nav" style="background: #2563eb; color: white; padding: 10px; text-align: center; margin-bottom: 20px;">\
+                <a href="/" style="color: white; text-decoration: none; font-weight: bold;">← Back to OpenZIM MCP Main Site</a>\
+              </div>' "index.html"
+              
+              echo "Navigation added to benchmark page"
+            else
+              echo "Navigation already exists in benchmark page"
+            fi
+          else
+            echo "No benchmark page found or not a benchmark page"
+          fi
+
+      - name: Commit changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add .
+            git commit -m "Add navigation link to main site in benchmark page"
+            git push
+            echo "Changes committed and pushed"
+          fi

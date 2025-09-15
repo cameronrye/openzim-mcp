@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenZIM MCP - Intelligent Knowledge Access for AI Models</title>
+    <meta name="description" content="OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns.">
+    <meta name="keywords" content="OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia">
+    <meta name="author" content="OpenZIM MCP Development Team">
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://cameronrye.github.io/openzim-mcp/">
+    <meta property="og:title" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
+    <meta property="og:description" content="Transform static ZIM archives into dynamic knowledge engines for Large Language Models with intelligent, structured access patterns.">
+    <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://cameronrye.github.io/openzim-mcp/">
+    <meta property="twitter:title" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
+    <meta property="twitter:description" content="Transform static ZIM archives into dynamic knowledge engines for Large Language Models with intelligent, structured access patterns.">
+    <meta property="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+    <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="assets/styles.css">
+    
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "OpenZIM MCP",
+        "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline",
+        "url": "https://cameronrye.github.io/openzim-mcp/",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Cross-platform",
+        "programmingLanguage": "Python",
+        "license": "https://opensource.org/licenses/MIT",
+        "author": {
+            "@type": "Organization",
+            "name": "OpenZIM MCP Development Team"
+        },
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+        }
+    }
+    </script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <span class="logo-icon">🧠</span>
+                <span class="logo-text">OpenZIM MCP</span>
+            </div>
+            <div class="nav-menu" id="nav-menu">
+                <a href="#home" class="nav-link">Home</a>
+                <a href="#features" class="nav-link">Features</a>
+                <a href="#installation" class="nav-link">Installation</a>
+                <a href="#usage" class="nav-link">Usage</a>
+                <a href="#documentation" class="nav-link">Documentation</a>
+                <a href="https://github.com/cameronrye/openzim-mcp" class="nav-link nav-link-github" target="_blank">
+                    <span class="github-icon">⭐</span> GitHub
+                </a>
+            </div>
+            <div class="nav-toggle" id="nav-toggle">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section id="home" class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <div class="hero-badge">
+                    <span class="badge-icon">🚀</span>
+                    <span>Built for LLM Intelligence</span>
+                </div>
+                <h1 class="hero-title">
+                    Transform Static ZIM Archives into 
+                    <span class="gradient-text">Dynamic Knowledge Engines</span>
+                </h1>
+                <p class="hero-description">
+                    OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search 
+                    ZIM format knowledge bases offline with intelligent, structured access patterns.
+                </p>
+                <div class="hero-buttons">
+                    <a href="#installation" class="btn btn-primary">
+                        <span class="btn-icon">⚡</span>
+                        Get Started
+                    </a>
+                    <a href="https://github.com/cameronrye/openzim-mcp" class="btn btn-secondary" target="_blank">
+                        <span class="btn-icon">📖</span>
+                        View on GitHub
+                    </a>
+                </div>
+                <div class="hero-stats">
+                    <div class="stat">
+                        <div class="stat-number">90%+</div>
+                        <div class="stat-label">Test Coverage</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-number">🔒</div>
+                        <div class="stat-label">Security First</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-number">⚡</div>
+                        <div class="stat-label">High Performance</div>
+                    </div>
+                </div>
+            </div>
+            <div class="hero-visual">
+                <div class="code-window">
+                    <div class="code-header">
+                        <div class="code-dots">
+                            <span class="dot red"></span>
+                            <span class="dot yellow"></span>
+                            <span class="dot green"></span>
+                        </div>
+                        <div class="code-title">MCP Configuration</div>
+                    </div>
+                    <div class="code-content">
+                        <pre><code>{
+  "openzim-mcp": {
+    "command": "uv",
+    "args": [
+      "--directory", "/path/to/openzim-mcp",
+      "run", "python", "-m", "openzim_mcp",
+      "/path/to/zim/files"
+    ]
+  }
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="features">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Why LLMs Love OpenZIM MCP</h2>
+                <p class="section-description">
+                    Unlike basic file readers, OpenZIM MCP provides intelligent, structured access 
+                    that LLMs need to effectively navigate and understand vast knowledge repositories.
+                </p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🧭</div>
+                    <h3 class="feature-title">Smart Navigation</h3>
+                    <p class="feature-description">
+                        Browse by namespace (articles, metadata, media) instead of blind searching. 
+                        Get structured access to content organization.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔍</div>
+                    <h3 class="feature-title">Context-Aware Discovery</h3>
+                    <p class="feature-description">
+                        Get article structure, relationships, and metadata for deeper understanding. 
+                        Extract links and content connections.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3 class="feature-title">Intelligent Search</h3>
+                    <p class="feature-description">
+                        Advanced filtering, auto-complete suggestions, and relevance-ranked results 
+                        with namespace and content type filters.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3 class="feature-title">Performance Optimized</h3>
+                    <p class="feature-description">
+                        Cached operations and pagination prevent timeouts on massive archives. 
+                        Intelligent caching with TTL management.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔗</div>
+                    <h3 class="feature-title">Relationship Mapping</h3>
+                    <p class="feature-description">
+                        Extract internal/external links to understand content connections. 
+                        Build knowledge graphs from ZIM content.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔒</div>
+                    <h3 class="feature-title">Security First</h3>
+                    <p class="feature-description">
+                        Comprehensive input validation, path traversal protection, and secure 
+                        resource management with type safety.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Installation Section -->
+    <section id="installation" class="installation">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Quick Installation</h2>
+                <p class="section-description">
+                    Get up and running with OpenZIM MCP in just a few minutes.
+                </p>
+            </div>
+            <div class="installation-steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3 class="step-title">Clone & Install</h3>
+                        <div class="code-block">
+                            <button class="copy-btn" data-clipboard-target="#install-code">
+                                <span class="copy-icon">📋</span>
+                            </button>
+                            <pre><code id="install-code"># Clone the repository
+git clone https://github.com/cameronrye/openzim-mcp.git
+cd openzim-mcp
+
+# Install dependencies
+uv sync</code></pre>
+                        </div>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3 class="step-title">Prepare ZIM Files</h3>
+                        <div class="code-block">
+                            <button class="copy-btn" data-clipboard-target="#zim-code">
+                                <span class="copy-icon">📋</span>
+                            </button>
+                            <pre><code id="zim-code"># Create directory for ZIM files
+mkdir ~/zim-files
+
+# Download ZIM files from Kiwix Library
+# https://browse.library.kiwix.org/</code></pre>
+                        </div>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3 class="step-title">Run the Server</h3>
+                        <div class="code-block">
+                            <button class="copy-btn" data-clipboard-target="#run-code">
+                                <span class="copy-icon">📋</span>
+                            </button>
+                            <pre><code id="run-code"># Start the MCP server
+uv run python -m openzim_mcp /path/to/zim/files
+
+# Or using make
+make run ZIM_DIR=/path/to/zim/files</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Usage Examples Section -->
+    <section id="usage" class="usage">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Usage Examples</h2>
+                <p class="section-description">
+                    See OpenZIM MCP in action with real-world examples and API calls.
+                </p>
+            </div>
+            <div class="usage-tabs">
+                <div class="tab-buttons">
+                    <button class="tab-btn active" data-tab="search">Search Content</button>
+                    <button class="tab-btn" data-tab="browse">Browse Namespaces</button>
+                    <button class="tab-btn" data-tab="structure">Article Structure</button>
+                    <button class="tab-btn" data-tab="config">MCP Config</button>
+                </div>
+                <div class="tab-content">
+                    <div class="tab-pane active" id="search">
+                        <div class="example-block">
+                            <h4>Search ZIM Files</h4>
+                            <div class="code-block">
+                                <button class="copy-btn" data-clipboard-target="#search-example">
+                                    <span class="copy-icon">📋</span>
+                                </button>
+                                <pre><code id="search-example">{
+  "name": "search_zim_file",
+  "arguments": {
+    "zim_file_path": "wikipedia_en_100_2025-08.zim",
+    "query": "artificial intelligence",
+    "limit": 5
+  }
+}</code></pre>
+                            </div>
+                            <div class="example-result">
+                                <h5>Response:</h5>
+                                <pre><code>Found 42 matches for "artificial intelligence", showing 1-5:
+
+## 1. Artificial Intelligence
+Path: Artificial_intelligence
+Snippet: Artificial intelligence (AI) is intelligence demonstrated by machines...
+
+## 2. Machine Learning  
+Path: Machine_learning
+Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Documentation Section -->
+    <section id="documentation" class="documentation">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Documentation & Resources</h2>
+                <p class="section-description">
+                    Comprehensive guides, API references, and community resources to help you get the most out of OpenZIM MCP.
+                </p>
+            </div>
+            <div class="docs-grid">
+                <div class="doc-card">
+                    <div class="doc-icon">📚</div>
+                    <h3 class="doc-title">API Reference</h3>
+                    <p class="doc-description">
+                        Complete documentation of all available MCP tools, parameters, and response formats.
+                    </p>
+                    <a href="https://github.com/cameronrye/openzim-mcp#-api-reference" class="doc-link" target="_blank">
+                        View API Docs →
+                    </a>
+                </div>
+                <div class="doc-card">
+                    <div class="doc-icon">🚀</div>
+                    <h3 class="doc-title">Quick Start Guide</h3>
+                    <p class="doc-description">
+                        Step-by-step tutorial to get OpenZIM MCP running in your environment quickly.
+                    </p>
+                    <a href="https://github.com/cameronrye/openzim-mcp/wiki/Quick-Start-Tutorial" class="doc-link" target="_blank">
+                        Start Tutorial →
+                    </a>
+                </div>
+                <div class="doc-card">
+                    <div class="doc-icon">⚙️</div>
+                    <h3 class="doc-title">Configuration Guide</h3>
+                    <p class="doc-description">
+                        Advanced configuration options, environment variables, and performance tuning.
+                    </p>
+                    <a href="https://github.com/cameronrye/openzim-mcp/wiki/Configuration-Guide" class="doc-link" target="_blank">
+                        Configure →
+                    </a>
+                </div>
+                <div class="doc-card">
+                    <div class="doc-icon">🔧</div>
+                    <h3 class="doc-title">Troubleshooting</h3>
+                    <p class="doc-description">
+                        Common issues, solutions, and debugging tips for OpenZIM MCP deployment.
+                    </p>
+                    <a href="https://github.com/cameronrye/openzim-mcp/wiki/Troubleshooting-Guide" class="doc-link" target="_blank">
+                        Get Help →
+                    </a>
+                </div>
+                <div class="doc-card">
+                    <div class="doc-icon">🏗️</div>
+                    <h3 class="doc-title">Architecture Overview</h3>
+                    <p class="doc-description">
+                        Deep dive into the system architecture, components, and design decisions.
+                    </p>
+                    <a href="https://github.com/cameronrye/openzim-mcp/wiki/Architecture-Overview" class="doc-link" target="_blank">
+                        Learn More →
+                    </a>
+                </div>
+                <div class="doc-card">
+                    <div class="doc-icon">🤝</div>
+                    <h3 class="doc-title">Contributing</h3>
+                    <p class="doc-description">
+                        Guidelines for contributing code, reporting issues, and joining the community.
+                    </p>
+                    <a href="https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md" class="doc-link" target="_blank">
+                        Contribute →
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <div class="footer-logo">
+                        <span class="logo-icon">🧠</span>
+                        <span class="logo-text">OpenZIM MCP</span>
+                    </div>
+                    <p class="footer-description">
+                        Transform static ZIM archives into dynamic knowledge engines for AI models.
+                    </p>
+                </div>
+                <div class="footer-section">
+                    <h4 class="footer-title">Resources</h4>
+                    <ul class="footer-links">
+                        <li><a href="https://github.com/cameronrye/openzim-mcp">GitHub Repository</a></li>
+                        <li><a href="https://github.com/cameronrye/openzim-mcp/wiki">Documentation</a></li>
+                        <li><a href="https://github.com/cameronrye/openzim-mcp/issues">Issues</a></li>
+                        <li><a href="https://github.com/cameronrye/openzim-mcp/releases">Releases</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4 class="footer-title">Community</h4>
+                    <ul class="footer-links">
+                        <li><a href="https://modelcontextprotocol.io/">Model Context Protocol</a></li>
+                        <li><a href="https://openzim.org/">OpenZIM Project</a></li>
+                        <li><a href="https://www.kiwix.org/">Kiwix</a></li>
+                        <li><a href="https://browse.library.kiwix.org/">ZIM Library</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4 class="footer-title">License</h4>
+                    <p class="footer-license">
+                        Released under the <a href="https://opensource.org/licenses/MIT">MIT License</a>
+                    </p>
+                    <div class="footer-badges">
+                        <img src="https://img.shields.io/badge/python-3.12+-blue.svg" alt="Python 3.12+">
+                        <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 OpenZIM MCP Development Team. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="assets/script.js"></script>
+</body>
+</html>
