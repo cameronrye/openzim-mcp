@@ -3,7 +3,7 @@
 <!-- Build and Quality Badges -->
 [![CI](https://github.com/cameronrye/openzim-mcp/workflows/CI/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/cameronrye/openzim-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/cameronrye/openzim-mcp)
-[![CodeQL](https://github.com/cameronrye/openzim-mcp/workflows/CodeQL/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/codeql.yml)
+[![CodeQL](https://github.com/cameronrye/openzim-mcp/workflows/CodeQL%20Security%20Analysis/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/codeql.yml)
 [![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=cameronrye_openzim-mcp&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=cameronrye_openzim-mcp)
 
 <!-- Package and Version Badges -->
