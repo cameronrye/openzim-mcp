@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v0.3.0)'
+        description: 'Tag to release (e.g., v0.3.0) - IMPORTANT: This workflow should be triggered from the tag ref, not main branch'
         required: true
         type: string
 
@@ -79,10 +79,26 @@ jobs:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     needs: build
+    # Only run PyPI deployment when triggered by tag push or when workflow_dispatch provides a valid tag
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.tag, 'v'))
     environment:
       name: pypi
       url: https://pypi.org/p/openzim-mcp
     steps:
+    - name: Validate deployment context
+      run: |
+        echo "Event: ${{ github.event_name }}"
+        echo "Ref: ${{ github.ref }}"
+        echo "Head branch: ${{ github.head_ref || github.ref_name }}"
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          echo "Tag input: ${{ github.event.inputs.tag }}"
+          # Ensure the tag input is provided and starts with 'v'
+          if [[ ! "${{ github.event.inputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
+            echo "Error: Invalid tag format. Expected format: v1.2.3"
+            exit 1
+          fi
+        fi
+
     - name: Download build artifacts
       uses: actions/download-artifact@v4
       with:

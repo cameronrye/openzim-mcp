@@ -1,0 +1,94 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create and release (e.g., v0.3.2)'
+        required: true
+        type: string
+      create_tag:
+        description: 'Create the tag if it does not exist'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write  # Required for trusted publishing to PyPI
+
+jobs:
+  validate-and-tag:
+    name: Validate and Create Tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag_exists: ${{ steps.check-tag.outputs.exists }}
+      tag_name: ${{ github.event.inputs.tag }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Validate tag format
+      run: |
+        if [[ ! "${{ github.event.inputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
+          echo "Error: Invalid tag format. Expected format: v1.2.3"
+          exit 1
+        fi
+
+    - name: Check if tag exists
+      id: check-tag
+      run: |
+        if git rev-parse "${{ github.event.inputs.tag }}" >/dev/null 2>&1; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+          echo "Tag ${{ github.event.inputs.tag }} already exists"
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+          echo "Tag ${{ github.event.inputs.tag }} does not exist"
+        fi
+
+    - name: Create tag if requested
+      if: steps.check-tag.outputs.exists == 'false' && github.event.inputs.create_tag == 'true'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "${{ github.event.inputs.tag }}" -m "Release ${{ github.event.inputs.tag }}"
+        git push origin "${{ github.event.inputs.tag }}"
+        echo "Created and pushed tag ${{ github.event.inputs.tag }}"
+
+    - name: Fail if tag doesn't exist and creation not requested
+      if: steps.check-tag.outputs.exists == 'false' && github.event.inputs.create_tag == 'false'
+      run: |
+        echo "Error: Tag ${{ github.event.inputs.tag }} does not exist and create_tag is false"
+        echo "Either:"
+        echo "1. Set create_tag to true to create the tag, or"
+        echo "2. Create the tag manually first, or"
+        echo "3. Use an existing tag"
+        exit 1
+
+  trigger-release:
+    name: Trigger Release Workflow
+    runs-on: ubuntu-latest
+    needs: validate-and-tag
+    if: needs.validate-and-tag.outputs.tag_exists == 'true' || github.event.inputs.create_tag == 'true'
+    steps:
+    - name: Wait for tag to be available
+      if: github.event.inputs.create_tag == 'true'
+      run: sleep 10
+
+    - name: Trigger release workflow
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const response = await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'release.yml',
+            ref: '${{ needs.validate-and-tag.outputs.tag_name }}',
+            inputs: {
+              tag: '${{ needs.validate-and-tag.outputs.tag_name }}'
+            }
+          });
+          
+          console.log('Triggered release workflow for tag ${{ needs.validate-and-tag.outputs.tag_name }}');
+          console.log('Response:', response.status);
