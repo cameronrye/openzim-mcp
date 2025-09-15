@@ -115,7 +115,6 @@ jobs:
         fi
         # Clean any untracked files that might cause conflicts
         git clean -fd
-
     - name: Compare benchmark results (PR)
       uses: benchmark-action/github-action-benchmark@v1
       if: github.event_name == 'pull_request' && hashFiles('benchmark-results.json') != ''
