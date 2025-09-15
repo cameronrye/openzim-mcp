@@ -41,12 +41,33 @@ jobs:
 
     - name: Run performance benchmarks
       run: |
+        echo "🔍 Searching for benchmark tests..."
+        BENCHMARK_TESTS=$(uv run pytest --collect-only -k "benchmark" tests/ 2>/dev/null | grep -c "test session starts" || echo "0")
+        echo "Found benchmark test sessions: $BENCHMARK_TESTS"
+
         # Run benchmarks and save results
-        uv run pytest tests/ -k "benchmark" --benchmark-json=benchmark-results.json --benchmark-only || true
-        
-        # If no benchmark tests exist yet, create a placeholder
-        if [ ! -f benchmark-results.json ]; then
-          echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "placeholder"}' > benchmark-results.json
+        echo "🚀 Running performance benchmarks..."
+        if uv run pytest tests/ -k "benchmark" --benchmark-json=benchmark-results.json --benchmark-only; then
+          echo "✅ Benchmarks completed successfully"
+        else
+          echo "⚠️ Benchmark execution completed with warnings or no tests found"
+        fi
+
+        # Verify and create benchmark results file
+        if [ -f benchmark-results.json ] && [ -s benchmark-results.json ]; then
+          echo "✅ benchmark-results.json created successfully"
+          echo "File size: $(stat -c%s benchmark-results.json) bytes"
+        else
+          echo "📝 Creating placeholder benchmark results file..."
+          echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "no-benchmark-tests", "machine_info": {"node": "github-actions", "processor": "unknown"}}' > benchmark-results.json
+        fi
+
+        # Validate JSON format
+        if uv run python -c "import json; json.load(open('benchmark-results.json'))"; then
+          echo "✅ benchmark-results.json is valid JSON"
+        else
+          echo "❌ Invalid JSON detected, recreating file..."
+          echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "invalid-json-fallback"}' > benchmark-results.json
         fi
 
     - name: Store benchmark results (temporarily disabled)
@@ -55,6 +76,21 @@ jobs:
         echo "Benchmark storage temporarily disabled during release system testing"
         echo "This will be re-enabled after the release system is validated"
         echo "Benchmark results are still generated and available as artifacts"
+
+    - name: Verify benchmark results file
+      if: github.event_name == 'pull_request'
+      run: |
+        echo "Checking for benchmark results file..."
+        if [ -f benchmark-results.json ]; then
+          echo "✅ benchmark-results.json found"
+          echo "File size: $(stat -c%s benchmark-results.json) bytes"
+          echo "File contents preview:"
+          head -n 5 benchmark-results.json
+        else
+          echo "❌ benchmark-results.json not found"
+          echo "Creating minimal benchmark file for comparison..."
+          echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "no-benchmarks"}' > benchmark-results.json
+        fi
 
     - name: Clean up local changes before benchmark comparison
       if: github.event_name == 'pull_request'
@@ -71,7 +107,7 @@ jobs:
 
     - name: Compare benchmark results (PR)
       uses: benchmark-action/github-action-benchmark@v1
-      if: github.event_name == 'pull_request'
+      if: github.event_name == 'pull_request' && hashFiles('benchmark-results.json') != ''
       with:
         tool: 'pytest'
         output-file-path: benchmark-results.json
