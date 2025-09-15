@@ -32,7 +32,8 @@ jobs:
     - name: Install dependencies
       run: |
         uv sync --frozen  # Use frozen lockfile to prevent modifications
-        uv run pip install pytest-benchmark
+        # Install pytest-benchmark in isolated environment to avoid lock file changes
+        uv run --isolated pip install pytest-benchmark
 
     - name: Download ZIM test data
       run: |
@@ -55,6 +56,19 @@ jobs:
         echo "This will be re-enabled after the release system is validated"
         echo "Benchmark results are still generated and available as artifacts"
 
+    - name: Clean up local changes before benchmark comparison
+      if: github.event_name == 'pull_request'
+      run: |
+        # Stash any local changes to avoid conflicts with benchmark action
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        if ! git diff --quiet; then
+          echo "Stashing local changes to avoid git conflicts"
+          git stash push -m "Temporary stash for benchmark comparison"
+        fi
+        # Clean any untracked files that might cause conflicts
+        git clean -fd
+
     - name: Compare benchmark results (PR)
       uses: benchmark-action/github-action-benchmark@v1
       if: github.event_name == 'pull_request'
@@ -65,6 +79,8 @@ jobs:
         comment-on-alert: true
         alert-threshold: '150%'
         fail-on-alert: false
+        # Disable auto-push to avoid gh-pages conflicts
+        auto-push: false
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@v4
@@ -91,7 +107,8 @@ jobs:
     - name: Install dependencies
       run: |
         uv sync --frozen  # Use frozen lockfile to prevent modifications
-        uv run pip install memory-profiler psutil
+        # Install profiling tools in isolated environment to avoid lock file changes
+        uv run --isolated pip install memory-profiler psutil
 
     - name: Download ZIM test data
       run: |
