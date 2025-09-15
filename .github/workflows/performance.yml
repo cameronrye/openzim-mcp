@@ -17,7 +17,7 @@ jobs:
       pull-requests: write  # For commenting on PRs
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         fetch-depth: 0  # Fetch full history for comparison
 
@@ -78,7 +78,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Install uv
       uses: astral-sh/setup-uv@v4
