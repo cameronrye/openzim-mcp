@@ -146,8 +146,7 @@
   "openzim-mcp": {
     "command": "uv",
     "args": [
-      "--directory", "/path/to/openzim-mcp",
-      "run", "python", "-m", "openzim_mcp",
+      "run", "openzim-mcp",
       "/path/to/zim/files"
     ]
   }
@@ -509,13 +508,16 @@ make build && make publish</code></pre>
                 <div class="step">
                     <div class="step-number">1</div>
                     <div class="step-content">
-                        <h3 class="step-title">Install from PyPI</h3>
+                        <h3 class="step-title">Install with uv</h3>
                         <div class="code-block">
                             <button class="copy-btn" data-clipboard-target="#install-code">
                                 <span class="copy-icon">📋</span>
                             </button>
-                            <pre><code id="install-code"># Install OpenZIM MCP from PyPI (recommended)
-pip install openzim-mcp</code></pre>
+                            <pre><code id="install-code"># Install OpenZIM MCP with uv (recommended)
+uv add openzim-mcp
+
+# Or install globally with uv
+uv tool install openzim-mcp</code></pre>
                         </div>
                     </div>
                 </div>
@@ -544,6 +546,9 @@ mkdir ~/zim-files
                                 <span class="copy-icon">📋</span>
                             </button>
                             <pre><code id="run-code"># Start the MCP server
+uv run openzim-mcp /path/to/zim/files
+
+# Or if installed globally
 openzim-mcp /path/to/zim/files</code></pre>
                         </div>
                     </div>
@@ -554,7 +559,7 @@ openzim-mcp /path/to/zim/files</code></pre>
             <div class="dev-install">
                 <h3 class="dev-install-title">Development Installation</h3>
                 <p class="dev-install-description">
-                    For contributors and developers who want to work with the source code:
+                    For contributors and developers who want to work with the source code or need the latest features:
                 </p>
                 <div class="code-block">
                     <button class="copy-btn" data-clipboard-target="#dev-install-code">

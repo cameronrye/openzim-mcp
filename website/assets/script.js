@@ -236,12 +236,8 @@ function addTabContent() {
     "openzim-mcp": {
       "command": "uv",
       "args": [
-        "--directory",
-        "/path/to/openzim-mcp",
         "run",
-        "python",
-        "-m",
-        "openzim_mcp",
+        "openzim-mcp",
         "/path/to/zim/files"
       ]
     }
@@ -249,6 +245,17 @@ function addTabContent() {
 }</code></pre>
             </div>
             <div class="example-result">
+                <h5>Alternative: Global Installation</h5>
+                <pre><code>{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "openzim-mcp",
+      "args": [
+        "/path/to/zim/files"
+      ]
+    }
+  }
+}</code></pre>
                 <h5>Environment Variables (Optional):</h5>
                 <pre><code># Cache configuration
 export OPENZIM_MCP_CACHE__ENABLED=true
