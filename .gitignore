@@ -1,0 +1,53 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+
+# Logs
+*.log
+logs/
+
+# ZIM files (for testing)
+*.zim
+demo/
+
+# ZIM test data from zim-testing-suite
+test_data/zim-testing-suite/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Development artifacts
+test_*_validation.py
+test_*_edge_cases.py
+test_*_integration.py
+*_VALIDATION_REPORT.md
+*_REPORT.md

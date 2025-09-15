@@ -1,0 +1,134 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a new feature! Please provide detailed information to help us understand your request.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      description: Please verify these items before submitting
+      options:
+        - label: I have searched existing issues and discussions for similar requests
+          required: true
+        - label: I have read the project documentation and roadmap
+          required: true
+        - label: This feature aligns with the project's goals and scope
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve?
+      placeholder: Describe the problem or limitation you're experiencing
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: What would you like to see implemented?
+      placeholder: Describe your proposed solution in detail
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other solutions have you considered?
+      placeholder: Describe alternative solutions or workarounds you've considered
+
+  - type: textarea
+    id: use_cases
+    attributes:
+      label: Use Cases
+      description: How would this feature be used?
+      placeholder: |
+        Provide specific examples of how this feature would be used:
+        1. Use case 1: ...
+        2. Use case 2: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: benefits
+    attributes:
+      label: Benefits
+      description: What are the benefits of this feature?
+      placeholder: |
+        - Improved performance
+        - Better user experience
+        - Enhanced functionality
+        - etc.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature to you?
+      options:
+        - Low - Nice to have
+        - Medium - Would be helpful
+        - High - Important for my use case
+        - Critical - Blocking my use case
+    validations:
+      required: true
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Estimated Complexity
+      description: How complex do you think this feature would be to implement?
+      options:
+        - Low - Simple change or addition
+        - Medium - Moderate development effort
+        - High - Significant development effort
+        - Unknown - Not sure about complexity
+
+  - type: checkboxes
+    id: breaking_changes
+    attributes:
+      label: Breaking Changes
+      description: Would this feature require breaking changes?
+      options:
+        - label: This feature might require breaking changes to existing APIs
+        - label: This feature can be implemented without breaking existing functionality
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation Ideas
+      description: Do you have ideas about how this could be implemented?
+      placeholder: |
+        If you have technical ideas about implementation:
+        - API changes needed
+        - New dependencies
+        - Architecture considerations
+        - etc.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context or information
+      placeholder: Add any other context, mockups, references, or relevant information
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      description: Are you willing to contribute to this feature?
+      options:
+        - label: I would be willing to implement this feature
+        - label: I would be willing to help test this feature
+        - label: I would be willing to help with documentation

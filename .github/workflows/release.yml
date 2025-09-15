@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write  # Required for trusted publishing to PyPI
+
+jobs:
+  test:
+    name: Test before release
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install 3.12
+
+    - name: Install dependencies
+      run: |
+        uv sync
+
+    - name: Run tests
+      run: |
+        make check
+
+    - name: Download ZIM test data
+      run: |
+        make download-test-data
+
+    - name: Run integration tests
+      run: |
+        make test-requires-zim-data
+
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install 3.12
+
+    - name: Build package
+      run: |
+        uv build
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: pypi
+      url: https://pypi.org/p/openzim-mcp
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build, publish-pypi]
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - name: Extract release notes
+      id: extract-notes
+      run: |
+        # Extract version from tag
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        
+        # Extract release notes from CHANGELOG.md
+        python -c "
+        import re
+        import sys
+        
+        with open('CHANGELOG.md', 'r') as f:
+            content = f.read()
+        
+        # Find the section for this version
+        pattern = r'## \[' + re.escape('$VERSION') + r'\].*?\n(.*?)(?=\n## \[|\n# |\Z)'
+        match = re.search(pattern, content, re.DOTALL)
+        
+        if match:
+            notes = match.group(1).strip()
+            # Write to file for GitHub Actions
+            with open('release_notes.md', 'w') as f:
+                f.write(notes)
+        else:
+            with open('release_notes.md', 'w') as f:
+                f.write('Release notes not found in CHANGELOG.md')
+        " VERSION="$VERSION"
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Release v${{ steps.extract-notes.outputs.version }}
+        body_path: release_notes.md
+        files: |
+          dist/*
+        draft: false
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}

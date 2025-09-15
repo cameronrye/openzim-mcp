@@ -1,0 +1,44 @@
+# Code Owners for zimp (OpenZIM MCP)
+#
+# This file defines who should be automatically requested for review
+# when changes are made to specific parts of the codebase.
+#
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Global owners - will be requested for review on all changes
+* @cameronrye
+
+# Core Python code
+*.py @cameronrye
+openzim_mcp/ @cameronrye
+
+# Tests - require review for test changes
+tests/ @cameronrye
+conftest.py @cameronrye
+
+# Configuration files
+pyproject.toml @cameronrye
+uv.lock @cameronrye
+.pre-commit-config.yaml @cameronrye
+
+# CI/CD and GitHub workflows
+.github/ @cameronrye
+.github/workflows/ @cameronrye
+
+# Documentation
+README.md @cameronrye
+CONTRIBUTING.md @cameronrye
+CHANGELOG.md @cameronrye
+SECURITY.md @cameronrye
+docs/ @cameronrye
+*.md @cameronrye
+
+# Development tools
+Makefile @cameronrye
+scripts/ @cameronrye
+
+# License and legal
+LICENSE @cameronrye
+
+# Test data and configuration
+test_data/ @cameronrye

@@ -1,0 +1,110 @@
+name: Security Vulnerability Report
+description: Report a security vulnerability (use only for non-sensitive issues)
+title: "[Security]: "
+labels: ["security"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **IMPORTANT SECURITY NOTICE** ⚠️
+        
+        **For sensitive security vulnerabilities, please DO NOT use this public issue template.**
+        
+        Instead, please report sensitive security issues privately by:
+        1. Emailing the maintainers directly (see SECURITY.md)
+        2. Using GitHub's private vulnerability reporting feature
+        3. Contacting us through other secure channels listed in SECURITY.md
+        
+        **Only use this template for:**
+        - Non-sensitive security improvements
+        - Security-related feature requests
+        - General security discussions
+        - Issues that are already publicly known
+
+  - type: checkboxes
+    id: sensitivity_check
+    attributes:
+      label: Sensitivity Verification
+      description: Please confirm this is appropriate for public reporting
+      options:
+        - label: This is NOT a sensitive security vulnerability that could be exploited
+          required: true
+        - label: I have read the SECURITY.md file and understand the reporting guidelines
+          required: true
+        - label: This issue can be safely discussed in public
+          required: true
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Type of Security Issue
+      description: What type of security-related issue is this?
+      options:
+        - Security enhancement suggestion
+        - Security documentation improvement
+        - Security testing improvement
+        - General security discussion
+        - Non-sensitive security configuration issue
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the security-related issue or suggestion
+      placeholder: Provide a clear description of the security concern or improvement
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Potential Impact
+      description: What is the potential security impact?
+      placeholder: |
+        Describe the potential impact:
+        - What could be affected?
+        - What are the risks?
+        - Who might be impacted?
+
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: Suggested Mitigation
+      description: Do you have suggestions for addressing this?
+      placeholder: |
+        Suggestions for improvement:
+        - Configuration changes
+        - Code improvements
+        - Documentation updates
+        - etc.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Information
+      description: Relevant environment details
+      placeholder: |
+        - OS: [e.g., Ubuntu 22.04, Windows 11, macOS 14]
+        - Python version: [e.g., 3.12.1]
+        - zimp version: [e.g., 0.2.0]
+        - Deployment context: [e.g., local development, production server]
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other relevant information
+      placeholder: Add any other context, references, or relevant information
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        
+        **Remember:** For sensitive security vulnerabilities, please use private reporting channels as described in our [SECURITY.md](../../SECURITY.md) file.
+        
+        Thank you for helping to keep zimp secure! 🔒

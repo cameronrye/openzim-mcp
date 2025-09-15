@@ -1,0 +1,83 @@
+name: Dependency Updates (Legacy)
+
+# NOTE: This workflow is kept for manual triggering only.
+# Dependabot is now configured in .github/dependabot.yml for automated updates.
+# This workflow can be used as a fallback or for manual dependency updates.
+
+on:
+  workflow_dispatch:  # Manual triggering only
+  # schedule:
+  #   - cron: '0 8 * * 1'  # Disabled in favor of Dependabot
+
+jobs:
+  update-dependencies:
+    name: Update Dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install 3.12
+
+    - name: Update dependencies
+      run: |
+        # Update all dependencies to latest compatible versions
+        uv sync --upgrade
+        
+        # Check if there are any changes
+        if git diff --quiet uv.lock; then
+          echo "No dependency updates available"
+          echo "has_updates=false" >> $GITHUB_ENV
+        else
+          echo "Dependencies updated"
+          echo "has_updates=true" >> $GITHUB_ENV
+        fi
+
+    - name: Run tests with updated dependencies
+      if: env.has_updates == 'true'
+      run: |
+        make check
+
+    - name: Create Pull Request
+      if: env.has_updates == 'true'
+      uses: peter-evans/create-pull-request@v6
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: "chore: update dependencies"
+        title: "chore: update dependencies"
+        body: |
+          ## Dependency Updates (Manual)
+
+          This PR updates project dependencies to their latest compatible versions.
+
+          **Note**: This was created by the legacy manual dependency update workflow.
+          Regular automated updates are now handled by Dependabot (see `.github/dependabot.yml`).
+
+          ### Changes
+          - Updated `uv.lock` with latest dependency versions
+
+          ### Testing
+          - ✅ All tests pass with updated dependencies
+          - ✅ Code quality checks pass
+
+          ### Review Notes
+          Please review the dependency changes and ensure compatibility.
+
+          ---
+          *This PR was created by the manual dependency update workflow.*
+        branch: chore/update-dependencies
+        delete-branch: true
+        labels: |
+          dependencies
+          automated

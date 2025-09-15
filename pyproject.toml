@@ -1,0 +1,119 @@
+[project]
+name = "openzim-mcp"
+version = "0.2.0"
+description = "OpenZIM MCP - ZIM MCP Server that enables AI models to access and search ZIM format knowledge bases offline"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Cameron Rye", email = "c@meron.io"},
+]
+maintainers = [
+    {name = "Cameron Rye", email = "c@meron.io"},
+]
+keywords = [
+    "zim",
+    "openzim",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "llm",
+    "knowledge-base",
+    "offline",
+    "wikipedia",
+    "search",
+    "libzim",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Indexing",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+dependencies = [
+    "beautifulsoup4>=4.13.4",
+    "html2text>=2025.4.15",
+    "libzim>=3.7.0",
+    "mcp[cli]>=1.9.0",
+    "pydantic>=2.11.0",
+    "pydantic-settings>=2.9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/cameronrye/zimp"
+Repository = "https://github.com/cameronrye/zimp.git"
+Issues = "https://github.com/cameronrye/zimp/issues"
+Changelog = "https://github.com/cameronrye/zimp/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/cameronrye/zimp#readme"
+"Security Policy" = "https://github.com/cameronrye/zimp/blob/main/SECURITY.md"
+"Contributing" = "https://github.com/cameronrye/zimp/blob/main/CONTRIBUTING.md"
+
+[project.scripts]
+openzim-mcp = "openzim_mcp.__main__:main"
+
+
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+module = "libzim"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=openzim_mcp --cov-report=html --cov-report=term-missing --cov-report=xml"
+
+[tool.coverage.run]
+source = ["openzim_mcp"]
+omit = ["tests/*"]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "flake8>=7.3.0",
+    "isort>=6.0.1",
+    "mypy>=1.18.1",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-benchmark>=4.0.0",
+    "pytest-cov>=7.0.0",
+    "pre-commit>=4.0.0",
+    "bandit[toml]>=1.8.0",
+    "safety>=3.0.0",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", "test_data"]
+skips = ["B101"]  # Skip assert_used test
+
+[tool.bandit.assert_used]
+skips = ["*_test.py", "test_*.py"]

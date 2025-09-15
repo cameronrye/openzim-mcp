@@ -1,0 +1,109 @@
+# Dependabot configuration for zimp (OpenZIM MCP)
+# See: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Python dependencies (uv.lock)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "cameronrye"
+    assignees:
+      - "cameronrye"
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    # Group related updates together
+    groups:
+      # Group all patch updates together
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      # Group development dependencies
+      dev-dependencies:
+        patterns:
+          - "pytest*"
+          - "black"
+          - "flake8*"
+          - "mypy*"
+          - "isort"
+          - "bandit*"
+          - "safety"
+          - "pre-commit"
+        update-types:
+          - "minor"
+          - "patch"
+      # Group security updates (always separate for visibility)
+      security-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "security"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "cameronrye"
+    assignees:
+      - "cameronrye"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    # Group GitHub Actions updates
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Pre-commit hooks
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "08:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "cameronrye"
+    assignees:
+      - "cameronrye"
+    labels:
+      - "dependencies"
+      - "pre-commit"
+    commit-message:
+      prefix: "pre-commit"
+      include: "scope"
+    # Only update pre-commit related dependencies
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    ignore:
+      # Ignore major version updates for stability
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

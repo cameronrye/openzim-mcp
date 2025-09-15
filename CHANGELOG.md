@@ -1,0 +1,86 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- **Smart Retrieval System**: Intelligent ZIM entry retrieval with automatic fallback
+  - Direct access attempt followed by search-based fallback for reliable entry retrieval
+  - Automatic handling of path encoding differences (spaces vs underscores, URL encoding, etc.)
+  - Path mapping cache for improved performance on repeated access
+  - Enhanced error messages with actionable guidance for LLM users
+  - Transparent operation eliminating need for manual search-first methodology
+
+### Enhanced
+
+- **get_zim_entry function**: Now includes smart retrieval capabilities for better reliability
+- **Cache system**: Added path mapping cache with automatic invalidation of stale entries
+- **Error handling**: Improved error messages specifically designed for LLM user experience
+
+## [0.2.0] - 2024-12-12
+
+### Added
+
+- **Complete Architecture Refactoring**: Modular design with dependency injection
+- **Enhanced Security**: 
+  - Fixed path traversal vulnerability using secure path validation
+  - Comprehensive input sanitization and validation
+  - Protection against directory traversal attacks
+- **Comprehensive Testing**: 90%+ test coverage with pytest
+  - Unit tests for all components
+  - Integration tests for end-to-end functionality
+  - Security tests for vulnerability prevention
+- **Intelligent Caching**: LRU cache with TTL support for improved performance
+- **Modern Configuration Management**: Pydantic-based configuration with validation
+- **Structured Logging**: Configurable logging with proper error handling
+- **Type Safety**: Complete type annotations throughout the codebase
+- **Resource Management**: Proper cleanup with context managers
+- **Health Monitoring**: Built-in health check endpoint
+- **Development Tools**: 
+  - Makefile for common development tasks
+  - Black, flake8, mypy, isort for code quality
+  - Comprehensive development dependencies
+
+### Changed
+
+- **Project Name**: Changed from "zim-mcp-server" to "openzim-mcp" for consistency
+- **Entry Point**: New `python -m openzim_mcp` interface (backwards compatible)
+- **Error Handling**: Consistent custom exception hierarchy
+- **Content Processing**: Improved HTML to text conversion
+- **API**: Enhanced tool interfaces with better validation
+
+### Security
+
+- **CRITICAL**: Fixed path traversal vulnerability in PathManager
+- **HIGH**: Added comprehensive input validation
+- **MEDIUM**: Sanitized error messages to prevent information disclosure
+
+### Performance
+
+- **Caching**: Intelligent caching reduces ZIM file access overhead
+- **Resource Management**: Proper cleanup prevents memory leaks
+- **Optimized Processing**: Improved content processing performance
+
+## [0.1.0] - 2024-XX-XX
+
+### Added
+
+- Initial release of ZIM MCP Server
+- Basic ZIM file operations (list, search, get entry)
+- Simple path management
+- HTML to text conversion
+- MCP server implementation
+
+### Known Issues (Fixed in 0.2.0)
+
+- Path traversal security vulnerability
+- No input validation
+- Missing error handling
+- No testing framework
+- Resource management issues
+- Global state management problems
