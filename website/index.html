@@ -69,6 +69,8 @@
             <div class="nav-menu" id="nav-menu">
                 <a href="#home" class="nav-link">Home</a>
                 <a href="#features" class="nav-link">Features</a>
+                <a href="#smart-retrieval" class="nav-link">Smart Retrieval</a>
+                <a href="#security" class="nav-link">Security</a>
                 <a href="#installation" class="nav-link">Installation</a>
                 <a href="#usage" class="nav-link">Usage</a>
                 <a href="#documentation" class="nav-link">Documentation</a>
@@ -112,16 +114,20 @@
                 </div>
                 <div class="hero-stats">
                     <div class="stat">
+                        <div class="stat-number">v0.4.0</div>
+                        <div class="stat-label">Latest Release</div>
+                    </div>
+                    <div class="stat">
                         <div class="stat-number">90%+</div>
                         <div class="stat-label">Test Coverage</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-number">🔒</div>
-                        <div class="stat-label">Security First</div>
+                        <div class="stat-number">0</div>
+                        <div class="stat-label">Known Vulnerabilities</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-number">⚡</div>
-                        <div class="stat-label">High Performance</div>
+                        <div class="stat-number">15+</div>
+                        <div class="stat-label">MCP Tools</div>
                     </div>
                 </div>
             </div>
@@ -189,10 +195,10 @@
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">⚡</div>
-                    <h3 class="feature-title">Performance Optimized</h3>
+                    <h3 class="feature-title">High Performance</h3>
                     <p class="feature-description">
-                        Cached operations and pagination prevent timeouts on massive archives. 
-                        Intelligent caching with TTL management.
+                        LRU cache with TTL, intelligent eviction policies, and optimized ZIM operations.
+                        90%+ test coverage ensures reliability at scale.
                     </p>
                 </div>
                 <div class="feature-card">
@@ -215,6 +221,281 @@
         </div>
     </section>
 
+    <!-- Smart Retrieval System Section -->
+    <section id="smart-retrieval" class="smart-retrieval">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">🧠 Smart Retrieval System</h2>
+                <p class="section-description">
+                    Advanced intelligent entry retrieval with automatic fallback and path mapping for reliable access to ZIM content.
+                </p>
+            </div>
+            <div class="smart-retrieval-content">
+                <div class="retrieval-features">
+                    <div class="retrieval-feature">
+                        <div class="retrieval-icon">🎯</div>
+                        <h3 class="retrieval-title">Direct Access First</h3>
+                        <p class="retrieval-description">
+                            Attempts to retrieve entries using the exact path provided, optimizing for speed and accuracy.
+                        </p>
+                    </div>
+                    <div class="retrieval-feature">
+                        <div class="retrieval-icon">🔄</div>
+                        <h3 class="retrieval-title">Automatic Fallback</h3>
+                        <p class="retrieval-description">
+                            When direct access fails, automatically searches using various search terms and path variations.
+                        </p>
+                    </div>
+                    <div class="retrieval-feature">
+                        <div class="retrieval-icon">💾</div>
+                        <h3 class="retrieval-title">Path Mapping Cache</h3>
+                        <p class="retrieval-description">
+                            Caches successful path mappings to improve performance for repeated access patterns.
+                        </p>
+                    </div>
+                    <div class="retrieval-feature">
+                        <div class="retrieval-icon">🛠️</div>
+                        <h3 class="retrieval-title">Enhanced Error Guidance</h3>
+                        <p class="retrieval-description">
+                            Provides clear, actionable guidance when entries cannot be found, designed for LLM users.
+                        </p>
+                    </div>
+                </div>
+                <div class="retrieval-example">
+                    <h3 class="example-title">How It Works</h3>
+                    <div class="code-block">
+                        <pre><code># The system automatically handles path encoding differences:
+# ✅ Direct access: "A/Machine_Learning"
+# ✅ Fallback search: "Machine Learning", "machine learning"
+# ✅ Cached mapping: Future requests use cached path
+
+# No more manual search-first methodology needed!
+get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Security Features Section -->
+    <section id="security" class="security">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">🔒 Enterprise-Grade Security</h2>
+                <p class="section-description">
+                    Comprehensive security measures designed to protect against vulnerabilities and ensure safe operation in production environments.
+                </p>
+            </div>
+            <div class="security-grid">
+                <div class="security-feature">
+                    <div class="security-icon">🛡️</div>
+                    <h3 class="security-title">Path Traversal Protection</h3>
+                    <p class="security-description">
+                        Advanced path validation prevents directory traversal attacks using secure path checking with Python 3.9+ features.
+                    </p>
+                    <div class="security-details">
+                        <span class="security-tag">CRITICAL</span>
+                        <span class="security-status">✅ Fixed in v0.2.0</span>
+                    </div>
+                </div>
+                <div class="security-feature">
+                    <div class="security-icon">🔍</div>
+                    <h3 class="security-title">Input Validation & Sanitization</h3>
+                    <p class="security-description">
+                        Comprehensive input validation with length limits, character filtering, and sanitization to prevent injection attacks.
+                    </p>
+                    <div class="security-details">
+                        <span class="security-tag">HIGH</span>
+                        <span class="security-status">✅ Implemented</span>
+                    </div>
+                </div>
+                <div class="security-feature">
+                    <div class="security-icon">🔐</div>
+                    <h3 class="security-title">Type Safety & Validation</h3>
+                    <p class="security-description">
+                        Full type annotations with Pydantic validation ensure data integrity and prevent type-related vulnerabilities.
+                    </p>
+                    <div class="security-details">
+                        <span class="security-tag">MEDIUM</span>
+                        <span class="security-status">✅ Complete</span>
+                    </div>
+                </div>
+                <div class="security-feature">
+                    <div class="security-icon">📊</div>
+                    <h3 class="security-title">Secure Error Handling</h3>
+                    <p class="security-description">
+                        Sanitized error messages prevent information disclosure while providing helpful guidance for legitimate users.
+                    </p>
+                    <div class="security-details">
+                        <span class="security-tag">MEDIUM</span>
+                        <span class="security-status">✅ Enhanced</span>
+                    </div>
+                </div>
+            </div>
+            <div class="security-stats">
+                <div class="security-stat">
+                    <div class="stat-number">0</div>
+                    <div class="stat-label">Known Vulnerabilities</div>
+                </div>
+                <div class="security-stat">
+                    <div class="stat-number">90%+</div>
+                    <div class="stat-label">Test Coverage</div>
+                </div>
+                <div class="security-stat">
+                    <div class="stat-number">100%</div>
+                    <div class="stat-label">Type Annotated</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Advanced Features Section -->
+    <section id="advanced-features" class="advanced-features">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">⚡ Advanced Enterprise Features</h2>
+                <p class="section-description">
+                    Production-ready capabilities for enterprise deployments, monitoring, and multi-instance environments.
+                </p>
+            </div>
+            <div class="advanced-grid">
+                <div class="advanced-feature">
+                    <div class="advanced-icon">🔄</div>
+                    <h3 class="advanced-title">Multi-Instance Management</h3>
+                    <p class="advanced-description">
+                        Automatic instance tracking and conflict detection ensures reliable operation when multiple server instances are running.
+                    </p>
+                    <ul class="advanced-list">
+                        <li>Automatic instance registration with unique process IDs</li>
+                        <li>Configuration hash validation for compatibility</li>
+                        <li>Stale instance cleanup and orphaned file detection</li>
+                        <li>Real-time conflict detection and resolution</li>
+                    </ul>
+                </div>
+                <div class="advanced-feature">
+                    <div class="advanced-icon">📊</div>
+                    <h3 class="advanced-title">Health Monitoring & Diagnostics</h3>
+                    <p class="advanced-description">
+                        Comprehensive health checks and diagnostic tools provide deep insights into server performance and status.
+                    </p>
+                    <ul class="advanced-list">
+                        <li>Built-in health check endpoints</li>
+                        <li>Cache performance metrics and statistics</li>
+                        <li>Instance tracking status and recommendations</li>
+                        <li>Configuration validation and diagnostics</li>
+                    </ul>
+                </div>
+                <div class="advanced-feature">
+                    <div class="advanced-icon">🧠</div>
+                    <h3 class="advanced-title">Intelligent Caching System</h3>
+                    <p class="advanced-description">
+                        Advanced LRU cache with TTL support and intelligent eviction policies optimizes performance for large-scale deployments.
+                    </p>
+                    <ul class="advanced-list">
+                        <li>LRU (Least Recently Used) eviction strategy</li>
+                        <li>Configurable TTL (Time To Live) for entries</li>
+                        <li>Automatic expired entry cleanup</li>
+                        <li>Path mapping cache for retrieval optimization</li>
+                    </ul>
+                </div>
+                <div class="advanced-feature">
+                    <div class="advanced-icon">🔧</div>
+                    <h3 class="advanced-title">Modern Architecture</h3>
+                    <p class="advanced-description">
+                        Modular design with dependency injection, full type safety, and comprehensive configuration management.
+                    </p>
+                    <ul class="advanced-list">
+                        <li>Dependency injection for testability</li>
+                        <li>100% type annotations with mypy validation</li>
+                        <li>Pydantic-based configuration with validation</li>
+                        <li>Structured logging with configurable levels</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Developer Experience Section -->
+    <section id="developer-experience" class="developer-experience">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">🛠️ Developer Experience</h2>
+                <p class="section-description">
+                    Modern development workflow with automated releases, comprehensive tooling, and enterprise-grade CI/CD.
+                </p>
+            </div>
+            <div class="dev-experience-grid">
+                <div class="dev-feature">
+                    <div class="dev-icon">🚀</div>
+                    <h3 class="dev-title">Automated Release System</h3>
+                    <p class="dev-description">
+                        Release-please integration with semantic versioning, automated changelog generation, and PyPI deployment.
+                    </p>
+                    <div class="dev-tags">
+                        <span class="dev-tag">Release Please</span>
+                        <span class="dev-tag">Semantic Versioning</span>
+                        <span class="dev-tag">Auto PyPI</span>
+                    </div>
+                </div>
+                <div class="dev-feature">
+                    <div class="dev-icon">🔧</div>
+                    <h3 class="dev-title">Enhanced Makefile Workflow</h3>
+                    <p class="dev-description">
+                        Comprehensive development workflow with categorized help, security scanning, and cross-platform compatibility.
+                    </p>
+                    <div class="dev-tags">
+                        <span class="dev-tag">Make Targets</span>
+                        <span class="dev-tag">Security Scanning</span>
+                        <span class="dev-tag">Quality Checks</span>
+                    </div>
+                </div>
+                <div class="dev-feature">
+                    <div class="dev-icon">🧪</div>
+                    <h3 class="dev-title">Comprehensive Testing</h3>
+                    <p class="dev-description">
+                        90%+ test coverage with pytest, benchmarking, integration tests, and automated quality assurance.
+                    </p>
+                    <div class="dev-tags">
+                        <span class="dev-tag">90%+ Coverage</span>
+                        <span class="dev-tag">Benchmarks</span>
+                        <span class="dev-tag">Integration Tests</span>
+                    </div>
+                </div>
+                <div class="dev-feature">
+                    <div class="dev-icon">🔍</div>
+                    <h3 class="dev-title">Code Quality Tools</h3>
+                    <p class="dev-description">
+                        Black formatting, flake8 linting, mypy type checking, bandit security scanning, and pre-commit hooks.
+                    </p>
+                    <div class="dev-tags">
+                        <span class="dev-tag">Black</span>
+                        <span class="dev-tag">MyPy</span>
+                        <span class="dev-tag">Bandit</span>
+                    </div>
+                </div>
+            </div>
+            <div class="dev-workflow">
+                <h3 class="workflow-title">Development Workflow</h3>
+                <div class="code-block">
+                    <pre><code># Complete development setup in one command
+make install
+
+# Run all quality checks
+make check
+
+# Run tests with coverage
+make test
+
+# Security scanning
+make security
+
+# Build and publish
+make build && make publish</code></pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <!-- Installation Section -->
     <section id="installation" class="installation">
         <div class="container">
@@ -228,17 +509,13 @@
                 <div class="step">
                     <div class="step-number">1</div>
                     <div class="step-content">
-                        <h3 class="step-title">Clone & Install</h3>
+                        <h3 class="step-title">Install from PyPI</h3>
                         <div class="code-block">
                             <button class="copy-btn" data-clipboard-target="#install-code">
                                 <span class="copy-icon">📋</span>
                             </button>
-                            <pre><code id="install-code"># Clone the repository
-git clone https://github.com/cameronrye/openzim-mcp.git
-cd openzim-mcp
-
-# Install dependencies
-uv sync</code></pre>
+                            <pre><code id="install-code"># Install OpenZIM MCP from PyPI (recommended)
+pip install openzim-mcp</code></pre>
                         </div>
                     </div>
                 </div>
@@ -267,13 +544,33 @@ mkdir ~/zim-files
                                 <span class="copy-icon">📋</span>
                             </button>
                             <pre><code id="run-code"># Start the MCP server
-uv run python -m openzim_mcp /path/to/zim/files
-
-# Or using make
-make run ZIM_DIR=/path/to/zim/files</code></pre>
+openzim-mcp /path/to/zim/files</code></pre>
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Development Installation -->
+            <div class="dev-install">
+                <h3 class="dev-install-title">Development Installation</h3>
+                <p class="dev-install-description">
+                    For contributors and developers who want to work with the source code:
+                </p>
+                <div class="code-block">
+                    <button class="copy-btn" data-clipboard-target="#dev-install-code">
+                        <span class="copy-icon">📋</span>
+                    </button>
+                    <pre><code id="dev-install-code"># Clone the repository
+git clone https://github.com/cameronrye/openzim-mcp.git
+cd openzim-mcp
+
+# Install dependencies
+uv sync
+
+# Run from source
+uv run python -m openzim_mcp /path/to/zim/files</code></pre>
+                </div>
+            </div>
             </div>
         </div>
     </section>
