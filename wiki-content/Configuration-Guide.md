@@ -304,6 +304,11 @@ export OPENZIM_MCP_CACHE__MAX_SIZE=500
 Usage:
 ```bash
 source config-dev.sh
+
+# Standard installation
+openzim-mcp /path/to/zim/files
+
+# Development installation
 uv run python -m openzim_mcp /path/to/zim/files
 ```
 

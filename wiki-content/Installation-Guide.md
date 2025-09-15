@@ -11,12 +11,27 @@ This guide covers installing OpenZIM MCP on different platforms and for various 
 - **Storage**: Space for ZIM files (varies by content, typically 100MB - 50GB+)
 
 ### Required Tools
-- **uv** (recommended) or **pip** for package management
-- **Git** for cloning the repository
+- **pip** for package management (included with Python)
 
-## 🚀 Quick Installation
+## 🚀 Standard Installation (Recommended)
 
-### Option 1: Using uv (Recommended)
+### Install from PyPI
+
+```bash
+# Install OpenZIM MCP from PyPI
+pip install openzim-mcp
+
+# Verify installation
+openzim-mcp --help
+```
+
+That's it! OpenZIM MCP is now installed and ready to use.
+
+## 🛠️ Development Installation
+
+For contributors and developers who want to modify the code:
+
+### Option 1: Using uv (Recommended for Development)
 
 ```bash
 # Install uv if not already installed
@@ -29,11 +44,11 @@ cd openzim-mcp
 # Install dependencies
 uv sync
 
-# Install development dependencies (optional)
+# Install development dependencies
 uv sync --dev
 ```
 
-### Option 2: Using pip
+### Option 2: Using pip (Development)
 
 ```bash
 # Clone the repository
@@ -49,7 +64,7 @@ venv\Scripts\activate
 # On macOS/Linux:
 source venv/bin/activate
 
-# Install dependencies
+# Install in development mode
 pip install -e .
 ```
 
@@ -79,10 +94,16 @@ mkdir ~/zim-files
 
 ### Windows
 
+**Standard Installation:**
 ```powershell
 # Install Python 3.12+ from python.org
-# Install Git from git-scm.com
+# Then install OpenZIM MCP
+pip install openzim-mcp
+```
 
+**Development Installation:**
+```powershell
+# Install Git from git-scm.com
 # Clone and install
 git clone https://github.com/cameronrye/openzim-mcp.git
 cd openzim-mcp
@@ -98,10 +119,17 @@ pip install -e .
 
 ### macOS
 
+**Standard Installation:**
 ```bash
 # Install Python 3.12+ using Homebrew
 brew install python@3.12
 
+# Install OpenZIM MCP
+pip install openzim-mcp
+```
+
+**Development Installation:**
+```bash
 # Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
@@ -113,10 +141,20 @@ uv sync
 
 ### Linux (Ubuntu/Debian)
 
+**Standard Installation:**
 ```bash
 # Install Python 3.12+
 sudo apt update
-sudo apt install python3.12 python3.12-venv python3.12-dev git
+sudo apt install python3.12 python3-pip
+
+# Install OpenZIM MCP
+pip install openzim-mcp
+```
+
+**Development Installation:**
+```bash
+# Install development tools
+sudo apt install python3.12-venv python3.12-dev git
 
 # Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -129,9 +167,19 @@ uv sync
 
 ### Linux (CentOS/RHEL/Fedora)
 
+**Standard Installation:**
 ```bash
 # Install Python 3.12+
-sudo dnf install python3.12 python3.12-venv python3.12-devel git
+sudo dnf install python3.12 python3-pip
+
+# Install OpenZIM MCP
+pip install openzim-mcp
+```
+
+**Development Installation:**
+```bash
+# Install development tools
+sudo dnf install python3.12-venv python3.12-devel git
 
 # Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -150,6 +198,19 @@ Docker support is planned for future releases. Track progress in [GitHub Issues]
 
 ### Test the Installation
 
+**Standard Installation:**
+```bash
+# Test basic functionality
+openzim-mcp --help
+
+# Or using module
+python -m openzim_mcp --help
+
+# Run with a ZIM file directory
+openzim-mcp /path/to/zim/files
+```
+
+**Development Installation:**
 ```bash
 # Test basic functionality
 uv run python -m openzim_mcp --help
@@ -181,6 +242,35 @@ Add to your Claude Desktop configuration file:
 **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Linux**: `~/.config/claude/claude_desktop_config.json`
 
+**Standard Installation (Recommended):**
+```json
+{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "openzim-mcp",
+      "args": ["/path/to/zim/files"]
+    }
+  }
+}
+```
+
+**Alternative (using Python module):**
+```json
+{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "python",
+      "args": [
+        "-m",
+        "openzim_mcp",
+        "/path/to/zim/files"
+      ]
+    }
+  }
+}
+```
+
+**Development Installation:**
 ```json
 {
   "mcpServers": {
@@ -202,7 +292,12 @@ Add to your Claude Desktop configuration file:
 
 ### Other MCP Clients
 
-For other MCP-compatible clients, use the command:
+**Standard Installation:**
+```bash
+openzim-mcp /path/to/zim/files
+```
+
+**Development Installation:**
 ```bash
 uv run python -m openzim_mcp /path/to/zim/files
 ```

@@ -25,11 +25,10 @@ ZIM (Zeno IMproved) files are an open format for storing web content offline. Th
 
 ### How do I install OpenZIM MCP?
 
-1. **Install Python 3.12+** and **uv** package manager
-2. **Clone the repository**: `git clone https://github.com/cameronrye/openzim-mcp.git`
-3. **Install dependencies**: `uv sync`
-4. **Download ZIM files** from [Kiwix Library](https://browse.library.kiwix.org/)
-5. **Configure your MCP client** with the server path
+1. **Install Python 3.12+**
+2. **Install OpenZIM MCP**: `pip install openzim-mcp`
+3. **Download ZIM files** from [Kiwix Library](https://browse.library.kiwix.org/)
+4. **Configure your MCP client** with the server command
 
 See the [Installation Guide](Installation-Guide) for detailed instructions.
 

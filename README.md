@@ -57,14 +57,23 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 ### Installation
 
 ```bash
+# Install from PyPI (recommended)
+pip install openzim-mcp
+```
+
+### Development Installation
+
+For contributors and developers:
+
+```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/cameronrye/openzim-mcp.git
 cd openzim-mcp
 
 # Install dependencies
 uv sync
 
-# Install development dependencies (optional)
+# Install development dependencies
 uv sync --dev
 ```
 
@@ -80,19 +89,48 @@ mkdir ~/zim-files
 ### Running the Server
 
 ```bash
-# Run with the modular architecture
+# Using the console script (after pip install)
+openzim-mcp /path/to/zim/files
+
+# Or using the module
 python -m openzim_mcp /path/to/zim/files
 
-# Or using uv
+# For development (from source)
 uv run python -m openzim_mcp /path/to/zim/files
 
-# Or using make
+# Or using make (development)
 make run ZIM_DIR=/path/to/zim/files
 ```
 
 ### MCP Configuration
 
 Add to your MCP client configuration:
+
+```json
+{
+  "openzim-mcp": {
+    "command": "openzim-mcp",
+    "args": ["/path/to/zim/files"]
+  }
+}
+```
+
+Alternative configuration using Python module:
+
+```json
+{
+  "openzim-mcp": {
+    "command": "python",
+    "args": [
+      "-m",
+      "openzim_mcp",
+      "/path/to/zim/files"
+    ]
+  }
+}
+```
+
+For development (from source):
 
 ```json
 {

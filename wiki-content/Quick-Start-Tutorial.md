@@ -14,7 +14,7 @@ Get up and running with OpenZIM MCP in just a few minutes! This tutorial will wa
 ## 📋 Before You Start
 
 Make sure you have completed the [Installation Guide](Installation-Guide) and have:
-- ✅ OpenZIM MCP installed
+- ✅ OpenZIM MCP installed (`pip install openzim-mcp`)
 - ✅ Python 3.12+ available
 - ✅ A ZIM file downloaded (we'll help you get one if needed)
 
@@ -33,10 +33,10 @@ cd ~/zim-files
 # Download and save to ~/zim-files/
 ```
 
-### Option B: Use Our Test Data
+### Option B: Use Our Test Data (Development)
 
 ```bash
-# From your openzim-mcp directory
+# From your openzim-mcp directory (if installed from source)
 make download-test-data
 
 # This downloads small test ZIM files to tests/data/
@@ -44,12 +44,13 @@ make download-test-data
 
 ## 🔧 Step 2: Start the Server
 
+**Standard Installation:**
 ```bash
-# Navigate to your openzim-mcp directory
-cd /path/to/openzim-mcp
-
 # Start the server with your ZIM files directory
-uv run python -m openzim_mcp ~/zim-files
+openzim-mcp ~/zim-files
+
+# Or using the module
+python -m openzim_mcp ~/zim-files
 
 # You should see output like:
 # OpenZIM MCP Server starting...
@@ -57,6 +58,15 @@ uv run python -m openzim_mcp ~/zim-files
 # Allowed directories: ['/home/user/zim-files']
 # Cache enabled: True
 # Server ready for MCP connections.
+```
+
+**Development Installation:**
+```bash
+# Navigate to your openzim-mcp directory
+cd /path/to/openzim-mcp
+
+# Start the server with your ZIM files directory
+uv run python -m openzim_mcp ~/zim-files
 ```
 
 ## 📱 Step 3: Configure Your MCP Client
@@ -70,6 +80,19 @@ uv run python -m openzim_mcp ~/zim-files
 
 2. **Add OpenZIM MCP configuration**:
 
+**Standard Installation (Recommended):**
+```json
+{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "openzim-mcp",
+      "args": ["/path/to/your/zim-files"]
+    }
+  }
+}
+```
+
+**Development Installation:**
 ```json
 {
   "mcpServers": {
@@ -93,7 +116,15 @@ uv run python -m openzim_mcp ~/zim-files
 
 ### For Other MCP Clients
 
-Use the command: `uv run python -m openzim_mcp /path/to/zim-files`
+**Standard Installation:**
+```bash
+openzim-mcp /path/to/zim-files
+```
+
+**Development Installation:**
+```bash
+uv run python -m openzim_mcp /path/to/zim-files
+```
 
 ## 🧪 Step 4: Test Basic Functionality
 
