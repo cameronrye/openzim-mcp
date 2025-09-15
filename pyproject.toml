@@ -1,6 +1,6 @@
 [project]
 name = "openzim-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "OpenZIM MCP - ZIM MCP Server that enables AI models to access and search ZIM format knowledge bases offline"
 readme = "README.md"
 requires-python = ">=3.12"
