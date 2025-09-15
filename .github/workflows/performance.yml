@@ -31,7 +31,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync
+        uv sync --frozen  # Use frozen lockfile to prevent modifications
         uv run pip install pytest-benchmark
 
     - name: Download ZIM test data
@@ -48,14 +48,25 @@ jobs:
           echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "placeholder"}' > benchmark-results.json
         fi
 
-    - name: Clean workspace before benchmark storage
+    - name: Store benchmark results
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
-        # Stash any changes to avoid conflicts with gh-pages checkout
-        git add .
-        git stash --include-untracked || echo "No changes to stash"
+        # Clean workspace to avoid git conflicts
+        echo "Cleaning workspace before benchmark storage..."
+        git status
 
-    - name: Store benchmark results
+        # Reset any changes to tracked files
+        git checkout -- . || echo "No tracked changes to reset"
+
+        # Remove untracked files that might conflict
+        git clean -fd || echo "No untracked files to clean"
+
+        # Ensure we're on the correct branch
+        git checkout main || git checkout ${{ github.ref_name }}
+
+        echo "Workspace cleaned, ready for benchmark action"
+
+    - name: Run benchmark action
       uses: benchmark-action/github-action-benchmark@v1
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       continue-on-error: true  # Don't fail if gh-pages doesn't exist yet
@@ -70,13 +81,6 @@ jobs:
         # Store benchmarks in a subdirectory to avoid conflicts with main site
         gh-pages-branch: 'gh-pages'
         benchmark-data-dir-path: 'benchmarks'
-
-    - name: Restore workspace after benchmark storage
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      run: |
-        # Return to original branch and restore changes if any
-        git checkout ${{ github.ref_name }} || git checkout main
-        git stash pop || echo "No stash to restore"
 
     - name: Compare benchmark results (PR)
       uses: benchmark-action/github-action-benchmark@v1
@@ -113,7 +117,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync
+        uv sync --frozen  # Use frozen lockfile to prevent modifications
         uv run pip install memory-profiler psutil
 
     - name: Download ZIM test data
