@@ -128,4 +128,35 @@ jobs:
         run: |
           echo "🎉 Release ${{ needs.release-please.outputs.tag_name }} created and validated!"
           echo "Version: ${{ needs.release-please.outputs.version }}"
-          echo "The existing release workflow will now handle building and publishing."
+          echo "The release workflow will now be triggered automatically."
+
+  # Trigger the release workflow when a release is created
+  trigger-release:
+    runs-on: ubuntu-latest
+    needs: [release-please, validate-release]
+    if: needs.release-please.outputs.release_created && needs.validate-release.result == 'success'
+    steps:
+      - name: Trigger release workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tagName = '${{ needs.release-please.outputs.tag_name }}';
+            console.log(`Triggering release workflow for tag: ${tagName}`);
+
+            try {
+              const result = await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'release.yml',
+                ref: 'main',
+                inputs: {
+                  tag: tagName,
+                  create_tag: 'false'
+                }
+              });
+              console.log('✅ Release workflow triggered successfully');
+              console.log(`Workflow dispatch result: ${result.status}`);
+            } catch (error) {
+              console.error('❌ Failed to trigger release workflow:', error.message);
+              throw error;
+            }

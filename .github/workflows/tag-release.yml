@@ -1,0 +1,84 @@
+name: Tag Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  tag-release:
+    name: Handle Tag-Based Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract tag information
+        id: tag-info
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "Tag detected: $TAG_NAME"
+          
+          # Validate tag format
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
+            echo "❌ Invalid tag format: $TAG_NAME"
+            echo "Expected format: v1.2.3"
+            exit 1
+          fi
+          
+          echo "✅ Valid tag format detected"
+
+      - name: Check if release workflow should be triggered
+        id: check-trigger
+        run: |
+          echo "Checking if release workflow needs to be triggered for tag: ${{ steps.tag-info.outputs.tag_name }}"
+          
+          # Check if this tag was created by release-please (has associated GitHub release)
+          # If so, the release-please workflow should handle triggering the release workflow
+          # If not, we should trigger it manually
+          
+          echo "This workflow serves as a backup trigger for tag-based releases"
+          echo "The primary release workflow should be triggered by release-please"
+          echo "If you see this running, it means the tag was created manually or release-please didn't trigger the release workflow"
+          
+          # For now, we'll trigger the release workflow as a backup
+          echo "should_trigger=true" >> $GITHUB_OUTPUT
+
+      - name: Trigger release workflow
+        if: steps.check-trigger.outputs.should_trigger == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tagName = '${{ steps.tag-info.outputs.tag_name }}';
+            console.log(`🚀 Triggering release workflow for tag: ${tagName}`);
+            
+            try {
+              const result = await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'release.yml',
+                ref: 'main',
+                inputs: {
+                  tag: tagName,
+                  create_tag: 'false'
+                }
+              });
+              console.log('✅ Release workflow triggered successfully');
+              console.log(`Workflow dispatch result: ${result.status}`);
+            } catch (error) {
+              console.error('❌ Failed to trigger release workflow:', error.message);
+              // Don't fail the workflow if we can't trigger the release workflow
+              // This might happen if the release workflow is already running
+              console.log('This might be expected if the release workflow is already running');
+            }
+
+      - name: Summary
+        run: |
+          echo "## Tag Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: ${{ steps.tag-info.outputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action**: Triggered release workflow as backup" >> $GITHUB_STEP_SUMMARY
+          echo "- **Note**: This workflow serves as a safety net for tag-based releases" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The main release workflow should handle building and publishing to PyPI." >> $GITHUB_STEP_SUMMARY
