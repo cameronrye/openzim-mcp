@@ -5,7 +5,7 @@ This document summarizes the comprehensive infrastructure improvements implement
 ## ✅ Completed Improvements
 
 ### 1. Critical Issues Fixed
-- ✅ Updated all repository URLs from "zimp" to "openzim-mcp" in pyproject.toml
+- ✅ Updated all repository URLs from legacy names to "openzim-mcp" in pyproject.toml
 - ✅ Fixed repository references in GitHub configuration files
 - ✅ Updated issue templates and documentation references
 - ✅ Corrected Dependabot and CODEOWNERS configurations

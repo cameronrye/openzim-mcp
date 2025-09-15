@@ -1,14 +1,14 @@
-# Contributing to zimp
+# Contributing to OpenZIM MCP
 
-Thank you for your interest in contributing to zimp! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to OpenZIM MCP! This document provides guidelines and information for contributors.
 
 ## 🚀 Quick Start
 
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/zimp.git
-   cd zimp
+   git clone https://github.com/YOUR_USERNAME/openzim-mcp.git
+   cd openzim-mcp
    ```
 3. **Set up development environment**:
    ```bash
@@ -33,8 +33,8 @@ Thank you for your interest in contributing to zimp! This document provides guid
 
 ```bash
 # Clone the repository
-git clone https://github.com/cameronrye/zimp.git
-cd zimp
+git clone https://github.com/cameronrye/openzim-mcp.git
+cd openzim-mcp
 
 # Install dependencies
 uv sync
@@ -323,4 +323,4 @@ By contributing, you agree that your contributions will be licensed under the MI
 
 ---
 
-Thank you for contributing to zimp! 🎉
+Thank you for contributing to OpenZIM MCP! 🎉

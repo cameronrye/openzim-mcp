@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-We actively support the following versions of zimp with security updates:
+We actively support the following versions of OpenZIM MCP with security updates:
 
 | Version | Supported          |
 | ------- | ------------------ |
@@ -11,7 +11,7 @@ We actively support the following versions of zimp with security updates:
 
 ## Reporting a Vulnerability
 
-We take security vulnerabilities seriously and appreciate your help in keeping zimp secure.
+We take security vulnerabilities seriously and appreciate your help in keeping OpenZIM MCP secure.
 
 ### For Sensitive Security Issues
 
@@ -21,7 +21,7 @@ Instead, please report them privately using one of these methods:
 
 #### 1. GitHub Private Vulnerability Reporting (Preferred)
 
-1. Go to the [Security tab](https://github.com/cameronrye/zimp/security) of this repository
+1. Go to the [Security tab](https://github.com/cameronrye/openzim-mcp/security) of this repository
 2. Click "Report a vulnerability"
 3. Fill out the vulnerability report form
 4. Submit the report
@@ -63,7 +63,7 @@ Please include as much information as possible:
 - **Description**: Clear description of the vulnerability
 - **Impact**: What could an attacker accomplish?
 - **Reproduction**: Step-by-step instructions to reproduce
-- **Environment**: OS, Python version, zimp version
+- **Environment**: OS, Python version, OpenZIM MCP version
 - **ZIM Files**: Information about test files used (if relevant)
 
 ### Optional but Helpful
@@ -113,7 +113,7 @@ We classify vulnerabilities using the following criteria:
 
 ## Security Measures
 
-zimp implements several security measures:
+OpenZIM MCP implements several security measures:
 
 ### Input Validation
 - Comprehensive path validation to prevent directory traversal
@@ -157,7 +157,7 @@ zimp implements several security measures:
 ## Security Best Practices for Users
 
 ### Deployment Security
-- Run zimp with minimal required privileges
+- Run OpenZIM MCP with minimal required privileges
 - Use allowed directories to restrict file access
 - Monitor logs for suspicious activity
 - Keep dependencies updated
@@ -259,4 +259,4 @@ Please ensure your security research:
 
 ---
 
-Thank you for helping to keep zimp secure! 🔒
+Thank you for helping to keep OpenZIM MCP secure! 🔒

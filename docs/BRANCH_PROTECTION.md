@@ -1,6 +1,6 @@
 # Branch Protection Rules
 
-This document outlines the recommended branch protection rules for the zimp repository to ensure code quality and security.
+This document outlines the recommended branch protection rules for the openzim-mcp repository to ensure code quality and security.
 
 ## Recommended Settings
 
