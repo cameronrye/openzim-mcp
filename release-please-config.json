@@ -73,7 +73,6 @@
           "glob": false
         }
       ],
-      "version-file": "openzim_mcp/__init__.py",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": false,
       "draft": false,

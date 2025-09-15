@@ -82,14 +82,50 @@ jobs:
               console.log('Failed to add comment:', error.message);
             }
 
-  # Optional: Add a job to notify about successful release
-  notify-release-created:
+  # Validate version synchronization after release creation
+  validate-release:
     runs-on: ubuntu-latest
     needs: release-please
     if: needs.release-please.outputs.release_created
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Validate version synchronization
+        run: |
+          echo "🔍 Validating version synchronization for ${{ needs.release-please.outputs.tag_name }}"
+
+          # Extract version from tag
+          TAG_VERSION="${{ needs.release-please.outputs.version }}"
+          echo "Expected version: $TAG_VERSION"
+
+          # Check pyproject.toml
+          PYPROJECT_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "pyproject.toml version: $PYPROJECT_VERSION"
+
+          # Check __init__.py
+          INIT_VERSION=$(grep '__version__ = ' openzim_mcp/__init__.py | sed 's/__version__ = "\(.*\)"/\1/')
+          echo "__init__.py version: $INIT_VERSION"
+
+          # Check manifest
+          MANIFEST_VERSION=$(jq -r '."."' .release-please-manifest.json)
+          echo "manifest version: $MANIFEST_VERSION"
+
+          # Validate all versions match
+          if [ "$TAG_VERSION" = "$PYPROJECT_VERSION" ] && [ "$TAG_VERSION" = "$INIT_VERSION" ] && [ "$TAG_VERSION" = "$MANIFEST_VERSION" ]; then
+            echo "✅ All versions are synchronized!"
+          else
+            echo "❌ Version mismatch detected!"
+            echo "Tag: $TAG_VERSION"
+            echo "pyproject.toml: $PYPROJECT_VERSION"
+            echo "__init__.py: $INIT_VERSION"
+            echo "manifest: $MANIFEST_VERSION"
+            exit 1
+          fi
+
       - name: Notify release created
         run: |
-          echo "🎉 Release ${{ needs.release-please.outputs.tag_name }} created!"
+          echo "🎉 Release ${{ needs.release-please.outputs.tag_name }} created and validated!"
           echo "Version: ${{ needs.release-please.outputs.version }}"
           echo "The existing release workflow will now handle building and publishing."
