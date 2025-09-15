@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cache system**: Added path mapping cache with automatic invalidation of stale entries
 - **Error handling**: Improved error messages specifically designed for LLM user experience
 
-## [0.2.0] - 2024-12-12
+## [0.2.0] - 2025-01-15
 
 ### Added
 
