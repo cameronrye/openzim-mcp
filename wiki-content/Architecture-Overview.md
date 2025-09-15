@@ -16,7 +16,7 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 │                 OpenZIM MCP Server                         │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
 │  │   Server    │ │   Security  │ │   Instance Tracker  │   │
-│  │   Core      │ │   Layer     │ │                     │   │
+│  │   Core      │ │   Layer     │ │   & Health Monitor  │   │
 │  └─────────────┘ └─────────────┘ └─────────────────────┘   │
 └─────────────────────┬───────────────────────────────────────┘
                       │
@@ -24,7 +24,7 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 │                 Business Logic Layer                       │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
 │  │    Cache    │ │   Content   │ │    ZIM Operations   │   │
-│  │   Manager   │ │  Processor  │ │                     │   │
+│  │   Manager   │ │  Processor  │ │  & Smart Retrieval  │   │
 │  └─────────────┘ └─────────────┘ └─────────────────────┘   │
 └─────────────────────┬───────────────────────────────────────┘
                       │
@@ -32,13 +32,13 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 │                   Data Access Layer                        │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
 │  │   libzim    │ │ File System │ │   Configuration     │   │
-│  │  Interface  │ │   Access    │ │                     │   │
+│  │  Interface  │ │   Access    │ │   & Validation      │   │
 │  └─────────────┘ └─────────────┘ └─────────────────────┘   │
 └─────────────────────┬───────────────────────────────────────┘
                       │
 ┌─────────────────────▼───────────────────────────────────────┐
 │                 Storage Layer                              │
-│              ZIM Files, Cache, Logs                        │
+│        ZIM Files, Cache, Logs, Instance Tracking           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -114,6 +114,34 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 - Namespace browsing
 - Article structure analysis
 
+### 6. Instance Tracker (`instance_tracker.py`)
+
+**Responsibilities**:
+- Multi-instance management
+- Conflict detection and resolution
+- Process monitoring
+- Configuration validation
+
+**Enterprise Features**:
+- Automatic instance registration
+- Stale instance cleanup
+- Configuration hash comparison
+- Health monitoring integration
+
+### 7. Smart Retrieval System
+
+**Responsibilities**:
+- Intelligent entry path resolution
+- Path mapping cache management
+- Automatic fallback strategies
+- Performance optimization
+
+**Advanced Capabilities**:
+- Pattern learning and recognition
+- Confidence-based caching
+- Multiple search strategies
+- Transparent operation
+
 ## 🔄 Request Flow
 
 ### Typical Request Processing
@@ -162,7 +190,7 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 
 ```
 openzim_mcp/
-├── __init__.py          # Package initialization
+├── __init__.py          # Package initialization and version
 ├── __main__.py          # CLI entry point
 ├── main.py              # Application entry point
 ├── server.py            # MCP server implementation
@@ -171,10 +199,27 @@ openzim_mcp/
 ├── cache.py             # Caching functionality
 ├── content_processor.py # Content processing
 ├── zim_operations.py    # ZIM file operations
+├── instance_tracker.py  # Multi-instance management
 ├── exceptions.py        # Custom exceptions
-├── constants.py         # Application constants
-└── instance_tracker.py  # Multi-instance management
+└── constants.py         # Application constants
 ```
+
+### Enhanced Module Responsibilities
+
+#### Core Infrastructure
+- **`server.py`**: Enhanced with health monitoring and diagnostics
+- **`config.py`**: Expanded configuration with validation and profiles
+- **`security.py`**: Advanced security features and input validation
+
+#### Business Logic
+- **`zim_operations.py`**: Smart retrieval system integration
+- **`cache.py`**: Multi-layer caching with performance metrics
+- **`content_processor.py`**: Enhanced content analysis and link extraction
+
+#### Enterprise Features
+- **`instance_tracker.py`**: Multi-instance management and conflict resolution
+- **Smart Retrieval**: Integrated path resolution and fallback mechanisms
+- **Health Monitoring**: Comprehensive system diagnostics and metrics
 
 ### Configuration System
 

@@ -6,25 +6,109 @@ Tips and techniques for optimizing OpenZIM MCP performance in production environ
 
 OpenZIM MCP is designed for high performance with intelligent caching, optimized ZIM operations, and efficient resource management. This guide helps you maximize performance for your specific use case.
 
-## 📊 Performance Monitoring
+## 📊 Advanced Performance Monitoring
 
-### Health Check Commands
+### Comprehensive Health Monitoring
 
-Monitor performance using built-in tools:
+OpenZIM MCP includes enterprise-grade monitoring capabilities:
 
-```bash
-# In your MCP client:
-"Check server health and show performance metrics"
-"Diagnose server state and identify performance issues"
+```json
+{
+  "name": "get_server_health"
+}
 ```
 
-### Key Metrics to Monitor
+**Detailed Health Response**:
+```json
+{
+  "status": "healthy",
+  "server_name": "openzim-mcp",
+  "uptime_info": {
+    "process_id": 12345,
+    "started_at": "2025-09-14T10:30:00Z",
+    "uptime_seconds": 3600
+  },
+  "cache_performance": {
+    "enabled": true,
+    "size": 150,
+    "max_size": 500,
+    "hit_rate": 0.87,
+    "total_hits": 8700,
+    "total_misses": 1300,
+    "evictions": 25,
+    "memory_usage_mb": 45.2
+  },
+  "instance_tracking": {
+    "active_instances": 1,
+    "conflicts_detected": 0,
+    "tracking_enabled": true
+  },
+  "request_metrics": {
+    "total_requests": 10000,
+    "successful_requests": 9950,
+    "failed_requests": 50,
+    "average_response_time_ms": 125,
+    "p95_response_time_ms": 250,
+    "p99_response_time_ms": 500
+  },
+  "smart_retrieval": {
+    "enabled": true,
+    "cache_hit_rate": 0.93,
+    "fallback_success_rate": 0.87,
+    "average_resolution_time_ms": 45
+  }
+}
+```
 
-1. **Cache Hit Rate**: Target >70% for good performance
-2. **Memory Usage**: Monitor for memory leaks
-3. **Request Duration**: Track response times
-4. **Concurrent Operations**: Monitor active requests
-5. **ZIM File Access**: Track file I/O patterns
+### Advanced Diagnostics
+
+```json
+{
+  "name": "diagnose_server_state"
+}
+```
+
+**Performance Analysis Response**:
+```json
+{
+  "performance_analysis": {
+    "cache_efficiency": "excellent",
+    "memory_usage": "normal",
+    "response_times": "optimal",
+    "smart_retrieval_performance": "good",
+    "instance_management": "healthy"
+  },
+  "recommendations": [
+    "Cache performance is optimal",
+    "Consider increasing smart retrieval cache size",
+    "Monitor memory usage trends"
+  ],
+  "bottlenecks_detected": [],
+  "optimization_opportunities": [
+    {
+      "area": "cache_tuning",
+      "impact": "medium",
+      "suggestion": "Increase cache TTL for better hit rates"
+    }
+  ]
+}
+```
+
+### Key Performance Indicators (KPIs)
+
+#### Primary Metrics
+1. **Cache Hit Rate**: Target >85% for optimal performance
+2. **Smart Retrieval Hit Rate**: Target >90% for path resolution
+3. **Average Response Time**: Target <100ms for search operations
+4. **Memory Efficiency**: Monitor cache memory vs total memory
+5. **Instance Health**: Zero conflicts in production
+
+#### Secondary Metrics
+1. **Request Success Rate**: Target >99.5%
+2. **Fallback Success Rate**: Target >85% for smart retrieval
+3. **Concurrent Request Handling**: Monitor queue depth
+4. **ZIM File Access Patterns**: Track I/O efficiency
+5. **Configuration Stability**: Monitor config hash changes
 
 ## 🚀 Cache Optimization
 
@@ -46,6 +130,135 @@ export OPENZIM_MCP_CACHE__TTL_SECONDS=14400  # 4 hours
 ```bash
 export OPENZIM_MCP_CACHE__MAX_SIZE=1000
 export OPENZIM_MCP_CACHE__TTL_SECONDS=28800  # 8 hours
+```
+
+## 📈 Monitoring and Alerting
+
+### Real-Time Monitoring
+
+**Continuous Health Monitoring**:
+```bash
+#!/bin/bash
+# health_monitor.sh - Continuous health monitoring script
+
+HEALTH_CHECK_INTERVAL=60  # seconds
+LOG_FILE="/var/log/openzim-mcp/health.log"
+
+while true; do
+    TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Get health metrics
+    HEALTH_DATA=$(curl -s -X POST http://localhost:8000/mcp \
+        -H "Content-Type: application/json" \
+        -d '{"name": "get_server_health"}')
+
+    # Extract key metrics
+    CACHE_HIT_RATE=$(echo "$HEALTH_DATA" | jq -r '.cache_performance.hit_rate')
+    RESPONSE_TIME=$(echo "$HEALTH_DATA" | jq -r '.request_metrics.average_response_time_ms')
+    MEMORY_USAGE=$(echo "$HEALTH_DATA" | jq -r '.cache_performance.memory_usage_mb')
+
+    # Log metrics
+    echo "$TIMESTAMP,cache_hit_rate:$CACHE_HIT_RATE,response_time:$RESPONSE_TIME,memory_mb:$MEMORY_USAGE" >> "$LOG_FILE"
+
+    # Check thresholds and alert
+    if (( $(echo "$CACHE_HIT_RATE < 0.7" | bc -l) )); then
+        echo "ALERT: Low cache hit rate: $CACHE_HIT_RATE" | logger -t openzim-mcp
+    fi
+
+    if (( $(echo "$RESPONSE_TIME > 200" | bc -l) )); then
+        echo "ALERT: High response time: ${RESPONSE_TIME}ms" | logger -t openzim-mcp
+    fi
+
+    sleep $HEALTH_CHECK_INTERVAL
+done
+```
+
+### Performance Dashboards
+
+**Grafana Dashboard Configuration** (Future):
+```json
+{
+  "dashboard": {
+    "title": "OpenZIM MCP Performance",
+    "panels": [
+      {
+        "title": "Cache Hit Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "openzim_cache_hit_rate",
+            "legendFormat": "Hit Rate"
+          }
+        ]
+      },
+      {
+        "title": "Response Times",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "openzim_response_time_ms",
+            "legendFormat": "Response Time"
+          }
+        ]
+      },
+      {
+        "title": "Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "openzim_memory_usage_mb",
+            "legendFormat": "Memory MB"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Alerting Rules
+
+**Performance Alert Thresholds**:
+```yaml
+# alerts.yml - Performance alerting configuration
+groups:
+  - name: openzim_mcp_performance
+    rules:
+      - alert: LowCacheHitRate
+        expr: openzim_cache_hit_rate < 0.7
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenZIM MCP cache hit rate is low"
+          description: "Cache hit rate is {{ $value }}, below 70% threshold"
+
+      - alert: HighResponseTime
+        expr: openzim_response_time_ms > 200
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenZIM MCP response time is high"
+          description: "Average response time is {{ $value }}ms"
+
+      - alert: MemoryUsageHigh
+        expr: openzim_memory_usage_mb > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenZIM MCP memory usage is high"
+          description: "Memory usage is {{ $value }}MB"
+
+      - alert: InstanceConflict
+        expr: openzim_instance_conflicts > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenZIM MCP instance conflicts detected"
+          description: "{{ $value }} instance conflicts detected"
 ```
 
 ### Cache Strategy Optimization
