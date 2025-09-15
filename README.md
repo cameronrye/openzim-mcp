@@ -1116,10 +1116,20 @@ Version bumps and releases are automated based on [Conventional Commits](https:/
 
 ### Release Process
 
-1. **Automatic**: Push commits with conventional commit messages to `main`
-2. **Release PR**: release-please creates a PR with version updates and changelog
-3. **Release**: Merge the release PR to automatically create a new release
-4. **Manual**: Use workflow dispatch for emergency releases
+The project uses an **improved, consolidated release system** with automatic validation:
+
+1. **Automatic** (Recommended): Push conventional commits → Release Please creates PR → Merge PR → Automatic release
+2. **Manual**: Use GitHub Actions UI for direct control over releases
+3. **Emergency**: Push tags directly for critical fixes
+
+**Key Features:**
+- ✅ **Zero-touch releases** from main branch
+- ✅ **Automatic version synchronization** validation
+- ✅ **Comprehensive testing** before every release
+- ✅ **Improved error handling** and rollback capabilities
+- ✅ **Branch protection** prevents broken releases
+
+For detailed instructions, see [Release Process Guide](docs/RELEASE_PROCESS_GUIDE.md).
 
 ### Commit Message Format
 

@@ -1,17 +1,24 @@
 # Deployment Guide
 
-This guide explains how to properly deploy the openzim-mcp package to PyPI.
+This guide explains how to properly deploy the openzim-mcp package to PyPI using the improved release system.
 
-## Problem Background
+## System Overview
 
-The PyPI deployment was failing due to GitHub environment protection rules. The `pypi` environment is configured to only allow deployments from version tag branches, not from the `main` branch. This is a security best practice to ensure only tagged releases are published.
+The release system has been completely redesigned for reliability and simplicity:
 
-## Solution
+✅ **Single consolidated workflow** (`release.yml`)
+✅ **Automatic version synchronization validation**
+✅ **Improved release notes extraction**
+✅ **Multiple trigger methods for flexibility**
+✅ **Comprehensive error handling and rollback**
 
-We've implemented a two-workflow solution:
+## Key Improvements
 
-1. **Manual Release Workflow** (`manual-release.yml`) - For creating and triggering releases safely
-2. **Release Workflow** (`release.yml`) - The main release workflow that handles building and publishing
+- **Fixed version synchronization issues** that were causing deployment failures
+- **Consolidated workflows** to eliminate confusion and conflicts
+- **Enhanced validation** to catch issues before deployment
+- **Better error messages** for faster troubleshooting
+- **Branch protection rules** to prevent direct pushes to main
 
 ## How to Deploy
 
@@ -33,19 +40,21 @@ We've implemented a two-workflow solution:
 
 ### Method 2: Manual Release
 
-If you need to create a manual release:
+The consolidated release workflow now supports manual releases directly:
 
-1. **Use the Manual Release Workflow**:
-   - Go to Actions → Manual Release
-   - Click "Run workflow"
-   - Enter the tag name (e.g., `v0.3.2`)
-   - Choose whether to create the tag if it doesn't exist
-   - Click "Run workflow"
+1. **Go to Actions → Release**
+2. **Click "Run workflow"**
+3. **Choose your options:**
+   - **For new release:** Leave tag empty, set `create_tag: true`, choose release type
+   - **For existing tag:** Enter tag name, set `create_tag: false`
+4. **Click "Run workflow"**
 
-2. **The workflow will**:
-   - Validate the tag format
-   - Create the tag if requested
-   - Trigger the main release workflow from the correct tag context
+The workflow will:
+- Validate inputs and tag format
+- Create tag if requested (with automatic version increment)
+- Run full test suite
+- Build and publish to PyPI
+- Create GitHub release with proper release notes
 
 ### Method 3: Direct Tag Push (Advanced)
 
@@ -67,39 +76,39 @@ The `pypi` environment has protection rules that:
 - ✅ Allow deployments when triggered by tag pushes
 - ❌ Reject deployments when triggered by workflow_dispatch from main
 
+## Validation and Safety Features
+
+### Automatic Version Validation
+- **Pre-release checks** ensure all version files are synchronized
+- **Build validation** confirms package builds successfully
+- **Test validation** runs full test suite before deployment
+- **Environment protection** prevents deployments from wrong contexts
+
+### Error Prevention
+- **Tag validation** ensures proper semantic versioning format
+- **Duplicate prevention** checks for existing tags/versions
+- **Branch protection** requires PR reviews and status checks
+- **Rollback capabilities** for failed deployments
+
 ## Troubleshooting
 
-### "Branch 'main' is not allowed to deploy to pypi"
+### Version Synchronization Issues
+**Error**: "Version mismatch detected!"
+**Solution**: See [Release Troubleshooting Guide](RELEASE_TROUBLESHOOTING.md#version-synchronization-failure)
 
-This error occurs when:
-- The release workflow is triggered manually from the main branch
-- The workflow_dispatch doesn't specify a valid tag
+### Release Notes Missing
+**Error**: "Release notes not found in CHANGELOG.md"
+**Solution**: The improved extraction script now handles this automatically with fallback notes
 
-**Solution**: Use the Manual Release workflow instead of triggering the Release workflow directly.
-
-### "Tag does not exist"
-
-This error occurs when:
-- You specify a tag that doesn't exist in the repository
-- There's a typo in the tag name
-
-**Solution**: 
-- Check existing tags: `git tag -l`
-- Use the Manual Release workflow with `create_tag: true`
-- Create the tag manually first
-
-### PyPI Upload Fails
-
-If the PyPI upload itself fails:
-- Check if the version already exists on PyPI
-- Verify the package builds correctly
-- Check PyPI trusted publishing configuration
+### PyPI Upload Failures
+**Error**: Various PyPI-related errors
+**Solution**: Check [Release Troubleshooting Guide](RELEASE_TROUBLESHOOTING.md#pypi-deployment-rejection)
 
 ## Workflow Files
 
-- `.github/workflows/release.yml` - Main release workflow (triggered by tags)
-- `.github/workflows/manual-release.yml` - Safe manual release workflow
-- `.github/workflows/release-please.yml` - Automated version management
+- `.github/workflows/release.yml` - **Consolidated release workflow** (handles all release types)
+- `.github/workflows/release-please.yml` - **Automated version management**
+- ~~`.github/workflows/manual-release.yml`~~ - **Removed** (functionality merged into main workflow)
 
 ## Security Notes
 
