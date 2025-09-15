@@ -48,6 +48,13 @@ jobs:
           echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "placeholder"}' > benchmark-results.json
         fi
 
+    - name: Clean workspace before benchmark storage
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        # Stash any changes to avoid conflicts with gh-pages checkout
+        git add .
+        git stash --include-untracked || echo "No changes to stash"
+
     - name: Store benchmark results
       uses: benchmark-action/github-action-benchmark@v1
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -63,6 +70,13 @@ jobs:
         # Store benchmarks in a subdirectory to avoid conflicts with main site
         gh-pages-branch: 'gh-pages'
         benchmark-data-dir-path: 'benchmarks'
+
+    - name: Restore workspace after benchmark storage
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        # Return to original branch and restore changes if any
+        git checkout ${{ github.ref_name }} || git checkout main
+        git stash pop || echo "No stash to restore"
 
     - name: Compare benchmark results (PR)
       uses: benchmark-action/github-action-benchmark@v1
