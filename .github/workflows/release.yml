@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.3.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -90,6 +96,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
     - name: Download build artifacts
       uses: actions/download-artifact@v4
@@ -100,8 +107,13 @@ jobs:
     - name: Extract release notes
       id: extract-notes
       run: |
-        # Extract version from tag
-        VERSION=${GITHUB_REF#refs/tags/v}
+        # Extract version from tag or manual input
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.tag }}"
+          VERSION=${VERSION#v}  # Remove 'v' prefix if present
+        else
+          VERSION=${GITHUB_REF#refs/tags/v}
+        fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         
         # Extract release notes from CHANGELOG.md
