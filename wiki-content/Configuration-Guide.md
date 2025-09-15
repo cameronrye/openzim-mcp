@@ -176,6 +176,98 @@ export OPENZIM_MCP_INSTANCE__TRACKING_DIR="/var/lib/openzim_mcp"
 # Conflict detection sensitivity (default: strict)
 # Options: strict, moderate, relaxed
 export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=moderate
+
+# Heartbeat interval in seconds (default: 60)
+export OPENZIM_MCP_INSTANCE__HEARTBEAT_INTERVAL=30
+
+# Instance cleanup interval in seconds (default: 300)
+export OPENZIM_MCP_INSTANCE__CLEANUP_INTERVAL=600
+
+# Maximum stale instance age in seconds (default: 3600)
+export OPENZIM_MCP_INSTANCE__MAX_STALE_AGE=7200
+```
+
+### Instance Tracking Profiles
+
+**Production Environment**:
+```bash
+export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
+export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=strict
+export OPENZIM_MCP_INSTANCE__HEARTBEAT_INTERVAL=60
+export OPENZIM_MCP_INSTANCE__CLEANUP_INTERVAL=300
+```
+
+**Development Environment**:
+```bash
+export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
+export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=relaxed
+export OPENZIM_MCP_INSTANCE__HEARTBEAT_INTERVAL=120
+export OPENZIM_MCP_INSTANCE__CLEANUP_INTERVAL=600
+```
+
+**High-Availability Environment**:
+```bash
+export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
+export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=strict
+export OPENZIM_MCP_INSTANCE__HEARTBEAT_INTERVAL=30
+export OPENZIM_MCP_INSTANCE__CLEANUP_INTERVAL=120
+export OPENZIM_MCP_INSTANCE__MAX_STALE_AGE=1800
+```
+
+## 🧠 Smart Retrieval Configuration
+
+### Smart Retrieval Settings
+
+```bash
+# Enable/disable smart retrieval (default: true)
+export OPENZIM_MCP_SMART_RETRIEVAL__ENABLED=true
+
+# Path mapping cache size (default: 1000)
+export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=2000
+
+# Cache TTL in seconds (default: 3600)
+export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=7200
+
+# Fallback search limit (default: 10)
+export OPENZIM_MCP_SMART_RETRIEVAL__SEARCH_LIMIT=20
+
+# Minimum confidence threshold (default: 0.7)
+export OPENZIM_MCP_SMART_RETRIEVAL__MIN_CONFIDENCE=0.8
+
+# Enable pattern learning (default: true)
+export OPENZIM_MCP_SMART_RETRIEVAL__PATTERN_LEARNING=true
+
+# Maximum fallback attempts (default: 5)
+export OPENZIM_MCP_SMART_RETRIEVAL__MAX_ATTEMPTS=10
+```
+
+### Smart Retrieval Profiles
+
+**High-Performance Profile**:
+```bash
+export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=5000
+export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=14400
+export OPENZIM_MCP_SMART_RETRIEVAL__SEARCH_LIMIT=50
+export OPENZIM_MCP_SMART_RETRIEVAL__MIN_CONFIDENCE=0.6
+export OPENZIM_MCP_SMART_RETRIEVAL__MAX_ATTEMPTS=15
+```
+
+**Memory-Constrained Profile**:
+```bash
+export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=500
+export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=1800
+export OPENZIM_MCP_SMART_RETRIEVAL__SEARCH_LIMIT=5
+export OPENZIM_MCP_SMART_RETRIEVAL__MIN_CONFIDENCE=0.8
+export OPENZIM_MCP_SMART_RETRIEVAL__MAX_ATTEMPTS=3
+```
+
+**Development Profile**:
+```bash
+export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=1000
+export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=3600
+export OPENZIM_MCP_SMART_RETRIEVAL__SEARCH_LIMIT=15
+export OPENZIM_MCP_SMART_RETRIEVAL__MIN_CONFIDENCE=0.7
+export OPENZIM_MCP_SMART_RETRIEVAL__PATTERN_LEARNING=true
 ```
 
 ## 📊 Complete Configuration Reference
@@ -212,6 +304,17 @@ export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=moderate
 | `INSTANCE__TRACKING_ENABLED` | `true` | Instance tracking | `true`, `false` |
 | `INSTANCE__TRACKING_DIR` | `~/.openzim_mcp_instances` | Tracking directory | Any valid path |
 | `INSTANCE__CONFLICT_DETECTION` | `strict` | Conflict detection | `strict`, `moderate`, `relaxed` |
+| `INSTANCE__HEARTBEAT_INTERVAL` | `60` | Heartbeat interval (sec) | `30-300` |
+| `INSTANCE__CLEANUP_INTERVAL` | `300` | Cleanup interval (sec) | `60-3600` |
+| `INSTANCE__MAX_STALE_AGE` | `3600` | Max stale age (sec) | `300-86400` |
+| **Smart Retrieval Settings** |
+| `SMART_RETRIEVAL__ENABLED` | `true` | Enable smart retrieval | `true`, `false` |
+| `SMART_RETRIEVAL__CACHE_SIZE` | `1000` | Path cache size | `100-10000` |
+| `SMART_RETRIEVAL__CACHE_TTL` | `3600` | Cache TTL (sec) | `300-86400` |
+| `SMART_RETRIEVAL__SEARCH_LIMIT` | `10` | Fallback search limit | `1-100` |
+| `SMART_RETRIEVAL__MIN_CONFIDENCE` | `0.7` | Min confidence threshold | `0.1-1.0` |
+| `SMART_RETRIEVAL__PATTERN_LEARNING` | `true` | Enable pattern learning | `true`, `false` |
+| `SMART_RETRIEVAL__MAX_ATTEMPTS` | `5` | Max fallback attempts | `1-20` |
 
 ## 🎯 Configuration Profiles
 

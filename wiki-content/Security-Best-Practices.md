@@ -8,13 +8,43 @@ OpenZIM MCP implements multiple layers of security to protect against common vul
 
 ## 🛡️ Built-in Security Features
 
-### Path Traversal Protection
+### Advanced Path Traversal Protection
 
-**Automatic Protection**:
-- Path normalization and validation
-- Whitelist-based directory access
-- Symbolic link resolution blocking
-- Relative path prevention
+**Enterprise-Grade Protection**:
+- Multi-layer path normalization and validation
+- Whitelist-based directory access with inheritance checking
+- Symbolic link resolution blocking with recursive detection
+- Relative path prevention with canonical path verification
+- Directory escape detection using multiple algorithms
+- Real-time path validation with caching
+
+**Enhanced Security Implementation**:
+```python
+# Advanced path validation process
+def validate_path_enterprise(self, path: str) -> ValidationResult:
+    # 1. Normalize path separators and resolve relative components
+    normalized = os.path.normpath(path.replace('\\', '/'))
+
+    # 2. Detect common traversal patterns
+    traversal_patterns = ['../', '..\\', '%2e%2e%2f', '%2e%2e%5c']
+    for pattern in traversal_patterns:
+        if pattern in path.lower():
+            return ValidationResult.BLOCKED_TRAVERSAL
+
+    # 3. Resolve symbolic links and get canonical path
+    try:
+        canonical = os.path.realpath(normalized)
+    except (OSError, ValueError):
+        return ValidationResult.INVALID_PATH
+
+    # 4. Verify against allowed directories
+    for allowed_dir in self.allowed_directories:
+        allowed_canonical = os.path.realpath(allowed_dir)
+        if canonical.startswith(allowed_canonical + os.sep):
+            return ValidationResult.ALLOWED
+
+    return ValidationResult.BLOCKED_UNAUTHORIZED
+```
 
 **Configuration**:
 ```bash
@@ -23,6 +53,12 @@ export OPENZIM_MCP_SECURITY__STRICT_PATHS=true
 
 # Limit path depth (default: 10)
 export OPENZIM_MCP_SECURITY__MAX_PATH_DEPTH=15
+
+# Enable advanced traversal detection (default: true)
+export OPENZIM_MCP_SECURITY__ADVANCED_TRAVERSAL_DETECTION=true
+
+# Path validation cache size (default: 1000)
+export OPENZIM_MCP_SECURITY__PATH_CACHE_SIZE=2000
 ```
 
 ### Input Validation
@@ -43,6 +79,57 @@ export OPENZIM_MCP_SECURITY__SANITIZE_INPUT=true
 
 # Allowed file extensions (default: .zim)
 export OPENZIM_MCP_SECURITY__ALLOWED_EXTENSIONS=".zim,.zimaa"
+```
+
+### Multi-Instance Security
+
+**Enterprise Instance Management**:
+- Automatic instance registration with security validation
+- Configuration hash verification to prevent tampering
+- Process isolation and conflict detection
+- Secure instance file storage with permission validation
+- Automatic cleanup of stale instances
+
+**Security Features**:
+```python
+# Instance security validation
+def validate_instance_security(self, instance: ServerInstance) -> SecurityResult:
+    # 1. Verify process ownership
+    try:
+        process = psutil.Process(instance.pid)
+        if process.username() != self.expected_user:
+            return SecurityResult.UNAUTHORIZED_PROCESS
+    except psutil.NoSuchProcess:
+        return SecurityResult.STALE_INSTANCE
+
+    # 2. Validate configuration hash
+    if not self.verify_config_hash(instance.config_hash):
+        return SecurityResult.TAMPERED_CONFIG
+
+    # 3. Check directory permissions
+    for directory in instance.allowed_directories:
+        if not self.validate_directory_permissions(directory):
+            return SecurityResult.INSECURE_PERMISSIONS
+
+    return SecurityResult.SECURE
+```
+
+**Configuration**:
+```bash
+# Enable instance tracking (default: true)
+export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
+
+# Secure instance directory (default: ~/.openzim_mcp_instances)
+export OPENZIM_MCP_INSTANCE__TRACKING_DIR="/var/lib/openzim_mcp_secure"
+
+# Strict conflict detection (default: strict)
+export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=strict
+
+# Instance file permissions (default: 600)
+export OPENZIM_MCP_INSTANCE__FILE_PERMISSIONS=600
+
+# Enable process validation (default: true)
+export OPENZIM_MCP_INSTANCE__VALIDATE_PROCESSES=true
 ```
 
 ## 🏗️ Deployment Security
