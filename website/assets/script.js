@@ -129,146 +129,7 @@ function initTabs() {
     });
 }
 
-// Add more tab content dynamically
-function addTabContent() {
-    const tabContent = document.querySelector('.tab-content');
-    
-    // Browse tab content
-    const browseTab = document.createElement('div');
-    browseTab.className = 'tab-pane';
-    browseTab.id = 'browse';
-    browseTab.innerHTML = `
-        <div class="example-block">
-            <h4>Browse Namespaces</h4>
-            <div class="code-block">
-                <button class="copy-btn" data-clipboard-target="#browse-example">
-                    <span class="copy-icon">📋</span>
-                </button>
-                <pre><code id="browse-example">{
-  "name": "browse_namespace",
-  "arguments": {
-    "zim_file_path": "wikipedia_en_100_2025-08.zim",
-    "namespace": "C",
-    "limit": 10,
-    "offset": 0
-  }
-}</code></pre>
-            </div>
-            <div class="example-result">
-                <h5>Response:</h5>
-                <pre><code>{
-  "namespace": "C",
-  "total_in_namespace": 80000,
-  "offset": 0,
-  "limit": 10,
-  "returned_count": 10,
-  "has_more": true,
-  "entries": [
-    {
-      "path": "C/Biology",
-      "title": "Biology",
-      "content_type": "text/html",
-      "preview": "Biology is the scientific study of life..."
-    }
-  ]
-}</code></pre>
-            </div>
-        </div>
-    `;
-    
-    // Structure tab content
-    const structureTab = document.createElement('div');
-    structureTab.className = 'tab-pane';
-    structureTab.id = 'structure';
-    structureTab.innerHTML = `
-        <div class="example-block">
-            <h4>Get Article Structure</h4>
-            <div class="code-block">
-                <button class="copy-btn" data-clipboard-target="#structure-example">
-                    <span class="copy-icon">📋</span>
-                </button>
-                <pre><code id="structure-example">{
-  "name": "get_article_structure",
-  "arguments": {
-    "zim_file_path": "wikipedia_en_100_2025-08.zim",
-    "entry_path": "C/Evolution"
-  }
-}</code></pre>
-            </div>
-            <div class="example-result">
-                <h5>Response:</h5>
-                <pre><code>{
-  "title": "Evolution",
-  "path": "C/Evolution",
-  "content_type": "text/html",
-  "headings": [
-    {"level": 1, "text": "Evolution", "id": "evolution"},
-    {"level": 2, "text": "History", "id": "history"},
-    {"level": 2, "text": "Mechanisms", "id": "mechanisms"}
-  ],
-  "sections": [
-    {
-      "title": "Evolution",
-      "level": 1,
-      "content_preview": "Evolution is the change in heritable traits...",
-      "word_count": 150
-    }
-  ],
-  "word_count": 5000
-}</code></pre>
-            </div>
-        </div>
-    `;
-    
-    // Config tab content
-    const configTab = document.createElement('div');
-    configTab.className = 'tab-pane';
-    configTab.id = 'config';
-    configTab.innerHTML = `
-        <div class="example-block">
-            <h4>MCP Client Configuration</h4>
-            <div class="code-block">
-                <button class="copy-btn" data-clipboard-target="#config-example">
-                    <span class="copy-icon">📋</span>
-                </button>
-                <pre><code id="config-example">{
-  "mcpServers": {
-    "openzim-mcp": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/path/to/openzim-mcp",
-        "run",
-        "python",
-        "-m",
-        "openzim_mcp",
-        "/path/to/zim/files"
-      ]
-    }
-  }
-}</code></pre>
-            </div>
-            <div class="example-result">
-                <h5>Environment Variables (Optional):</h5>
-                <pre><code># Cache configuration
-export OPENZIM_MCP_CACHE__ENABLED=true
-export OPENZIM_MCP_CACHE__MAX_SIZE=200
-export OPENZIM_MCP_CACHE__TTL_SECONDS=7200
-
-# Content configuration
-export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000
-export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=2000
-
-# Logging configuration
-export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
-            </div>
-        </div>
-    `;
-    
-    tabContent.appendChild(browseTab);
-    tabContent.appendChild(structureTab);
-    tabContent.appendChild(configTab);
-}
+// Tab content is now in HTML, no need for dynamic generation
 
 // Intersection Observer for animations
 function initScrollAnimations() {
@@ -361,15 +222,9 @@ function initLazyLoading() {
 document.addEventListener('DOMContentLoaded', function() {
     initCopyButtons();
     initTabs();
-    addTabContent();
     initScrollAnimations();
     initKeyboardNavigation();
     initLazyLoading();
-    
-    // Re-initialize copy buttons for dynamically added content
-    setTimeout(() => {
-        initCopyButtons();
-    }, 100);
 });
 
 // Add some Easter eggs for developers
