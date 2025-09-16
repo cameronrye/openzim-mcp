@@ -231,3 +231,15 @@ class TestSecurityMissingCoverage:
 
         with pytest.raises(OpenZimMcpValidationError, match="File is not a ZIM file"):
             validator.validate_zim_file(non_zim_file)
+
+    def test_validate_zim_file_directory_coverage(self, temp_dir: Path):
+        """Test validate_zim_file with directory instead of file - covers line 160."""
+        validator = PathValidator([str(temp_dir)])
+
+        # Create a directory with .zim extension
+        zim_dir = temp_dir / "test.zim"
+        zim_dir.mkdir()
+
+        # Should raise error because it's a directory, not a file
+        with pytest.raises(OpenZimMcpValidationError, match="Path is not a file"):
+            validator.validate_zim_file(zim_dir)

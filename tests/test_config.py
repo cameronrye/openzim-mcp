@@ -150,3 +150,32 @@ class TestConfigMissingCoverage:
         assert "enabled=True" in repr_str
         assert "max_size=10" in repr_str
         assert "ttl_seconds=60" in repr_str
+
+    def test_get_config_summary_coverage(self, temp_dir: Path):
+        """Test get_config_summary method - covers line 142 in config.py."""
+        config = OpenZimMcpConfig(allowed_directories=[str(temp_dir)])
+        summary = config.get_config_summary()
+
+        # Verify all expected keys are present
+        expected_keys = {
+            "server_name",
+            "allowed_directories_count",
+            "allowed_directories",
+            "cache_enabled",
+            "cache_max_size",
+            "cache_ttl_seconds",
+            "content_max_length",
+            "content_snippet_length",
+            "search_default_limit",
+            "logging_level",
+            "config_hash"
+        }
+
+        assert set(summary.keys()) == expected_keys
+
+        # Verify some key values
+        assert summary["server_name"] == config.server_name
+        assert summary["allowed_directories_count"] == len(config.allowed_directories)
+        assert summary["allowed_directories"] == config.allowed_directories
+        assert summary["cache_enabled"] == config.cache.enabled
+        assert summary["config_hash"] == config.get_config_hash()
