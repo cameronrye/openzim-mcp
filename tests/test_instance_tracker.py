@@ -26,7 +26,9 @@ class TestSafeLog:
 
     def test_safe_log_handles_value_error(self):
         """Test safe_log handles ValueError (I/O operation on closed file)."""
-        mock_log_func = MagicMock(side_effect=ValueError("I/O operation on closed file"))
+        mock_log_func = MagicMock(
+            side_effect=ValueError("I/O operation on closed file")
+        )
         message = "Test log message"
 
         # Should not raise an exception
@@ -46,7 +48,9 @@ class TestSafeLog:
 
     def test_safe_log_handles_attribute_error(self):
         """Test safe_log handles AttributeError (logging objects may be None)."""
-        mock_log_func = MagicMock(side_effect=AttributeError("'NoneType' object has no attribute 'write'"))
+        mock_log_func = MagicMock(
+            side_effect=AttributeError("'NoneType' object has no attribute 'write'")
+        )
         message = "Test log message"
 
         # Should not raise an exception

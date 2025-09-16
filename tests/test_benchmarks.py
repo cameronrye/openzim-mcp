@@ -31,6 +31,7 @@ class TestCacheBenchmarks:
                 results.append(cache.get(f"key_{i}"))
 
             return results
+
         result = benchmark(cache_operations)
         assert len(result) == 100
         assert all(r is not None for r in result)
@@ -48,6 +49,7 @@ class TestCacheBenchmarks:
             # Access some items to test LRU behavior
             for i in range(0, 100, 10):
                 cache.get(f"key_{i}")
+
         benchmark(cache_eviction)
         assert cache.stats()["size"] <= 50
 
@@ -59,7 +61,8 @@ class TestContentProcessorBenchmarks:
         """Benchmark HTML to text conversion."""
         processor = ContentProcessor()
         # Create a moderately complex HTML document
-        html_content = """
+        html_content = (
+            """
         <html>
         <head><title>Test Document</title></head>
         <body>
@@ -81,10 +84,13 @@ class TestContentProcessorBenchmarks:
             </div>
         </body>
         </html>
-        """ * 10  # Repeat to make it larger
+        """
+            * 10
+        )  # Repeat to make it larger
 
         def convert_html():
             return processor.html_to_plain_text(html_content)
+
         result = benchmark(convert_html)
         assert isinstance(result, str)
         assert len(result) > 0
@@ -99,6 +105,7 @@ class TestContentProcessorBenchmarks:
 
         def truncate_content():
             return processor.truncate_content(large_content, max_length=5000)
+
         result = benchmark(truncate_content)
         # The result includes truncation message, so it will be longer than max_length
         assert "Content truncated" in result
@@ -125,7 +132,9 @@ class TestPathValidatorBenchmarks:
                 os.path.join(temp_dirs[0], "file1.zim"),
                 os.path.join(temp_dirs[1], "subdir", "file2.zim"),
                 os.path.join(temp_dirs[2], "another", "deep", "path", "file3.zim"),
-                os.path.join(temp_dirs[0], "..", os.path.basename(temp_dirs[1]), "file4.zim"),  # Should be normalized
+                os.path.join(
+                    temp_dirs[0], "..", os.path.basename(temp_dirs[1]), "file4.zim"
+                ),  # Should be normalized
             ] * 25  # 100 paths total
 
             def validate_paths():
@@ -137,11 +146,13 @@ class TestPathValidatorBenchmarks:
                     except Exception:
                         results.append(None)
                 return results
+
             results = benchmark(validate_paths)
             assert len(results) == 100
         finally:
             # Clean up temporary directories
             import shutil
+
             for temp_dir in temp_dirs:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -149,7 +160,7 @@ class TestPathValidatorBenchmarks:
 class TestZimOperationsBenchmarks:
     """Benchmark ZIM operations (mocked for performance testing)."""
 
-    @patch('openzim_mcp.zim_operations.Archive')
+    @patch("openzim_mcp.zim_operations.Archive")
     def test_search_benchmark(self, mock_archive_class, benchmark):
         """Benchmark search operations."""
         from openzim_mcp.config import OpenZimMcpConfig
@@ -169,13 +180,16 @@ class TestZimOperationsBenchmarks:
 
         # Create required dependencies
         import tempfile
+
         temp_dir = tempfile.mkdtemp()
         try:
             config = OpenZimMcpConfig(allowed_directories=[temp_dir])
             mock_path_validator = Mock()
             mock_cache = Mock()
             mock_content_processor = Mock()
-            zim_ops = ZimOperations(config, mock_path_validator, mock_cache, mock_content_processor)
+            zim_ops = ZimOperations(
+                config, mock_path_validator, mock_cache, mock_content_processor
+            )
 
             # Mock the search method to return a proper JSON string
             def mock_search(*args, **kwargs):
@@ -185,14 +199,16 @@ class TestZimOperationsBenchmarks:
 
             def perform_search():
                 return zim_ops.search_zim_file("/fake/path.zim", "test query", limit=50)
+
             result = benchmark(perform_search)
             assert "matches" in result
             assert "results" in result
         finally:
             import shutil
+
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    @patch('openzim_mcp.zim_operations.Archive')
+    @patch("openzim_mcp.zim_operations.Archive")
     def test_entry_retrieval_benchmark(self, mock_archive_class, benchmark):
         """Benchmark entry retrieval operations."""
         from openzim_mcp.config import OpenZimMcpConfig
@@ -203,7 +219,9 @@ class TestZimOperationsBenchmarks:
         mock_archive_class.return_value = mock_archive
         # Mock entry
         mock_entry = Mock()
-        mock_entry.get_item.return_value.get_data.return_value = b"<html><body>Test content</body></html>"
+        mock_entry.get_item.return_value.get_data.return_value = (
+            b"<html><body>Test content</body></html>"
+        )
         mock_entry.get_path.return_value = "A/Test_Article"
         mock_entry.get_title.return_value = "Test Article"
         mock_entry.get_mimetype.return_value = "text/html"
@@ -211,13 +229,16 @@ class TestZimOperationsBenchmarks:
 
         # Create required dependencies
         import tempfile
+
         temp_dir = tempfile.mkdtemp()
         try:
             config = OpenZimMcpConfig(allowed_directories=[temp_dir])
             mock_path_validator = Mock()
             mock_cache = Mock()
             mock_content_processor = Mock()
-            zim_ops = ZimOperations(config, mock_path_validator, mock_cache, mock_content_processor)
+            zim_ops = ZimOperations(
+                config, mock_path_validator, mock_cache, mock_content_processor
+            )
 
             # Mock the get_entry method to return a proper string
             def mock_get_entry(*args, **kwargs):
@@ -227,11 +248,13 @@ class TestZimOperationsBenchmarks:
 
             def get_entry():
                 return zim_ops.get_zim_entry("/fake/path.zim", "A/Test_Article")
+
             result = benchmark(get_entry)
             assert "content" in result
             assert "Path" in result
         finally:
             import shutil
+
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 

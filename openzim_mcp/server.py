@@ -29,7 +29,9 @@ class OpenZimMcpServer:
     """Main OpenZIM MCP server class with dependency injection."""
 
     def __init__(
-        self, config: OpenZimMcpConfig, instance_tracker: Optional[InstanceTracker] = None
+        self,
+        config: OpenZimMcpConfig,
+        instance_tracker: Optional[InstanceTracker] = None,
     ):
         """
         Initialize OpenZIM MCP server.
@@ -1116,7 +1118,9 @@ class OpenZimMcpServer:
             try:
                 # Sanitize inputs
                 zim_file_path = sanitize_input(zim_file_path, 1000)
-                namespace = sanitize_input(namespace, 100)  # Increased to support new namespace scheme
+                namespace = sanitize_input(
+                    namespace, 100
+                )  # Increased to support new namespace scheme
 
                 # Validate parameters
                 if limit < 1 or limit > 200:
@@ -1163,7 +1167,9 @@ class OpenZimMcpServer:
                 zim_file_path = sanitize_input(zim_file_path, 1000)
                 query = sanitize_input(query, 500)
                 if namespace:
-                    namespace = sanitize_input(namespace, 100)  # Increased to support new namespace scheme
+                    namespace = sanitize_input(
+                        namespace, 100
+                    )  # Increased to support new namespace scheme
                 if content_type:
                     content_type = sanitize_input(content_type, 100)
 
