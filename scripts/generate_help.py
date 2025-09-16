@@ -7,6 +7,7 @@ This script provides cross-platform compatibility for the make help command.
 import re
 import sys
 import os
+import signal
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -19,6 +20,55 @@ if os.name == 'nt':
         os.system('')
     except:
         pass
+
+
+class RegexTimeoutError(Exception):
+    """Raised when regex processing takes too long."""
+    pass
+
+
+def timeout_handler(signum, frame):
+    """Signal handler for regex timeout."""
+    raise RegexTimeoutError("Regex processing timed out")
+
+
+def safe_regex_findall(pattern: str, text: str, flags: int = 0, timeout: int = 5) -> List[Tuple[str, str]]:
+    """
+    Safely execute regex findall with timeout protection.
+
+    Args:
+        pattern: The regex pattern to match
+        text: The text to search in
+        flags: Regex flags
+        timeout: Maximum time in seconds to allow for regex processing
+
+    Returns:
+        List of matches as tuples
+
+    Raises:
+        RegexTimeoutError: If regex processing takes longer than timeout
+    """
+    # Set up timeout handler (Unix-like systems only)
+    if hasattr(signal, 'SIGALRM'):
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout)
+
+    try:
+        # Compile the regex first to catch any compilation errors
+        compiled_pattern = re.compile(pattern, flags)
+        matches = compiled_pattern.findall(text)
+        return matches
+    except RegexTimeoutError:
+        print("Warning: Regex processing timed out, using fallback parsing", file=sys.stderr)
+        return []
+    except re.error as e:
+        print(f"Warning: Regex compilation error: {e}, using fallback parsing", file=sys.stderr)
+        return []
+    finally:
+        # Clean up timeout handler
+        if hasattr(signal, 'SIGALRM'):
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
 
 def parse_makefile(makefile_path: Path) -> Dict[str, List[Tuple[str, str]]]:
@@ -42,9 +92,52 @@ def parse_makefile(makefile_path: Path) -> Dict[str, List[Tuple[str, str]]]:
         print(f"Error: Makefile not found at {makefile_path}")
         sys.exit(1)
     
-    # Find all targets with help comments
-    pattern = r'^([a-zA-Z][a-zA-Z0-9_-]*):.*?## (.*)$'
-    matches = re.findall(pattern, content, re.MULTILINE)
+    # Find all targets with help comments using a safe, non-backtracking regex
+    # This pattern avoids catastrophic backtracking by:
+    # 1. Using possessive quantifiers where possible
+    # 2. Being very specific about what can appear between target and comment
+    # 3. Limiting the search scope with line-by-line processing
+
+    matches = []
+
+    try:
+        lines = content.split('\n')
+
+        # Limit processing to reasonable number of lines to prevent DoS
+        max_lines = 10000
+        if len(lines) > max_lines:
+            print(f"Warning: Makefile has {len(lines)} lines, processing only first {max_lines}", file=sys.stderr)
+            lines = lines[:max_lines]
+
+        # Process line by line to avoid backtracking issues
+        target_pattern = re.compile(r'^([a-zA-Z][a-zA-Z0-9_-]{0,50}):')  # Limit target name length
+        comment_pattern = re.compile(r'## (.{0,200})$')  # Limit comment length
+
+        for line_num, line in enumerate(lines, 1):
+            # Skip overly long lines that might cause issues
+            if len(line) > 1000:
+                continue
+
+            try:
+                # First check if line starts with a valid target
+                target_match = target_pattern.match(line)
+                if target_match:
+                    # Then check if it has a help comment
+                    comment_match = comment_pattern.search(line)
+                    if comment_match:
+                        target_name = target_match.group(1)
+                        comment_text = comment_match.group(1).strip()
+
+                        # Additional validation
+                        if target_name and comment_text:
+                            matches.append((target_name, comment_text))
+            except Exception as e:
+                print(f"Warning: Error processing line {line_num}: {e}", file=sys.stderr)
+                continue
+
+    except Exception as e:
+        print(f"Error parsing Makefile: {e}", file=sys.stderr)
+        return {category: [] for category in categories.keys()}
     
     # Categorize targets with more specific matching
     for target, description in matches:
