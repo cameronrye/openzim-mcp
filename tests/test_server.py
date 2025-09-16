@@ -1413,8 +1413,8 @@ class TestOpenZimMcpServerHealthAndDiagnostics:
     def test_get_server_health_directory_access_errors(self, server):
         """Test get_server_health with directory access issues - covers lines 574-575."""
         import asyncio
-        from unittest.mock import patch, MagicMock
         from pathlib import Path
+        from unittest.mock import patch
 
         # Mock Path.exists to simulate inaccessible directories
         with patch.object(Path, 'exists', return_value=False):
@@ -1446,8 +1446,13 @@ class TestOpenZimMcpServerHealthAndDiagnostics:
     def test_get_server_configuration_invalid_directories(self, temp_dir):
         """Test get_server_configuration with invalid directories - covers lines 654-668."""
         import asyncio
-        from pathlib import Path
-        from openzim_mcp.config import OpenZimMcpConfig, CacheConfig, ContentConfig, LoggingConfig
+
+        from openzim_mcp.config import (
+            CacheConfig,
+            ContentConfig,
+            LoggingConfig,
+            OpenZimMcpConfig,
+        )
 
         # Create a valid config first, then modify it to have invalid directories
         valid_config = OpenZimMcpConfig(
@@ -1516,7 +1521,7 @@ class TestServerMissingCoverage:
 
     def test_search_zim_file_conflict_detection_coverage(self, server: OpenZimMcpServer):
         """Test search_zim_file conflict detection - covers lines 356-358."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         # Mock instance tracker to return conflicts
         mock_tracker = MagicMock()
@@ -1577,7 +1582,7 @@ class TestServerMissingCoverage:
 
     def test_search_zim_file_conflict_warning_coverage(self, server: OpenZimMcpServer):
         """Test search_zim_file conflict warning display - covers lines 341-355."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         # Mock instance tracker to return conflicts
         mock_tracker = MagicMock()
@@ -1808,8 +1813,8 @@ class TestOpenZimMcpServerParameterValidation:
 
     def test_list_zim_files_no_warnings_coverage(self, server: OpenZimMcpServer):
         """Test list_zim_files when no warnings are present - covers lines 274-275."""
-        from unittest.mock import patch, MagicMock
         import asyncio
+        from unittest.mock import MagicMock, patch
 
         # Mock the instance tracker to return no conflicts
         mock_tracker = MagicMock()
@@ -1830,11 +1835,11 @@ class TestOpenZimMcpServerParameterValidation:
                         warnings = []
                         if server.instance_tracker:
                             try:
-                                conflicts = server.instance_tracker.detect_conflicts(
+                                server.instance_tracker.detect_conflicts(
                                     server.config.get_config_hash()
                                 )
                                 # No conflicts in this test case
-                            except Exception as e:
+                            except Exception:
                                 pass
 
                         # If there are warnings, prepend them to the result
@@ -1860,8 +1865,8 @@ class TestOpenZimMcpServerParameterValidation:
 
     def test_list_zim_files_multiple_instances_warning_coverage(self, server: OpenZimMcpServer):
         """Test list_zim_files with multiple instances warning - covers lines 236-237."""
-        from unittest.mock import patch, MagicMock
         import asyncio
+        from unittest.mock import MagicMock, patch
 
         # Mock the instance tracker to return multiple instances conflict
         mock_tracker = MagicMock()
@@ -1895,18 +1900,28 @@ class TestOpenZimMcpServerParameterValidation:
                                         if conflict["type"] == "configuration_mismatch":
                                             warnings.append({
                                                 "type": "configuration_conflict",
-                                                "message": f"⚠️  Configuration mismatch detected with server PID {conflict['instance']['pid']}",
+                                                "message": (
+                                                    f"⚠️  Configuration mismatch detected "
+                                                    f"with server PID {conflict['instance']['pid']}"
+                                                ),
                                                 "resolution": "Different server configurations may cause inconsistent results.",
                                                 "severity": "high",
                                             })
                                         elif conflict["type"] == "multiple_instances":  # This covers lines 236-237
                                             warnings.append({
                                                 "type": "multiple_servers",
-                                                "message": f"⚠️  Multiple server instances detected (PID {conflict['instance']['pid']})",
-                                                "resolution": "Multiple servers may cause confusion. Use 'diagnose_server_state()' for detailed analysis or stop unused instances.",
+                                                "message": (
+                                                    f"⚠️  Multiple server instances detected "
+                                                    f"(PID {conflict['instance']['pid']})"
+                                                ),
+                                                "resolution": (
+                                                    "Multiple servers may cause confusion. "
+                                                    "Use 'diagnose_server_state()' for detailed analysis "
+                                                    "or stop unused instances."
+                                                ),
                                                 "severity": "medium",
                                             })
-                            except Exception as e:
+                            except Exception:
                                 pass
 
                         # If there are warnings, prepend them to the result

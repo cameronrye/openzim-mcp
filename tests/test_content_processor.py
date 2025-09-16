@@ -343,7 +343,7 @@ class TestContentProcessorMissingCoverage:
 
     def test_process_mime_content_decode_exception(self, content_processor: ContentProcessor):
         """Test process_mime_content with decode exception - covers line 296."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock
 
         # Create mock bytes that raises exception on decode
         mock_bytes = MagicMock()
