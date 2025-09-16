@@ -564,7 +564,7 @@ class TestInstanceTrackerMissingCoverage:
         """Test update_heartbeat exception handling - covers lines 248-258."""
         # Register an instance
         with patch("os.getpid", return_value=12345):
-            instance = instance_tracker.register_instance(
+            instance_tracker.register_instance(
                 config_hash="abc123",
                 allowed_directories=["/test/dir"],
                 server_name="test_server",

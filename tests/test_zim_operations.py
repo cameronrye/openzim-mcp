@@ -1908,7 +1908,7 @@ class TestZimOperationsExceptionHandling:
 
     def test_get_zim_entry_search_fallback_exception(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test get_zim_entry search fallback exception handling - covers lines 434-436."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         zim_file = temp_dir / "test.zim"
         zim_file.touch()
@@ -1931,7 +1931,7 @@ class TestZimOperationsExceptionHandling:
 
     def test_get_zim_metadata_exception_handling(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test get_zim_metadata exception handling - covers lines 678-679."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         zim_file = temp_dir / "test.zim"
         zim_file.touch()
@@ -1956,7 +1956,7 @@ class TestZimOperationsExceptionHandling:
 
     def test_list_namespaces_sampling_exception(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test list_namespaces sampling exception handling - covers lines 910-915."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         zim_file = temp_dir / "test.zim"
         zim_file.touch()
@@ -1978,12 +1978,12 @@ class TestZimOperationsExceptionHandling:
 
     def test_browse_namespace_exception_handling(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test browse_namespace exception handling - covers lines 1121-1123."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         zim_file = temp_dir / "test.zim"
         zim_file.touch()
 
-        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+        with patch("openzim_mcp.zim_operations.zim_archive"):
             mock_archive_instance = MagicMock()
             mock_archive_instance.entry_count = 100
             mock_archive_instance.has_new_namespace_scheme = False
@@ -2009,6 +2009,3 @@ class TestZimOperationsExceptionHandling:
 
             # Should include proper error message (check actual message format)
             assert "Link extraction failed" in str(exc_info.value)
-
-
-

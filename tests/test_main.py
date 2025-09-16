@@ -221,9 +221,9 @@ class TestMainEntryPoint:
 
     def test_main_cleanup_function_coverage(self):
         """Test the cleanup function inside main() - covers line 46."""
-        from unittest.mock import patch, MagicMock
-        import tempfile
         import sys
+        import tempfile
+        from unittest.mock import MagicMock, patch
 
         # Create a temporary directory for the test
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -399,10 +399,10 @@ if __name__ == "__main__":
 
     def test_main_module_runpy_execution(self):
         """Test __main__.py using runpy to simulate python -m execution."""
-        from unittest.mock import patch
         import runpy
         import sys
         import tempfile
+        from unittest.mock import patch
 
         # Create a temporary directory for the test
         with tempfile.TemporaryDirectory() as temp_dir:
