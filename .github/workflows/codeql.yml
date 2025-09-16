@@ -5,6 +5,15 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to analyze (optional)"
+        required: false
+        type: string
   schedule:
     - cron: "0 6 * * 1" # Weekly on Mondays at 6 AM UTC
 
@@ -26,6 +35,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # For pull_request_target, checkout the PR head
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
