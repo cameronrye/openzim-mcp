@@ -5,6 +5,15 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  pull_request_target:
+    branches: [ main ]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to benchmark (optional)'
+        required: false
+        type: string
   schedule:
     - cron: '0 2 * * 1'  # Weekly on Mondays at 2 AM UTC
 
@@ -19,6 +28,8 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
+        # For pull_request_target, checkout the PR head
+        ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
         fetch-depth: 0  # Fetch full history for comparison
 
     - name: Install uv
