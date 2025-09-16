@@ -168,7 +168,7 @@ This will run `get_server_health` and `diagnose_server_state` to identify proble
 **Solutions**:
 1. **Use search first**: Search for the article title
 2. **Check exact path**: Use `browse_namespace` to find correct path
-3. **Try different encodings**: 
+3. **Try different encodings**:
    - `A/Article_Name` vs `A/Article%20Name`
    - `A/Article_Name` vs `A/Article-Name`
 4. **Check namespace**: Ensure correct namespace (A, C, etc.)

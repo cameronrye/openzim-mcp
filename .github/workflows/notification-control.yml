@@ -14,19 +14,19 @@ jobs:
     name: Smart Notification Summary
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'failure'
-    
+
     steps:
-    - name: Send summary for failed workflows only
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const workflowName = '${{ github.event.workflow_run.name }}';
-          const conclusion = '${{ github.event.workflow_run.conclusion }}';
-          const runUrl = '${{ github.event.workflow_run.html_url }}';
-          
-          // Only create an issue for repeated failures to reduce noise
-          console.log(`Workflow ${workflowName} ${conclusion}`);
-          console.log(`Run URL: ${runUrl}`);
-          
-          // You can customize this to create issues, send to Slack, etc.
-          // instead of relying on email notifications
+      - name: Send summary for failed workflows only
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowName = '${{ github.event.workflow_run.name }}';
+            const conclusion = '${{ github.event.workflow_run.conclusion }}';
+            const runUrl = '${{ github.event.workflow_run.html_url }}';
+
+            // Only create an issue for repeated failures to reduce noise
+            console.log(`Workflow ${workflowName} ${conclusion}`);
+            console.log(`Run URL: ${runUrl}`);
+
+            // You can customize this to create issues, send to Slack, etc.
+            // instead of relying on email notifications

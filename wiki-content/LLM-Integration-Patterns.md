@@ -40,7 +40,7 @@ Leverage the smart retrieval system for robust access.
 ```
 # The system automatically handles:
 - "Natural Selection" → "Natural_selection"
-- "DNA Replication" → "DNA_replication"  
+- "DNA Replication" → "DNA_replication"
 - "Café" → "Caf%C3%A9"
 ```
 
@@ -225,16 +225,16 @@ for topic in popular_topics:
 def create_lesson_plan(topic):
     # 1. Get topic overview
     overview = search_zim_file(zim_path, topic, limit=1)
-    
+
     # 2. Get article structure for curriculum planning
     structure = get_article_structure(zim_path, overview[0].path)
-    
+
     # 3. Create progressive learning path
     sections = structure.sections
-    
+
     # 4. Prepare related topics for exploration
     links = extract_article_links(zim_path, overview[0].path)
-    
+
     return {
         "overview": overview,
         "structure": structure,
@@ -248,27 +248,27 @@ def create_lesson_plan(topic):
 # Pattern for research applications
 def research_topic(topic, depth="medium"):
     results = []
-    
+
     # 1. Initial search
     primary_results = search_zim_file(zim_path, topic, limit=10)
-    
+
     # 2. Get detailed content
     for result in primary_results:
         content = get_zim_entry(zim_path, result.path)
         links = extract_article_links(zim_path, result.path)
-        
+
         results.append({
             "content": content,
             "related": links.internal_links[:5]  # Top 5 related
         })
-    
+
     # 3. Follow related links if deep research
     if depth == "deep":
         for result in results:
             for link in result["related"]:
                 # Get related content
                 pass
-    
+
     return results
 ```
 
@@ -280,19 +280,19 @@ def summarize_topic(topic):
     # 1. Get main article
     search_results = search_zim_file(zim_path, topic, limit=1)
     main_article = search_results[0]
-    
+
     # 2. Get article structure for key points
     structure = get_article_structure(zim_path, main_article.path)
-    
+
     # 3. Extract key sections
     key_sections = [s for s in structure.sections if s.level <= 2]
-    
+
     # 4. Get content for each key section
     summary_content = []
     for section in key_sections:
         # Extract section content
         pass
-    
+
     return {
         "title": structure.title,
         "key_points": key_sections,
@@ -325,15 +325,15 @@ def robust_content_access(entry_path):
 def progressive_content_load(entry_path):
     # Start with structure
     structure = get_article_structure(zim_path, entry_path)
-    
+
     # Get preview
     preview = get_zim_entry(zim_path, entry_path, max_content_length=2000)
-    
+
     # Full content only if needed
     if user_wants_full_content:
         full_content = get_zim_entry(zim_path, entry_path, max_content_length=100000)
         return full_content
-    
+
     return preview
 ```
 
@@ -392,11 +392,11 @@ popular_articles = track_article_access()
 # Pattern for working with multiple ZIM files
 def search_across_zims(query, zim_files):
     all_results = []
-    
+
     for zim_file in zim_files:
         results = search_zim_file(zim_file, query, limit=5)
         all_results.extend(results)
-    
+
     # Deduplicate and rank results
     return deduplicate_and_rank(all_results)
 ```
@@ -408,13 +408,13 @@ def search_across_zims(query, zim_files):
 def create_comprehensive_answer(topic):
     # Main article
     main_content = get_main_article(topic)
-    
+
     # Related concepts
     related = get_related_articles(topic)
-    
+
     # External context
     external_links = extract_external_links(main_content.path)
-    
+
     return assemble_comprehensive_response(main_content, related, external_links)
 ```
 

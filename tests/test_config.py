@@ -104,7 +104,9 @@ class TestOpenZimMcpConfig:
 
     def test_openzim_mcp_config_nonexistent_directory(self):
         """Test OpenZimMcpConfig with non-existent directory."""
-        with pytest.raises(OpenZimMcpConfigurationError, match="Directory does not exist"):
+        with pytest.raises(
+            OpenZimMcpConfigurationError, match="Directory does not exist"
+        ):
             OpenZimMcpConfig(allowed_directories=["/nonexistent/path"])
 
     def test_openzim_mcp_config_file_instead_of_directory(self, temp_dir: Path):
@@ -112,7 +114,9 @@ class TestOpenZimMcpConfig:
         test_file = temp_dir / "test.txt"
         test_file.write_text("test")
 
-        with pytest.raises(OpenZimMcpConfigurationError, match="Path is not a directory"):
+        with pytest.raises(
+            OpenZimMcpConfigurationError, match="Path is not a directory"
+        ):
             OpenZimMcpConfig(allowed_directories=[str(test_file)])
 
     def test_openzim_mcp_config_home_directory_expansion(self, temp_dir: Path):
@@ -168,7 +172,7 @@ class TestConfigMissingCoverage:
             "content_snippet_length",
             "search_default_limit",
             "logging_level",
-            "config_hash"
+            "config_hash",
         }
 
         assert set(summary.keys()) == expected_keys

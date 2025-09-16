@@ -209,7 +209,7 @@ python -c "import openzim_mcp; print(openzim_mcp.__version__)"
    ```bash
    # Check recent workflow runs
    gh run list --limit 10
-   
+
    # Check current state
    git status
    git log --oneline -5

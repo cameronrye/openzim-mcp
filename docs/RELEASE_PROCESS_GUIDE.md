@@ -21,7 +21,7 @@ This is the primary release method using conventional commits and Release Please
 # Feature additions (minor version bump)
 git commit -m "feat: add search suggestions endpoint"
 
-# Bug fixes (patch version bump)  
+# Bug fixes (patch version bump)
 git commit -m "fix: resolve path traversal vulnerability"
 
 # Breaking changes (major version bump)
@@ -119,7 +119,7 @@ The system includes automatic validation:
 ```
 ✅ Validate and Prepare Release (for manual releases)
 ✅ Test before release
-✅ Build distribution  
+✅ Build distribution
 ✅ Publish to PyPI
 ✅ Create GitHub Release
 ```
@@ -128,7 +128,7 @@ The system includes automatic validation:
 
 ### Version Mismatch Errors
 **Error**: "Version mismatch detected!"
-**Solution**: 
+**Solution**:
 1. Check which files have wrong versions
 2. Update manually or create a fix commit
 3. Re-run the release

@@ -261,7 +261,7 @@ class OpenZimMcpServer:
 class ContentProcessor:
     def __init__(self, strategies: Dict[str, ProcessingStrategy]):
         self.strategies = strategies
-    
+
     def process(self, content_type: str, content: str) -> str:
         strategy = self.strategies.get(content_type, self.default_strategy)
         return strategy.process(content)
@@ -287,7 +287,7 @@ class ZimHandlerFactory:
 class HealthMonitor:
     def __init__(self):
         self.observers = []
-    
+
     def notify_health_change(self, health_data: HealthData):
         for observer in self.observers:
             observer.on_health_update(health_data)
@@ -341,10 +341,10 @@ class ZimFileManager:
     def __init__(self):
         self.open_files = {}
         self.file_locks = {}
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cleanup_resources()
 ```
@@ -374,16 +374,16 @@ class ZimFileManager:
 def validate_request(self, request: McpRequest) -> ValidationResult:
     # 1. Input validation
     self.validate_input(request.params)
-    
+
     # 2. Path validation
     self.validate_paths(request.file_paths)
-    
+
     # 3. Access control
     self.check_access_permissions(request.file_paths)
-    
+
     # 4. Rate limiting (future)
     self.check_rate_limits(request.client_id)
-    
+
     return ValidationResult.VALID
 ```
 
@@ -441,14 +441,14 @@ class InstanceTracker:
 def detect_conflicts(self) -> List[Conflict]:
     conflicts = []
     active_instances = self.get_active_instances()
-    
+
     for instance in active_instances:
         if self.has_config_conflict(instance):
             conflicts.append(ConfigConflict(instance))
-        
+
         if self.has_directory_conflict(instance):
             conflicts.append(DirectoryConflict(instance))
-    
+
     return conflicts
 ```
 

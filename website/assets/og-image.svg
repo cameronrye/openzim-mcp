@@ -9,10 +9,10 @@
       <stop offset="100%" style="stop-color:#10b981;stop-opacity:1" />
     </linearGradient>
   </defs>
-  
+
   <!-- Background -->
   <rect width="1200" height="630" fill="url(#bgGrad)"/>
-  
+
   <!-- Grid pattern -->
   <defs>
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -20,21 +20,21 @@
     </pattern>
   </defs>
   <rect width="1200" height="630" fill="url(#grid)"/>
-  
+
   <!-- Main content -->
   <g transform="translate(100, 150)">
     <!-- Logo -->
     <circle cx="60" cy="60" r="50" fill="url(#textGrad)" opacity="0.1"/>
     <text x="60" y="85" font-family="Arial, sans-serif" font-size="60" text-anchor="middle" fill="url(#textGrad)">🧠</text>
-    
+
     <!-- Title -->
     <text x="150" y="50" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="#1f2937">OpenZIM MCP</text>
     <text x="150" y="100" font-family="Arial, sans-serif" font-size="28" fill="#6b7280">Intelligent Knowledge Access for AI Models</text>
-    
+
     <!-- Description -->
     <text x="0" y="180" font-family="Arial, sans-serif" font-size="24" fill="#374151">Transform static ZIM archives into dynamic knowledge engines</text>
     <text x="0" y="220" font-family="Arial, sans-serif" font-size="24" fill="#374151">for Large Language Models with intelligent, structured access patterns.</text>
-    
+
     <!-- Features -->
     <g transform="translate(0, 280)">
       <text x="0" y="0" font-family="Arial, sans-serif" font-size="18" fill="#10b981">✓ Smart Navigation</text>
@@ -43,7 +43,7 @@
       <text x="650" y="0" font-family="Arial, sans-serif" font-size="18" fill="#10b981">✓ Security First</text>
     </g>
   </g>
-  
+
   <!-- GitHub link -->
   <text x="1100" y="600" font-family="Arial, sans-serif" font-size="16" text-anchor="end" fill="#6b7280">github.com/cameronrye/openzim-mcp</text>
 </svg>

@@ -3,20 +3,20 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v0.3.0) - Leave empty to create a new tag from main'
+        description: "Tag to release (e.g., v0.3.0) - Leave empty to create a new tag from main"
         required: false
         type: string
       create_tag:
-        description: 'Create the tag if it does not exist'
+        description: "Create the tag if it does not exist"
         required: false
         type: boolean
         default: false
       release_type:
-        description: 'Type of release (for new tags only)'
+        description: "Type of release (for new tags only)"
         required: false
         type: choice
         options:
@@ -27,7 +27,7 @@ on:
 
 permissions:
   contents: write
-  id-token: write  # Required for trusted publishing to PyPI
+  id-token: write # Required for trusted publishing to PyPI
 
 jobs:
   validate-and-prepare:
@@ -38,74 +38,74 @@ jobs:
       tag_name: ${{ steps.prepare.outputs.tag_name }}
       should_create_tag: ${{ steps.prepare.outputs.should_create_tag }}
     steps:
-    - uses: actions/checkout@v5
-      with:
-        fetch-depth: 0
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-    - name: Validate and prepare release
-      id: prepare
-      run: |
-        if [ -n "${{ github.event.inputs.tag }}" ]; then
-          # Use provided tag
-          TAG="${{ github.event.inputs.tag }}"
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
-            echo "Error: Invalid tag format. Expected format: v1.2.3"
-            exit 1
+      - name: Validate and prepare release
+        id: prepare
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            # Use provided tag
+            TAG="${{ github.event.inputs.tag }}"
+            if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
+              echo "Error: Invalid tag format. Expected format: v1.2.3"
+              exit 1
+            fi
+          else
+            # Generate new tag based on release type
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            echo "Latest tag: $LATEST_TAG"
+
+            # Extract version numbers
+            VERSION=${LATEST_TAG#v}
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+            # Increment based on release type
+            case "${{ github.event.inputs.release_type }}" in
+              major)
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+                ;;
+              minor)
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                ;;
+              patch)
+                PATCH=$((PATCH + 1))
+                ;;
+            esac
+
+            TAG="v${MAJOR}.${MINOR}.${PATCH}"
           fi
-        else
-          # Generate new tag based on release type
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "Latest tag: $LATEST_TAG"
 
-          # Extract version numbers
-          VERSION=${LATEST_TAG#v}
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          echo "tag_name=$TAG" >> $GITHUB_OUTPUT
 
-          # Increment based on release type
-          case "${{ github.event.inputs.release_type }}" in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
-          esac
+          # Check if tag exists
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "should_create_tag=false" >> $GITHUB_OUTPUT
+            echo "Tag $TAG already exists"
+          else
+            echo "should_create_tag=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG will be created"
+          fi
 
-          TAG="v${MAJOR}.${MINOR}.${PATCH}"
-        fi
+      - name: Create tag if needed
+        if: steps.prepare.outputs.should_create_tag == 'true' && github.event.inputs.create_tag == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.prepare.outputs.tag_name }}" -m "Release ${{ steps.prepare.outputs.tag_name }}"
+          git push origin "${{ steps.prepare.outputs.tag_name }}"
+          echo "Created and pushed tag ${{ steps.prepare.outputs.tag_name }}"
 
-        echo "tag_name=$TAG" >> $GITHUB_OUTPUT
-
-        # Check if tag exists
-        if git rev-parse "$TAG" >/dev/null 2>&1; then
-          echo "should_create_tag=false" >> $GITHUB_OUTPUT
-          echo "Tag $TAG already exists"
-        else
-          echo "should_create_tag=true" >> $GITHUB_OUTPUT
-          echo "Tag $TAG will be created"
-        fi
-
-    - name: Create tag if needed
-      if: steps.prepare.outputs.should_create_tag == 'true' && github.event.inputs.create_tag == 'true'
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a "${{ steps.prepare.outputs.tag_name }}" -m "Release ${{ steps.prepare.outputs.tag_name }}"
-        git push origin "${{ steps.prepare.outputs.tag_name }}"
-        echo "Created and pushed tag ${{ steps.prepare.outputs.tag_name }}"
-
-    - name: Fail if tag doesn't exist and creation not requested
-      if: steps.prepare.outputs.should_create_tag == 'true' && github.event.inputs.create_tag != 'true'
-      run: |
-        echo "Error: Tag ${{ steps.prepare.outputs.tag_name }} does not exist and create_tag is false"
-        echo "Either set create_tag to true or create the tag manually first"
-        exit 1
+      - name: Fail if tag doesn't exist and creation not requested
+        if: steps.prepare.outputs.should_create_tag == 'true' && github.event.inputs.create_tag != 'true'
+        run: |
+          echo "Error: Tag ${{ steps.prepare.outputs.tag_name }} does not exist and create_tag is false"
+          echo "Either set create_tag to true or create the tag manually first"
+          exit 1
 
   test:
     name: Test before release
@@ -113,33 +113,33 @@ jobs:
     needs: [validate-and-prepare]
     if: always() && (needs.validate-and-prepare.result == 'success' || needs.validate-and-prepare.result == 'skipped')
     steps:
-    - uses: actions/checkout@v5
-      with:
-        ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-      with:
-        version: "latest"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
 
-    - name: Set up Python
-      run: uv python install 3.12
+      - name: Set up Python
+        run: uv python install 3.12
 
-    - name: Install dependencies
-      run: |
-        uv sync
+      - name: Install dependencies
+        run: |
+          uv sync
 
-    - name: Run tests
-      run: |
-        make check
+      - name: Run tests
+        run: |
+          make check
 
-    - name: Download ZIM test data
-      run: |
-        make download-test-data
+      - name: Download ZIM test data
+        run: |
+          make download-test-data
 
-    - name: Run integration tests
-      run: |
-        make test-requires-zim-data
+      - name: Run integration tests
+        run: |
+          make test-requires-zim-data
 
   build:
     name: Build distribution
@@ -147,27 +147,27 @@ jobs:
     needs: [validate-and-prepare, test]
     if: always() && needs.test.result == 'success'
     steps:
-    - uses: actions/checkout@v5
-      with:
-        ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-      with:
-        version: "latest"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
 
-    - name: Set up Python
-      run: uv python install 3.12
+      - name: Set up Python
+        run: uv python install 3.12
 
-    - name: Build package
-      run: |
-        uv build
+      - name: Build package
+        run: |
+          uv build
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: dist
-        path: dist/
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
 
   publish-pypi:
     name: Publish to PyPI
@@ -179,29 +179,29 @@ jobs:
       name: pypi
       url: https://pypi.org/p/openzim-mcp
     steps:
-    - name: Validate deployment context
-      run: |
-        echo "Event: ${{ github.event_name }}"
-        echo "Ref: ${{ github.ref }}"
-        echo "Head branch: ${{ github.head_ref || github.ref_name }}"
-        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-          TAG="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
-          echo "Tag input: $TAG"
-          # Ensure the tag input is provided and starts with 'v'
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
-            echo "Error: Invalid tag format. Expected format: v1.2.3"
-            exit 1
+      - name: Validate deployment context
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Head branch: ${{ github.head_ref || github.ref_name }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
+            echo "Tag input: $TAG"
+            # Ensure the tag input is provided and starts with 'v'
+            if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
+              echo "Error: Invalid tag format. Expected format: v1.2.3"
+              exit 1
+            fi
           fi
-        fi
 
-    - name: Download build artifacts
-      uses: actions/download-artifact@v5
-      with:
-        name: dist
-        path: dist/
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: dist
+          path: dist/
 
-    - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
 
   create-release:
     name: Create GitHub Release
@@ -209,77 +209,77 @@ jobs:
     needs: [validate-and-prepare, build, publish-pypi]
     if: always() && needs.publish-pypi.result == 'success'
     steps:
-    - uses: actions/checkout@v5
-      with:
-        fetch-depth: 0
-        ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
-    - name: Download build artifacts
-      uses: actions/download-artifact@v5
-      with:
-        name: dist
-        path: dist/
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: dist
+          path: dist/
 
-    - name: Extract release notes
-      id: extract-notes
-      run: |
-        # Extract version from tag or manual input
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          VERSION="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
-          VERSION=${VERSION#v}  # Remove 'v' prefix if present
-        else
-          VERSION=${GITHUB_REF#refs/tags/v}
-        fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        
-        # Extract release notes from CHANGELOG.md
-        python -c "
-        import re
-        import sys
+      - name: Extract release notes
+        id: extract-notes
+        run: |
+          # Extract version from tag or manual input
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
+            VERSION=${VERSION#v}  # Remove 'v' prefix if present
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-        version = '$VERSION'
-        print(f'Extracting release notes for version: {version}')
+          # Extract release notes from CHANGELOG.md
+          python -c "
+          import re
+          import sys
 
-        with open('CHANGELOG.md', 'r') as f:
-            content = f.read()
+          version = '$VERSION'
+          print(f'Extracting release notes for version: {version}')
 
-        # Try multiple patterns to find the version section
-        patterns = [
-            # Pattern 1: [0.3.3] format
-            r'## \[' + re.escape(version) + r'\].*?\n(.*?)(?=\n## \[|\n# |\Z)',
-            # Pattern 2: v0.3.3 format
-            r'## \[v' + re.escape(version) + r'\].*?\n(.*?)(?=\n## \[|\n# |\Z)',
-            # Pattern 3: Without brackets
-            r'## ' + re.escape(version) + r'.*?\n(.*?)(?=\n## |\n# |\Z)',
-            # Pattern 4: With v prefix
-            r'## v' + re.escape(version) + r'.*?\n(.*?)(?=\n## |\n# |\Z)'
-        ]
+          with open('CHANGELOG.md', 'r') as f:
+              content = f.read()
 
-        notes = None
-        for pattern in patterns:
-            match = re.search(pattern, content, re.DOTALL)
-            if match:
-                notes = match.group(1).strip()
-                print(f'Found release notes using pattern: {pattern[:50]}...')
-                break
+          # Try multiple patterns to find the version section
+          patterns = [
+              # Pattern 1: [0.3.3] format
+              r'## \[' + re.escape(version) + r'\].*?\n(.*?)(?=\n## \[|\n# |\Z)',
+              # Pattern 2: v0.3.3 format
+              r'## \[v' + re.escape(version) + r'\].*?\n(.*?)(?=\n## \[|\n# |\Z)',
+              # Pattern 3: Without brackets
+              r'## ' + re.escape(version) + r'.*?\n(.*?)(?=\n## |\n# |\Z)',
+              # Pattern 4: With v prefix
+              r'## v' + re.escape(version) + r'.*?\n(.*?)(?=\n## |\n# |\Z)'
+          ]
 
-        if notes and len(notes) > 10:  # Ensure we have substantial content
-            with open('release_notes.md', 'w') as f:
-                f.write(notes)
-            print(f'Release notes extracted successfully ({len(notes)} characters)')
-        else:
-            fallback_notes = f'## Release {version}\n\nThis release includes various improvements and bug fixes. See the full changelog for details.'
-            with open('release_notes.md', 'w') as f:
-                f.write(fallback_notes)
-            print('Using fallback release notes')
-        " VERSION="$VERSION"
+          notes = None
+          for pattern in patterns:
+              match = re.search(pattern, content, re.DOTALL)
+              if match:
+                  notes = match.group(1).strip()
+                  print(f'Found release notes using pattern: {pattern[:50]}...')
+                  break
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        name: Release v${{ steps.extract-notes.outputs.version }}
-        body_path: release_notes.md
-        files: |
-          dist/*
-        draft: false
-        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          if notes and len(notes) > 10:  # Ensure we have substantial content
+              with open('release_notes.md', 'w') as f:
+                  f.write(notes)
+              print(f'Release notes extracted successfully ({len(notes)} characters)')
+          else:
+              fallback_notes = f'## Release {version}\n\nThis release includes various improvements and bug fixes. See the full changelog for details.'
+              with open('release_notes.md', 'w') as f:
+                  f.write(fallback_notes)
+              print('Using fallback release notes')
+          " VERSION="$VERSION"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release v${{ steps.extract-notes.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            dist/*
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}

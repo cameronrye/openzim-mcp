@@ -60,30 +60,30 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 // Copy to clipboard functionality
 function initCopyButtons() {
     const copyButtons = document.querySelectorAll('.copy-btn');
-    
+
     copyButtons.forEach(button => {
         button.addEventListener('click', async function() {
             const targetId = this.getAttribute('data-clipboard-target');
             const targetElement = document.querySelector(targetId);
-            
+
             if (targetElement) {
                 const text = targetElement.textContent || targetElement.innerText;
-                
+
                 try {
                     await navigator.clipboard.writeText(text);
-                    
+
                     // Visual feedback
                     const originalIcon = this.querySelector('.copy-icon');
                     const originalText = originalIcon.textContent;
                     originalIcon.textContent = '✅';
-                    
+
                     setTimeout(() => {
                         originalIcon.textContent = originalText;
                     }, 2000);
-                    
+
                 } catch (err) {
                     console.error('Failed to copy text: ', err);
-                    
+
                     // Fallback for older browsers
                     const textArea = document.createElement('textarea');
                     textArea.value = text;
@@ -91,12 +91,12 @@ function initCopyButtons() {
                     textArea.select();
                     document.execCommand('copy');
                     document.body.removeChild(textArea);
-                    
+
                     // Visual feedback
                     const originalIcon = this.querySelector('.copy-icon');
                     const originalText = originalIcon.textContent;
                     originalIcon.textContent = '✅';
-                    
+
                     setTimeout(() => {
                         originalIcon.textContent = originalText;
                     }, 2000);
@@ -110,15 +110,15 @@ function initCopyButtons() {
 function initTabs() {
     const tabButtons = document.querySelectorAll('.tab-btn');
     const tabPanes = document.querySelectorAll('.tab-pane');
-    
+
     tabButtons.forEach(button => {
         button.addEventListener('click', function() {
             const targetTab = this.getAttribute('data-tab');
-            
+
             // Remove active class from all buttons and panes
             tabButtons.forEach(btn => btn.classList.remove('active'));
             tabPanes.forEach(pane => pane.classList.remove('active'));
-            
+
             // Add active class to clicked button and corresponding pane
             this.classList.add('active');
             const targetPane = document.getElementById(targetTab);
@@ -137,7 +137,7 @@ function initScrollAnimations() {
         threshold: 0.1,
         rootMargin: '0px 0px -50px 0px'
     };
-    
+
     const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
@@ -146,7 +146,7 @@ function initScrollAnimations() {
             }
         });
     }, observerOptions);
-    
+
     // Observe feature cards
     document.querySelectorAll('.feature-card').forEach(card => {
         card.style.opacity = '0';
@@ -154,7 +154,7 @@ function initScrollAnimations() {
         card.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
         observer.observe(card);
     });
-    
+
     // Observe installation steps
     document.querySelectorAll('.step').forEach(step => {
         step.style.opacity = '0';
@@ -167,11 +167,11 @@ function initScrollAnimations() {
 // Add keyboard navigation for tabs
 function initKeyboardNavigation() {
     const tabButtons = document.querySelectorAll('.tab-btn');
-    
+
     tabButtons.forEach((button, index) => {
         button.addEventListener('keydown', function(e) {
             let targetIndex;
-            
+
             switch(e.key) {
                 case 'ArrowLeft':
                     e.preventDefault();
@@ -203,7 +203,7 @@ function initKeyboardNavigation() {
 // Performance optimization: Lazy load images
 function initLazyLoading() {
     const images = document.querySelectorAll('img[data-src]');
-    
+
     const imageObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
@@ -214,7 +214,7 @@ function initLazyLoading() {
             }
         });
     });
-    
+
     images.forEach(img => imageObserver.observe(img));
 }
 
@@ -231,9 +231,9 @@ document.addEventListener('DOMContentLoaded', function() {
 console.log(`
 🧠 OpenZIM MCP - Intelligent Knowledge Access for AI Models
 
-Thanks for checking out the console! 
+Thanks for checking out the console!
 
-If you're interested in contributing to OpenZIM MCP, 
+If you're interested in contributing to OpenZIM MCP,
 check out our GitHub repository:
 https://github.com/cameronrye/openzim-mcp
 

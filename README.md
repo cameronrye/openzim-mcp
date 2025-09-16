@@ -29,6 +29,7 @@
 **OpenZIM MCP transforms static ZIM archives into dynamic knowledge engines for Large Language Models.** Unlike basic file readers, this tool provides *intelligent, structured access* that LLMs need to effectively navigate and understand vast knowledge repositories.
 
 🚀 **Why LLMs Love OpenZIM MCP:**
+
 - **Smart Navigation**: Browse by namespace (articles, metadata, media) instead of blind searching
 - **Context-Aware Discovery**: Get article structure, relationships, and metadata for deeper understanding
 - **Intelligent Search**: Advanced filtering, auto-complete suggestions, and relevance-ranked results
@@ -192,6 +193,7 @@ make clean-test-data
 ```
 
 The test data includes:
+
 - **Basic files**: Small ZIM files for essential testing
 - **Real content**: Actual Wikipedia/Wikibooks content for integration testing
 - **Invalid files**: Malformed ZIM files for error handling testing
@@ -639,6 +641,7 @@ Results of conflict resolution including cleanup actions and recommendations.
 ```
 
 Response:
+
 ```plain
 Found 39 matches for "computer", showing 1-2:
 
@@ -667,6 +670,7 @@ Snippet: #  Protein A representation of the 3D structure of the protein myoglobi
 ```
 
 Response:
+
 ```plain
 # Evolution
 
@@ -709,6 +713,7 @@ Mechanisms and processes
 ```
 
 Response:
+
 ```json
 {
   "entry_count": 100000,
@@ -740,6 +745,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "namespace": "C",
@@ -787,6 +793,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "title": "Evolution",
@@ -823,6 +830,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "partial_query": "bio",
@@ -846,6 +854,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "status": "healthy",
@@ -876,6 +885,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "status": "healthy",
@@ -904,6 +914,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "status": "success",
@@ -926,18 +937,21 @@ Response:
 OpenZIM MCP implements an intelligent entry retrieval system that automatically handles path encoding inconsistencies common in ZIM files:
 
 **How It Works:**
+
 1. **Direct Access First**: Attempts to retrieve the entry using the provided path exactly as given
 2. **Automatic Fallback**: If direct access fails, automatically searches for the entry using various search terms
 3. **Path Mapping Cache**: Caches successful path mappings to improve performance for repeated access
 4. **Enhanced Error Guidance**: Provides clear guidance when entries cannot be found
 
 **Benefits for LLM Users:**
+
 - **Transparent Operation**: No need to understand ZIM path encoding complexities
 - **Single Tool Call**: Eliminates the need for manual search-first methodology
 - **Reliable Results**: Consistent success across different path formats (spaces vs underscores, URL encoding, etc.)
 - **Performance Optimized**: Cached mappings improve repeated access speed
 
 **Example Scenarios Handled Automatically:**
+
 - `A/Test Article` → `A/Test_Article` (space to underscore conversion)
 - `C/Café` → `C/Caf%C3%A9` (URL encoding differences)
 - `A/Some-Page` → `A/Some_Page` (hyphen to underscore conversion)
@@ -945,6 +959,7 @@ OpenZIM MCP implements an intelligent entry retrieval system that automatically 
 ### Usage Recommendations
 
 **For Direct Entry Access:**
+
 ```json
 {
   "name": "get_zim_entry",
@@ -957,6 +972,7 @@ OpenZIM MCP implements an intelligent entry retrieval system that automatically 
 
 **When Entry Not Found:**
 The system will automatically provide guidance:
+
 ```
 Entry not found: 'A/Article_Name'.
 The entry path may not exist in this ZIM file.
@@ -969,15 +985,18 @@ or browse_namespace() to explore the file structure.
 ## ⚠️ Important Notes and Limitations
 
 ### Content Length Requirements
+
 - The `max_content_length` parameter for `get_zim_entry` must be at least 1000 characters
 - Content longer than the specified limit will be truncated with a note showing the total character count
 
 ### Search Behavior
+
 - Search results may include articles that contain the search terms in various contexts
 - Results are ranked by relevance but may not always be directly related to the primary meaning of the search term
 - Search snippets provide a preview of the content but may not show the exact location where the search term appears
 
 ### File Format Support
+
 - Currently supports ZIM files (Zeno IMproved format)
 - Tested with Wikipedia ZIM files (e.g., `wikipedia_en_100_2025-08.zim`)
 - File paths must be properly escaped in JSON (use `\\` for Windows paths)
@@ -1161,6 +1180,7 @@ The project uses an **improved, consolidated release system** with automatic val
 3. **Emergency**: Push tags directly for critical fixes
 
 **Key Features:**
+
 - ✅ **Zero-touch releases** from main branch
 - ✅ **Automatic version synchronization** validation
 - ✅ **Comprehensive testing** before every release
@@ -1180,6 +1200,7 @@ For detailed instructions, see [Release Process Guide](docs/RELEASE_PROCESS_GUID
 ```
 
 **Examples:**
+
 ```bash
 feat: add search suggestions endpoint
 fix: resolve path traversal vulnerability

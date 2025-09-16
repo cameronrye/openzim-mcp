@@ -6,18 +6,24 @@ Thank you for your interest in contributing to OpenZIM MCP! This document provid
 
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
+
    ```bash
    git clone https://github.com/YOUR_USERNAME/openzim-mcp.git
    cd openzim-mcp
    ```
+
 3. **Set up development environment**:
+
    ```bash
    python scripts/setup_dev_env.py
    ```
+
 4. **Create a feature branch**:
+
    ```bash
    git checkout -b feature/your-feature-name
    ```
+
 5. **Make your changes** and commit them
 6. **Push to your fork** and create a pull request
 
@@ -143,6 +149,7 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) f
 #### Breaking Changes
 
 For breaking changes, use:
+
 - **`feat!:`** or **`fix!:`** with exclamation mark
 - Or include **`BREAKING CHANGE:`** in the footer
 

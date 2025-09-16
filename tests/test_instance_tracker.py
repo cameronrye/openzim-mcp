@@ -26,7 +26,9 @@ class TestSafeLog:
 
     def test_safe_log_handles_value_error(self):
         """Test safe_log handles ValueError (I/O operation on closed file)."""
-        mock_log_func = MagicMock(side_effect=ValueError("I/O operation on closed file"))
+        mock_log_func = MagicMock(
+            side_effect=ValueError("I/O operation on closed file")
+        )
         message = "Test log message"
 
         # Should not raise an exception
@@ -46,7 +48,9 @@ class TestSafeLog:
 
     def test_safe_log_handles_attribute_error(self):
         """Test safe_log handles AttributeError (logging objects may be None)."""
-        mock_log_func = MagicMock(side_effect=AttributeError("'NoneType' object has no attribute 'write'"))
+        mock_log_func = MagicMock(
+            side_effect=AttributeError("'NoneType' object has no attribute 'write'")
+        )
         message = "Test log message"
 
         # Should not raise an exception
@@ -580,14 +584,18 @@ class TestInstanceTrackerMissingCoverage:
         import subprocess
 
         with patch("platform.system", return_value="Windows"):
-            with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("tasklist", 5)):
+            with patch(
+                "subprocess.run", side_effect=subprocess.TimeoutExpired("tasklist", 5)
+            ):
                 result = instance_tracker._is_process_running(12345)
                 assert result is False
 
     def test_is_process_running_windows_file_not_found(self, instance_tracker):
         """Test _is_process_running Windows FileNotFoundError handling - covers lines 274-275."""
         with patch("platform.system", return_value="Windows"):
-            with patch("subprocess.run", side_effect=FileNotFoundError("tasklist not found")):
+            with patch(
+                "subprocess.run", side_effect=FileNotFoundError("tasklist not found")
+            ):
                 result = instance_tracker._is_process_running(12345)
                 assert result is False
 

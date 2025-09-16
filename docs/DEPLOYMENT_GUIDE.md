@@ -29,7 +29,7 @@ The release system has been completely redesigned for reliability and simplicity
    # Make changes with conventional commits
    git commit -m "feat: add new feature"
    git commit -m "fix: resolve bug"
-   
+
    # Push to main - this triggers release-please
    git push origin main
    ```

@@ -2,11 +2,11 @@ name: Performance Benchmarks
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   schedule:
-    - cron: '0 2 * * 1'  # Weekly on Mondays at 2 AM UTC
+    - cron: "0 2 * * 1" # Weekly on Mondays at 2 AM UTC
 
 jobs:
   benchmark:
@@ -14,115 +14,115 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write  # For commenting on PRs
+      pull-requests: write # For commenting on PRs
 
     steps:
-    - uses: actions/checkout@v5
-      with:
-        fetch-depth: 0  # Fetch full history for comparison
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # Fetch full history for comparison
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-      with:
-        version: "latest"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
 
-    - name: Set up Python
-      run: uv python install 3.12
+      - name: Set up Python
+        run: uv python install 3.12
 
-    - name: Install dependencies
-      run: |
-        uv sync --frozen  # Use frozen lockfile to prevent modifications
-        # Install pytest-benchmark in isolated environment to avoid lock file changes
-        uv run --isolated pip install pytest-benchmark
+      - name: Install dependencies
+        run: |
+          uv sync --frozen  # Use frozen lockfile to prevent modifications
+          # Install pytest-benchmark in isolated environment to avoid lock file changes
+          uv run --isolated pip install pytest-benchmark
 
-    - name: Download ZIM test data
-      run: |
-        make download-test-data
+      - name: Download ZIM test data
+        run: |
+          make download-test-data
 
-    - name: Run performance benchmarks
-      run: |
-        echo "🔍 Searching for benchmark tests..."
-        BENCHMARK_TESTS=$(uv run pytest --collect-only -k "benchmark" tests/ 2>/dev/null | grep -c "test session starts" || echo "0")
-        echo "Found benchmark test sessions: $BENCHMARK_TESTS"
+      - name: Run performance benchmarks
+        run: |
+          echo "🔍 Searching for benchmark tests..."
+          BENCHMARK_TESTS=$(uv run pytest --collect-only -k "benchmark" tests/ 2>/dev/null | grep -c "test session starts" || echo "0")
+          echo "Found benchmark test sessions: $BENCHMARK_TESTS"
 
-        # Run benchmarks and save results
-        echo "🚀 Running performance benchmarks..."
-        if uv run pytest tests/ -k "benchmark" --benchmark-json=benchmark-results.json --benchmark-only; then
-          echo "✅ Benchmarks completed successfully"
-        else
-          echo "⚠️ Benchmark execution completed with warnings or no tests found"
-        fi
+          # Run benchmarks and save results
+          echo "🚀 Running performance benchmarks..."
+          if uv run pytest tests/ -k "benchmark" --benchmark-json=benchmark-results.json --benchmark-only; then
+            echo "✅ Benchmarks completed successfully"
+          else
+            echo "⚠️ Benchmark execution completed with warnings or no tests found"
+          fi
 
-        # Verify and create benchmark results file
-        if [ -f benchmark-results.json ] && [ -s benchmark-results.json ]; then
-          echo "✅ benchmark-results.json created successfully"
-          echo "File size: $(stat -c%s benchmark-results.json) bytes"
-        else
-          echo "📝 Creating placeholder benchmark results file..."
-          echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "no-benchmark-tests", "machine_info": {"node": "github-actions", "processor": "unknown"}}' > benchmark-results.json
-        fi
+          # Verify and create benchmark results file
+          if [ -f benchmark-results.json ] && [ -s benchmark-results.json ]; then
+            echo "✅ benchmark-results.json created successfully"
+            echo "File size: $(stat -c%s benchmark-results.json) bytes"
+          else
+            echo "📝 Creating placeholder benchmark results file..."
+            echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "no-benchmark-tests", "machine_info": {"node": "github-actions", "processor": "unknown"}}' > benchmark-results.json
+          fi
 
-        # Validate JSON format
-        if uv run python -c "import json; json.load(open('benchmark-results.json'))"; then
-          echo "✅ benchmark-results.json is valid JSON"
-        else
-          echo "❌ Invalid JSON detected, recreating file..."
-          echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "invalid-json-fallback"}' > benchmark-results.json
-        fi
+          # Validate JSON format
+          if uv run python -c "import json; json.load(open('benchmark-results.json'))"; then
+            echo "✅ benchmark-results.json is valid JSON"
+          else
+            echo "❌ Invalid JSON detected, recreating file..."
+            echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "invalid-json-fallback"}' > benchmark-results.json
+          fi
 
-    - name: Store benchmark results (temporarily disabled)
-      if: false  # Temporarily disable to avoid git conflicts during release system testing
-      run: |
-        echo "Benchmark storage temporarily disabled during release system testing"
-        echo "This will be re-enabled after the release system is validated"
-        echo "Benchmark results are still generated and available as artifacts"
+      - name: Store benchmark results (temporarily disabled)
+        if: false # Temporarily disable to avoid git conflicts during release system testing
+        run: |
+          echo "Benchmark storage temporarily disabled during release system testing"
+          echo "This will be re-enabled after the release system is validated"
+          echo "Benchmark results are still generated and available as artifacts"
 
-    - name: Verify benchmark results file
-      if: github.event_name == 'pull_request'
-      run: |
-        echo "Checking for benchmark results file..."
-        if [ -f benchmark-results.json ]; then
-          echo "✅ benchmark-results.json found"
-          echo "File size: $(stat -c%s benchmark-results.json) bytes"
-          echo "File contents preview:"
-          head -n 5 benchmark-results.json
-        else
-          echo "❌ benchmark-results.json not found"
-          echo "Creating minimal benchmark file for comparison..."
-          echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "no-benchmarks"}' > benchmark-results.json
-        fi
+      - name: Verify benchmark results file
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Checking for benchmark results file..."
+          if [ -f benchmark-results.json ]; then
+            echo "✅ benchmark-results.json found"
+            echo "File size: $(stat -c%s benchmark-results.json) bytes"
+            echo "File contents preview:"
+            head -n 5 benchmark-results.json
+          else
+            echo "❌ benchmark-results.json not found"
+            echo "Creating minimal benchmark file for comparison..."
+            echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "no-benchmarks"}' > benchmark-results.json
+          fi
 
-    - name: Clean up local changes before benchmark comparison
-      if: github.event_name == 'pull_request'
-      run: |
-        # Stash any local changes to avoid conflicts with benchmark action
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        if ! git diff --quiet; then
-          echo "Stashing local changes to avoid git conflicts"
-          git stash push -m "Temporary stash for benchmark comparison"
-        fi
-        # Clean any untracked files that might cause conflicts
-        git clean -fd
+      - name: Clean up local changes before benchmark comparison
+        if: github.event_name == 'pull_request'
+        run: |
+          # Stash any local changes to avoid conflicts with benchmark action
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            echo "Stashing local changes to avoid git conflicts"
+            git stash push -m "Temporary stash for benchmark comparison"
+          fi
+          # Clean any untracked files that might cause conflicts
+          git clean -fd
 
-    - name: Compare benchmark results (PR)
-      uses: benchmark-action/github-action-benchmark@v1
-      if: github.event_name == 'pull_request' && hashFiles('benchmark-results.json') != ''
-      with:
-        tool: 'pytest'
-        output-file-path: benchmark-results.json
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        comment-on-alert: true
-        alert-threshold: '150%'
-        fail-on-alert: false
-        # Disable auto-push to avoid gh-pages conflicts
-        auto-push: false
+      - name: Compare benchmark results (PR)
+        uses: benchmark-action/github-action-benchmark@v1
+        if: github.event_name == 'pull_request' && hashFiles('benchmark-results.json') != ''
+        with:
+          tool: "pytest"
+          output-file-path: benchmark-results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-on-alert: true
+          alert-threshold: "150%"
+          fail-on-alert: false
+          # Disable auto-push to avoid gh-pages conflicts
+          auto-push: false
 
-    - name: Upload benchmark results
-      uses: actions/upload-artifact@v4
-      with:
-        name: benchmark-results
-        path: benchmark-results.json
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-results.json
 
   memory-profiling:
     name: Memory Profiling
@@ -130,64 +130,64 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-    - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-      with:
-        version: "latest"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
 
-    - name: Set up Python
-      run: uv python install 3.12
+      - name: Set up Python
+        run: uv python install 3.12
 
-    - name: Install dependencies
-      run: |
-        uv sync --frozen  # Use frozen lockfile to prevent modifications
-        # Install profiling tools in isolated environment to avoid lock file changes
-        uv run --isolated pip install memory-profiler psutil
+      - name: Install dependencies
+        run: |
+          uv sync --frozen  # Use frozen lockfile to prevent modifications
+          # Install profiling tools in isolated environment to avoid lock file changes
+          uv run --isolated pip install memory-profiler psutil
 
-    - name: Download ZIM test data
-      run: |
-        make download-test-data
+      - name: Download ZIM test data
+        run: |
+          make download-test-data
 
-    - name: Run memory profiling
-      run: |
-        # Create a simple memory profiling script
-        cat > memory_profile.py << 'EOF'
-        import os
-        import psutil
-        import time
-        from openzim_mcp.main import main
-        
-        def profile_memory():
-            process = psutil.Process()
-            initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-            
-            print(f"Initial memory: {initial_memory:.2f} MB")
-            
-            # Simulate some operations
-            # This would need to be expanded with actual benchmark operations
-            time.sleep(1)
-            
-            final_memory = process.memory_info().rss / 1024 / 1024  # MB
-            print(f"Final memory: {final_memory:.2f} MB")
-            print(f"Memory increase: {final_memory - initial_memory:.2f} MB")
-            
-            return {
-                'initial_memory_mb': initial_memory,
-                'final_memory_mb': final_memory,
-                'memory_increase_mb': final_memory - initial_memory
-            }
-        
-        if __name__ == "__main__":
-            results = profile_memory()
-            print(f"Memory profiling results: {results}")
-        EOF
-        
-        uv run python memory_profile.py > memory-profile-results.txt
+      - name: Run memory profiling
+        run: |
+          # Create a simple memory profiling script
+          cat > memory_profile.py << 'EOF'
+          import os
+          import psutil
+          import time
+          from openzim_mcp.main import main
 
-    - name: Upload memory profiling results
-      uses: actions/upload-artifact@v4
-      with:
-        name: memory-profile-results
-        path: memory-profile-results.txt
+          def profile_memory():
+              process = psutil.Process()
+              initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+
+              print(f"Initial memory: {initial_memory:.2f} MB")
+
+              # Simulate some operations
+              # This would need to be expanded with actual benchmark operations
+              time.sleep(1)
+
+              final_memory = process.memory_info().rss / 1024 / 1024  # MB
+              print(f"Final memory: {final_memory:.2f} MB")
+              print(f"Memory increase: {final_memory - initial_memory:.2f} MB")
+
+              return {
+                  'initial_memory_mb': initial_memory,
+                  'final_memory_mb': final_memory,
+                  'memory_increase_mb': final_memory - initial_memory
+              }
+
+          if __name__ == "__main__":
+              results = profile_memory()
+              print(f"Memory profiling results: {results}")
+          EOF
+
+          uv run python memory_profile.py > memory-profile-results.txt
+
+      - name: Upload memory profiling results
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-profile-results
+          path: memory-profile-results.txt

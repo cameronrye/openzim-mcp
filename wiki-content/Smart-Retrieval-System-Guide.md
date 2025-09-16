@@ -98,21 +98,21 @@ The system evaluates search results using multiple criteria:
 ```python
 def score_match(result, original_query):
     score = 0.0
-    
+
     # Exact title match (highest priority)
     if result.title.lower() == original_query.lower():
         score += 1.0
-    
+
     # Path similarity
     score += path_similarity(result.path, original_query)
-    
+
     # Namespace match
     if result.namespace == expected_namespace:
         score += 0.5
-    
+
     # Content relevance
     score += content_relevance(result.snippet, original_query)
-    
+
     return score
 ```
 
@@ -403,7 +403,7 @@ Check smart retrieval performance:
 
 #### Issue: Low Cache Hit Rate
 **Symptoms**: Slow response times, frequent fallback searches
-**Causes**: 
+**Causes**:
 - Cache size too small
 - TTL too short
 - Highly variable path patterns

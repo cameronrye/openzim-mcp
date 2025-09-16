@@ -106,7 +106,7 @@ class TestMainModuleEntryPoint:
         result = subprocess.run(
             [sys.executable, "-c", "import openzim_mcp.__main__; print('imported')"],
             capture_output=True,
-            text=True
+            text=True,
         )
 
         # Should import successfully
@@ -221,19 +221,21 @@ class TestMainEntryPoint:
 
     def test_main_cleanup_function_coverage(self):
         """Test the cleanup function inside main() - covers line 46."""
-        from unittest.mock import patch, MagicMock
-        import tempfile
         import sys
+        import tempfile
+        from unittest.mock import MagicMock, patch
 
         # Create a temporary directory for the test
         with tempfile.TemporaryDirectory() as temp_dir:
             # Mock sys.argv to provide the required directory argument
-            with patch.object(sys, 'argv', ['openzim_mcp', temp_dir]):
+            with patch.object(sys, "argv", ["openzim_mcp", temp_dir]):
                 # Mock the components to avoid actually starting the server
-                with patch('openzim_mcp.main.OpenZimMcpConfig') as mock_config_class, \
-                     patch('openzim_mcp.main.InstanceTracker') as mock_tracker_class, \
-                     patch('openzim_mcp.main.OpenZimMcpServer') as mock_server_class, \
-                     patch('openzim_mcp.main.atexit') as mock_atexit:
+                with (
+                    patch("openzim_mcp.main.OpenZimMcpConfig") as mock_config_class,
+                    patch("openzim_mcp.main.InstanceTracker") as mock_tracker_class,
+                    patch("openzim_mcp.main.OpenZimMcpServer") as mock_server_class,
+                    patch("openzim_mcp.main.atexit") as mock_atexit,
+                ):
 
                     # Set up mocks
                     mock_config = MagicMock()
@@ -249,6 +251,7 @@ class TestMainEntryPoint:
 
                     # Import and call main
                     from openzim_mcp.main import main
+
                     main()
 
                     # Verify that atexit.register was called with a cleanup function
@@ -266,7 +269,7 @@ class TestMainEntryPoint:
         from unittest.mock import patch
 
         # Mock the main function to avoid actually starting the server
-        with patch('openzim_mcp.main.main') as mock_main:
+        with patch("openzim_mcp.main.main") as mock_main:
             # Import the main module
             import openzim_mcp.main
 
@@ -278,10 +281,13 @@ class TestMainEntryPoint:
                 openzim_mcp.main.__name__ = "__main__"
 
                 # Execute the if __name__ == "__main__" block
-                exec("""
+                exec(
+                    """
 if __name__ == "__main__":
     main()
-""", {"__name__": "__main__", "main": openzim_mcp.main.main})
+""",
+                    {"__name__": "__main__", "main": openzim_mcp.main.main},
+                )
 
             finally:
                 # Restore the original __name__
@@ -344,7 +350,7 @@ if __name__ == "__main__":
                 capture_output=True,
                 text=True,
                 timeout=5,
-                env={"PYTHONPATH": ".", **dict(__import__("os").environ)}
+                env={"PYTHONPATH": ".", **dict(__import__("os").environ)},
             )
 
             # The process should start and then exit (likely due to no ZIM files or other config)
@@ -363,7 +369,7 @@ if __name__ == "__main__":
             [sys.executable, "-m", "openzim_mcp"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
         )
 
         # Should exit with code 1 and show usage
@@ -378,7 +384,7 @@ if __name__ == "__main__":
         import openzim_mcp.__main__
 
         # Mock the main function to avoid actually starting the server
-        with patch('openzim_mcp.__main__.main') as mock_main:
+        with patch("openzim_mcp.__main__.main") as mock_main:
             # Directly call the main function that would be called in __main__.py line 8
             openzim_mcp.__main__.main()
 
@@ -391,28 +397,29 @@ if __name__ == "__main__":
         import openzim_mcp.__main__
 
         # Verify the module has the expected attributes
-        assert hasattr(openzim_mcp.__main__, 'main')
+        assert hasattr(openzim_mcp.__main__, "main")
 
         # Verify the main function is the one from the main module
         from openzim_mcp.main import main as main_func
+
         assert openzim_mcp.__main__.main is main_func
 
     def test_main_module_runpy_execution(self):
         """Test __main__.py using runpy to simulate python -m execution."""
-        from unittest.mock import patch
         import runpy
         import sys
         import tempfile
+        from unittest.mock import patch
 
         # Create a temporary directory for the test
         with tempfile.TemporaryDirectory() as temp_dir:
             # Mock sys.argv to provide the required directory argument
-            with patch.object(sys, 'argv', ['openzim_mcp', temp_dir]):
+            with patch.object(sys, "argv", ["openzim_mcp", temp_dir]):
                 # Mock the main function to avoid actually starting the server
-                with patch('openzim_mcp.main.main') as mock_main:
+                with patch("openzim_mcp.main.main") as mock_main:
                     try:
                         # Use runpy to execute the module as if run with python -m
-                        runpy.run_module('openzim_mcp', run_name='__main__')
+                        runpy.run_module("openzim_mcp", run_name="__main__")
                     except SystemExit:
                         # Expected when main() is called and exits
                         pass

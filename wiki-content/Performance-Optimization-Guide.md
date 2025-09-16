@@ -319,7 +319,7 @@ search_zim_file(zim_path, query, limit=100) # May cause timeouts
 ```python
 # More efficient than post-processing
 search_with_filters(
-    zim_path, 
+    zim_path,
     query="evolution",
     namespace="C",           # Content only
     content_type="text/html", # HTML articles only
@@ -341,8 +341,8 @@ search_with_filters(
 **For Previews**:
 ```python
 preview = get_zim_entry(
-    zim_path, 
-    entry_path, 
+    zim_path,
+    entry_path,
     max_content_length=5000  # Quick preview
 )
 ```
@@ -350,8 +350,8 @@ preview = get_zim_entry(
 **For Full Reading**:
 ```python
 full_content = get_zim_entry(
-    zim_path, 
-    entry_path, 
+    zim_path,
+    entry_path,
     max_content_length=100000  # Complete article
 )
 ```
@@ -370,17 +370,17 @@ if structure.word_count < 10000:  # Only for shorter articles
 def load_content_progressively(entry_path):
     # 1. Get structure overview
     structure = get_article_structure(zim_path, entry_path)
-    
+
     # 2. Show structure to user
     present_structure(structure)
-    
+
     # 3. Load content based on user interest
     if user_wants_full_content():
         content = get_zim_entry(zim_path, entry_path)
     else:
         # Just show preview
         preview = get_zim_entry(zim_path, entry_path, max_content_length=2000)
-    
+
     return content
 ```
 
@@ -532,7 +532,7 @@ export OPENZIM_MCP_SERVER__REQUEST_TIMEOUT=45
 ```python
 # Preload popular content
 popular_articles = [
-    "C/Biology", "C/Physics", "C/Chemistry", 
+    "C/Biology", "C/Physics", "C/Chemistry",
     "C/Mathematics", "C/Computer_science"
 ]
 
@@ -552,13 +552,13 @@ def process_topic_batch(topic_list):
     for topic in topic_list:
         results = search_zim_file(zim_path, topic, limit=5)
         search_results.extend(results)
-    
+
     # Then get content for all results
     content_results = []
     for result in search_results:
         content = get_zim_entry(zim_path, result.path)
         content_results.append(content)
-    
+
     return content_results
 ```
 
@@ -569,19 +569,19 @@ def process_topic_batch(topic_list):
 def explore_topic_efficiently(main_topic):
     # 1. Get main article (cached)
     main_article = get_zim_entry(zim_path, f"C/{main_topic}")
-    
+
     # 2. Get structure (cached)
     structure = get_article_structure(zim_path, f"C/{main_topic}")
-    
+
     # 3. Get related links (cached)
     links = extract_article_links(zim_path, f"C/{main_topic}")
-    
+
     # 4. Access related articles (likely cached due to common topics)
     related_content = []
     for link in links.internal_links[:5]:  # Top 5 only
         content = get_zim_entry(zim_path, link.path)
         related_content.append(content)
-    
+
     return {
         "main": main_article,
         "structure": structure,

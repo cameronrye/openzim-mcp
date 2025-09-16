@@ -9,14 +9,14 @@ body:
     attributes:
       value: |
         ⚠️ **IMPORTANT SECURITY NOTICE** ⚠️
-        
+
         **For sensitive security vulnerabilities, please DO NOT use this public issue template.**
-        
+
         Instead, please report sensitive security issues privately by:
         1. Emailing the maintainers directly (see SECURITY.md)
         2. Using GitHub's private vulnerability reporting feature
         3. Contacting us through other secure channels listed in SECURITY.md
-        
+
         **Only use this template for:**
         - Non-sensitive security improvements
         - Security-related feature requests
@@ -104,7 +104,7 @@ body:
     attributes:
       value: |
         ---
-        
+
         **Remember:** For sensitive security vulnerabilities, please use private reporting channels as described in our [SECURITY.md](../../SECURITY.md) file.
-        
+
         Thank you for helping to keep OpenZIM MCP secure! 🔒

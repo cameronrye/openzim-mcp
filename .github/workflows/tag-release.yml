@@ -3,12 +3,12 @@ name: Tag Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
   id-token: write
-  actions: write  # Required to trigger workflow dispatches
+  actions: write # Required to trigger workflow dispatches
 
 jobs:
   tag-release:
@@ -21,29 +21,29 @@ jobs:
           TAG_NAME=${GITHUB_REF#refs/tags/}
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "Tag detected: $TAG_NAME"
-          
+
           # Validate tag format
           if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
             echo "❌ Invalid tag format: $TAG_NAME"
             echo "Expected format: v1.2.3"
             exit 1
           fi
-          
+
           echo "✅ Valid tag format detected"
 
       - name: Check if release workflow should be triggered
         id: check-trigger
         run: |
           echo "Checking if release workflow needs to be triggered for tag: ${{ steps.tag-info.outputs.tag_name }}"
-          
+
           # Check if this tag was created by release-please (has associated GitHub release)
           # If so, the release-please workflow should handle triggering the release workflow
           # If not, we should trigger it manually
-          
+
           echo "This workflow serves as a backup trigger for tag-based releases"
           echo "The primary release workflow should be triggered by release-please"
           echo "If you see this running, it means the tag was created manually or release-please didn't trigger the release workflow"
-          
+
           # For now, we'll trigger the release workflow as a backup
           echo "should_trigger=true" >> $GITHUB_OUTPUT
 
@@ -54,7 +54,7 @@ jobs:
           script: |
             const tagName = '${{ steps.tag-info.outputs.tag_name }}';
             console.log(`🚀 Triggering release workflow for tag: ${tagName}`);
-            
+
             try {
               const result = await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,

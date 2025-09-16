@@ -319,19 +319,27 @@ class TestContentProcessor:
 class TestContentProcessorMissingCoverage:
     """Test missing coverage areas in ContentProcessor."""
 
-    def test_html_to_plain_text_exception_fallback(self, content_processor: ContentProcessor):
+    def test_html_to_plain_text_exception_fallback(
+        self, content_processor: ContentProcessor
+    ):
         """Test html_to_plain_text exception handling fallback - covers lines 74-78."""
         from unittest.mock import patch
 
         # Mock html2text to raise exception
-        with patch.object(content_processor._html_converter, 'handle', side_effect=Exception("HTML conversion error")):
+        with patch.object(
+            content_processor._html_converter,
+            "handle",
+            side_effect=Exception("HTML conversion error"),
+        ):
             html_content = "<p>Test content</p>"
             result = content_processor.html_to_plain_text(html_content)
 
             # Should fallback to BeautifulSoup text extraction
             assert "Test content" in result
 
-    def test_create_snippet_with_exact_length(self, content_processor: ContentProcessor):
+    def test_create_snippet_with_exact_length(
+        self, content_processor: ContentProcessor
+    ):
         """Test create_snippet with content exactly at snippet length - covers line 239."""
         # Create content exactly at snippet length
         content = "a" * content_processor.snippet_length
@@ -341,9 +349,11 @@ class TestContentProcessorMissingCoverage:
         assert result == content
         assert "..." not in result
 
-    def test_process_mime_content_decode_exception(self, content_processor: ContentProcessor):
+    def test_process_mime_content_decode_exception(
+        self, content_processor: ContentProcessor
+    ):
         """Test process_mime_content with decode exception - covers line 296."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         # Create mock bytes that raises exception on decode
         mock_bytes = MagicMock()
@@ -354,7 +364,9 @@ class TestContentProcessorMissingCoverage:
         # Should return error message
         assert "Error processing content" in result
 
-    def test_extract_html_structure_content_preview_coverage(self, content_processor: ContentProcessor):
+    def test_extract_html_structure_content_preview_coverage(
+        self, content_processor: ContentProcessor
+    ):
         """Test extract_html_structure content preview logic - covers line 239."""
         # HTML with content that should trigger the content preview logic
         html_content = """
@@ -382,7 +394,9 @@ class TestContentProcessorMissingCoverage:
             if section.get("content_preview"):
                 assert isinstance(section["content_preview"], str)
 
-    def test_extract_html_links_empty_href_coverage(self, content_processor: ContentProcessor):
+    def test_extract_html_links_empty_href_coverage(
+        self, content_processor: ContentProcessor
+    ):
         """Test extract_html_links with empty href - covers line 296."""
         # HTML with links that have empty href attributes
         html_content = """

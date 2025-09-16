@@ -47,13 +47,13 @@ repos:
           - flake8-simplify
         args: ["--max-line-length=128", "--extend-ignore=E203,W503"]
 
-  # Type checking
+  # Type checking (relaxed for pre-commit)
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.18.1
     hooks:
       - id: mypy
-        additional_dependencies: [types-beautifulsoup4]
-        args: ["--python-version=3.12"]
+        additional_dependencies: [types-beautifulsoup4, pydantic, pydantic-settings, html2text]
+        args: ["--python-version=3.12", "--ignore-missing-imports"]
         files: ^openzim_mcp/
 
   # Security scanning (only high severity issues)

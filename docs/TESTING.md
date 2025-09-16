@@ -194,13 +194,13 @@ def test_zim_operations_basic(self, zim_operations: ZimOperations, temp_dir: Pat
     # Create mock ZIM file
     zim_file = temp_dir / "test.zim"
     zim_file.write_text("test content")
-    
+
     # Test with mocks
     with patch("openzim-mcp.zim_operations.Archive") as mock_archive:
         # Setup mock behavior
         mock_archive_instance = MagicMock()
         mock_archive.return_value = mock_archive_instance
-        
+
         # Test functionality
         result = zim_operations.list_zim_files()
         assert "test.zim" in result

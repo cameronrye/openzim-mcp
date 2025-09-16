@@ -23,7 +23,7 @@
     --success-color: #10b981;
     --gradient-primary: linear-gradient(135deg, #2563eb 0%, #10b981 100%);
     --gradient-secondary: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
-    
+
     /* Typography */
     --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
@@ -36,7 +36,7 @@
     --font-size-3xl: 1.875rem;
     --font-size-4xl: 2.25rem;
     --font-size-5xl: 3rem;
-    
+
     /* Spacing */
     --spacing-xs: 0.25rem;
     --spacing-sm: 0.5rem;
@@ -57,7 +57,7 @@
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
     --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-    
+
     /* Transitions */
     --transition-fast: 0.15s ease-in-out;
     --transition-normal: 0.3s ease-in-out;
@@ -1056,63 +1056,63 @@ body {
         transition: var(--transition-normal);
         box-shadow: var(--shadow-lg);
     }
-    
+
     .nav-menu.active {
         left: 0;
     }
-    
+
     .nav-toggle {
         display: flex;
     }
-    
+
     .nav-toggle.active .bar:nth-child(2) {
         opacity: 0;
     }
-    
+
     .nav-toggle.active .bar:nth-child(1) {
         transform: translateY(7px) rotate(45deg);
     }
-    
+
     .nav-toggle.active .bar:nth-child(3) {
         transform: translateY(-7px) rotate(-45deg);
     }
-    
+
     .hero .container {
         grid-template-columns: 1fr;
         gap: var(--spacing-2xl);
         text-align: center;
     }
-    
+
     .hero-title {
         font-size: var(--font-size-3xl);
     }
-    
+
     .hero-buttons {
         flex-direction: column;
         align-items: center;
     }
-    
+
     .hero-stats {
         justify-content: center;
     }
-    
+
     .code-window {
         transform: none;
     }
-    
+
     .features-grid {
         grid-template-columns: 1fr;
     }
-    
+
     .step {
         flex-direction: column;
         text-align: center;
     }
-    
+
     .tab-buttons {
         flex-wrap: wrap;
     }
-    
+
     .footer-content {
         grid-template-columns: 1fr;
         text-align: center;
@@ -1123,19 +1123,19 @@ body {
     .container {
         padding: 0 var(--spacing-md);
     }
-    
+
     .hero {
         padding: 100px 0 60px;
     }
-    
+
     .hero-title {
         font-size: var(--font-size-2xl);
     }
-    
+
     .section-title {
         font-size: var(--font-size-2xl);
     }
-    
+
     .feature-card {
         padding: var(--spacing-lg);
     }

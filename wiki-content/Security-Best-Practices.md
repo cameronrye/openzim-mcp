@@ -234,11 +234,11 @@ def validate_search_query(query: str) -> bool:
         r'data:',
         r'vbscript:'
     ]
-    
+
     for pattern in suspicious_patterns:
         if re.search(pattern, query, re.IGNORECASE):
             return False
-    
+
     return True
 ```
 

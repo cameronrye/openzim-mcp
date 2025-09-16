@@ -194,6 +194,7 @@ class TestSecurityMissingCoverage:
 
         # Mock hasattr to return False to trigger fallback
         from unittest.mock import patch
+
         with patch("builtins.hasattr", return_value=False):
             # Test valid path
             result = validator._is_path_within_directory(test_path, temp_dir)
