@@ -135,3 +135,18 @@ class TestOpenZimMcpConfig:
         assert config.cache.enabled is True
         assert config.content.max_content_length == 100000
         assert config.logging.level == "INFO"
+
+
+class TestConfigMissingCoverage:
+    """Test missing coverage areas in config module."""
+
+    def test_cache_config_repr_coverage(self):
+        """Test CacheConfig __repr__ method - covers line 142."""
+        cache_config = CacheConfig(enabled=True, max_size=10, ttl_seconds=60)
+        repr_str = repr(cache_config)
+
+        # Should contain class name and key attributes
+        assert "CacheConfig" in repr_str
+        assert "enabled=True" in repr_str
+        assert "max_size=10" in repr_str
+        assert "ttl_seconds=60" in repr_str

@@ -179,3 +179,55 @@ class TestSanitizeInput:
         """Test that sanitization preserves newlines and tabs."""
         result = sanitize_input("Hello\nWorld\tTest")
         assert result == "Hello\nWorld\tTest"
+
+
+class TestSecurityMissingCoverage:
+    """Test missing coverage areas in security module."""
+
+    def test_is_path_within_directory_fallback_coverage(self, temp_dir: Path):
+        """Test _is_path_within_directory fallback for older Python - covers lines 135-139."""
+        validator = PathValidator([str(temp_dir)])
+
+        # Create a test path
+        test_path = temp_dir / "test.txt"
+        test_path.touch()
+
+        # Mock hasattr to return False to trigger fallback
+        from unittest.mock import patch
+        with patch("builtins.hasattr", return_value=False):
+            # Test valid path
+            result = validator._is_path_within_directory(test_path, temp_dir)
+            assert result is True
+
+            # Test invalid path
+            invalid_path = Path("/some/other/path")
+            result = validator._is_path_within_directory(invalid_path, temp_dir)
+            assert result is False
+
+    def test_validate_zim_file_symlink_coverage(self, temp_dir: Path):
+        """Test validate_zim_file with symlink - covers additional validation."""
+        validator = PathValidator([str(temp_dir)])
+
+        # Create a real ZIM file
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        # Create a symlink to the ZIM file
+        symlink_file = temp_dir / "link.zim"
+        symlink_file.symlink_to(zim_file)
+
+        # Should validate successfully (pass Path object, not string)
+        result = validator.validate_zim_file(symlink_file)
+        # The result should be the symlink path, not the resolved target
+        assert result == symlink_file
+
+    def test_validate_zim_file_non_zim_extension_coverage(self, temp_dir: Path):
+        """Test validate_zim_file with non-.zim extension - covers line 160."""
+        validator = PathValidator([str(temp_dir)])
+
+        # Create a file without .zim extension
+        non_zim_file = temp_dir / "test.txt"
+        non_zim_file.touch()
+
+        with pytest.raises(OpenZimMcpValidationError, match="File is not a ZIM file"):
+            validator.validate_zim_file(non_zim_file)

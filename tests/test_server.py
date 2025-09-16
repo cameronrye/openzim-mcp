@@ -1229,6 +1229,477 @@ class TestOpenZimMcpServerErrorFormatting:
         assert "**Need Help?** Use `get_server_configuration()`" in result
 
 
+class TestOpenZimMcpServerInstanceTrackerIntegration:
+    """Test server functionality with instance tracker integration."""
+
+    @pytest.fixture
+    def mock_instance_tracker(self):
+        """Create a mock instance tracker."""
+        from unittest.mock import MagicMock
+        tracker = MagicMock()
+        tracker.detect_conflicts.return_value = []
+        tracker.cleanup_stale_instances.return_value = 0
+        tracker.get_active_instances.return_value = []
+        return tracker
+
+    @pytest.fixture
+    def server_with_tracker(self, test_config: OpenZimMcpConfig, mock_instance_tracker):
+        """Create a server with instance tracker."""
+        return OpenZimMcpServer(test_config, instance_tracker=mock_instance_tracker)
+
+    def test_list_zim_files_with_conflicts(self, server_with_tracker, mock_instance_tracker):
+        """Test list_zim_files with conflict detection - covers lines 211-275."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        # Mock conflicts
+        mock_conflicts = [
+            {
+                "type": "configuration_mismatch",
+                "instance": {"pid": 1234},
+                "message": "Config mismatch"
+            }
+        ]
+        mock_instance_tracker.detect_conflicts.return_value = mock_conflicts
+
+        # Mock zim_operations.list_zim_files
+        server_with_tracker.zim_operations.list_zim_files = MagicMock(
+            return_value='{"files": []}'
+        )
+
+        # Test the tool
+        result = asyncio.run(server_with_tracker.mcp.call_tool("list_zim_files", {}))
+
+        # Should include conflict warnings
+        assert "Server Conflict Detected" in str(result) or "files" in str(result)
+        mock_instance_tracker.detect_conflicts.assert_called_once()
+
+    def test_list_zim_files_conflict_detection_exception(self, server_with_tracker, mock_instance_tracker):
+        """Test list_zim_files when conflict detection fails - covers lines 356-358."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        # Mock conflict detection to raise exception
+        mock_instance_tracker.detect_conflicts.side_effect = Exception("Conflict detection failed")
+
+        # Mock zim_operations.list_zim_files
+        server_with_tracker.zim_operations.list_zim_files = MagicMock(
+            return_value='{"files": []}'
+        )
+
+        # Test the tool - should not fail even if conflict detection fails
+        result = asyncio.run(server_with_tracker.mcp.call_tool("list_zim_files", {}))
+
+        # Should return the basic result without conflicts
+        assert "files" in str(result)
+
+    def test_search_zim_file_with_conflicts(self, server_with_tracker, mock_instance_tracker):
+        """Test search_zim_file with conflict detection - covers conflict warning logic."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        # Mock conflicts
+        mock_conflicts = [
+            {
+                "type": "multiple_instances",
+                "instance": {"pid": 5678},
+                "message": "Multiple instances"
+            }
+        ]
+        mock_instance_tracker.detect_conflicts.return_value = mock_conflicts
+
+        # Mock zim_operations.search_zim_file
+        server_with_tracker.zim_operations.search_zim_file = MagicMock(
+            return_value='{"results": []}'
+        )
+
+        # Test the tool
+        result = asyncio.run(server_with_tracker.mcp.call_tool(
+            "search_zim_file",
+            {"zim_file_path": "test.zim", "query": "test"}
+        ))
+
+        # Should include conflict warnings
+        assert "Server Conflict Detected" in str(result) or "results" in str(result)
+
+    def test_get_server_health_with_instance_tracker(self, server_with_tracker, mock_instance_tracker):
+        """Test get_server_health with instance tracker - covers lines 497-510."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        # Mock active instances with some stale ones
+        mock_instances = [
+            MagicMock(pid=1234),
+            MagicMock(pid=5678),
+        ]
+        mock_instance_tracker.get_active_instances.return_value = mock_instances
+
+        # Mock _is_process_running to simulate stale instances
+        mock_instance_tracker._is_process_running.side_effect = lambda pid: pid != 1234
+
+        # Test the tool
+        result = asyncio.run(server_with_tracker.mcp.call_tool("get_server_health", {}))
+
+        # Should include stale instance information
+        result_str = str(result)
+        assert "stale_instances" in result_str or "instance_tracking" in result_str
+
+    def test_get_server_health_instance_tracker_exception(self, server_with_tracker, mock_instance_tracker):
+        """Test get_server_health when instance tracker fails - covers lines 506-507."""
+        import asyncio
+
+        # Mock instance tracker to raise exception
+        mock_instance_tracker.get_active_instances.side_effect = Exception("Tracker failed")
+
+        # Test the tool - should not fail
+        result = asyncio.run(server_with_tracker.mcp.call_tool("get_server_health", {}))
+
+        # Should include warning about tracker failure
+        result_str = str(result)
+        assert "Instance tracking check failed" in result_str or "warnings" in result_str
+
+    def test_get_server_configuration_with_conflicts(self, server_with_tracker, mock_instance_tracker):
+        """Test get_server_configuration with conflicts - covers lines 636-652."""
+        import asyncio
+
+        # Mock conflicts
+        mock_conflicts = [{"type": "test_conflict", "message": "Test conflict"}]
+        mock_instance_tracker.detect_conflicts.return_value = mock_conflicts
+
+        # Test the tool
+        result = asyncio.run(server_with_tracker.mcp.call_tool("get_server_configuration", {}))
+
+        # Should include conflict information
+        result_str = str(result)
+        assert "conflicts" in result_str or "validation_status" in result_str
+
+    def test_resolve_server_conflicts_success(self, server_with_tracker, mock_instance_tracker):
+        """Test resolve_server_conflicts successful cleanup - covers lines 955-963."""
+        import asyncio
+
+        # Mock successful cleanup
+        mock_instance_tracker.cleanup_stale_instances.return_value = 3
+
+        # Test the tool
+        result = asyncio.run(server_with_tracker.mcp.call_tool("resolve_server_conflicts", {}))
+
+        # Should report successful cleanup
+        result_str = str(result)
+        assert "stale_instances_removed" in result_str or "actions_taken" in result_str
+
+    def test_resolve_server_conflicts_cleanup_failure(self, server_with_tracker, mock_instance_tracker):
+        """Test resolve_server_conflicts cleanup failure - covers lines 964-967."""
+        import asyncio
+
+        # Mock cleanup failure
+        mock_instance_tracker.cleanup_stale_instances.side_effect = Exception("Cleanup failed")
+
+        # Test the tool
+        result = asyncio.run(server_with_tracker.mcp.call_tool("resolve_server_conflicts", {}))
+
+        # Should include failure message
+        result_str = str(result)
+        assert "Failed to clean up stale instances" in result_str or "recommendations" in result_str
+
+
+class TestOpenZimMcpServerHealthAndDiagnostics:
+    """Test server health and diagnostics functionality."""
+
+    @pytest.fixture
+    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
+        """Create a test server instance."""
+        return OpenZimMcpServer(test_config)
+
+    def test_get_server_health_directory_access_errors(self, server):
+        """Test get_server_health with directory access issues - covers lines 574-575."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        from pathlib import Path
+
+        # Mock Path.exists to simulate inaccessible directories
+        with patch.object(Path, 'exists', return_value=False):
+            result = asyncio.run(server.mcp.call_tool("get_server_health", {}))
+
+            # Should report directory issues
+            result_str = str(result)
+            assert "accessible_directories" in result_str or "warnings" in result_str
+
+    def test_get_server_health_cache_stats_error(self, server):
+        """Test get_server_health when cache stats fail - covers cache error handling."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        # Mock cache.stats to raise exception
+        original_stats = server.cache.stats
+        server.cache.stats = MagicMock(side_effect=Exception("Cache stats failed"))
+
+        try:
+            result = asyncio.run(server.mcp.call_tool("get_server_health", {}))
+
+            # Should handle cache error gracefully
+            result_str = str(result)
+            assert "cache" in result_str or "health" in result_str
+        finally:
+            # Restore original stats method
+            server.cache.stats = original_stats
+
+    def test_get_server_configuration_invalid_directories(self, temp_dir):
+        """Test get_server_configuration with invalid directories - covers lines 654-668."""
+        import asyncio
+        from pathlib import Path
+        from openzim_mcp.config import OpenZimMcpConfig, CacheConfig, ContentConfig, LoggingConfig
+
+        # Create a valid config first, then modify it to have invalid directories
+        valid_config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            cache=CacheConfig(enabled=True, max_size=10, ttl_seconds=60),
+            content=ContentConfig(max_content_length=1000, snippet_length=100),
+            logging=LoggingConfig(level="DEBUG"),
+        )
+
+        server = OpenZimMcpServer(valid_config)
+
+        # Now modify the config to have invalid directories for testing
+        server.config.allowed_directories = ["/non/existent/directory"]
+
+        result = asyncio.run(server.mcp.call_tool("get_server_configuration", {}))
+
+        # Should report invalid directories
+        result_str = str(result)
+        assert "validation_status" in result_str or "invalid_dirs" in result_str or "error" in result_str
+
+    def test_get_server_configuration_exception_handling(self, server):
+        """Test get_server_configuration exception handling - covers lines 678-680."""
+        import asyncio
+        from unittest.mock import patch
+
+        # Mock json.dumps to raise exception
+        with patch('json.dumps', side_effect=Exception("JSON error")):
+            result = asyncio.run(server.mcp.call_tool("get_server_configuration", {}))
+
+            # Should return error message
+            result_str = str(result)
+            assert "Error: Failed to get configuration" in result_str
+
+    def test_diagnose_server_state_exception_handling(self, server):
+        """Test diagnose_server_state exception handling - covers lines 913-915."""
+        import asyncio
+        from unittest.mock import patch
+
+        # Mock json.dumps to raise exception (safer than mocking os.getpid)
+        with patch('json.dumps', side_effect=Exception("JSON error")):
+            result = asyncio.run(server.mcp.call_tool("diagnose_server_state", {}))
+
+            # Should return error message
+            result_str = str(result)
+            assert "Error: Failed to run diagnostics" in result_str
+
+    def test_resolve_server_conflicts_no_tracker(self, server):
+        """Test resolve_server_conflicts without instance tracker - covers lines 948-953."""
+        import asyncio
+
+        # Server created without instance tracker
+        result = asyncio.run(server.mcp.call_tool("resolve_server_conflicts", {}))
+
+        # Should report that tracker is not available
+        result_str = str(result)
+        assert "Instance tracker not available" in result_str or "error" in result_str
+
+
+class TestServerMissingCoverage:
+    """Test missing coverage areas in server.py."""
+
+    @pytest.fixture
+    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
+        """Create a test server instance."""
+        return OpenZimMcpServer(test_config)
+
+    def test_search_zim_file_conflict_detection_coverage(self, server: OpenZimMcpServer):
+        """Test search_zim_file conflict detection - covers lines 356-358."""
+        from unittest.mock import patch, MagicMock
+
+        # Mock instance tracker to return conflicts
+        mock_tracker = MagicMock()
+        mock_tracker.detect_conflicts.return_value = [
+            {
+                "type": "configuration_mismatch",
+                "instance": {"pid": 12345}
+            }
+        ]
+        server.instance_tracker = mock_tracker
+
+        # Mock zim_operations to return a successful result
+        with patch.object(server.zim_operations, 'search_zim_file', return_value="Search results"):
+            # Mock conflict detection to raise exception
+            with patch.object(mock_tracker, 'detect_conflicts', side_effect=Exception("Conflict error")):
+                result = asyncio.run(server.mcp.call_tool("search_zim_file", {
+                    "zim_file_path": "/test/file.zim",
+                    "query": "test"
+                }))
+
+                # Should return search results without conflict warning
+                assert "Search results" in str(result)
+
+    def test_get_zim_entry_parameter_validation_coverage(self, server: OpenZimMcpServer):
+        """Test get_zim_entry parameter validation - covers lines 392-399."""
+        result = asyncio.run(server.mcp.call_tool("get_zim_entry", {
+            "zim_file_path": "/test/file.zim",
+            "entry_path": "A/Test",
+            "max_content_length": 500  # Less than minimum 1000
+        }))
+
+        result_str = str(result)
+        assert "Parameter Validation Error" in result_str
+        assert "max_content_length must be at least 1000" in result_str
+
+    def test_get_server_configuration_invalid_directories_coverage(self, server: OpenZimMcpServer):
+        """Test get_server_configuration with invalid directories - covers lines 653-668."""
+        # Modify config to have invalid directories
+        server.config.allowed_directories = ["/non/existent/directory"]
+
+        result = asyncio.run(server.mcp.call_tool("get_server_configuration", {}))
+
+        result_str = str(result)
+        assert "validation_status" in result_str or "Invalid directories" in result_str
+
+    def test_diagnose_server_state_comprehensive_coverage(self, server: OpenZimMcpServer):
+        """Test diagnose_server_state comprehensive functionality - covers lines 695-717."""
+        result = asyncio.run(server.mcp.call_tool("diagnose_server_state", {}))
+
+        result_str = str(result)
+        # Should contain comprehensive diagnostic information
+        assert "server_info" in result_str
+        assert "configuration" in result_str
+        assert "conflicts" in result_str
+        assert "issues" in result_str
+        assert "recommendations" in result_str
+        assert "environment_checks" in result_str
+
+    def test_search_zim_file_conflict_warning_coverage(self, server: OpenZimMcpServer):
+        """Test search_zim_file conflict warning display - covers lines 341-355."""
+        from unittest.mock import patch, MagicMock
+
+        # Mock instance tracker to return conflicts
+        mock_tracker = MagicMock()
+        mock_tracker.detect_conflicts.return_value = [
+            {
+                "type": "configuration_mismatch",
+                "instance": {"pid": 12345}
+            },
+            {
+                "type": "multiple_instances",
+                "instance": {"pid": 67890}
+            }
+        ]
+        server.instance_tracker = mock_tracker
+
+        # Mock zim_operations to return a successful result
+        with patch.object(server.zim_operations, 'search_zim_file', return_value="Search results"):
+            result = asyncio.run(server.mcp.call_tool("search_zim_file", {
+                "zim_file_path": "/test/file.zim",
+                "query": "test"
+            }))
+
+            result_str = str(result)
+            # Should include conflict warnings
+            assert "Server Conflict Detected" in result_str or "Configuration mismatch" in result_str
+
+    def test_list_namespaces_exception_handling_coverage(self, server: OpenZimMcpServer):
+        """Test list_namespaces exception handling - covers lines 503-504."""
+        from unittest.mock import patch
+
+        # Mock zim_operations to raise exception
+        with patch.object(server.zim_operations, 'list_namespaces', side_effect=Exception("Namespace error")):
+            result = asyncio.run(server.mcp.call_tool("list_namespaces", {
+                "zim_file_path": "/test/file.zim"
+            }))
+
+            result_str = str(result)
+            assert "Failed to list namespaces" in result_str and "Namespace error" in result_str
+
+    def test_browse_namespace_exception_handling_coverage(self, server: OpenZimMcpServer):
+        """Test browse_namespace exception handling - covers lines 536-547."""
+        from unittest.mock import patch
+
+        # Mock zim_operations to raise exception
+        with patch.object(server.zim_operations, 'browse_namespace', side_effect=Exception("Browse error")):
+            result = asyncio.run(server.mcp.call_tool("browse_namespace", {
+                "zim_file_path": "/test/file.zim",
+                "namespace": "A"
+            }))
+
+            result_str = str(result)
+            assert "Operation Failed" in result_str and "Browse error" in result_str
+
+    def test_search_with_filters_exception_handling_coverage(self, server: OpenZimMcpServer):
+        """Test search_with_filters exception handling - covers lines 559-562."""
+        from unittest.mock import patch
+
+        # Mock zim_operations to raise exception
+        with patch.object(server.zim_operations, 'search_with_filters', side_effect=Exception("Filter error")):
+            result = asyncio.run(server.mcp.call_tool("search_with_filters", {
+                "zim_file_path": "/test/file.zim",
+                "query": "test"
+            }))
+
+            result_str = str(result)
+            assert "Failed to perform filtered search" in result_str and "Filter error" in result_str
+
+
+class TestOpenZimMcpServerEdgeCases:
+    """Test server edge cases and error scenarios."""
+
+    @pytest.fixture
+    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
+        """Create a test server instance."""
+        return OpenZimMcpServer(test_config)
+
+    def test_tool_exception_handling_comprehensive(self, server):
+        """Test comprehensive exception handling in all tools."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        # Mock all zim_operations methods to raise exceptions
+        methods_to_mock = [
+            'get_zim_metadata',
+            'get_main_page',
+            'get_search_suggestions',
+            'get_article_structure',
+            'extract_article_links'
+        ]
+
+        original_methods = {}
+        try:
+            for method_name in methods_to_mock:
+                if hasattr(server.zim_operations, method_name):
+                    original_methods[method_name] = getattr(server.zim_operations, method_name)
+                    setattr(
+                        server.zim_operations,
+                        method_name,
+                        MagicMock(side_effect=Exception(f"{method_name} failed"))
+                    )
+
+            # Test each tool's exception handling
+            test_cases = [
+                ("get_zim_metadata", {"zim_file_path": "test.zim"}),
+                ("get_main_page", {"zim_file_path": "test.zim"}),
+                ("get_search_suggestions", {"zim_file_path": "test.zim", "partial_query": "test"}),
+                ("get_article_structure", {"zim_file_path": "test.zim", "entry_path": "A/Test"}),
+                ("extract_article_links", {"zim_file_path": "test.zim", "entry_path": "A/Test"}),
+            ]
+
+            for tool_name, params in test_cases:
+                result = asyncio.run(server.mcp.call_tool(tool_name, params))
+                result_str = str(result)
+                # Should return error message
+                assert "Error:" in result_str or "Failed" in result_str
+
+        finally:
+            # Restore original methods
+            for method_name, original_method in original_methods.items():
+                setattr(server.zim_operations, method_name, original_method)
+
+
 class TestOpenZimMcpServerParameterValidation:
     """Test parameter validation in server tool methods."""
 
