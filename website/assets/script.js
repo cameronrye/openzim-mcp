@@ -1,3 +1,98 @@
+// Theme Management
+function initTheme() {
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeIcon = document.getElementById('theme-icon');
+    const html = document.documentElement;
+
+    // Get saved theme or default to light
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    html.setAttribute('data-theme', savedTheme);
+    updateThemeIcon(savedTheme);
+
+    // Theme toggle functionality
+    themeToggle.addEventListener('click', function() {
+        const currentTheme = html.getAttribute('data-theme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+        html.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        updateThemeIcon(newTheme);
+
+        // Add a subtle animation
+        themeToggle.style.transform = 'scale(0.9)';
+        setTimeout(() => {
+            themeToggle.style.transform = 'scale(1)';
+        }, 150);
+    });
+
+    function updateThemeIcon(theme) {
+        themeIcon.textContent = theme === 'dark' ? '☀️' : '🌙';
+        themeToggle.setAttribute('aria-label',
+            theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+        );
+    }
+}
+
+// Dynamic Version Fetching
+async function fetchLatestVersion() {
+    const versionDisplay = document.getElementById('version-display');
+    const fallbackVersion = 'v0.5.1';
+
+    // Show loading state
+    versionDisplay.style.opacity = '0.6';
+    versionDisplay.textContent = 'Loading...';
+
+    try {
+        // Check cache first
+        const cached = localStorage.getItem('cached-version');
+        if (cached) {
+            const cacheData = JSON.parse(cached);
+            const oneHour = 60 * 60 * 1000;
+
+            if (Date.now() - cacheData.timestamp < oneHour) {
+                versionDisplay.textContent = cacheData.version;
+                versionDisplay.style.opacity = '1';
+                return;
+            }
+        }
+
+        const response = await fetch('https://api.github.com/repos/cameronrye/openzim-mcp/releases/latest', {
+            headers: {
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        });
+
+        if (!response.ok) throw new Error('Failed to fetch');
+
+        const data = await response.json();
+        const version = data.tag_name || fallbackVersion;
+
+        // Animate the version update
+        versionDisplay.style.opacity = '0';
+        setTimeout(() => {
+            versionDisplay.textContent = version;
+            versionDisplay.style.opacity = '1';
+        }, 150);
+
+        // Cache the version for 1 hour
+        const cacheData = {
+            version: version,
+            timestamp: Date.now()
+        };
+        localStorage.setItem('cached-version', JSON.stringify(cacheData));
+
+    } catch (error) {
+        console.log('Using fallback version due to:', error.message);
+
+        // Use fallback version with animation
+        versionDisplay.style.opacity = '0';
+        setTimeout(() => {
+            versionDisplay.textContent = fallbackVersion;
+            versionDisplay.style.opacity = '1';
+        }, 150);
+    }
+}
+
 // Mobile Navigation Toggle
 document.addEventListener('DOMContentLoaded', function() {
     const navToggle = document.getElementById('nav-toggle');
@@ -20,6 +115,14 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
+    // Keyboard navigation for mobile menu
+    navToggle.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            navToggle.click();
+        }
+    });
+
     // Close mobile menu when clicking outside
     document.addEventListener('click', function(e) {
         if (!navToggle.contains(e.target) && !navMenu.contains(e.target)) {
@@ -33,11 +136,21 @@ document.addEventListener('DOMContentLoaded', function() {
 // Navbar scroll effect
 window.addEventListener('scroll', function() {
     const navbar = document.getElementById('navbar');
+    const theme = document.documentElement.getAttribute('data-theme') || 'light';
+
     if (window.scrollY > 50) {
-        navbar.style.background = 'rgba(255, 255, 255, 0.98)';
+        if (theme === 'dark') {
+            navbar.style.background = 'rgba(15, 23, 42, 0.98)';
+        } else {
+            navbar.style.background = 'rgba(255, 255, 255, 0.98)';
+        }
         navbar.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1)';
     } else {
-        navbar.style.background = 'rgba(255, 255, 255, 0.95)';
+        if (theme === 'dark') {
+            navbar.style.background = 'rgba(15, 23, 42, 0.95)';
+        } else {
+            navbar.style.background = 'rgba(255, 255, 255, 0.95)';
+        }
         navbar.style.boxShadow = 'none';
     }
 });
@@ -220,6 +333,8 @@ function initLazyLoading() {
 
 // Initialize all functionality when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
+    initTheme();
+    fetchLatestVersion();
     initCopyButtons();
     initTabs();
     initScrollAnimations();
@@ -240,16 +355,56 @@ https://github.com/cameronrye/openzim-mcp
 Built with ❤️ by the OpenZIM MCP Development Team
 `);
 
+// Enhanced error handling for theme changes
+function handleThemeChange() {
+    const navbar = document.getElementById('navbar');
+    if (navbar && window.scrollY > 50) {
+        // Re-trigger scroll effect to update navbar background
+        window.dispatchEvent(new Event('scroll'));
+    }
+}
+
+// Listen for theme changes
+document.addEventListener('DOMContentLoaded', function() {
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+                handleThemeChange();
+            }
+        });
+    });
+
+    observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme']
+    });
+});
+
 // Add performance monitoring
 if ('performance' in window) {
     window.addEventListener('load', function() {
         setTimeout(() => {
-            const perfData = performance.getEntriesByType('navigation')[0];
-            console.log('Page load performance:', {
-                'DOM Content Loaded': Math.round(perfData.domContentLoadedEventEnd - perfData.domContentLoadedEventStart),
-                'Load Complete': Math.round(perfData.loadEventEnd - perfData.loadEventStart),
-                'Total Load Time': Math.round(perfData.loadEventEnd - perfData.fetchStart)
-            });
+            try {
+                const perfData = performance.getEntriesByType('navigation')[0];
+                if (perfData) {
+                    console.log('Page load performance:', {
+                        'DOM Content Loaded': Math.round(perfData.domContentLoadedEventEnd - perfData.domContentLoadedEventStart),
+                        'Load Complete': Math.round(perfData.loadEventEnd - perfData.loadEventStart),
+                        'Total Load Time': Math.round(perfData.loadEventEnd - perfData.fetchStart)
+                    });
+                }
+            } catch (error) {
+                console.log('Performance monitoring not available');
+            }
         }, 0);
+    });
+}
+
+// Add service worker registration for better caching (optional)
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+        // Only register if we have a service worker file
+        // This is commented out as we haven't created one yet
+        // navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
 }

@@ -59,11 +59,19 @@
     </script>
 </head>
 <body>
+    <!-- Skip to main content for accessibility -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+
     <!-- Navigation -->
     <nav class="navbar" id="navbar">
         <div class="nav-container">
             <div class="nav-logo">
-                <span class="logo-icon">🧠</span>
+                <svg class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2a3 3 0 0 0-3 3 4 4 0 0 0-4 4v6a4 4 0 0 0 4 4 3 3 0 0 0 3 3 3 3 0 0 0 3-3 4 4 0 0 0 4-4V9a4 4 0 0 0-4-4 3 3 0 0 0-3-3z"/>
+                    <path d="M12 2v20"/>
+                    <path d="M8 7s0-2 4-2 4 2 4 2"/>
+                    <path d="M8 17s0 2 4 2 4-2 4-2"/>
+                </svg>
                 <span class="logo-text">OpenZIM MCP</span>
             </div>
             <div class="nav-menu" id="nav-menu">
@@ -77,6 +85,9 @@
                 <a href="https://github.com/cameronrye/openzim-mcp" class="nav-link nav-link-github" target="_blank">
                     <span class="github-icon">⭐</span> GitHub
                 </a>
+                <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
+                    <span class="theme-icon" id="theme-icon">🌙</span>
+                </button>
             </div>
             <div class="nav-toggle" id="nav-toggle">
                 <span class="bar"></span>
@@ -87,11 +98,12 @@
     </nav>
 
     <!-- Hero Section -->
+    <main id="main-content">
     <section id="home" class="hero">
         <div class="container">
             <div class="hero-content">
                 <div class="hero-badge">
-                    <span class="badge-icon">🚀</span>
+                    <span class="badge-icon">⚡</span>
                     <span>Built for LLM Intelligence</span>
                 </div>
                 <h1 class="hero-title">
@@ -104,17 +116,17 @@
                 </p>
                 <div class="hero-buttons">
                     <a href="#installation" class="btn btn-primary">
-                        <span class="btn-icon">⚡</span>
+                        <span class="btn-icon">→</span>
                         Get Started
                     </a>
                     <a href="https://github.com/cameronrye/openzim-mcp" class="btn btn-secondary" target="_blank">
-                        <span class="btn-icon">📖</span>
+                        <span class="btn-icon">↗</span>
                         View on GitHub
                     </a>
                 </div>
                 <div class="hero-stats">
                     <div class="stat">
-                        <div class="stat-number">v0.4.0</div>
+                        <div class="stat-number" id="version-display">v0.5.1</div>
                         <div class="stat-label">Latest Release</div>
                     </div>
                     <div class="stat">
@@ -832,6 +844,7 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
             </div>
         </div>
     </section>
+    </main>
 
     <!-- Footer -->
     <footer class="footer">
@@ -839,7 +852,12 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
             <div class="footer-content">
                 <div class="footer-section">
                     <div class="footer-logo">
-                        <span class="logo-icon">🧠</span>
+                        <svg class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 2a3 3 0 0 0-3 3 4 4 0 0 0-4 4v6a4 4 0 0 0 4 4 3 3 0 0 0 3 3 3 3 0 0 0 3-3 4 4 0 0 0 4-4V9a4 4 0 0 0-4-4 3 3 0 0 0-3-3z"/>
+                            <path d="M12 2v20"/>
+                            <path d="M8 7s0-2 4-2 4 2 4 2"/>
+                            <path d="M8 17s0 2 4 2 4-2 4-2"/>
+                        </svg>
                         <span class="logo-text">OpenZIM MCP</span>
                     </div>
                     <p class="footer-description">
