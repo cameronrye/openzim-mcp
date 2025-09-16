@@ -314,3 +314,96 @@ class TestContentProcessor:
         assert len(links_data["internal_links"]) == 0
         assert len(links_data["external_links"]) == 0
         assert len(links_data["media_links"]) == 0
+
+
+class TestContentProcessorMissingCoverage:
+    """Test missing coverage areas in ContentProcessor."""
+
+    def test_html_to_plain_text_exception_fallback(self, content_processor: ContentProcessor):
+        """Test html_to_plain_text exception handling fallback - covers lines 74-78."""
+        from unittest.mock import patch
+
+        # Mock html2text to raise exception
+        with patch.object(content_processor._html_converter, 'handle', side_effect=Exception("HTML conversion error")):
+            html_content = "<p>Test content</p>"
+            result = content_processor.html_to_plain_text(html_content)
+
+            # Should fallback to BeautifulSoup text extraction
+            assert "Test content" in result
+
+    def test_create_snippet_with_exact_length(self, content_processor: ContentProcessor):
+        """Test create_snippet with content exactly at snippet length - covers line 239."""
+        # Create content exactly at snippet length
+        content = "a" * content_processor.snippet_length
+        result = content_processor.create_snippet(content)
+
+        # Should return content without truncation indicator
+        assert result == content
+        assert "..." not in result
+
+    def test_process_mime_content_decode_exception(self, content_processor: ContentProcessor):
+        """Test process_mime_content with decode exception - covers line 296."""
+        from unittest.mock import MagicMock
+
+        # Create mock bytes that raises exception on decode
+        mock_bytes = MagicMock()
+        mock_bytes.decode.side_effect = Exception("Decode error")
+
+        result = content_processor.process_mime_content(mock_bytes, "text/html")
+
+        # Should return error message
+        assert "Error processing content" in result
+
+    def test_extract_html_structure_content_preview_coverage(self, content_processor: ContentProcessor):
+        """Test extract_html_structure content preview logic - covers line 239."""
+        # HTML with content that should trigger the content preview logic
+        html_content = """
+        <html>
+        <body>
+            <h1>Main Title</h1>
+            <h2>Section 1</h2>
+            <p>This is a paragraph with some content that should be included in the preview.</p>
+            <p>Another paragraph with more content to test the preview length limits.</p>
+            <h3>Subsection</h3>
+            <p>More content here.</p>
+        </body>
+        </html>
+        """
+
+        result = content_processor.extract_html_structure(html_content)
+
+        # Should have extracted structure with content previews
+        assert "sections" in result
+        sections = result["sections"]
+        assert len(sections) > 0
+
+        # Check that content previews were generated
+        for section in sections:
+            if section.get("content_preview"):
+                assert isinstance(section["content_preview"], str)
+
+    def test_extract_html_links_empty_href_coverage(self, content_processor: ContentProcessor):
+        """Test extract_html_links with empty href - covers line 296."""
+        # HTML with links that have empty href attributes
+        html_content = """
+        <html>
+        <body>
+            <a href="">Empty href link</a>
+            <a href="   ">Whitespace href link</a>
+            <a href="http://example.com">Valid link</a>
+            <a>No href attribute</a>
+        </body>
+        </html>
+        """
+
+        result = content_processor.extract_html_links(html_content)
+
+        # Should only include links with non-empty href
+        assert "internal_links" in result
+        assert "external_links" in result
+
+        # Should have filtered out empty href links
+        all_links = result["internal_links"] + result["external_links"]
+        for link in all_links:
+            assert link["url"]  # Should not be empty
+            assert link["url"].strip()  # Should not be just whitespace
