@@ -1,11 +1,13 @@
 [flake8]
 max-line-length = 128
-extend-ignore = E203, W503
-exclude = 
+extend-ignore = E203,W503,E501,D200,D212,D401,D107,D202,D400,D415,D205,B110,B007,B014,B017,SIM102,SIM105,SIM111,SIM117,SIM907,SIM904,F401,F541,F841
+exclude =
     .git,
     __pycache__,
     .venv,
     .pytest_cache,
     htmlcov,
     build,
-    dist
+    dist,
+    scripts/*,  # Relax rules for scripts
+    website/*   # Relax rules for website

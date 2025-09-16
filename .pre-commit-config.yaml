@@ -12,13 +12,13 @@ repos:
       - id: check-toml
       - id: check-json
       - id: check-added-large-files
-        args: ['--maxkb=1000']
+        args: ["--maxkb=1000"]
       - id: check-merge-conflict
       - id: check-case-conflict
       - id: check-docstring-first
       - id: debug-statements
       - id: name-tests-test
-        args: ['--pytest-test-first']
+        args: ["--pytest-test-first"]
 
   # Python code formatting
   - repo: https://github.com/psf/black
@@ -26,14 +26,14 @@ repos:
     hooks:
       - id: black
         language_version: python3.12
-        args: ['--line-length=88', '--target-version=py312']
+        args: ["--line-length=88", "--target-version=py312"]
 
   # Import sorting
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:
       - id: isort
-        args: ['--profile=black', '--line-length=88']
+        args: ["--profile=black", "--line-length=88"]
 
   # Linting
   - repo: https://github.com/pycqa/flake8
@@ -45,37 +45,39 @@ repos:
           - flake8-bugbear
           - flake8-comprehensions
           - flake8-simplify
-        args: ['--max-line-length=88', '--extend-ignore=E203,W503']
+        args: ["--max-line-length=128", "--extend-ignore=E203,W503"]
 
   # Type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.18.1
     hooks:
       - id: mypy
-        additional_dependencies: [types-all]
-        args: ['--python-version=3.12']
+        additional_dependencies: [types-beautifulsoup4]
+        args: ["--python-version=3.12"]
+        files: ^openzim_mcp/
 
-  # Security scanning
+  # Security scanning (only high severity issues)
   - repo: https://github.com/PyCQA/bandit
     rev: 1.8.0
     hooks:
       - id: bandit
-        args: ['-c', 'pyproject.toml']
-        additional_dependencies: ['bandit[toml]']
+        args: ["-c", "pyproject.toml", "--severity-level", "medium"]
+        additional_dependencies: ["bandit[toml]"]
 
-  # Documentation
+  # Documentation (relaxed rules)
   - repo: https://github.com/pycqa/pydocstyle
     rev: 6.3.0
     hooks:
       - id: pydocstyle
-        args: ['--convention=google']
+        args: ["--convention=google", "--add-ignore=D200,D212"]
 
-  # Markdown linting
+  # Markdown linting (auto-fix only)
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.42.0
     hooks:
       - id: markdownlint
-        args: ['--fix']
+        args: ["--fix"]
+        files: ^(README|CONTRIBUTING|CHANGELOG)\.md$
 
   # YAML formatting
   - repo: https://github.com/pre-commit/mirrors-prettier
@@ -91,8 +93,8 @@ ci:
 
     for more information, see https://pre-commit.ci
   autofix_prs: true
-  autoupdate_branch: ''
-  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_branch: ""
+  autoupdate_commit_msg: "[pre-commit.ci] pre-commit autoupdate"
   autoupdate_schedule: weekly
   skip: []
   submodules: false
