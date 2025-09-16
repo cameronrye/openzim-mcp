@@ -314,3 +314,42 @@ class TestContentProcessor:
         assert len(links_data["internal_links"]) == 0
         assert len(links_data["external_links"]) == 0
         assert len(links_data["media_links"]) == 0
+
+
+class TestContentProcessorMissingCoverage:
+    """Test missing coverage areas in ContentProcessor."""
+
+    def test_html_to_plain_text_exception_fallback(self, content_processor: ContentProcessor):
+        """Test html_to_plain_text exception handling fallback - covers lines 74-78."""
+        from unittest.mock import patch
+
+        # Mock html2text to raise exception
+        with patch.object(content_processor._html_converter, 'handle', side_effect=Exception("HTML conversion error")):
+            html_content = "<p>Test content</p>"
+            result = content_processor.html_to_plain_text(html_content)
+
+            # Should fallback to BeautifulSoup text extraction
+            assert "Test content" in result
+
+    def test_create_snippet_with_exact_length(self, content_processor: ContentProcessor):
+        """Test create_snippet with content exactly at snippet length - covers line 239."""
+        # Create content exactly at snippet length
+        content = "a" * content_processor.snippet_length
+        result = content_processor.create_snippet(content)
+
+        # Should return content without truncation indicator
+        assert result == content
+        assert "..." not in result
+
+    def test_process_mime_content_decode_exception(self, content_processor: ContentProcessor):
+        """Test process_mime_content with decode exception - covers line 296."""
+        from unittest.mock import patch, MagicMock
+
+        # Create mock bytes that raises exception on decode
+        mock_bytes = MagicMock()
+        mock_bytes.decode.side_effect = Exception("Decode error")
+
+        result = content_processor.process_mime_content(mock_bytes, "text/html")
+
+        # Should return error message
+        assert "Error processing content" in result

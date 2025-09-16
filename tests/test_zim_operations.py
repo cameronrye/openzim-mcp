@@ -1857,3 +1857,158 @@ class TestZimOperationsUtilityFunctions:
         expected_patterns = ["I/favicon.png", "I/logo.png", "I/image.jpg"]
         for pattern in expected_patterns:
             assert pattern in patterns
+
+
+class TestZimOperationsExceptionHandling:
+    """Test exception handling in ZimOperations to improve coverage."""
+
+    @pytest.fixture
+    def zim_operations(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator: PathValidator,
+        openzim_mcp_cache: OpenZimMcpCache,
+        content_processor: ContentProcessor,
+    ) -> ZimOperations:
+        """Create ZimOperations instance for testing."""
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def test_search_zim_file_exception_handling(self, zim_operations: ZimOperations, temp_dir: Path):
+        """Test search_zim_file exception handling - covers lines 189-191."""
+        from unittest.mock import patch
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        # Mock zim_archive to raise exception
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.side_effect = Exception("Archive error")
+
+            with pytest.raises(OpenZimMcpArchiveError):
+                zim_operations.search_zim_file(str(zim_file), "test query")
+
+    def test_get_zim_entry_exception_handling(self, zim_operations: ZimOperations, temp_dir: Path):
+        """Test get_zim_entry exception handling - covers lines 326-328."""
+        from unittest.mock import patch
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        # Mock zim_archive to raise exception
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.side_effect = Exception("Archive error")
+
+            with pytest.raises(OpenZimMcpArchiveError) as exc_info:
+                zim_operations.get_zim_entry(str(zim_file), "A/Test")
+
+            # Should include guidance message
+            assert "Try using search_zim_file()" in str(exc_info.value)
+
+    def test_get_zim_entry_search_fallback_exception(self, zim_operations: ZimOperations, temp_dir: Path):
+        """Test get_zim_entry search fallback exception handling - covers lines 434-436."""
+        from unittest.mock import patch, MagicMock
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            # Mock direct access to fail
+            mock_archive_instance.get_entry_by_path.side_effect = Exception("Direct access failed")
+
+            # Mock search to also fail
+            with patch.object(zim_operations, '_find_entry_by_search', side_effect=Exception("Search failed")):
+                with pytest.raises(OpenZimMcpArchiveError) as exc_info:
+                    zim_operations.get_zim_entry(str(zim_file), "A/Test")
+
+                # Should include comprehensive error message
+                assert "Direct access failed" in str(exc_info.value)
+                assert "Search-based fallback failed" in str(exc_info.value)
+
+    def test_get_zim_metadata_exception_handling(self, zim_operations: ZimOperations, temp_dir: Path):
+        """Test get_zim_metadata exception handling - covers lines 678-679."""
+        from unittest.mock import patch, MagicMock
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive_instance.entry_count = 100
+            mock_archive_instance.all_entry_count = 120
+            mock_archive_instance.article_count = 80
+            mock_archive_instance.media_count = 20
+
+            # Mock metadata extraction to raise exception
+            mock_archive_instance.get_entry_by_path.side_effect = Exception("Metadata extraction failed")
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            # Should not raise exception, but handle gracefully
+            result = zim_operations.get_zim_metadata(str(zim_file))
+
+            # Should still return basic metadata
+            assert "entry_count" in result
+            assert "100" in result
+
+    def test_list_namespaces_sampling_exception(self, zim_operations: ZimOperations, temp_dir: Path):
+        """Test list_namespaces sampling exception handling - covers lines 910-915."""
+        from unittest.mock import patch, MagicMock
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive_instance.entry_count = 100
+            mock_archive_instance.has_new_namespace_scheme = False
+
+            # Mock get_random_entry to raise exception
+            mock_archive_instance.get_random_entry.side_effect = Exception("Sampling error")
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            # Should handle exception gracefully
+            result = zim_operations.list_namespaces(str(zim_file))
+
+            # Should still return result structure
+            assert "namespaces" in result
+
+    def test_browse_namespace_exception_handling(self, zim_operations: ZimOperations, temp_dir: Path):
+        """Test browse_namespace exception handling - covers lines 1121-1123."""
+        from unittest.mock import patch, MagicMock
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive_instance.entry_count = 100
+            mock_archive_instance.has_new_namespace_scheme = False
+
+            # Mock _find_entries_in_namespace to raise exception
+            with patch.object(zim_operations, '_find_entries_in_namespace', side_effect=Exception("Browse error")):
+                with pytest.raises(OpenZimMcpArchiveError):
+                    zim_operations.browse_namespace(str(zim_file), "A")
+
+    def test_extract_article_links_exception_handling(self, zim_operations: ZimOperations, temp_dir: Path):
+        """Test extract_article_links exception handling - covers lines 1848-1850."""
+        from unittest.mock import patch
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        # Mock zim_archive to raise exception
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.side_effect = Exception("Archive error")
+
+            with pytest.raises(OpenZimMcpArchiveError) as exc_info:
+                zim_operations.extract_article_links(str(zim_file), "A/Test")
+
+            # Should include proper error message (check actual message format)
+            assert "Link extraction failed" in str(exc_info.value)
+
+
+
