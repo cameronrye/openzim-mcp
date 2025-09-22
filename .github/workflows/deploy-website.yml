@@ -53,7 +53,7 @@ jobs:
           find _site -type f -name "*.html" -o -name "*.css" -o -name "*.js" -o -name "*.svg" | head -20
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: _site
 
