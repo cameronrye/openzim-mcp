@@ -2,10 +2,12 @@
 Main entry point for OpenZIM MCP server.
 """
 
+import argparse
 import atexit
 import sys
 
 from .config import OpenZimMcpConfig
+from .constants import TOOL_MODE_FULL, TOOL_MODE_SIMPLE, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
 from .instance_tracker import InstanceTracker
 from .server import OpenZimMcpServer
@@ -13,22 +15,53 @@ from .server import OpenZimMcpServer
 
 def main() -> None:
     """Main entry point for OpenZIM MCP server."""
-    args = sys.argv[1:]
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="OpenZIM MCP Server - Access ZIM files through MCP",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Full mode (all 15 tools)
+  python -m openzim_mcp /path/to/zim/files
+  python -m openzim_mcp --mode full /path/to/zim/files
 
-    if not args:
-        print(
-            "Usage: python -m openzim_mcp <allowed_directory> [other_directories...]",
-            file=sys.stderr,
-        )
-        print(
-            "   or: uv run openzim_mcp/main.py <allowed_directory> [other_directories...]",
-            file=sys.stderr,
-        )
+  # Simple mode (2 intelligent tools)
+  python -m openzim_mcp --mode simple /path/to/zim/files
+
+Environment Variables:
+  OPENZIM_MCP_TOOL_MODE - Set tool mode (full or simple)
+        """,
+    )
+    parser.add_argument(
+        "directories",
+        nargs="+",
+        help="One or more directories containing ZIM files",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=list(VALID_TOOL_MODES),
+        default=None,
+        help=(
+            f"Tool mode: 'full' for all 15 tools, 'simple' for 2 "
+            f"intelligent tools (default: {TOOL_MODE_FULL}, or from "
+            f"OPENZIM_MCP_TOOL_MODE env var)"
+        ),
+    )
+
+    # Handle case where no arguments provided
+    if len(sys.argv) == 1:
+        parser.print_help(sys.stderr)
         sys.exit(1)
 
+    args = parser.parse_args()
+
     try:
-        # Create configuration
-        config = OpenZimMcpConfig(allowed_directories=args)
+        # Create configuration with tool mode
+        config_kwargs = {"allowed_directories": args.directories}
+        if args.mode:
+            config_kwargs["tool_mode"] = args.mode
+
+        config = OpenZimMcpConfig(**config_kwargs)
 
         # Initialize instance tracker
         instance_tracker = InstanceTracker()
@@ -50,8 +83,17 @@ def main() -> None:
         # Create and run server
         server = OpenZimMcpServer(config, instance_tracker)
 
+        mode_desc = (
+            "SIMPLE mode (2 intelligent tools)"
+            if config.tool_mode == TOOL_MODE_SIMPLE
+            else "FULL mode (15 specialized tools)"
+        )
         print(
-            f"OpenZIM MCP server started, allowed directories: {', '.join(args)}",
+            f"OpenZIM MCP server started in {mode_desc}",
+            file=sys.stderr,
+        )
+        print(
+            f"Allowed directories: {', '.join(args.directories)}",
             file=sys.stderr,
         )
 

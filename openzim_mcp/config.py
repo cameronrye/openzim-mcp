@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +17,8 @@ from .constants import (
     DEFAULT_MAX_CONTENT_LENGTH,
     DEFAULT_SEARCH_LIMIT,
     DEFAULT_SNIPPET_LENGTH,
+    TOOL_MODE_FULL,
+    VALID_TOOL_MODES,
 )
 from .exceptions import OpenZimMcpConfigurationError
 
@@ -66,6 +68,10 @@ class OpenZimMcpConfig(BaseSettings):
 
     # Server settings
     server_name: str = "openzim-mcp"
+    tool_mode: Literal["full", "simple"] = Field(
+        default=TOOL_MODE_FULL,
+        description="Tool mode: 'full' for all 15 tools, 'simple' for 2 smart tools",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="OPENZIM_MCP_",
@@ -92,6 +98,16 @@ class OpenZimMcpConfig(BaseSettings):
             validated_dirs.append(str(path))
 
         return validated_dirs
+
+    @field_validator("tool_mode")
+    @classmethod
+    def validate_tool_mode(cls, v: str) -> str:
+        """Validate tool mode."""
+        if v not in VALID_TOOL_MODES:
+            raise OpenZimMcpConfigurationError(
+                f"Invalid tool mode: {v}. Must be one of {VALID_TOOL_MODES}"
+            )
+        return v
 
     def setup_logging(self) -> None:
         """Configure logging based on settings."""
@@ -124,6 +140,7 @@ class OpenZimMcpConfig(BaseSettings):
             "content_snippet_length": self.content.snippet_length,
             "search_default_limit": self.content.default_search_limit,
             "server_name": self.server_name,
+            "tool_mode": self.tool_mode,
         }
 
         # Convert to JSON string with sorted keys for consistent hashing
@@ -141,6 +158,7 @@ class OpenZimMcpConfig(BaseSettings):
         """
         return {
             "server_name": self.server_name,
+            "tool_mode": self.tool_mode,
             "allowed_directories_count": len(self.allowed_directories),
             "allowed_directories": self.allowed_directories,
             "cache_enabled": self.cache.enabled,

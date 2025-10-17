@@ -2,6 +2,11 @@
 Constants used throughout the OpenZIM MCP server.
 """
 
+# Tool mode constants
+TOOL_MODE_FULL = "full"
+TOOL_MODE_SIMPLE = "simple"
+VALID_TOOL_MODES = {TOOL_MODE_FULL, TOOL_MODE_SIMPLE}
+
 # Content processing constants
 DEFAULT_SNIPPET_LENGTH = 1000
 DEFAULT_MAX_CONTENT_LENGTH = 100000

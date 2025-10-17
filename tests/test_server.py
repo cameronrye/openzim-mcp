@@ -212,7 +212,9 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
         # This at least verifies that _register_tools was called
         assert server.mcp.name == server.config.server_name
 
-    def test_server_tool_execution_with_mocked_dependencies(self, server: OpenZimMcpServer):
+    def test_server_tool_execution_with_mocked_dependencies(
+        self, server: OpenZimMcpServer
+    ):
         """Test server tool execution by mocking dependencies and triggering errors."""
         # This test aims to actually execute server code by manipulating dependencies
 
@@ -1081,9 +1083,7 @@ class TestOpenZimMcpServerErrorFormatting:
         error = OpenZimMcpFileNotFoundError("File not found: test.zim")
 
         result = server._create_enhanced_error_message(
-            operation="search",
-            error=error,
-            context="test.zim"
+            operation="search", error=error, context="test.zim"
         )
 
         assert "❌ **File Not Found Error**" in result
@@ -1097,9 +1097,7 @@ class TestOpenZimMcpServerErrorFormatting:
         error = OpenZimMcpArchiveError("Archive corrupted")
 
         result = server._create_enhanced_error_message(
-            operation="get_entry",
-            error=error,
-            context="test.zim/A/Article"
+            operation="get_entry", error=error, context="test.zim/A/Article"
         )
 
         assert "❌ **Archive Operation Error**" in result
@@ -1114,9 +1112,7 @@ class TestOpenZimMcpServerErrorFormatting:
         error = OpenZimMcpSecurityError("Path traversal detected")
 
         result = server._create_enhanced_error_message(
-            operation="get_entry",
-            error=error,
-            context="../../../etc/passwd"
+            operation="get_entry", error=error, context="../../../etc/passwd"
         )
 
         assert "🔒 **Security Validation Error**" in result
@@ -1131,9 +1127,7 @@ class TestOpenZimMcpServerErrorFormatting:
         error = OpenZimMcpValidationError("Invalid parameter format")
 
         result = server._create_enhanced_error_message(
-            operation="search",
-            error=error,
-            context="query=''"
+            operation="search", error=error, context="query=''"
         )
 
         assert "⚠️ **Input Validation Error**" in result
@@ -1148,9 +1142,7 @@ class TestOpenZimMcpServerErrorFormatting:
         error = Exception("Permission denied: access to file")
 
         result = server._create_enhanced_error_message(
-            operation="list_files",
-            error=error,
-            context="/restricted/path"
+            operation="list_files", error=error, context="/restricted/path"
         )
 
         assert "🔐 **Permission Error**" in result
@@ -1165,9 +1157,7 @@ class TestOpenZimMcpServerErrorFormatting:
         error = Exception("Access denied to resource")
 
         result = server._create_enhanced_error_message(
-            operation="read_file",
-            error=error,
-            context="/some/file.zim"
+            operation="read_file", error=error, context="/some/file.zim"
         )
 
         assert "🔐 **Permission Error**" in result
@@ -1181,9 +1171,7 @@ class TestOpenZimMcpServerErrorFormatting:
         error = Exception("Entry not found in archive")
 
         result = server._create_enhanced_error_message(
-            operation="get_entry",
-            error=error,
-            context="A/NonExistentArticle"
+            operation="get_entry", error=error, context="A/NonExistentArticle"
         )
 
         assert "📁 **Resource Not Found**" in result
@@ -1198,9 +1186,7 @@ class TestOpenZimMcpServerErrorFormatting:
         error = Exception("Resource does not exist")
 
         result = server._create_enhanced_error_message(
-            operation="browse",
-            error=error,
-            context="namespace/path"
+            operation="browse", error=error, context="namespace/path"
         )
 
         assert "📁 **Resource Not Found**" in result
@@ -1214,9 +1200,7 @@ class TestOpenZimMcpServerErrorFormatting:
         error = RuntimeError("Unexpected runtime error")
 
         result = server._create_enhanced_error_message(
-            operation="complex_operation",
-            error=error,
-            context="some context"
+            operation="complex_operation", error=error, context="some context"
         )
 
         assert "❌ **Operation Failed**" in result
@@ -1237,7 +1221,9 @@ class TestOpenZimMcpServerParameterValidation:
         """Create a test server instance."""
         return OpenZimMcpServer(test_config)
 
-    def test_get_zim_entry_max_content_length_validation_too_small(self, server: OpenZimMcpServer):
+    def test_get_zim_entry_max_content_length_validation_too_small(
+        self, server: OpenZimMcpServer
+    ):
         """Test max_content_length validation in get_zim_entry tool."""
         # Mock the zim_operations to avoid actual file operations
         server.zim_operations.get_zim_entry = MagicMock()
@@ -1258,11 +1244,16 @@ class TestOpenZimMcpServerParameterValidation:
         result = asyncio.run(mock_get_zim_entry())
 
         assert "⚠️ **Parameter Validation Error**" in result
-        assert "max_content_length must be at least 1000 characters (provided: 500)" in result
+        assert (
+            "max_content_length must be at least 1000 characters (provided: 500)"
+            in result
+        )
         assert "Increase the max_content_length parameter" in result
         assert "Use `max_content_length=5000`" in result
 
-    def test_get_zim_entry_max_content_length_validation_valid(self, server: OpenZimMcpServer):
+    def test_get_zim_entry_max_content_length_validation_valid(
+        self, server: OpenZimMcpServer
+    ):
         """Test max_content_length validation with valid value."""
         # Mock the zim_operations to return success
         server.zim_operations.get_zim_entry = MagicMock(return_value="Entry content")
@@ -1272,15 +1263,22 @@ class TestOpenZimMcpServerParameterValidation:
             max_content_length = 2000  # Valid value
             if max_content_length is not None and max_content_length < 1000:
                 return "Validation error"
-            return server.zim_operations.get_zim_entry("test.zim", "A/Article", max_content_length)
+            return server.zim_operations.get_zim_entry(
+                "test.zim", "A/Article", max_content_length
+            )
 
         result = asyncio.run(mock_get_zim_entry())
 
         assert result == "Entry content"
-        server.zim_operations.get_zim_entry.assert_called_once_with("test.zim", "A/Article", 2000)
+        server.zim_operations.get_zim_entry.assert_called_once_with(
+            "test.zim", "A/Article", 2000
+        )
 
-    def test_browse_namespace_limit_validation_too_small(self, server: OpenZimMcpServer):
+    def test_browse_namespace_limit_validation_too_small(
+        self, server: OpenZimMcpServer
+    ):
         """Test limit validation in browse_namespace tool."""
+
         # Create a mock tool function that mimics the validation logic
         async def mock_browse_namespace():
             limit = 0  # Too small
@@ -1291,8 +1289,11 @@ class TestOpenZimMcpServerParameterValidation:
         result = asyncio.run(mock_browse_namespace())
         assert result == "Error: limit must be between 1 and 200"
 
-    def test_browse_namespace_limit_validation_too_large(self, server: OpenZimMcpServer):
+    def test_browse_namespace_limit_validation_too_large(
+        self, server: OpenZimMcpServer
+    ):
         """Test limit validation in browse_namespace tool with too large value."""
+
         # Create a mock tool function that mimics the validation logic
         async def mock_browse_namespace():
             limit = 300  # Too large
@@ -1303,8 +1304,11 @@ class TestOpenZimMcpServerParameterValidation:
         result = asyncio.run(mock_browse_namespace())
         assert result == "Error: limit must be between 1 and 200"
 
-    def test_browse_namespace_offset_validation_negative(self, server: OpenZimMcpServer):
+    def test_browse_namespace_offset_validation_negative(
+        self, server: OpenZimMcpServer
+    ):
         """Test offset validation in browse_namespace tool."""
+
         # Create a mock tool function that mimics the validation logic
         async def mock_browse_namespace():
             offset = -1  # Negative
@@ -1315,10 +1319,14 @@ class TestOpenZimMcpServerParameterValidation:
         result = asyncio.run(mock_browse_namespace())
         assert result == "Error: offset must be non-negative"
 
-    def test_browse_namespace_validation_valid_parameters(self, server: OpenZimMcpServer):
+    def test_browse_namespace_validation_valid_parameters(
+        self, server: OpenZimMcpServer
+    ):
         """Test browse_namespace with valid parameters."""
         # Mock the zim_operations to return success
-        server.zim_operations.browse_namespace = MagicMock(return_value="Namespace content")
+        server.zim_operations.browse_namespace = MagicMock(
+            return_value="Namespace content"
+        )
 
         # Create a mock tool function that mimics the validation logic
         async def mock_browse_namespace():
@@ -1328,9 +1336,13 @@ class TestOpenZimMcpServerParameterValidation:
                 return "Error: limit must be between 1 and 200"
             if offset < 0:
                 return "Error: offset must be non-negative"
-            return server.zim_operations.browse_namespace("test.zim", "A", limit, offset)
+            return server.zim_operations.browse_namespace(
+                "test.zim", "A", limit, offset
+            )
 
         result = asyncio.run(mock_browse_namespace())
 
         assert result == "Namespace content"
-        server.zim_operations.browse_namespace.assert_called_once_with("test.zim", "A", 50, 10)
+        server.zim_operations.browse_namespace.assert_called_once_with(
+            "test.zim", "A", 50, 10
+        )

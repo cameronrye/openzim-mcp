@@ -34,9 +34,13 @@ class PathValidator:
             resolved_path = Path(normalized_path).resolve()
 
             if not resolved_path.exists():
-                raise OpenZimMcpValidationError(f"Directory does not exist: {resolved_path}")
+                raise OpenZimMcpValidationError(
+                    f"Directory does not exist: {resolved_path}"
+                )
             if not resolved_path.is_dir():
-                raise OpenZimMcpValidationError(f"Path is not a directory: {resolved_path}")
+                raise OpenZimMcpValidationError(
+                    f"Path is not a directory: {resolved_path}"
+                )
 
             self.allowed_directories.append(resolved_path)
 

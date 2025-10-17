@@ -346,7 +346,9 @@ class ZimOperations:
         cache_key = f"path_mapping:{entry_path}"
         cached_actual_path = self.cache.get(cache_key)
         if cached_actual_path:
-            logger.debug(f"Using cached path mapping: {entry_path} -> {cached_actual_path}")
+            logger.debug(
+                f"Using cached path mapping: {entry_path} -> {cached_actual_path}"
+            )
             try:
                 return self._get_entry_content_direct(
                     archive, cached_actual_path, entry_path, max_content_length
@@ -378,7 +380,9 @@ class ZimOperations:
                     )
                     # Cache successful path mapping
                     self.cache.set(cache_key, actual_path)
-                    logger.info(f"Smart retrieval successful: {entry_path} -> {actual_path}")
+                    logger.info(
+                        f"Smart retrieval successful: {entry_path} -> {actual_path}"
+                    )
                     return result
                 else:
                     # No entry found via search
@@ -392,7 +396,9 @@ class ZimOperations:
                 # Re-raise our custom errors with guidance
                 raise
             except Exception as search_error:
-                logger.error(f"Search-based retrieval also failed for {entry_path}: {search_error}")
+                logger.error(
+                    f"Search-based retrieval also failed for {entry_path}: {search_error}"
+                )
                 # Provide comprehensive error message with guidance
                 raise OpenZimMcpArchiveError(
                     f"Failed to retrieve entry '{entry_path}'. "
@@ -403,7 +409,11 @@ class ZimOperations:
                 ) from search_error
 
     def _get_entry_content_direct(
-        self, archive: Archive, actual_path: str, requested_path: str, max_content_length: int
+        self,
+        archive: Archive,
+        actual_path: str,
+        requested_path: str,
+        max_content_length: int,
     ) -> str:
         """
         Get entry content using the actual path from the ZIM file.
@@ -436,9 +446,7 @@ class ZimOperations:
             content = f"(Error retrieving content: {e})"
 
         # Truncate if necessary
-        content = self.content_processor.truncate_content(
-            content, max_content_length
-        )
+        content = self.content_processor.truncate_content(content, max_content_length)
 
         # Build return content - show both requested and actual paths if different
         result_text = f"# {title}\n\n"
@@ -535,6 +543,7 @@ class ZimOperations:
 
         # URL decode if it looks like it might be encoded
         import urllib.parse
+
         try:
             decoded = urllib.parse.unquote(path_without_namespace)
             if decoded != path_without_namespace:
@@ -568,8 +577,12 @@ class ZimOperations:
             return True
 
         # Extract the path part without namespace
-        requested_part = requested_path.split("/", 1)[1] if "/" in requested_path else requested_path
-        actual_part = actual_path.split("/", 1)[1] if "/" in actual_path else actual_path
+        requested_part = (
+            requested_path.split("/", 1)[1] if "/" in requested_path else requested_path
+        )
+        actual_part = (
+            actual_path.split("/", 1)[1] if "/" in actual_path else actual_path
+        )
 
         # Case-insensitive comparison
         if requested_part.lower() == actual_part.lower():
@@ -583,6 +596,7 @@ class ZimOperations:
 
         # URL encoding comparison
         import urllib.parse
+
         try:
             requested_decoded = urllib.parse.unquote(requested_part).lower()
             actual_decoded = urllib.parse.unquote(actual_part).lower()
@@ -862,18 +876,22 @@ class ZimOperations:
         }
 
         # Check if archive uses new namespace scheme
-        has_new_scheme = getattr(archive, 'has_new_namespace_scheme', False)
+        has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
         logger.debug(f"Archive uses new namespace scheme: {has_new_scheme}")
 
         # Use sampling approach since direct iteration is not available
         sample_size = min(1000, archive.entry_count)  # Sample up to 1000 entries
         sampled_entries: set[str] = set()  # Track sampled paths to avoid duplicates
 
-        logger.debug(f"Sampling {sample_size} entries from {archive.entry_count} total entries")
+        logger.debug(
+            f"Sampling {sample_size} entries from {archive.entry_count} total entries"
+        )
 
         try:
             # Sample random entries to discover namespaces
-            for _ in range(sample_size * 2):  # Try more samples to account for duplicates
+            for _ in range(
+                sample_size * 2
+            ):  # Try more samples to account for duplicates
                 if len(sampled_entries) >= sample_size:
                     break
 
@@ -929,7 +947,7 @@ class ZimOperations:
             "total_entries": archive.entry_count,
             "sampled_entries": len(sampled_entries),
             "has_new_namespace_scheme": has_new_scheme,
-            "namespaces": namespaces
+            "namespaces": namespaces,
         }
 
         return json.dumps(result, indent=2, ensure_ascii=False)
@@ -1025,10 +1043,12 @@ class ZimOperations:
         entries: List[Dict[str, Any]] = []
 
         # Check if archive uses new namespace scheme
-        has_new_scheme = getattr(archive, 'has_new_namespace_scheme', False)
+        has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
 
         # Use sampling approach to find entries in the namespace
-        namespace_entries = self._find_entries_in_namespace(archive, namespace, has_new_scheme)
+        namespace_entries = self._find_entries_in_namespace(
+            archive, namespace, has_new_scheme
+        )
 
         # Apply pagination
         total_in_namespace = len(namespace_entries)
@@ -1090,19 +1110,25 @@ class ZimOperations:
 
         return json.dumps(result, indent=2, ensure_ascii=False)
 
-    def _find_entries_in_namespace(self, archive: Archive, namespace: str, has_new_scheme: bool) -> List[str]:
+    def _find_entries_in_namespace(
+        self, archive: Archive, namespace: str, has_new_scheme: bool
+    ) -> List[str]:
         """Find entries in a specific namespace using sampling and search strategies."""
         namespace_entries: list[str] = []
         seen_entries = set()
 
         # Strategy 1: Use random sampling to find entries
-        max_samples = min(2000, archive.entry_count)  # Sample more entries for better coverage
+        max_samples = min(
+            2000, archive.entry_count
+        )  # Sample more entries for better coverage
         sample_attempts = 0
         max_attempts = max_samples * 3  # Allow more attempts to find diverse entries
 
         logger.debug(f"Searching for entries in namespace '{namespace}' using sampling")
 
-        while len(namespace_entries) < 200 and sample_attempts < max_attempts:  # Collect up to 200 entries
+        while (
+            len(namespace_entries) < 200 and sample_attempts < max_attempts
+        ):  # Collect up to 200 entries
             sample_attempts += 1
             try:
                 entry = archive.get_random_entry()
@@ -1114,7 +1140,9 @@ class ZimOperations:
                 seen_entries.add(path)
 
                 # Check if entry belongs to target namespace
-                entry_namespace = self._extract_namespace_from_path(path, has_new_scheme)
+                entry_namespace = self._extract_namespace_from_path(
+                    path, has_new_scheme
+                )
                 if entry_namespace == namespace:
                     namespace_entries.append(path)
 
@@ -1134,7 +1162,9 @@ class ZimOperations:
                 logger.debug(f"Error checking pattern {pattern}: {e}")
                 continue
 
-        logger.info(f"Found {len(namespace_entries)} entries in namespace '{namespace}' after {sample_attempts} samples")
+        logger.info(
+            f"Found {len(namespace_entries)} entries in namespace '{namespace}' after {sample_attempts} samples"
+        )
         return sorted(namespace_entries)  # Sort for consistent pagination
 
     def _get_common_namespace_patterns(self, namespace: str) -> List[str]:
@@ -1143,33 +1173,45 @@ class ZimOperations:
 
         # Common patterns based on namespace
         if namespace == "C":
-            patterns.extend([
-                "index.html", "main.html", "home.html",
-                "C/index.html", "C/main.html", "content/index.html"
-            ])
+            patterns.extend(
+                [
+                    "index.html",
+                    "main.html",
+                    "home.html",
+                    "C/index.html",
+                    "C/main.html",
+                    "content/index.html",
+                ]
+            )
         elif namespace == "M":
-            patterns.extend([
-                "M/Title", "M/Description", "M/Language", "M/Creator",
-                "metadata/title", "metadata/description"
-            ])
+            patterns.extend(
+                [
+                    "M/Title",
+                    "M/Description",
+                    "M/Language",
+                    "M/Creator",
+                    "metadata/title",
+                    "metadata/description",
+                ]
+            )
         elif namespace == "W":
-            patterns.extend([
-                "W/mainPage", "W/favicon", "W/navigation",
-                "wellknown/mainPage", "wellknown/favicon"
-            ])
+            patterns.extend(
+                [
+                    "W/mainPage",
+                    "W/favicon",
+                    "W/navigation",
+                    "wellknown/mainPage",
+                    "wellknown/favicon",
+                ]
+            )
         elif namespace == "X":
-            patterns.extend([
-                "X/fulltext", "X/title", "X/search",
-                "search/fulltext", "index/title"
-            ])
+            patterns.extend(
+                ["X/fulltext", "X/title", "X/search", "search/fulltext", "index/title"]
+            )
         elif namespace == "A":
-            patterns.extend([
-                "A/index.html", "A/main.html", "A/home.html"
-            ])
+            patterns.extend(["A/index.html", "A/main.html", "A/home.html"])
         elif namespace == "I":
-            patterns.extend([
-                "I/favicon.png", "I/logo.png", "I/image.jpg"
-            ])
+            patterns.extend(["I/favicon.png", "I/logo.png", "I/image.jpg"])
 
         return patterns
 
@@ -1241,7 +1283,9 @@ class ZimOperations:
 
         except Exception as e:
             logger.error(f"Filtered search failed for {validated_path}: {e}")
-            raise OpenZimMcpArchiveError(f"Filtered search operation failed: {e}") from e
+            raise OpenZimMcpArchiveError(
+                f"Filtered search operation failed: {e}"
+            ) from e
 
     def _perform_filtered_search(
         self,
@@ -1766,7 +1810,9 @@ class ZimOperations:
 
         except Exception as e:
             logger.error(f"Error extracting structure for {entry_path}: {e}")
-            raise OpenZimMcpArchiveError(f"Failed to extract article structure: {e}") from e
+            raise OpenZimMcpArchiveError(
+                f"Failed to extract article structure: {e}"
+            ) from e
 
     def extract_article_links(self, zim_file_path: str, entry_path: str) -> str:
         """
