@@ -75,7 +75,7 @@ class ContentProcessor:
             logger.warning(f"Error converting HTML to text: {e}")
             # Fallback: return raw text content
             soup = BeautifulSoup(html_content, "html.parser")
-            return soup.get_text().strip()
+            return str(soup.get_text().strip())
 
     def create_snippet(self, content: str, max_paragraphs: int = 2) -> str:
         """
