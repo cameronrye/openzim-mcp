@@ -1,5 +1,7 @@
 # OpenZIM MCP Server
 
+> **🎯 Now with Dual Mode Support!** Choose between Full mode (15 specialized tools) or Simple mode (1 intelligent natural language tool) to match your LLM's capabilities.
+
 <!-- Build and Quality Badges -->
 [![CI](https://github.com/cameronrye/openzim-mcp/workflows/CI/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/cameronrye/openzim-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/cameronrye/openzim-mcp)
@@ -43,6 +45,7 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 
 ## ✨ Features
 
+- 🎯 **Dual Mode Support**: Choose between Full mode (15 specialized tools) or Simple mode (1 intelligent natural language tool)
 - 🔒 **Security First**: Comprehensive input validation and path traversal protection
 - ⚡ **High Performance**: Intelligent caching and optimized ZIM file operations
 - 🧠 **Smart Retrieval**: Automatic fallback from direct access to search-based retrieval for reliable entry access
@@ -89,28 +92,51 @@ mkdir ~/zim-files
 ### Running the Server
 
 ```bash
-# Using the console script (after pip install)
+# Full mode (default) - All 15 specialized tools
 openzim-mcp /path/to/zim/files
-
-# Or using the module
 python -m openzim_mcp /path/to/zim/files
+
+# Simple mode - 1 intelligent natural language tool
+openzim-mcp --mode simple /path/to/zim/files
+python -m openzim_mcp --mode simple /path/to/zim/files
 
 # For development (from source)
 uv run python -m openzim_mcp /path/to/zim/files
+uv run python -m openzim_mcp --mode simple /path/to/zim/files
 
 # Or using make (development)
 make run ZIM_DIR=/path/to/zim/files
 ```
 
+### Tool Modes
+
+OpenZIM MCP supports two modes:
+
+- **Full Mode** (default): Exposes all 15 specialized MCP tools for maximum control
+- **Simple Mode**: Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
+
+See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
+
 ### MCP Configuration
 
-Add to your MCP client configuration:
+**Full Mode (default):**
 
 ```json
 {
   "openzim-mcp": {
     "command": "openzim-mcp",
     "args": ["/path/to/zim/files"]
+  }
+}
+```
+
+**Simple Mode:**
+
+```json
+{
+  "openzim-mcp-simple": {
+    "command": "openzim-mcp",
+    "args": ["--mode", "simple", "/path/to/zim/files"]
   }
 }
 ```

@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .cache import OpenZimMcpCache
 from .config import OpenZimMcpConfig
+from .constants import TOOL_MODE_SIMPLE
 from .content_processor import ContentProcessor
 from .exceptions import (
     OpenZimMcpArchiveError,
@@ -20,6 +21,7 @@ from .exceptions import (
 )
 from .instance_tracker import InstanceTracker
 from .security import PathValidator, sanitize_input
+from .simple_tools import SimpleToolsHandler
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,9 @@ class OpenZimMcpServer:
     """Main OpenZIM MCP server class with dependency injection."""
 
     def __init__(
-        self, config: OpenZimMcpConfig, instance_tracker: Optional[InstanceTracker] = None
+        self,
+        config: OpenZimMcpConfig,
+        instance_tracker: Optional[InstanceTracker] = None,
     ):
         """
         Initialize OpenZIM MCP server.
@@ -53,22 +57,35 @@ class OpenZimMcpServer:
             config, self.path_validator, self.cache, self.content_processor
         )
 
+        # Initialize simple tools handler if in simple mode
+        self.simple_tools_handler = None
+        if config.tool_mode == TOOL_MODE_SIMPLE:
+            self.simple_tools_handler = SimpleToolsHandler(self.zim_operations)
+
         # Initialize MCP server
         self.mcp = FastMCP(config.server_name)
         self._register_tools()
 
-        logger.info("OpenZIM MCP server initialized successfully")
+        logger.info(
+            f"OpenZIM MCP server initialized successfully in {config.tool_mode} mode"
+        )
 
         # Minimal server startup logging - detailed config available via MCP tools
         logger.info(
             f"Server: {self.config.server_name}, "
+            f"Mode: {self.config.tool_mode}, "
             f"Directories: {len(self.config.allowed_directories)}, "
             f"Cache: {self.config.cache.enabled}"
         )
-        logger.debug(
-            "Use get_server_configuration() or diagnose_server_state() MCP tools "
-            "for detailed configuration and diagnostics"
-        )
+        if config.tool_mode == TOOL_MODE_SIMPLE:
+            logger.info(
+                "Running in SIMPLE mode with 2 intelligent tools: zim_query and zim_server_status"
+            )
+        else:
+            logger.debug(
+                "Use get_server_configuration() or diagnose_server_state() MCP tools "
+                "for detailed configuration and diagnostics"
+            )
 
     def _create_enhanced_error_message(
         self, operation: str, error: Exception, context: str = ""
@@ -190,8 +207,100 @@ class OpenZimMcpServer:
                 f"status or try simpler operations first."
             )
 
+    def _register_simple_tools(self) -> None:
+        """Register simple mode tools (2 intelligent tools + underlying tools for routing)."""
+
+        # Register the simple wrapper tools that LLMs will primarily use
+        @self.mcp.tool()
+        async def zim_query(
+            query: str,
+            zim_file_path: Optional[str] = None,
+            limit: Optional[int] = None,
+            offset: int = 0,
+            max_content_length: Optional[int] = None,
+        ) -> str:
+            """Query ZIM files using natural language.
+
+            This intelligent tool understands natural language queries and automatically
+            routes them to the appropriate underlying operations. It can handle:
+
+            - File listing: "list files", "what ZIM files are available"
+            - Metadata: "metadata for file.zim", "info about this ZIM"
+            - Main page: "show main page", "get home page"
+            - Namespaces: "list namespaces", "what namespaces exist"
+            - Browsing: "browse namespace C", "show articles in namespace A"
+            - Article structure: "structure of Biology", "outline of Evolution"
+            - Links: "links in Biology", "references from Evolution"
+            - Suggestions: "suggestions for bio", "autocomplete evol"
+            - Filtered search: "search evolution in namespace C"
+            - Get article: "get article Biology", "show Evolution"
+            - General search: "search for biology", "find evolution"
+
+            Args:
+                query: Natural language query (REQUIRED)
+                zim_file_path: Optional path to ZIM file (auto-selects if only one exists)
+                limit: Optional maximum number of results (for search/browse operations)
+                offset: Optional starting offset for pagination (default: 0)
+                max_content_length: Optional maximum content length for articles
+
+            Returns:
+                Response based on the query intent
+
+            Examples:
+                - "list available ZIM files"
+                - "search for biology in wikipedia.zim"
+                - "get article Evolution"
+                - "show structure of Biology"
+                - "browse namespace C with limit 10"
+            """
+            try:
+                # Build options dict from parameters
+                options = {}
+                if limit is not None:
+                    options["limit"] = limit
+                if offset != 0:
+                    options["offset"] = offset
+                if max_content_length is not None:
+                    options["max_content_length"] = max_content_length
+
+                # Use simple tools handler
+                if self.simple_tools_handler:
+                    return self.simple_tools_handler.handle_zim_query(
+                        query, zim_file_path, options
+                    )
+                else:
+                    return "Error: Simple tools handler not initialized"
+
+            except Exception as e:
+                logger.error(f"Error in zim_query: {e}")
+                return self._create_enhanced_error_message(
+                    operation="zim_query",
+                    error=e,
+                    context=f"Query: {query}, File: {zim_file_path}",
+                )
+
+        # Also register the full tools so they're available for advanced use
+        # This allows the simple mode to still have access to all functionality
+        self._register_full_tools()
+
+        logger.info(
+            "Simple mode tools registered successfully (zim_query + all underlying tools)"
+        )
+
     def _register_tools(self) -> None:
-        """Register MCP tools."""
+        """Register MCP tools based on configured mode."""
+        # Check tool mode and register appropriate tools
+        if self.config.tool_mode == TOOL_MODE_SIMPLE:
+            logger.info("Registering simple mode tools...")
+            self._register_simple_tools()
+            return
+
+        # Full mode - register all tools (existing behavior)
+        logger.info("Registering full mode tools...")
+        self._register_full_tools()
+
+    def _register_full_tools(self) -> None:
+        """Register full mode tools (all 15 tools)."""
 
         @self.mcp.tool()
         async def list_zim_files() -> str:
@@ -1116,7 +1225,9 @@ class OpenZimMcpServer:
             try:
                 # Sanitize inputs
                 zim_file_path = sanitize_input(zim_file_path, 1000)
-                namespace = sanitize_input(namespace, 100)  # Increased to support new namespace scheme
+                namespace = sanitize_input(
+                    namespace, 100
+                )  # Increased to support new namespace scheme
 
                 # Validate parameters
                 if limit < 1 or limit > 200:
@@ -1163,7 +1274,9 @@ class OpenZimMcpServer:
                 zim_file_path = sanitize_input(zim_file_path, 1000)
                 query = sanitize_input(query, 500)
                 if namespace:
-                    namespace = sanitize_input(namespace, 100)  # Increased to support new namespace scheme
+                    namespace = sanitize_input(
+                        namespace, 100
+                    )  # Increased to support new namespace scheme
                 if content_type:
                     content_type = sanitize_input(content_type, 100)
 

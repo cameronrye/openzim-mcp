@@ -52,8 +52,11 @@ repos:
     rev: v1.18.1
     hooks:
       - id: mypy
-        additional_dependencies: [types-all]
-        args: ['--python-version=3.12']
+        files: ^openzim_mcp/
+        additional_dependencies:
+          - pydantic
+          - types-requests
+        args: ['--python-version=3.12', '--ignore-missing-imports']
 
   # Security scanning
   - repo: https://github.com/PyCQA/bandit

@@ -196,7 +196,9 @@ class TestZimOperations:
             mock_searcher.search.return_value = mock_search
 
             with (
-                patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher),
+                patch(
+                    "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+                ),
                 patch("openzim_mcp.zim_operations.Query"),
             ):
 
@@ -277,7 +279,9 @@ class TestZimOperations:
             # Mock archive with entries in different namespaces
             mock_archive_instance = MagicMock()
             mock_archive_instance.entry_count = 3
-            mock_archive_instance.has_new_namespace_scheme = False  # Set to boolean value
+            mock_archive_instance.has_new_namespace_scheme = (
+                False  # Set to boolean value
+            )
 
             # Mock entries
             mock_entries = []
@@ -296,6 +300,7 @@ class TestZimOperations:
             # Mock get_random_entry to return entries from our list
             def mock_get_random_entry():
                 import random
+
                 return random.choice(mock_entries)
 
             mock_archive_instance.get_random_entry = mock_get_random_entry
@@ -308,6 +313,7 @@ class TestZimOperations:
             # Due to random sampling, we can't guarantee all namespaces will be found
             # but we should find at least some namespaces
             import json
+
             result_data = json.loads(result)
             assert "namespaces" in result_data
             assert len(result_data["namespaces"]) > 0
@@ -325,7 +331,9 @@ class TestZimOperations:
             # Mock archive with entries
             mock_archive_instance = MagicMock()
             mock_archive_instance.entry_count = 5
-            mock_archive_instance.has_new_namespace_scheme = False  # Set to boolean value
+            mock_archive_instance.has_new_namespace_scheme = (
+                False  # Set to boolean value
+            )
 
             # Mock entries - some in C namespace, some in other namespaces
             mock_entries = []
@@ -353,6 +361,7 @@ class TestZimOperations:
             # Mock get_random_entry to return entries from our list
             def mock_get_random_entry():
                 import random
+
                 return random.choice(mock_entries)
 
             mock_archive_instance.get_random_entry = mock_get_random_entry
@@ -385,14 +394,17 @@ class TestZimOperations:
 
     def test_browse_namespace_invalid_params(self, zim_operations: ZimOperations):
         """Test namespace browsing with invalid parameters."""
-        with pytest.raises(OpenZimMcpArchiveError, match="Limit must be between 1 and 200"):
+        with pytest.raises(
+            OpenZimMcpArchiveError, match="Limit must be between 1 and 200"
+        ):
             zim_operations.browse_namespace("test.zim", "C", limit=0)
 
         with pytest.raises(OpenZimMcpArchiveError, match="Offset must be non-negative"):
             zim_operations.browse_namespace("test.zim", "C", offset=-1)
 
         with pytest.raises(
-            OpenZimMcpSecurityError, match="Access denied - Path is outside allowed directories"
+            OpenZimMcpSecurityError,
+            match="Access denied - Path is outside allowed directories",
         ):
             zim_operations.browse_namespace("test.zim", "ABC", limit=10)
 
@@ -433,7 +445,9 @@ class TestZimOperations:
             ]
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
-            with patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher):
+            with patch(
+                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            ):
                 result = zim_operations.search_with_filters(
                     str(zim_file), "test", namespace="C", limit=10
                 )
@@ -550,7 +564,9 @@ class TestZimOperations:
                 "Entry access error"
             )
 
-            with patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher):
+            with patch(
+                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            ):
                 with patch("openzim_mcp.zim_operations.Query"):
                     result = zim_operations.search_zim_file(str(zim_file), "test")
                     # Should handle the exception and include error message
@@ -605,7 +621,9 @@ class TestZimOperations:
                 "Main page error"
             )
 
-            with pytest.raises(OpenZimMcpArchiveError, match="Main page retrieval failed"):
+            with pytest.raises(
+                OpenZimMcpArchiveError, match="Main page retrieval failed"
+            ):
                 zim_operations.get_main_page(str(zim_file))
 
     def test_search_with_filters_exception_handling(
@@ -637,7 +655,9 @@ class TestZimOperations:
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.side_effect = Exception("Archive error")
 
-            with pytest.raises(OpenZimMcpArchiveError, match="Suggestion generation failed"):
+            with pytest.raises(
+                OpenZimMcpArchiveError, match="Suggestion generation failed"
+            ):
                 zim_operations.get_search_suggestions(str(zim_file), "test")
 
     def test_get_article_structure_exception_handling(
@@ -652,7 +672,9 @@ class TestZimOperations:
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.side_effect = Exception("Archive error")
 
-            with pytest.raises(OpenZimMcpArchiveError, match="Structure extraction failed"):
+            with pytest.raises(
+                OpenZimMcpArchiveError, match="Structure extraction failed"
+            ):
                 zim_operations.get_article_structure(str(zim_file), "A/Test")
 
     def test_browse_namespace_exception_handling(
@@ -667,7 +689,9 @@ class TestZimOperations:
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.side_effect = Exception("Archive error")
 
-            with pytest.raises(OpenZimMcpArchiveError, match="Namespace browsing failed"):
+            with pytest.raises(
+                OpenZimMcpArchiveError, match="Namespace browsing failed"
+            ):
                 zim_operations.browse_namespace(str(zim_file), "A")
 
     def test_extract_article_links_exception_handling(
@@ -864,7 +888,9 @@ class TestZimOperations:
             mock_entry.get_item.return_value = mock_item
             mock_archive_instance.get_entry_by_path.return_value = mock_entry
 
-            with patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher):
+            with patch(
+                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            ):
                 with patch("openzim_mcp.zim_operations.Query"):
                     result = zim_operations.search_with_filters(
                         str(zim_file), "test", namespace="A", content_type="text/html"
@@ -879,11 +905,15 @@ class TestZimOperations:
         zim_file.touch()
 
         # Test limit too low
-        with pytest.raises(OpenZimMcpArchiveError, match="Limit must be between 1 and 50"):
+        with pytest.raises(
+            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+        ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=0)
 
         # Test limit too high
-        with pytest.raises(OpenZimMcpArchiveError, match="Limit must be between 1 and 50"):
+        with pytest.raises(
+            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+        ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=51)
 
     def test_cache_hit_scenarios(self, zim_operations: ZimOperations, temp_dir: Path):
@@ -982,7 +1012,9 @@ class TestZimOperations:
 
             mock_archive_instance.get_entry_by_path.side_effect = mock_get_entry_by_path
 
-            with patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher):
+            with patch(
+                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            ):
                 with patch("openzim_mcp.zim_operations.Query"):
                     # Test search with multiple results and error handling
                     result = zim_operations.search_zim_file(
@@ -1031,6 +1063,7 @@ class TestZimOperations:
             # Mock get_random_entry to return entries from our list
             def mock_get_random_entry():
                 import random
+
                 return random.choice(mock_entries)
 
             mock_archive_instance.get_random_entry = mock_get_random_entry
@@ -1081,7 +1114,9 @@ class TestZimOperations:
             mock_archive_instance.get_entry_by_path.return_value = mock_entry
 
             # This should raise an exception since get_item() fails early
-            with pytest.raises(OpenZimMcpArchiveError, match="Structure extraction failed"):
+            with pytest.raises(
+                OpenZimMcpArchiveError, match="Structure extraction failed"
+            ):
                 zim_operations.get_article_structure(str(zim_file), "A/Test")
 
     def test_structure_extraction_comprehensive(
@@ -1231,7 +1266,9 @@ class TestZimOperations:
             mock_archive_instance.get_entry_by_path.side_effect = mock_get_entry_by_path
 
             # Mock the search functionality by patching _find_entry_by_search
-            with patch.object(zim_operations, '_find_entry_by_search', return_value="A/Test_Article"):
+            with patch.object(
+                zim_operations, "_find_entry_by_search", return_value="A/Test_Article"
+            ):
                 result = zim_operations.get_zim_entry(str(zim_file), "A/Test Article")
 
                 assert "# Test Article" in result
@@ -1278,7 +1315,9 @@ class TestZimOperations:
             assert "Cached content" in result
 
             # Should only be called once with the cached path
-            mock_archive_instance.get_entry_by_path.assert_called_once_with("A/Test_Article")
+            mock_archive_instance.get_entry_by_path.assert_called_once_with(
+                "A/Test_Article"
+            )
 
     def test_smart_retrieval_invalid_cached_path(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1317,7 +1356,9 @@ class TestZimOperations:
             mock_archive_instance.get_entry_by_path.side_effect = mock_get_entry_by_path
 
             # Mock the search functionality by patching _find_entry_by_search
-            with patch.object(zim_operations, '_find_entry_by_search', return_value="A/Test_Article"):
+            with patch.object(
+                zim_operations, "_find_entry_by_search", return_value="A/Test_Article"
+            ):
                 result = zim_operations.get_zim_entry(str(zim_file), "A/Test Article")
 
                 assert "# Test Article" in result
@@ -1341,7 +1382,9 @@ class TestZimOperations:
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             # Mock direct access failure
-            mock_archive_instance.get_entry_by_path.side_effect = Exception("Entry not found")
+            mock_archive_instance.get_entry_by_path.side_effect = Exception(
+                "Entry not found"
+            )
 
             # Mock search with no results
             mock_searcher = MagicMock()
@@ -1349,7 +1392,9 @@ class TestZimOperations:
             mock_search.getEstimatedMatches.return_value = 0
             mock_searcher.search.return_value = mock_search
 
-            with patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher):
+            with patch(
+                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            ):
                 with patch("openzim_mcp.zim_operations.Query"):
                     with pytest.raises(OpenZimMcpArchiveError) as exc_info:
                         zim_operations.get_zim_entry(str(zim_file), "A/Nonexistent")
@@ -1373,10 +1418,16 @@ class TestZimOperations:
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             # Mock direct access failure
-            mock_archive_instance.get_entry_by_path.side_effect = Exception("Direct access failed")
+            mock_archive_instance.get_entry_by_path.side_effect = Exception(
+                "Direct access failed"
+            )
 
             # Mock search failure by patching _find_entry_by_search to raise exception
-            with patch.object(zim_operations, '_find_entry_by_search', side_effect=Exception("Search failed")):
+            with patch.object(
+                zim_operations,
+                "_find_entry_by_search",
+                side_effect=Exception("Search failed"),
+            ):
                 with pytest.raises(OpenZimMcpArchiveError) as exc_info:
                     zim_operations.get_zim_entry(str(zim_file), "A/Test")
 
@@ -1474,7 +1525,9 @@ class TestZimOperations:
 
             mock_archive_instance.get_entry_by_path.side_effect = mock_get_entry_by_path
 
-            with patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher):
+            with patch(
+                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            ):
                 with patch("openzim_mcp.zim_operations.Query"):
                     # Test search with filters
                     result = zim_operations.search_with_filters(
@@ -1500,7 +1553,9 @@ class TestZimOperations:
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive_instance = MagicMock()
             mock_archive_instance.entry_count = 100
-            mock_archive_instance.has_new_namespace_scheme = False  # Set to boolean value
+            mock_archive_instance.has_new_namespace_scheme = (
+                False  # Set to boolean value
+            )
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             # Mock a large number of entries across different namespaces
@@ -1531,6 +1586,7 @@ class TestZimOperations:
             # Mock get_random_entry to return entries from our list
             def mock_get_random_entry():
                 import random
+
                 return random.choice(mock_entries)
 
             mock_archive_instance.get_random_entry = mock_get_random_entry
@@ -1633,17 +1689,25 @@ class TestZimOperations:
         assert "Query too short for suggestions" in result
 
         # Test search suggestions with invalid limit
-        with pytest.raises(OpenZimMcpArchiveError, match="Limit must be between 1 and 50"):
+        with pytest.raises(
+            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+        ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=0)
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Limit must be between 1 and 50"):
+        with pytest.raises(
+            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+        ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=51)
 
         # Test browse_namespace with invalid parameters
-        with pytest.raises(OpenZimMcpArchiveError, match="Limit must be between 1 and 200"):
+        with pytest.raises(
+            OpenZimMcpArchiveError, match="Limit must be between 1 and 200"
+        ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=0)
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Limit must be between 1 and 200"):
+        with pytest.raises(
+            OpenZimMcpArchiveError, match="Limit must be between 1 and 200"
+        ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=201)
 
         with pytest.raises(OpenZimMcpArchiveError, match="Offset must be non-negative"):
@@ -1660,10 +1724,14 @@ class TestZimOperations:
             zim_operations.browse_namespace(str(zim_file), "   ")
 
         # Test search_with_filters with invalid parameters
-        with pytest.raises(OpenZimMcpArchiveError, match="Limit must be between 1 and 100"):
+        with pytest.raises(
+            OpenZimMcpArchiveError, match="Limit must be between 1 and 100"
+        ):
             zim_operations.search_with_filters(str(zim_file), "test", limit=0)
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Limit must be between 1 and 100"):
+        with pytest.raises(
+            OpenZimMcpArchiveError, match="Limit must be between 1 and 100"
+        ):
             zim_operations.search_with_filters(str(zim_file), "test", limit=101)
 
         with pytest.raises(OpenZimMcpArchiveError, match="Offset must be non-negative"):
@@ -1727,32 +1795,46 @@ class TestZimOperationsUtilityFunctions:
             test_config, path_validator, openzim_mcp_cache, content_processor
         )
 
-    def test_extract_namespace_from_path_new_scheme_with_slash(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_new_scheme_with_slash(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction from path with new scheme (has slash)."""
-        result = zim_operations._extract_namespace_from_path("content/article/test", True)
+        result = zim_operations._extract_namespace_from_path(
+            "content/article/test", True
+        )
         assert result == "C"  # content gets mapped to C
 
-    def test_extract_namespace_from_path_new_scheme_no_slash(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_new_scheme_no_slash(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction from path with new scheme (no slash)."""
         result = zim_operations._extract_namespace_from_path("A", True)
         assert result == "A"
 
-    def test_extract_namespace_from_path_old_scheme_with_slash(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_old_scheme_with_slash(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction from path with old scheme (has slash)."""
         result = zim_operations._extract_namespace_from_path("A/Article_Title", False)
         assert result == "A"
 
-    def test_extract_namespace_from_path_old_scheme_no_slash(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_old_scheme_no_slash(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction from path with old scheme (no slash)."""
         result = zim_operations._extract_namespace_from_path("M", False)
         assert result == "M"
 
-    def test_extract_namespace_from_path_empty_string(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_empty_string(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction from empty path."""
         result = zim_operations._extract_namespace_from_path("", True)
         assert result == "Unknown"
 
-    def test_extract_namespace_from_path_empty_string_old_scheme(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_empty_string_old_scheme(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction from empty path with old scheme."""
         result = zim_operations._extract_namespace_from_path("", False)
         assert result == "Unknown"
@@ -1764,7 +1846,9 @@ class TestZimOperationsUtilityFunctions:
         # content namespace doesn't have specific patterns, should return empty
         assert len(patterns) == 0
 
-    def test_get_common_namespace_patterns_a_namespace(self, zim_operations: ZimOperations):
+    def test_get_common_namespace_patterns_a_namespace(
+        self, zim_operations: ZimOperations
+    ):
         """Test common namespace patterns for A namespace."""
         patterns = zim_operations._get_common_namespace_patterns("A")
 
@@ -1775,7 +1859,9 @@ class TestZimOperationsUtilityFunctions:
         for pattern in expected_patterns:
             assert pattern in patterns
 
-    def test_get_common_namespace_patterns_m_namespace(self, zim_operations: ZimOperations):
+    def test_get_common_namespace_patterns_m_namespace(
+        self, zim_operations: ZimOperations
+    ):
         """Test common namespace patterns for M namespace (metadata)."""
         patterns = zim_operations._get_common_namespace_patterns("M")
 
@@ -1786,49 +1872,72 @@ class TestZimOperationsUtilityFunctions:
         for pattern in metadata_patterns:
             assert pattern in patterns
 
-    def test_get_common_namespace_patterns_unknown_namespace(self, zim_operations: ZimOperations):
+    def test_get_common_namespace_patterns_unknown_namespace(
+        self, zim_operations: ZimOperations
+    ):
         """Test common namespace patterns for unknown namespace."""
         patterns = zim_operations._get_common_namespace_patterns("XYZ")
 
         # Unknown namespaces return empty list
         assert len(patterns) == 0
 
-    def test_extract_namespace_from_path_metadata_mapping(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_metadata_mapping(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction for metadata paths."""
         result = zim_operations._extract_namespace_from_path("metadata/title", True)
         assert result == "M"  # metadata gets mapped to M
 
-    def test_extract_namespace_from_path_wellknown_mapping(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_wellknown_mapping(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction for wellknown paths."""
         result = zim_operations._extract_namespace_from_path("wellknown/mainPage", True)
         assert result == "W"  # wellknown gets mapped to W
 
-    def test_extract_namespace_from_path_search_mapping(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_search_mapping(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction for search paths."""
         result = zim_operations._extract_namespace_from_path("search/fulltext", True)
         assert result == "X"  # search gets mapped to X
 
-    def test_extract_namespace_from_path_single_char_uppercase(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_single_char_uppercase(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction for single character paths."""
         result = zim_operations._extract_namespace_from_path("c/article", True)
         assert result == "C"  # single char gets uppercased
 
-    def test_extract_namespace_from_path_unknown_namespace(self, zim_operations: ZimOperations):
+    def test_extract_namespace_from_path_unknown_namespace(
+        self, zim_operations: ZimOperations
+    ):
         """Test namespace extraction for unknown namespace."""
         result = zim_operations._extract_namespace_from_path("unknown/path", True)
         assert result == "unknown"  # unknown namespace returned as-is
 
-    def test_get_common_namespace_patterns_c_namespace(self, zim_operations: ZimOperations):
+    def test_get_common_namespace_patterns_c_namespace(
+        self, zim_operations: ZimOperations
+    ):
         """Test common namespace patterns for C namespace."""
         patterns = zim_operations._get_common_namespace_patterns("C")
 
         # Should include content patterns
         assert len(patterns) > 0
-        expected_patterns = ["index.html", "main.html", "home.html", "C/index.html", "C/main.html", "content/index.html"]
+        expected_patterns = [
+            "index.html",
+            "main.html",
+            "home.html",
+            "C/index.html",
+            "C/main.html",
+            "content/index.html",
+        ]
         for pattern in expected_patterns:
             assert pattern in patterns
 
-    def test_get_common_namespace_patterns_w_namespace(self, zim_operations: ZimOperations):
+    def test_get_common_namespace_patterns_w_namespace(
+        self, zim_operations: ZimOperations
+    ):
         """Test common namespace patterns for W namespace."""
         patterns = zim_operations._get_common_namespace_patterns("W")
 
@@ -1838,7 +1947,9 @@ class TestZimOperationsUtilityFunctions:
         for pattern in expected_patterns:
             assert pattern in patterns
 
-    def test_get_common_namespace_patterns_x_namespace(self, zim_operations: ZimOperations):
+    def test_get_common_namespace_patterns_x_namespace(
+        self, zim_operations: ZimOperations
+    ):
         """Test common namespace patterns for X namespace."""
         patterns = zim_operations._get_common_namespace_patterns("X")
 
@@ -1848,7 +1959,9 @@ class TestZimOperationsUtilityFunctions:
         for pattern in expected_patterns:
             assert pattern in patterns
 
-    def test_get_common_namespace_patterns_i_namespace(self, zim_operations: ZimOperations):
+    def test_get_common_namespace_patterns_i_namespace(
+        self, zim_operations: ZimOperations
+    ):
         """Test common namespace patterns for I namespace."""
         patterns = zim_operations._get_common_namespace_patterns("I")
 
