@@ -366,7 +366,7 @@ class SimpleToolsHandler:
                 files = json.loads(files_json)
 
                 if len(files) == 1:
-                    return files[0]["path"]
+                    return str(files[0]["path"])
 
         except Exception as e:
             logger.warning(f"Could not auto-select ZIM file: {e}")
