@@ -253,14 +253,17 @@ class TestSimpleToolsHandler:
             'Found 1 ZIM file:\n[{"path": "/test/single.zim", "name": "single.zim"}]'
         )
 
-        result = handler.handle_zim_query("search for biology")
+        handler.handle_zim_query("search for biology")
         # Should auto-select the file and perform search
         mock_zim_operations.search_zim_file.assert_called_once()
 
     def test_no_file_specified_multiple_files(self, handler, mock_zim_operations):
         """Test error when no file specified and multiple files exist."""
         # Mock list_zim_files to return multiple files
-        mock_zim_operations.list_zim_files.return_value = 'Found 2 ZIM files:\n[{"path": "/test/file1.zim"}, {"path": "/test/file2.zim"}]'
+        mock_zim_operations.list_zim_files.return_value = (
+            'Found 2 ZIM files:\n'
+            '[{"path": "/test/file1.zim"}, {"path": "/test/file2.zim"}]'
+        )
 
         result = handler.handle_zim_query("search for biology")
         # Should return error asking to specify file

@@ -391,7 +391,7 @@ class SimpleToolsHandler:
             # If no action specified, default to health check
             if not action:
                 # Import here to avoid circular dependency
-                from .server import OpenZimMcpServer
+                from .server import OpenZimMcpServer  # noqa: F401
 
                 # We need access to the server instance methods
                 # This will be called from the server context

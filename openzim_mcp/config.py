@@ -17,7 +17,6 @@ from .constants import (
     DEFAULT_MAX_CONTENT_LENGTH,
     DEFAULT_SEARCH_LIMIT,
     DEFAULT_SNIPPET_LENGTH,
-    TOOL_MODE_FULL,
     VALID_TOOL_MODES,
 )
 from .exceptions import OpenZimMcpConfigurationError
