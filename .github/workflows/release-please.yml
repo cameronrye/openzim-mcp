@@ -41,7 +41,7 @@ jobs:
     if: needs.release-please.outputs.pr && !needs.release-please.outputs.release_created
     steps:
       - name: Comment on PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             // Extract PR number from the PR output (format: "https://github.com/owner/repo/pull/123")
@@ -138,7 +138,7 @@ jobs:
     if: needs.release-please.outputs.release_created && needs.validate-release.result == 'success'
     steps:
       - name: Trigger release workflow
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const tagName = '${{ needs.release-please.outputs.tag_name }}';
