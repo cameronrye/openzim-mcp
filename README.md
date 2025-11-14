@@ -1,6 +1,6 @@
 # OpenZIM MCP Server
 
-> **🎯 Now with Dual Mode Support!** Choose between Full mode (15 specialized tools) or Simple mode (1 intelligent natural language tool) to match your LLM's capabilities.
+> **Now with Dual Mode Support!** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (15 specialized tools) to match your LLM's capabilities.
 
 <!-- Build and Quality Badges -->
 [![CI](https://github.com/cameronrye/openzim-mcp/workflows/CI/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/test.yml)
@@ -26,36 +26,37 @@
 [![GitHub contributors](https://img.shields.io/github/contributors/cameronrye/openzim-mcp)](https://github.com/cameronrye/openzim-mcp/graphs/contributors)
 [![GitHub stars](https://img.shields.io/github/stars/cameronrye/openzim-mcp?style=social)](https://github.com/cameronrye/openzim-mcp/stargazers)
 
-## 🧠 Built for LLM Intelligence
+## Built for LLM Intelligence
 
 **OpenZIM MCP transforms static ZIM archives into dynamic knowledge engines for Large Language Models.** Unlike basic file readers, this tool provides *intelligent, structured access* that LLMs need to effectively navigate and understand vast knowledge repositories.
 
-🚀 **Why LLMs Love OpenZIM MCP:**
+ **Why LLMs Love OpenZIM MCP:**
+
 - **Smart Navigation**: Browse by namespace (articles, metadata, media) instead of blind searching
 - **Context-Aware Discovery**: Get article structure, relationships, and metadata for deeper understanding
 - **Intelligent Search**: Advanced filtering, auto-complete suggestions, and relevance-ranked results
 - **Performance Optimized**: Cached operations and pagination prevent timeouts on massive archives
 - **Relationship Mapping**: Extract internal/external links to understand content connections
 
-Whether you're building a research assistant, knowledge chatbot, or content analysis system, OpenZIM MCP gives your LLM the structured access patterns it needs to unlock the full potential of offline knowledge archives. No more fumbling through raw text dumps! 🎯
+Whether you're building a research assistant, knowledge chatbot, or content analysis system, OpenZIM MCP gives your LLM the structured access patterns it needs to unlock the full potential of offline knowledge archives. No more fumbling through raw text dumps!
 
 **OpenZIM MCP** is a modern, secure, and high-performance MCP (Model Context Protocol) server that enables AI models to access and search [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge bases offline.
 
 [ZIM](https://en.wikipedia.org/wiki/ZIM_(file_format)) (Zeno IMproved) is an open file format developed by the [openZIM project](https://openzim.org/), designed specifically for offline storage and access to website content. The format supports high compression rates using Zstandard compression (default since 2021) and enables fast full-text searching, making it ideal for storing entire Wikipedia content and other large reference materials in relatively compact files. The openZIM project is sponsored by Wikimedia CH and supported by the Wikimedia Foundation, ensuring the format's continued development and adoption for offline knowledge access, especially in environments without reliable internet connectivity.
 
-## ✨ Features
+## Features
 
-- 🎯 **Dual Mode Support**: Choose between Full mode (15 specialized tools) or Simple mode (1 intelligent natural language tool)
-- 🔒 **Security First**: Comprehensive input validation and path traversal protection
-- ⚡ **High Performance**: Intelligent caching and optimized ZIM file operations
-- 🧠 **Smart Retrieval**: Automatic fallback from direct access to search-based retrieval for reliable entry access
-- 🧪 **Well Tested**: 90%+ test coverage with comprehensive test suite
-- 🏗️ **Modern Architecture**: Modular design with dependency injection
-- 📝 **Type Safe**: Full type annotations throughout the codebase
-- 🔧 **Configurable**: Flexible configuration with validation
-- 📊 **Observable**: Structured logging and health monitoring
+- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (15 specialized tools)
+- **Security First**: Comprehensive input validation and path traversal protection
+- **High Performance**: Intelligent caching and optimized ZIM file operations
+- **Smart Retrieval**: Automatic fallback from direct access to search-based retrieval for reliable entry access
+- **Well Tested**: 90%+ test coverage with comprehensive test suite
+- **Modern Architecture**: Modular design with dependency injection
+- **Type Safe**: Full type annotations throughout the codebase
+- **Configurable**: Flexible configuration with validation
+- **Observable**: Structured logging and health monitoring
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -92,17 +93,17 @@ mkdir ~/zim-files
 ### Running the Server
 
 ```bash
-# Full mode (default) - All 15 specialized tools
+# Simple mode (default) - 1 intelligent natural language tool
 openzim-mcp /path/to/zim/files
 python -m openzim_mcp /path/to/zim/files
 
-# Simple mode - 1 intelligent natural language tool
-openzim-mcp --mode simple /path/to/zim/files
-python -m openzim_mcp --mode simple /path/to/zim/files
+# Advanced mode - all 15 specialized tools
+openzim-mcp --mode advanced /path/to/zim/files
+python -m openzim_mcp --mode advanced /path/to/zim/files
 
 # For development (from source)
 uv run python -m openzim_mcp /path/to/zim/files
-uv run python -m openzim_mcp --mode simple /path/to/zim/files
+uv run python -m openzim_mcp --mode advanced /path/to/zim/files
 
 # Or using make (development)
 make run ZIM_DIR=/path/to/zim/files
@@ -112,14 +113,14 @@ make run ZIM_DIR=/path/to/zim/files
 
 OpenZIM MCP supports two modes:
 
-- **Full Mode** (default): Exposes all 15 specialized MCP tools for maximum control
-- **Simple Mode**: Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
+- **Simple Mode** (default): Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
+- **Advanced Mode**: Exposes all 15 specialized MCP tools for maximum control
 
 See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
 
 ### MCP Configuration
 
-**Full Mode (default):**
+**Simple Mode (default):**
 
 ```json
 {
@@ -130,13 +131,13 @@ See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
 }
 ```
 
-**Simple Mode:**
+**Advanced Mode:**
 
 ```json
 {
-  "openzim-mcp-simple": {
+  "openzim-mcp-advanced": {
     "command": "openzim-mcp",
-    "args": ["--mode", "simple", "/path/to/zim/files"]
+    "args": ["--mode", "advanced", "/path/to/zim/files"]
   }
 }
 ```
@@ -175,7 +176,7 @@ For development (from source):
 }
 ```
 
-## 🛠️ Development
+## Development
 
 ### Running Tests
 
@@ -218,6 +219,7 @@ make clean-test-data
 ```
 
 The test data includes:
+
 - **Basic files**: Small ZIM files for essential testing
 - **Real content**: Actual Wikipedia/Wikibooks content for integration testing
 - **Invalid files**: Malformed ZIM files for error handling testing
@@ -265,7 +267,7 @@ openzim-mcp/
 
 ---
 
-## 📚 API Reference
+## API Reference
 
 ### Available Tools
 
@@ -665,6 +667,7 @@ Results of conflict resolution including cleanup actions and recommendations.
 ```
 
 Response:
+
 ```plain
 Found 39 matches for "computer", showing 1-2:
 
@@ -693,6 +696,7 @@ Snippet: #  Protein A representation of the 3D structure of the protein myoglobi
 ```
 
 Response:
+
 ```plain
 # Evolution
 
@@ -721,7 +725,7 @@ Mechanisms and processes
 ... [Content truncated, total of 110,237 characters, only showing first 1,500 characters] ...
 ```
 
-### 🎯 Advanced Knowledge Retrieval Examples
+### Advanced Knowledge Retrieval Examples
 
 **Getting ZIM metadata:**
 
@@ -735,6 +739,7 @@ Mechanisms and processes
 ```
 
 Response:
+
 ```json
 {
   "entry_count": 100000,
@@ -766,6 +771,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "namespace": "C",
@@ -813,6 +819,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "title": "Evolution",
@@ -849,6 +856,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "partial_query": "bio",
@@ -861,7 +869,7 @@ Response:
 }
 ```
 
-### 🔧 Server Management and Diagnostics Examples
+### Server Management and Diagnostics Examples
 
 **Getting server health:**
 
@@ -872,6 +880,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "status": "healthy",
@@ -902,6 +911,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "status": "healthy",
@@ -930,6 +940,7 @@ Response:
 ```
 
 Response:
+
 ```json
 {
   "status": "success",
@@ -945,25 +956,28 @@ Response:
 
 ---
 
-## 🎯 ZIM Entry Retrieval Best Practices
+## ZIM Entry Retrieval Best Practices
 
 ### Smart Retrieval System
 
 OpenZIM MCP implements an intelligent entry retrieval system that automatically handles path encoding inconsistencies common in ZIM files:
 
 **How It Works:**
+
 1. **Direct Access First**: Attempts to retrieve the entry using the provided path exactly as given
 2. **Automatic Fallback**: If direct access fails, automatically searches for the entry using various search terms
 3. **Path Mapping Cache**: Caches successful path mappings to improve performance for repeated access
 4. **Enhanced Error Guidance**: Provides clear guidance when entries cannot be found
 
 **Benefits for LLM Users:**
+
 - **Transparent Operation**: No need to understand ZIM path encoding complexities
 - **Single Tool Call**: Eliminates the need for manual search-first methodology
 - **Reliable Results**: Consistent success across different path formats (spaces vs underscores, URL encoding, etc.)
 - **Performance Optimized**: Cached mappings improve repeated access speed
 
 **Example Scenarios Handled Automatically:**
+
 - `A/Test Article` → `A/Test_Article` (space to underscore conversion)
 - `C/Café` → `C/Caf%C3%A9` (URL encoding differences)
 - `A/Some-Page` → `A/Some_Page` (hyphen to underscore conversion)
@@ -971,6 +985,7 @@ OpenZIM MCP implements an intelligent entry retrieval system that automatically 
 ### Usage Recommendations
 
 **For Direct Entry Access:**
+
 ```json
 {
   "name": "get_zim_entry",
@@ -983,6 +998,7 @@ OpenZIM MCP implements an intelligent entry retrieval system that automatically 
 
 **When Entry Not Found:**
 The system will automatically provide guidance:
+
 ```
 Entry not found: 'A/Article_Name'.
 The entry path may not exist in this ZIM file.
@@ -992,25 +1008,28 @@ or browse_namespace() to explore the file structure.
 
 ---
 
-## ⚠️ Important Notes and Limitations
+## Important Notes and Limitations
 
 ### Content Length Requirements
+
 - The `max_content_length` parameter for `get_zim_entry` must be at least 1000 characters
 - Content longer than the specified limit will be truncated with a note showing the total character count
 
 ### Search Behavior
+
 - Search results may include articles that contain the search terms in various contexts
 - Results are ranked by relevance but may not always be directly related to the primary meaning of the search term
 - Search snippets provide a preview of the content but may not show the exact location where the search term appears
 
 ### File Format Support
+
 - Currently supports ZIM files (Zeno IMproved format)
 - Tested with Wikipedia ZIM files (e.g., `wikipedia_en_100_2025-08.zim`)
 - File paths must be properly escaped in JSON (use `\\` for Windows paths)
 
 ---
 
-## 🔄 Multi-Server Instance Management
+## Multi-Server Instance Management
 
 OpenZIM MCP includes advanced multi-server instance tracking and conflict detection to ensure reliable operation when multiple server instances are running.
 
@@ -1032,9 +1051,9 @@ OpenZIM MCP includes advanced multi-server instance tracking and conflict detect
 OpenZIM MCP automatically includes conflict warnings in search results and file listings when issues are detected:
 
 ```plain
-🔍 **Server Conflict Detected**
-⚠️ Configuration mismatch with server PID 12345. Search results may be inconsistent.
-💡 Use 'resolve_server_conflicts()' to fix these issues.
+ **Server Conflict Detected**
+ Configuration mismatch with server PID 12345. Search results may be inconsistent.
+ Use 'resolve_server_conflicts()' to fix these issues.
 ```
 
 ### Best Practices
@@ -1046,7 +1065,7 @@ OpenZIM MCP automatically includes conflict warnings in search results and file 
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 OpenZIM MCP supports configuration through environment variables with the `OPENZIM_MCP_` prefix:
 
@@ -1085,7 +1104,7 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 
 ---
 
-## 🔒 Security Features
+## Security Features
 
 - **Path Traversal Protection**: Secure path validation prevents access outside allowed directories
 - **Input Sanitization**: All user inputs are validated and sanitized
@@ -1095,7 +1114,7 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 
 ---
 
-## 🚀 Performance Features
+## Performance Features
 
 - **Intelligent Caching**: LRU cache with TTL for frequently accessed content
 - **Resource Pooling**: Efficient ZIM archive management
@@ -1105,7 +1124,7 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 
 ---
 
-## 🧪 Testing
+## Testing
 
 The project includes comprehensive testing with 90%+ coverage using both mock data and real ZIM files:
 
@@ -1153,7 +1172,7 @@ Tests are organized with pytest markers:
 
 ---
 
-## 📈 Monitoring
+## Monitoring
 
 OpenZIM MCP provides built-in monitoring capabilities:
 
@@ -1164,7 +1183,7 @@ OpenZIM MCP provides built-in monitoring capabilities:
 
 ---
 
-## 🔄 Versioning
+## Versioning
 
 This project uses [Semantic Versioning](https://semver.org/) with automated version management through [release-please](https://github.com/googleapis/release-please).
 
@@ -1187,11 +1206,12 @@ The project uses an **improved, consolidated release system** with automatic val
 3. **Emergency**: Push tags directly for critical fixes
 
 **Key Features:**
-- ✅ **Zero-touch releases** from main branch
-- ✅ **Automatic version synchronization** validation
-- ✅ **Comprehensive testing** before every release
-- ✅ **Improved error handling** and rollback capabilities
-- ✅ **Branch protection** prevents broken releases
+
+- **Zero-touch releases** from main branch
+- **Automatic version synchronization** validation
+- **Comprehensive testing** before every release
+- **Improved error handling** and rollback capabilities
+- **Branch protection** prevents broken releases
 
 For detailed instructions, see [Release Process Guide](docs/RELEASE_PROCESS_GUIDE.md).
 
@@ -1206,6 +1226,7 @@ For detailed instructions, see [Release Process Guide](docs/RELEASE_PROCESS_GUID
 ```
 
 **Examples:**
+
 ```bash
 feat: add search suggestions endpoint
 fix: resolve path traversal vulnerability
@@ -1215,7 +1236,7 @@ docs: update installation instructions
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -1236,14 +1257,18 @@ docs: update installation instructions
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [Kiwix](https://www.kiwix.org/) for the ZIM format and libzim library
 - [MCP](https://modelcontextprotocol.io/) for the Model Context Protocol
 - The open-source community for the excellent libraries used in this project
+
+---
+
+Made with ❤️ by [Cameron Rye](https://rye.dev)

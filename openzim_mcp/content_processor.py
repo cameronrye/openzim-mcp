@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Union, cast
 from urllib.parse import urlparse
 
 import html2text
-from bs4 import BeautifulSoup, PageElement, Tag
+from bs4 import BeautifulSoup, Tag
 
 from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
 
@@ -212,9 +212,7 @@ class ContentProcessor:
             sections = []
             current_section: Union[Dict[str, Union[str, int]], None] = None
 
-            elements: List[PageElement] = soup.find_all(
-                ["h1", "h2", "h3", "h4", "h5", "h6", "p", "div"]
-            )
+            elements = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "div"])
             for page_element in elements:
                 if isinstance(page_element, Tag) and page_element.name:
                     # MyPy type narrowing: page_element is now definitely a Tag

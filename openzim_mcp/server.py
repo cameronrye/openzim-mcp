@@ -279,9 +279,9 @@ class OpenZimMcpServer:
                     context=f"Query: {query}, File: {zim_file_path}",
                 )
 
-        # Also register the full tools so they're available for advanced use
+        # Also register the advanced tools so they're available for advanced use
         # This allows the simple mode to still have access to all functionality
-        self._register_full_tools()
+        self._register_advanced_tools()
 
         logger.info(
             "Simple mode tools registered successfully (zim_query + all underlying tools)"
@@ -295,12 +295,12 @@ class OpenZimMcpServer:
             self._register_simple_tools()
             return
 
-        # Full mode - register all tools (existing behavior)
-        logger.info("Registering full mode tools...")
-        self._register_full_tools()
+        # Advanced mode - register all tools (existing behavior)
+        logger.info("Registering advanced mode tools...")
+        self._register_advanced_tools()
 
-    def _register_full_tools(self) -> None:
-        """Register full mode tools (all 15 tools)."""
+    def _register_advanced_tools(self) -> None:
+        """Register advanced mode tools (all 15 tools)."""
 
         @self.mcp.tool()
         async def list_zim_files() -> str:

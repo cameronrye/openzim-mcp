@@ -7,7 +7,7 @@
     <meta name="description" content="OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns.">
     <meta name="keywords" content="OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia">
     <meta name="author" content="OpenZIM MCP Development Team">
-    
+
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://cameronrye.github.io/openzim-mcp/">
@@ -30,10 +30,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    
+
     <!-- Styles -->
     <link rel="stylesheet" href="assets/styles.css">
-    
+
     <!-- Structured Data -->
     <script type="application/ld+json">
     {
@@ -107,12 +107,13 @@
                     <span>Built for LLM Intelligence</span>
                 </div>
                 <h1 class="hero-title">
-                    Transform Static ZIM Archives into 
+                    Transform Static ZIM Archives into
                     <span class="gradient-text">Dynamic Knowledge Engines</span>
                 </h1>
                 <p class="hero-description">
-                    OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search 
+                    OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search
                     ZIM format knowledge bases offline with intelligent, structured access patterns.
+                    Choose between Simple mode (default) or Advanced mode to match your needs.
                 </p>
                 <div class="hero-buttons">
                     <a href="#installation" class="btn btn-primary">
@@ -138,8 +139,8 @@
                         <div class="stat-label">Known Vulnerabilities</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-number">15+</div>
-                        <div class="stat-label">MCP Tools</div>
+                        <div class="stat-number">2 Modes</div>
+                        <div class="stat-label">Simple & Advanced</div>
                     </div>
                 </div>
             </div>
@@ -175,16 +176,24 @@
             <div class="section-header">
                 <h2 class="section-title">Why LLMs Love OpenZIM MCP</h2>
                 <p class="section-description">
-                    Unlike basic file readers, OpenZIM MCP provides intelligent, structured access 
+                    Unlike basic file readers, OpenZIM MCP provides intelligent, structured access
                     that LLMs need to effectively navigate and understand vast knowledge repositories.
                 </p>
             </div>
             <div class="features-grid">
                 <div class="feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3 class="feature-title">Dual Mode Support</h3>
+                    <p class="feature-description">
+                        Choose Simple mode (1 intelligent natural language tool, default) or Advanced mode
+                        (15 specialized tools) to match your LLM's capabilities.
+                    </p>
+                </div>
+                <div class="feature-card">
                     <div class="feature-icon">🧭</div>
                     <h3 class="feature-title">Smart Navigation</h3>
                     <p class="feature-description">
-                        Browse by namespace (articles, metadata, media) instead of blind searching. 
+                        Browse by namespace (articles, metadata, media) instead of blind searching.
                         Get structured access to content organization.
                     </p>
                 </div>
@@ -192,7 +201,7 @@
                     <div class="feature-icon">🔍</div>
                     <h3 class="feature-title">Context-Aware Discovery</h3>
                     <p class="feature-description">
-                        Get article structure, relationships, and metadata for deeper understanding. 
+                        Get article structure, relationships, and metadata for deeper understanding.
                         Extract links and content connections.
                     </p>
                 </div>
@@ -200,7 +209,7 @@
                     <div class="feature-icon">🎯</div>
                     <h3 class="feature-title">Intelligent Search</h3>
                     <p class="feature-description">
-                        Advanced filtering, auto-complete suggestions, and relevance-ranked results 
+                        Advanced filtering, auto-complete suggestions, and relevance-ranked results
                         with namespace and content type filters.
                     </p>
                 </div>
@@ -216,7 +225,7 @@
                     <div class="feature-icon">🔗</div>
                     <h3 class="feature-title">Relationship Mapping</h3>
                     <p class="feature-description">
-                        Extract internal/external links to understand content connections. 
+                        Extract internal/external links to understand content connections.
                         Build knowledge graphs from ZIM content.
                     </p>
                 </div>
@@ -224,7 +233,7 @@
                     <div class="feature-icon">🔒</div>
                     <h3 class="feature-title">Security First</h3>
                     <p class="feature-description">
-                        Comprehensive input validation, path traversal protection, and secure 
+                        Comprehensive input validation, path traversal protection, and secure
                         resource management with type safety.
                     </p>
                 </div>
@@ -721,7 +730,7 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
 
                     <div class="tab-pane" id="config">
                         <div class="example-block">
-                            <h4>MCP Client Configuration</h4>
+                            <h4>MCP Client Configuration - Simple Mode (Default)</h4>
                             <div class="code-block">
                                 <button class="copy-btn" data-clipboard-target="#config-example">
                                     <span class="copy-icon">📋</span>
@@ -740,19 +749,23 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
 }</code></pre>
                             </div>
                             <div class="example-result">
-                                <h5>Alternative: Global Installation</h5>
+                                <h5>Advanced Mode (15 specialized tools):</h5>
                                 <pre><code>{
   "mcpServers": {
-    "openzim-mcp": {
+    "openzim-mcp-advanced": {
       "command": "openzim-mcp",
       "args": [
+        "--mode", "advanced",
         "/path/to/zim/files"
       ]
     }
   }
 }</code></pre>
                                 <h5>Environment Variables (Optional):</h5>
-                                <pre><code># Cache configuration
+                                <pre><code># Tool mode (default: simple)
+export OPENZIM_MCP_TOOL_MODE=simple
+
+# Cache configuration
 export OPENZIM_MCP_CACHE__ENABLED=true
 export OPENZIM_MCP_CACHE__MAX_SIZE=200
 export OPENZIM_MCP_CACHE__TTL_SECONDS=7200

@@ -4,8 +4,8 @@
 
 OpenZIM MCP supports two distinct modes to accommodate different LLM capabilities:
 
-1. **Full Mode** (default): Exposes all 15 specialized MCP tools for maximum control and flexibility
-2. **Simple Mode**: Provides just 1 primary intelligent tool that accepts natural language queries
+1. **Simple Mode** (default): Provides just 1 primary intelligent tool that accepts natural language queries
+2. **Advanced Mode**: Exposes all 15 specialized MCP tools for maximum control and flexibility
 
 ## Why Simple Mode?
 
@@ -21,13 +21,13 @@ Simple mode is designed for:
 ### Command Line
 
 ```bash
-# Simple mode
+# Simple mode (default)
+python -m openzim_mcp /path/to/zim/files
+# or explicitly
 python -m openzim_mcp --mode simple /path/to/zim/files
 
-# Full mode (default)
-python -m openzim_mcp --mode full /path/to/zim/files
-# or simply
-python -m openzim_mcp /path/to/zim/files
+# Advanced mode
+python -m openzim_mcp --mode advanced /path/to/zim/files
 ```
 
 ### Environment Variable
@@ -81,6 +81,7 @@ Or using environment variable:
 The primary tool for all ZIM content operations. It accepts natural language queries and intelligently routes them to the appropriate underlying operations.
 
 **Parameters:**
+
 - `query` (required): Natural language query describing what you want
 - `zim_file_path` (optional): Path to ZIM file (auto-selects if only one exists)
 - `limit` (optional): Maximum number of results for search/browse operations
@@ -90,6 +91,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 **Supported Query Types:**
 
 #### File Listing
+
 ```
 "list files"
 "what ZIM files are available"
@@ -97,6 +99,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### Metadata
+
 ```
 "metadata for wikipedia.zim"
 "info about this ZIM file"
@@ -104,6 +107,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### Main Page
+
 ```
 "show main page"
 "get home page"
@@ -111,6 +115,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### Namespaces
+
 ```
 "list namespaces"
 "what namespaces exist"
@@ -118,6 +123,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### Browsing
+
 ```
 "browse namespace C"
 "show articles in namespace A"
@@ -125,6 +131,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### Article Structure
+
 ```
 "structure of Biology"
 "outline of Evolution"
@@ -132,6 +139,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### Links Extraction
+
 ```
 "links in Biology"
 "references from Evolution"
@@ -139,6 +147,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### Search Suggestions
+
 ```
 "suggestions for bio"
 "autocomplete evol"
@@ -146,6 +155,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### Filtered Search
+
 ```
 "search evolution in namespace C"
 "find biology in type text/html"
@@ -153,6 +163,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### Get Article
+
 ```
 "get article Biology"
 "show Evolution"
@@ -161,6 +172,7 @@ The primary tool for all ZIM content operations. It accepts natural language que
 ```
 
 #### General Search
+
 ```
 "search for biology"
 "find evolution"
@@ -255,9 +267,9 @@ The `zim_query` tool uses intelligent intent parsing to understand your query:
 4. **Priority Ordering**: More specific patterns are checked first
 5. **Fallback**: Defaults to search if intent is unclear
 
-## Comparison: Full vs Simple Mode
+## Comparison: Advanced vs Simple Mode
 
-| Aspect | Full Mode | Simple Mode |
+| Aspect | Advanced Mode | Simple Mode |
 |--------|-----------|-------------|
 | Number of Tools | 15 specialized tools | 1 primary tool |
 | Interface | Explicit tool selection | Natural language queries |
@@ -266,9 +278,9 @@ The `zim_query` tool uses intelligent intent parsing to understand your query:
 | Learning Curve | Steeper (need to know which tool to use) | Gentler (just describe what you want) |
 | Best For | Advanced LLMs, power users | Simple LLMs, conversational AI |
 
-## Full Mode Tools (for reference)
+## Advanced Mode Tools (for reference)
 
-When in full mode, these 15 tools are available:
+When in advanced mode, these 15 tools are available:
 
 1. `list_zim_files` - List all ZIM files
 2. `search_zim_file` - Search within ZIM file
@@ -312,21 +324,20 @@ If the wrong operation is executed:
 1. Use more specific keywords
 2. Check the intent parsing patterns in the documentation
 3. Try rephrasing your query
-4. Consider using full mode for precise control
+4. Consider using advanced mode for precise control
 
 ## Migration Between Modes
 
 You can switch between modes at any time by changing the configuration:
 
 ```bash
-# Switch to simple mode
-export OPENZIM_MCP_TOOL_MODE=simple
+# Switch to advanced mode
+export OPENZIM_MCP_TOOL_MODE=advanced
 
-# Switch to full mode
-export OPENZIM_MCP_TOOL_MODE=full
+# Switch to simple mode (default)
+export OPENZIM_MCP_TOOL_MODE=simple
 # or
-unset OPENZIM_MCP_TOOL_MODE  # defaults to full
+unset OPENZIM_MCP_TOOL_MODE  # defaults to simple
 ```
 
 No data migration is needed - both modes use the same underlying operations and data.
-

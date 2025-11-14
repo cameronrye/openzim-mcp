@@ -2,7 +2,7 @@
 
 Common questions and answers about OpenZIM MCP.
 
-## 🤔 General Questions
+## General Questions
 
 ### What is OpenZIM MCP?
 
@@ -11,6 +11,7 @@ OpenZIM MCP is a Model Context Protocol (MCP) server that enables AI models to a
 ### What makes it different from other file readers?
 
 Unlike basic file readers, OpenZIM MCP provides:
+
 - **Smart Navigation**: Browse by namespace instead of blind searching
 - **Context-Aware Discovery**: Get article structure and relationships
 - **Intelligent Search**: Advanced filtering and auto-complete
@@ -21,7 +22,7 @@ Unlike basic file readers, OpenZIM MCP provides:
 
 ZIM (Zeno IMproved) files are an open format for storing web content offline. They're highly compressed and optimized for fast access, commonly used for Wikipedia, Wiktionary, and other reference materials.
 
-## 🚀 Getting Started
+## Getting Started
 
 ### How do I install OpenZIM MCP?
 
@@ -35,6 +36,7 @@ See the [Installation Guide](Installation-Guide) for detailed instructions.
 ### Where can I get ZIM files?
 
 Download ZIM files from the [Kiwix Library](https://browse.library.kiwix.org/). Popular options include:
+
 - Wikipedia (various languages and sizes)
 - Wiktionary (dictionaries)
 - Stack Overflow (programming Q&A)
@@ -47,11 +49,12 @@ Download ZIM files from the [Kiwix Library](https://browse.library.kiwix.org/). 
 - **Storage**: Space for ZIM files (100MB to 50GB+ depending on content)
 - **OS**: Windows, macOS, or Linux
 
-## 🔧 Configuration
+## Configuration
 
 ### How do I configure caching?
 
 Use environment variables:
+
 ```bash
 export OPENZIM_MCP_CACHE__ENABLED=true
 export OPENZIM_MCP_CACHE__MAX_SIZE=200
@@ -67,6 +70,7 @@ Yes! Place multiple ZIM files in your directory and OpenZIM MCP will automatical
 ### How do I optimize performance?
 
 Key optimization strategies:
+
 - **Increase cache size** for frequently accessed content
 - **Use appropriate content limits** for your use case
 - **Monitor cache hit rates** (target >70%)
@@ -74,11 +78,12 @@ Key optimization strategies:
 
 See the [Performance Optimization Guide](Performance-Optimization-Guide) for details.
 
-## 🔍 Usage
+## Usage
 
 ### How do I search for content?
 
 Use natural language with your MCP client:
+
 - "Search for biology in the ZIM files"
 - "Find articles about evolution"
 - "Get search suggestions for 'bio'"
@@ -88,6 +93,7 @@ The system supports various search strategies and filters.
 ### How do I get specific articles?
 
 Request articles directly:
+
 - "Get the Biology article from the ZIM file"
 - "Show me the content of the Evolution page"
 
@@ -96,21 +102,24 @@ The smart retrieval system automatically handles path encoding differences.
 ### Can I get article structure without full content?
 
 Yes! Use structure requests:
+
 - "Show me the structure of the Evolution article"
 - "What are the main sections in the Biology page?"
 
 This gives you headings, sections, and metadata without loading full content.
 
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### "No ZIM files found" error
 
 **Causes**:
+
 - Wrong directory path
 - Missing `.zim` file extension
 - Permission issues
 
 **Solutions**:
+
 1. Verify the directory path exists
 2. Check file permissions (`chmod 644 *.zim`)
 3. Ensure files have `.zim` extension
@@ -119,11 +128,13 @@ This gives you headings, sections, and metadata without loading full content.
 ### Server not responding
 
 **Causes**:
+
 - Server process not running
 - Wrong configuration path
 - Permission issues
 
 **Solutions**:
+
 1. Check if server process is running
 2. Verify MCP client configuration paths
 3. Restart the server
@@ -132,11 +143,13 @@ This gives you headings, sections, and metadata without loading full content.
 ### Search returns no results
 
 **Causes**:
+
 - Typos in search terms
 - Content not in ZIM file
 - Wrong namespace
 
 **Solutions**:
+
 1. Check spelling of search terms
 2. Try broader search terms
 3. Browse namespaces to explore content
@@ -145,11 +158,13 @@ This gives you headings, sections, and metadata without loading full content.
 ### Slow performance
 
 **Causes**:
+
 - Large ZIM files
 - Low cache hit rate
 - Insufficient system resources
 
 **Solutions**:
+
 1. Increase cache size
 2. Use smaller ZIM files for testing
 3. Monitor system resources
@@ -157,11 +172,12 @@ This gives you headings, sections, and metadata without loading full content.
 
 See the [Troubleshooting Guide](Troubleshooting-Guide) for detailed solutions.
 
-## 🔒 Security
+## Security
 
 ### Is OpenZIM MCP secure?
 
 Yes! OpenZIM MCP includes multiple security layers:
+
 - **Path traversal protection**
 - **Input validation and sanitization**
 - **Directory access restrictions**
@@ -176,13 +192,14 @@ Yes, use the allowed directories configuration to limit access to specific paths
 ### How do I run it securely in production?
 
 Follow security best practices:
+
 - Run as dedicated user (not root)
 - Set appropriate file permissions
 - Enable comprehensive logging
 - Regular security updates
 - Monitor for suspicious activity
 
-## 🔄 Advanced Usage
+## Advanced Usage
 
 ### Can I use it with multiple MCP clients?
 
@@ -200,7 +217,7 @@ The modular architecture supports extensions. Check the [Architecture Overview](
 
 Yes! Any valid ZIM file works with OpenZIM MCP. You can create custom ZIM files using tools from the OpenZIM project.
 
-## 📊 Performance
+## Performance
 
 ### What's a good cache hit rate?
 
@@ -209,6 +226,7 @@ Target >70% cache hit rate for good performance. Monitor using the health check 
 ### How much memory does it use?
 
 Memory usage depends on:
+
 - Cache size configuration
 - ZIM file sizes
 - Concurrent operations
@@ -219,12 +237,13 @@ Typical usage: 100-500MB for moderate workloads.
 ### Can it handle large ZIM files?
 
 Yes, but performance depends on system resources. For very large files (>10GB):
+
 - Increase system RAM
 - Optimize cache settings
 - Use SSD storage
 - Monitor performance metrics
 
-## 🛠️ Development
+## Development
 
 ### How do I contribute?
 
@@ -252,12 +271,13 @@ make test-with-zim-data
 ### Where can I report bugs?
 
 Report bugs on [GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues). Include:
+
 - Operating system and version
 - Python version
 - Error messages
 - Steps to reproduce
 
-## 📚 Resources
+## Resources
 
 ### Where can I learn more?
 
@@ -269,6 +289,7 @@ Report bugs on [GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues)
 ### What about the ZIM format?
 
 Learn more about ZIM files:
+
 - **[OpenZIM Project](https://openzim.org/)** - Official ZIM format documentation
 - **[Kiwix](https://www.kiwix.org/)** - ZIM file reader and library
 - **[ZIM Format Specification](https://openzim.org/wiki/ZIM_file_format)** - Technical details
@@ -278,11 +299,12 @@ Learn more about ZIM files:
 - **[GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions)** - Ask questions and share ideas
 - **[GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues)** - Report bugs and request features
 
-## 🔮 Future Plans
+## Future Plans
 
 ### What's coming next?
 
 Planned features include:
+
 - Docker container support
 - Enhanced multi-instance management
 - Performance improvements

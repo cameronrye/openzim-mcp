@@ -2,11 +2,11 @@
 
 Advanced configuration options and environment variables for OpenZIM MCP.
 
-## 📋 Overview
+## Overview
 
 OpenZIM MCP supports extensive configuration through environment variables, allowing you to customize behavior for different deployment scenarios.
 
-## 🔧 Configuration Methods
+## Configuration Methods
 
 ### Environment Variables
 
@@ -21,7 +21,23 @@ export OPENZIM_MCP_CACHE__MAX_SIZE=200
 
 Configuration file support is planned for future releases.
 
-## 📊 Cache Configuration
+## Tool Mode Configuration
+
+OpenZIM MCP supports two operational modes:
+
+```bash
+# Tool mode (default: simple)
+# Options: simple, advanced
+export OPENZIM_MCP_TOOL_MODE=simple
+```
+
+**Simple Mode (default)**: Provides 1 intelligent tool (`zim_query`) that accepts natural language queries. Best for most LLMs and use cases.
+
+**Advanced Mode**: Exposes all 15 specialized MCP tools for maximum control. Useful when you need fine-grained control over ZIM operations.
+
+See the [Simple Mode Guide](../docs/SIMPLE_MODE_GUIDE.md) for detailed information about the differences between modes.
+
+## Cache Configuration
 
 ### Basic Cache Settings
 
@@ -39,24 +55,27 @@ export OPENZIM_MCP_CACHE__TTL_SECONDS=7200
 ### Cache Performance Tuning
 
 **For Development**:
+
 ```bash
 export OPENZIM_MCP_CACHE__MAX_SIZE=50
 export OPENZIM_MCP_CACHE__TTL_SECONDS=1800  # 30 minutes
 ```
 
 **For Production**:
+
 ```bash
 export OPENZIM_MCP_CACHE__MAX_SIZE=500
 export OPENZIM_MCP_CACHE__TTL_SECONDS=14400  # 4 hours
 ```
 
 **For High-Memory Systems**:
+
 ```bash
 export OPENZIM_MCP_CACHE__MAX_SIZE=1000
 export OPENZIM_MCP_CACHE__TTL_SECONDS=28800  # 8 hours
 ```
 
-## 📄 Content Configuration
+## Content Configuration
 
 ### Content Length Limits
 
@@ -81,7 +100,7 @@ export OPENZIM_MCP_CONTENT__CONVERT_HTML=true
 export OPENZIM_MCP_CONTENT__PRESERVE_FORMATTING=true
 ```
 
-## 📝 Logging Configuration
+## Logging Configuration
 
 ### Log Levels
 
@@ -112,7 +131,7 @@ export OPENZIM_MCP_LOGGING__JSON=true
 export OPENZIM_MCP_LOGGING__FORMAT="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 ```
 
-## 🖥️ Server Configuration
+## Server Configuration
 
 ### Server Identity
 
@@ -137,7 +156,7 @@ export OPENZIM_MCP_SERVER__REQUEST_TIMEOUT=60
 export OPENZIM_MCP_SERVER__MAX_CONCURRENT=20
 ```
 
-## 🔒 Security Configuration
+## Security Configuration
 
 ### Path Security
 
@@ -162,7 +181,7 @@ export OPENZIM_MCP_SECURITY__MAX_QUERY_LENGTH=2000
 export OPENZIM_MCP_SECURITY__SANITIZE_INPUT=true
 ```
 
-## 🔄 Instance Management
+## Instance Management
 
 ### Multi-Instance Settings
 
@@ -190,6 +209,7 @@ export OPENZIM_MCP_INSTANCE__MAX_STALE_AGE=7200
 ### Instance Tracking Profiles
 
 **Production Environment**:
+
 ```bash
 export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
 export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=strict
@@ -198,6 +218,7 @@ export OPENZIM_MCP_INSTANCE__CLEANUP_INTERVAL=300
 ```
 
 **Development Environment**:
+
 ```bash
 export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
 export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=relaxed
@@ -206,6 +227,7 @@ export OPENZIM_MCP_INSTANCE__CLEANUP_INTERVAL=600
 ```
 
 **High-Availability Environment**:
+
 ```bash
 export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
 export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=strict
@@ -214,7 +236,7 @@ export OPENZIM_MCP_INSTANCE__CLEANUP_INTERVAL=120
 export OPENZIM_MCP_INSTANCE__MAX_STALE_AGE=1800
 ```
 
-## 🧠 Smart Retrieval Configuration
+## Smart Retrieval Configuration
 
 ### Smart Retrieval Settings
 
@@ -244,6 +266,7 @@ export OPENZIM_MCP_SMART_RETRIEVAL__MAX_ATTEMPTS=10
 ### Smart Retrieval Profiles
 
 **High-Performance Profile**:
+
 ```bash
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=5000
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=14400
@@ -253,6 +276,7 @@ export OPENZIM_MCP_SMART_RETRIEVAL__MAX_ATTEMPTS=15
 ```
 
 **Memory-Constrained Profile**:
+
 ```bash
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=500
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=1800
@@ -262,6 +286,7 @@ export OPENZIM_MCP_SMART_RETRIEVAL__MAX_ATTEMPTS=3
 ```
 
 **Development Profile**:
+
 ```bash
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=1000
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=3600
@@ -270,10 +295,12 @@ export OPENZIM_MCP_SMART_RETRIEVAL__MIN_CONFIDENCE=0.7
 export OPENZIM_MCP_SMART_RETRIEVAL__PATTERN_LEARNING=true
 ```
 
-## 📊 Complete Configuration Reference
+## Complete Configuration Reference
 
 | Setting | Default | Description | Valid Values |
 |---------|---------|-------------|--------------|
+| **Tool Mode** |
+| `TOOL_MODE` | `simple` | Tool operation mode | `simple`, `advanced` |
 | **Cache Settings** |
 | `CACHE__ENABLED` | `true` | Enable caching | `true`, `false` |
 | `CACHE__MAX_SIZE` | `100` | Max cache entries | `1-10000` |
@@ -316,7 +343,7 @@ export OPENZIM_MCP_SMART_RETRIEVAL__PATTERN_LEARNING=true
 | `SMART_RETRIEVAL__PATTERN_LEARNING` | `true` | Enable pattern learning | `true`, `false` |
 | `SMART_RETRIEVAL__MAX_ATTEMPTS` | `5` | Max fallback attempts | `1-20` |
 
-## 🎯 Configuration Profiles
+## Configuration Profiles
 
 ### Development Profile
 
@@ -364,11 +391,12 @@ export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=500
 export OPENZIM_MCP_SERVER__MAX_CONCURRENT=5
 ```
 
-## 🔧 Configuration Management
+## Configuration Management
 
 ### Setting Configuration
 
 **Linux/macOS**:
+
 ```bash
 # Set in shell profile (.bashrc, .zshrc, etc.)
 echo 'export OPENZIM_MCP_CACHE__MAX_SIZE=200' >> ~/.bashrc
@@ -376,6 +404,7 @@ source ~/.bashrc
 ```
 
 **Windows**:
+
 ```powershell
 # Set environment variable
 $env:OPENZIM_MCP_CACHE__MAX_SIZE = "200"
@@ -389,6 +418,7 @@ $env:OPENZIM_MCP_CACHE__MAX_SIZE = "200"
 Create configuration scripts for different environments:
 
 **config-dev.sh**:
+
 ```bash
 #!/bin/bash
 export OPENZIM_MCP_LOGGING__LEVEL=DEBUG
@@ -397,6 +427,7 @@ export OPENZIM_MCP_CACHE__MAX_SIZE=50
 ```
 
 **config-prod.sh**:
+
 ```bash
 #!/bin/bash
 export OPENZIM_MCP_LOGGING__LEVEL=INFO
@@ -405,6 +436,7 @@ export OPENZIM_MCP_CACHE__MAX_SIZE=500
 ```
 
 Usage:
+
 ```bash
 source config-dev.sh
 
@@ -415,7 +447,7 @@ openzim-mcp /path/to/zim/files
 uv run python -m openzim_mcp /path/to/zim/files
 ```
 
-## 📊 Monitoring Configuration
+## Monitoring Configuration
 
 ### Health Check Settings
 
@@ -443,7 +475,7 @@ export OPENZIM_MCP_METRICS__REQUESTS_ENABLED=true
 export OPENZIM_MCP_METRICS__RETENTION_PERIOD=7200
 ```
 
-## 🔍 Configuration Validation
+## Configuration Validation
 
 ### Validate Configuration
 
@@ -455,6 +487,7 @@ Use the server diagnostics to validate your configuration:
 ```
 
 This will check for:
+
 - Invalid configuration values
 - Conflicting settings
 - Performance recommendations

@@ -2,11 +2,11 @@
 
 Comprehensive guide to OpenZIM MCP's automated release system with enterprise-grade CI/CD pipeline.
 
-## 📋 Overview
+## Overview
 
 OpenZIM MCP features a sophisticated automated release system built on [Release Please](https://github.com/googleapis/release-please) and GitHub Actions. This enterprise-grade system ensures reliable, consistent releases with comprehensive validation and automated deployment.
 
-## 🏗️ Release System Architecture
+## Release System Architecture
 
 ### Components
 
@@ -49,7 +49,7 @@ OpenZIM MCP features a sophisticated automated release system built on [Release 
 10. GitHub Release Creation
 ```
 
-## 📝 Conventional Commits
+## Conventional Commits
 
 ### Commit Format
 
@@ -92,6 +92,7 @@ BREAKING CHANGE: Search results now return different JSON structure
 ### Examples
 
 **Feature Addition**:
+
 ```bash
 feat: add multi-instance conflict detection
 
@@ -102,6 +103,7 @@ Closes #123
 ```
 
 **Bug Fix**:
+
 ```bash
 fix: resolve cache invalidation issue
 
@@ -112,6 +114,7 @@ Fixes #456
 ```
 
 **Documentation Update**:
+
 ```bash
 docs: add smart retrieval system guide
 
@@ -119,11 +122,12 @@ Comprehensive documentation for the intelligent entry retrieval
 system including configuration options and troubleshooting.
 ```
 
-## 🚀 Release Process
+## Release Process
 
 ### Automatic Releases (Recommended)
 
 1. **Write Conventional Commits**:
+
    ```bash
    git commit -m "feat: add new search feature"
    git push origin main
@@ -156,6 +160,7 @@ For emergency releases or special cases:
    - Specify tag (optional)
 
 2. **Direct Tag Creation**:
+
    ```bash
    git tag v0.5.0
    git push origin v0.5.0
@@ -166,25 +171,29 @@ For emergency releases or special cases:
 The system includes comprehensive validation:
 
 #### Version Synchronization
+
 - Validates `pyproject.toml` version
 - Validates `__init__.py` version
 - Ensures consistency across files
 
 #### Testing Requirements
+
 - All tests must pass
 - Code coverage requirements met
 - Security scans completed
 
 #### Build Validation
+
 - Package builds successfully
 - Dependencies resolved correctly
 - Distribution files created
 
-## 🔧 Configuration
+## Configuration
 
 ### Release Please Configuration
 
 **`.release-please-config.json`**:
+
 ```json
 {
   "release-type": "python",
@@ -209,6 +218,7 @@ The system includes comprehensive validation:
 ### GitHub Actions Workflows
 
 #### Release Please Workflow
+
 ```yaml
 name: Release Please
 on:
@@ -227,6 +237,7 @@ jobs:
 ```
 
 #### Release Workflow
+
 ```yaml
 name: Release
 on:
@@ -255,7 +266,7 @@ jobs:
       - name: Create GitHub release
 ```
 
-## 📊 Release Metrics
+## Release Metrics
 
 ### Version History
 
@@ -282,42 +293,51 @@ v0.3.0 (2025-09-15) - Feature release
 - **Automated vs manual releases**: 95% automated
 - **Breaking changes frequency**: <5% of releases
 
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
 #### Issue: Release Please Not Creating PR
+
 **Symptoms**: No release PR after conventional commits
 **Causes**:
+
 - Non-conventional commit messages
 - No releasable changes
 - Workflow permissions
 
 **Solutions**:
+
 1. Check commit message format
 2. Verify workflow permissions
 3. Manually trigger workflow
 
 #### Issue: Version Synchronization Failure
+
 **Symptoms**: Release workflow fails with version mismatch
 **Causes**:
+
 - Manual version edits
 - Merge conflicts
 - Incomplete updates
 
 **Solutions**:
+
 1. Check `pyproject.toml` and `__init__.py`
 2. Ensure versions match
 3. Re-run release process
 
 #### Issue: PyPI Deployment Failure
+
 **Symptoms**: Package build succeeds but PyPI upload fails
 **Causes**:
+
 - Authentication issues
 - Version already exists
 - Package validation errors
 
 **Solutions**:
+
 1. Check PyPI credentials
 2. Verify version uniqueness
 3. Validate package structure
@@ -325,6 +345,7 @@ v0.3.0 (2025-09-15) - Feature release
 ### Diagnostic Commands
 
 #### Check Release Status
+
 ```bash
 # View recent releases
 gh release list
@@ -334,6 +355,7 @@ gh run list --workflow=release.yml
 ```
 
 #### Validate Version Sync
+
 ```bash
 # Check pyproject.toml version
 grep version pyproject.toml
@@ -343,13 +365,14 @@ grep __version__ openzim_mcp/__init__.py
 ```
 
 #### Test Release Process
+
 ```bash
 # Dry run release
 python -m build
 twine check dist/*
 ```
 
-## 🔮 Future Enhancements
+## Future Enhancements
 
 ### Planned Improvements
 

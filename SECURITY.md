@@ -6,8 +6,8 @@ We actively support the following versions of OpenZIM MCP with security updates:
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.2.x   | ✅ Yes             |
-| 0.1.x   | ❌ No (deprecated) |
+| 0.2.x   |  Yes             |
+| 0.1.x   |  No (deprecated) |
 
 ## Reporting a Vulnerability
 
@@ -31,6 +31,7 @@ Instead, please report them privately using one of these methods:
 Send an email to: **security@[project-domain]** (replace with actual email)
 
 Include in your email:
+
 - Description of the vulnerability
 - Steps to reproduce
 - Potential impact
@@ -92,21 +93,25 @@ We are committed to responding to security reports promptly:
 We classify vulnerabilities using the following criteria:
 
 ### Critical (CVSS 9.0-10.0)
+
 - Remote code execution
 - Privilege escalation to system level
 - Data exfiltration of sensitive information
 
 ### High (CVSS 7.0-8.9)
+
 - Local privilege escalation
 - Authentication bypass
 - Significant data exposure
 
 ### Medium (CVSS 4.0-6.9)
+
 - Information disclosure
 - Denial of service
 - Path traversal (limited impact)
 
 ### Low (CVSS 0.1-3.9)
+
 - Minor information leaks
 - Security misconfigurations
 - Theoretical attacks with high complexity
@@ -116,22 +121,26 @@ We classify vulnerabilities using the following criteria:
 OpenZIM MCP implements several security measures:
 
 ### Input Validation
+
 - Comprehensive path validation to prevent directory traversal
 - Input sanitization for all user-provided data
 - Type checking and validation using Pydantic
 
 ### Secure Defaults
+
 - Restricted file access to allowed directories only
 - Secure error handling that doesn't leak sensitive information
 - Resource limits to prevent abuse
 
 ### Code Security
+
 - Regular security scanning with bandit
 - Dependency vulnerability scanning
 - Type safety with mypy
 - Comprehensive testing including security tests
 
 ### Development Security
+
 - Pre-commit hooks for security checks
 - Automated security scanning in CI/CD
 - Regular dependency updates
@@ -140,16 +149,19 @@ OpenZIM MCP implements several security measures:
 ## Known Security Considerations
 
 ### ZIM File Processing
+
 - ZIM files are processed using the libzim library
 - Content is sanitized before processing
 - Large files are handled with appropriate limits
 
 ### Path Handling
+
 - All file paths are validated against allowed directories
 - Path traversal attacks are prevented through secure path resolution
 - Symbolic links are handled safely
 
 ### Caching
+
 - Cache keys are validated to prevent cache poisoning
 - Cached content has appropriate TTL limits
 - Cache size is limited to prevent memory exhaustion
@@ -157,17 +169,20 @@ OpenZIM MCP implements several security measures:
 ## Security Best Practices for Users
 
 ### Deployment Security
+
 - Run OpenZIM MCP with minimal required privileges
 - Use allowed directories to restrict file access
 - Monitor logs for suspicious activity
 - Keep dependencies updated
 
 ### ZIM File Security
+
 - Only use ZIM files from trusted sources
 - Verify ZIM file integrity when possible
 - Be cautious with user-provided ZIM files
 
 ### Configuration Security
+
 - Use environment variables for sensitive configuration
 - Avoid logging sensitive information
 - Implement appropriate access controls
@@ -259,4 +274,4 @@ Please ensure your security research:
 
 ---
 
-Thank you for helping to keep OpenZIM MCP secure! 🔒
+Thank you for helping to keep OpenZIM MCP secure!

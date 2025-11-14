@@ -57,8 +57,8 @@ security:  ## Run security scans
 	@echo "Running security scans..."
 	@echo "Running bandit security scan..."
 	@uv run bandit -r openzim_mcp -ll || echo "Bandit found low-severity issues (non-blocking)"
-	@echo "Running safety dependency scan..."
-	@uv run safety check --json || echo "Safety scan completed with warnings"
+	@echo "Running pip-audit dependency scan..."
+	@uv run pip-audit || echo "Pip-audit scan completed with warnings"
 
 download-test-data:  ## Download ZIM test data files
 	uv run python scripts/download_test_data.py --priority 1

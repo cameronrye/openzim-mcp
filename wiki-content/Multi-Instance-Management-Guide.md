@@ -2,11 +2,11 @@
 
 Advanced guide for managing multiple OpenZIM MCP server instances with conflict detection and resolution.
 
-## 📋 Overview
+## Overview
 
 OpenZIM MCP includes sophisticated multi-instance management capabilities that allow multiple server instances to run simultaneously while detecting and resolving conflicts automatically. This enterprise-grade feature ensures reliable operation in complex deployment scenarios.
 
-## 🏗️ Instance Tracking System
+## Instance Tracking System
 
 ### How It Works
 
@@ -32,20 +32,23 @@ instance = InstanceTracker.register_instance(
 ```
 
 **Instance Information Stored**:
+
 - Process ID (PID)
 - Configuration hash
 - Allowed directories
 - Start time and last heartbeat
 - Server name and description
 
-## 🔍 Conflict Detection
+## Conflict Detection
 
 ### Types of Conflicts
 
 #### 1. Configuration Mismatch
+
 Multiple servers with different configurations accessing the same directories.
 
 **Example Scenario**:
+
 ```bash
 # Server 1
 export OPENZIM_MCP_CACHE__MAX_SIZE=100
@@ -61,9 +64,11 @@ openzim-mcp /shared/zim/files
 **Impact**: Inconsistent behavior, cache conflicts
 
 #### 2. Multiple Active Instances
+
 Multiple servers running simultaneously on the same directories.
 
 **Example Scenario**:
+
 ```bash
 # Terminal 1
 openzim-mcp /zim/files &
@@ -77,9 +82,11 @@ openzim-mcp /zim/files &
 **Impact**: Resource contention, potential confusion
 
 #### 3. Stale Instance Files
+
 Orphaned instance files from terminated processes.
 
 **Example Scenario**:
+
 - Server process crashes or is killed
 - Instance file remains in tracking directory
 - New server detects "ghost" instance
@@ -106,7 +113,7 @@ Orphaned instance files from terminated processes.
 7. Provide Resolution Recommendations
 ```
 
-## 🛠️ Using Management Tools
+## Using Management Tools
 
 ### Check Server Health
 
@@ -119,6 +126,7 @@ Monitor instance tracking status:
 ```
 
 **Response includes**:
+
 ```json
 {
   "instance_tracking": {
@@ -141,6 +149,7 @@ Get comprehensive diagnostics:
 ```
 
 **Conflict Information**:
+
 ```json
 {
   "conflicts": [
@@ -170,6 +179,7 @@ Automatically clean up and resolve issues:
 ```
 
 **Cleanup Actions**:
+
 ```json
 {
   "cleanup_results": {
@@ -185,7 +195,7 @@ Automatically clean up and resolve issues:
 }
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### Instance Tracking Settings
 
@@ -203,25 +213,29 @@ export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=moderate
 ### Conflict Detection Levels
 
 #### Strict (Default)
+
 - Detects all configuration differences
 - Reports multiple instances as conflicts
 - Strict directory overlap checking
 
 #### Moderate
+
 - Ignores minor configuration differences
 - Allows multiple instances with warnings
 - Relaxed directory overlap rules
 
 #### Relaxed
+
 - Only reports major configuration conflicts
 - Minimal instance overlap checking
 - Suitable for development environments
 
-## 🎯 Best Practices
+## Best Practices
 
 ### Production Deployments
 
 #### 1. Use Consistent Configuration
+
 ```bash
 # Create shared configuration script
 cat > /etc/openzim-mcp/config.sh << 'EOF'
@@ -237,6 +251,7 @@ openzim-mcp /path/to/zim/files
 ```
 
 #### 2. Monitor Instance Health
+
 ```bash
 # Regular health checks
 curl -X POST http://localhost:8000/mcp \
@@ -245,6 +260,7 @@ curl -X POST http://localhost:8000/mcp \
 ```
 
 #### 3. Automated Conflict Resolution
+
 ```bash
 # Scheduled cleanup (cron job)
 0 */6 * * * curl -X POST http://localhost:8000/mcp \
@@ -254,11 +270,13 @@ curl -X POST http://localhost:8000/mcp \
 ### Development Environments
 
 #### 1. Use Relaxed Detection
+
 ```bash
 export OPENZIM_MCP_INSTANCE__CONFLICT_DETECTION=relaxed
 ```
 
 #### 2. Separate Tracking Directories
+
 ```bash
 # Developer 1
 export OPENZIM_MCP_INSTANCE__TRACKING_DIR="/tmp/dev1_instances"
@@ -268,35 +286,42 @@ export OPENZIM_MCP_INSTANCE__TRACKING_DIR="/tmp/dev2_instances"
 ```
 
 #### 3. Quick Cleanup
+
 ```bash
 # Clean all instances for fresh start
 rm -rf ~/.openzim_mcp_instances/*
 ```
 
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
 #### Issue: False Conflict Warnings
+
 **Symptoms**: Warnings about conflicts when only one server is running
 **Cause**: Stale instance files from previous sessions
 **Solution**:
+
 ```json
 {"name": "resolve_server_conflicts"}
 ```
 
 #### Issue: Configuration Mismatch Errors
+
 **Symptoms**: High-severity conflicts between instances
 **Cause**: Different environment variables or configuration
 **Solution**:
+
 1. Standardize configuration across instances
 2. Use configuration management tools
 3. Document configuration requirements
 
 #### Issue: Instance Tracking Disabled
+
 **Symptoms**: No conflict detection, missing health information
 **Cause**: `OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=false`
 **Solution**:
+
 ```bash
 export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
 ```
@@ -304,17 +329,20 @@ export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
 ### Diagnostic Commands
 
 #### Check Instance Files
+
 ```bash
 ls -la ~/.openzim_mcp_instances/
 cat ~/.openzim_mcp_instances/server_*.json
 ```
 
 #### Verify Process Status
+
 ```bash
 ps aux | grep openzim-mcp
 ```
 
 #### Test Configuration Hash
+
 ```bash
 # Compare configuration between instances
 curl -X POST http://localhost:8000/mcp \
@@ -322,7 +350,7 @@ curl -X POST http://localhost:8000/mcp \
   jq '.configuration.config_hash'
 ```
 
-## 🔧 Advanced Configuration
+## Advanced Configuration
 
 ### Custom Instance Tracking
 
@@ -342,6 +370,7 @@ export OPENZIM_MCP_LOGGING__LEVEL=DEBUG
 ### Integration with Monitoring Systems
 
 #### Prometheus Metrics (Future)
+
 ```bash
 # Enable metrics endpoint
 export OPENZIM_MCP_METRICS__ENABLED=true
@@ -349,6 +378,7 @@ export OPENZIM_MCP_METRICS__PORT=9090
 ```
 
 #### Health Check Endpoints
+
 ```bash
 # Configure health check URL
 curl http://localhost:8000/health/instances
