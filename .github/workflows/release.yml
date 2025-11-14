@@ -118,7 +118,7 @@ jobs:
         ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@v7
       with:
         version: "latest"
 
@@ -152,7 +152,7 @@ jobs:
         ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@v7
       with:
         version: "latest"
 
