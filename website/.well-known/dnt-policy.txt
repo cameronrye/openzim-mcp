@@ -1,0 +1,49 @@
+# Do Not Track Policy
+# https://www.eff.org/dnt-policy
+
+OpenZIM MCP Documentation Website
+https://cameronrye.github.io/openzim-mcp/
+
+## Our Commitment to Do Not Track (DNT)
+
+This website respects the Do Not Track (DNT) browser setting.
+
+## What We Track
+
+This website is hosted on GitHub Pages and does not implement any custom tracking or analytics. GitHub Pages may collect basic server logs as part of their service, which may include:
+
+- IP addresses
+- Browser user agents
+- Referring pages
+- Date and time of requests
+
+For more information about GitHub's data collection practices, please see:
+https://docs.github.com/en/pages/getting-started-with-github-pages/about-github-pages#data-collection
+
+## What We Don't Do
+
+We do NOT:
+- Use cookies for tracking purposes
+- Implement third-party analytics (Google Analytics, etc.)
+- Track user behavior across sessions
+- Collect personally identifiable information
+- Share data with third parties for advertising
+- Create user profiles
+- Use fingerprinting techniques
+
+## Your Privacy
+
+We believe in privacy by default. This website is designed to be informational and does not require any personal data collection to function.
+
+## Contact
+
+If you have questions about this policy, please contact:
+- Email: c@meron.io
+- GitHub: https://github.com/cameronrye/openzim-mcp/issues
+
+## Policy Updates
+
+Last Updated: 2025-01-15
+
+This policy may be updated from time to time. The latest version will always be available at:
+https://cameronrye.github.io/openzim-mcp/.well-known/dnt-policy.txt

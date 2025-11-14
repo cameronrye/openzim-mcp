@@ -1,0 +1,66 @@
+# humanstxt.org/
+# The humans responsible & technology colophon
+
+# TEAM
+
+    Creator & Lead Developer: Cameron Rye
+    Site: https://rye.dev
+    GitHub: @cameronrye
+    Location: Earth
+
+# THANKS
+
+    OpenZIM Project: https://openzim.org/
+    Wikimedia Foundation: https://wikimediafoundation.org/
+    Model Context Protocol: https://modelcontextprotocol.io/
+    All Contributors: https://github.com/cameronrye/openzim-mcp/graphs/contributors
+
+# TECHNOLOGY COLOPHON
+
+    ## Backend
+    Python 3.12+
+    libzim (C++ library for ZIM files)
+    MCP SDK (Model Context Protocol)
+    Pydantic (Data validation)
+
+    ## Frontend
+    HTML5
+    CSS3 (Custom properties, Grid, Flexbox)
+    Vanilla JavaScript (ES6+)
+    SVG Graphics
+
+    ## Fonts
+    Inter (Google Fonts)
+    JetBrains Mono (Google Fonts)
+
+    ## Build & Deploy
+    GitHub Actions
+    GitHub Pages
+    Python validation scripts
+
+    ## Development Tools
+    uv (Python package manager)
+    pytest (Testing framework)
+    mypy (Type checking)
+    black (Code formatting)
+    isort (Import sorting)
+
+    ## Standards & Protocols
+    Schema.org (Structured data)
+    Open Graph Protocol (Social media)
+    Twitter Cards (Social media)
+    RFC 9116 (security.txt)
+    WCAG 2.1 (Accessibility)
+
+    ## SEO & Analytics
+    Google Search Console
+    Bing Webmaster Tools
+    Lighthouse (Performance & SEO)
+
+# SITE
+
+    Last update: 2025-01-15
+    Language: English
+    Doctype: HTML5
+    IDE: Various (VS Code, Vim, etc.)
+    Version: 0.6.0

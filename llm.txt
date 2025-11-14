@@ -1,0 +1,182 @@
+# OpenZIM MCP Server
+
+> Transform static ZIM archives into dynamic knowledge engines for Large Language Models
+
+## Overview
+
+OpenZIM MCP is a Model Context Protocol (MCP) server that enables AI models to access and search ZIM format knowledge bases offline. It provides intelligent, structured access patterns that LLMs need to effectively navigate vast knowledge repositories like Wikipedia, Wiktionary, and other offline content archives.
+
+**Version**: 0.6.0
+**License**: MIT
+**Python**: 3.12+
+**Repository**: https://github.com/cameronrye/openzim-mcp
+**Documentation**: https://cameronrye.github.io/openzim-mcp/
+
+## Key Features
+
+- **Dual Mode Support**: Simple mode (1 intelligent natural language tool) or Advanced mode (15 specialized tools)
+- **Smart Navigation**: Browse by namespace (articles, metadata, media) with intelligent path resolution
+- **Context-Aware Discovery**: Get article structure, relationships, and metadata
+- **Intelligent Search**: Advanced filtering, auto-complete suggestions, relevance-ranked results
+- **Performance Optimized**: Intelligent caching and pagination for massive archives
+- **Security First**: Comprehensive input validation and path traversal protection
+- **Well Tested**: 90%+ test coverage with comprehensive test suite
+
+## Installation
+
+```bash
+# Install from PyPI
+pip install openzim-mcp
+
+# Or with uv (recommended)
+uv pip install openzim-mcp
+```
+
+## Quick Start
+
+```bash
+# Simple mode (default) - 1 intelligent natural language tool
+openzim-mcp /path/to/zim/files
+
+# Advanced mode - 15 specialized tools
+openzim-mcp --mode advanced /path/to/zim/files
+
+# With configuration file
+openzim-mcp --config config.json /path/to/zim/files
+```
+
+## MCP Configuration
+
+Add to your MCP client configuration (e.g., Claude Desktop):
+
+```json
+{
+  "mcpServers": {
+    "openzim": {
+      "command": "openzim-mcp",
+      "args": ["/path/to/zim/files"]
+    }
+  }
+}
+```
+
+## Core Concepts
+
+### ZIM Format
+ZIM (Zeno IMproved) is an open file format for storing web content offline. Key features:
+- High compression (Zstandard by default)
+- Fast random access and full-text search
+- Namespace organization (C=content, M=metadata, W=well-known, X=search)
+- Used by Wikipedia, Kiwix, and other offline knowledge projects
+
+### Model Context Protocol (MCP)
+MCP is a protocol for connecting AI models to external data sources and tools. OpenZIM MCP implements this protocol to provide structured access to ZIM archives.
+
+### Smart Retrieval System
+Automatic fallback from direct access to search-based retrieval:
+- Handles path encoding variations (spaces, underscores, URL encoding)
+- Transparent operation - no manual search required
+- Performance caching for repeated access
+- Clear error guidance with actionable suggestions
+
+## Available Tools
+
+### Simple Mode (Default)
+- `query_zim`: Natural language interface for all ZIM operations
+
+### Advanced Mode
+- `list_zim_files`: List available ZIM archives
+- `get_zim_metadata`: Get archive metadata
+- `get_zim_entry`: Retrieve specific entry by path
+- `search_zim_entries`: Search entries by title/path
+- `list_zim_entries`: Browse entries with pagination
+- `get_main_page`: Get archive main page
+- `get_entry_by_title`: Find entry by exact title
+- `suggest_entries`: Auto-complete suggestions
+- `get_random_entry`: Get random article
+- `count_entries`: Count entries by namespace
+- `get_entry_metadata`: Get entry metadata only
+- `extract_links`: Extract internal/external links
+- `get_namespace_info`: Get namespace statistics
+- `check_entry_exists`: Check if entry exists
+- `get_mime_types`: List MIME types in archive
+
+## Common Use Cases
+
+### Research Assistant
+```python
+# Search for articles on a topic
+search_zim_entries(query="quantum physics", limit=10)
+
+# Get article content with metadata
+get_zim_entry(path="A/Quantum_mechanics")
+
+# Extract related articles via links
+extract_links(path="A/Quantum_mechanics")
+```
+
+### Knowledge Chatbot
+```python
+# Get main page for context
+get_main_page(zim_file="wikipedia_en.zim")
+
+# Search with auto-complete
+suggest_entries(prefix="artif", limit=5)
+
+# Get random articles for exploration
+get_random_entry(namespace="A")
+```
+
+### Content Analysis
+```python
+# Get namespace statistics
+get_namespace_info(zim_file="wikipedia_en.zim")
+
+# Count articles
+count_entries(namespace="A")
+
+# List MIME types
+get_mime_types(zim_file="wikipedia_en.zim")
+```
+
+## Important Notes
+
+### Path Encoding
+- ZIM paths use UTF-8 encoding, NOT URL encoding
+- Smart retrieval handles encoding variations automatically
+- Example: "Test Article" → "Test_Article" (automatic)
+
+### Namespaces
+- **C**: Content (articles, resources)
+- **M**: Metadata (archive information)
+- **W**: Well-known entries (main page redirects)
+- **X**: Search indexes (full-text, title search)
+
+### Performance
+- Caching enabled by default (configurable)
+- Pagination recommended for large result sets
+- Use specific tools in advanced mode for best performance
+
+## Configuration Options
+
+```json
+{
+  "mode": "simple",
+  "cache_enabled": true,
+  "cache_ttl": 3600,
+  "max_cache_size": 1000,
+  "log_level": "INFO",
+  "max_search_results": 100
+}
+```
+
+## Resources
+
+- **Documentation**: https://cameronrye.github.io/openzim-mcp/
+- **GitHub**: https://github.com/cameronrye/openzim-mcp
+- **PyPI**: https://pypi.org/project/openzim-mcp/
+- **ZIM Format Spec**: https://openzim.org/wiki/ZIM_file_format
+- **Download ZIM Files**: https://library.kiwix.org/
+- **OpenZIM Project**: https://openzim.org/
+
+Made with ❤️ by Cameron Rye
