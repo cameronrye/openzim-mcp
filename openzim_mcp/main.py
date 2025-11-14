@@ -7,7 +7,7 @@ import atexit
 import sys
 
 from .config import OpenZimMcpConfig
-from .constants import TOOL_MODE_ADVANCED, TOOL_MODE_SIMPLE, VALID_TOOL_MODES
+from .constants import TOOL_MODE_SIMPLE, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
 from .instance_tracker import InstanceTracker
 from .server import OpenZimMcpServer
