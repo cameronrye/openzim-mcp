@@ -2,18 +2,20 @@
 
 This guide covers installing OpenZIM MCP on different platforms and for various use cases.
 
-## 📋 Prerequisites
+## Prerequisites
 
 ### System Requirements
+
 - **Python**: 3.12 or higher (3.13 also supported)
 - **Operating System**: Windows, macOS, or Linux
 - **Memory**: Minimum 512MB RAM (2GB+ recommended for large ZIM files)
 - **Storage**: Space for ZIM files (varies by content, typically 100MB - 50GB+)
 
 ### Required Tools
+
 - **pip** for package management (included with Python)
 
-## 🚀 Standard Installation (Recommended)
+## Standard Installation (Recommended)
 
 ### Install from PyPI
 
@@ -27,7 +29,7 @@ openzim-mcp --help
 
 That's it! OpenZIM MCP is now installed and ready to use.
 
-## 🛠️ Development Installation
+## Development Installation
 
 For contributors and developers who want to modify the code:
 
@@ -68,11 +70,11 @@ source venv/bin/activate
 pip install -e .
 ```
 
-## 📁 Setting Up ZIM Files
+## Setting Up ZIM Files
 
 ### Download ZIM Files
 
-1. **Visit the Kiwix Library**: https://browse.library.kiwix.org/
+1. **Visit the Kiwix Library**: <https://browse.library.kiwix.org/>
 2. **Choose content**: Wikipedia, Wiktionary, Stack Overflow, etc.
 3. **Download ZIM files** to a dedicated directory
 
@@ -90,11 +92,12 @@ mkdir ~/zim-files
 - **Wikipedia (English, Top 1000)**: ~2GB - Comprehensive testing
 - **Simple English Wikipedia**: ~200MB - Lightweight option
 
-## 🔧 Platform-Specific Installation
+## Platform-Specific Installation
 
 ### Windows
 
 **Standard Installation:**
+
 ```powershell
 # Install Python 3.12+ from python.org
 # Then install OpenZIM MCP
@@ -102,6 +105,7 @@ pip install openzim-mcp
 ```
 
 **Development Installation:**
+
 ```powershell
 # Install Git from git-scm.com
 # Clone and install
@@ -120,6 +124,7 @@ pip install -e .
 ### macOS
 
 **Standard Installation:**
+
 ```bash
 # Install Python 3.12+ using Homebrew
 brew install python@3.12
@@ -129,6 +134,7 @@ pip install openzim-mcp
 ```
 
 **Development Installation:**
+
 ```bash
 # Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -142,6 +148,7 @@ uv sync
 ### Linux (Ubuntu/Debian)
 
 **Standard Installation:**
+
 ```bash
 # Install Python 3.12+
 sudo apt update
@@ -152,6 +159,7 @@ pip install openzim-mcp
 ```
 
 **Development Installation:**
+
 ```bash
 # Install development tools
 sudo apt install python3.12-venv python3.12-dev git
@@ -168,6 +176,7 @@ uv sync
 ### Linux (CentOS/RHEL/Fedora)
 
 **Standard Installation:**
+
 ```bash
 # Install Python 3.12+
 sudo dnf install python3.12 python3-pip
@@ -177,6 +186,7 @@ pip install openzim-mcp
 ```
 
 **Development Installation:**
+
 ```bash
 # Install development tools
 sudo dnf install python3.12-venv python3.12-devel git
@@ -190,15 +200,16 @@ cd openzim-mcp
 uv sync
 ```
 
-## 🐳 Docker Installation (Coming Soon)
+## Docker Installation (Coming Soon)
 
 Docker support is planned for future releases. Track progress in [GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues).
 
-## ✅ Verification
+## Verification
 
 ### Test the Installation
 
 **Standard Installation:**
+
 ```bash
 # Test basic functionality
 openzim-mcp --help
@@ -211,6 +222,7 @@ openzim-mcp /path/to/zim/files
 ```
 
 **Development Installation:**
+
 ```bash
 # Test basic functionality
 uv run python -m openzim_mcp --help
@@ -232,7 +244,7 @@ Cache enabled: True
 Server ready for MCP connections.
 ```
 
-## 🔧 MCP Client Configuration
+## MCP Client Configuration
 
 ### Claude Desktop
 
@@ -243,6 +255,7 @@ Add to your Claude Desktop configuration file:
 **Linux**: `~/.config/claude/claude_desktop_config.json`
 
 **Standard Installation (Recommended):**
+
 ```json
 {
   "mcpServers": {
@@ -255,6 +268,7 @@ Add to your Claude Desktop configuration file:
 ```
 
 **Alternative (using Python module):**
+
 ```json
 {
   "mcpServers": {
@@ -271,6 +285,7 @@ Add to your Claude Desktop configuration file:
 ```
 
 **Development Installation:**
+
 ```json
 {
   "mcpServers": {
@@ -293,41 +308,51 @@ Add to your Claude Desktop configuration file:
 ### Other MCP Clients
 
 **Standard Installation:**
+
 ```bash
 openzim-mcp /path/to/zim/files
 ```
 
 **Development Installation:**
+
 ```bash
 uv run python -m openzim_mcp /path/to/zim/files
 ```
 
-## 🚨 Troubleshooting Installation
+## Troubleshooting Installation
 
 ### Common Issues
 
 **Python Version Error**
+
 ```
 Error: Python 3.12+ required
 ```
+
 **Solution**: Install Python 3.12 or higher from [python.org](https://python.org)
 
 **uv Not Found**
+
 ```
 Command 'uv' not found
 ```
+
 **Solution**: Install uv using the installation script or use pip instead
 
 **Permission Denied**
+
 ```
 Permission denied: '/path/to/zim/files'
 ```
+
 **Solution**: Ensure the ZIM files directory is readable by the user running the server
 
 **ZIM Files Not Found**
+
 ```
 No ZIM files found in directory
 ```
+
 **Solution**: Download ZIM files from [Kiwix Library](https://browse.library.kiwix.org/) and place them in the specified directory
 
 ### Getting Help
@@ -336,7 +361,7 @@ No ZIM files found in directory
 - **Open an issue** on [GitHub](https://github.com/cameronrye/openzim-mcp/issues)
 - **Join discussions** on [GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions)
 
-## ⏭️ Next Steps
+## ⏭ Next Steps
 
 1. **[Quick Start Tutorial](Quick-Start-Tutorial)** - Learn basic usage
 2. **[Configuration Guide](Configuration-Guide)** - Customize your setup

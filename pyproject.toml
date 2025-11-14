@@ -1,6 +1,6 @@
 [project]
 name = "openzim-mcp"
-version = "0.6.0"
+version = "0.6.2"
 description = "OpenZIM MCP - ZIM MCP Server that enables AI models to access and search ZIM format knowledge bases offline"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -41,12 +41,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "beautifulsoup4>=4.13.4",
+    "beautifulsoup4>=4.14.2",
     "html2text>=2025.4.15",
-    "libzim>=3.7.0",
-    "mcp[cli]>=1.9.0",
-    "pydantic>=2.11.0",
-    "pydantic-settings>=2.9.0",
+    "libzim>=3.8.0",
+    "mcp[cli]>=1.21.0",
+    "pydantic>=2.12.0",
+    "pydantic-settings>=2.12.0",
 ]
 
 [project.urls]
@@ -100,17 +100,17 @@ omit = ["tests/*"]
 
 [dependency-groups]
 dev = [
-    "black>=25.1.0",
+    "black>=25.11.0",
     "flake8>=7.3.0",
-    "isort>=6.0.1",
-    "mypy>=1.18.1",
-    "pytest>=8.4.2",
-    "pytest-asyncio>=1.2.0",
-    "pytest-benchmark>=4.0.0",
+    "isort>=7.0.0",
+    "mypy>=1.18.2",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-benchmark>=5.2.0",
     "pytest-cov>=7.0.0",
-    "pre-commit>=4.0.0",
+    "pre-commit>=4.4.0",
     "bandit[toml]>=1.8.0",
-    "safety>=3.0.0",
+    "pip-audit>=2.8.0",
 ]
 
 [tool.bandit]

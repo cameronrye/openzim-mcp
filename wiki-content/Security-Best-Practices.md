@@ -2,15 +2,16 @@
 
 Security considerations and best practices for deploying OpenZIM MCP in production environments.
 
-## 🔒 Security Overview
+## Security Overview
 
 OpenZIM MCP implements multiple layers of security to protect against common vulnerabilities and ensure safe operation in production environments.
 
-## 🛡️ Built-in Security Features
+## Built-in Security Features
 
 ### Advanced Path Traversal Protection
 
 **Enterprise-Grade Protection**:
+
 - Multi-layer path normalization and validation
 - Whitelist-based directory access with inheritance checking
 - Symbolic link resolution blocking with recursive detection
@@ -19,6 +20,7 @@ OpenZIM MCP implements multiple layers of security to protect against common vul
 - Real-time path validation with caching
 
 **Enhanced Security Implementation**:
+
 ```python
 # Advanced path validation process
 def validate_path_enterprise(self, path: str) -> ValidationResult:
@@ -47,6 +49,7 @@ def validate_path_enterprise(self, path: str) -> ValidationResult:
 ```
 
 **Configuration**:
+
 ```bash
 # Enable strict path validation (default: true)
 export OPENZIM_MCP_SECURITY__STRICT_PATHS=true
@@ -64,12 +67,14 @@ export OPENZIM_MCP_SECURITY__PATH_CACHE_SIZE=2000
 ### Input Validation
 
 **Comprehensive Validation**:
+
 - Query length limits
 - Parameter type checking
 - Content sanitization
 - File extension validation
 
 **Configuration**:
+
 ```bash
 # Maximum query length (default: 1000)
 export OPENZIM_MCP_SECURITY__MAX_QUERY_LENGTH=2000
@@ -84,6 +89,7 @@ export OPENZIM_MCP_SECURITY__ALLOWED_EXTENSIONS=".zim,.zimaa"
 ### Multi-Instance Security
 
 **Enterprise Instance Management**:
+
 - Automatic instance registration with security validation
 - Configuration hash verification to prevent tampering
 - Process isolation and conflict detection
@@ -91,6 +97,7 @@ export OPENZIM_MCP_SECURITY__ALLOWED_EXTENSIONS=".zim,.zimaa"
 - Automatic cleanup of stale instances
 
 **Security Features**:
+
 ```python
 # Instance security validation
 def validate_instance_security(self, instance: ServerInstance) -> SecurityResult:
@@ -115,6 +122,7 @@ def validate_instance_security(self, instance: ServerInstance) -> SecurityResult
 ```
 
 **Configuration**:
+
 ```bash
 # Enable instance tracking (default: true)
 export OPENZIM_MCP_INSTANCE__TRACKING_ENABLED=true
@@ -132,11 +140,12 @@ export OPENZIM_MCP_INSTANCE__FILE_PERMISSIONS=600
 export OPENZIM_MCP_INSTANCE__VALIDATE_PROCESSES=true
 ```
 
-## 🏗️ Deployment Security
+## Deployment Security
 
 ### File System Security
 
 **Directory Permissions**:
+
 ```bash
 # Set appropriate permissions for ZIM files directory
 chmod 755 /path/to/zim/files
@@ -147,6 +156,7 @@ chown -R zimuser:zimgroup /path/to/zim/files
 ```
 
 **Access Control**:
+
 ```bash
 # Create dedicated user for OpenZIM MCP
 sudo useradd -r -s /bin/false zimuser
@@ -159,22 +169,25 @@ sudo -u zimuser uv run python -m openzim_mcp /path/to/zim/files
 ### Network Security
 
 **Local Access Only** (Recommended):
+
 - OpenZIM MCP is designed for local MCP client connections
 - Avoid exposing directly to network interfaces
 - Use reverse proxy if network access is required
 
 **Firewall Configuration**:
+
 ```bash
 # Block external access to MCP ports
 sudo ufw deny from any to any port 3000  # Example MCP port
 sudo ufw allow from 127.0.0.1 to any port 3000  # Local only
 ```
 
-## 🔐 Access Control
+## Access Control
 
 ### Directory Restrictions
 
 **Principle of Least Privilege**:
+
 ```bash
 # Only allow access to specific ZIM directories
 export OPENZIM_MCP_ALLOWED_DIRECTORIES="/opt/zim-files:/var/lib/zim-content"
@@ -184,6 +197,7 @@ export OPENZIM_MCP_ALLOWED_DIRECTORIES="/opt/zim-files:/var/lib/zim-content"
 ```
 
 **Directory Structure**:
+
 ```bash
 # Recommended structure
 /opt/zim-files/
@@ -200,6 +214,7 @@ chmod 700 /opt/zim-files/temp
 ### File Validation
 
 **ZIM File Integrity**:
+
 ```bash
 # Verify ZIM file integrity before use
 zimcheck /path/to/file.zim
@@ -209,21 +224,24 @@ sha256sum -c zim-files.sha256
 ```
 
 **Content Validation**:
+
 - Only use ZIM files from trusted sources
 - Verify download integrity
 - Regular security scans of content
 
-## 🔍 Input Security
+## Input Security
 
 ### Query Sanitization
 
 **Automatic Sanitization**:
+
 - HTML entity encoding
 - Special character filtering
 - Length limit enforcement
 - Type validation
 
 **Custom Validation**:
+
 ```python
 # Example additional validation
 def validate_search_query(query: str) -> bool:
@@ -234,23 +252,25 @@ def validate_search_query(query: str) -> bool:
         r'data:',
         r'vbscript:'
     ]
-    
+
     for pattern in suspicious_patterns:
         if re.search(pattern, query, re.IGNORECASE):
             return False
-    
+
     return True
 ```
 
 ### Parameter Validation
 
 **Built-in Limits**:
+
 - Maximum content length: 1,000,000 characters
 - Maximum search results: 100
 - Maximum query length: 10,000 characters
 - Path depth limits: 50 levels
 
 **Custom Limits**:
+
 ```bash
 # Stricter limits for high-security environments
 export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=50000
@@ -258,11 +278,12 @@ export OPENZIM_MCP_SECURITY__MAX_QUERY_LENGTH=500
 export OPENZIM_MCP_SECURITY__MAX_PATH_DEPTH=5
 ```
 
-## 📝 Logging and Monitoring
+## Logging and Monitoring
 
 ### Security Logging
 
 **Enable Comprehensive Logging**:
+
 ```bash
 export OPENZIM_MCP_LOGGING__LEVEL=INFO
 export OPENZIM_MCP_LOGGING__JSON=true
@@ -270,6 +291,7 @@ export OPENZIM_MCP_LOGGING__SECURITY_EVENTS=true
 ```
 
 **Log Monitoring**:
+
 ```bash
 # Monitor for security events
 tail -f /var/log/openzim-mcp/security.log | grep -E "(SECURITY|ERROR|WARNING)"
@@ -281,6 +303,7 @@ logrotate /etc/logrotate.d/openzim-mcp
 ### Security Metrics
 
 **Monitor Key Indicators**:
+
 - Failed access attempts
 - Path traversal attempts
 - Invalid input patterns
@@ -288,6 +311,7 @@ logrotate /etc/logrotate.d/openzim-mcp
 - Resource exhaustion attempts
 
 **Alerting**:
+
 ```bash
 # Example monitoring script
 #!/bin/bash
@@ -302,11 +326,12 @@ if [ "$EVENTS" -gt "$ALERT_THRESHOLD" ]; then
 fi
 ```
 
-## 🔄 Update and Maintenance
+## Update and Maintenance
 
 ### Regular Updates
 
 **Keep Dependencies Updated**:
+
 ```bash
 # Update Python packages
 uv sync --upgrade
@@ -319,6 +344,7 @@ sudo apt update && sudo apt upgrade
 ```
 
 **ZIM File Updates**:
+
 - Regular content updates from trusted sources
 - Verify integrity of new ZIM files
 - Remove outdated or unused content
@@ -326,6 +352,7 @@ sudo apt update && sudo apt upgrade
 ### Security Auditing
 
 **Regular Security Checks**:
+
 ```bash
 # Run security diagnostics
 "Diagnose server state and check for security issues"
@@ -338,6 +365,7 @@ find /path/to/zim/files -type f -perm /o+w -ls
 ```
 
 **Vulnerability Scanning**:
+
 ```bash
 # Scan for known vulnerabilities
 bandit -r openzim_mcp/
@@ -349,17 +377,19 @@ safety check
 sudo lynis audit system
 ```
 
-## 🚨 Incident Response
+## Incident Response
 
 ### Security Event Detection
 
 **Automated Detection**:
+
 - Path traversal attempts
 - Excessive request rates
 - Invalid input patterns
 - Configuration tampering
 
 **Response Procedures**:
+
 1. **Immediate**: Log and block suspicious activity
 2. **Short-term**: Investigate and assess impact
 3. **Long-term**: Implement additional protections
@@ -367,6 +397,7 @@ sudo lynis audit system
 ### Incident Handling
 
 **Security Incident Checklist**:
+
 - [ ] Identify and contain the threat
 - [ ] Preserve logs and evidence
 - [ ] Assess impact and scope
@@ -375,7 +406,7 @@ sudo lynis audit system
 - [ ] Document lessons learned
 - [ ] Update security measures
 
-## 🔧 Hardening Configuration
+## Hardening Configuration
 
 ### Production Security Profile
 
@@ -401,6 +432,7 @@ export OPENZIM_MCP_SERVER__REQUEST_TIMEOUT=30
 ### Environment Isolation
 
 **Container Security** (Future):
+
 ```dockerfile
 # Example secure container configuration
 FROM python:3.12-slim
@@ -420,6 +452,7 @@ CMD ["python", "-m", "openzim_mcp", "/opt/zim-files"]
 ```
 
 **Process Isolation**:
+
 ```bash
 # Use systemd for process management
 sudo systemctl enable openzim-mcp
@@ -430,7 +463,7 @@ echo "zimuser soft nofile 1024" >> /etc/security/limits.conf
 echo "zimuser hard nofile 2048" >> /etc/security/limits.conf
 ```
 
-## 📋 Security Checklist
+## Security Checklist
 
 ### Pre-Deployment
 
@@ -465,11 +498,12 @@ echo "zimuser hard nofile 2048" >> /etc/security/limits.conf
 - [ ] Security training for operators
 - [ ] Incident response drills
 
-## 🔍 Security Testing
+## Security Testing
 
 ### Validation Tests
 
 **Path Traversal Testing**:
+
 ```bash
 # Test path traversal protection
 # These should all be blocked:
@@ -480,6 +514,7 @@ echo "zimuser hard nofile 2048" >> /etc/security/limits.conf
 ```
 
 **Input Validation Testing**:
+
 ```bash
 # Test input sanitization
 # These should be sanitized or rejected:
@@ -489,16 +524,18 @@ echo "zimuser hard nofile 2048" >> /etc/security/limits.conf
 ```
 
 **Resource Exhaustion Testing**:
+
 ```bash
 # Test resource limits
 # Large queries, excessive requests, etc.
 ```
 
-## 🚀 Advanced Security
+## Advanced Security
 
 ### Future Enhancements
 
 **Planned Security Features**:
+
 - Rate limiting and throttling
 - Authentication and authorization
 - Encrypted communication
@@ -506,6 +543,7 @@ echo "zimuser hard nofile 2048" >> /etc/security/limits.conf
 - Advanced threat detection
 
 **Integration Opportunities**:
+
 - SIEM system integration
 - Security orchestration platforms
 - Threat intelligence feeds

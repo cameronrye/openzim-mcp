@@ -7,7 +7,7 @@ import atexit
 import sys
 
 from .config import OpenZimMcpConfig
-from .constants import TOOL_MODE_FULL, TOOL_MODE_SIMPLE, VALID_TOOL_MODES
+from .constants import TOOL_MODE_SIMPLE, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
 from .instance_tracker import InstanceTracker
 from .server import OpenZimMcpServer
@@ -21,15 +21,15 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full mode (all 15 tools)
+  # Simple mode (default - 2 intelligent tools)
   python -m openzim_mcp /path/to/zim/files
-  python -m openzim_mcp --mode full /path/to/zim/files
-
-  # Simple mode (2 intelligent tools)
   python -m openzim_mcp --mode simple /path/to/zim/files
 
+  # Advanced mode (all 15 tools)
+  python -m openzim_mcp --mode advanced /path/to/zim/files
+
 Environment Variables:
-  OPENZIM_MCP_TOOL_MODE - Set tool mode (full or simple)
+  OPENZIM_MCP_TOOL_MODE - Set tool mode (advanced or simple)
         """,
     )
     parser.add_argument(
@@ -42,8 +42,8 @@ Environment Variables:
         choices=list(VALID_TOOL_MODES),
         default=None,
         help=(
-            f"Tool mode: 'full' for all 15 tools, 'simple' for 2 "
-            f"intelligent tools (default: {TOOL_MODE_FULL}, or from "
+            f"Tool mode: 'advanced' for all 15 tools, 'simple' for 2 "
+            f"intelligent tools (default: {TOOL_MODE_SIMPLE}, or from "
             f"OPENZIM_MCP_TOOL_MODE env var)"
         ),
     )
@@ -86,7 +86,7 @@ Environment Variables:
         mode_desc = (
             "SIMPLE mode (2 intelligent tools)"
             if config.tool_mode == TOOL_MODE_SIMPLE
-            else "FULL mode (15 specialized tools)"
+            else "ADVANCED mode (15 specialized tools)"
         )
         print(
             f"OpenZIM MCP server started in {mode_desc}",

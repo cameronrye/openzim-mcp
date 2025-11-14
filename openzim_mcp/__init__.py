@@ -4,8 +4,8 @@ OpenZIM MCP - ZIM MCP Server
 A modern, secure MCP server for accessing ZIM format knowledge bases offline.
 """
 
-__version__ = "0.6.0"
-__author__ = "OpenZIM MCP Development Team"
+__version__ = "0.6.2"
+__author__ = "Cameron Rye"
 
 from .config import OpenZimMcpConfig
 from .exceptions import (

@@ -2,16 +2,18 @@
 
 This runbook provides quick solutions for common release system issues.
 
-## 🚨 Critical Issues
+## Critical Issues
 
 ### Version Synchronization Failure
 
 **Symptoms:**
+
 - Release Please creates PR but versions don't match
 - PyPI deployment fails with version conflicts
 - `__init__.py` version differs from `pyproject.toml`
 
 **Quick Fix:**
+
 ```bash
 # Check current versions
 grep 'version = ' pyproject.toml
@@ -36,10 +38,12 @@ git push origin main
 ### Release Notes Extraction Failure
 
 **Symptoms:**
+
 - GitHub releases show "Release notes not found in CHANGELOG.md"
 - Empty or generic release notes
 
 **Quick Fix:**
+
 1. Check CHANGELOG.md format around the version
 2. Ensure version follows pattern: `## [X.Y.Z]` or `## X.Y.Z`
 3. Manually edit release notes in GitHub UI if needed
@@ -49,10 +53,12 @@ git push origin main
 ### PyPI Deployment Rejection
 
 **Symptoms:**
+
 - Error: "Branch 'main' is not allowed to deploy to pypi"
 - Deployment fails with environment protection error
 
 **Quick Fix:**
+
 ```bash
 # Use the consolidated release workflow instead
 # Go to Actions → Release → Run workflow
@@ -61,15 +67,17 @@ git push origin main
 
 **Root Cause:** Environment protection rules require tag-based deployments.
 
-## ⚠️ Common Issues
+## Common Issues
 
 ### Release Please Not Creating PR
 
 **Symptoms:**
+
 - Commits pushed to main but no release PR appears
 - Release Please workflow runs but no output
 
 **Diagnosis:**
+
 ```bash
 # Check recent commits for conventional format
 git log --oneline -10
@@ -79,13 +87,16 @@ git log --oneline -10
 ```
 
 **Solutions:**
+
 1. **No conventional commits:** Add a conventional commit
+
    ```bash
    git commit --allow-empty -m "chore: trigger release"
    git push origin main
    ```
 
 2. **Already at latest version:** Make a meaningful change
+
    ```bash
    git commit -m "feat: improve error handling"
    git push origin main
@@ -97,10 +108,12 @@ git log --oneline -10
 ### Test Failures During Release
 
 **Symptoms:**
+
 - Release workflow fails at test step
 - Red X on test jobs
 
 **Quick Diagnosis:**
+
 ```bash
 # Run tests locally
 make test
@@ -110,7 +123,9 @@ make type-check
 ```
 
 **Solutions:**
+
 1. **Fix tests locally:**
+
    ```bash
    # Fix the failing tests
    git add .
@@ -124,10 +139,12 @@ make type-check
 ### Build Failures
 
 **Symptoms:**
+
 - Package build fails
 - Missing dependencies or import errors
 
 **Diagnosis:**
+
 ```bash
 # Test build locally
 uv build
@@ -135,6 +152,7 @@ uv build
 ```
 
 **Solutions:**
+
 1. **Missing files:** Update `pyproject.toml` includes
 2. **Dependency issues:** Update `pyproject.toml` dependencies
 3. **Import errors:** Check package structure
@@ -142,15 +160,18 @@ uv build
 ### Tag Already Exists
 
 **Symptoms:**
+
 - Error: "Tag vX.Y.Z already exists"
 - Cannot create release
 
 **Solutions:**
+
 1. **Use existing tag:**
    - Go to Actions → Release → Run workflow
    - Enter existing tag, set `create_tag: false`
 
 2. **Delete and recreate tag:**
+
    ```bash
    git tag -d v0.3.4
    git push origin :refs/tags/v0.3.4
@@ -160,9 +181,10 @@ uv build
 3. **Increment version:**
    - Create new version instead
 
-## 🔧 Diagnostic Commands
+## Diagnostic Commands
 
 ### Check Release System Health
+
 ```bash
 # Verify all versions match
 echo "pyproject.toml: $(grep 'version = ' pyproject.toml)"
@@ -178,6 +200,7 @@ gh run list --workflow=release-please.yml --limit 5
 ```
 
 ### Validate Release Configuration
+
 ```bash
 # Check Release Please config
 cat release-please-config.json | jq .
@@ -188,6 +211,7 @@ gh workflow view release.yml
 ```
 
 ### Test Release Components
+
 ```bash
 # Test build process
 uv build
@@ -198,24 +222,27 @@ pip install dist/*.whl
 python -c "import openzim_mcp; print(openzim_mcp.__version__)"
 ```
 
-## 🚑 Emergency Procedures
+## Emergency Procedures
 
 ### Complete Release System Failure
 
 **When to use:** Multiple releases failing, system appears broken
 
 **Steps:**
+
 1. **Assess damage:**
+
    ```bash
    # Check recent workflow runs
    gh run list --limit 10
-   
+
    # Check current state
    git status
    git log --oneline -5
    ```
 
 2. **Emergency release bypass:**
+
    ```bash
    # Create tag manually and push
    git tag v0.3.5
@@ -233,7 +260,9 @@ python -c "import openzim_mcp; print(openzim_mcp.__version__)"
 **When to use:** Released version has critical issues
 
 **Steps:**
+
 1. **Immediate action:**
+
    ```bash
    # Create hotfix tag from previous good release
    git checkout v0.3.3  # Last good release
@@ -258,7 +287,9 @@ python -c "import openzim_mcp; print(openzim_mcp.__version__)"
 **Important:** You cannot delete or replace PyPI packages
 
 **Steps:**
+
 1. **Immediate fix:**
+
    ```bash
    # Create new patch version with fix
    git commit -m "fix: critical issue in v0.3.4"
@@ -269,15 +300,17 @@ python -c "import openzim_mcp; print(openzim_mcp.__version__)"
    - Add warning to GitHub release notes
    - Consider yanking on PyPI (advanced users only)
 
-## 📞 Escalation
+## Escalation
 
 ### When to Escalate
+
 - Multiple diagnostic attempts failed
 - System-wide release failures
 - Security-related release issues
 - PyPI publishing completely broken
 
 ### How to Escalate
+
 1. **Gather information:**
    - Recent workflow run URLs
    - Error messages and logs
@@ -294,7 +327,7 @@ python -c "import openzim_mcp; print(openzim_mcp.__version__)"
    - Document any manual steps taken
    - Communicate status to team
 
-## 📚 Additional Resources
+## Additional Resources
 
 - [Release Process Guide](RELEASE_PROCESS_GUIDE.md)
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)

@@ -9,19 +9,20 @@ This document outlines the recommended branch protection rules for the openzim-m
 Configure the following settings for the `main` branch in GitHub repository settings:
 
 #### General Settings
-- ✅ **Restrict pushes that create files larger than 100 MB**
-- ✅ **Restrict pushes that create files larger than a specified limit**: 50 MB
+
+- **Restrict pushes that create files larger than 100 MB**
+- **Restrict pushes that create files larger than a specified limit**: 50 MB
 
 #### Branch Protection Rules for `main`
 
 1. **Require a pull request before merging**
-   - ✅ Require approvals: **1**
-   - ✅ Dismiss stale PR approvals when new commits are pushed
-   - ✅ Require review from code owners (when CODEOWNERS file is present)
-   - ✅ Restrict pushes that create files larger than 100 MB
+   - Require approvals: **1**
+   - Dismiss stale PR approvals when new commits are pushed
+   - Require review from code owners (when CODEOWNERS file is present)
+   - Restrict pushes that create files larger than 100 MB
 
 2. **Require status checks to pass before merging**
-   - ✅ Require branches to be up to date before merging
+   - Require branches to be up to date before merging
    - **Required status checks:**
      - `Test Python 3.12 on ubuntu-latest`
      - `Test Python 3.12 on windows-latest`
@@ -31,33 +32,33 @@ Configure the following settings for the `main` branch in GitHub repository sett
      - `CodeQL`
 
 3. **Require conversation resolution before merging**
-   - ✅ All conversations on code must be resolved
+   - All conversations on code must be resolved
 
 4. **Require signed commits**
-   - ✅ Require signed commits (recommended for security)
+   - Require signed commits (recommended for security)
 
 5. **Require linear history**
-   - ✅ Require linear history (prevents merge commits)
+   - Require linear history (prevents merge commits)
 
 6. **Include administrators**
-   - ✅ Include administrators (applies rules to admins too)
+   - Include administrators (applies rules to admins too)
 
 7. **Allow force pushes**
-   - ❌ Do not allow force pushes
+   - Do not allow force pushes
 
 8. **Allow deletions**
-   - ❌ Do not allow deletions
+   - Do not allow deletions
 
 ### Develop Branch Protection (if used)
 
 If using a `develop` branch for integration:
 
 1. **Require a pull request before merging**
-   - ✅ Require approvals: **1**
-   - ✅ Dismiss stale PR approvals when new commits are pushed
+   - Require approvals: **1**
+   - Dismiss stale PR approvals when new commits are pushed
 
 2. **Require status checks to pass before merging**
-   - ✅ Require branches to be up to date before merging
+   - Require branches to be up to date before merging
    - **Required status checks:**
      - `Test Python 3.12 on ubuntu-latest`
      - `Security Scanning`

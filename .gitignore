@@ -51,3 +51,8 @@ test_*_edge_cases.py
 test_*_integration.py
 *_VALIDATION_REPORT.md
 *_REPORT.md
+
+# Node.js (for pre-commit hooks like prettier)
+node_modules/
+package-lock.json
+yarn.lock

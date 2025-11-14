@@ -67,9 +67,9 @@ class OpenZimMcpConfig(BaseSettings):
 
     # Server settings
     server_name: str = "openzim-mcp"
-    tool_mode: Literal["full", "simple"] = Field(
-        default="full",
-        description="Tool mode: 'full' for all 15 tools, 'simple' for 2 smart tools",
+    tool_mode: Literal["advanced", "simple"] = Field(
+        default="simple",
+        description="Tool mode: 'advanced' for all 15 tools, 'simple' for 2 smart tools",
     )
 
     model_config = SettingsConfigDict(

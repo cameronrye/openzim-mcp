@@ -2,11 +2,11 @@
 
 Tips and techniques for optimizing OpenZIM MCP performance in production environments.
 
-## 🎯 Performance Overview
+## Performance Overview
 
 OpenZIM MCP is designed for high performance with intelligent caching, optimized ZIM operations, and efficient resource management. This guide helps you maximize performance for your specific use case.
 
-## 📊 Advanced Performance Monitoring
+## Advanced Performance Monitoring
 
 ### Comprehensive Health Monitoring
 
@@ -19,6 +19,7 @@ OpenZIM MCP includes enterprise-grade monitoring capabilities:
 ```
 
 **Detailed Health Response**:
+
 ```json
 {
   "status": "healthy",
@@ -69,6 +70,7 @@ OpenZIM MCP includes enterprise-grade monitoring capabilities:
 ```
 
 **Performance Analysis Response**:
+
 ```json
 {
   "performance_analysis": {
@@ -97,6 +99,7 @@ OpenZIM MCP includes enterprise-grade monitoring capabilities:
 ### Key Performance Indicators (KPIs)
 
 #### Primary Metrics
+
 1. **Cache Hit Rate**: Target >85% for optimal performance
 2. **Smart Retrieval Hit Rate**: Target >90% for path resolution
 3. **Average Response Time**: Target <100ms for search operations
@@ -104,39 +107,44 @@ OpenZIM MCP includes enterprise-grade monitoring capabilities:
 5. **Instance Health**: Zero conflicts in production
 
 #### Secondary Metrics
+
 1. **Request Success Rate**: Target >99.5%
 2. **Fallback Success Rate**: Target >85% for smart retrieval
 3. **Concurrent Request Handling**: Monitor queue depth
 4. **ZIM File Access Patterns**: Track I/O efficiency
 5. **Configuration Stability**: Monitor config hash changes
 
-## 🚀 Cache Optimization
+## Cache Optimization
 
 ### Cache Configuration
 
 **Development Environment**:
+
 ```bash
 export OPENZIM_MCP_CACHE__MAX_SIZE=50
 export OPENZIM_MCP_CACHE__TTL_SECONDS=1800  # 30 minutes
 ```
 
 **Production Environment**:
+
 ```bash
 export OPENZIM_MCP_CACHE__MAX_SIZE=500
 export OPENZIM_MCP_CACHE__TTL_SECONDS=14400  # 4 hours
 ```
 
 **High-Memory Systems**:
+
 ```bash
 export OPENZIM_MCP_CACHE__MAX_SIZE=1000
 export OPENZIM_MCP_CACHE__TTL_SECONDS=28800  # 8 hours
 ```
 
-## 📈 Monitoring and Alerting
+## Monitoring and Alerting
 
 ### Real-Time Monitoring
 
 **Continuous Health Monitoring**:
+
 ```bash
 #!/bin/bash
 # health_monitor.sh - Continuous health monitoring script
@@ -176,6 +184,7 @@ done
 ### Performance Dashboards
 
 **Grafana Dashboard Configuration** (Future):
+
 ```json
 {
   "dashboard": {
@@ -219,6 +228,7 @@ done
 ### Alerting Rules
 
 **Performance Alert Thresholds**:
+
 ```yaml
 # alerts.yml - Performance alerting configuration
 groups:
@@ -264,11 +274,13 @@ groups:
 ### Cache Strategy Optimization
 
 **For Frequent Searches**:
+
 - Increase cache size
 - Longer TTL for stable content
 - Monitor hit rates regularly
 
 **For Memory-Constrained Systems**:
+
 - Smaller cache size
 - Shorter TTL
 - Focus on most accessed content
@@ -288,11 +300,12 @@ related_links = extract_article_links(zim_path, "C/Evolution")
 # Related articles likely to be cached
 ```
 
-## 🔍 Search Optimization
+## Search Optimization
 
 ### Efficient Search Strategies
 
 **Start Broad, Then Narrow**:
+
 ```python
 # 1. Broad search first
 results = search_zim_file(zim_path, "biology", limit=10)
@@ -306,6 +319,7 @@ for result in filtered[:3]:  # Limit to top 3
 ```
 
 **Use Appropriate Limits**:
+
 ```python
 # Good: Reasonable limits
 search_zim_file(zim_path, query, limit=10)  # For exploration
@@ -316,10 +330,11 @@ search_zim_file(zim_path, query, limit=100) # May cause timeouts
 ```
 
 **Leverage Filters**:
+
 ```python
 # More efficient than post-processing
 search_with_filters(
-    zim_path, 
+    zim_path,
     query="evolution",
     namespace="C",           # Content only
     content_type="text/html", # HTML articles only
@@ -334,29 +349,32 @@ search_with_filters(
 3. **Batch Related Searches**: Process similar queries together
 4. **Monitor Search Patterns**: Optimize based on usage
 
-## 📄 Content Retrieval Optimization
+## Content Retrieval Optimization
 
 ### Content Length Management
 
 **For Previews**:
+
 ```python
 preview = get_zim_entry(
-    zim_path, 
-    entry_path, 
+    zim_path,
+    entry_path,
     max_content_length=5000  # Quick preview
 )
 ```
 
 **For Full Reading**:
+
 ```python
 full_content = get_zim_entry(
-    zim_path, 
-    entry_path, 
+    zim_path,
+    entry_path,
     max_content_length=100000  # Complete article
 )
 ```
 
 **For Analysis**:
+
 ```python
 # Get structure first, then content
 structure = get_article_structure(zim_path, entry_path)
@@ -370,30 +388,32 @@ if structure.word_count < 10000:  # Only for shorter articles
 def load_content_progressively(entry_path):
     # 1. Get structure overview
     structure = get_article_structure(zim_path, entry_path)
-    
+
     # 2. Show structure to user
     present_structure(structure)
-    
+
     # 3. Load content based on user interest
     if user_wants_full_content():
         content = get_zim_entry(zim_path, entry_path)
     else:
         # Just show preview
         preview = get_zim_entry(zim_path, entry_path, max_content_length=2000)
-    
+
     return content
 ```
 
-## 🗂️ ZIM File Optimization
+## ZIM File Optimization
 
 ### File Selection
 
 **For Development**:
+
 - Use smaller ZIM files (100-500MB)
 - Wikipedia "Top 100" or "Top 1000" editions
 - Subject-specific collections
 
 **For Production**:
+
 - Choose appropriate content scope
 - Balance file size vs. content coverage
 - Consider multiple specialized ZIM files vs. one large file
@@ -421,11 +441,12 @@ def load_content_progressively(entry_path):
 3. **Sufficient Space**: Ensure adequate free space for operations
 4. **Regular Cleanup**: Remove unused or outdated ZIM files
 
-## ⚡ System Resource Optimization
+## System Resource Optimization
 
 ### Memory Management
 
 **Monitor Memory Usage**:
+
 ```bash
 # Check memory usage
 ps aux | grep openzim_mcp
@@ -433,6 +454,7 @@ top -p $(pgrep -f openzim_mcp)
 ```
 
 **Memory Configuration**:
+
 ```bash
 # For systems with limited RAM (< 4GB)
 export OPENZIM_MCP_CACHE__MAX_SIZE=25
@@ -448,6 +470,7 @@ export OPENZIM_MCP_SERVER__MAX_CONCURRENT=20
 ### CPU Optimization
 
 **Concurrent Operations**:
+
 ```bash
 # Adjust based on CPU cores
 export OPENZIM_MCP_SERVER__MAX_CONCURRENT=10  # For 4-core systems
@@ -455,6 +478,7 @@ export OPENZIM_MCP_SERVER__MAX_CONCURRENT=20  # For 8-core systems
 ```
 
 **Request Timeout**:
+
 ```bash
 # Balance responsiveness vs. completion
 export OPENZIM_MCP_SERVER__REQUEST_TIMEOUT=30   # Default
@@ -462,16 +486,18 @@ export OPENZIM_MCP_SERVER__REQUEST_TIMEOUT=60   # For complex operations
 export OPENZIM_MCP_SERVER__REQUEST_TIMEOUT=120  # For large content
 ```
 
-## 🔄 Multi-Instance Optimization
+## Multi-Instance Optimization
 
 ### Instance Management
 
 **Avoid Conflicts**:
+
 - Use consistent configuration across instances
 - Monitor for configuration mismatches
 - Regular conflict resolution
 
 **Load Distribution**:
+
 - Different ZIM files per instance
 - Specialized instances for different content types
 - Geographic distribution for global access
@@ -483,7 +509,7 @@ export OPENZIM_MCP_SERVER__REQUEST_TIMEOUT=120  # For large content
 "Resolve server conflicts and clean up stale instances"
 ```
 
-## 📈 Performance Tuning by Use Case
+## Performance Tuning by Use Case
 
 ### Research Applications
 
@@ -525,14 +551,14 @@ export OPENZIM_MCP_SERVER__MAX_CONCURRENT=30
 export OPENZIM_MCP_SERVER__REQUEST_TIMEOUT=45
 ```
 
-## 🔧 Advanced Optimization Techniques
+## Advanced Optimization Techniques
 
 ### Preloading Strategies
 
 ```python
 # Preload popular content
 popular_articles = [
-    "C/Biology", "C/Physics", "C/Chemistry", 
+    "C/Biology", "C/Physics", "C/Chemistry",
     "C/Mathematics", "C/Computer_science"
 ]
 
@@ -552,13 +578,13 @@ def process_topic_batch(topic_list):
     for topic in topic_list:
         results = search_zim_file(zim_path, topic, limit=5)
         search_results.extend(results)
-    
+
     # Then get content for all results
     content_results = []
     for result in search_results:
         content = get_zim_entry(zim_path, result.path)
         content_results.append(content)
-    
+
     return content_results
 ```
 
@@ -569,19 +595,19 @@ def process_topic_batch(topic_list):
 def explore_topic_efficiently(main_topic):
     # 1. Get main article (cached)
     main_article = get_zim_entry(zim_path, f"C/{main_topic}")
-    
+
     # 2. Get structure (cached)
     structure = get_article_structure(zim_path, f"C/{main_topic}")
-    
+
     # 3. Get related links (cached)
     links = extract_article_links(zim_path, f"C/{main_topic}")
-    
+
     # 4. Access related articles (likely cached due to common topics)
     related_content = []
     for link in links.internal_links[:5]:  # Top 5 only
         content = get_zim_entry(zim_path, link.path)
         related_content.append(content)
-    
+
     return {
         "main": main_article,
         "structure": structure,
@@ -589,11 +615,12 @@ def explore_topic_efficiently(main_topic):
     }
 ```
 
-## 📊 Performance Benchmarking
+## Performance Benchmarking
 
 ### Baseline Measurements
 
 **Measure Current Performance**:
+
 ```bash
 # Time operations
 time search_operation
@@ -602,6 +629,7 @@ time structure_analysis
 ```
 
 **Monitor Over Time**:
+
 - Track cache hit rates daily
 - Monitor response times
 - Watch memory usage trends
@@ -629,23 +657,26 @@ time structure_analysis
 - [ ] Monitoring in place
 - [ ] Performance baselines established
 
-## 🚨 Performance Troubleshooting
+## Performance Troubleshooting
 
 ### Common Performance Issues
 
 **Slow Search Results**:
+
 - Check cache hit rate
 - Reduce search result limits
 - Verify ZIM file integrity
 - Monitor system resources
 
 **High Memory Usage**:
+
 - Reduce cache size
 - Lower content length limits
 - Check for memory leaks
 - Restart server periodically
 
 **Timeouts**:
+
 - Increase request timeout
 - Reduce concurrent operations
 - Check system load

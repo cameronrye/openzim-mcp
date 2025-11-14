@@ -2,26 +2,32 @@
 
 Thank you for your interest in contributing to OpenZIM MCP! This document provides guidelines and information for contributors.
 
-## 🚀 Quick Start
+## Quick Start
 
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
+
    ```bash
    git clone https://github.com/YOUR_USERNAME/openzim-mcp.git
    cd openzim-mcp
    ```
+
 3. **Set up development environment**:
+
    ```bash
    python scripts/setup_dev_env.py
    ```
+
 4. **Create a feature branch**:
+
    ```bash
    git checkout -b feature/your-feature-name
    ```
+
 5. **Make your changes** and commit them
 6. **Push to your fork** and create a pull request
 
-## 🛠️ Development Setup
+## Development Setup
 
 ### Prerequisites
 
@@ -74,7 +80,7 @@ make check
 make test-with-zim-data
 ```
 
-## 📝 Code Style and Standards
+## Code Style and Standards
 
 ### Code Formatting
 
@@ -143,6 +149,7 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) f
 #### Breaking Changes
 
 For breaking changes, use:
+
 - **`feat!:`** or **`fix!:`** with exclamation mark
 - Or include **`BREAKING CHANGE:`** in the footer
 
@@ -168,7 +175,7 @@ fix(security): resolve path traversal issue
 docs(readme): update installation guide
 ```
 
-## 🧪 Testing
+## Testing
 
 ### Test Categories
 
@@ -208,7 +215,7 @@ uv run pytest -m "not slow"
 make test-requires-zim-data
 ```
 
-## 🔒 Security
+## Security
 
 ### Security Guidelines
 
@@ -225,7 +232,7 @@ make test-requires-zim-data
 - Verify path traversal protection
 - Check for information disclosure in error messages
 
-## 📋 Pull Request Process
+## Pull Request Process
 
 ### Before Submitting
 
@@ -269,7 +276,7 @@ Brief description of changes
 - [ ] Changelog updated (if needed)
 ```
 
-## 🐛 Bug Reports
+## Bug Reports
 
 ### Before Reporting
 
@@ -289,7 +296,7 @@ Include:
 - **Error messages**: Full stack traces
 - **ZIM files**: Information about test files used
 
-## 💡 Feature Requests
+## Feature Requests
 
 ### Before Requesting
 
@@ -307,7 +314,7 @@ Include:
 - **Use cases**: How would this be used?
 - **Breaking changes**: Any compatibility concerns
 
-## 🏷️ Issue Labels
+## Issue Labels
 
 We use labels to categorize issues:
 
@@ -320,7 +327,7 @@ We use labels to categorize issues:
 - **performance**: Performance improvements
 - **testing**: Testing improvements
 
-## 🎯 Development Focus Areas
+## Development Focus Areas
 
 ### High Priority
 
@@ -336,7 +343,7 @@ We use labels to categorize issues:
 - Code quality enhancements
 - Minor bug fixes
 
-## 📚 Resources
+## Resources
 
 ### Documentation
 
@@ -352,7 +359,7 @@ We use labels to categorize issues:
 - [Python Type Hints](https://docs.python.org/3/library/typing.html)
 - [pytest Documentation](https://docs.pytest.org/)
 
-## 🤝 Community
+## Community
 
 ### Code of Conduct
 
@@ -372,10 +379,10 @@ Contributors are recognized in:
 - Release notes for significant contributions
 - Special thanks in documentation
 
-## 📄 License
+## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
 
 ---
 
-Thank you for contributing to OpenZIM MCP! 🎉
+Thank you for contributing to OpenZIM MCP!

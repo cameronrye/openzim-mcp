@@ -2,7 +2,7 @@
 
 Technical documentation of the OpenZIM MCP system architecture and design.
 
-## 🏗️ System Architecture
+## System Architecture
 
 OpenZIM MCP follows a modular, layered architecture designed for performance, security, and maintainability.
 
@@ -42,17 +42,19 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 🧩 Core Components
+## Core Components
 
 ### 1. Server Core (`server.py`)
 
 **Responsibilities**:
+
 - MCP protocol implementation
 - Request routing and handling
 - Tool registration and execution
 - Error handling and response formatting
 
 **Key Features**:
+
 - Asynchronous request processing
 - Structured logging
 - Health monitoring
@@ -61,12 +63,14 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 ### 2. Security Layer (`security.py`)
 
 **Responsibilities**:
+
 - Input validation and sanitization
 - Path traversal protection
 - Access control enforcement
 - Security policy implementation
 
 **Security Features**:
+
 - Whitelist-based directory access
 - Path normalization and validation
 - Input length limits
@@ -75,12 +79,14 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 ### 3. Cache Manager (`cache.py`)
 
 **Responsibilities**:
+
 - LRU cache with TTL support
 - Cache key generation and management
 - Performance metrics collection
 - Memory usage optimization
 
 **Cache Strategy**:
+
 - Content-based caching for search results
 - Entry path mapping cache
 - Metadata caching
@@ -89,12 +95,14 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 ### 4. Content Processor (`content_processor.py`)
 
 **Responsibilities**:
+
 - HTML to text conversion
 - Content formatting and cleanup
 - Snippet generation
 - Link extraction
 
 **Processing Features**:
+
 - Preserves formatting structure
 - Handles various content types
 - Configurable content limits
@@ -103,12 +111,14 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 ### 5. ZIM Operations (`zim_operations.py`)
 
 **Responsibilities**:
+
 - ZIM file access and management
 - Search operations
 - Entry retrieval
 - Metadata extraction
 
 **Smart Features**:
+
 - Automatic path resolution
 - Fallback search mechanisms
 - Namespace browsing
@@ -117,12 +127,14 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 ### 6. Instance Tracker (`instance_tracker.py`)
 
 **Responsibilities**:
+
 - Multi-instance management
 - Conflict detection and resolution
 - Process monitoring
 - Configuration validation
 
 **Enterprise Features**:
+
 - Automatic instance registration
 - Stale instance cleanup
 - Configuration hash comparison
@@ -131,18 +143,20 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 ### 7. Smart Retrieval System
 
 **Responsibilities**:
+
 - Intelligent entry path resolution
 - Path mapping cache management
 - Automatic fallback strategies
 - Performance optimization
 
 **Advanced Capabilities**:
+
 - Pattern learning and recognition
 - Confidence-based caching
 - Multiple search strategies
 - Transparent operation
 
-## 🔄 Request Flow
+## Request Flow
 
 ### Typical Request Processing
 
@@ -184,7 +198,7 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 7. Content Retrieval
 ```
 
-## 🗂️ Module Structure
+## Module Structure
 
 ### Core Modules
 
@@ -207,16 +221,19 @@ openzim_mcp/
 ### Enhanced Module Responsibilities
 
 #### Core Infrastructure
+
 - **`server.py`**: Enhanced with health monitoring and diagnostics
 - **`config.py`**: Expanded configuration with validation and profiles
 - **`security.py`**: Advanced security features and input validation
 
 #### Business Logic
+
 - **`zim_operations.py`**: Smart retrieval system integration
 - **`cache.py`**: Multi-layer caching with performance metrics
 - **`content_processor.py`**: Enhanced content analysis and link extraction
 
 #### Enterprise Features
+
 - **`instance_tracker.py`**: Multi-instance management and conflict resolution
 - **Smart Retrieval**: Integrated path resolution and fallback mechanisms
 - **Health Monitoring**: Comprehensive system diagnostics and metrics
@@ -251,7 +268,7 @@ class OpenZimMcpServer:
         # Component initialization
 ```
 
-## 🔧 Design Patterns
+## Design Patterns
 
 ### 1. Strategy Pattern
 
@@ -261,7 +278,7 @@ class OpenZimMcpServer:
 class ContentProcessor:
     def __init__(self, strategies: Dict[str, ProcessingStrategy]):
         self.strategies = strategies
-    
+
     def process(self, content_type: str, content: str) -> str:
         strategy = self.strategies.get(content_type, self.default_strategy)
         return strategy.process(content)
@@ -287,7 +304,7 @@ class ZimHandlerFactory:
 class HealthMonitor:
     def __init__(self):
         self.observers = []
-    
+
     def notify_health_change(self, health_data: HealthData):
         for observer in self.observers:
             observer.on_health_update(health_data)
@@ -304,7 +321,7 @@ def search_zim_file(self, zim_file_path: str, query: str) -> List[SearchResult]:
     # Implementation
 ```
 
-## 🚀 Performance Architecture
+## Performance Architecture
 
 ### Caching Strategy
 
@@ -341,15 +358,15 @@ class ZimFileManager:
     def __init__(self):
         self.open_files = {}
         self.file_locks = {}
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cleanup_resources()
 ```
 
-## 🔒 Security Architecture
+## Security Architecture
 
 ### Defense in Depth
 
@@ -374,20 +391,20 @@ class ZimFileManager:
 def validate_request(self, request: McpRequest) -> ValidationResult:
     # 1. Input validation
     self.validate_input(request.params)
-    
+
     # 2. Path validation
     self.validate_paths(request.file_paths)
-    
+
     # 3. Access control
     self.check_access_permissions(request.file_paths)
-    
+
     # 4. Rate limiting (future)
     self.check_rate_limits(request.client_id)
-    
+
     return ValidationResult.VALID
 ```
 
-## 📊 Monitoring and Observability
+## Monitoring and Observability
 
 ### Health Monitoring
 
@@ -418,7 +435,7 @@ logger.info(
 )
 ```
 
-## 🔄 Multi-Instance Management
+## Multi-Instance Management
 
 ### Instance Tracking
 
@@ -441,18 +458,18 @@ class InstanceTracker:
 def detect_conflicts(self) -> List[Conflict]:
     conflicts = []
     active_instances = self.get_active_instances()
-    
+
     for instance in active_instances:
         if self.has_config_conflict(instance):
             conflicts.append(ConfigConflict(instance))
-        
+
         if self.has_directory_conflict(instance):
             conflicts.append(DirectoryConflict(instance))
-    
+
     return conflicts
 ```
 
-## 🧪 Testing Architecture
+## Testing Architecture
 
 ### Test Structure
 
@@ -473,7 +490,7 @@ tests/
 3. **Security Tests**: Path traversal and input validation
 4. **Performance Tests**: Cache performance and resource usage
 
-## 🚀 Scalability Considerations
+## Scalability Considerations
 
 ### Horizontal Scaling
 
@@ -486,23 +503,6 @@ tests/
 - **Memory optimization**: Efficient cache management
 - **CPU optimization**: Asynchronous processing
 - **I/O optimization**: Smart file access patterns
-
-## 🔮 Future Architecture Enhancements
-
-### Planned Improvements
-
-1. **Microservices**: Split into specialized services
-2. **Message Queue**: Asynchronous task processing
-3. **Distributed Cache**: Redis/Memcached integration
-4. **API Gateway**: Rate limiting and authentication
-5. **Container Support**: Docker and Kubernetes deployment
-
-### Extension Points
-
-- **Plugin System**: Custom content processors
-- **Custom Backends**: Alternative storage systems
-- **Authentication**: User management and access control
-- **Analytics**: Usage tracking and optimization
 
 ---
 

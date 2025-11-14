@@ -261,7 +261,7 @@ class TestSimpleToolsHandler:
         """Test error when no file specified and multiple files exist."""
         # Mock list_zim_files to return multiple files
         mock_zim_operations.list_zim_files.return_value = (
-            'Found 2 ZIM files:\n'
+            "Found 2 ZIM files:\n"
             '[{"path": "/test/file1.zim"}, {"path": "/test/file2.zim"}]'
         )
 

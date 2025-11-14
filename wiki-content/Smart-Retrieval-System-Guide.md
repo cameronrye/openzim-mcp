@@ -2,15 +2,16 @@
 
 Comprehensive guide to OpenZIM MCP's intelligent entry retrieval system with automatic fallback and path mapping cache.
 
-## 📋 Overview
+## Overview
 
 The Smart Retrieval System is one of OpenZIM MCP's most powerful features, designed to handle the complexities of ZIM file path encoding automatically. It provides transparent, reliable access to ZIM entries regardless of path format inconsistencies.
 
-## 🧠 How Smart Retrieval Works
+## How Smart Retrieval Works
 
 ### The Challenge
 
 ZIM files often contain entries with inconsistent path encoding:
+
 - Spaces vs underscores: `"Test Article"` vs `"Test_Article"`
 - URL encoding: `"Café"` vs `"Caf%C3%A9"`
 - Case variations: `"DNA"` vs `"dna"`
@@ -36,7 +37,7 @@ Smart Retrieval uses a multi-stage approach:
 7. Content Retrieval
 ```
 
-## 🔄 Retrieval Process
+## Retrieval Process
 
 ### Stage 1: Direct Access
 
@@ -68,24 +69,28 @@ if cached_path:
 If direct access fails, multiple search strategies are employed:
 
 #### Strategy 1: Exact Title Search
+
 ```python
 # Search for exact title match
 results = search_zim_file(query="Test Article", namespace="A")
 ```
 
 #### Strategy 2: Normalized Search
+
 ```python
 # Try with underscores
 results = search_zim_file(query="Test_Article", namespace="A")
 ```
 
 #### Strategy 3: URL Decoded Search
+
 ```python
 # Try URL decoding
 results = search_zim_file(query=url_decode("Test%20Article"), namespace="A")
 ```
 
 #### Strategy 4: Fuzzy Matching
+
 ```python
 # Fuzzy search for close matches
 results = fuzzy_search(query="Test Article", threshold=0.8)
@@ -98,21 +103,21 @@ The system evaluates search results using multiple criteria:
 ```python
 def score_match(result, original_query):
     score = 0.0
-    
+
     # Exact title match (highest priority)
     if result.title.lower() == original_query.lower():
         score += 1.0
-    
+
     # Path similarity
     score += path_similarity(result.path, original_query)
-    
+
     # Namespace match
     if result.namespace == expected_namespace:
         score += 0.5
-    
+
     # Content relevance
     score += content_relevance(result.snippet, original_query)
-    
+
     return score
 ```
 
@@ -129,7 +134,7 @@ path_cache.set(
 )
 ```
 
-## 🗂️ Path Mapping Cache
+## Path Mapping Cache
 
 ### Cache Structure
 
@@ -162,11 +167,13 @@ The path mapping cache stores successful path resolutions:
 ### Cache Management
 
 #### Automatic Invalidation
+
 - **TTL-based**: Entries expire after configured time
 - **Size-based**: LRU eviction when cache is full
 - **Confidence-based**: Low-confidence entries expire sooner
 
 #### Cache Optimization
+
 ```python
 # High-confidence entries get longer TTL
 if confidence > 0.9:
@@ -177,7 +184,7 @@ else:
     ttl = 1800  # 30 minutes
 ```
 
-## 🎯 Usage Examples
+## Usage Examples
 
 ### Basic Usage
 
@@ -194,6 +201,7 @@ The Smart Retrieval System works transparently:
 ```
 
 **Response with Smart Retrieval**:
+
 ```
 # Test Article
 
@@ -210,6 +218,7 @@ This article demonstrates the smart retrieval system...
 ### Advanced Scenarios
 
 #### Scenario 1: URL Encoded Paths
+
 ```json
 {
   "name": "get_zim_entry",
@@ -220,11 +229,13 @@ This article demonstrates the smart retrieval system...
 ```
 
 **Smart Retrieval Process**:
-1. Try direct: `C/Caf%C3%A9` ❌
-2. Try decoded: `C/Café` ✅
+
+1. Try direct: `C/Caf%C3%A9`
+2. Try decoded: `C/Café`
 3. Cache mapping: `C/Caf%C3%A9` → `C/Café`
 
 #### Scenario 2: Space vs Underscore
+
 ```json
 {
   "name": "get_zim_entry",
@@ -235,11 +246,13 @@ This article demonstrates the smart retrieval system...
 ```
 
 **Smart Retrieval Process**:
-1. Try direct: `A/Machine Learning` ❌
-2. Try with underscores: `A/Machine_Learning` ✅
+
+1. Try direct: `A/Machine Learning`
+2. Try with underscores: `A/Machine_Learning`
 3. Cache mapping: `A/Machine Learning` → `A/Machine_Learning`
 
 #### Scenario 3: Case Sensitivity
+
 ```json
 {
   "name": "get_zim_entry",
@@ -250,15 +263,17 @@ This article demonstrates the smart retrieval system...
 ```
 
 **Smart Retrieval Process**:
-1. Try direct: `C/dna` ❌
-2. Search with case variations: `DNA`, `Dna` ✅
+
+1. Try direct: `C/dna`
+2. Search with case variations: `DNA`, `Dna`
 3. Cache mapping: `C/dna` → `C/DNA`
 
-## ⚡ Performance Optimizations
+## Performance Optimizations
 
 ### Cache Hit Rates
 
 Typical cache performance:
+
 - **First access**: 0% hit rate (cache miss)
 - **Subsequent access**: 95%+ hit rate
 - **Similar paths**: 80%+ hit rate (pattern recognition)
@@ -282,6 +297,7 @@ Typical cache performance:
 ### Optimization Strategies
 
 #### 1. Preload Common Patterns
+
 ```python
 # Preload known path mappings
 common_patterns = {
@@ -292,6 +308,7 @@ common_patterns = {
 ```
 
 #### 2. Pattern Learning
+
 ```python
 # Learn from successful mappings
 def learn_pattern(original, resolved):
@@ -300,6 +317,7 @@ def learn_pattern(original, resolved):
 ```
 
 #### 3. Batch Processing
+
 ```python
 # Process multiple paths efficiently
 def resolve_paths_batch(paths):
@@ -308,7 +326,7 @@ def resolve_paths_batch(paths):
     # Update cache in batch
 ```
 
-## 🔧 Configuration
+## Configuration
 
 ### Smart Retrieval Settings
 
@@ -332,6 +350,7 @@ export OPENZIM_MCP_SMART_RETRIEVAL__MIN_CONFIDENCE=0.8
 ### Performance Tuning
 
 #### High-Performance Profile
+
 ```bash
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=5000
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=14400
@@ -339,13 +358,14 @@ export OPENZIM_MCP_SMART_RETRIEVAL__SEARCH_LIMIT=50
 ```
 
 #### Memory-Constrained Profile
+
 ```bash
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=500
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=1800
 export OPENZIM_MCP_SMART_RETRIEVAL__SEARCH_LIMIT=5
 ```
 
-## 📊 Monitoring and Diagnostics
+## Monitoring and Diagnostics
 
 ### Health Monitoring
 
@@ -358,6 +378,7 @@ Check smart retrieval performance:
 ```
 
 **Response includes**:
+
 ```json
 {
   "smart_retrieval": {
@@ -379,6 +400,7 @@ Check smart retrieval performance:
 ```
 
 **Smart Retrieval Diagnostics**:
+
 ```json
 {
   "smart_retrieval_analysis": {
@@ -397,18 +419,21 @@ Check smart retrieval performance:
 }
 ```
 
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
 #### Issue: Low Cache Hit Rate
+
 **Symptoms**: Slow response times, frequent fallback searches
-**Causes**: 
+**Causes**:
+
 - Cache size too small
 - TTL too short
 - Highly variable path patterns
 
 **Solutions**:
+
 ```bash
 # Increase cache size
 export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_SIZE=3000
@@ -418,13 +443,16 @@ export OPENZIM_MCP_SMART_RETRIEVAL__CACHE_TTL=7200
 ```
 
 #### Issue: Fallback Failures
+
 **Symptoms**: "Entry not found" errors for existing content
 **Causes**:
+
 - Search limit too low
 - Confidence threshold too high
 - Unusual path encoding
 
 **Solutions**:
+
 ```bash
 # Increase search limit
 export OPENZIM_MCP_SMART_RETRIEVAL__SEARCH_LIMIT=30
@@ -434,13 +462,16 @@ export OPENZIM_MCP_SMART_RETRIEVAL__MIN_CONFIDENCE=0.6
 ```
 
 #### Issue: Slow Resolution Times
+
 **Symptoms**: High average resolution times
 **Causes**:
+
 - Too many fallback searches
 - Large search limits
 - Cache misses
 
 **Solutions**:
+
 1. Monitor cache hit rates
 2. Optimize search strategies
 3. Preload common patterns
@@ -448,6 +479,7 @@ export OPENZIM_MCP_SMART_RETRIEVAL__MIN_CONFIDENCE=0.6
 ### Diagnostic Commands
 
 #### Check Cache Status
+
 ```bash
 # View cache statistics
 curl -X POST http://localhost:8000/mcp \
@@ -456,6 +488,7 @@ curl -X POST http://localhost:8000/mcp \
 ```
 
 #### Test Path Resolution
+
 ```bash
 # Test specific path resolution
 curl -X POST http://localhost:8000/mcp \

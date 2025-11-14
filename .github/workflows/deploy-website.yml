@@ -2,10 +2,10 @@ name: Deploy Website
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'website/**'
-      - '.github/workflows/deploy-website.yml'
+      - "website/**"
+      - ".github/workflows/deploy-website.yml"
   workflow_dispatch:
 
 permissions:
@@ -33,21 +33,21 @@ jobs:
         run: |
           # Create build directory
           mkdir -p _site
-          
+
           # Copy website files
           cp -r website/* _site/
-          
+
           # Create a simple build info file
           echo "Built on: $(date)" > _site/build-info.txt
           echo "Commit: ${{ github.sha }}" >> _site/build-info.txt
           echo "Branch: ${{ github.ref_name }}" >> _site/build-info.txt
-          
+
           # Validate HTML (basic check)
           if command -v tidy &> /dev/null; then
             echo "Validating HTML..."
             tidy -q -e _site/index.html || echo "HTML validation warnings (non-critical)"
           fi
-          
+
           # List built files for debugging
           echo "Built files:"
           find _site -type f -name "*.html" -o -name "*.css" -o -name "*.js" -o -name "*.svg" | head -20
@@ -76,16 +76,19 @@ jobs:
     steps:
       - name: Checkout gh-pages branch
         uses: actions/checkout@v5
+        continue-on-error: true
+        id: checkout-gh-pages
         with:
           ref: gh-pages
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add navigation to benchmark page
+        if: steps.checkout-gh-pages.outcome == 'success'
         run: |
           # Check if there's a benchmark index.html and add navigation
           if [ -f "index.html" ] && grep -q "benchmark" "index.html"; then
             echo "Adding navigation link to main site in benchmark page..."
-            
+
             # Create a simple navigation header if it doesn't exist
             if ! grep -q "main-site-nav" "index.html"; then
               # Add navigation at the top of the body
@@ -93,7 +96,7 @@ jobs:
               <div id="main-site-nav" style="background: #2563eb; color: white; padding: 10px; text-align: center; margin-bottom: 20px;">\
                 <a href="/" style="color: white; text-decoration: none; font-weight: bold;">← Back to OpenZIM MCP Main Site</a>\
               </div>' "index.html"
-              
+
               echo "Navigation added to benchmark page"
             else
               echo "Navigation already exists in benchmark page"
@@ -103,10 +106,11 @@ jobs:
           fi
 
       - name: Commit changes
+        if: steps.checkout-gh-pages.outcome == 'success'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
+
           if git diff --quiet; then
             echo "No changes to commit"
           else
