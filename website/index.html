@@ -5,56 +5,231 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenZIM MCP - Intelligent Knowledge Access for AI Models</title>
     <meta name="description" content="OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns.">
-    <meta name="keywords" content="OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia">
-    <meta name="author" content="OpenZIM MCP Development Team">
-    
+    <meta name="keywords" content="OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python, open source, semantic search">
+    <meta name="author" content="Cameron Rye">
+
+    <!-- SEO Meta Tags -->
+    <link rel="canonical" href="https://cameronrye.github.io/openzim-mcp/">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="bingbot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="theme-color" content="#2563eb">
+    <meta name="color-scheme" content="light dark">
+
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website">
+    <meta property="og:site_name" content="OpenZIM MCP">
     <meta property="og:url" content="https://cameronrye.github.io/openzim-mcp/">
     <meta property="og:title" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
     <meta property="og:description" content="Transform static ZIM archives into dynamic knowledge engines for Large Language Models with intelligent, structured access patterns.">
     <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
+    <meta property="og:locale" content="en_US">
+    <meta property="article:author" content="Cameron Rye">
+    <meta property="article:modified_time" content="2025-01-15T00:00:00Z">
 
     <!-- Twitter -->
-    <meta property="twitter:card" content="summary_large_image">
-    <meta property="twitter:url" content="https://cameronrye.github.io/openzim-mcp/">
-    <meta property="twitter:title" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
-    <meta property="twitter:description" content="Transform static ZIM archives into dynamic knowledge engines for Large Language Models with intelligent, structured access patterns.">
-    <meta property="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:site" content="@cameronrye">
+    <meta name="twitter:creator" content="@cameronrye">
+    <meta name="twitter:url" content="https://cameronrye.github.io/openzim-mcp/">
+    <meta name="twitter:title" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
+    <meta name="twitter:description" content="Transform static ZIM archives into dynamic knowledge engines for Large Language Models with intelligent, structured access patterns.">
+    <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+    <meta name="twitter:image:alt" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
 
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
     <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
 
+    <!-- Humans.txt -->
+    <link rel="author" type="text/plain" href="humans.txt">
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    
+
     <!-- Styles -->
     <link rel="stylesheet" href="assets/styles.css">
-    
-    <!-- Structured Data -->
+
+    <!-- Structured Data - Software Application -->
     <script type="application/ld+json">
     {
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "OpenZIM MCP",
-        "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline",
+        "alternateName": "OpenZIM MCP Server",
+        "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
         "url": "https://cameronrye.github.io/openzim-mcp/",
+        "softwareVersion": "0.6.0",
+        "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
         "applicationCategory": "DeveloperApplication",
-        "operatingSystem": "Cross-platform",
-        "programmingLanguage": "Python",
+        "applicationSubCategory": "AI Tools",
+        "operatingSystem": "Linux, macOS, Windows",
+        "programmingLanguage": {
+            "@type": "ComputerLanguage",
+            "name": "Python",
+            "version": "3.12+"
+        },
         "license": "https://opensource.org/licenses/MIT",
+        "downloadUrl": "https://pypi.org/project/openzim-mcp/",
+        "installUrl": "https://pypi.org/project/openzim-mcp/",
+        "codeRepository": "https://github.com/cameronrye/openzim-mcp",
+        "softwareHelp": "https://github.com/cameronrye/openzim-mcp#readme",
         "author": {
-            "@type": "Organization",
-            "name": "OpenZIM MCP Development Team"
+            "@type": "Person",
+            "name": "Cameron Rye",
+            "url": "https://rye.dev"
+        },
+        "creator": {
+            "@type": "Person",
+            "name": "Cameron Rye",
+            "url": "https://rye.dev"
+        },
+        "maintainer": {
+            "@type": "Person",
+            "name": "Cameron Rye",
+            "url": "https://rye.dev"
         },
         "offers": {
             "@type": "Offer",
             "price": "0",
-            "priceCurrency": "USD"
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock"
+        },
+        "featureList": [
+            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (15 specialized tools)",
+            "Security First: Comprehensive input validation and path traversal protection",
+            "Smart Retrieval System: Intelligent content extraction with configurable strategies",
+            "Multi-Instance Management: Handle multiple ZIM files simultaneously",
+            "Performance Optimized: Intelligent caching and pagination",
+            "Full-Text Search: Fast search across ZIM archives",
+            "Metadata Access: Rich metadata and article information",
+            "Link Extraction: Internal and external link discovery"
+        ],
+        "keywords": "OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python, semantic search",
+        "screenshot": "https://cameronrye.github.io/openzim-mcp/assets/og-image.svg",
+        "aggregateRating": {
+            "@type": "AggregateRating",
+            "ratingValue": "5.0",
+            "ratingCount": "1",
+            "bestRating": "5",
+            "worstRating": "1"
         }
+    }
+    </script>
+
+    <!-- Structured Data - Organization -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "OpenZIM MCP",
+        "url": "https://cameronrye.github.io/openzim-mcp/",
+        "logo": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg",
+        "sameAs": [
+            "https://github.com/cameronrye/openzim-mcp",
+            "https://pypi.org/project/openzim-mcp/"
+        ],
+        "founder": {
+            "@type": "Person",
+            "name": "Cameron Rye",
+            "url": "https://rye.dev"
+        },
+        "contactPoint": {
+            "@type": "ContactPoint",
+            "contactType": "Technical Support",
+            "url": "https://github.com/cameronrye/openzim-mcp/issues"
+        }
+    }
+    </script>
+
+    <!-- Structured Data - WebSite -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "OpenZIM MCP",
+        "url": "https://cameronrye.github.io/openzim-mcp/",
+        "description": "Transform static ZIM archives into dynamic knowledge engines for Large Language Models",
+        "publisher": {
+            "@type": "Organization",
+            "name": "OpenZIM MCP",
+            "logo": {
+                "@type": "ImageObject",
+                "url": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg"
+            }
+        },
+        "inLanguage": "en-US"
+    }
+    </script>
+
+    <!-- Structured Data - BreadcrumbList -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {
+                "@type": "ListItem",
+                "position": 1,
+                "name": "Home",
+                "item": "https://cameronrye.github.io/openzim-mcp/"
+            },
+            {
+                "@type": "ListItem",
+                "position": 2,
+                "name": "Features",
+                "item": "https://cameronrye.github.io/openzim-mcp/#features"
+            },
+            {
+                "@type": "ListItem",
+                "position": 3,
+                "name": "Installation",
+                "item": "https://cameronrye.github.io/openzim-mcp/#installation"
+            },
+            {
+                "@type": "ListItem",
+                "position": 4,
+                "name": "Documentation",
+                "item": "https://cameronrye.github.io/openzim-mcp/#documentation"
+            }
+        ]
+    }
+    </script>
+
+    <!-- Structured Data - TechArticle for Documentation -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "OpenZIM MCP - Intelligent Knowledge Access for AI Models",
+        "description": "Comprehensive guide to OpenZIM MCP, a modern MCP server for AI models to access ZIM format knowledge bases offline",
+        "author": {
+            "@type": "Person",
+            "name": "Cameron Rye",
+            "url": "https://rye.dev"
+        },
+        "datePublished": "2024-01-01T00:00:00Z",
+        "dateModified": "2025-01-15T00:00:00Z",
+        "publisher": {
+            "@type": "Organization",
+            "name": "OpenZIM MCP",
+            "logo": {
+                "@type": "ImageObject",
+                "url": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg"
+            }
+        },
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "https://cameronrye.github.io/openzim-mcp/"
+        },
+        "articleSection": "Technology",
+        "keywords": "OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python",
+        "inLanguage": "en-US"
     }
     </script>
 </head>
@@ -107,12 +282,13 @@
                     <span>Built for LLM Intelligence</span>
                 </div>
                 <h1 class="hero-title">
-                    Transform Static ZIM Archives into 
+                    Transform Static ZIM Archives into
                     <span class="gradient-text">Dynamic Knowledge Engines</span>
                 </h1>
                 <p class="hero-description">
-                    OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search 
+                    OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search
                     ZIM format knowledge bases offline with intelligent, structured access patterns.
+                    Choose between Simple mode (default) or Advanced mode to match your needs.
                 </p>
                 <div class="hero-buttons">
                     <a href="#installation" class="btn btn-primary">
@@ -138,8 +314,8 @@
                         <div class="stat-label">Known Vulnerabilities</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-number">15+</div>
-                        <div class="stat-label">MCP Tools</div>
+                        <div class="stat-number">2 Modes</div>
+                        <div class="stat-label">Simple & Advanced</div>
                     </div>
                 </div>
             </div>
@@ -175,16 +351,24 @@
             <div class="section-header">
                 <h2 class="section-title">Why LLMs Love OpenZIM MCP</h2>
                 <p class="section-description">
-                    Unlike basic file readers, OpenZIM MCP provides intelligent, structured access 
+                    Unlike basic file readers, OpenZIM MCP provides intelligent, structured access
                     that LLMs need to effectively navigate and understand vast knowledge repositories.
                 </p>
             </div>
             <div class="features-grid">
                 <div class="feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3 class="feature-title">Dual Mode Support</h3>
+                    <p class="feature-description">
+                        Choose Simple mode (1 intelligent natural language tool, default) or Advanced mode
+                        (15 specialized tools) to match your LLM's capabilities.
+                    </p>
+                </div>
+                <div class="feature-card">
                     <div class="feature-icon">🧭</div>
                     <h3 class="feature-title">Smart Navigation</h3>
                     <p class="feature-description">
-                        Browse by namespace (articles, metadata, media) instead of blind searching. 
+                        Browse by namespace (articles, metadata, media) instead of blind searching.
                         Get structured access to content organization.
                     </p>
                 </div>
@@ -192,7 +376,7 @@
                     <div class="feature-icon">🔍</div>
                     <h3 class="feature-title">Context-Aware Discovery</h3>
                     <p class="feature-description">
-                        Get article structure, relationships, and metadata for deeper understanding. 
+                        Get article structure, relationships, and metadata for deeper understanding.
                         Extract links and content connections.
                     </p>
                 </div>
@@ -200,7 +384,7 @@
                     <div class="feature-icon">🎯</div>
                     <h3 class="feature-title">Intelligent Search</h3>
                     <p class="feature-description">
-                        Advanced filtering, auto-complete suggestions, and relevance-ranked results 
+                        Advanced filtering, auto-complete suggestions, and relevance-ranked results
                         with namespace and content type filters.
                     </p>
                 </div>
@@ -216,7 +400,7 @@
                     <div class="feature-icon">🔗</div>
                     <h3 class="feature-title">Relationship Mapping</h3>
                     <p class="feature-description">
-                        Extract internal/external links to understand content connections. 
+                        Extract internal/external links to understand content connections.
                         Build knowledge graphs from ZIM content.
                     </p>
                 </div>
@@ -224,7 +408,7 @@
                     <div class="feature-icon">🔒</div>
                     <h3 class="feature-title">Security First</h3>
                     <p class="feature-description">
-                        Comprehensive input validation, path traversal protection, and secure 
+                        Comprehensive input validation, path traversal protection, and secure
                         resource management with type safety.
                     </p>
                 </div>
@@ -721,7 +905,7 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
 
                     <div class="tab-pane" id="config">
                         <div class="example-block">
-                            <h4>MCP Client Configuration</h4>
+                            <h4>MCP Client Configuration - Simple Mode (Default)</h4>
                             <div class="code-block">
                                 <button class="copy-btn" data-clipboard-target="#config-example">
                                     <span class="copy-icon">📋</span>
@@ -740,19 +924,23 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
 }</code></pre>
                             </div>
                             <div class="example-result">
-                                <h5>Alternative: Global Installation</h5>
+                                <h5>Advanced Mode (15 specialized tools):</h5>
                                 <pre><code>{
   "mcpServers": {
-    "openzim-mcp": {
+    "openzim-mcp-advanced": {
       "command": "openzim-mcp",
       "args": [
+        "--mode", "advanced",
         "/path/to/zim/files"
       ]
     }
   }
 }</code></pre>
                                 <h5>Environment Variables (Optional):</h5>
-                                <pre><code># Cache configuration
+                                <pre><code># Tool mode (default: simple)
+export OPENZIM_MCP_TOOL_MODE=simple
+
+# Cache configuration
 export OPENZIM_MCP_CACHE__ENABLED=true
 export OPENZIM_MCP_CACHE__MAX_SIZE=200
 export OPENZIM_MCP_CACHE__TTL_SECONDS=7200
@@ -894,7 +1082,7 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; 2025 OpenZIM MCP Development Team. All rights reserved.</p>
+                <p>Made with <span class="beating-heart">❤️</span> by <a href="https://rye.dev" target="_blank" rel="noopener noreferrer">Cameron Rye</a></p>
             </div>
         </div>
     </footer>

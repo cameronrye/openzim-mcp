@@ -2,23 +2,24 @@
 
 Get up and running with OpenZIM MCP in just a few minutes! This tutorial will walk you through your first successful setup and usage.
 
-## 🎯 What You'll Learn
+## What You'll Learn
 
 - How to set up OpenZIM MCP with a test ZIM file
 - How to configure your MCP client
 - How to perform basic searches and content retrieval
 - How to verify everything is working correctly
 
-## ⏱️ Time Required: ~10 minutes
+## ⏱ Time Required: ~10 minutes
 
-## 📋 Before You Start
+## Before You Start
 
 Make sure you have completed the [Installation Guide](Installation-Guide) and have:
-- ✅ OpenZIM MCP installed (`pip install openzim-mcp`)
-- ✅ Python 3.12+ available
-- ✅ A ZIM file downloaded (we'll help you get one if needed)
 
-## 🚀 Step 1: Get a Test ZIM File
+- OpenZIM MCP installed (`pip install openzim-mcp`)
+- Python 3.12+ available
+- A ZIM file downloaded (we'll help you get one if needed)
+
+## Step 1: Get a Test ZIM File
 
 ### Option A: Download a Small Test File
 
@@ -42,9 +43,10 @@ make download-test-data
 # This downloads small test ZIM files to tests/data/
 ```
 
-## 🔧 Step 2: Start the Server
+## Step 2: Start the Server
 
 **Standard Installation:**
+
 ```bash
 # Start the server with your ZIM files directory
 openzim-mcp ~/zim-files
@@ -61,6 +63,7 @@ python -m openzim_mcp ~/zim-files
 ```
 
 **Development Installation:**
+
 ```bash
 # Navigate to your openzim-mcp directory
 cd /path/to/openzim-mcp
@@ -69,7 +72,7 @@ cd /path/to/openzim-mcp
 uv run python -m openzim_mcp ~/zim-files
 ```
 
-## 📱 Step 3: Configure Your MCP Client
+## Step 3: Configure Your MCP Client
 
 ### For Claude Desktop
 
@@ -81,6 +84,7 @@ uv run python -m openzim_mcp ~/zim-files
 2. **Add OpenZIM MCP configuration**:
 
 **Standard Installation (Recommended):**
+
 ```json
 {
   "mcpServers": {
@@ -93,6 +97,7 @@ uv run python -m openzim_mcp ~/zim-files
 ```
 
 **Development Installation:**
+
 ```json
 {
   "mcpServers": {
@@ -117,16 +122,18 @@ uv run python -m openzim_mcp ~/zim-files
 ### For Other MCP Clients
 
 **Standard Installation:**
+
 ```bash
 openzim-mcp /path/to/zim-files
 ```
 
 **Development Installation:**
+
 ```bash
 uv run python -m openzim_mcp /path/to/zim-files
 ```
 
-## 🧪 Step 4: Test Basic Functionality
+## Step 4: Test Basic Functionality
 
 ### Test 1: List Available ZIM Files
 
@@ -154,7 +161,7 @@ Get the content of the "Biology" article from the ZIM file
 
 **Expected Response**: The full content of the Biology article with proper formatting.
 
-## 🔍 Step 5: Explore Advanced Features
+## Step 5: Explore Advanced Features
 
 ### Smart Retrieval
 
@@ -184,7 +191,7 @@ Show me the structure and headings of the "Evolution" article
 Give me search suggestions for "bio"
 ```
 
-## ✅ Step 6: Verify Everything Works
+## Step 6: Verify Everything Works
 
 ### Health Check
 
@@ -202,21 +209,24 @@ Search for "computer" and then get the full content of one of the results
 
 This tests both search and content retrieval functionality.
 
-## 🎉 Success! What's Next?
+## Success! What's Next?
 
 Congratulations! You now have OpenZIM MCP running successfully. Here's what you can explore next:
 
-### 📚 Learn More
+### Learn More
+
 - **[API Reference](API-Reference)** - Explore all available tools
 - **[LLM Integration Patterns](LLM-Integration-Patterns)** - Best practices for AI integration
 - **[Configuration Guide](Configuration-Guide)** - Customize your setup
 
-### 🚀 Advanced Usage
+### Advanced Usage
+
 - **[Performance Optimization](Performance-Optimization-Guide)** - Optimize for production
 - **[Security Best Practices](Security-Best-Practices)** - Secure your deployment
 - **[Architecture Overview](Architecture-Overview)** - Understand the system design
 
-### 🛠️ Development
+### Development
+
 - **[Contributing Guidelines](https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md)** - Contribute to the project
 - **[Testing Guide](https://github.com/cameronrye/openzim-mcp/blob/main/docs/TESTING.md)** - Run tests and add new ones
 
@@ -225,16 +235,19 @@ Congratulations! You now have OpenZIM MCP running successfully. Here's what you 
 ### Common Issues
 
 **"No ZIM files found"**
+
 - Verify ZIM files are in the correct directory
 - Check file permissions
 - Ensure files have `.zim` extension
 
 **"Server not responding"**
+
 - Check if the server process is running
 - Verify the correct path in MCP client configuration
 - Look for error messages in the server output
 
 **"Permission denied"**
+
 - Ensure the user has read access to ZIM files directory
 - Check directory permissions
 
@@ -244,7 +257,7 @@ Congratulations! You now have OpenZIM MCP running successfully. Here's what you 
 - **[GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues)** - Report bugs
 - **[GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions)** - Ask questions
 
-## 💡 Pro Tips
+## Pro Tips
 
 1. **Start Small**: Use smaller ZIM files (100-500MB) for initial testing
 2. **Monitor Performance**: Use the health check tools to monitor cache performance
@@ -253,4 +266,4 @@ Congratulations! You now have OpenZIM MCP running successfully. Here's what you 
 
 ---
 
-**Great job!** You're now ready to harness the full power of OpenZIM MCP for your AI applications. Happy exploring! 🎯
+**Great job!** You're now ready to harness the full power of OpenZIM MCP for your AI applications. Happy exploring!

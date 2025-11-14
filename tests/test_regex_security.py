@@ -32,10 +32,12 @@ class TestRegexSecurity:
                 "target3: " + "#" * 50 + "## Final comment\n"
                 "# This is just a comment with lots of text " + "x" * 2000 + "\n"
                 "normal-target: deps ## Normal comment\n"
-                "very-long-target: " + "dependency " * 1000 + " ## This should be filtered\n"
+                "very-long-target: "
+                + "dependency " * 1000
+                + " ## This should be filtered\n"
             )
 
-            with open(test_makefile, 'w') as f:
+            with open(test_makefile, "w") as f:
                 f.write(malicious_content)
 
             # Measure parsing time - should complete quickly
@@ -45,7 +47,9 @@ class TestRegexSecurity:
 
             # Should complete in well under a second
             parsing_time = end_time - start_time
-            assert parsing_time < 1.0, f"Parsing took too long: {parsing_time:.2f} seconds"
+            assert (
+                parsing_time < 1.0
+            ), f"Parsing took too long: {parsing_time:.2f} seconds"
 
             # Should still extract valid targets
             all_targets = []
@@ -77,7 +81,7 @@ class TestRegexSecurity:
                 "another-target: deps ## Normal comment\n"
             )
 
-            with open(test_makefile, 'w') as f:
+            with open(test_makefile, "w") as f:
                 f.write(long_line_content)
 
             # Should handle long lines gracefully
@@ -87,7 +91,9 @@ class TestRegexSecurity:
 
             # Should still complete quickly
             parsing_time = end_time - start_time
-            assert parsing_time < 2.0, f"Parsing took too long: {parsing_time:.2f} seconds"
+            assert (
+                parsing_time < 2.0
+            ), f"Parsing took too long: {parsing_time:.2f} seconds"
 
             # Should extract valid targets (long line might be skipped)
             all_targets = []
@@ -117,7 +123,7 @@ class TestRegexSecurity:
 
             content = "\n".join(lines)
 
-            with open(test_makefile, 'w') as f:
+            with open(test_makefile, "w") as f:
                 f.write(content)
 
             # Should handle many lines efficiently
@@ -127,7 +133,9 @@ class TestRegexSecurity:
 
             # Should complete reasonably quickly
             parsing_time = end_time - start_time
-            assert parsing_time < 3.0, f"Parsing took too long: {parsing_time:.2f} seconds"
+            assert (
+                parsing_time < 3.0
+            ), f"Parsing took too long: {parsing_time:.2f} seconds"
 
             # Should extract the target lines
             all_targets = []
@@ -148,14 +156,14 @@ class TestRegexSecurity:
 
         try:
             # Test empty file
-            with open(test_makefile, 'w') as f:
+            with open(test_makefile, "w") as f:
                 f.write("")
 
             result = parse_makefile(test_makefile)
             assert isinstance(result, dict)
 
             # Test file with no valid targets
-            with open(test_makefile, 'w') as f:
+            with open(test_makefile, "w") as f:
                 f.write("# Just comments\n# No targets here\n")
 
             result = parse_makefile(test_makefile)

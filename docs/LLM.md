@@ -134,7 +134,7 @@ Offset | Length      | Description
 ### 2.4 Search Indexes (X Namespace)
 
 - **X/fulltext/xapian**: Xapian full-text search database
-- **X/title/xapian**: Xapian title search database  
+- **X/title/xapian**: Xapian title search database
 - **X/listing/titleOrdered/v0**: Binary list of all entries by title
 - **X/listing/titleOrdered/v1**: Binary list of article entries by title
 
@@ -264,7 +264,7 @@ std::string html = article.getData();
 OpenZIM MCP implements an intelligent entry retrieval system that automatically handles common path encoding issues:
 
 ```plain
-✅ Smart: get_zim_entry("A/Test Article")
+ Smart: get_zim_entry("A/Test Article")
    → Tries direct access first
    → Falls back to search if needed
    → Automatically finds "A/Test_Article"
@@ -294,23 +294,23 @@ Input Path          → Actual ZIM Path
 **Path Encoding Issues:**
 
 ```plain
-❌ Wrong: Store URL-encoded paths like "foo%20bar.html"
-✅ Correct: Store UTF-8 paths like "foo bar.html"
-✅ Better: Use OpenZIM MCP smart retrieval (handles both automatically)
+ Wrong: Store URL-encoded paths like "foo%20bar.html"
+ Correct: Store UTF-8 paths like "foo bar.html"
+ Better: Use OpenZIM MCP smart retrieval (handles both automatically)
 ```
 
 **Namespace Confusion:**
 
 ```plain
-❌ Wrong: Looking for articles in M or X namespaces
-✅ Correct: User content is always in C namespace
+ Wrong: Looking for articles in M or X namespaces
+ Correct: User content is always in C namespace
 ```
 
 **Redirect Handling:**
 
 ```plain
-❌ Wrong: Accessing redirect entry content directly
-✅ Correct: Follow redirect to target entry first
+ Wrong: Accessing redirect entry content directly
+ Correct: Follow redirect to target entry first
 ```
 
 **Version Compatibility:**
@@ -340,7 +340,7 @@ std::cout << "Main page: " << zimFile.getMainPage().getTitle() << std::endl;
 
 ```cpp
 for (auto it = zimFile.begin(); it != zimFile.end(); ++it) {
-    std::cout << "Namespace: " << it->getNamespace() 
+    std::cout << "Namespace: " << it->getNamespace()
               << ", Path: " << it->getUrl()
               << ", Title: " << it->getTitle() << std::endl;
 }
@@ -379,7 +379,7 @@ if (result != zimFile.end()) {
 ```cpp
 std::string searchTerm = "physics";
 auto it = zimFile.findByTitle('C', searchTerm);
-while (it != zimFile.end() && 
+while (it != zimFile.end() &&
        it->getTitle().substr(0, searchTerm.length()) == searchTerm) {
     std::cout << "Match: " << it->getTitle() << std::endl;
     ++it;
@@ -437,4 +437,3 @@ while (it != zimFile.end() &&
 - `5`: Zstandard
 
 This manual provides the foundation for understanding and working with ZIM files effectively. Always refer to the official OpenZIM documentation for the most current specifications.
-

@@ -2,11 +2,11 @@
 
 Complete documentation for all OpenZIM MCP tools and their parameters.
 
-## 📋 Overview
+## Overview
 
 OpenZIM MCP provides a comprehensive set of tools for accessing and searching ZIM format knowledge bases. All tools are designed to work seamlessly with LLMs and provide intelligent, structured access to offline content.
 
-## 🔍 Content Access Tools
+## Content Access Tools
 
 ### list_zim_files
 
@@ -17,6 +17,7 @@ Lists all ZIM files in allowed directories with metadata.
 **Returns**: JSON array of ZIM files with details
 
 **Example**:
+
 ```json
 {
   "name": "list_zim_files"
@@ -24,6 +25,7 @@ Lists all ZIM files in allowed directories with metadata.
 ```
 
 **Response**:
+
 ```json
 [
   {
@@ -41,14 +43,17 @@ Lists all ZIM files in allowed directories with metadata.
 Search within ZIM file content with basic parameters.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 - `query` (string): Search query term
 
 **Optional Parameters**:
+
 - `limit` (integer, default: 10): Maximum number of results
 - `offset` (integer, default: 0): Starting offset for pagination
 
 **Example**:
+
 ```json
 {
   "name": "search_zim_file",
@@ -65,18 +70,22 @@ Search within ZIM file content with basic parameters.
 Get detailed content of a specific entry with smart retrieval.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 - `entry_path` (string): Entry path (e.g., 'A/Some_Article')
 
 **Optional Parameters**:
+
 - `max_content_length` (integer, default: 100000, min: 1000): Maximum content length
 
 **Smart Features**:
+
 - Automatic fallback to search if direct access fails
 - Path mapping cache for performance
 - Handles encoding differences automatically
 
 **Example**:
+
 ```json
 {
   "name": "get_zim_entry",
@@ -87,18 +96,20 @@ Get detailed content of a specific entry with smart retrieval.
 }
 ```
 
-## 🗂️ Metadata & Structure Tools
+## Metadata & Structure Tools
 
 ### get_zim_metadata
 
 Get ZIM file metadata from M namespace entries.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 
 **Returns**: JSON with entry counts, archive info, and metadata
 
 **Example**:
+
 ```json
 {
   "name": "get_zim_metadata",
@@ -113,6 +124,7 @@ Get ZIM file metadata from M namespace entries.
 Get the main page entry from W namespace.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 
 **Returns**: Main page content or information
@@ -122,11 +134,13 @@ Get the main page entry from W namespace.
 List available namespaces and their entry counts.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 
 **Returns**: JSON with namespace information and sample entries
 
 **Example Response**:
+
 ```json
 {
   "namespaces": {
@@ -142,14 +156,17 @@ List available namespaces and their entry counts.
 Browse entries in a specific namespace with pagination.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 - `namespace` (string): Namespace to browse (C, M, W, X, A, I, etc.)
 
 **Optional Parameters**:
+
 - `limit` (integer, default: 50, range: 1-200): Maximum entries to return
 - `offset` (integer, default: 0): Starting offset for pagination
 
 **Example**:
+
 ```json
 {
   "name": "browse_namespace",
@@ -161,23 +178,26 @@ Browse entries in a specific namespace with pagination.
 }
 ```
 
-## 🔎 Advanced Search Tools
+## Advanced Search Tools
 
 ### search_with_filters
 
 Search with advanced namespace and content type filters.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 - `query` (string): Search query term
 
 **Optional Parameters**:
+
 - `namespace` (string): Namespace filter (C, M, W, X, etc.)
 - `content_type` (string): Content type filter (text/html, text/plain, etc.)
 - `limit` (integer, default: 10, range: 1-100): Maximum results
 - `offset` (integer, default: 0): Starting offset
 
 **Example**:
+
 ```json
 {
   "name": "search_with_filters",
@@ -196,19 +216,23 @@ Search with advanced namespace and content type filters.
 Get intelligent search suggestions and auto-complete for partial queries based on article titles and content.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 - `partial_query` (string): Partial search query (minimum 2 characters)
 
 **Optional Parameters**:
+
 - `limit` (integer, default: 10, range: 1-50): Maximum number of suggestions to return
 
 **Features**:
+
 - Title-based matching with priority ranking
 - Content-based suggestions for broader discovery
 - Fuzzy matching for typo tolerance
 - Namespace-aware suggestions
 
 **Example**:
+
 ```json
 {
   "name": "get_search_suggestions",
@@ -221,6 +245,7 @@ Get intelligent search suggestions and auto-complete for partial queries based o
 ```
 
 **Response**:
+
 ```json
 {
   "partial_query": "bio",
@@ -267,19 +292,21 @@ Get intelligent search suggestions and auto-complete for partial queries based o
 }
 ```
 
-## 📄 Content Analysis Tools
+## Content Analysis Tools
 
 ### get_article_structure
 
 Extract comprehensive article structure including headings hierarchy, sections, metadata, and content analysis.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 - `entry_path` (string): Entry path (e.g., 'C/Some_Article')
 
 **Returns**: Detailed JSON structure with headings, sections, word count, and metadata
 
 **Features**:
+
 - Hierarchical heading extraction with IDs
 - Section-by-section content analysis
 - Word count and reading time estimation
@@ -287,6 +314,7 @@ Extract comprehensive article structure including headings hierarchy, sections, 
 - Content type detection
 
 **Example**:
+
 ```json
 {
   "name": "get_article_structure",
@@ -298,6 +326,7 @@ Extract comprehensive article structure including headings hierarchy, sections, 
 ```
 
 **Response Structure**:
+
 ```json
 {
   "title": "Evolution",
@@ -397,12 +426,14 @@ Extract comprehensive article structure including headings hierarchy, sections, 
 Extract and categorize all internal and external links from an article with detailed metadata.
 
 **Required Parameters**:
+
 - `zim_file_path` (string): Path to the ZIM file
 - `entry_path` (string): Entry path (e.g., 'C/Some_Article')
 
 **Returns**: Comprehensive JSON with categorized links, metadata, and relationship information
 
 **Features**:
+
 - Internal ZIM links with target validation
 - External web links with domain analysis
 - Media links (images, videos, audio)
@@ -410,6 +441,7 @@ Extract and categorize all internal and external links from an article with deta
 - Link context and anchor text analysis
 
 **Example**:
+
 ```json
 {
   "name": "extract_article_links",
@@ -421,6 +453,7 @@ Extract and categorize all internal and external links from an article with deta
 ```
 
 **Response Structure**:
+
 ```json
 {
   "article": {
@@ -514,7 +547,7 @@ Extract and categorize all internal and external links from an article with deta
 }
 ```
 
-## 🔧 Server Management Tools
+## Server Management Tools
 
 ### get_server_health
 
@@ -525,6 +558,7 @@ Get comprehensive server health and statistics including cache performance, inst
 **Returns**: Detailed server health information with performance metrics
 
 **Example**:
+
 ```json
 {
   "name": "get_server_health"
@@ -532,6 +566,7 @@ Get comprehensive server health and statistics including cache performance, inst
 ```
 
 **Response**:
+
 ```json
 {
   "status": "healthy",
@@ -578,6 +613,7 @@ Get detailed server configuration with diagnostics and validation results.
 **Returns**: Complete configuration details, validation status, and recommendations
 
 **Example**:
+
 ```json
 {
   "name": "get_server_configuration"
@@ -585,6 +621,7 @@ Get detailed server configuration with diagnostics and validation results.
 ```
 
 **Response**:
+
 ```json
 {
   "configuration": {
@@ -624,6 +661,7 @@ Comprehensive server diagnostics including instance conflicts, configuration val
 **Returns**: Detailed diagnostic information with actionable recommendations
 
 **Example**:
+
 ```json
 {
   "name": "diagnose_server_state"
@@ -631,6 +669,7 @@ Comprehensive server diagnostics including instance conflicts, configuration val
 ```
 
 **Response**:
+
 ```json
 {
   "status": "healthy",
@@ -678,6 +717,7 @@ Identify and resolve server instance conflicts including stale instance cleanup 
 **Returns**: Conflict resolution results and cleanup actions taken
 
 **Example**:
+
 ```json
 {
   "name": "resolve_server_conflicts"
@@ -685,6 +725,7 @@ Identify and resolve server instance conflicts including stale instance cleanup 
 ```
 
 **Response**:
+
 ```json
 {
   "status": "success",
@@ -718,7 +759,7 @@ Identify and resolve server instance conflicts including stale instance cleanup 
 }
 ```
 
-## 📊 Response Formats
+## Response Formats
 
 ### Standard Response Structure
 
@@ -749,7 +790,7 @@ All tools return structured responses with consistent formatting:
 }
 ```
 
-## 🚨 Error Codes
+## Error Codes
 
 | Code | Description | Common Causes |
 |------|-------------|---------------|
@@ -760,19 +801,22 @@ All tools return structured responses with consistent formatting:
 | `PERMISSION_DENIED` | Access denied | File permissions issue |
 | `INVALID_PARAMETER` | Invalid parameter value | Wrong data type or range |
 
-## 💡 Best Practices
+## Best Practices
 
 ### Performance Tips
+
 1. **Use caching**: Repeated queries benefit from built-in caching
 2. **Limit results**: Use appropriate `limit` values to avoid timeouts
 3. **Batch operations**: Group related queries when possible
 
 ### Search Strategies
+
 1. **Start broad**: Use general terms, then refine with filters
 2. **Use suggestions**: Leverage auto-complete for better queries
 3. **Explore structure**: Use `get_article_structure` to understand content
 
 ### Error Handling
+
 1. **Check responses**: Always verify the response status
 2. **Handle fallbacks**: Use search when direct access fails
 3. **Monitor health**: Regular health checks prevent issues

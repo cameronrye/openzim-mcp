@@ -1,0 +1,20 @@
+# Security Contact Information
+# This file follows RFC 9116: https://www.rfc-editor.org/rfc/rfc9116.html
+
+Contact: https://github.com/cameronrye/openzim-mcp/security/advisories/new
+Contact: mailto:c@meron.io
+Expires: 2026-01-15T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://cameronrye.github.io/openzim-mcp/.well-known/security.txt
+
+# Security Policy
+Policy: https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md
+
+# Acknowledgments
+Acknowledgments: https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md#acknowledgments
+
+# Encryption
+# PGP key available upon request
+
+# Additional Information
+Hiring: https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md

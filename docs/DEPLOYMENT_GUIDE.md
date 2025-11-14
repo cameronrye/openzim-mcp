@@ -6,11 +6,11 @@ This guide explains how to properly deploy the openzim-mcp package to PyPI using
 
 The release system has been completely redesigned for reliability and simplicity:
 
-✅ **Single consolidated workflow** (`release.yml`)
-✅ **Automatic version synchronization validation**
-✅ **Improved release notes extraction**
-✅ **Multiple trigger methods for flexibility**
-✅ **Comprehensive error handling and rollback**
+ **Single consolidated workflow** (`release.yml`)
+ **Automatic version synchronization validation**
+ **Improved release notes extraction**
+ **Multiple trigger methods for flexibility**
+ **Comprehensive error handling and rollback**
 
 ## Key Improvements
 
@@ -25,11 +25,12 @@ The release system has been completely redesigned for reliability and simplicity
 ### Method 1: Automatic Release (Recommended)
 
 1. **Use Release Please**: The repository uses release-please for automated versioning
+
    ```bash
    # Make changes with conventional commits
    git commit -m "feat: add new feature"
    git commit -m "fix: resolve bug"
-   
+
    # Push to main - this triggers release-please
    git push origin main
    ```
@@ -50,6 +51,7 @@ The consolidated release workflow now supports manual releases directly:
 4. **Click "Run workflow"**
 
 The workflow will:
+
 - Validate inputs and tag format
 - Create tag if requested (with automatic version increment)
 - Run full test suite
@@ -61,6 +63,7 @@ The workflow will:
 For advanced users who want direct control:
 
 1. **Create and push a tag**:
+
    ```bash
    git tag v0.3.2
    git push origin v0.3.2
@@ -71,20 +74,23 @@ For advanced users who want direct control:
 ## Environment Protection Rules
 
 The `pypi` environment has protection rules that:
-- ✅ Allow deployments from version tag branches (e.g., `v0.2.0`)
-- ❌ Reject deployments from the `main` branch
-- ✅ Allow deployments when triggered by tag pushes
-- ❌ Reject deployments when triggered by workflow_dispatch from main
+
+- Allow deployments from version tag branches (e.g., `v0.2.0`)
+- Reject deployments from the `main` branch
+- Allow deployments when triggered by tag pushes
+- Reject deployments when triggered by workflow_dispatch from main
 
 ## Validation and Safety Features
 
 ### Automatic Version Validation
+
 - **Pre-release checks** ensure all version files are synchronized
 - **Build validation** confirms package builds successfully
 - **Test validation** runs full test suite before deployment
 - **Environment protection** prevents deployments from wrong contexts
 
 ### Error Prevention
+
 - **Tag validation** ensures proper semantic versioning format
 - **Duplicate prevention** checks for existing tags/versions
 - **Branch protection** requires PR reviews and status checks
@@ -93,14 +99,17 @@ The `pypi` environment has protection rules that:
 ## Troubleshooting
 
 ### Version Synchronization Issues
+
 **Error**: "Version mismatch detected!"
 **Solution**: See [Release Troubleshooting Guide](RELEASE_TROUBLESHOOTING.md#version-synchronization-failure)
 
 ### Release Notes Missing
+
 **Error**: "Release notes not found in CHANGELOG.md"
 **Solution**: The improved extraction script now handles this automatically with fallback notes
 
 ### PyPI Upload Failures
+
 **Error**: Various PyPI-related errors
 **Solution**: Check [Release Troubleshooting Guide](RELEASE_TROUBLESHOOTING.md#pypi-deployment-rejection)
 

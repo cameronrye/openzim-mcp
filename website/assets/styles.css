@@ -1321,3 +1321,21 @@ body {
         --text-secondary: #ffffff;
     }
 }
+
+/* Beating Heart Animation */
+.beating-heart {
+    display: inline-block;
+    animation: heartbeat 1.5s ease-in-out infinite;
+}
+
+@keyframes heartbeat {
+    0%, 100% {
+        transform: scale(1);
+    }
+    10%, 30% {
+        transform: scale(1.1);
+    }
+    20%, 40% {
+        transform: scale(1);
+    }
+}
