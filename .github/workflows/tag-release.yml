@@ -49,7 +49,7 @@ jobs:
 
       - name: Trigger release workflow
         if: steps.check-trigger.outputs.should_trigger == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const tagName = '${{ steps.tag-info.outputs.tag_name }}';
