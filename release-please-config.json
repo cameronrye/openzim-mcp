@@ -84,7 +84,7 @@
       "pull-request-header": "🤖 **Automated Release**\n\nThis PR was created automatically by release-please based on conventional commits since the last release.\n\n**Changes included:**",
       "separate-pull-requests": false,
       "tag-separator": "-",
-      "skip-github-release": false,
+      "skip-github-release": true,
       "release-search-depth": 400,
       "commit-search-depth": 500
     }
