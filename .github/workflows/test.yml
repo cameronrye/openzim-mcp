@@ -65,7 +65,7 @@ jobs:
 
     - name: Upload coverage to Codecov
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v5
       env:
         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       with:
@@ -75,7 +75,7 @@ jobs:
 
     - name: Upload coverage reports to Codecov
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v5
       env:
         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       with:
@@ -161,7 +161,7 @@ jobs:
         uv run bandit -r openzim_mcp -f sarif -o bandit-report.sarif || echo '{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "bandit"}}, "results": []}]}' > bandit-report.sarif
 
     - name: Upload Bandit SARIF results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       if: always() && hashFiles('bandit-report.sarif') != ''
       continue-on-error: true
       with:
@@ -251,7 +251,7 @@ jobs:
 
     - name: Upload comprehensive coverage to Codecov
       if: env.CODECOV_TOKEN != ''
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v5
       env:
         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       with:
