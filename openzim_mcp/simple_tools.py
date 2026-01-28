@@ -9,6 +9,7 @@ limited tool-calling capabilities or context windows.
 import logging
 import re
 import signal
+import sys
 from contextlib import contextmanager
 from typing import Any, Dict, Generator, Optional, Tuple
 
@@ -44,8 +45,9 @@ def regex_timeout(seconds: float) -> Generator[None, None, None]:
         >>> with regex_timeout(1.0):
         ...     re.search(r"complex.*pattern", "some text")
     """
-    # SIGALRM is not available on Windows
-    if not hasattr(signal, "SIGALRM"):
+    # SIGALRM/setitimer are not available on Windows
+    # Use sys.platform check for mypy type narrowing
+    if sys.platform == "win32":
         yield
         return
 
