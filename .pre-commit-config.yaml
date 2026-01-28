@@ -86,6 +86,7 @@ repos:
     hooks:
       - id: prettier
         types: [yaml]
+        args: ["--cache-location", ".cache/prettier"]
 
 # Configuration for specific hooks
 ci:

@@ -60,3 +60,6 @@ test_*_integration.py
 node_modules/
 package-lock.json
 yarn.lock
+
+# Prettier cache (configured via --cache-location in pre-commit)
+.cache/
