@@ -164,7 +164,7 @@ jobs:
           uv build
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dist
           path: dist/
@@ -195,7 +195,7 @@ jobs:
           fi
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
@@ -217,7 +217,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
