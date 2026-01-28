@@ -26,7 +26,7 @@ jobs:
         python-version: ["3.12", "3.13"]
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         # For pull_request_target, checkout the PR head
         ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
@@ -103,7 +103,7 @@ jobs:
 
     - name: Upload coverage reports as artifacts
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: coverage-reports
         path: |
@@ -132,7 +132,7 @@ jobs:
       actions: read
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7
@@ -208,7 +208,7 @@ jobs:
         echo "4. Or download the security-reports artifact to view results locally"
 
     - name: Upload security scan results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       if: always() && (hashFiles('safety-report.json') != '' || hashFiles('bandit-report.json') != '' || hashFiles('bandit-report.sarif') != '')
       with:
         name: security-reports
@@ -223,7 +223,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7

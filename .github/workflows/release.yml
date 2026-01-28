@@ -38,7 +38,7 @@ jobs:
       tag_name: ${{ steps.prepare.outputs.tag_name }}
       should_create_tag: ${{ steps.prepare.outputs.should_create_tag }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -113,7 +113,7 @@ jobs:
     needs: [validate-and-prepare]
     if: always() && (needs.validate-and-prepare.result == 'success' || needs.validate-and-prepare.result == 'skipped')
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
@@ -147,7 +147,7 @@ jobs:
     needs: [validate-and-prepare, test]
     if: always() && needs.test.result == 'success'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
@@ -164,7 +164,7 @@ jobs:
           uv build
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dist
           path: dist/
@@ -211,7 +211,7 @@ jobs:
     needs: [validate-and-prepare, build, publish-pypi]
     if: always() && needs.publish-pypi.result == 'success'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}

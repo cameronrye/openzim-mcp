@@ -89,7 +89,7 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.release_created
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
 
