@@ -1468,7 +1468,15 @@ class ZimOperations:
 
             # Cache the result
             self.cache.set(cache_key, result)
-            logger.info(f"Generated {limit} suggestions for: {partial_query}")
+            # Parse result to get actual count for accurate logging
+            try:
+                result_data = json.loads(result)
+                actual_count = result_data.get(
+                    "count", len(result_data.get("suggestions", []))
+                )
+            except (json.JSONDecodeError, TypeError):
+                actual_count = "unknown"
+            logger.info(f"Generated {actual_count} suggestions for: {partial_query}")
             return result
 
         except Exception as e:
@@ -1894,3 +1902,129 @@ class ZimOperations:
         except Exception as e:
             logger.error(f"Error extracting links for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Failed to extract article links: {e}") from e
+
+    def get_binary_entry(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        max_size_bytes: Optional[int] = None,
+        include_data: bool = True,
+    ) -> str:
+        """
+        Retrieve binary content from a ZIM entry.
+
+        This method returns raw binary content encoded in base64, enabling
+        integration with external tools for processing embedded media like
+        PDFs, videos, and images.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Entry path, e.g., 'I/image.png' or 'C/document.pdf'
+            max_size_bytes: Maximum size of content to return (default: 10MB)
+            include_data: If True, include base64-encoded data; if False, metadata only
+
+        Returns:
+            JSON string containing binary content metadata and optionally the data
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If entry retrieval fails
+        """
+        import base64
+
+        from .constants import DEFAULT_MAX_BINARY_SIZE
+
+        if max_size_bytes is None:
+            max_size_bytes = DEFAULT_MAX_BINARY_SIZE
+
+        # Validate and resolve file path
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Prepare cache key for metadata (not data, as that could be large)
+        # Note: caching binary data is intentionally not done to avoid memory bloat
+        cache_key = f"binary_meta:{validated_path}:{entry_path}"
+        _ = cache_key  # Reserved for future metadata caching optimization
+
+        try:
+            with zim_archive(validated_path) as archive:
+                # Try direct access first
+                try:
+                    entry = archive.get_entry_by_path(entry_path)
+                except Exception:
+                    # Fall back to search-based retrieval
+                    actual_path = self._find_entry_by_search(archive, entry_path)
+                    if actual_path:
+                        entry = archive.get_entry_by_path(actual_path)
+                        entry_path = actual_path
+                    else:
+                        raise OpenZimMcpArchiveError(
+                            f"Entry not found: '{entry_path}'. "
+                            f"Try using search_zim_file() to find available entries, "
+                            f"or browse_namespace() to explore the file structure."
+                        )
+
+                item = entry.get_item()
+                title = entry.title or "Untitled"
+                mime_type = item.mimetype or "application/octet-stream"
+                raw_content = bytes(item.content)
+                content_size = len(raw_content)
+
+                result: Dict[str, Any] = {
+                    "path": entry_path,
+                    "title": title,
+                    "mime_type": mime_type,
+                    "size": content_size,
+                    "size_human": self._format_size(content_size),
+                }
+
+                # Determine if we should include the data
+                if include_data:
+                    if content_size <= max_size_bytes:
+                        # Encode content as base64
+                        encoded_data = base64.b64encode(raw_content).decode("ascii")
+                        result["encoding"] = "base64"
+                        result["data"] = encoded_data
+                        result["truncated"] = False
+                    else:
+                        # Content too large
+                        result["encoding"] = None
+                        result["data"] = None
+                        result["truncated"] = True
+                        result["message"] = (
+                            f"Content size ({self._format_size(content_size)}) "
+                            f"exceeds max_size_bytes ({self._format_size(max_size_bytes)}). "
+                            f"Set include_data=False for metadata only, or increase max_size_bytes."
+                        )
+                else:
+                    result["encoding"] = None
+                    result["data"] = None
+                    result["truncated"] = False
+                    result["message"] = "Data not included (include_data=False)"
+
+                # Cache the metadata (without data)
+                meta_for_cache = {k: v for k, v in result.items() if k != "data"}
+                self.cache.set(cache_key, meta_for_cache)
+
+                logger.info(
+                    f"Retrieved binary entry: {entry_path} "
+                    f"({mime_type}, {self._format_size(content_size)})"
+                )
+                return json.dumps(result, indent=2, ensure_ascii=False)
+
+        except OpenZimMcpArchiveError:
+            raise
+        except Exception as e:
+            logger.error(f"Binary entry retrieval failed for {entry_path}: {e}")
+            raise OpenZimMcpArchiveError(f"Failed to retrieve binary entry: {e}") from e
+
+    def _format_size(self, size_bytes: int) -> str:
+        """Format size in bytes to human-readable string."""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.2f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.2f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"

@@ -5,7 +5,7 @@
 OpenZIM MCP supports two distinct modes to accommodate different LLM capabilities:
 
 1. **Simple Mode** (default): Provides just 1 primary intelligent tool that accepts natural language queries
-2. **Advanced Mode**: Exposes all 15 specialized MCP tools for maximum control and flexibility
+2. **Advanced Mode**: Exposes all 16 specialized MCP tools for maximum control and flexibility
 
 ## Why Simple Mode?
 
@@ -271,7 +271,7 @@ The `zim_query` tool uses intelligent intent parsing to understand your query:
 
 | Aspect | Advanced Mode | Simple Mode |
 |--------|-----------|-------------|
-| Number of Tools | 15 specialized tools | 1 primary tool |
+| Number of Tools | 16 specialized tools | 1 primary tool |
 | Interface | Explicit tool selection | Natural language queries |
 | Context Usage | Higher (all tool definitions) | Lower (minimal tool definitions) |
 | Flexibility | Maximum control | Simplified interface |
@@ -280,7 +280,7 @@ The `zim_query` tool uses intelligent intent parsing to understand your query:
 
 ## Advanced Mode Tools (for reference)
 
-When in advanced mode, these 15 tools are available:
+When in advanced mode, these 16 tools are available:
 
 1. `list_zim_files` - List all ZIM files
 2. `search_zim_file` - Search within ZIM file
@@ -293,10 +293,11 @@ When in advanced mode, these 15 tools are available:
 9. `get_search_suggestions` - Auto-complete suggestions
 10. `get_article_structure` - Extract article structure
 11. `extract_article_links` - Extract article links
-12. `get_server_health` - Server health and statistics
-13. `get_server_configuration` - Server configuration
-14. `diagnose_server_state` - Comprehensive diagnostics
-15. `resolve_server_conflicts` - Resolve server conflicts
+12. `get_binary_entry` - Retrieve binary content (images, PDFs, etc.)
+13. `get_server_health` - Server health and statistics
+14. `get_server_configuration` - Server configuration
+15. `diagnose_server_state` - Comprehensive diagnostics
+16. `resolve_server_conflicts` - Resolve server conflicts
 
 ## Tips for Using Simple Mode
 

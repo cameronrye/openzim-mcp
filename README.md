@@ -1,6 +1,8 @@
 # OpenZIM MCP Server
 
-> **Now with Dual Mode Support!** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (15 specialized tools) to match your LLM's capabilities.
+> 🆕 **NEW: Binary Content Retrieval!** Extract PDFs, images, videos, and other embedded media from ZIM archives for processing with external tools. Perfect for multi-agent workflows! [Learn more →](#get_binary_entry---retrieve-binary-content-from-a-zim-entry)
+
+> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (16 specialized tools) to match your LLM's capabilities.
 
 <!-- Build and Quality Badges -->
 [![CI](https://github.com/cameronrye/openzim-mcp/workflows/CI/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/test.yml)
@@ -46,7 +48,8 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 
 ## Features
 
-- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (15 specialized tools)
+- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (16 specialized tools)
+- **Binary Content Retrieval**: 🆕 Extract PDFs, images, videos, and other embedded media for multi-agent workflows
 - **Security First**: Comprehensive input validation and path traversal protection
 - **High Performance**: Intelligent caching and optimized ZIM file operations
 - **Smart Retrieval**: Automatic fallback from direct access to search-based retrieval for reliable entry access
@@ -97,7 +100,7 @@ mkdir ~/zim-files
 openzim-mcp /path/to/zim/files
 python -m openzim_mcp /path/to/zim/files
 
-# Advanced mode - all 15 specialized tools
+# Advanced mode - all 16 specialized tools
 openzim-mcp --mode advanced /path/to/zim/files
 python -m openzim_mcp --mode advanced /path/to/zim/files
 
@@ -114,7 +117,7 @@ make run ZIM_DIR=/path/to/zim/files
 OpenZIM MCP supports two modes:
 
 - **Simple Mode** (default): Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
-- **Advanced Mode**: Exposes all 15 specialized MCP tools for maximum control
+- **Advanced Mode**: Exposes all 16 specialized MCP tools for maximum control
 
 See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
 
@@ -397,6 +400,38 @@ JSON string containing article structure including headings, sections, metadata,
 
 **Returns:**
 JSON string containing categorized links (internal, external, media) with titles and metadata.
+
+### get_binary_entry - Retrieve binary content from a ZIM entry
+
+**Required parameters:**
+
+- `zim_file_path` (string): Path to the ZIM file
+- `entry_path` (string): Entry path, e.g., 'I/image.png' or 'I/document.pdf'
+
+**Optional parameters:**
+
+- `max_size_bytes` (integer): Maximum size of content to return (default: 10MB). Content larger than this will return metadata only.
+- `include_data` (boolean): If true (default), include base64-encoded data. Set to false to retrieve metadata only.
+
+**Returns:**
+
+JSON string containing:
+
+- `path`: Entry path in ZIM file
+- `title`: Entry title
+- `mime_type`: Content type (e.g., "application/pdf", "image/png")
+- `size`: Size in bytes
+- `size_human`: Human-readable size (e.g., "1.5 MB")
+- `encoding`: "base64" when data is included, null otherwise
+- `data`: Base64-encoded content (if include_data=true and under size limit)
+- `truncated`: Boolean indicating if content exceeded size limit
+
+**Use Cases:**
+
+- Retrieve PDFs for processing with PDF parsing tools
+- Extract images for vision models or OCR tools
+- Get video/audio files for transcription services
+- Enable multi-agent workflows with specialized content processors
 
 ---
 

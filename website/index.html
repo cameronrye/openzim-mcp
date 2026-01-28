@@ -101,7 +101,8 @@
             "availability": "https://schema.org/InStock"
         },
         "featureList": [
-            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (15 specialized tools)",
+            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (16 specialized tools)",
+            "Binary Content Retrieval: Extract PDFs, images, videos, and other embedded media for multi-agent workflows",
             "Security First: Comprehensive input validation and path traversal protection",
             "Smart Retrieval System: Intelligent content extraction with configurable strategies",
             "Multi-Instance Management: Handle multiple ZIM files simultaneously",
@@ -274,6 +275,15 @@
 
     <!-- Hero Section -->
     <main id="main-content">
+    <!-- NEW Feature Banner -->
+    <div class="new-feature-banner">
+        <div class="container">
+            <span class="new-badge">🆕 NEW</span>
+            <span class="new-text"><strong>Binary Content Retrieval!</strong> Extract PDFs, images, videos, and other embedded media from ZIM archives for multi-agent workflows.</span>
+            <a href="#binary-retrieval" class="new-link">Learn more →</a>
+        </div>
+    </div>
+
     <section id="home" class="hero">
         <div class="container">
             <div class="hero-content">
@@ -361,7 +371,16 @@
                     <h3 class="feature-title">Dual Mode Support</h3>
                     <p class="feature-description">
                         Choose Simple mode (1 intelligent natural language tool, default) or Advanced mode
-                        (15 specialized tools) to match your LLM's capabilities.
+                        (16 specialized tools) to match your LLM's capabilities.
+                    </p>
+                </div>
+                <div class="feature-card feature-new" id="binary-retrieval">
+                    <div class="feature-badge-new">🆕 NEW</div>
+                    <div class="feature-icon">📦</div>
+                    <h3 class="feature-title">Binary Content Retrieval</h3>
+                    <p class="feature-description">
+                        Extract PDFs, images, videos, and other embedded media from ZIM archives.
+                        Perfect for multi-agent workflows with specialized processors.
                     </p>
                 </div>
                 <div class="feature-card">
@@ -924,7 +943,7 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
 }</code></pre>
                             </div>
                             <div class="example-result">
-                                <h5>Advanced Mode (15 specialized tools):</h5>
+                                <h5>Advanced Mode (16 specialized tools):</h5>
                                 <pre><code>{
   "mcpServers": {
     "openzim-mcp-advanced": {

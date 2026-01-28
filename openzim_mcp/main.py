@@ -21,11 +21,11 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Simple mode (default - 2 intelligent tools)
+  # Simple mode (default - 1 intelligent NL tool)
   python -m openzim_mcp /path/to/zim/files
   python -m openzim_mcp --mode simple /path/to/zim/files
 
-  # Advanced mode (all 15 tools)
+  # Advanced mode (all 16 tools)
   python -m openzim_mcp --mode advanced /path/to/zim/files
 
 Environment Variables:
@@ -42,8 +42,8 @@ Environment Variables:
         choices=list(VALID_TOOL_MODES),
         default=None,
         help=(
-            f"Tool mode: 'advanced' for all 15 tools, 'simple' for 2 "
-            f"intelligent tools (default: {TOOL_MODE_SIMPLE}, or from "
+            f"Tool mode: 'advanced' for all 16 tools, 'simple' for 1 "
+            f"intelligent NL tool + underlying tools (default: {TOOL_MODE_SIMPLE}, or from "
             f"OPENZIM_MCP_TOOL_MODE env var)"
         ),
     )
@@ -84,9 +84,9 @@ Environment Variables:
         server = OpenZimMcpServer(config, instance_tracker)
 
         mode_desc = (
-            "SIMPLE mode (2 intelligent tools)"
+            "SIMPLE mode (1 intelligent tool + all underlying tools)"
             if config.tool_mode == TOOL_MODE_SIMPLE
-            else "ADVANCED mode (15 specialized tools)"
+            else "ADVANCED mode (16 specialized tools)"
         )
         print(
             f"OpenZIM MCP server started in {mode_desc}",

@@ -2,6 +2,8 @@
 
 **OpenZIM MCP** is a modern, secure, and high-performance MCP (Model Context Protocol) server that enables AI models to access and search [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge bases offline.
 
+> 🆕 **NEW: Binary Content Retrieval!** Extract PDFs, images, videos, and other embedded media from ZIM archives for processing with external tools. Perfect for multi-agent workflows where you need to pass content to specialized processors like PDF parsers, vision models, or transcription services. [See API Reference →](API-Reference#get_binary_entry)
+
 ## Quick Navigation
 
 ### Getting Started
@@ -42,6 +44,7 @@ Unlike basic file readers, OpenZIM MCP provides **intelligent, structured access
 
 ### Enterprise-Ready Features
 
+- **Binary Content Retrieval**: 🆕 Extract PDFs, images, videos for multi-agent workflows
 - **Security First**: Comprehensive input validation and path traversal protection
 - **High Performance**: Intelligent caching and optimized ZIM file operations
 - **Smart Retrieval**: Automatic fallback from direct access to search-based retrieval

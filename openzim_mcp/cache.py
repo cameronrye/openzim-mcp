@@ -21,6 +21,11 @@ class CacheEntry:
         Args:
             value: Value to cache
             ttl_seconds: Time to live in seconds
+
+        Example:
+            >>> entry = CacheEntry("cached_value", ttl_seconds=3600)
+            >>> entry.is_expired()
+            False
         """
         self.value = value
         self.created_at = time.time()
@@ -32,7 +37,22 @@ class CacheEntry:
 
 
 class OpenZimMcpCache:
-    """Simple in-memory cache with TTL support."""
+    """Simple in-memory cache with TTL support and hit/miss statistics.
+
+    This cache implements LRU (Least Recently Used) eviction with TTL-based
+    expiration. It tracks cache hits and misses for performance monitoring.
+
+    Example:
+        >>> from openzim_mcp.config import CacheConfig
+        >>> config = CacheConfig(enabled=True, max_size=100, ttl_seconds=3600)
+        >>> cache = OpenZimMcpCache(config)
+        >>> cache.set("key1", "value1")
+        >>> cache.get("key1")
+        'value1'
+        >>> stats = cache.stats()
+        >>> stats["hits"]
+        1
+    """
 
     def __init__(self, config: CacheConfig):
         """
@@ -44,6 +64,8 @@ class OpenZimMcpCache:
         self.config = config
         self._cache: Dict[str, CacheEntry] = {}
         self._access_order: Dict[str, float] = {}
+        self._hits: int = 0
+        self._misses: int = 0
         logger.info(
             f"Cache initialized: enabled={config.enabled}, "
             f"max_size={config.max_size}, ttl={config.ttl_seconds}s"
@@ -63,6 +85,7 @@ class OpenZimMcpCache:
             return None
 
         if key not in self._cache:
+            self._misses += 1
             return None
 
         entry = self._cache[key]
@@ -70,11 +93,13 @@ class OpenZimMcpCache:
         # Check if expired
         if entry.is_expired():
             self._remove(key)
+            self._misses += 1
             logger.debug(f"Cache entry expired: {key}")
             return None
 
         # Update access time for LRU
         self._access_order[key] = time.time()
+        self._hits += 1
         logger.debug(f"Cache hit: {key}")
         return entry.value
 
@@ -141,16 +166,54 @@ class OpenZimMcpCache:
         logger.debug(f"Evicted LRU cache entry: {lru_key}")
 
     def clear(self) -> None:
-        """Clear all cache entries."""
+        """Clear all cache entries and reset statistics."""
         self._cache.clear()
         self._access_order.clear()
+        self._hits = 0
+        self._misses = 0
         logger.info("Cache cleared")
 
+    def reset_stats(self) -> None:
+        """Reset hit/miss statistics without clearing cache entries."""
+        self._hits = 0
+        self._misses = 0
+        logger.debug("Cache statistics reset")
+
     def stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
+        """Get cache statistics including hit/miss rates.
+
+        Returns:
+            Dictionary containing:
+            - enabled: Whether cache is enabled
+            - size: Current number of entries
+            - max_size: Maximum allowed entries
+            - ttl_seconds: Time-to-live for entries
+            - hits: Number of cache hits
+            - misses: Number of cache misses
+            - hit_rate: Ratio of hits to total requests (0.0-1.0)
+
+        Example:
+            >>> cache = OpenZimMcpCache(config)
+            >>> cache.set("key", "value")
+            >>> cache.get("key")  # hit
+            >>> cache.get("missing")  # miss
+            >>> stats = cache.stats()
+            >>> stats["hits"]
+            1
+            >>> stats["misses"]
+            1
+            >>> stats["hit_rate"]
+            0.5
+        """
+        total_requests = self._hits + self._misses
+        hit_rate = self._hits / total_requests if total_requests > 0 else 0.0
+
         return {
             "enabled": self.config.enabled,
             "size": len(self._cache),
             "max_size": self.config.max_size,
             "ttl_seconds": self.config.ttl_seconds,
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": round(hit_rate, 4),
         }

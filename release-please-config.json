@@ -71,6 +71,11 @@
           "type": "generic",
           "path": "openzim_mcp/__init__.py",
           "glob": false
+        },
+        {
+          "type": "generic",
+          "path": "llm.txt",
+          "glob": false
         }
       ],
       "bump-minor-pre-major": true,

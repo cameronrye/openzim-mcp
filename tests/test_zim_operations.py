@@ -1970,3 +1970,169 @@ class TestZimOperationsUtilityFunctions:
         expected_patterns = ["I/favicon.png", "I/logo.png", "I/image.jpg"]
         for pattern in expected_patterns:
             assert pattern in patterns
+
+
+class TestGetBinaryEntry:
+    """Test get_binary_entry functionality for binary content retrieval."""
+
+    @pytest.fixture
+    def zim_operations(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator: PathValidator,
+        openzim_mcp_cache: OpenZimMcpCache,
+        content_processor: ContentProcessor,
+    ) -> ZimOperations:
+        """Create ZimOperations instance for testing."""
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def test_get_binary_entry_invalid_path(self, zim_operations: ZimOperations):
+        """Test get_binary_entry with invalid file path."""
+        with pytest.raises(
+            (OpenZimMcpValidationError, OpenZimMcpArchiveError, OpenZimMcpSecurityError)
+        ):
+            zim_operations.get_binary_entry("/invalid/path.zim", "I/test.png")
+
+    @patch("openzim_mcp.zim_operations.zim_archive")
+    def test_get_binary_entry_success(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Test successful binary entry retrieval."""
+        import base64
+        import json
+
+        # Create a test ZIM file
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        # Mock the archive
+        mock_archive_instance = MagicMock()
+        mock_entry = MagicMock()
+        mock_entry.title = "Test Image"
+        mock_item = MagicMock()
+        mock_item.mimetype = "image/png"
+        # Create a small binary content
+        binary_content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+        mock_item.content = binary_content
+        mock_entry.get_item.return_value = mock_item
+        mock_archive_instance.get_entry_by_path.return_value = mock_entry
+        mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+        result = zim_operations.get_binary_entry(str(zim_file), "I/test.png")
+
+        # Parse result as JSON
+        result_data = json.loads(result)
+        assert result_data["path"] == "I/test.png"
+        assert result_data["title"] == "Test Image"
+        assert result_data["mime_type"] == "image/png"
+        assert result_data["size"] == len(binary_content)
+        assert result_data["encoding"] == "base64"
+        assert result_data["truncated"] is False
+        # Verify the data is correct base64
+        decoded = base64.b64decode(result_data["data"])
+        assert decoded == binary_content
+
+    @patch("openzim_mcp.zim_operations.zim_archive")
+    def test_get_binary_entry_metadata_only(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Test binary entry retrieval with metadata only."""
+        import json
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        mock_archive_instance = MagicMock()
+        mock_entry = MagicMock()
+        mock_entry.title = "Test PDF"
+        mock_item = MagicMock()
+        mock_item.mimetype = "application/pdf"
+        mock_item.content = b"%PDF-1.4 test content"
+        mock_entry.get_item.return_value = mock_item
+        mock_archive_instance.get_entry_by_path.return_value = mock_entry
+        mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+        result = zim_operations.get_binary_entry(
+            str(zim_file), "I/doc.pdf", include_data=False
+        )
+
+        result_data = json.loads(result)
+        assert result_data["path"] == "I/doc.pdf"
+        assert result_data["mime_type"] == "application/pdf"
+        assert result_data["data"] is None
+        assert result_data["encoding"] is None
+        assert "Data not included" in result_data.get("message", "")
+
+    @patch("openzim_mcp.zim_operations.zim_archive")
+    def test_get_binary_entry_size_limit(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Test binary entry retrieval with content exceeding size limit."""
+        import json
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        mock_archive_instance = MagicMock()
+        mock_entry = MagicMock()
+        mock_entry.title = "Large Video"
+        mock_item = MagicMock()
+        mock_item.mimetype = "video/mp4"
+        # Create content larger than the limit we'll set
+        mock_item.content = b"x" * 1000
+        mock_entry.get_item.return_value = mock_item
+        mock_archive_instance.get_entry_by_path.return_value = mock_entry
+        mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+        # Set a small size limit
+        result = zim_operations.get_binary_entry(
+            str(zim_file), "I/video.mp4", max_size_bytes=100
+        )
+
+        result_data = json.loads(result)
+        assert result_data["path"] == "I/video.mp4"
+        assert result_data["size"] == 1000
+        assert result_data["truncated"] is True
+        assert result_data["data"] is None
+        assert "exceeds max_size_bytes" in result_data.get("message", "")
+
+    @patch("openzim_mcp.zim_operations.zim_archive")
+    def test_get_binary_entry_not_found(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Test binary entry retrieval when entry not found."""
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        mock_archive_instance = MagicMock()
+        mock_archive_instance.get_entry_by_path.side_effect = Exception(
+            "Entry not found"
+        )
+        mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+        with pytest.raises(OpenZimMcpArchiveError, match="Entry not found"):
+            zim_operations.get_binary_entry(str(zim_file), "I/nonexistent.png")
+
+    def test_format_size_bytes(self, zim_operations: ZimOperations):
+        """Test _format_size helper with bytes."""
+        assert zim_operations._format_size(0) == "0 B"
+        assert zim_operations._format_size(500) == "500 B"
+        assert zim_operations._format_size(1023) == "1023 B"
+
+    def test_format_size_kilobytes(self, zim_operations: ZimOperations):
+        """Test _format_size helper with kilobytes."""
+        assert zim_operations._format_size(1024) == "1.00 KB"
+        assert zim_operations._format_size(1536) == "1.50 KB"
+        assert zim_operations._format_size(10240) == "10.00 KB"
+
+    def test_format_size_megabytes(self, zim_operations: ZimOperations):
+        """Test _format_size helper with megabytes."""
+        assert zim_operations._format_size(1024 * 1024) == "1.00 MB"
+        assert zim_operations._format_size(5 * 1024 * 1024) == "5.00 MB"
+
+    def test_format_size_gigabytes(self, zim_operations: ZimOperations):
+        """Test _format_size helper with gigabytes."""
+        assert zim_operations._format_size(1024 * 1024 * 1024) == "1.00 GB"
+        assert zim_operations._format_size(2 * 1024 * 1024 * 1024) == "2.00 GB"

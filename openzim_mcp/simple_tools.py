@@ -8,11 +8,61 @@ limited tool-calling capabilities or context windows.
 
 import logging
 import re
-from typing import Any, Dict, Optional, Tuple
+import signal
+from contextlib import contextmanager
+from typing import Any, Dict, Generator, Optional, Tuple
 
+from .constants import REGEX_TIMEOUT_SECONDS
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
+
+
+class RegexTimeoutError(Exception):
+    """Raised when a regex operation times out."""
+
+    pass
+
+
+@contextmanager
+def regex_timeout(seconds: float) -> Generator[None, None, None]:
+    """Context manager for regex operations with timeout protection.
+
+    This provides protection against ReDoS (Regular Expression Denial of Service)
+    attacks by limiting the time spent on regex matching.
+
+    Note: This uses SIGALRM which is only available on Unix-like systems.
+    On Windows, the timeout is not enforced but the operation proceeds normally.
+
+    Args:
+        seconds: Maximum time allowed for regex operation
+
+    Raises:
+        RegexTimeoutError: If the operation exceeds the time limit
+
+    Example:
+        >>> with regex_timeout(1.0):
+        ...     re.search(r"complex.*pattern", "some text")
+    """
+    # SIGALRM is not available on Windows
+    if not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def timeout_handler(signum: int, frame: Any) -> None:
+        raise RegexTimeoutError(f"Regex operation timed out after {seconds} seconds")
+
+    # Set the signal handler
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    # Set the alarm (converting float seconds to integer microseconds for setitimer)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+
+    try:
+        yield
+    finally:
+        # Cancel the alarm and restore the old handler
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 class IntentParser:
@@ -47,6 +97,19 @@ class IntentParser:
         (r"\b(structure|outline|sections?|headings?)\s+(of|for)?\b", "structure"),
         # Links extraction intents
         (r"\b(links?|references?|related)\s+(in|from|to)\b", "links"),
+        # Binary/media retrieval intents
+        (
+            r"\b(get|retrieve|download|extract|fetch)\s+(binary|raw)\s+(content|data|entry)\b",
+            "binary",
+        ),
+        (
+            r"\b(binary|raw)\s+(content|data)\s+(for|from|of)\b",
+            "binary",
+        ),
+        (
+            r"\b(get|retrieve|download|extract|fetch)\s+(pdf|image|video|audio|media)\b",
+            "binary",
+        ),
         # Suggestions intents (more specific)
         (r"\b(suggestions?|autocomplete|complete|hints?)\s+(for|of)\b", "suggestions"),
         (r"\b(suggest|autocomplete|complete)\b", "suggestions"),
@@ -66,27 +129,45 @@ class IntentParser:
         """
         Parse a natural language query to determine intent.
 
+        Uses timeout protection to prevent ReDoS attacks on malicious input.
+
         Args:
             query: Natural language query string
 
         Returns:
             Tuple of (intent_type, extracted_params)
+
+        Example:
+            >>> intent, params = IntentParser.parse_intent("search for biology")
+            >>> intent
+            'search'
+            >>> params
+            {'query': 'biology'}
         """
         query_lower = query.lower()
 
-        # Check each pattern in priority order
-        for pattern, intent in cls.INTENT_PATTERNS:
-            if re.search(pattern, query_lower, re.IGNORECASE):
-                params = cls._extract_params(query, intent)
-                return intent, params
+        try:
+            with regex_timeout(REGEX_TIMEOUT_SECONDS):
+                # Check each pattern in priority order
+                for pattern, intent in cls.INTENT_PATTERNS:
+                    if re.search(pattern, query_lower, re.IGNORECASE):
+                        params = cls._extract_params(query, intent)
+                        return intent, params
+        except RegexTimeoutError:
+            logger.warning(
+                f"Regex timeout during intent parsing for query: {query[:50]}..."
+            )
+            # Fall through to default search behavior
 
-        # Default to search if no specific intent detected
+        # Default to search if no specific intent detected or timeout occurred
         return "search", {"query": query}
 
     @classmethod
     def _extract_params(cls, query: str, intent: str) -> Dict[str, Any]:
         """
         Extract parameters from query based on intent.
+
+        Uses timeout protection to prevent ReDoS attacks.
 
         Args:
             query: Original query string
@@ -97,79 +178,114 @@ class IntentParser:
         """
         params: Dict[str, Any] = {}
 
-        if intent == "browse":
-            # Extract namespace from query
-            namespace_match = re.search(
-                r"namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?", query, re.IGNORECASE
-            )
-            if namespace_match:
-                params["namespace"] = namespace_match.group(1)
+        try:
+            with regex_timeout(REGEX_TIMEOUT_SECONDS):
+                if intent == "browse":
+                    # Extract namespace from query
+                    namespace_match = re.search(
+                        r"namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?",
+                        query,
+                        re.IGNORECASE,
+                    )
+                    if namespace_match:
+                        params["namespace"] = namespace_match.group(1)
 
-        elif intent == "filtered_search":
-            # Extract search query and filters
-            # Try to extract the search term
-            search_match = re.search(
-                r"(?:search|find|look)\s+(?:for\s+)?['\"]?([^'\"]+?)['\"]?\s+(?:in|within)",
-                query,
-                re.IGNORECASE,
-            )
-            if search_match:
-                params["query"] = search_match.group(1).strip()
+                elif intent == "filtered_search":
+                    # Extract search query and filters
+                    # Try to extract the search term
+                    search_match = re.search(
+                        r"(?:search|find|look)\s+(?:for\s+)?['\"]?([^'\"]+?)['\"]?\s+(?:in|within)",
+                        query,
+                        re.IGNORECASE,
+                    )
+                    if search_match:
+                        params["query"] = search_match.group(1).strip()
 
-            # Extract namespace filter
-            namespace_match = re.search(
-                r"namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?", query, re.IGNORECASE
-            )
-            if namespace_match:
-                params["namespace"] = namespace_match.group(1)
+                    # Extract namespace filter
+                    namespace_match = re.search(
+                        r"namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?",
+                        query,
+                        re.IGNORECASE,
+                    )
+                    if namespace_match:
+                        params["namespace"] = namespace_match.group(1)
 
-            # Extract content type filter
-            type_match = re.search(
-                r"type\s+['\"]?([A-Za-z0-9_/.-]+)['\"]?", query, re.IGNORECASE
-            )
-            if type_match:
-                params["content_type"] = type_match.group(1)
+                    # Extract content type filter
+                    type_match = re.search(
+                        r"type\s+['\"]?([A-Za-z0-9_/.-]+)['\"]?", query, re.IGNORECASE
+                    )
+                    if type_match:
+                        params["content_type"] = type_match.group(1)
 
-        elif intent in ["get_article", "structure", "links"]:
-            # Extract article/entry path
-            # Try to find quoted strings first
-            quoted_match = re.search(r"['\"]([^'\"]+)['\"]", query)
-            if quoted_match:
-                params["entry_path"] = quoted_match.group(1)
-            else:
-                # Try to extract after keywords
-                # For links: "links in Biology", "references from Evolution"
-                # For structure: "structure of Biology"
-                # For get_article: "get article Biology"
-                path_match = re.search(
-                    r"(?:article|entry|page|of|for|in|from|to)\s+([A-Za-z0-9_/.-]+)",
-                    query,
-                    re.IGNORECASE,
-                )
-                if path_match:
-                    params["entry_path"] = path_match.group(1)
+                elif intent in ["get_article", "structure", "links"]:
+                    # Extract article/entry path
+                    # Try to find quoted strings first
+                    quoted_match = re.search(r"['\"]([^'\"]+)['\"]", query)
+                    if quoted_match:
+                        params["entry_path"] = quoted_match.group(1)
+                    else:
+                        # Try to extract after keywords
+                        # For links: "links in Biology", "references from Evolution"
+                        # For structure: "structure of Biology"
+                        # For get_article: "get article Biology"
+                        path_match = re.search(
+                            r"(?:article|entry|page|of|for|in|from|to)\s+([A-Za-z0-9_/.-]+)",
+                            query,
+                            re.IGNORECASE,
+                        )
+                        if path_match:
+                            params["entry_path"] = path_match.group(1)
 
-        elif intent == "suggestions":
-            # Extract partial query
-            suggest_match = re.search(
-                r"(?:suggestions?|autocomplete|complete|hints?)\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?",
-                query,
-                re.IGNORECASE,
-            )
-            if suggest_match:
-                params["partial_query"] = suggest_match.group(1).strip()
+                elif intent == "binary":
+                    # Extract entry path for binary content retrieval
+                    # Try to find quoted strings first
+                    quoted_match = re.search(r"['\"]([^'\"]+)['\"]", query)
+                    if quoted_match:
+                        params["entry_path"] = quoted_match.group(1)
+                    else:
+                        # Try to extract path after keywords
+                        # "get binary content from I/image.png"
+                        # "extract pdf I/document.pdf"
+                        # "retrieve image logo.png"
+                        path_match = re.search(
+                            r"(?:content|data|entry|from|of|for|pdf|image|video|audio|media)\s+['\"]?([A-Za-z0-9_/.-]+)['\"]?",
+                            query,
+                            re.IGNORECASE,
+                        )
+                        if path_match:
+                            params["entry_path"] = path_match.group(1)
 
-        elif intent == "search":
-            # For general search, use the whole query or extract search term
-            search_match = re.search(
-                r"(?:search|find|look)\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?",
-                query,
-                re.IGNORECASE,
+                    # Check for metadata-only mode
+                    if re.search(r"\b(metadata|info)\s+only\b", query, re.IGNORECASE):
+                        params["include_data"] = False
+
+                elif intent == "suggestions":
+                    # Extract partial query
+                    suggest_match = re.search(
+                        r"(?:suggestions?|autocomplete|complete|hints?)\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?",
+                        query,
+                        re.IGNORECASE,
+                    )
+                    if suggest_match:
+                        params["partial_query"] = suggest_match.group(1).strip()
+
+                elif intent == "search":
+                    # For general search, use the whole query or extract search term
+                    search_match = re.search(
+                        r"(?:search|find|look)\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?",
+                        query,
+                        re.IGNORECASE,
+                    )
+                    if search_match:
+                        params["query"] = search_match.group(1).strip()
+                    else:
+                        params["query"] = query
+
+        except RegexTimeoutError:
+            logger.warning(
+                f"Regex timeout during param extraction for intent {intent}: {query[:50]}..."
             )
-            if search_match:
-                params["query"] = search_match.group(1).strip()
-            else:
-                params["query"] = query
+            # Return empty params on timeout - caller will handle gracefully
 
         return params
 
@@ -269,6 +385,24 @@ class SimpleToolsHandler:
                     )
                 return self.zim_operations.extract_article_links(
                     zim_file_path, entry_path
+                )
+
+            elif intent == "binary":
+                entry_path = params.get("entry_path")
+                if not entry_path:
+                    return (
+                        "⚠️ **Missing Entry Path**\n\n"
+                        "Please specify the path of the binary content to retrieve.\n"
+                        "**Examples**:\n"
+                        "- 'get binary content from \"I/image.png\"'\n"
+                        "- 'extract pdf \"I/document.pdf\"'\n"
+                        "- 'retrieve image I/logo.png'\n\n"
+                        "**Tip**: Use `extract_article_links` to discover embedded media paths."
+                    )
+                include_data = params.get("include_data", True)
+                max_size_bytes = options.get("max_size_bytes")
+                return self.zim_operations.get_binary_entry(
+                    zim_file_path, entry_path, max_size_bytes, include_data
                 )
 
             elif intent == "suggestions":
