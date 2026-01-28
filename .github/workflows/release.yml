@@ -222,16 +222,39 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Determine tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG_NAME="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
+          else
+            TAG_NAME="${{ github.ref_name }}"
+          fi
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "Tag name: $TAG_NAME"
+
+      - name: Check if release already exists
+        id: check-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${{ steps.tag.outputs.tag_name }}"
+          echo "Checking if release exists for tag: $TAG_NAME"
+
+          if gh release view "$TAG_NAME" --json tagName >/dev/null 2>&1; then
+            echo "release_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Release already exists for $TAG_NAME (created by release-please)"
+          else
+            echo "release_exists=false" >> $GITHUB_OUTPUT
+            echo "📝 Release does not exist for $TAG_NAME, will create new release"
+          fi
+
       - name: Extract release notes
         id: extract-notes
         run: |
-          # Extract version from tag or manual input
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag }}"
-            VERSION=${VERSION#v}  # Remove 'v' prefix if present
-          else
-            VERSION=${GITHUB_REF#refs/tags/v}
-          fi
+          # Extract version from tag
+          TAG_NAME="${{ steps.tag.outputs.tag_name }}"
+          VERSION=${TAG_NAME#v}  # Remove 'v' prefix if present
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
           # Extract release notes from CHANGELOG.md
@@ -276,10 +299,31 @@ jobs:
               print('Using fallback release notes')
           " VERSION="$VERSION"
 
-      - name: Create Release
+      - name: Upload assets to existing release
+        if: steps.check-release.outputs.release_exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${{ steps.tag.outputs.tag_name }}"
+          echo "📦 Uploading build artifacts to existing release: $TAG_NAME"
+
+          # Upload each file in dist/
+          for file in dist/*; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              echo "Uploading: $filename"
+              # Use --clobber to overwrite if asset already exists
+              gh release upload "$TAG_NAME" "$file" --clobber || echo "Warning: Failed to upload $filename"
+            fi
+          done
+
+          echo "✅ Assets uploaded to release $TAG_NAME"
+
+      - name: Create new release
+        if: steps.check-release.outputs.release_exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.tag_name }}
           name: Release v${{ steps.extract-notes.outputs.version }}
           body_path: release_notes.md
           files: |
