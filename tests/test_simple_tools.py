@@ -162,6 +162,52 @@ class TestIntentParser:
         assert "evolution" in params.get("query", "").lower()
         assert params.get("namespace") == "C"
 
+    def test_parse_binary_intent(self):
+        """Test parsing binary content retrieval intents."""
+        queries = [
+            "get binary content from I/image.png",
+            "retrieve raw data from document.pdf",
+            "extract binary entry logo.jpg",
+            "fetch raw content from video.mp4",
+        ]
+        for query in queries:
+            intent, params = IntentParser.parse_intent(query)
+            assert intent == "binary", f"Failed for query: {query}"
+
+    def test_parse_binary_intent_media_types(self):
+        """Test parsing binary intent with media type keywords."""
+        queries = [
+            "get pdf from I/document.pdf",
+            "extract image I/logo.png",
+            "fetch video presentation.mp4",
+            "retrieve audio track.mp3",
+            "download media file.jpg",
+        ]
+        for query in queries:
+            intent, params = IntentParser.parse_intent(query)
+            assert intent == "binary", f"Failed for query: {query}"
+
+    def test_extract_binary_entry_path_quoted(self):
+        """Test extracting entry path from quoted strings for binary intent."""
+        query = 'get binary content from "I/my-image.png"'
+        intent, params = IntentParser.parse_intent(query)
+        assert intent == "binary"
+        assert params.get("entry_path") == "I/my-image.png"
+
+    def test_extract_binary_entry_path_unquoted(self):
+        """Test extracting entry path from unquoted strings for binary intent."""
+        query = "extract pdf I/document.pdf"
+        intent, params = IntentParser.parse_intent(query)
+        assert intent == "binary"
+        assert params.get("entry_path") == "I/document.pdf"
+
+    def test_binary_metadata_only_mode(self):
+        """Test detecting metadata only mode for binary intent."""
+        query = "get binary content metadata only for I/image.png"
+        intent, params = IntentParser.parse_intent(query)
+        assert intent == "binary"
+        assert params.get("include_data") is False
+
 
 class TestSimpleToolsHandler:
     """Test simple tools handler."""
@@ -183,6 +229,9 @@ class TestSimpleToolsHandler:
         mock.extract_article_links.return_value = "Article links"
         mock.get_search_suggestions.return_value = "Suggestions"
         mock.search_with_filters.return_value = "Filtered search results"
+        mock.get_binary_entry.return_value = (
+            '{"path": "I/image.png", "mime_type": "image/png", "size": 1234}'
+        )
         return mock
 
     @pytest.fixture
@@ -277,3 +326,23 @@ class TestSimpleToolsHandler:
         # Check that limit and offset were passed to search
         call_args = mock_zim_operations.search_zim_file.call_args
         assert call_args is not None
+
+    def test_handle_binary(self, handler, mock_zim_operations):
+        """Test handling binary content retrieval queries."""
+        result = handler.handle_zim_query(
+            'get binary content from "I/image.png"', "/test/file.zim"
+        )
+        mock_zim_operations.get_binary_entry.assert_called_once()
+        assert "I/image.png" in result
+
+    def test_handle_binary_media_keyword(self, handler, mock_zim_operations):
+        """Test handling binary queries with media type keywords."""
+        result = handler.handle_zim_query("extract image I/logo.png", "/test/file.zim")
+        mock_zim_operations.get_binary_entry.assert_called_once()
+        assert "image.png" in result or mock_zim_operations.get_binary_entry.called
+
+    def test_handle_binary_missing_path(self, handler, mock_zim_operations):
+        """Test binary query without entry path returns error message."""
+        result = handler.handle_zim_query("get binary content", "/test/file.zim")
+        # Should return error about missing path
+        assert "Missing Entry Path" in result or "specify" in result.lower()

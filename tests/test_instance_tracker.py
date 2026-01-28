@@ -411,12 +411,16 @@ class TestInstanceTracker:
         """Test process running check on Windows systems."""
         with patch("platform.system", return_value="Windows"):
             with patch("subprocess.run") as mock_run:
-                # Process exists
+                # Process exists - tasklist returns PID in output
                 mock_run.return_value.returncode = 0
+                mock_run.return_value.stdout = "Image Name   PID\npython.exe   12345"
                 assert instance_tracker._is_process_running(12345) is True
 
-                # Process doesn't exist
-                mock_run.return_value.returncode = 1
+                # Process doesn't exist - tasklist returns "No tasks" message
+                mock_run.return_value.returncode = 0  # tasklist always returns 0
+                mock_run.return_value.stdout = (
+                    "INFO: No tasks are running which match the specified criteria."
+                )
                 assert instance_tracker._is_process_running(12345) is False
 
     def test_corrupted_instance_file_handling(self, instance_tracker):

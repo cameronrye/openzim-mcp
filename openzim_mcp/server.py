@@ -11,10 +11,20 @@ from mcp.server.fastmcp import FastMCP
 
 from .cache import OpenZimMcpCache
 from .config import OpenZimMcpConfig
-from .constants import TOOL_MODE_SIMPLE
+from .constants import (
+    INPUT_LIMIT_CONTENT_TYPE,
+    INPUT_LIMIT_ENTRY_PATH,
+    INPUT_LIMIT_FILE_PATH,
+    INPUT_LIMIT_NAMESPACE,
+    INPUT_LIMIT_PARTIAL_QUERY,
+    INPUT_LIMIT_QUERY,
+    TOOL_MODE_SIMPLE,
+    VALID_TRANSPORT_TYPES,
+)
 from .content_processor import ContentProcessor
 from .exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpConfigurationError,
     OpenZimMcpFileNotFoundError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
@@ -79,7 +89,7 @@ class OpenZimMcpServer:
         )
         if config.tool_mode == TOOL_MODE_SIMPLE:
             logger.info(
-                "Running in SIMPLE mode with 2 intelligent tools: zim_query and zim_server_status"
+                "Running in SIMPLE mode with 1 intelligent tool (zim_query) plus all underlying tools"
             )
         else:
             logger.debug(
@@ -300,7 +310,7 @@ class OpenZimMcpServer:
         self._register_advanced_tools()
 
     def _register_advanced_tools(self) -> None:
-        """Register advanced mode tools (all 15 tools)."""
+        """Register advanced mode tools (all 16 tools)."""
 
         @self.mcp.tool()
         async def list_zim_files() -> str:
@@ -411,8 +421,8 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
-                query = sanitize_input(query, 500)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+                query = sanitize_input(query, INPUT_LIMIT_QUERY)
 
                 # Validate parameters
                 if limit is not None and (limit < 1 or limit > 100):
@@ -494,8 +504,8 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
-                entry_path = sanitize_input(entry_path, 500)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+                entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
                 # Validate parameters
                 if max_content_length is not None and max_content_length < 1000:
@@ -786,7 +796,11 @@ class OpenZimMcpServer:
                 return json.dumps(result, indent=2)
             except Exception as e:
                 logger.error(f"Error getting server configuration: {e}")
-                return f"Error: Failed to get configuration: {e}"
+                return self._create_enhanced_error_message(
+                    operation="get server configuration",
+                    error=e,
+                    context="Configuration diagnostics",
+                )
 
         @self.mcp.tool()
         async def diagnose_server_state() -> str:
@@ -1021,7 +1035,11 @@ class OpenZimMcpServer:
 
             except Exception as e:
                 logger.error(f"Error in server diagnostics: {e}")
-                return f"Error: Failed to run diagnostics: {e}"
+                return self._create_enhanced_error_message(
+                    operation="diagnose server state",
+                    error=e,
+                    context="Server diagnostics",
+                )
 
         @self.mcp.tool()
         async def resolve_server_conflicts() -> str:
@@ -1152,7 +1170,7 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
 
                 return self.zim_operations.get_zim_metadata(zim_file_path)
 
@@ -1176,13 +1194,17 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
 
                 return self.zim_operations.get_main_page(zim_file_path)
 
             except Exception as e:
                 logger.error(f"Error getting main page: {e}")
-                return f"Error: Failed to get main page: {e}"
+                return self._create_enhanced_error_message(
+                    operation="get main page",
+                    error=e,
+                    context=f"File: {zim_file_path}",
+                )
 
         @self.mcp.tool()
         async def list_namespaces(zim_file_path: str) -> str:
@@ -1196,13 +1218,17 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
 
                 return self.zim_operations.list_namespaces(zim_file_path)
 
             except Exception as e:
                 logger.error(f"Error listing namespaces: {e}")
-                return f"Error: Failed to list namespaces: {e}"
+                return self._create_enhanced_error_message(
+                    operation="list namespaces",
+                    error=e,
+                    context=f"File: {zim_file_path}",
+                )
 
         @self.mcp.tool()
         async def browse_namespace(
@@ -1224,9 +1250,9 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
                 namespace = sanitize_input(
-                    namespace, 100
+                    namespace, INPUT_LIMIT_NAMESPACE
                 )  # Increased to support new namespace scheme
 
                 # Validate parameters
@@ -1271,14 +1297,16 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
-                query = sanitize_input(query, 500)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+                query = sanitize_input(query, INPUT_LIMIT_QUERY)
                 if namespace:
                     namespace = sanitize_input(
-                        namespace, 100
+                        namespace, INPUT_LIMIT_NAMESPACE
                     )  # Increased to support new namespace scheme
                 if content_type:
-                    content_type = sanitize_input(content_type, 100)
+                    content_type = sanitize_input(
+                        content_type, INPUT_LIMIT_CONTENT_TYPE
+                    )
 
                 # Validate parameters
                 if limit is not None and (limit < 1 or limit > 100):
@@ -1320,7 +1348,11 @@ class OpenZimMcpServer:
 
             except Exception as e:
                 logger.error(f"Error in filtered search: {e}")
-                return f"Error: Failed to perform filtered search: {e}"
+                return self._create_enhanced_error_message(
+                    operation="filtered search",
+                    error=e,
+                    context=f"File: {zim_file_path}, Query: {query}",
+                )
 
         @self.mcp.tool()
         async def get_search_suggestions(
@@ -1338,8 +1370,8 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
-                partial_query = sanitize_input(partial_query, 200)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+                partial_query = sanitize_input(partial_query, INPUT_LIMIT_PARTIAL_QUERY)
 
                 # Validate parameters
                 if limit < 1 or limit > 50:
@@ -1351,7 +1383,11 @@ class OpenZimMcpServer:
 
             except Exception as e:
                 logger.error(f"Error getting search suggestions: {e}")
-                return f"Error: Failed to get search suggestions: {e}"
+                return self._create_enhanced_error_message(
+                    operation="get search suggestions",
+                    error=e,
+                    context=f"File: {zim_file_path}, Query: {partial_query}",
+                )
 
         @self.mcp.tool()
         async def get_article_structure(zim_file_path: str, entry_path: str) -> str:
@@ -1366,8 +1402,8 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
-                entry_path = sanitize_input(entry_path, 500)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+                entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
                 return self.zim_operations.get_article_structure(
                     zim_file_path, entry_path
@@ -1375,7 +1411,11 @@ class OpenZimMcpServer:
 
             except Exception as e:
                 logger.error(f"Error getting article structure: {e}")
-                return f"Error: Failed to get article structure: {e}"
+                return self._create_enhanced_error_message(
+                    operation="get article structure",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                )
 
         @self.mcp.tool()
         async def extract_article_links(zim_file_path: str, entry_path: str) -> str:
@@ -1390,8 +1430,8 @@ class OpenZimMcpServer:
             """
             try:
                 # Sanitize inputs
-                zim_file_path = sanitize_input(zim_file_path, 1000)
-                entry_path = sanitize_input(entry_path, 500)
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+                entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
                 return self.zim_operations.extract_article_links(
                     zim_file_path, entry_path
@@ -1399,7 +1439,65 @@ class OpenZimMcpServer:
 
             except Exception as e:
                 logger.error(f"Error extracting article links: {e}")
-                return f"Error: Failed to extract article links: {e}"
+                return self._create_enhanced_error_message(
+                    operation="extract article links",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                )
+
+        @self.mcp.tool()
+        async def get_binary_entry(
+            zim_file_path: str,
+            entry_path: str,
+            max_size_bytes: Optional[int] = None,
+            include_data: bool = True,
+        ) -> str:
+            """Retrieve binary content from a ZIM entry.
+
+            This tool returns raw binary content encoded in base64, enabling
+            integration with external tools for processing embedded media like
+            PDFs, videos, and images.
+
+            Args:
+                zim_file_path: Path to the ZIM file
+                entry_path: Entry path, e.g., 'I/image.png' or 'C/document.pdf'
+                max_size_bytes: Maximum size of content to return (default: 10MB).
+                    Content larger than this will return metadata only.
+                include_data: If True (default), include base64-encoded data.
+                    Set to False to retrieve metadata only without the binary data.
+
+            Returns:
+                JSON string containing:
+                - path: Entry path in ZIM file
+                - title: Entry title
+                - mime_type: Content type (e.g., "application/pdf", "image/png")
+                - size: Size in bytes
+                - size_human: Human-readable size (e.g., "1.5 MB")
+                - encoding: "base64" when data is included, null otherwise
+                - data: Base64-encoded content (if include_data=True and under size limit)
+                - truncated: Boolean indicating if content exceeded size limit
+
+            Examples:
+                - Get a PDF: get_binary_entry("/path/to/file.zim", "I/document.pdf")
+                - Get image metadata: get_binary_entry(..., "I/logo.png", include_data=False)
+                - Large video: get_binary_entry(..., "I/video.mp4", max_size_bytes=100000000)
+            """
+            try:
+                # Sanitize inputs
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+                entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
+
+                return self.zim_operations.get_binary_entry(
+                    zim_file_path, entry_path, max_size_bytes, include_data
+                )
+
+            except Exception as e:
+                logger.error(f"Error retrieving binary entry: {e}")
+                return self._create_enhanced_error_message(
+                    operation="retrieve binary entry",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                )
 
         logger.info("MCP tools registered successfully")
 
@@ -1410,8 +1508,22 @@ class OpenZimMcpServer:
         Run the OpenZIM MCP server.
 
         Args:
-            transport: Transport protocol to use
+            transport: Transport protocol to use ("stdio", "sse", or "streamable-http")
+
+        Raises:
+            OpenZimMcpConfigurationError: If transport type is invalid
+
+        Example:
+            >>> server = OpenZimMcpServer()
+            >>> server.run(transport="stdio")
         """
+        # Validate transport type
+        if transport not in VALID_TRANSPORT_TYPES:
+            raise OpenZimMcpConfigurationError(
+                f"Invalid transport type: '{transport}'. "
+                f"Must be one of: {', '.join(sorted(VALID_TRANSPORT_TYPES))}"
+            )
+
         logger.info(f"Starting OpenZIM MCP server with transport: {transport}")
         try:
             self.mcp.run(transport=transport)

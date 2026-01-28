@@ -1177,55 +1177,55 @@ body {
     .nav-toggle {
         display: flex;
     }
-    
+
     .nav-toggle.active .bar:nth-child(2) {
         opacity: 0;
     }
-    
+
     .nav-toggle.active .bar:nth-child(1) {
         transform: translateY(7px) rotate(45deg);
     }
-    
+
     .nav-toggle.active .bar:nth-child(3) {
         transform: translateY(-7px) rotate(-45deg);
     }
-    
+
     .hero .container {
         grid-template-columns: 1fr;
         gap: var(--spacing-2xl);
         text-align: center;
     }
-    
+
     .hero-title {
         font-size: var(--font-size-3xl);
     }
-    
+
     .hero-buttons {
         flex-direction: column;
         align-items: center;
     }
-    
+
     .hero-stats {
         justify-content: center;
     }
-    
+
     .code-window {
         transform: none;
     }
-    
+
     .features-grid {
         grid-template-columns: 1fr;
     }
-    
+
     .step {
         flex-direction: column;
         text-align: center;
     }
-    
+
     .tab-buttons {
         flex-wrap: wrap;
     }
-    
+
     .footer-content {
         grid-template-columns: 1fr;
         text-align: center;
@@ -1337,5 +1337,81 @@ body {
     }
     20%, 40% {
         transform: scale(1);
+    }
+}
+
+/* NEW Feature Banner */
+.new-feature-banner {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+    padding: 0.75rem 0;
+    text-align: center;
+    position: relative;
+    z-index: 100;
+}
+
+.new-feature-banner .container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.new-badge {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+.new-text {
+    font-size: 0.95rem;
+}
+
+.new-link {
+    color: white;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.new-link:hover {
+    opacity: 0.9;
+}
+
+/* Feature Card with NEW badge */
+.feature-card.feature-new {
+    position: relative;
+    border: 2px solid #10b981;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(5, 150, 105, 0.05) 100%);
+}
+
+.feature-badge-new {
+    position: absolute;
+    top: -0.75rem;
+    right: 1rem;
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+[data-theme="dark"] .feature-card.feature-new {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(5, 150, 105, 0.1) 100%);
+}
+
+/* Responsive adjustments for new feature banner */
+@media (max-width: 768px) {
+    .new-feature-banner .container {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .new-text {
+        font-size: 0.875rem;
     }
 }

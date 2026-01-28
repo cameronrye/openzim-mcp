@@ -9,6 +9,8 @@ platform-specific process detection approach.
 import json
 import logging
 import os
+import platform
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -259,9 +261,6 @@ class InstanceTracker:
 
     def _is_process_running(self, pid: int) -> bool:
         """Check if a process is running by PID."""
-        import platform
-        import subprocess
-
         if platform.system() == "Windows":
             try:
                 result = subprocess.run(
@@ -270,7 +269,10 @@ class InstanceTracker:
                     text=True,
                     timeout=5,
                 )
-                return result.returncode == 0
+                # tasklist always returns 0, so check if PID appears in output
+                # When no process matches, output contains "No tasks are running"
+                # or similar message instead of the actual PID
+                return str(pid) in result.stdout
             except (subprocess.TimeoutExpired, FileNotFoundError):
                 return False
         else:

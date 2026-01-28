@@ -547,6 +547,93 @@ Extract and categorize all internal and external links from an article with deta
 }
 ```
 
+### get_binary_entry
+
+Retrieve binary content from a ZIM entry, enabling integration with external tools for processing embedded media like PDFs, videos, and images.
+
+**Required Parameters**:
+
+- `zim_file_path` (string): Path to the ZIM file
+- `entry_path` (string): Entry path (e.g., 'I/image.png' or 'I/document.pdf')
+
+**Optional Parameters**:
+
+- `max_size_bytes` (integer): Maximum size of content to return in bytes (default: 10MB). Content larger than this will return metadata only.
+- `include_data` (boolean): If true (default), include base64-encoded data. Set to false to retrieve metadata only without the binary data.
+
+**Returns**: JSON with binary content metadata and optionally base64-encoded data
+
+**Features**:
+
+- Base64 encoding for safe transport through text-based protocols
+- Size limits with truncation handling for large files
+- Metadata-only mode for discovering content without downloading
+- Smart retrieval with automatic path resolution
+- Human-readable size formatting
+
+**Example**:
+
+```json
+{
+  "name": "get_binary_entry",
+  "arguments": {
+    "zim_file_path": "/path/to/file.zim",
+    "entry_path": "I/document.pdf"
+  }
+}
+```
+
+**Response Structure**:
+
+```json
+{
+  "path": "I/document.pdf",
+  "title": "Important Document",
+  "mime_type": "application/pdf",
+  "size": 245678,
+  "size_human": "239.92 KB",
+  "encoding": "base64",
+  "data": "JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC...",
+  "truncated": false
+}
+```
+
+**Metadata-Only Example** (for large files or discovery):
+
+```json
+{
+  "name": "get_binary_entry",
+  "arguments": {
+    "zim_file_path": "/path/to/file.zim",
+    "entry_path": "I/large_video.mp4",
+    "include_data": false
+  }
+}
+```
+
+**Response**:
+
+```json
+{
+  "path": "I/large_video.mp4",
+  "title": "Tutorial Video",
+  "mime_type": "video/mp4",
+  "size": 52428800,
+  "size_human": "50.00 MB",
+  "encoding": null,
+  "data": null,
+  "truncated": false,
+  "message": "Data not included (include_data=False)"
+}
+```
+
+**Use Cases**:
+
+- **PDF Processing**: Extract PDFs and pass to PDF parsing tools for text extraction or summarization
+- **Image Analysis**: Pass images to vision models or OCR tools
+- **Video/Audio Transcription**: Retrieve media files for transcription services
+- **Multi-Agent Workflows**: Enable knowledge agents to delegate specialized content processing to other tools
+
 ## Server Management Tools
 
 ### get_server_health
