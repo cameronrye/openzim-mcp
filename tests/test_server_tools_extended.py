@@ -9,9 +9,7 @@ These tests focus on the untested paths in server_tools.py:
 """
 
 import json
-import os
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

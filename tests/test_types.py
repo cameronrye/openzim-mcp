@@ -9,9 +9,7 @@ This module tests the TypedDict definitions to ensure they:
 
 from typing import get_type_hints
 
-import pytest
-
-from openzim_mcp.types import (  # ZIM File Listing Types; Search Types; Namespace Types; Instance Tracking and Conflict Types; Health Check Types; Binary Entry Types; Article Structure Types; Link Extraction Types; Summary Types; Table of Contents Types; Diagnostics Types; Conflict Resolution Types
+from openzim_mcp.types import (
     ArticleMetadata,
     ArticleStructure,
     BinaryEntryResponse,

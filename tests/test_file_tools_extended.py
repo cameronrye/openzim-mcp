@@ -8,7 +8,7 @@ These tests focus on the untested paths in file_tools.py:
 - Warning text formatting
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

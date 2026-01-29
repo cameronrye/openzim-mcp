@@ -9,7 +9,7 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpRateLimitError
 from openzim_mcp.server import OpenZimMcpServer
-from openzim_mcp.tools.navigation_tools import register_navigation_tools
+from openzim_mcp.tools.navigation_tools import register_navigation_tools  # noqa: F401
 
 
 class TestRegisterNavigationTools:

@@ -9,7 +9,7 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpRateLimitError
 from openzim_mcp.server import OpenZimMcpServer
-from openzim_mcp.tools.metadata_tools import register_metadata_tools
+from openzim_mcp.tools.metadata_tools import register_metadata_tools  # noqa: F401
 
 
 class TestRegisterMetadataTools:
