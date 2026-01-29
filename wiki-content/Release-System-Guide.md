@@ -14,14 +14,14 @@ OpenZIM MCP features a sophisticated automated release system built on [Release 
 ┌─────────────────────────────────────────────────────────────┐
 │                 Release System Architecture                 │
 │                                                             │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
-│  │ Conventional│ │ Release     │ │    GitHub Actions   │   │
-│  │  Commits    │ │  Please     │ │     Workflows       │   │
-│  │             │ │             │ │                     │   │
-│  │ • feat:     │ │ • Version   │ │ • CI/CD Pipeline    │   │
-│  │ • fix:      │ │ • Changelog │ │ • Testing           │   │
-│  │ • docs:     │ │ • Tags      │ │ • PyPI Deployment   │   │
-│  └─────────────┘ └─────────────┘ └─────────────────────┘   │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐    │
+│  │ Conventional│ │ Release     │ │    GitHub Actions   │    │
+│  │  Commits    │ │  Please     │ │     Workflows       │    │
+│  │             │ │             │ │                     │    │
+│  │ • feat:     │ │ • Version   │ │ • CI/CD Pipeline    │    │
+│  │ • fix:      │ │ • Changelog │ │ • Testing           │    │
+│  │ • docs:     │ │ • Tags      │ │ • PyPI Deployment   │    │
+│  └─────────────┘ └─────────────┘ └─────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
