@@ -12,9 +12,14 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .constants import (
+    DEFAULT_CACHE_PERSISTENCE_ENABLED,
+    DEFAULT_CACHE_PERSISTENCE_PATH,
     DEFAULT_CACHE_SIZE,
     DEFAULT_CACHE_TTL,
     DEFAULT_MAX_CONTENT_LENGTH,
+    DEFAULT_RATE_LIMIT_BURST,
+    DEFAULT_RATE_LIMIT_ENABLED,
+    DEFAULT_RATE_LIMIT_RPS,
     DEFAULT_SEARCH_LIMIT,
     DEFAULT_SNIPPET_LENGTH,
     VALID_TOOL_MODES,
@@ -28,6 +33,16 @@ class CacheConfig(BaseModel):
     enabled: bool = True
     max_size: int = Field(default=DEFAULT_CACHE_SIZE, ge=1, le=10000)
     ttl_seconds: int = Field(default=DEFAULT_CACHE_TTL, ge=60, le=86400)
+    persistence_enabled: bool = Field(default=DEFAULT_CACHE_PERSISTENCE_ENABLED)
+    persistence_path: str = Field(default=DEFAULT_CACHE_PERSISTENCE_PATH)
+
+
+class RateLimitConfig(BaseModel):
+    """Rate limiting configuration settings."""
+
+    enabled: bool = Field(default=DEFAULT_RATE_LIMIT_ENABLED)
+    requests_per_second: float = Field(default=DEFAULT_RATE_LIMIT_RPS, gt=0)
+    burst_size: int = Field(default=DEFAULT_RATE_LIMIT_BURST, ge=1, le=1000)
 
 
 class ContentConfig(BaseModel):
@@ -64,12 +79,13 @@ class OpenZimMcpConfig(BaseSettings):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     content: ContentConfig = Field(default_factory=ContentConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
 
     # Server settings
     server_name: str = "openzim-mcp"
     tool_mode: Literal["advanced", "simple"] = Field(
         default="simple",
-        description="Tool mode: 'advanced' for all 16 tools, 'simple' for 2 smart tools",
+        description="Tool mode: 'advanced' for all 18 tools, 'simple' for 1 intelligent tool plus underlying tools",
     )
 
     model_config = SettingsConfigDict(
@@ -140,6 +156,9 @@ class OpenZimMcpConfig(BaseSettings):
             "search_default_limit": self.content.default_search_limit,
             "server_name": self.server_name,
             "tool_mode": self.tool_mode,
+            "rate_limit_enabled": self.rate_limit.enabled,
+            "rate_limit_rps": self.rate_limit.requests_per_second,
+            "rate_limit_burst": self.rate_limit.burst_size,
         }
 
         # Convert to JSON string with sorted keys for consistent hashing
@@ -147,25 +166,3 @@ class OpenZimMcpConfig(BaseSettings):
 
         # Generate SHA-256 hash
         return hashlib.sha256(config_json.encode("utf-8")).hexdigest()
-
-    def get_config_summary(self) -> dict:
-        """
-        Get a human-readable summary of the configuration.
-
-        Returns:
-            Dictionary containing key configuration details
-        """
-        return {
-            "server_name": self.server_name,
-            "tool_mode": self.tool_mode,
-            "allowed_directories_count": len(self.allowed_directories),
-            "allowed_directories": self.allowed_directories,
-            "cache_enabled": self.cache.enabled,
-            "cache_max_size": self.cache.max_size,
-            "cache_ttl_seconds": self.cache.ttl_seconds,
-            "content_max_length": self.content.max_content_length,
-            "content_snippet_length": self.content.snippet_length,
-            "search_default_limit": self.content.default_search_limit,
-            "logging_level": self.logging.level,
-            "config_hash": self.get_config_hash(),
-        }

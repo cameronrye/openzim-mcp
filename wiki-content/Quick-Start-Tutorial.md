@@ -9,7 +9,7 @@ Get up and running with OpenZIM MCP in just a few minutes! This tutorial will wa
 - How to perform basic searches and content retrieval
 - How to verify everything is working correctly
 
-## ⏱ Time Required: ~10 minutes
+## Time Required: ~10 minutes
 
 ## Before You Start
 
@@ -230,7 +230,7 @@ Congratulations! You now have OpenZIM MCP running successfully. Here's what you 
 - **[Contributing Guidelines](https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md)** - Contribute to the project
 - **[Testing Guide](https://github.com/cameronrye/openzim-mcp/blob/main/docs/TESTING.md)** - Run tests and add new ones
 
-## 🆘 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 

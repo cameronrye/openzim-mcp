@@ -1,6 +1,6 @@
 [project]
 name = "openzim-mcp"
-version = "0.7.1"
+version = "0.8.0"
 description = "OpenZIM MCP - ZIM MCP Server that enables AI models to access and search ZIM format knowledge bases offline"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -44,7 +44,7 @@ dependencies = [
     "beautifulsoup4>=4.14.2",
     "html2text>=2025.4.15",
     "libzim>=3.8.0",
-    "mcp[cli]>=1.21.0",
+    "mcp[cli]>=1.23.0",
     "pydantic>=2.12.0",
     "pydantic-settings>=2.12.0",
 ]
@@ -61,8 +61,9 @@ Documentation = "https://github.com/cameronrye/openzim-mcp#readme"
 [project.scripts]
 openzim-mcp = "openzim_mcp.__main__:main"
 
-[tool.setuptools]
-packages = ["openzim_mcp"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openzim_mcp*"]
 
 
 

@@ -208,7 +208,7 @@ class TestDiagnosticTools:
             "test operation", error, "test context"
         )
 
-        assert "❌ **File Not Found Error**" in message
+        assert "**File Not Found Error**" in message
         assert "**Operation**: test operation" in message
         assert "**Context**: test context" in message
         assert "**Troubleshooting Steps**:" in message
@@ -220,7 +220,7 @@ class TestDiagnosticTools:
             "archive operation", error, "archive context"
         )
 
-        assert "❌ **Archive Operation Error**" in message
+        assert "**Archive Operation Error**" in message
         assert "diagnose_server_state()" in message
 
     @pytest.mark.asyncio
@@ -247,7 +247,7 @@ class TestDiagnosticTools:
 
             content = result[0][0].text
             assert "Search results" in content
-            assert "🔍 **Server Conflict Detected**" in content
+            assert "**Server Conflict Detected**" in content
             assert "resolve_server_conflicts()" in content
 
     def test_environment_validation_comprehensive(self, server, temp_dir):
@@ -295,7 +295,7 @@ class TestDiagnosticTools:
         )
 
         content = result[0][0].text
-        assert "⚠️ **Parameter Validation Error**" in content
+        assert "**Parameter Validation Error**" in content
         assert "limit must be between 1 and 100" in content
         assert "**Troubleshooting**:" in content
         assert "**Example**:" in content

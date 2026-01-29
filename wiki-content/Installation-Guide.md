@@ -361,7 +361,7 @@ No ZIM files found in directory
 - **Open an issue** on [GitHub](https://github.com/cameronrye/openzim-mcp/issues)
 - **Join discussions** on [GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions)
 
-## ⏭ Next Steps
+## Next Steps
 
 1. **[Quick Start Tutorial](Quick-Start-Tutorial)** - Learn basic usage
 2. **[Configuration Guide](Configuration-Guide)** - Customize your setup

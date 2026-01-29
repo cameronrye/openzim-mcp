@@ -21,7 +21,7 @@ class TestIntentParser:
             "get zim files",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "list_files", f"Failed for query: {query}"
 
     def test_parse_metadata_intent(self):
@@ -32,7 +32,7 @@ class TestIntentParser:
             "details of the archive",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "metadata", f"Failed for query: {query}"
 
     def test_parse_main_page_intent(self):
@@ -43,7 +43,7 @@ class TestIntentParser:
             "get start page",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "main_page", f"Failed for query: {query}"
 
     def test_parse_list_namespaces_intent(self):
@@ -54,7 +54,7 @@ class TestIntentParser:
             "what namespaces exist",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "list_namespaces", f"Failed for query: {query}"
 
     def test_parse_browse_intent(self):
@@ -65,13 +65,13 @@ class TestIntentParser:
             "show entries in namespace C",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "browse", f"Failed for query: {query}"
 
     def test_parse_browse_intent_with_namespace(self):
         """Test extracting namespace from browse queries."""
         query = "browse namespace C"
-        intent, params = IntentParser.parse_intent(query)
+        intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "browse"
         assert params.get("namespace") == "C"
 
@@ -83,7 +83,7 @@ class TestIntentParser:
             "sections of Protein",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "structure", f"Failed for query: {query}"
 
     def test_parse_links_intent(self):
@@ -94,7 +94,7 @@ class TestIntentParser:
             # Note: "related articles in Protein" is ambiguous and may match browse
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "links", f"Failed for query: {query}"
 
     def test_parse_suggestions_intent(self):
@@ -105,7 +105,7 @@ class TestIntentParser:
             "hints for prot",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "suggestions", f"Failed for query: {query}"
 
     def test_parse_filtered_search_intent(self):
@@ -115,7 +115,7 @@ class TestIntentParser:
             "find biology within type text/html",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "filtered_search", f"Failed for query: {query}"
 
     def test_parse_get_article_intent(self):
@@ -126,7 +126,7 @@ class TestIntentParser:
             "read page Protein",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "get_article", f"Failed for query: {query}"
 
     def test_parse_search_intent(self):
@@ -137,27 +137,27 @@ class TestIntentParser:
             "look for protein",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "search", f"Failed for query: {query}"
 
     def test_parse_default_to_search(self):
         """Test that ambiguous queries default to search."""
         query = "biology evolution protein"
-        intent, params = IntentParser.parse_intent(query)
+        intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "search"
         assert params.get("query") == query
 
     def test_extract_entry_path_from_quoted_string(self):
         """Test extracting entry path from quoted strings."""
         query = 'get article "C/Biology"'
-        intent, params = IntentParser.parse_intent(query)
+        intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "get_article"
         assert params.get("entry_path") == "C/Biology"
 
     def test_extract_search_query_with_filters(self):
         """Test extracting search query and filters."""
         query = "search evolution in namespace C"
-        intent, params = IntentParser.parse_intent(query)
+        intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "filtered_search"
         assert "evolution" in params.get("query", "").lower()
         assert params.get("namespace") == "C"
@@ -171,7 +171,7 @@ class TestIntentParser:
             "fetch raw content from video.mp4",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "binary", f"Failed for query: {query}"
 
     def test_parse_binary_intent_media_types(self):
@@ -184,27 +184,27 @@ class TestIntentParser:
             "download media file.jpg",
         ]
         for query in queries:
-            intent, params = IntentParser.parse_intent(query)
+            intent, params, _ = IntentParser.parse_intent(query)
             assert intent == "binary", f"Failed for query: {query}"
 
     def test_extract_binary_entry_path_quoted(self):
         """Test extracting entry path from quoted strings for binary intent."""
         query = 'get binary content from "I/my-image.png"'
-        intent, params = IntentParser.parse_intent(query)
+        intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "binary"
         assert params.get("entry_path") == "I/my-image.png"
 
     def test_extract_binary_entry_path_unquoted(self):
         """Test extracting entry path from unquoted strings for binary intent."""
         query = "extract pdf I/document.pdf"
-        intent, params = IntentParser.parse_intent(query)
+        intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "binary"
         assert params.get("entry_path") == "I/document.pdf"
 
     def test_binary_metadata_only_mode(self):
         """Test detecting metadata only mode for binary intent."""
         query = "get binary content metadata only for I/image.png"
-        intent, params = IntentParser.parse_intent(query)
+        intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "binary"
         assert params.get("include_data") is False
 
@@ -297,10 +297,10 @@ class TestSimpleToolsHandler:
 
     def test_auto_select_single_file(self, handler, mock_zim_operations):
         """Test auto-selecting ZIM file when only one exists."""
-        # Mock list_zim_files to return a single file
-        mock_zim_operations.list_zim_files.return_value = (
-            'Found 1 ZIM file:\n[{"path": "/test/single.zim", "name": "single.zim"}]'
-        )
+        # Mock list_zim_files_data to return a single file (structured data)
+        mock_zim_operations.list_zim_files_data.return_value = [
+            {"path": "/test/single.zim", "name": "single.zim"}
+        ]
 
         handler.handle_zim_query("search for biology")
         # Should auto-select the file and perform search
@@ -308,7 +308,12 @@ class TestSimpleToolsHandler:
 
     def test_no_file_specified_multiple_files(self, handler, mock_zim_operations):
         """Test error when no file specified and multiple files exist."""
-        # Mock list_zim_files to return multiple files
+        # Mock list_zim_files_data to return multiple files (structured data)
+        mock_zim_operations.list_zim_files_data.return_value = [
+            {"path": "/test/file1.zim"},
+            {"path": "/test/file2.zim"},
+        ]
+        # Also mock list_zim_files for the error message display
         mock_zim_operations.list_zim_files.return_value = (
             "Found 2 ZIM files:\n"
             '[{"path": "/test/file1.zim"}, {"path": "/test/file2.zim"}]'

@@ -6,7 +6,6 @@ This script provides cross-platform compatibility for the make clean command.
 
 import os
 import shutil
-import sys
 from pathlib import Path
 
 

@@ -15,6 +15,42 @@ from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
 logger = logging.getLogger(__name__)
 
 
+class ParsedHTML:
+    """Container for pre-parsed HTML to enable reuse across multiple operations.
+
+    This class allows parsing HTML once and using it for multiple extraction
+    operations (text conversion, structure extraction, link extraction) without
+    re-parsing the HTML each time.
+
+    Example:
+        >>> processor = ContentProcessor()
+        >>> parsed = processor.parse_html("<html><body><h1>Title</h1></body></html>")
+        >>> text = processor.html_to_plain_text_from_parsed(parsed)
+        >>> structure = processor.extract_html_structure_from_parsed(parsed)
+    """
+
+    def __init__(self, html_content: str):
+        """Parse HTML content once for reuse.
+
+        Args:
+            html_content: Raw HTML string to parse
+        """
+        self.original_html = html_content
+        self._soup = BeautifulSoup(html_content, "html.parser")
+        # Store a copy of the original parsed soup for operations that modify it
+        self._original_soup_html = str(self._soup)
+
+    @property
+    def soup(self) -> BeautifulSoup:
+        """Get a fresh copy of the parsed soup (since some operations modify it)."""
+        return BeautifulSoup(self._original_soup_html, "html.parser")
+
+    @property
+    def soup_for_reading(self) -> BeautifulSoup:
+        """Get the original soup for read-only operations (more efficient)."""
+        return self._soup
+
+
 class ContentProcessor:
     """Handles HTML to text conversion and content processing."""
 
@@ -40,6 +76,59 @@ class ContentProcessor:
         converter.unicode_snob = True  # Use Unicode instead of ASCII
         converter.body_width = 0  # No line wrapping
         return converter
+
+    def parse_html(self, html_content: str) -> ParsedHTML:
+        """Parse HTML content once for reuse across multiple operations.
+
+        Use this method when you need to perform multiple operations on the same
+        HTML content (e.g., extract text AND structure AND links). This avoids
+        re-parsing the HTML for each operation.
+
+        Args:
+            html_content: Raw HTML string to parse
+
+        Returns:
+            ParsedHTML container that can be passed to *_from_parsed methods
+
+        Example:
+            >>> parsed = processor.parse_html(html_content)
+            >>> text = processor.html_to_plain_text_from_parsed(parsed)
+            >>> links = processor.extract_html_links_from_parsed(parsed)
+        """
+        return ParsedHTML(html_content)
+
+    def html_to_plain_text_from_parsed(self, parsed: ParsedHTML) -> str:
+        """Convert pre-parsed HTML to clean plain text.
+
+        More efficient when used with parse_html() for multiple operations.
+
+        Args:
+            parsed: Pre-parsed HTML container
+
+        Returns:
+            Converted plain text
+        """
+        try:
+            # Get a copy since we modify the soup
+            soup = parsed.soup
+
+            # Remove unwanted elements
+            for selector in UNWANTED_HTML_SELECTORS:
+                for element in soup.select(selector):
+                    element.decompose()
+
+            # Convert to text using html2text
+            text = self._html_converter.handle(str(soup))
+
+            # Clean up excess empty lines
+            text = re.sub(r"\n{3,}", "\n\n", text)
+
+            return text.strip()
+
+        except Exception as e:
+            logger.warning(f"Error converting HTML to text: {e}")
+            # Fallback: return raw text content
+            return str(parsed.soup_for_reading.get_text().strip())
 
     def html_to_plain_text(self, html_content: str) -> str:
         """
@@ -155,6 +244,19 @@ class ContentProcessor:
             logger.warning(f"Error processing content with MIME type {mime_type}: {e}")
             return f"(Error processing content: {e})"
 
+    def extract_html_structure_from_parsed(self, parsed: ParsedHTML) -> Dict[str, Any]:
+        """Extract structure from pre-parsed HTML including headings and sections.
+
+        More efficient when used with parse_html() for multiple operations.
+
+        Args:
+            parsed: Pre-parsed HTML container
+
+        Returns:
+            Dictionary containing structure information
+        """
+        return self._extract_structure_from_soup(parsed.soup)
+
     def extract_html_structure(self, html_content: str) -> Dict[str, Any]:
         """
         Extract structure from HTML content including headings and sections.
@@ -165,10 +267,36 @@ class ContentProcessor:
         Returns:
             Dictionary containing structure information
         """
-        structure = {"headings": [], "sections": [], "metadata": {}, "word_count": 0}
-
         try:
             soup = BeautifulSoup(html_content, "html.parser")
+            return self._extract_structure_from_soup(soup)
+        except Exception as e:
+            logger.warning(f"Error extracting HTML structure: {e}")
+            return {
+                "headings": [],
+                "sections": [],
+                "metadata": {},
+                "word_count": 0,
+                "error": str(e),
+            }
+
+    def _extract_structure_from_soup(self, soup: BeautifulSoup) -> Dict[str, Any]:
+        """Internal method to extract structure from a BeautifulSoup object.
+
+        Args:
+            soup: BeautifulSoup object (will be modified)
+
+        Returns:
+            Dictionary containing structure information
+        """
+        structure: Dict[str, Any] = {
+            "headings": [],
+            "sections": [],
+            "metadata": {},
+            "word_count": 0,
+        }
+
+        try:
 
             # Extract metadata from meta tags BEFORE removing unwanted elements
             metadata = {}
@@ -261,12 +389,47 @@ class ContentProcessor:
 
         return structure
 
+    def extract_html_links_from_parsed(self, parsed: ParsedHTML) -> Dict[str, Any]:
+        """Extract links from pre-parsed HTML content.
+
+        More efficient when used with parse_html() for multiple operations.
+
+        Args:
+            parsed: Pre-parsed HTML container
+
+        Returns:
+            Dictionary containing link information
+        """
+        # Links extraction is read-only, so we can use the original soup
+        return self._extract_links_from_soup(parsed.soup_for_reading)
+
     def extract_html_links(self, html_content: str) -> Dict[str, Any]:
         """
         Extract links from HTML content.
 
         Args:
             html_content: HTML content to analyze
+
+        Returns:
+            Dictionary containing link information
+        """
+        try:
+            soup = BeautifulSoup(html_content, "html.parser")
+            return self._extract_links_from_soup(soup)
+        except Exception as e:
+            logger.warning(f"Error extracting HTML links: {e}")
+            return {
+                "internal_links": [],
+                "external_links": [],
+                "media_links": [],
+                "error": str(e),
+            }
+
+    def _extract_links_from_soup(self, soup: BeautifulSoup) -> Dict[str, Any]:
+        """Internal method to extract links from a BeautifulSoup object.
+
+        Args:
+            soup: BeautifulSoup object (read-only operation)
 
         Returns:
             Dictionary containing link information
@@ -278,8 +441,6 @@ class ContentProcessor:
         }
 
         try:
-            soup = BeautifulSoup(html_content, "html.parser")
-
             # Extract all links
             for link in soup.find_all("a", href=True):
                 if isinstance(link, Tag):
@@ -298,8 +459,8 @@ class ContentProcessor:
                         # Categorize links
                         if href.startswith(("http://", "https://", "//")):
                             # External link
-                            parsed = urlparse(href)
-                            link_info["domain"] = parsed.netloc
+                            parsed_url = urlparse(href)
+                            link_info["domain"] = parsed_url.netloc
                             links_data["external_links"].append(link_info)
                         elif href.startswith("#"):
                             # Internal anchor

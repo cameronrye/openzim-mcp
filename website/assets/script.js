@@ -1,7 +1,6 @@
 // Theme Management
 function initTheme() {
     const themeToggle = document.getElementById('theme-toggle');
-    const themeIcon = document.getElementById('theme-icon');
     const html = document.documentElement;
 
     // Get saved theme or default to light
@@ -26,7 +25,16 @@ function initTheme() {
     });
 
     function updateThemeIcon(theme) {
-        themeIcon.textContent = theme === 'dark' ? '☀️' : '🌙';
+        const iconSvg = document.getElementById('theme-icon-svg');
+        if (iconSvg) {
+            if (theme === 'dark') {
+                // Sun icon for dark mode (to switch to light)
+                iconSvg.innerHTML = '<circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path>';
+            } else {
+                // Moon icon for light mode (to switch to dark)
+                iconSvg.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>';
+            }
+        }
         themeToggle.setAttribute('aria-label',
             theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
         );
@@ -38,9 +46,9 @@ async function fetchLatestVersion() {
     const versionDisplay = document.getElementById('version-display');
     const fallbackVersion = 'v0.5.1';
 
-    // Show loading state
-    versionDisplay.style.opacity = '0.6';
-    versionDisplay.textContent = 'Loading...';
+    // Show loading skeleton
+    versionDisplay.classList.add('loading');
+    versionDisplay.textContent = 'v0.0.0';
 
     try {
         // Check cache first
@@ -50,8 +58,8 @@ async function fetchLatestVersion() {
             const oneHour = 60 * 60 * 1000;
 
             if (Date.now() - cacheData.timestamp < oneHour) {
+                versionDisplay.classList.remove('loading');
                 versionDisplay.textContent = cacheData.version;
-                versionDisplay.style.opacity = '1';
                 return;
             }
         }
@@ -67,12 +75,9 @@ async function fetchLatestVersion() {
         const data = await response.json();
         const version = data.tag_name || fallbackVersion;
 
-        // Animate the version update
-        versionDisplay.style.opacity = '0';
-        setTimeout(() => {
-            versionDisplay.textContent = version;
-            versionDisplay.style.opacity = '1';
-        }, 150);
+        // Remove loading state and show version
+        versionDisplay.classList.remove('loading');
+        versionDisplay.textContent = version;
 
         // Cache the version for 1 hour
         const cacheData = {
@@ -84,12 +89,9 @@ async function fetchLatestVersion() {
     } catch (error) {
         console.log('Using fallback version due to:', error.message);
 
-        // Use fallback version with animation
-        versionDisplay.style.opacity = '0';
-        setTimeout(() => {
-            versionDisplay.textContent = fallbackVersion;
-            versionDisplay.style.opacity = '1';
-        }, 150);
+        // Remove loading state and use fallback version
+        versionDisplay.classList.remove('loading');
+        versionDisplay.textContent = fallbackVersion;
     }
 }
 
@@ -173,30 +175,34 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 // Copy to clipboard functionality
 function initCopyButtons() {
     const copyButtons = document.querySelectorAll('.copy-btn');
-    
+    const clipboardSvg = '<span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span>';
+    const checkSvg = '<span class="icon"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span>';
+
     copyButtons.forEach(button => {
         button.addEventListener('click', async function() {
             const targetId = this.getAttribute('data-clipboard-target');
             const targetElement = document.querySelector(targetId);
-            
+
             if (targetElement) {
                 const text = targetElement.textContent || targetElement.innerText;
-                
+
                 try {
                     await navigator.clipboard.writeText(text);
-                    
-                    // Visual feedback
+
+                    // Visual feedback - icon change
                     const originalIcon = this.querySelector('.copy-icon');
-                    const originalText = originalIcon.textContent;
-                    originalIcon.textContent = '✅';
-                    
+                    originalIcon.innerHTML = checkSvg;
+
+                    // Show toast notification
+                    showCopyToast();
+
                     setTimeout(() => {
-                        originalIcon.textContent = originalText;
+                        originalIcon.innerHTML = clipboardSvg;
                     }, 2000);
-                    
+
                 } catch (err) {
                     console.error('Failed to copy text: ', err);
-                    
+
                     // Fallback for older browsers
                     const textArea = document.createElement('textarea');
                     textArea.value = text;
@@ -204,14 +210,16 @@ function initCopyButtons() {
                     textArea.select();
                     document.execCommand('copy');
                     document.body.removeChild(textArea);
-                    
-                    // Visual feedback
+
+                    // Visual feedback - icon change
                     const originalIcon = this.querySelector('.copy-icon');
-                    const originalText = originalIcon.textContent;
-                    originalIcon.textContent = '✅';
-                    
+                    originalIcon.innerHTML = checkSvg;
+
+                    // Show toast notification
+                    showCopyToast();
+
                     setTimeout(() => {
-                        originalIcon.textContent = originalText;
+                        originalIcon.innerHTML = clipboardSvg;
                     }, 2000);
                 }
             }
@@ -223,15 +231,15 @@ function initCopyButtons() {
 function initTabs() {
     const tabButtons = document.querySelectorAll('.tab-btn');
     const tabPanes = document.querySelectorAll('.tab-pane');
-    
+
     tabButtons.forEach(button => {
         button.addEventListener('click', function() {
             const targetTab = this.getAttribute('data-tab');
-            
+
             // Remove active class from all buttons and panes
             tabButtons.forEach(btn => btn.classList.remove('active'));
             tabPanes.forEach(pane => pane.classList.remove('active'));
-            
+
             // Add active class to clicked button and corresponding pane
             this.classList.add('active');
             const targetPane = document.getElementById(targetTab);
@@ -244,13 +252,93 @@ function initTabs() {
 
 // Tab content is now in HTML, no need for dynamic generation
 
+// Scroll Progress Indicator
+function initScrollProgress() {
+    const scrollProgress = document.getElementById('scroll-progress');
+    if (!scrollProgress) return;
+
+    function updateScrollProgress() {
+        const scrollTop = window.scrollY;
+        const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+        const scrollPercent = (scrollTop / docHeight) * 100;
+        scrollProgress.style.width = scrollPercent + '%';
+    }
+
+    window.addEventListener('scroll', updateScrollProgress, { passive: true });
+    updateScrollProgress();
+}
+
+// Back to Top Button
+function initBackToTop() {
+    const backToTop = document.getElementById('back-to-top');
+    if (!backToTop) return;
+
+    function toggleBackToTop() {
+        if (window.scrollY > 500) {
+            backToTop.classList.add('visible');
+        } else {
+            backToTop.classList.remove('visible');
+        }
+    }
+
+    window.addEventListener('scroll', toggleBackToTop, { passive: true });
+
+    backToTop.addEventListener('click', function() {
+        window.scrollTo({
+            top: 0,
+            behavior: 'smooth'
+        });
+    });
+
+    toggleBackToTop();
+}
+
+// Active Navigation Highlighting (Scroll Spy)
+function initScrollSpy() {
+    const sections = document.querySelectorAll('section[id]');
+    const navLinks = document.querySelectorAll('.nav-link[href^="#"]');
+
+    function updateActiveLink() {
+        const scrollY = window.scrollY + 100;
+
+        sections.forEach(section => {
+            const sectionTop = section.offsetTop;
+            const sectionHeight = section.offsetHeight;
+            const sectionId = section.getAttribute('id');
+
+            if (scrollY >= sectionTop && scrollY < sectionTop + sectionHeight) {
+                navLinks.forEach(link => {
+                    link.classList.remove('active');
+                    if (link.getAttribute('href') === '#' + sectionId) {
+                        link.classList.add('active');
+                    }
+                });
+            }
+        });
+    }
+
+    window.addEventListener('scroll', updateActiveLink, { passive: true });
+    updateActiveLink();
+}
+
+// Copy Toast Notification
+function showCopyToast() {
+    const toast = document.getElementById('copy-toast');
+    if (!toast) return;
+
+    toast.classList.add('visible');
+    setTimeout(() => {
+        toast.classList.remove('visible');
+    }, 2000);
+}
+
 // Intersection Observer for animations
 function initScrollAnimations() {
     const observerOptions = {
         threshold: 0.1,
         rootMargin: '0px 0px -50px 0px'
     };
-    
+
     const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
@@ -259,7 +347,7 @@ function initScrollAnimations() {
             }
         });
     }, observerOptions);
-    
+
     // Observe feature cards
     document.querySelectorAll('.feature-card').forEach(card => {
         card.style.opacity = '0';
@@ -267,7 +355,7 @@ function initScrollAnimations() {
         card.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
         observer.observe(card);
     });
-    
+
     // Observe installation steps
     document.querySelectorAll('.step').forEach(step => {
         step.style.opacity = '0';
@@ -280,11 +368,11 @@ function initScrollAnimations() {
 // Add keyboard navigation for tabs
 function initKeyboardNavigation() {
     const tabButtons = document.querySelectorAll('.tab-btn');
-    
+
     tabButtons.forEach((button, index) => {
         button.addEventListener('keydown', function(e) {
             let targetIndex;
-            
+
             switch(e.key) {
                 case 'ArrowLeft':
                     e.preventDefault();
@@ -316,7 +404,7 @@ function initKeyboardNavigation() {
 // Performance optimization: Lazy load images
 function initLazyLoading() {
     const images = document.querySelectorAll('img[data-src]');
-    
+
     const imageObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
@@ -327,7 +415,7 @@ function initLazyLoading() {
             }
         });
     });
-    
+
     images.forEach(img => imageObserver.observe(img));
 }
 
@@ -340,19 +428,22 @@ document.addEventListener('DOMContentLoaded', function() {
     initScrollAnimations();
     initKeyboardNavigation();
     initLazyLoading();
+    initScrollProgress();
+    initBackToTop();
+    initScrollSpy();
 });
 
 // Add some Easter eggs for developers
 console.log(`
-🧠 OpenZIM MCP - Intelligent Knowledge Access for AI Models
+OpenZIM MCP - Intelligent Knowledge Access for AI Models
 
-Thanks for checking out the console! 
+Thanks for checking out the console!
 
-If you're interested in contributing to OpenZIM MCP, 
+If you're interested in contributing to OpenZIM MCP,
 check out our GitHub repository:
 https://github.com/cameronrye/openzim-mcp
 
-Built with ❤️ by the OpenZIM MCP Development Team
+Built with care by Cameron Rye
 `);
 
 // Enhanced error handling for theme changes

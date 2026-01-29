@@ -1,62 +1,71 @@
 """
 Constants used throughout the OpenZIM MCP server.
+
+NOTE: This module re-exports values from defaults.py for backward compatibility.
+New code should import from defaults.py directly for access to the structured
+defaults classes.
 """
 
-# Tool mode constants
-TOOL_MODE_ADVANCED = "advanced"
-TOOL_MODE_SIMPLE = "simple"
-VALID_TOOL_MODES = {TOOL_MODE_ADVANCED, TOOL_MODE_SIMPLE}
+# Import from centralized defaults for backward compatibility
+# These are re-exported for external consumers
+from .defaults import (  # noqa: F401
+    CACHE,
+    CACHE_PERFORMANCE,
+    CONTENT,
+    INPUT_LIMITS,
+    NAMESPACE_SAMPLING,
+    RATE_LIMIT,
+    SERVER,
+    TIMEOUTS,
+    TOOL_MODE_ADVANCED,
+    TOOL_MODE_SIMPLE,
+    UNWANTED_HTML_SELECTORS,
+    VALID_TOOL_MODES,
+    VALID_TRANSPORT_TYPES,
+    ZIM_FILE_EXTENSION,
+)
 
+# Re-export legacy constant names for backward compatibility
 # Content processing constants
-DEFAULT_SNIPPET_LENGTH = 1000
-DEFAULT_MAX_CONTENT_LENGTH = 100000
-DEFAULT_SEARCH_LIMIT = 10
-DEFAULT_SEARCH_OFFSET = 0
-
-# File validation constants
-ZIM_FILE_EXTENSION = ".zim"
-SUPPORTED_MIME_TYPES = {
-    "text/html",
-    "text/plain",
-    "text/markdown",
-    "text/css",
-    "text/javascript",
-}
-
-# HTML processing constants
-UNWANTED_HTML_SELECTORS = [
-    "script",
-    "style",
-    "meta",
-    "link",
-    "head",
-    "footer",
-    ".mw-parser-output .reflist",
-    ".mw-editsection",
-]
-
-# Logging configuration
-LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+DEFAULT_SNIPPET_LENGTH = CONTENT.SNIPPET_LENGTH
+DEFAULT_MAX_CONTENT_LENGTH = CONTENT.MAX_CONTENT_LENGTH
+DEFAULT_SEARCH_LIMIT = CONTENT.SEARCH_LIMIT
 
 # Cache configuration
-DEFAULT_CACHE_SIZE = 100
-DEFAULT_CACHE_TTL = 3600  # 1 hour in seconds
+DEFAULT_CACHE_SIZE = CACHE.MAX_SIZE
+DEFAULT_CACHE_TTL = CACHE.TTL_SECONDS
 
 # Binary content retrieval constants
-DEFAULT_MAX_BINARY_SIZE = 10_000_000  # 10MB default limit for binary content
+DEFAULT_MAX_BINARY_SIZE = CONTENT.MAX_BINARY_SIZE
 
-# Input validation limits (for sanitize_input)
-# These limits prevent resource exhaustion and ensure reasonable input sizes
-INPUT_LIMIT_FILE_PATH = 1000  # Maximum length for file paths
-INPUT_LIMIT_QUERY = 500  # Maximum length for search queries
-INPUT_LIMIT_ENTRY_PATH = 500  # Maximum length for entry paths
-INPUT_LIMIT_NAMESPACE = 100  # Maximum length for namespace identifiers
-INPUT_LIMIT_CONTENT_TYPE = 100  # Maximum length for content type strings
-INPUT_LIMIT_PARTIAL_QUERY = 200  # Maximum length for autocomplete queries
+# Input validation limits
+INPUT_LIMIT_FILE_PATH = INPUT_LIMITS.FILE_PATH
+INPUT_LIMIT_QUERY = INPUT_LIMITS.QUERY
+INPUT_LIMIT_ENTRY_PATH = INPUT_LIMITS.ENTRY_PATH
+INPUT_LIMIT_NAMESPACE = INPUT_LIMITS.NAMESPACE
+INPUT_LIMIT_CONTENT_TYPE = INPUT_LIMITS.CONTENT_TYPE
+INPUT_LIMIT_PARTIAL_QUERY = INPUT_LIMITS.PARTIAL_QUERY
 
 # Regex timeout for intent parsing (seconds)
-REGEX_TIMEOUT_SECONDS = 1.0
+REGEX_TIMEOUT_SECONDS = TIMEOUTS.REGEX_SECONDS
 
-# Valid transport types for MCP server
-VALID_TRANSPORT_TYPES = {"stdio", "sse", "streamable-http"}
+# Rate limiting defaults
+DEFAULT_RATE_LIMIT_ENABLED = RATE_LIMIT.ENABLED
+DEFAULT_RATE_LIMIT_RPS = RATE_LIMIT.REQUESTS_PER_SECOND
+DEFAULT_RATE_LIMIT_BURST = RATE_LIMIT.BURST_SIZE
+
+# Cache persistence defaults
+DEFAULT_CACHE_PERSISTENCE_ENABLED = CACHE.PERSISTENCE_ENABLED
+DEFAULT_CACHE_PERSISTENCE_PATH = CACHE.PERSISTENCE_PATH
+
+# Main page display
+DEFAULT_MAIN_PAGE_TRUNCATION = CONTENT.MAIN_PAGE_TRUNCATION
+
+# Cache performance thresholds
+CACHE_LOW_HIT_RATE_THRESHOLD = CACHE_PERFORMANCE.LOW_HIT_RATE
+CACHE_HIGH_HIT_RATE_THRESHOLD = CACHE_PERFORMANCE.HIGH_HIT_RATE
+
+# Namespace sampling
+NAMESPACE_MAX_SAMPLE_SIZE = NAMESPACE_SAMPLING.MAX_SAMPLE_SIZE
+NAMESPACE_MAX_ENTRIES = NAMESPACE_SAMPLING.MAX_NAMESPACE_ENTRIES
+NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER = NAMESPACE_SAMPLING.MAX_SAMPLE_ATTEMPTS_MULTIPLIER

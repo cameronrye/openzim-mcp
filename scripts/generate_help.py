@@ -4,26 +4,25 @@ Generate help output for the Makefile by parsing targets and their comments.
 This script provides cross-platform compatibility for the make help command.
 """
 
-import re
-import sys
 import os
+import re
 import signal
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 # Enable ANSI colors on Windows
-if os.name == 'nt':
+if os.name == "nt":
     try:
         # Enable ANSI escape sequence processing on Windows 10+
-        import subprocess
-        subprocess.run([''], shell=True, check=True, capture_output=True)
-        os.system('')
-    except:
+        os.system("")
+    except OSError:
         pass
 
 
 class RegexTimeoutError(Exception):
     """Raised when regex processing takes too long."""
+
     pass
 
 
@@ -32,7 +31,9 @@ def timeout_handler(signum, frame):
     raise RegexTimeoutError("Regex processing timed out")
 
 
-def safe_regex_findall(pattern: str, text: str, flags: int = 0, timeout: int = 5) -> List[Tuple[str, str]]:
+def safe_regex_findall(
+    pattern: str, text: str, flags: int = 0, timeout: int = 5
+) -> List[Tuple[str, str]]:
     """
     Safely execute regex findall with timeout protection.
 
@@ -49,7 +50,8 @@ def safe_regex_findall(pattern: str, text: str, flags: int = 0, timeout: int = 5
         RegexTimeoutError: If regex processing takes longer than timeout
     """
     # Set up timeout handler (Unix-like systems only)
-    if hasattr(signal, 'SIGALRM'):
+    old_handler = None
+    if hasattr(signal, "SIGALRM"):
         old_handler = signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(timeout)
 
@@ -59,14 +61,20 @@ def safe_regex_findall(pattern: str, text: str, flags: int = 0, timeout: int = 5
         matches = compiled_pattern.findall(text)
         return matches
     except RegexTimeoutError:
-        print("Warning: Regex processing timed out, using fallback parsing", file=sys.stderr)
+        print(
+            "Warning: Regex processing timed out, using fallback parsing",
+            file=sys.stderr,
+        )
         return []
     except re.error as e:
-        print(f"Warning: Regex compilation error: {e}, using fallback parsing", file=sys.stderr)
+        print(
+            f"Warning: Regex compilation error: {e}, using fallback parsing",
+            file=sys.stderr,
+        )
         return []
     finally:
         # Clean up timeout handler
-        if hasattr(signal, 'SIGALRM'):
+        if hasattr(signal, "SIGALRM") and old_handler is not None:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
 
@@ -79,19 +87,19 @@ def parse_makefile(makefile_path: Path) -> Dict[str, List[Tuple[str, str]]]:
         "Testing": ["test", "benchmark"],
         "Data Management": ["download", "list", "clean"],
         "Build & Distribution": ["build", "publish"],
-        "Utilities": ["check", "ci", "run", "help"]
+        "Utilities": ["check", "ci", "run", "help"],
     }
-    
+
     # Initialize result dictionary
     result = {category: [] for category in categories.keys()}
-    
+
     try:
-        with open(makefile_path, 'r', encoding='utf-8') as f:
+        with open(makefile_path, "r", encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
         print(f"Error: Makefile not found at {makefile_path}")
         sys.exit(1)
-    
+
     # Find all targets with help comments using a safe, non-backtracking regex
     # This pattern avoids catastrophic backtracking by:
     # 1. Using possessive quantifiers where possible
@@ -101,17 +109,22 @@ def parse_makefile(makefile_path: Path) -> Dict[str, List[Tuple[str, str]]]:
     matches = []
 
     try:
-        lines = content.split('\n')
+        lines = content.split("\n")
 
         # Limit processing to reasonable number of lines to prevent DoS
         max_lines = 10000
         if len(lines) > max_lines:
-            print(f"Warning: Makefile has {len(lines)} lines, processing only first {max_lines}", file=sys.stderr)
+            print(
+                f"Warning: Makefile has {len(lines)} lines, processing only first {max_lines}",
+                file=sys.stderr,
+            )
             lines = lines[:max_lines]
 
         # Process line by line to avoid backtracking issues
-        target_pattern = re.compile(r'^([a-zA-Z][a-zA-Z0-9_-]{0,50}):')  # Limit target name length
-        comment_pattern = re.compile(r'## (.{0,200})$')  # Limit comment length
+        target_pattern = re.compile(
+            r"^([a-zA-Z][a-zA-Z0-9_-]{0,50}):"
+        )  # Limit target name length
+        comment_pattern = re.compile(r"## (.{0,200})$")  # Limit comment length
 
         for line_num, line in enumerate(lines, 1):
             # Skip overly long lines that might cause issues
@@ -132,33 +145,45 @@ def parse_makefile(makefile_path: Path) -> Dict[str, List[Tuple[str, str]]]:
                         if target_name and comment_text:
                             matches.append((target_name, comment_text))
             except Exception as e:
-                print(f"Warning: Error processing line {line_num}: {e}", file=sys.stderr)
+                print(
+                    f"Warning: Error processing line {line_num}: {e}", file=sys.stderr
+                )
                 continue
 
     except Exception as e:
         print(f"Error parsing Makefile: {e}", file=sys.stderr)
         return {category: [] for category in categories.keys()}
-    
+
     # Categorize targets with more specific matching
     for target, description in matches:
         # Use more specific categorization rules
-        if target in ["install", "install-dev", "install-hooks", "setup-dev", "check-tools"]:
+        if target in [
+            "install",
+            "install-dev",
+            "install-hooks",
+            "setup-dev",
+            "check-tools",
+        ]:
             result["Setup & Installation"].append((target, description))
         elif target in ["lint", "format", "type-check", "security"]:
             result["Code Quality"].append((target, description))
         elif target.startswith("test") or target == "benchmark":
             result["Testing"].append((target, description))
-        elif target.startswith("download") or target.startswith("list") or target.startswith("clean"):
+        elif (
+            target.startswith("download")
+            or target.startswith("list")
+            or target.startswith("clean")
+        ):
             result["Data Management"].append((target, description))
         elif target.startswith("build") or target.startswith("publish"):
             result["Build & Distribution"].append((target, description))
         else:
             result["Utilities"].append((target, description))
-    
+
     # Sort targets within each category
     for category in result:
         result[category].sort(key=lambda x: x[0])
-    
+
     return result
 
 
@@ -177,17 +202,20 @@ def format_help_output(categories: Dict[str, List[Tuple[str, str]]]) -> str:
     # Check if we're in a terminal that supports colors
     if not sys.stdout.isatty():
         use_colors = False
-    elif os.name == 'nt':
+    elif os.name == "nt":
         # On Windows, try to enable ANSI color support
         try:
             # Enable ANSI escape sequence processing on Windows 10+
             import ctypes
+
             kernel32 = ctypes.windll.kernel32
             handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
             mode = ctypes.c_ulong()
             kernel32.GetConsoleMode(handle, ctypes.byref(mode))
-            kernel32.SetConsoleMode(handle, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
-        except:
+            kernel32.SetConsoleMode(
+                handle, mode.value | 0x0004
+            )  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        except (OSError, AttributeError, ValueError):
             # If that fails, disable colors for better compatibility
             use_colors = False
 
@@ -198,7 +226,7 @@ def format_help_output(categories: Dict[str, List[Tuple[str, str]]]) -> str:
         reset = "\033[0m"
     else:
         blue = cyan = reset = ""
-    
+
     # Generate output for each category
     for category, targets in categories.items():
         if targets:  # Only show categories that have targets
@@ -206,7 +234,7 @@ def format_help_output(categories: Dict[str, List[Tuple[str, str]]]) -> str:
             for target, description in targets:
                 output.append(f"  {cyan}{target:<20}{reset} {description}")
             output.append("")
-    
+
     return "\n".join(output)
 
 
@@ -215,15 +243,15 @@ def main():
     # Find the Makefile (should be in the parent directory of this script)
     script_dir = Path(__file__).parent
     makefile_path = script_dir.parent / "Makefile"
-    
+
     if not makefile_path.exists():
         print(f"Error: Makefile not found at {makefile_path}")
         sys.exit(1)
-    
+
     # Parse the Makefile and generate help
     categories = parse_makefile(makefile_path)
     help_output = format_help_output(categories)
-    
+
     print(help_output)
 
 

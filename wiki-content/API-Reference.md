@@ -547,6 +547,123 @@ Extract and categorize all internal and external links from an article with deta
 }
 ```
 
+### get_entry_summary
+
+Get a concise summary of an article without loading the full content. Useful for quick content preview and understanding article context.
+
+**Required Parameters**:
+
+- `zim_file_path` (string): Path to the ZIM file
+- `entry_path` (string): Entry path (e.g., 'C/Some_Article')
+
+**Optional Parameters**:
+
+- `max_words` (integer, default: 200, range: 10-1000): Maximum number of words in the summary
+
+**Returns**: Structured JSON with article summary and metadata
+
+**Features**:
+
+- Extracts opening paragraphs while removing infoboxes, navigation, and sidebars
+- Provides quick article overview without loading full content
+- Includes truncation status and word count
+
+**Example**:
+
+```json
+{
+  "name": "get_entry_summary",
+  "arguments": {
+    "zim_file_path": "/path/to/file.zim",
+    "entry_path": "C/Evolution",
+    "max_words": 150
+  }
+}
+```
+
+**Response**:
+
+```json
+{
+  "title": "Evolution",
+  "path": "C/Evolution",
+  "content_type": "text/html",
+  "summary": "Evolution is the change in heritable characteristics of biological populations over successive generations. These characteristics are the expressions of genes, which are passed from parent to offspring during reproduction. Different characteristics tend to exist within any given population as a result of mutation, genetic recombination and other sources of genetic variation...",
+  "word_count": 150,
+  "is_truncated": true
+}
+```
+
+### get_table_of_contents
+
+Extract a hierarchical table of contents from an article based on heading levels (h1-h6). Enables LLMs to understand article structure and navigate to specific sections.
+
+**Required Parameters**:
+
+- `zim_file_path` (string): Path to the ZIM file
+- `entry_path` (string): Entry path (e.g., 'C/Some_Article')
+
+**Returns**: Hierarchical JSON structure with nested headings
+
+**Features**:
+
+- Hierarchical tree structure with nested children
+- Includes heading levels, text, and anchor IDs
+- Provides heading count and maximum depth statistics
+- Enables direct navigation to specific sections
+
+**Example**:
+
+```json
+{
+  "name": "get_table_of_contents",
+  "arguments": {
+    "zim_file_path": "/path/to/file.zim",
+    "entry_path": "C/Evolution"
+  }
+}
+```
+
+**Response**:
+
+```json
+{
+  "title": "Evolution",
+  "path": "C/Evolution",
+  "content_type": "text/html",
+  "toc": [
+    {
+      "level": 1,
+      "text": "Evolution",
+      "id": "evolution",
+      "children": [
+        {
+          "level": 2,
+          "text": "History of evolutionary thought",
+          "id": "history",
+          "children": [
+            {
+              "level": 3,
+              "text": "Ancient and medieval understanding",
+              "id": "ancient",
+              "children": []
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "text": "Mechanisms of evolution",
+          "id": "mechanisms",
+          "children": []
+        }
+      ]
+    }
+  ],
+  "heading_count": 15,
+  "max_depth": 4
+}
+```
+
 ### get_binary_entry
 
 Retrieve binary content from a ZIM entry, enabling integration with external tools for processing embedded media like PDFs, videos, and images.

@@ -7,11 +7,19 @@ import os
 import re
 from pathlib import Path
 from typing import List
+from urllib.parse import unquote
 
 from .constants import ZIM_FILE_EXTENSION
 from .exceptions import OpenZimMcpSecurityError, OpenZimMcpValidationError
 
 logger = logging.getLogger(__name__)
+
+# Maximum allowed path length to prevent buffer exhaustion attacks
+MAX_PATH_LENGTH = 4096
+
+# Placeholder for hidden/sanitized paths in error messages
+PATH_HIDDEN_PLACEHOLDER = "<path-hidden>"
+NO_PATH_PLACEHOLDER = "<no-path>"
 
 
 class PathValidator:
@@ -60,24 +68,44 @@ class PathValidator:
             Normalized path string
 
         Raises:
-            OpenZimMcpValidationError: If path contains invalid characters
+            OpenZimMcpValidationError: If path contains invalid characters or exceeds length limit
+            OpenZimMcpSecurityError: If path contains traversal attempts
         """
         if not filepath or not isinstance(filepath, str):
             raise OpenZimMcpValidationError("Path must be a non-empty string")
 
-        # Check for suspicious patterns
+        # Check path length to prevent buffer exhaustion attacks
+        if len(filepath) > MAX_PATH_LENGTH:
+            raise OpenZimMcpValidationError(
+                f"Path too long: {len(filepath)} characters exceeds maximum of {MAX_PATH_LENGTH}"
+            )
+
+        # URL-decode the path to catch encoded traversal attempts (%2e%2e, %2f, etc.)
+        # We decode multiple times to handle double-encoding attacks
+        decoded_path = filepath
+        for _ in range(3):  # Handle up to triple encoding
+            new_decoded = unquote(decoded_path)
+            if new_decoded == decoded_path:
+                break
+            decoded_path = new_decoded
+
+        # Check for suspicious patterns in both original and decoded paths
         suspicious_patterns = [
-            r"\.\./",  # Directory traversal
-            r"\.\.\\",  # Windows directory traversal
+            r"\.\./",  # Directory traversal (Unix)
+            r"\.\.\\",  # Directory traversal (Windows)
+            r"\.\.$",  # Trailing ..
+            r"^\.\.",  # Leading ..
             r'[<>"|?*]',  # Invalid filename characters (excluding colon for Windows)
             r"[\x00-\x1f]",  # Control characters
         ]
 
-        for pattern in suspicious_patterns:
-            if re.search(pattern, filepath):
-                raise OpenZimMcpSecurityError(
-                    f"Path contains suspicious pattern: {filepath}"
-                )
+        # Check both original and decoded path for traversal attempts
+        for path_to_check in [filepath, decoded_path]:
+            for pattern in suspicious_patterns:
+                if re.search(pattern, path_to_check):
+                    raise OpenZimMcpSecurityError(
+                        f"Path contains suspicious pattern: {filepath}"
+                    )
 
         # Expand home directory and normalize
         if filepath.startswith("~"):
@@ -170,19 +198,22 @@ class PathValidator:
         return file_path
 
 
-def sanitize_input(input_string: str, max_length: int = 1000) -> str:
+def sanitize_input(
+    input_string: str, max_length: int = 1000, allow_empty: bool = False
+) -> str:
     """
     Sanitize user input string.
 
     Args:
         input_string: String to sanitize
         max_length: Maximum allowed length
+        allow_empty: If False (default), raises error if result is empty after sanitization
 
     Returns:
         Sanitized string
 
     Raises:
-        OpenZimMcpValidationError: If input is invalid
+        OpenZimMcpValidationError: If input is invalid or empty (when allow_empty=False)
     """
     if not isinstance(input_string, str):
         raise OpenZimMcpValidationError("Input must be a string")
@@ -194,5 +225,118 @@ def sanitize_input(input_string: str, max_length: int = 1000) -> str:
 
     # Remove control characters except newlines and tabs
     sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", input_string)
+    sanitized = sanitized.strip()
 
-    return sanitized.strip()
+    # Check for empty result after sanitization
+    if not allow_empty and not sanitized:
+        raise OpenZimMcpValidationError(
+            "Input is empty or contains only whitespace/control characters"
+        )
+
+    return sanitized
+
+
+def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
+    """
+    Sanitize a file path for inclusion in error messages.
+
+    This function obscures the full directory path while keeping the filename
+    visible for debugging purposes. This helps prevent information disclosure
+    of internal file system structure in production environments.
+
+    Args:
+        path: The file path to sanitize
+        show_filename: If True, show the filename; if False, completely obscure
+
+    Returns:
+        Sanitized path string
+
+    Example:
+        >>> sanitize_path_for_error("/home/user/data/wikipedia.zim")
+        '...wikipedia.zim'
+        >>> sanitize_path_for_error("/home/user/data/wikipedia.zim", show_filename=False)
+        '<path-hidden>'
+    """
+    if not path:
+        return NO_PATH_PLACEHOLDER
+
+    if not show_filename:
+        return PATH_HIDDEN_PLACEHOLDER
+
+    try:
+        # Extract just the filename
+        path_obj = Path(path)
+        filename = path_obj.name
+        if filename:
+            return f"...{filename}"
+        return PATH_HIDDEN_PLACEHOLDER
+    except Exception:
+        return PATH_HIDDEN_PLACEHOLDER
+
+
+def sanitize_context_for_error(context: str) -> str:
+    """
+    Sanitize context strings for error messages.
+
+    Looks for patterns that might be file paths and sanitizes them.
+    Also handles URL-encoded paths to prevent information leakage.
+
+    Args:
+        context: The context string to sanitize
+
+    Returns:
+        Sanitized context string
+    """
+    if not context:
+        return context
+
+    # URL-decode the context to catch encoded paths (%2F = /, etc.)
+    decoded_context = context
+    try:
+        decoded_context = unquote(context)
+    except Exception:
+        pass  # If decode fails, use original
+
+    # Common patterns indicating file paths
+    path_indicators = [
+        "File:",
+        "Path:",
+        "Directory:",
+        "/home/",
+        "/Users/",
+        "/var/",
+        "/tmp/",
+        "C:\\",
+        "D:\\",
+    ]
+
+    sanitized = context
+
+    # Check if context (original or decoded) contains file path indicators
+    context_to_check = decoded_context if decoded_context != context else context
+    for indicator in path_indicators:
+        if indicator in context_to_check:
+            # Try to extract and sanitize any paths
+            # Split by common delimiters and check each part
+            parts = context_to_check.replace(",", " ").split()
+            sanitized_parts = []
+            for part in parts:
+                # Check if this part looks like a file path (also check decoded version)
+                decoded_part = part
+                try:
+                    decoded_part = unquote(part)
+                except Exception:
+                    pass
+                if (
+                    decoded_part.startswith("/")
+                    or decoded_part.startswith("C:\\")
+                    or decoded_part.startswith("D:\\")
+                    or ".zim" in decoded_part.lower()
+                ):
+                    sanitized_parts.append(sanitize_path_for_error(decoded_part))
+                else:
+                    sanitized_parts.append(part)
+            sanitized = " ".join(sanitized_parts)
+            break
+
+    return sanitized

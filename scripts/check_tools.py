@@ -4,10 +4,9 @@ Check required tools for the OpenZIM MCP development environment.
 This script provides cross-platform compatibility for the make check-tools command.
 """
 
+import shutil
 import subprocess
 import sys
-import shutil
-from pathlib import Path
 
 
 def check_command_exists(command: str) -> bool:
@@ -19,10 +18,7 @@ def get_command_version(command: str, version_arg: str = "--version") -> str:
     """Get the version of a command."""
     try:
         result = subprocess.run(
-            [command, version_arg], 
-            capture_output=True, 
-            text=True, 
-            timeout=10
+            [command, version_arg], capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -36,10 +32,7 @@ def check_python_version() -> tuple[bool, str]:
     """Check if Python version meets requirements (3.12+)."""
     try:
         result = subprocess.run(
-            [sys.executable, "--version"], 
-            capture_output=True, 
-            text=True, 
-            timeout=10
+            [sys.executable, "--version"], capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
             version_str = result.stdout.strip()
@@ -49,7 +42,7 @@ def check_python_version() -> tuple[bool, str]:
                 version = version_parts[1]
                 # Check if version is 3.12 or higher
                 try:
-                    major, minor = map(int, version.split('.')[:2])
+                    major, minor = map(int, version.split(".")[:2])
                     is_valid = (major > 3) or (major == 3 and minor >= 12)
                     return is_valid, version_str
                 except ValueError:
@@ -57,16 +50,20 @@ def check_python_version() -> tuple[bool, str]:
             return False, version_str
         else:
             return False, f"Error: {result.stderr.strip()}"
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
+    except (
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        subprocess.SubprocessError,
+    ) as e:
         return False, f"Error checking Python version: {e}"
 
 
 def main():
     """Main function to check all required tools."""
     print("Checking required tools...")
-    
+
     all_good = True
-    
+
     # Check uv
     if check_command_exists("uv"):
         version = get_command_version("uv")
@@ -74,7 +71,7 @@ def main():
     else:
         print("[FAIL] uv not found. Install from: https://docs.astral.sh/uv/")
         all_good = False
-    
+
     # Check Python version
     python_ok, python_version = check_python_version()
     if python_ok:
@@ -82,7 +79,7 @@ def main():
     else:
         print(f"[FAIL] Python 3.12+ required. Current: {python_version}")
         all_good = False
-    
+
     if all_good:
         print("[OK] All required tools are available")
         sys.exit(0)
