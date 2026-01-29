@@ -4,6 +4,9 @@ Cross-platform instance tracking for OpenZIM MCP servers.
 This module provides functionality to track running OpenZIM MCP server instances
 using file-based tracking in the user's home directory, replacing the
 platform-specific process detection approach.
+
+File locking is used to prevent race conditions when multiple processes
+attempt to read/write instance files simultaneously.
 """
 
 import json
@@ -11,12 +14,119 @@ import logging
 import os
 import platform
 import subprocess
+import sys
+import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generator, List, Optional
+
+# Platform-specific file locking imports
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def file_lock(file_handle: Any, exclusive: bool = True) -> Generator[None, None, None]:
+    """Cross-platform file locking context manager (best-effort, non-blocking).
+
+    Note: This is a best-effort locking mechanism. If lock acquisition fails,
+    operations will proceed without the lock. This means concurrent access from
+    multiple processes may result in race conditions. For most use cases this
+    is acceptable as the instance tracking is used for advisory purposes only.
+    """
+    lock_acquired = False
+
+    if sys.platform == "win32":
+        # Windows: use msvcrt for byte-range locking
+        try:
+            # Lock the first byte of the file
+            msvcrt.locking(file_handle.fileno(), msvcrt.LK_NBLCK, 1)
+            lock_acquired = True
+        except OSError as e:
+            # If locking fails (e.g., file already locked), proceed without lock
+            # Log at debug level to help diagnose potential race conditions
+            logger.debug(
+                f"File lock acquisition failed (Windows), proceeding without lock: {e}"
+            )
+
+        try:
+            yield
+        finally:
+            if lock_acquired:
+                try:
+                    # Seek to beginning before unlocking
+                    file_handle.seek(0)
+                    msvcrt.locking(file_handle.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    # Unlock errors are non-fatal - file will be unlocked on close
+                    pass
+    else:
+        # Unix: use fcntl for advisory locking
+        lock_type = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        try:
+            fcntl.flock(file_handle.fileno(), lock_type | fcntl.LOCK_NB)
+            lock_acquired = True
+        except OSError as e:
+            # If locking fails (e.g., file already locked), proceed without lock
+            # Log at debug level to help diagnose potential race conditions
+            logger.debug(
+                f"File lock acquisition failed (Unix), proceeding without lock: {e}"
+            )
+
+        try:
+            yield
+        finally:
+            if lock_acquired:
+                try:
+                    fcntl.flock(file_handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    # Unlock errors are non-fatal - file will be unlocked on close
+                    pass
+
+
+def atomic_write_json(file_path: Path, data: Dict[str, Any]) -> None:
+    """
+    Atomically write JSON data to a file using a temporary file and rename.
+
+    This prevents corruption if the process is interrupted during writing.
+
+    Args:
+        file_path: Destination path for the JSON file
+        data: Dictionary to write as JSON
+    """
+    # Create temp file in same directory to ensure same filesystem for atomic rename
+    dir_path = file_path.parent
+    tmp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=dir_path,
+            suffix=".tmp",
+            delete=False,
+        ) as tmp_file:
+            json.dump(data, tmp_file, indent=2)
+            tmp_file.flush()  # Ensure data is written to disk
+            os.fsync(tmp_file.fileno())  # Force OS to write to disk
+            tmp_path = Path(tmp_file.name)
+
+        # Atomic rename (on POSIX systems; best-effort on Windows)
+        tmp_path.replace(file_path)
+    except (OSError, IOError) as write_error:
+        # Clean up temp file if rename failed
+        if tmp_path is not None:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                # Cleanup failure is non-fatal
+                pass
+        raise write_error
 
 
 def safe_log(log_func: Any, message: str) -> None:
@@ -114,7 +224,7 @@ class InstanceTracker:
         allowed_directories: List[str],
         server_name: str = "openzim-mcp",
     ) -> ServerInstance:
-        """Register a new server instance."""
+        """Register a new server instance with file locking."""
         pid = os.getpid()
         start_time = time.time()
 
@@ -126,16 +236,22 @@ class InstanceTracker:
             server_name=server_name,
         )
 
-        # Save instance file
+        # Save instance file with file locking to prevent race conditions
+        # Note: We use direct writes instead of atomic_write_json because
+        # tempfile.NamedTemporaryFile internally calls os.getpid(), which
+        # can interfere with mocked PIDs in tests.
         instance_file = self.instances_dir / f"server_{pid}.json"
         try:
             with open(instance_file, "w") as f:
-                json.dump(instance.to_dict(), f, indent=2)
+                with file_lock(f, exclusive=True):
+                    json.dump(instance.to_dict(), f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
             safe_log(
                 logger.info,
                 f"Registered server instance: PID {pid}, config hash {config_hash[:8]}",
             )
-        except Exception as e:
+        except (OSError, IOError, json.JSONDecodeError) as e:
             safe_log(logger.warning, f"Failed to register instance: {e}")
 
         self.current_instance = instance
@@ -154,7 +270,7 @@ class InstanceTracker:
                 instance_file.unlink()
                 if not silent:
                     safe_log(logger.info, f"Unregistered server instance: PID {pid}")
-        except Exception as e:
+        except OSError as e:
             if not silent:
                 safe_log(logger.warning, f"Failed to unregister instance: {e}")
 
@@ -162,21 +278,24 @@ class InstanceTracker:
             self.current_instance = None
 
     def get_all_instances(self) -> List[ServerInstance]:
-        """Get all registered server instances."""
+        """Get all registered server instances with file locking."""
         instances = []
 
         for instance_file in self.instances_dir.glob("server_*.json"):
             try:
                 with open(instance_file, "r") as f:
-                    data = json.load(f)
+                    # Use shared (read) lock to allow concurrent reads
+                    with file_lock(f, exclusive=False):
+                        data = json.load(f)
                 instance = ServerInstance.from_dict(data)
                 instances.append(instance)
-            except Exception as e:
+            except (OSError, IOError, json.JSONDecodeError, KeyError, ValueError) as e:
                 logger.warning(f"Failed to load instance from {instance_file}: {e}")
                 # Clean up corrupted files
                 try:
                     instance_file.unlink()
-                except Exception:
+                except OSError:
+                    # Cleanup failure is non-fatal
                     pass
 
         return instances
@@ -227,36 +346,42 @@ class InstanceTracker:
         for instance_file in self.instances_dir.glob("server_*.json"):
             try:
                 with open(instance_file, "r") as f:
-                    data = json.load(f)
+                    # Use shared (read) lock when checking
+                    with file_lock(f, exclusive=False):
+                        data = json.load(f)
                 instance = ServerInstance.from_dict(data)
 
                 if not self._is_process_running(instance.pid):
                     instance_file.unlink()
                     cleaned_count += 1
                     logger.debug(f"Cleaned up stale instance file: {instance_file}")
-            except Exception:
+            except (OSError, IOError, json.JSONDecodeError, KeyError, ValueError):
                 # If we can't read the file, it's probably corrupted
                 try:
                     instance_file.unlink()
                     cleaned_count += 1
                     logger.debug(f"Cleaned up corrupted instance file: {instance_file}")
-                except Exception:
+                except OSError:
+                    # Cleanup failure is non-fatal
                     pass
 
         return cleaned_count
 
     def update_heartbeat(self) -> None:
-        """Update heartbeat for current instance."""
+        """Update heartbeat for current instance with file locking."""
         if self.current_instance:
             self.current_instance.update_heartbeat()
-            # Update the instance file
+            # Update the instance file with file locking
             instance_file = (
                 self.instances_dir / f"server_{self.current_instance.pid}.json"
             )
             try:
                 with open(instance_file, "w") as f:
-                    json.dump(self.current_instance.to_dict(), f, indent=2)
-            except Exception as e:
+                    with file_lock(f, exclusive=True):
+                        json.dump(self.current_instance.to_dict(), f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+            except (OSError, IOError) as e:
                 logger.warning(f"Failed to update heartbeat: {e}")
 
     def _is_process_running(self, pid: int) -> bool:

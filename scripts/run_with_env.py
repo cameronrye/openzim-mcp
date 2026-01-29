@@ -5,9 +5,8 @@ This script provides cross-platform compatibility for setting environment variab
 """
 
 import os
-import sys
 import subprocess
-from typing import List
+import sys
 
 
 def main():
@@ -15,23 +14,23 @@ def main():
     if len(sys.argv) < 3:
         print("Usage: python run_with_env.py ENV_VAR=value command [args...]")
         sys.exit(1)
-    
+
     # Parse environment variable assignment
     env_assignment = sys.argv[1]
     if "=" not in env_assignment:
         print(f"Error: Invalid environment variable assignment: {env_assignment}")
         print("Expected format: ENV_VAR=value")
         sys.exit(1)
-    
+
     env_var, env_value = env_assignment.split("=", 1)
-    
+
     # Get the command and arguments
     command_args = sys.argv[2:]
-    
+
     # Set up environment
     env = os.environ.copy()
     env[env_var] = env_value
-    
+
     # Run the command
     try:
         print(f"Running with {env_var}={env_value}: {' '.join(command_args)}")

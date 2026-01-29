@@ -28,7 +28,7 @@
     <meta property="og:image:alt" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
     <meta property="og:locale" content="en_US">
     <meta property="article:author" content="Cameron Rye">
-    <meta property="article:modified_time" content="2025-01-15T00:00:00Z">
+    <meta property="article:modified_time" content="2026-01-29T00:00:00Z">
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
@@ -64,7 +64,7 @@
         "alternateName": "OpenZIM MCP Server",
         "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
         "url": "https://cameronrye.github.io/openzim-mcp/",
-        "softwareVersion": "0.6.0",
+        "softwareVersion": "0.8.0",
         "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
         "applicationCategory": "DeveloperApplication",
         "applicationSubCategory": "AI Tools",
@@ -101,7 +101,10 @@
             "availability": "https://schema.org/InStock"
         },
         "featureList": [
-            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (16 specialized tools)",
+            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (18 specialized tools)",
+            "Article Summaries: Extract concise summaries from opening paragraphs for quick content preview",
+            "Table of Contents: Build hierarchical TOC from article headings for navigation",
+            "Pagination Cursors: Token-based pagination for seamless result navigation",
             "Binary Content Retrieval: Extract PDFs, images, videos, and other embedded media for multi-agent workflows",
             "Security First: Comprehensive input validation and path traversal protection",
             "Smart Retrieval System: Intelligent content extraction with configurable strategies",
@@ -215,7 +218,7 @@
             "url": "https://rye.dev"
         },
         "datePublished": "2024-01-01T00:00:00Z",
-        "dateModified": "2025-01-15T00:00:00Z",
+        "dateModified": "2026-01-29T00:00:00Z",
         "publisher": {
             "@type": "Organization",
             "name": "OpenZIM MCP",
@@ -235,6 +238,9 @@
     </script>
 </head>
 <body>
+    <!-- Scroll Progress Indicator -->
+    <div class="scroll-progress" id="scroll-progress"></div>
+
     <!-- Skip to main content for accessibility -->
     <a href="#main-content" class="skip-link">Skip to main content</a>
 
@@ -242,11 +248,31 @@
     <nav class="navbar" id="navbar">
         <div class="nav-container">
             <div class="nav-logo">
-                <svg class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 2a3 3 0 0 0-3 3 4 4 0 0 0-4 4v6a4 4 0 0 0 4 4 3 3 0 0 0 3 3 3 3 0 0 0 3-3 4 4 0 0 0 4-4V9a4 4 0 0 0-4-4 3 3 0 0 0-3-3z"/>
-                    <path d="M12 2v20"/>
-                    <path d="M8 7s0-2 4-2 4 2 4 2"/>
-                    <path d="M8 17s0 2 4 2 4-2 4-2"/>
+                <svg class="logo-icon" width="32" height="32" viewBox="0 0 32 32">
+                    <defs>
+                        <linearGradient id="navLogoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#2563eb"/>
+                            <stop offset="100%" style="stop-color:#10b981"/>
+                        </linearGradient>
+                    </defs>
+                    <circle cx="16" cy="16" r="15" fill="url(#navLogoGrad)"/>
+                    <g fill="white">
+                        <circle cx="16" cy="8" r="2.5"/>
+                        <circle cx="10" cy="14" r="2"/>
+                        <circle cx="22" cy="14" r="2"/>
+                        <circle cx="16" cy="16" r="2"/>
+                        <circle cx="12" cy="21" r="1.5"/>
+                        <circle cx="20" cy="21" r="1.5"/>
+                    </g>
+                    <g stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.8">
+                        <line x1="16" y1="8" x2="10" y2="14"/>
+                        <line x1="16" y1="8" x2="22" y2="14"/>
+                        <line x1="10" y1="14" x2="16" y2="16"/>
+                        <line x1="22" y1="14" x2="16" y2="16"/>
+                        <line x1="16" y1="16" x2="12" y2="21"/>
+                        <line x1="16" y1="16" x2="20" y2="21"/>
+                    </g>
+                    <rect x="8" y="25" width="16" height="2" rx="1" fill="white" opacity="0.7"/>
                 </svg>
                 <span class="logo-text">OpenZIM MCP</span>
             </div>
@@ -259,10 +285,10 @@
                 <a href="#usage" class="nav-link">Usage</a>
                 <a href="#documentation" class="nav-link">Documentation</a>
                 <a href="https://github.com/cameronrye/openzim-mcp" class="nav-link nav-link-github" target="_blank">
-                    <span class="github-icon">⭐</span> GitHub
+                    <span class="github-icon"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg></span></span> GitHub
                 </a>
                 <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
-                    <span class="theme-icon" id="theme-icon">🌙</span>
+                    <span class="theme-icon" id="theme-icon"><span class="icon"><svg viewBox="0 0 24 24" id="theme-icon-svg"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg></span></span>
                 </button>
             </div>
             <div class="nav-toggle" id="nav-toggle">
@@ -278,9 +304,8 @@
     <!-- NEW Feature Banner -->
     <div class="new-feature-banner">
         <div class="container">
-            <span class="new-badge">🆕 NEW</span>
-            <span class="new-text"><strong>Binary Content Retrieval!</strong> Extract PDFs, images, videos, and other embedded media from ZIM archives for multi-agent workflows.</span>
-            <a href="#binary-retrieval" class="new-link">Learn more →</a>
+            <span class="new-badge"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</span>
+            <span class="new-text"><strong>Article Summaries & Table of Contents!</strong> Extract concise summaries and hierarchical TOC for quick content overview. <a href="#content-tools" class="new-link">Learn more →</a></span>
         </div>
     </div>
 
@@ -288,7 +313,7 @@
         <div class="container">
             <div class="hero-content">
                 <div class="hero-badge">
-                    <span class="badge-icon">⚡</span>
+                    <span class="badge-icon"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span></span>
                     <span>Built for LLM Intelligence</span>
                 </div>
                 <h1 class="hero-title">
@@ -312,11 +337,11 @@
                 </div>
                 <div class="hero-stats">
                     <div class="stat">
-                        <div class="stat-number" id="version-display">v0.5.1</div>
+                        <div class="stat-number" id="version-display">v0.8.0</div>
                         <div class="stat-label">Latest Release</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-number">90%+</div>
+                        <div class="stat-number">80%+</div>
                         <div class="stat-label">Test Coverage</div>
                     </div>
                     <div class="stat">
@@ -367,16 +392,34 @@
             </div>
             <div class="features-grid">
                 <div class="feature-card">
-                    <div class="feature-icon">🎯</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></span></div>
                     <h3 class="feature-title">Dual Mode Support</h3>
                     <p class="feature-description">
                         Choose Simple mode (1 intelligent natural language tool, default) or Advanced mode
-                        (16 specialized tools) to match your LLM's capabilities.
+                        (18 specialized tools) to match your LLM's capabilities.
+                    </p>
+                </div>
+                <div class="feature-card feature-new" id="content-tools">
+                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 9H8"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></span></div>
+                    <h3 class="feature-title">Article Summaries</h3>
+                    <p class="feature-description">
+                        Extract concise summaries from article opening paragraphs.
+                        Quick content overview without loading full articles.
+                    </p>
+                </div>
+                <div class="feature-card feature-new">
+                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><line x1="8" x2="21" y1="6" y2="6"></line><line x1="8" x2="21" y1="12" y2="12"></line><line x1="8" x2="21" y1="18" y2="18"></line><line x1="3" x2="3.01" y1="6" y2="6"></line><line x1="3" x2="3.01" y1="12" y2="12"></line><line x1="3" x2="3.01" y1="18" y2="18"></line></svg></span></div>
+                    <h3 class="feature-title">Table of Contents</h3>
+                    <p class="feature-description">
+                        Build hierarchical TOC from article headings (h1-h6).
+                        Navigate directly to specific sections with anchor links.
                     </p>
                 </div>
                 <div class="feature-card feature-new" id="binary-retrieval">
-                    <div class="feature-badge-new">🆕 NEW</div>
-                    <div class="feature-icon">📦</div>
+                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="m7.5 4.27 9 5.15"></path><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></span></div>
                     <h3 class="feature-title">Binary Content Retrieval</h3>
                     <p class="feature-description">
                         Extract PDFs, images, videos, and other embedded media from ZIM archives.
@@ -384,7 +427,7 @@
                     </p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🧭</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg></span></div>
                     <h3 class="feature-title">Smart Navigation</h3>
                     <p class="feature-description">
                         Browse by namespace (articles, metadata, media) instead of blind searching.
@@ -392,7 +435,7 @@
                     </p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🔍</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span></div>
                     <h3 class="feature-title">Context-Aware Discovery</h3>
                     <p class="feature-description">
                         Get article structure, relationships, and metadata for deeper understanding.
@@ -400,7 +443,7 @@
                     </p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🎯</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></span></div>
                     <h3 class="feature-title">Intelligent Search</h3>
                     <p class="feature-description">
                         Advanced filtering, auto-complete suggestions, and relevance-ranked results
@@ -408,15 +451,15 @@
                     </p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">⚡</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span></div>
                     <h3 class="feature-title">High Performance</h3>
                     <p class="feature-description">
                         LRU cache with TTL, intelligent eviction policies, and optimized ZIM operations.
-                        90%+ test coverage ensures reliability at scale.
+                        80%+ test coverage ensures reliability at scale.
                     </p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🔗</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span></div>
                     <h3 class="feature-title">Relationship Mapping</h3>
                     <p class="feature-description">
                         Extract internal/external links to understand content connections.
@@ -424,11 +467,27 @@
                     </p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🔒</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg></span></div>
                     <h3 class="feature-title">Security First</h3>
                     <p class="feature-description">
                         Comprehensive input validation, path traversal protection, and secure
                         resource management with type safety.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path><line x1="22" x2="17" y1="10" y2="10"></line></svg></span></div>
+                    <h3 class="feature-title">Offline-First Architecture</h3>
+                    <p class="feature-description">
+                        Complete knowledge access without internet dependency. Perfect for
+                        air-gapped environments and privacy-sensitive deployments.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></span></div>
+                    <h3 class="feature-title">Multi-Archive Intelligence</h3>
+                    <p class="feature-description">
+                        Query across multiple ZIM archives simultaneously. Combine Wikipedia,
+                        Wiktionary, and specialized encyclopedias into a unified knowledge layer.
                     </p>
                 </div>
             </div>
@@ -439,7 +498,7 @@
     <section id="smart-retrieval" class="smart-retrieval">
         <div class="container">
             <div class="section-header">
-                <h2 class="section-title">🧠 Smart Retrieval System</h2>
+                <h2 class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"></path><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"></path><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"></path><path d="M3.477 10.896a4 4 0 0 1 .585-.396"></path><path d="M19.938 10.5a4 4 0 0 1 .585.396"></path><path d="M6 18a4 4 0 0 1-1.967-.516"></path><path d="M19.967 17.484A4 4 0 0 1 18 18"></path></svg></span> Smart Retrieval System</h2>
                 <p class="section-description">
                     Advanced intelligent entry retrieval with automatic fallback and path mapping for reliable access to ZIM content.
                 </p>
@@ -447,28 +506,28 @@
             <div class="smart-retrieval-content">
                 <div class="retrieval-features">
                     <div class="retrieval-feature">
-                        <div class="retrieval-icon">🎯</div>
+                        <div class="retrieval-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></span></div>
                         <h3 class="retrieval-title">Direct Access First</h3>
                         <p class="retrieval-description">
                             Attempts to retrieve entries using the exact path provided, optimizing for speed and accuracy.
                         </p>
                     </div>
                     <div class="retrieval-feature">
-                        <div class="retrieval-icon">🔄</div>
+                        <div class="retrieval-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg></span></div>
                         <h3 class="retrieval-title">Automatic Fallback</h3>
                         <p class="retrieval-description">
                             When direct access fails, automatically searches using various search terms and path variations.
                         </p>
                     </div>
                     <div class="retrieval-feature">
-                        <div class="retrieval-icon">💾</div>
+                        <div class="retrieval-icon"><span class="icon"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5V19A9 3 0 0 0 21 19V5"></path><path d="M3 12A9 3 0 0 0 21 12"></path></svg></span></div>
                         <h3 class="retrieval-title">Path Mapping Cache</h3>
                         <p class="retrieval-description">
                             Caches successful path mappings to improve performance for repeated access patterns.
                         </p>
                     </div>
                     <div class="retrieval-feature">
-                        <div class="retrieval-icon">🛠️</div>
+                        <div class="retrieval-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span></div>
                         <h3 class="retrieval-title">Enhanced Error Guidance</h3>
                         <p class="retrieval-description">
                             Provides clear, actionable guidance when entries cannot be found, designed for LLM users.
@@ -479,9 +538,9 @@
                     <h3 class="example-title">How It Works</h3>
                     <div class="code-block">
                         <pre><code># The system automatically handles path encoding differences:
-# ✅ Direct access: "A/Machine_Learning"
-# ✅ Fallback search: "Machine Learning", "machine learning"
-# ✅ Cached mapping: Future requests use cached path
+# <span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Direct access: "A/Machine_Learning"
+# <span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Fallback search: "Machine Learning", "machine learning"
+# <span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Cached mapping: Future requests use cached path
 
 # No more manual search-first methodology needed!
 get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
@@ -495,54 +554,54 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
     <section id="security" class="security">
         <div class="container">
             <div class="section-header">
-                <h2 class="section-title">🔒 Enterprise-Grade Security</h2>
+                <h2 class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg></span> Enterprise-Grade Security</h2>
                 <p class="section-description">
                     Comprehensive security measures designed to protect against vulnerabilities and ensure safe operation in production environments.
                 </p>
             </div>
             <div class="security-grid">
                 <div class="security-feature">
-                    <div class="security-icon">🛡️</div>
+                    <div class="security-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path></svg></span></div>
                     <h3 class="security-title">Path Traversal Protection</h3>
                     <p class="security-description">
                         Advanced path validation prevents directory traversal attacks using secure path checking with Python 3.9+ features.
                     </p>
                     <div class="security-details">
                         <span class="security-tag">CRITICAL</span>
-                        <span class="security-status">✅ Fixed in v0.2.0</span>
+                        <span class="security-status"><span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Fixed in v0.2.0</span>
                     </div>
                 </div>
                 <div class="security-feature">
-                    <div class="security-icon">🔍</div>
+                    <div class="security-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span></div>
                     <h3 class="security-title">Input Validation & Sanitization</h3>
                     <p class="security-description">
                         Comprehensive input validation with length limits, character filtering, and sanitization to prevent injection attacks.
                     </p>
                     <div class="security-details">
                         <span class="security-tag">HIGH</span>
-                        <span class="security-status">✅ Implemented</span>
+                        <span class="security-status"><span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Implemented</span>
                     </div>
                 </div>
                 <div class="security-feature">
-                    <div class="security-icon">🔐</div>
+                    <div class="security-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z"></path><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"></circle></svg></span></div>
                     <h3 class="security-title">Type Safety & Validation</h3>
                     <p class="security-description">
                         Full type annotations with Pydantic validation ensure data integrity and prevent type-related vulnerabilities.
                     </p>
                     <div class="security-details">
                         <span class="security-tag">MEDIUM</span>
-                        <span class="security-status">✅ Complete</span>
+                        <span class="security-status"><span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Complete</span>
                     </div>
                 </div>
                 <div class="security-feature">
-                    <div class="security-icon">📊</div>
+                    <div class="security-icon"><span class="icon"><svg viewBox="0 0 24 24"><line x1="18" x2="18" y1="20" y2="10"></line><line x1="12" x2="12" y1="20" y2="4"></line><line x1="6" x2="6" y1="20" y2="14"></line></svg></span></div>
                     <h3 class="security-title">Secure Error Handling</h3>
                     <p class="security-description">
                         Sanitized error messages prevent information disclosure while providing helpful guidance for legitimate users.
                     </p>
                     <div class="security-details">
                         <span class="security-tag">MEDIUM</span>
-                        <span class="security-status">✅ Enhanced</span>
+                        <span class="security-status"><span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Enhanced</span>
                     </div>
                 </div>
             </div>
@@ -552,7 +611,7 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
                     <div class="stat-label">Known Vulnerabilities</div>
                 </div>
                 <div class="security-stat">
-                    <div class="stat-number">90%+</div>
+                    <div class="stat-number">80%+</div>
                     <div class="stat-label">Test Coverage</div>
                 </div>
                 <div class="security-stat">
@@ -567,14 +626,14 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
     <section id="advanced-features" class="advanced-features">
         <div class="container">
             <div class="section-header">
-                <h2 class="section-title">⚡ Advanced Enterprise Features</h2>
+                <h2 class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span> Advanced Enterprise Features</h2>
                 <p class="section-description">
                     Production-ready capabilities for enterprise deployments, monitoring, and multi-instance environments.
                 </p>
             </div>
             <div class="advanced-grid">
                 <div class="advanced-feature">
-                    <div class="advanced-icon">🔄</div>
+                    <div class="advanced-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg></span></div>
                     <h3 class="advanced-title">Multi-Instance Management</h3>
                     <p class="advanced-description">
                         Automatic instance tracking and conflict detection ensures reliable operation when multiple server instances are running.
@@ -587,7 +646,7 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
                     </ul>
                 </div>
                 <div class="advanced-feature">
-                    <div class="advanced-icon">📊</div>
+                    <div class="advanced-icon"><span class="icon"><svg viewBox="0 0 24 24"><line x1="18" x2="18" y1="20" y2="10"></line><line x1="12" x2="12" y1="20" y2="4"></line><line x1="6" x2="6" y1="20" y2="14"></line></svg></span></div>
                     <h3 class="advanced-title">Health Monitoring & Diagnostics</h3>
                     <p class="advanced-description">
                         Comprehensive health checks and diagnostic tools provide deep insights into server performance and status.
@@ -600,7 +659,7 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
                     </ul>
                 </div>
                 <div class="advanced-feature">
-                    <div class="advanced-icon">🧠</div>
+                    <div class="advanced-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"></path><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"></path><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"></path><path d="M3.477 10.896a4 4 0 0 1 .585-.396"></path><path d="M19.938 10.5a4 4 0 0 1 .585.396"></path><path d="M6 18a4 4 0 0 1-1.967-.516"></path><path d="M19.967 17.484A4 4 0 0 1 18 18"></path></svg></span></div>
                     <h3 class="advanced-title">Intelligent Caching System</h3>
                     <p class="advanced-description">
                         Advanced LRU cache with TTL support and intelligent eviction policies optimizes performance for large-scale deployments.
@@ -613,7 +672,7 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
                     </ul>
                 </div>
                 <div class="advanced-feature">
-                    <div class="advanced-icon">🔧</div>
+                    <div class="advanced-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></span></div>
                     <h3 class="advanced-title">Modern Architecture</h3>
                     <p class="advanced-description">
                         Modular design with dependency injection, full type safety, and comprehensive configuration management.
@@ -633,14 +692,14 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
     <section id="developer-experience" class="developer-experience">
         <div class="container">
             <div class="section-header">
-                <h2 class="section-title">🛠️ Developer Experience</h2>
+                <h2 class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span> Developer Experience</h2>
                 <p class="section-description">
                     Modern development workflow with automated releases, comprehensive tooling, and enterprise-grade CI/CD.
                 </p>
             </div>
             <div class="dev-experience-grid">
                 <div class="dev-feature">
-                    <div class="dev-icon">🚀</div>
+                    <div class="dev-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path></svg></span></div>
                     <h3 class="dev-title">Automated Release System</h3>
                     <p class="dev-description">
                         Release-please integration with semantic versioning, automated changelog generation, and PyPI deployment.
@@ -652,7 +711,7 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
                     </div>
                 </div>
                 <div class="dev-feature">
-                    <div class="dev-icon">🔧</div>
+                    <div class="dev-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span></div>
                     <h3 class="dev-title">Enhanced Makefile Workflow</h3>
                     <p class="dev-description">
                         Comprehensive development workflow with categorized help, security scanning, and cross-platform compatibility.
@@ -664,19 +723,19 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
                     </div>
                 </div>
                 <div class="dev-feature">
-                    <div class="dev-icon">🧪</div>
+                    <div class="dev-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></svg></span></div>
                     <h3 class="dev-title">Comprehensive Testing</h3>
                     <p class="dev-description">
-                        90%+ test coverage with pytest, benchmarking, integration tests, and automated quality assurance.
+                        80%+ test coverage with pytest, benchmarking, integration tests, and automated quality assurance.
                     </p>
                     <div class="dev-tags">
-                        <span class="dev-tag">90%+ Coverage</span>
+                        <span class="dev-tag">80%+ Coverage</span>
                         <span class="dev-tag">Benchmarks</span>
                         <span class="dev-tag">Integration Tests</span>
                     </div>
                 </div>
                 <div class="dev-feature">
-                    <div class="dev-icon">🔍</div>
+                    <div class="dev-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span></div>
                     <h3 class="dev-title">Code Quality Tools</h3>
                     <p class="dev-description">
                         Black formatting, flake8 linting, mypy type checking, bandit security scanning, and pre-commit hooks.
@@ -726,7 +785,7 @@ make build && make publish</code></pre>
                         <h3 class="step-title">Install with uv</h3>
                         <div class="code-block">
                             <button class="copy-btn" data-clipboard-target="#install-code">
-                                <span class="copy-icon">📋</span>
+                                <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
                             </button>
                             <pre><code id="install-code"># Install OpenZIM MCP with uv (recommended)
 uv add openzim-mcp
@@ -742,7 +801,7 @@ uv tool install openzim-mcp</code></pre>
                         <h3 class="step-title">Prepare ZIM Files</h3>
                         <div class="code-block">
                             <button class="copy-btn" data-clipboard-target="#zim-code">
-                                <span class="copy-icon">📋</span>
+                                <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
                             </button>
                             <pre><code id="zim-code"># Create directory for ZIM files
 mkdir ~/zim-files
@@ -758,7 +817,7 @@ mkdir ~/zim-files
                         <h3 class="step-title">Run the Server</h3>
                         <div class="code-block">
                             <button class="copy-btn" data-clipboard-target="#run-code">
-                                <span class="copy-icon">📋</span>
+                                <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
                             </button>
                             <pre><code id="run-code"># Start the MCP server
 uv run openzim-mcp /path/to/zim/files
@@ -778,7 +837,7 @@ openzim-mcp /path/to/zim/files</code></pre>
                 </p>
                 <div class="code-block">
                     <button class="copy-btn" data-clipboard-target="#dev-install-code">
-                        <span class="copy-icon">📋</span>
+                        <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
                     </button>
                     <pre><code id="dev-install-code"># Clone the repository
 git clone https://github.com/cameronrye/openzim-mcp.git
@@ -817,7 +876,7 @@ uv run python -m openzim_mcp /path/to/zim/files</code></pre>
                             <h4>Search ZIM Files</h4>
                             <div class="code-block">
                                 <button class="copy-btn" data-clipboard-target="#search-example">
-                                    <span class="copy-icon">📋</span>
+                                    <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
                                 </button>
                                 <pre><code id="search-example">{
   "name": "search_zim_file",
@@ -848,7 +907,7 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
                             <h4>Browse Namespaces</h4>
                             <div class="code-block">
                                 <button class="copy-btn" data-clipboard-target="#browse-example">
-                                    <span class="copy-icon">📋</span>
+                                    <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
                                 </button>
                                 <pre><code id="browse-example">{
   "name": "browse_namespace",
@@ -887,7 +946,7 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
                             <h4>Get Article Structure</h4>
                             <div class="code-block">
                                 <button class="copy-btn" data-clipboard-target="#structure-example">
-                                    <span class="copy-icon">📋</span>
+                                    <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
                                 </button>
                                 <pre><code id="structure-example">{
   "name": "get_article_structure",
@@ -927,7 +986,7 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
                             <h4>MCP Client Configuration - Simple Mode (Default)</h4>
                             <div class="code-block">
                                 <button class="copy-btn" data-clipboard-target="#config-example">
-                                    <span class="copy-icon">📋</span>
+                                    <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
                                 </button>
                                 <pre><code id="config-example">{
   "mcpServers": {
@@ -943,7 +1002,7 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
 }</code></pre>
                             </div>
                             <div class="example-result">
-                                <h5>Advanced Mode (16 specialized tools):</h5>
+                                <h5>Advanced Mode (18 specialized tools):</h5>
                                 <pre><code>{
   "mcpServers": {
     "openzim-mcp-advanced": {
@@ -989,17 +1048,17 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
             </div>
             <div class="docs-grid">
                 <div class="doc-card">
-                    <div class="doc-icon">📚</div>
+                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg></span></div>
                     <h3 class="doc-title">API Reference</h3>
                     <p class="doc-description">
                         Complete documentation of all available MCP tools, parameters, and response formats.
                     </p>
-                    <a href="https://github.com/cameronrye/openzim-mcp#-api-reference" class="doc-link" target="_blank">
+                    <a href="https://github.com/cameronrye/openzim-mcp#api-reference" class="doc-link" target="_blank">
                         View API Docs →
                     </a>
                 </div>
                 <div class="doc-card">
-                    <div class="doc-icon">🚀</div>
+                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path></svg></span></div>
                     <h3 class="doc-title">Quick Start Guide</h3>
                     <p class="doc-description">
                         Step-by-step tutorial to get OpenZIM MCP running in your environment quickly.
@@ -1009,7 +1068,7 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
                     </a>
                 </div>
                 <div class="doc-card">
-                    <div class="doc-icon">⚙️</div>
+                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></span></div>
                     <h3 class="doc-title">Configuration Guide</h3>
                     <p class="doc-description">
                         Advanced configuration options, environment variables, and performance tuning.
@@ -1019,7 +1078,7 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
                     </a>
                 </div>
                 <div class="doc-card">
-                    <div class="doc-icon">🔧</div>
+                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span></div>
                     <h3 class="doc-title">Troubleshooting</h3>
                     <p class="doc-description">
                         Common issues, solutions, and debugging tips for OpenZIM MCP deployment.
@@ -1029,7 +1088,7 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
                     </a>
                 </div>
                 <div class="doc-card">
-                    <div class="doc-icon">🏗️</div>
+                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"></path><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"></path><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"></path><path d="M10 6h4"></path><path d="M10 10h4"></path><path d="M10 14h4"></path><path d="M10 18h4"></path></svg></span></div>
                     <h3 class="doc-title">Architecture Overview</h3>
                     <p class="doc-description">
                         Deep dive into the system architecture, components, and design decisions.
@@ -1039,7 +1098,7 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
                     </a>
                 </div>
                 <div class="doc-card">
-                    <div class="doc-icon">🤝</div>
+                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></span></div>
                     <h3 class="doc-title">Contributing</h3>
                     <p class="doc-description">
                         Guidelines for contributing code, reporting issues, and joining the community.
@@ -1059,11 +1118,31 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
             <div class="footer-content">
                 <div class="footer-section">
                     <div class="footer-logo">
-                        <svg class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M12 2a3 3 0 0 0-3 3 4 4 0 0 0-4 4v6a4 4 0 0 0 4 4 3 3 0 0 0 3 3 3 3 0 0 0 3-3 4 4 0 0 0 4-4V9a4 4 0 0 0-4-4 3 3 0 0 0-3-3z"/>
-                            <path d="M12 2v20"/>
-                            <path d="M8 7s0-2 4-2 4 2 4 2"/>
-                            <path d="M8 17s0 2 4 2 4-2 4-2"/>
+                        <svg class="logo-icon" width="32" height="32" viewBox="0 0 32 32">
+                            <defs>
+                                <linearGradient id="footerLogoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" style="stop-color:#2563eb"/>
+                                    <stop offset="100%" style="stop-color:#10b981"/>
+                                </linearGradient>
+                            </defs>
+                            <circle cx="16" cy="16" r="15" fill="url(#footerLogoGrad)"/>
+                            <g fill="white">
+                                <circle cx="16" cy="8" r="2.5"/>
+                                <circle cx="10" cy="14" r="2"/>
+                                <circle cx="22" cy="14" r="2"/>
+                                <circle cx="16" cy="16" r="2"/>
+                                <circle cx="12" cy="21" r="1.5"/>
+                                <circle cx="20" cy="21" r="1.5"/>
+                            </g>
+                            <g stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.8">
+                                <line x1="16" y1="8" x2="10" y2="14"/>
+                                <line x1="16" y1="8" x2="22" y2="14"/>
+                                <line x1="10" y1="14" x2="16" y2="16"/>
+                                <line x1="22" y1="14" x2="16" y2="16"/>
+                                <line x1="16" y1="16" x2="12" y2="21"/>
+                                <line x1="16" y1="16" x2="20" y2="21"/>
+                            </g>
+                            <rect x="8" y="25" width="16" height="2" rx="1" fill="white" opacity="0.7"/>
                         </svg>
                         <span class="logo-text">OpenZIM MCP</span>
                     </div>
@@ -1101,10 +1180,21 @@ export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>Made with <span class="beating-heart">❤️</span> by <a href="https://rye.dev" target="_blank" rel="noopener noreferrer">Cameron Rye</a></p>
+                <p>Made with <span class="beating-heart"><span class="icon icon-filled"><svg viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg></span></span> by <a href="https://rye.dev" target="_blank" rel="noopener noreferrer">Cameron Rye</a></p>
             </div>
         </div>
     </footer>
+
+    <!-- Back to Top Button -->
+    <button class="back-to-top" id="back-to-top" aria-label="Back to top">
+        <span class="icon"><svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"></path></svg></span>
+    </button>
+
+    <!-- Copy Toast Notification -->
+    <div class="copy-toast" id="copy-toast">
+        <span class="icon"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span>
+        <span>Copied to clipboard!</span>
+    </div>
 
     <!-- Scripts -->
     <script src="assets/script.js"></script>

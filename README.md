@@ -1,32 +1,46 @@
-# OpenZIM MCP Server
+<p align="center">
+  <img src="website/assets/logo.svg" alt="OpenZIM MCP Logo" width="120" height="120">
+</p>
 
-> 🆕 **NEW: Binary Content Retrieval!** Extract PDFs, images, videos, and other embedded media from ZIM archives for processing with external tools. Perfect for multi-agent workflows! [Learn more →](#get_binary_entry---retrieve-binary-content-from-a-zim-entry)
+<h1 align="center">OpenZIM MCP Server</h1>
 
-> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (16 specialized tools) to match your LLM's capabilities.
+<p align="center">
+  <strong>Transform static ZIM archives into dynamic knowledge engines for AI models</strong>
+</p>
 
-<!-- Build and Quality Badges -->
-[![CI](https://github.com/cameronrye/openzim-mcp/workflows/CI/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/cameronrye/openzim-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/cameronrye/openzim-mcp)
-[![CodeQL](https://github.com/cameronrye/openzim-mcp/workflows/CodeQL%20Security%20Analysis/badge.svg)](https://github.com/cameronrye/openzim-mcp/actions/workflows/codeql.yml)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=cameronrye_openzim-mcp&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=cameronrye_openzim-mcp)
+<p align="center">
+  <a href="https://github.com/cameronrye/openzim-mcp/actions/workflows/test.yml"><img src="https://github.com/cameronrye/openzim-mcp/workflows/CI/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/cameronrye/openzim-mcp"><img src="https://codecov.io/gh/cameronrye/openzim-mcp/branch/main/graph/badge.svg" alt="codecov"></a>
+  <a href="https://github.com/cameronrye/openzim-mcp/actions/workflows/codeql.yml"><img src="https://github.com/cameronrye/openzim-mcp/workflows/CodeQL%20Security%20Analysis/badge.svg" alt="CodeQL"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=cameronrye_openzim-mcp"><img src="https://sonarcloud.io/api/project_badges/measure?project=cameronrye_openzim-mcp&metric=security_rating" alt="Security Rating"></a>
+</p>
 
-<!-- Package and Version Badges -->
-[![PyPI version](https://badge.fury.io/py/openzim-mcp.svg)](https://badge.fury.io/py/openzim-mcp)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/openzim-mcp)](https://pypi.org/project/openzim-mcp/)
-[![PyPI - Downloads](https://img.shields.io/pypi/dm/openzim-mcp)](https://pypi.org/project/openzim-mcp/)
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/cameronrye/openzim-mcp)](https://github.com/cameronrye/openzim-mcp/releases)
+<p align="center">
+  <a href="https://badge.fury.io/py/openzim-mcp"><img src="https://badge.fury.io/py/openzim-mcp.svg" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/openzim-mcp/"><img src="https://img.shields.io/pypi/pyversions/openzim-mcp" alt="PyPI - Python Version"></a>
+  <a href="https://pypi.org/project/openzim-mcp/"><img src="https://img.shields.io/pypi/dm/openzim-mcp" alt="PyPI - Downloads"></a>
+  <a href="https://github.com/cameronrye/openzim-mcp/releases"><img src="https://img.shields.io/github/v/release/cameronrye/openzim-mcp" alt="GitHub release"></a>
+</p>
 
-<!-- Code Quality and Standards -->
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Imports: isort](https://img.shields.io/badge/%20imports-isort-%231674b1?style=flat&labelColor=ef8336)](https://pycqa.github.io/isort/)
-[![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy-blue)](https://mypy-lang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<p align="center">
+  <a href="https://github.com/psf/black"><img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Code style: black"></a>
+  <a href="https://pycqa.github.io/isort/"><img src="https://img.shields.io/badge/%20imports-isort-%231674b1?style=flat&labelColor=ef8336" alt="Imports: isort"></a>
+  <a href="https://mypy-lang.org/"><img src="https://img.shields.io/badge/type%20checked-mypy-blue" alt="Type checked: mypy"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
 
-<!-- Community and Contribution -->
-[![GitHub issues](https://img.shields.io/github/issues/cameronrye/openzim-mcp)](https://github.com/cameronrye/openzim-mcp/issues)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/cameronrye/openzim-mcp)](https://github.com/cameronrye/openzim-mcp/pulls)
-[![GitHub contributors](https://img.shields.io/github/contributors/cameronrye/openzim-mcp)](https://github.com/cameronrye/openzim-mcp/graphs/contributors)
-[![GitHub stars](https://img.shields.io/github/stars/cameronrye/openzim-mcp?style=social)](https://github.com/cameronrye/openzim-mcp/stargazers)
+<p align="center">
+  <a href="https://github.com/cameronrye/openzim-mcp/issues"><img src="https://img.shields.io/github/issues/cameronrye/openzim-mcp" alt="GitHub issues"></a>
+  <a href="https://github.com/cameronrye/openzim-mcp/pulls"><img src="https://img.shields.io/github/issues-pr/cameronrye/openzim-mcp" alt="GitHub pull requests"></a>
+  <a href="https://github.com/cameronrye/openzim-mcp/graphs/contributors"><img src="https://img.shields.io/github/contributors/cameronrye/openzim-mcp" alt="GitHub contributors"></a>
+  <a href="https://github.com/cameronrye/openzim-mcp/stargazers"><img src="https://img.shields.io/github/stars/cameronrye/openzim-mcp?style=social" alt="GitHub stars"></a>
+</p>
+
+---
+
+> 🆕 **NEW: Article Summaries & Table of Contents!** Extract concise article summaries and hierarchical table of contents for quick content overview. Plus pagination cursors for seamless navigation! [Learn more →](#get_entry_summary---get-a-concise-article-summary)
+
+> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (18 specialized tools) to match your LLM's capabilities.
 
 ## Built for LLM Intelligence
 
@@ -48,12 +62,12 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 
 ## Features
 
-- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (16 specialized tools)
+- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (18 specialized tools)
 - **Binary Content Retrieval**: 🆕 Extract PDFs, images, videos, and other embedded media for multi-agent workflows
 - **Security First**: Comprehensive input validation and path traversal protection
 - **High Performance**: Intelligent caching and optimized ZIM file operations
 - **Smart Retrieval**: Automatic fallback from direct access to search-based retrieval for reliable entry access
-- **Well Tested**: 90%+ test coverage with comprehensive test suite
+- **Well Tested**: 80%+ test coverage with comprehensive test suite
 - **Modern Architecture**: Modular design with dependency injection
 - **Type Safe**: Full type annotations throughout the codebase
 - **Configurable**: Flexible configuration with validation
@@ -100,7 +114,7 @@ mkdir ~/zim-files
 openzim-mcp /path/to/zim/files
 python -m openzim_mcp /path/to/zim/files
 
-# Advanced mode - all 16 specialized tools
+# Advanced mode - all 18 specialized tools
 openzim-mcp --mode advanced /path/to/zim/files
 python -m openzim_mcp --mode advanced /path/to/zim/files
 
@@ -117,7 +131,7 @@ make run ZIM_DIR=/path/to/zim/files
 OpenZIM MCP supports two modes:
 
 - **Simple Mode** (default): Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
-- **Advanced Mode**: Exposes all 16 specialized MCP tools for maximum control
+- **Advanced Mode**: Exposes all 18 specialized MCP tools for maximum control
 
 See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
 
@@ -400,6 +414,43 @@ JSON string containing article structure including headings, sections, metadata,
 
 **Returns:**
 JSON string containing categorized links (internal, external, media) with titles and metadata.
+
+### get_entry_summary - Get a concise article summary
+
+**Required parameters:**
+
+- `zim_file_path` (string): Path to the ZIM file
+- `entry_path` (string): Entry path, e.g., 'C/Some_Article'
+
+**Optional parameters:**
+
+- `max_words` (integer, default: 200, range: 10-1000): Maximum number of words in the summary
+
+**Returns:**
+JSON string containing a concise summary extracted from the article's opening paragraphs, with metadata including title, word count, and truncation status.
+
+**Features:**
+
+- Extracts opening paragraphs while removing infoboxes, navigation, and sidebars
+- Provides quick article overview without loading full content
+- Useful for LLMs to understand article context before deciding to read more
+
+### get_table_of_contents - Extract hierarchical table of contents
+
+**Required parameters:**
+
+- `zim_file_path` (string): Path to the ZIM file
+- `entry_path` (string): Entry path, e.g., 'C/Some_Article'
+
+**Returns:**
+JSON string containing a hierarchical tree structure of article headings (h1-h6), suitable for navigation and content overview.
+
+**Features:**
+
+- Hierarchical tree structure with nested children
+- Includes heading levels, text, and anchor IDs
+- Provides heading count and maximum depth statistics
+- Enables LLMs to navigate directly to specific sections
 
 ### get_binary_entry - Retrieve binary content from a ZIM entry
 
@@ -877,6 +928,77 @@ Response:
 }
 ```
 
+**Getting article summary:**
+
+```json
+{
+  "name": "get_entry_summary",
+  "arguments": {
+    "zim_file_path": "C:\\zim\\wikipedia_en_100_2025-08.zim",
+    "entry_path": "C/Evolution",
+    "max_words": 100
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "title": "Evolution",
+  "path": "C/Evolution",
+  "content_type": "text/html",
+  "summary": "Evolution is the change in heritable characteristics of biological populations over successive generations. These characteristics are the expressions of genes, which are passed from parent to offspring during reproduction...",
+  "word_count": 100,
+  "is_truncated": true
+}
+```
+
+**Getting table of contents:**
+
+```json
+{
+  "name": "get_table_of_contents",
+  "arguments": {
+    "zim_file_path": "C:\\zim\\wikipedia_en_100_2025-08.zim",
+    "entry_path": "C/Evolution"
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "title": "Evolution",
+  "path": "C/Evolution",
+  "content_type": "text/html",
+  "toc": [
+    {
+      "level": 1,
+      "text": "Evolution",
+      "id": "evolution",
+      "children": [
+        {
+          "level": 2,
+          "text": "History of evolutionary thought",
+          "id": "history",
+          "children": []
+        },
+        {
+          "level": 2,
+          "text": "Mechanisms",
+          "id": "mechanisms",
+          "children": []
+        }
+      ]
+    }
+  ],
+  "heading_count": 15,
+  "max_depth": 4
+}
+```
+
 **Getting search suggestions:**
 
 ```json
@@ -1161,7 +1283,7 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 
 ## Testing
 
-The project includes comprehensive testing with 90%+ coverage using both mock data and real ZIM files:
+The project includes comprehensive testing with 80%+ coverage using both mock data and real ZIM files:
 
 ### Test Categories
 

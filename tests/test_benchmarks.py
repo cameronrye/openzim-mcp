@@ -61,8 +61,7 @@ class TestContentProcessorBenchmarks:
         """Benchmark HTML to text conversion."""
         processor = ContentProcessor()
         # Create a moderately complex HTML document
-        html_content = (
-            """
+        html_content = """
         <html>
         <head><title>Test Document</title></head>
         <body>
@@ -84,9 +83,7 @@ class TestContentProcessorBenchmarks:
             </div>
         </body>
         </html>
-        """
-            * 10
-        )  # Repeat to make it larger
+        """ * 10  # Repeat to make it larger
 
         def convert_html():
             return processor.html_to_plain_text(html_content)

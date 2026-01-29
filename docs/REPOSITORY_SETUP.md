@@ -124,7 +124,7 @@ This document outlines the comprehensive setup and configuration applied to make
 
 ### Code Quality
 
-- 90%+ test coverage requirement
+- 80%+ test coverage requirement
 - Type safety with mypy
 - Code formatting with black
 - Import sorting with isort

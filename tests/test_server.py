@@ -240,9 +240,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
 
             # Test list_zim_files exception handling
             result = asyncio.run(server.mcp.call_tool("list_zim_files", {}))
-            assert "❌ **Operation Failed**" in str(result) and "List error" in str(
-                result
-            )
+            assert "**Operation Failed**" in str(result) and "List error" in str(result)
 
             # Test search_zim_file exception handling
             result = asyncio.run(
@@ -250,7 +248,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                     "search_zim_file", {"zim_file_path": "test.zim", "query": "test"}
                 )
             )
-            assert "❌ **Operation Failed**" in str(result) and "Search error" in str(
+            assert "**Operation Failed**" in str(result) and "Search error" in str(
                 result
             )
 
@@ -261,7 +259,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                     {"zim_file_path": "test.zim", "entry_path": "A/Test"},
                 )
             )
-            assert "❌ **Operation Failed**" in str(result) and "Entry error" in str(
+            assert "**Operation Failed**" in str(result) and "Entry error" in str(
                 result
             )
 
@@ -285,7 +283,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 },
             )
         )
-        assert "⚠️ **Parameter Validation Error**" in str(
+        assert "**Parameter Validation Error**" in str(
             result
         ) and "limit must be between 1 and" in str(result)
 
@@ -300,7 +298,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 },
             )
         )
-        assert "⚠️ **Parameter Validation Error**" in str(
+        assert "**Parameter Validation Error**" in str(
             result
         ) and "limit must be between 1 and" in str(result)
 
@@ -315,7 +313,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 },
             )
         )
-        assert "⚠️ **Parameter Validation Error**" in str(
+        assert "**Parameter Validation Error**" in str(
             result
         ) and "Offset must be non-negative" in str(result)
 
@@ -330,7 +328,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 },
             )
         )
-        assert "⚠️ **Parameter Validation Error**" in str(
+        assert "**Parameter Validation Error**" in str(
             result
         ) and "max_content_length must be at least 1000" in str(result)
 
@@ -345,7 +343,9 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 },
             )
         )
-        assert "Error: limit must be between 1 and 50" in str(result)
+        assert "**Parameter Validation Error**" in str(
+            result
+        ) and "limit must be between 1 and 50" in str(result)
 
         # Test get_search_suggestions validation - invalid limit (too high)
         result = asyncio.run(
@@ -358,7 +358,9 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 },
             )
         )
-        assert "Error: limit must be between 1 and 50" in str(result)
+        assert "**Parameter Validation Error**" in str(
+            result
+        ) and "limit must be between 1 and 50" in str(result)
 
     def test_mcp_tool_exception_paths_comprehensive(self, server: OpenZimMcpServer):
         """Test exception paths for all MCP tools."""
@@ -416,7 +418,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 result = asyncio.run(server.mcp.call_tool(tool_name, params))
                 # Each tool should return an error message (either format)
                 result_str = str(result)
-                assert "❌ **Operation Failed**" in result_str or "Error:" in result_str
+                assert "**Operation Failed**" in result_str or "Error:" in result_str
 
         finally:
             # Restore all original methods
@@ -530,11 +532,14 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
         # Test search suggestions limit validation
         def validate_suggestions_limit(limit):
             if limit < 1 or limit > 50:
-                return "Error: limit must be between 1 and 50"
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    f"**Issue**: limit must be between 1 and 50 (provided: {limit})"
+                )
             return "valid"
 
-        assert "Error: limit must be between 1 and 50" in validate_suggestions_limit(0)
-        assert "Error: limit must be between 1 and 50" in validate_suggestions_limit(51)
+        assert "limit must be between 1 and 50" in validate_suggestions_limit(0)
+        assert "limit must be between 1 and 50" in validate_suggestions_limit(51)
         assert validate_suggestions_limit(25) == "valid"
 
     def test_health_tool_error_handling(self, server: OpenZimMcpServer):
@@ -661,7 +666,10 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 limit = 10
 
                 if limit < 1 or limit > 50:
-                    return "Error: limit must be between 1 and 50"
+                    return (
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 50 (provided: {limit})"
+                    )
 
                 return server.zim_operations.get_search_suggestions(
                     zim_file_path, partial_query, limit
@@ -1009,7 +1017,10 @@ class TestOpenZimMcpServerNewTools:
                 partial_query = sanitize_input(partial_query, 200)
 
                 if limit < 1 or limit > 50:
-                    return "Error: limit must be between 1 and 50"
+                    return (
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 50 (provided: {limit})"
+                    )
 
                 return f"Suggestions for {partial_query}"
             except Exception as e:
@@ -1017,10 +1028,10 @@ class TestOpenZimMcpServerNewTools:
 
         # Test invalid limit
         result = asyncio.run(mock_get_search_suggestions("test.zim", "bio", 0))
-        assert "Error: limit must be between 1 and 50" in result
+        assert "limit must be between 1 and 50" in result
 
         result = asyncio.run(mock_get_search_suggestions("test.zim", "bio", 51))
-        assert "Error: limit must be between 1 and 50" in result
+        assert "limit must be between 1 and 50" in result
 
         # Test valid parameters
         result = asyncio.run(mock_get_search_suggestions("test.zim", "bio", 10))
@@ -1086,7 +1097,7 @@ class TestOpenZimMcpServerErrorFormatting:
             operation="search", error=error, context="test.zim"
         )
 
-        assert "❌ **File Not Found Error**" in result
+        assert "**File Not Found Error**" in result
         assert "**Operation**: search" in result
         assert "**Context**: test.zim" in result
         assert "Use `list_zim_files()` to see available ZIM files" in result
@@ -1100,7 +1111,7 @@ class TestOpenZimMcpServerErrorFormatting:
             operation="get_entry", error=error, context="test.zim/A/Article"
         )
 
-        assert "❌ **Archive Operation Error**" in result
+        assert "**Archive Operation Error**" in result
         assert "**Operation**: get_entry" in result
         assert "**Context**: test.zim/A/Article" in result
         assert "Verify the ZIM file is not corrupted" in result
@@ -1115,7 +1126,7 @@ class TestOpenZimMcpServerErrorFormatting:
             operation="get_entry", error=error, context="../../../etc/passwd"
         )
 
-        assert "🔒 **Security Validation Error**" in result
+        assert "**Security Validation Error**" in result
         assert "**Operation**: get_entry" in result
         assert "**Context**: ../../../etc/passwd" in result
         assert "Check for path traversal attempts (../ sequences)" in result
@@ -1130,7 +1141,7 @@ class TestOpenZimMcpServerErrorFormatting:
             operation="search", error=error, context="query=''"
         )
 
-        assert "⚠️ **Input Validation Error**" in result
+        assert "**Input Validation Error**" in result
         assert "**Operation**: search" in result
         assert "**Context**: query=''" in result
         assert "Check parameter formats and ranges" in result
@@ -1145,7 +1156,7 @@ class TestOpenZimMcpServerErrorFormatting:
             operation="list_files", error=error, context="/restricted/path"
         )
 
-        assert "🔐 **Permission Error**" in result
+        assert "**Permission Error**" in result
         assert "**Operation**: list_files" in result
         assert "**Context**: /restricted/path" in result
         assert "Check file and directory permissions" in result
@@ -1160,7 +1171,7 @@ class TestOpenZimMcpServerErrorFormatting:
             operation="read_file", error=error, context="/some/file.zim"
         )
 
-        assert "🔐 **Permission Error**" in result
+        assert "**Permission Error**" in result
         assert "**Operation**: read_file" in result
         assert "**Context**: /some/file.zim" in result
         assert "Check file and directory permissions" in result
@@ -1174,7 +1185,7 @@ class TestOpenZimMcpServerErrorFormatting:
             operation="get_entry", error=error, context="A/NonExistentArticle"
         )
 
-        assert "📁 **Resource Not Found**" in result
+        assert "**Resource Not Found**" in result
         assert "**Operation**: get_entry" in result
         assert "**Context**: A/NonExistentArticle" in result
         assert "Double-check the spelling and path" in result
@@ -1189,7 +1200,7 @@ class TestOpenZimMcpServerErrorFormatting:
             operation="browse", error=error, context="namespace/path"
         )
 
-        assert "📁 **Resource Not Found**" in result
+        assert "**Resource Not Found**" in result
         assert "**Operation**: browse" in result
         assert "**Context**: namespace/path" in result
         assert "Check if the resource exists in a different namespace" in result
@@ -1203,7 +1214,7 @@ class TestOpenZimMcpServerErrorFormatting:
             operation="complex_operation", error=error, context="some context"
         )
 
-        assert "❌ **Operation Failed**" in result
+        assert "**Operation Failed**" in result
         assert "**Operation**: complex_operation" in result
         assert "**Error Type**: RuntimeError" in result
         assert "**Context**: some context" in result
@@ -1231,19 +1242,20 @@ class TestOpenZimMcpServerParameterValidation:
         # Create a mock tool function that mimics the validation logic
         async def mock_get_zim_entry():
             max_content_length = 500  # Too small, should trigger validation error
+            # This condition is always True for the test (500 < 1000)
             if max_content_length is not None and max_content_length < 1000:
                 return (
-                    "⚠️ **Parameter Validation Error**\n\n"
+                    "**Parameter Validation Error**\n\n"
                     f"**Issue**: max_content_length must be at least 1000 characters (provided: {max_content_length})\n\n"
                     "**Troubleshooting**: Increase the max_content_length parameter or omit it to use the default.\n"
                     "**Example**: Use `max_content_length=5000` for longer content or omit the parameter for "
                     "default length."
                 )
-            return "Success"
+            return "Success"  # pragma: no cover - unreachable in this test
 
         result = asyncio.run(mock_get_zim_entry())
 
-        assert "⚠️ **Parameter Validation Error**" in result
+        assert "**Parameter Validation Error**" in result
         assert (
             "max_content_length must be at least 1000 characters (provided: 500)"
             in result
@@ -1311,10 +1323,10 @@ class TestOpenZimMcpServerParameterValidation:
 
         # Create a mock tool function that mimics the validation logic
         async def mock_browse_namespace():
-            offset = -1  # Negative
+            offset = -1  # Negative - always triggers validation error
             if offset < 0:
                 return "Error: offset must be non-negative"
-            return "Success"
+            return "Success"  # pragma: no cover - unreachable in this test
 
         result = asyncio.run(mock_browse_namespace())
         assert result == "Error: offset must be non-negative"

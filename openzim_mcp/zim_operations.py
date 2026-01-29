@@ -2,6 +2,7 @@
 ZIM file operations with proper resource management.
 """
 
+import base64
 import json
 import logging
 from contextlib import contextmanager
@@ -14,38 +15,141 @@ from libzim.search import Query, Searcher  # type: ignore[import-untyped]
 
 from .cache import OpenZimMcpCache
 from .config import OpenZimMcpConfig
+from .constants import (
+    DEFAULT_MAIN_PAGE_TRUNCATION,
+    NAMESPACE_MAX_ENTRIES,
+    NAMESPACE_MAX_SAMPLE_SIZE,
+    NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER,
+)
 from .content_processor import ContentProcessor
-from .exceptions import OpenZimMcpArchiveError
+from .exceptions import ArchiveOpenTimeoutError, OpenZimMcpArchiveError
 from .security import PathValidator
+from .timeout_utils import run_with_timeout
+
+# Timeout for opening ZIM archives (seconds)
+ARCHIVE_OPEN_TIMEOUT = 30.0
+
+
+class PaginationCursor:
+    """
+    Utility class for creating and parsing pagination cursors.
+
+    Cursors encode pagination state as base64 tokens, making it easy for
+    clients to continue from where they left off without tracking offset manually.
+    """
+
+    @staticmethod
+    def encode(offset: int, limit: int, query: Optional[str] = None) -> str:
+        """
+        Encode pagination state into a cursor token.
+
+        Args:
+            offset: Current offset position
+            limit: Page size
+            query: Optional query string for search cursors
+
+        Returns:
+            Base64-encoded cursor string
+        """
+        cursor_data: Dict[str, Any] = {"o": offset, "l": limit}
+        if query:
+            cursor_data["q"] = query
+        json_str = json.dumps(cursor_data, separators=(",", ":"))
+        return base64.urlsafe_b64encode(json_str.encode()).decode()
+
+    @staticmethod
+    def decode(cursor: str) -> Dict[str, Any]:
+        """
+        Decode a cursor token back to pagination state.
+
+        Args:
+            cursor: Base64-encoded cursor string
+
+        Returns:
+            Dictionary with offset, limit, and optional query
+
+        Raises:
+            ValueError: If cursor is invalid
+        """
+        try:
+            json_str = base64.urlsafe_b64decode(cursor.encode()).decode()
+            data = json.loads(json_str)
+            return {
+                "offset": data.get("o", 0),
+                "limit": data.get("l", 10),
+                "query": data.get("q"),
+            }
+        except Exception as e:
+            raise ValueError(f"Invalid pagination cursor: {e}") from e
+
+    @staticmethod
+    def create_next_cursor(
+        current_offset: int, limit: int, total: int, query: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Create cursor for the next page, or None if no more results.
+
+        Args:
+            current_offset: Current offset position
+            limit: Page size
+            total: Total number of results
+            query: Optional query string
+
+        Returns:
+            Next page cursor or None if at end
+        """
+        next_offset = current_offset + limit
+        if next_offset >= total:
+            return None
+        return PaginationCursor.encode(next_offset, limit, query)
+
 
 logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def zim_archive(file_path: Path) -> Generator[Archive, None, None]:
-    """
-    Context manager for ZIM archive operations.
+def zim_archive(
+    file_path: Path, timeout_seconds: float = ARCHIVE_OPEN_TIMEOUT
+) -> Generator[Archive, None, None]:
+    """Context manager for ZIM archive operations with resource cleanup and timeout.
 
     Args:
-        file_path: Path to ZIM file
+        file_path: Path to the ZIM file
+        timeout_seconds: Maximum time to wait for archive to open (default: 30s)
 
     Yields:
-        Archive object
+        Archive object for reading ZIM content
 
     Raises:
-        OpenZimMcpArchiveError: If archive cannot be opened
+        OpenZimMcpArchiveError: If archive fails to open or times out
     """
-    archive = None
+    archive: Optional[Archive] = None
     try:
-        archive = Archive(str(file_path))
+        # Use timeout to prevent hanging on corrupted or locked files
+        def open_archive() -> Archive:
+            return Archive(str(file_path))
+
+        try:
+            archive = run_with_timeout(
+                open_archive,
+                timeout_seconds,
+                f"Timed out opening ZIM archive after {timeout_seconds}s: {file_path}",
+                ArchiveOpenTimeoutError,
+            )
+        except ArchiveOpenTimeoutError as e:
+            raise OpenZimMcpArchiveError(str(e)) from e
+
         logger.debug(f"Opened ZIM archive: {file_path}")
         yield archive
+    except OpenZimMcpArchiveError:
+        # Re-raise our custom errors as-is
+        raise
     except Exception as e:
         raise OpenZimMcpArchiveError(f"Failed to open ZIM archive: {file_path}") from e
     finally:
-        if archive:
-            # Archive cleanup is handled by libzim
-            logger.debug(f"Closed ZIM archive: {file_path}")
+        if archive is not None:
+            logger.debug(f"Releasing ZIM archive: {file_path}")
+            del archive
 
 
 class ZimOperations:
@@ -73,17 +177,18 @@ class ZimOperations:
         self.content_processor = content_processor
         logger.info("ZimOperations initialized")
 
-    def list_zim_files(self) -> str:
+    def list_zim_files_data(self) -> List[Dict[str, Any]]:
         """
-        List all ZIM files in allowed directories.
+        List all ZIM files in allowed directories as structured data.
 
         Returns:
-            JSON string containing the list of ZIM files
+            List of dictionaries containing ZIM file information.
+            Each dict has: name, path, directory, size, size_bytes, modified
         """
-        cache_key = "zim_files_list"
+        cache_key = "zim_files_list_data"
         cached_result = self.cache.get(cache_key)
         if cached_result:
-            logger.debug("Returning cached ZIM files list")
+            logger.debug("Returning cached ZIM files list data")
             return cached_result  # type: ignore[no-any-return]
 
         logger.info(
@@ -93,7 +198,7 @@ class ZimOperations:
         for dir_path in self.config.allowed_directories:
             logger.info(f"  - {dir_path}")
 
-        all_zim_files = []
+        all_zim_files: List[Dict[str, Any]] = []
 
         for directory_str in self.config.allowed_directories:
             directory = Path(directory_str)
@@ -112,6 +217,7 @@ class ZimOperations:
                                     "path": str(file_path),
                                     "directory": str(directory),
                                     "size": f"{stats.st_size / (1024 * 1024):.2f} MB",
+                                    "size_bytes": stats.st_size,
                                     "modified": datetime.fromtimestamp(
                                         stats.st_mtime
                                     ).isoformat(),
@@ -125,6 +231,27 @@ class ZimOperations:
             except Exception as e:
                 logger.error(f"Error processing directory {directory}: {e}")
 
+        # Cache the result
+        self.cache.set(cache_key, all_zim_files)
+        logger.info(f"Listed {len(all_zim_files)} ZIM files")
+        return all_zim_files
+
+    def list_zim_files(self) -> str:
+        """
+        List all ZIM files in allowed directories.
+
+        Returns:
+            JSON string containing the list of ZIM files
+        """
+        cache_key = "zim_files_list"
+        cached_result = self.cache.get(cache_key)
+        if cached_result:
+            logger.debug("Returning cached ZIM files list")
+            return cached_result  # type: ignore[no-any-return]
+
+        # Get structured data
+        all_zim_files = self.list_zim_files_data()
+
         if not all_zim_files:
             result = "No ZIM files found in allowed directories"
         else:
@@ -137,7 +264,6 @@ class ZimOperations:
 
         # Cache the result
         self.cache.set(cache_key, result)
-        logger.info(f"Listed {len(all_zim_files)} ZIM files")
         return result
 
     def search_zim_file(
@@ -183,7 +309,7 @@ class ZimOperations:
 
             # Cache the result
             self.cache.set(cache_key, result)
-            logger.info(f"Search completed: query='{query}', results found")
+            logger.debug(f"Search completed: query='{query}', results found")
             return result
 
         except Exception as e:
@@ -231,7 +357,7 @@ class ZimOperations:
                     }
                 )
 
-        # Build result text
+        # Build result text with pagination info
         result_text = (
             f'Found {total_results} matches for "{query}", '
             f"showing {offset + 1}-{offset + len(results)}:\n\n"
@@ -241,6 +367,22 @@ class ZimOperations:
             result_text += f"## {offset + i + 1}. {result['title']}\n"
             result_text += f"Path: {result['path']}\n"
             result_text += f"Snippet: {result['snippet']}\n\n"
+
+        # Add pagination information
+        has_more = (offset + len(results)) < total_results
+        result_text += "---\n"
+        result_text += f"**Pagination**: Showing {offset + 1}-{offset + len(results)} of {total_results}\n"
+
+        if has_more:
+            next_cursor = PaginationCursor.create_next_cursor(
+                offset, limit, total_results, query
+            )
+            result_text += f"**Next cursor**: `{next_cursor}`\n"
+            result_text += (
+                f"**Hint**: Use offset={offset + limit} to get the next page\n"
+            )
+        else:
+            result_text += "**End of results**\n"
 
         return result_text
 
@@ -548,8 +690,8 @@ class ZimOperations:
             decoded = urllib.parse.unquote(path_without_namespace)
             if decoded != path_without_namespace:
                 terms.append(decoded)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"URL decode failed for path '{path_without_namespace}': {e}")
 
         # Remove duplicates while preserving order
         seen = set()
@@ -602,8 +744,8 @@ class ZimOperations:
             actual_decoded = urllib.parse.unquote(actual_part).lower()
             if requested_decoded == actual_decoded:
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"URL decode comparison failed: {e}")
 
         return False
 
@@ -685,9 +827,9 @@ class ZimOperations:
                         )
                         if content:
                             metadata_entries[meta_key] = content
-                except Exception:
-                    # Entry doesn't exist, continue
-                    pass
+                except Exception as e:
+                    # Entry doesn't exist or can't be read - expected for optional metadata
+                    logger.debug(f"Metadata entry 'M/{meta_key}' not available: {e}")
 
         except Exception as e:
             logger.warning(f"Error extracting metadata entries: {e}")
@@ -752,7 +894,9 @@ class ZimOperations:
                     )
 
                     # Truncate content for main page display
-                    content = self.content_processor.truncate_content(content, 5000)
+                    content = self.content_processor.truncate_content(
+                        content, DEFAULT_MAIN_PAGE_TRUNCATION
+                    )
 
                     result = f"# {title}\n\n"
                     result += f"Path: {path}\n"
@@ -793,7 +937,7 @@ class ZimOperations:
                                 bytes(item.content), item.mimetype
                             )
                             content = self.content_processor.truncate_content(
-                                content, 5000
+                                content, DEFAULT_MAIN_PAGE_TRUNCATION
                             )
 
                             result = f"# {title}\n\n"
@@ -880,8 +1024,9 @@ class ZimOperations:
         logger.debug(f"Archive uses new namespace scheme: {has_new_scheme}")
 
         # Use sampling approach since direct iteration is not available
-        sample_size = min(1000, archive.entry_count)  # Sample up to 1000 entries
+        sample_size = min(NAMESPACE_MAX_SAMPLE_SIZE, archive.entry_count)
         sampled_entries: set[str] = set()  # Track sampled paths to avoid duplicates
+        max_sample_attempts = sample_size * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
 
         logger.debug(
             f"Sampling {sample_size} entries from {archive.entry_count} total entries"
@@ -890,7 +1035,7 @@ class ZimOperations:
         try:
             # Sample random entries to discover namespaces
             for _ in range(
-                sample_size * 2
+                max_sample_attempts
             ):  # Try more samples to account for duplicates
                 if len(sampled_entries) >= sample_size:
                     break
@@ -1096,14 +1241,22 @@ class ZimOperations:
                 logger.warning(f"Error processing entry {entry_path}: {e}")
                 continue
 
-        # Build result
+        # Build result with pagination cursor
+        has_more = total_in_namespace > offset + len(entries)
+        next_cursor = None
+        if has_more:
+            next_cursor = PaginationCursor.create_next_cursor(
+                offset, limit, total_in_namespace
+            )
+
         result = {
             "namespace": namespace,
             "total_in_namespace": total_in_namespace,
             "offset": offset,
             "limit": limit,
             "returned_count": len(entries),
-            "has_more": total_in_namespace > offset + len(entries),
+            "has_more": has_more,
+            "next_cursor": next_cursor,
             "entries": entries,
             "sampling_based": True,
         }
@@ -1118,17 +1271,17 @@ class ZimOperations:
         seen_entries = set()
 
         # Strategy 1: Use random sampling to find entries
-        max_samples = min(
-            2000, archive.entry_count
-        )  # Sample more entries for better coverage
+        # Use 2x the sample size for namespace browsing to improve coverage
+        max_samples = min(NAMESPACE_MAX_SAMPLE_SIZE * 2, archive.entry_count)
         sample_attempts = 0
-        max_attempts = max_samples * 3  # Allow more attempts to find diverse entries
+        max_attempts = max_samples * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
 
         logger.debug(f"Searching for entries in namespace '{namespace}' using sampling")
 
         while (
-            len(namespace_entries) < 200 and sample_attempts < max_attempts
-        ):  # Collect up to 200 entries
+            len(namespace_entries) < NAMESPACE_MAX_ENTRIES
+            and sample_attempts < max_attempts
+        ):
             sample_attempts += 1
             try:
                 entry = archive.get_random_entry()
@@ -1250,8 +1403,11 @@ class ZimOperations:
             raise OpenZimMcpArchiveError("Limit must be between 1 and 100")
         if offset < 0:
             raise OpenZimMcpArchiveError("Offset must be non-negative")
-        if namespace and len(namespace) != 1:
-            raise OpenZimMcpArchiveError("Namespace must be a single character")
+        # Validate namespace - allow single chars (old format) or longer names (new format)
+        if namespace and (len(namespace) > 50 or not namespace.strip()):
+            raise OpenZimMcpArchiveError(
+                "Namespace must be a non-empty string (max 50 characters)"
+            )
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
@@ -1372,8 +1528,8 @@ class ZimOperations:
                 try:
                     item = entry.get_item()
                     content_mime = item.mimetype or ""
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Could not get mimetype for entry {entry_id}: {e}")
 
                 results.append(
                     {
@@ -1656,7 +1812,7 @@ class ZimOperations:
             search = searcher.search(query_obj)
 
             total_results = search.getEstimatedMatches()
-            logger.info(f"Search found {total_results} matches for '{partial_query}'")
+            logger.debug(f"Search found {total_results} matches for '{partial_query}'")
 
             if total_results == 0:
                 return suggestions
@@ -1930,8 +2086,6 @@ class ZimOperations:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If entry retrieval fails
         """
-        import base64
-
         from .constants import DEFAULT_MAX_BINARY_SIZE
 
         if max_size_bytes is None:
@@ -1941,10 +2095,8 @@ class ZimOperations:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Prepare cache key for metadata (not data, as that could be large)
-        # Note: caching binary data is intentionally not done to avoid memory bloat
+        # Cache key for metadata (not data, as that could be large)
         cache_key = f"binary_meta:{validated_path}:{entry_path}"
-        _ = cache_key  # Reserved for future metadata caching optimization
 
         try:
             with zim_archive(validated_path) as archive:
@@ -2028,3 +2180,397 @@ class ZimOperations:
             return f"{size_bytes / (1024 * 1024):.2f} MB"
         else:
             return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+    def get_entry_summary(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        max_words: int = 200,
+    ) -> str:
+        """
+        Get a concise summary of an article without returning the full content.
+
+        This method extracts the opening paragraph(s) or introduction section,
+        providing a quick overview of the article content. Useful for getting
+        context without loading full articles.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Entry path, e.g., 'C/Some_Article'
+            max_words: Maximum number of words in the summary (default: 200)
+
+        Returns:
+            JSON string containing the article summary
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If summary extraction fails
+        """
+        # Validate parameters
+        if max_words < 10:
+            max_words = 10
+        elif max_words > 1000:
+            max_words = 1000
+
+        # Validate and resolve file path
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Check cache
+        cache_key = f"summary:{validated_path}:{entry_path}:{max_words}"
+        cached_result = self.cache.get(cache_key)
+        if cached_result:
+            logger.debug(f"Returning cached summary for: {entry_path}")
+            return cached_result  # type: ignore[no-any-return]
+
+        try:
+            with zim_archive(validated_path) as archive:
+                result = self._extract_entry_summary(archive, entry_path, max_words)
+
+            # Cache the result
+            self.cache.set(cache_key, result)
+            logger.info(f"Extracted summary for: {entry_path}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Summary extraction failed for {entry_path}: {e}")
+            raise OpenZimMcpArchiveError(f"Summary extraction failed: {e}") from e
+
+    def _extract_entry_summary(
+        self, archive: Archive, entry_path: str, max_words: int
+    ) -> str:
+        """Extract summary from article content."""
+        try:
+            # Try direct access first, fall back to search
+            try:
+                entry = archive.get_entry_by_path(entry_path)
+            except Exception:
+                actual_path = self._find_entry_by_search(archive, entry_path)
+                if actual_path:
+                    entry = archive.get_entry_by_path(actual_path)
+                    entry_path = actual_path
+                else:
+                    raise OpenZimMcpArchiveError(
+                        f"Entry not found: '{entry_path}'. "
+                        f"Try using search_zim_file() to find available entries."
+                    )
+
+            title = entry.title or "Untitled"
+            item = entry.get_item()
+            mime_type = item.mimetype or ""
+            raw_content = bytes(item.content).decode("utf-8", errors="replace")
+
+            summary_data: Dict[str, Any] = {
+                "title": title,
+                "path": entry_path,
+                "content_type": mime_type,
+                "summary": "",
+                "word_count": 0,
+                "is_truncated": False,
+            }
+
+            if mime_type.startswith("text/html"):
+                summary_data.update(self._extract_html_summary(raw_content, max_words))
+            elif mime_type.startswith("text/"):
+                # For plain text, take first N words
+                plain_text = raw_content.strip()
+                words = plain_text.split()
+                if len(words) > max_words:
+                    summary_data["summary"] = " ".join(words[:max_words]) + "..."
+                    summary_data["is_truncated"] = True
+                else:
+                    summary_data["summary"] = plain_text
+                summary_data["word_count"] = min(len(words), max_words)
+            else:
+                summary_data["summary"] = f"(Non-text content: {mime_type})"
+
+            return json.dumps(summary_data, indent=2, ensure_ascii=False)
+
+        except OpenZimMcpArchiveError:
+            raise
+        except Exception as e:
+            logger.error(f"Error extracting summary for {entry_path}: {e}")
+            raise OpenZimMcpArchiveError(
+                f"Failed to extract article summary: {e}"
+            ) from e
+
+    def _extract_html_summary(
+        self, html_content: str, max_words: int
+    ) -> Dict[str, Any]:
+        """
+        Extract summary from HTML content.
+
+        Prioritizes:
+        1. First paragraph after the title/infobox
+        2. Content of the first <p> tags
+        3. Any text content as fallback
+        """
+        from bs4 import BeautifulSoup
+
+        result: Dict[str, Any] = {
+            "summary": "",
+            "word_count": 0,
+            "is_truncated": False,
+        }
+
+        try:
+            soup = BeautifulSoup(html_content, "html.parser")
+
+            # Remove navigation, sidebars, infoboxes, etc.
+            unwanted_selectors = [
+                "nav",
+                "header",
+                "footer",
+                "aside",
+                "script",
+                "style",
+                ".infobox",
+                ".navbox",
+                ".sidebar",
+                ".toc",
+                ".mw-editsection",
+                ".reference",
+                ".reflist",
+                "#coordinates",
+                ".hatnote",
+                ".mbox",
+                ".ambox",
+                ".metadata",
+            ]
+            for selector in unwanted_selectors:
+                for element in soup.select(selector):
+                    element.decompose()
+
+            # Try to find the first meaningful paragraphs
+            paragraphs = []
+            for p in soup.find_all("p"):
+                text = p.get_text().strip()
+                # Skip very short paragraphs (likely captions or labels)
+                if len(text) > 50:
+                    paragraphs.append(text)
+                    # Collect enough paragraphs to reach max_words
+                    total_words = sum(len(para.split()) for para in paragraphs)
+                    if total_words >= max_words:
+                        break
+
+            if paragraphs:
+                # Combine paragraphs and truncate to max_words
+                combined = " ".join(paragraphs)
+                words = combined.split()
+
+                if len(words) > max_words:
+                    result["summary"] = " ".join(words[:max_words]) + "..."
+                    result["is_truncated"] = True
+                    result["word_count"] = max_words
+                else:
+                    result["summary"] = combined
+                    result["word_count"] = len(words)
+            else:
+                # Fallback: use html2text to get any text
+                plain_text = self.content_processor.html_to_plain_text(html_content)
+                words = plain_text.split()
+
+                if len(words) > max_words:
+                    result["summary"] = " ".join(words[:max_words]) + "..."
+                    result["is_truncated"] = True
+                    result["word_count"] = max_words
+                else:
+                    result["summary"] = plain_text
+                    result["word_count"] = len(words)
+
+        except Exception as e:
+            logger.warning(f"Error extracting HTML summary: {e}")
+            result["summary"] = "(Error extracting summary)"
+            result["error"] = str(e)
+
+        return result
+
+    def get_table_of_contents(self, zim_file_path: str, entry_path: str) -> str:
+        """
+        Extract a hierarchical table of contents from an article.
+
+        Returns a structured TOC tree based on heading levels (h1-h6),
+        suitable for navigation and content overview.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Entry path, e.g., 'C/Some_Article'
+
+        Returns:
+            JSON string containing hierarchical table of contents
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If TOC extraction fails
+        """
+        # Validate and resolve file path
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Check cache
+        cache_key = f"toc:{validated_path}:{entry_path}"
+        cached_result = self.cache.get(cache_key)
+        if cached_result:
+            logger.debug(f"Returning cached TOC for: {entry_path}")
+            return cached_result  # type: ignore[no-any-return]
+
+        try:
+            with zim_archive(validated_path) as archive:
+                result = self._extract_table_of_contents(archive, entry_path)
+
+            # Cache the result
+            self.cache.set(cache_key, result)
+            logger.info(f"Extracted TOC for: {entry_path}")
+            return result
+
+        except Exception as e:
+            logger.error(f"TOC extraction failed for {entry_path}: {e}")
+            raise OpenZimMcpArchiveError(f"TOC extraction failed: {e}") from e
+
+    def _extract_table_of_contents(self, archive: Archive, entry_path: str) -> str:
+        """Extract hierarchical table of contents from article."""
+        try:
+            # Try direct access first, fall back to search
+            try:
+                entry = archive.get_entry_by_path(entry_path)
+            except Exception:
+                actual_path = self._find_entry_by_search(archive, entry_path)
+                if actual_path:
+                    entry = archive.get_entry_by_path(actual_path)
+                    entry_path = actual_path
+                else:
+                    raise OpenZimMcpArchiveError(
+                        f"Entry not found: '{entry_path}'. "
+                        f"Try using search_zim_file() to find available entries."
+                    )
+
+            title = entry.title or "Untitled"
+            item = entry.get_item()
+            mime_type = item.mimetype or ""
+
+            toc_data: Dict[str, Any] = {
+                "title": title,
+                "path": entry_path,
+                "content_type": mime_type,
+                "toc": [],
+                "heading_count": 0,
+                "max_depth": 0,
+            }
+
+            if not mime_type.startswith("text/html"):
+                toc_data["message"] = (
+                    f"TOC extraction requires HTML content, got: {mime_type}"
+                )
+                return json.dumps(toc_data, indent=2, ensure_ascii=False)
+
+            raw_content = bytes(item.content).decode("utf-8", errors="replace")
+            toc_data.update(self._build_hierarchical_toc(raw_content))
+
+            return json.dumps(toc_data, indent=2, ensure_ascii=False)
+
+        except OpenZimMcpArchiveError:
+            raise
+        except Exception as e:
+            logger.error(f"Error extracting TOC for {entry_path}: {e}")
+            raise OpenZimMcpArchiveError(
+                f"Failed to extract table of contents: {e}"
+            ) from e
+
+    def _build_hierarchical_toc(self, html_content: str) -> Dict[str, Any]:
+        """
+        Build a hierarchical table of contents from HTML headings.
+
+        Returns a tree structure where each node has:
+        - level: heading level (1-6)
+        - text: heading text
+        - id: heading id attribute (for anchor links)
+        - children: nested headings
+        """
+        from bs4 import BeautifulSoup, Tag
+
+        result: Dict[str, Any] = {
+            "toc": [],
+            "heading_count": 0,
+            "max_depth": 0,
+        }
+
+        try:
+            soup = BeautifulSoup(html_content, "html.parser")
+
+            # Remove unwanted elements
+            for selector in ["script", "style", "nav", ".mw-editsection"]:
+                for element in soup.select(selector):
+                    element.decompose()
+
+            # Find all headings in order
+            headings: List[Dict[str, Any]] = []
+            for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+                if isinstance(heading, Tag):
+                    level = int(heading.name[1])
+                    text = heading.get_text().strip()
+                    heading_id = heading.get("id", "")
+
+                    if text:  # Skip empty headings
+                        headings.append(
+                            {
+                                "level": level,
+                                "text": text,
+                                "id": heading_id if heading_id else "",
+                                "children": [],
+                            }
+                        )
+
+            if not headings:
+                result["message"] = "No headings found in article"
+                return result
+
+            result["heading_count"] = len(headings)
+            result["max_depth"] = max(h["level"] for h in headings)
+
+            # Build hierarchical tree
+            result["toc"] = self._headings_to_tree(headings)
+
+        except Exception as e:
+            logger.warning(f"Error building hierarchical TOC: {e}")
+            result["error"] = str(e)
+
+        return result
+
+    def _headings_to_tree(self, headings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Convert flat list of headings to hierarchical tree structure.
+
+        Uses a stack-based approach to properly nest headings based on level.
+        """
+        if not headings:
+            return []
+
+        # Create root nodes list
+        root: List[Dict[str, Any]] = []
+        # Stack to track parent nodes at each level
+        stack: List[tuple[int, List[Dict[str, Any]]]] = [(0, root)]
+
+        for heading in headings:
+            level = heading["level"]
+            node = {
+                "level": level,
+                "text": heading["text"],
+                "id": heading["id"],
+                "children": [],
+            }
+
+            # Pop stack until we find a parent with lower level
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+
+            # Add to appropriate parent
+            if stack:
+                parent_list = stack[-1][1]
+                parent_list.append(node)
+            else:
+                root.append(node)
+
+            # Push this node's children list onto stack
+            stack.append((level, node["children"]))
+
+        return root

@@ -25,7 +25,7 @@ Examples:
   python -m openzim_mcp /path/to/zim/files
   python -m openzim_mcp --mode simple /path/to/zim/files
 
-  # Advanced mode (all 16 tools)
+  # Advanced mode (all 18 tools)
   python -m openzim_mcp --mode advanced /path/to/zim/files
 
 Environment Variables:
@@ -42,7 +42,7 @@ Environment Variables:
         choices=list(VALID_TOOL_MODES),
         default=None,
         help=(
-            f"Tool mode: 'advanced' for all 16 tools, 'simple' for 1 "
+            f"Tool mode: 'advanced' for all 18 tools, 'simple' for 1 "
             f"intelligent NL tool + underlying tools (default: {TOOL_MODE_SIMPLE}, or from "
             f"OPENZIM_MCP_TOOL_MODE env var)"
         ),
@@ -86,7 +86,7 @@ Environment Variables:
         mode_desc = (
             "SIMPLE mode (1 intelligent tool + all underlying tools)"
             if config.tool_mode == TOOL_MODE_SIMPLE
-            else "ADVANCED mode (16 specialized tools)"
+            else "ADVANCED mode (18 specialized tools)"
         )
         print(
             f"OpenZIM MCP server started in {mode_desc}",
