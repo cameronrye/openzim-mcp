@@ -3,12 +3,12 @@ Tests for async_operations module.
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from openzim_mcp.async_operations import AsyncZimOperations
-from openzim_mcp.config import CacheConfig, ContentConfig, OpenZimMcpConfig
+from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.zim_operations import ZimOperations
 
 
@@ -242,7 +242,7 @@ class TestAsyncOperationsThreading:
         """Test that operations run in a separate thread."""
         import threading
 
-        main_thread_id = threading.current_thread().ident
+        _main_thread_id = threading.current_thread().ident  # noqa: F841
         operation_thread_id = None
 
         def sync_operation():
@@ -288,8 +288,6 @@ class TestAsyncOperationsIntegration:
         # This will return empty or error since no real ZIM files
         result = await real_async_ops.list_zim_files()
 
-        # Should return valid JSON
-        import json
-
+        # Should return valid string result
         # May return empty list or error message
         assert isinstance(result, str)

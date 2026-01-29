@@ -2,14 +2,14 @@
 Tests for file_tools module.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpRateLimitError
 from openzim_mcp.server import OpenZimMcpServer
-from openzim_mcp.tools.file_tools import register_file_tools
+from openzim_mcp.tools.file_tools import register_file_tools  # noqa: F401
 
 
 class TestRegisterFileTools:

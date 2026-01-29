@@ -279,7 +279,7 @@ class TestRateLimiter:
         for _ in range(3):
             limiter.check_rate_limit("default")
 
-        initial_tokens = limiter.get_status()["global_tokens_available"]
+        _initial_tokens = limiter.get_status()["global_tokens_available"]  # noqa: F841
 
         # Reset
         limiter.reset()

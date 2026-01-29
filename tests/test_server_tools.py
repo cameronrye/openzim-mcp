@@ -2,16 +2,13 @@
 Tests for server_tools module.
 """
 
-import json
 import os
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
-from openzim_mcp.tools.server_tools import register_server_tools
+from openzim_mcp.tools.server_tools import register_server_tools  # noqa: F401
 
 
 class TestRegisterServerTools:
