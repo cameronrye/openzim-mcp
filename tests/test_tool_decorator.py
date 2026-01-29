@@ -244,7 +244,6 @@ class TestDecoratorPreservesMetadata:
     @pytest.mark.asyncio
     async def test_async_decorator_preserves_name(self):
         """Test that async decorator preserves function name."""
-        _server = MockServer()  # noqa: F841
 
         @zim_tool("test")
         async def my_named_function(server) -> str:
@@ -257,7 +256,6 @@ class TestDecoratorPreservesMetadata:
 
     def test_sync_decorator_preserves_name(self):
         """Test that sync decorator preserves function name."""
-        _server = MockServer()  # noqa: F841
 
         @sync_zim_tool("test")
         def my_sync_function(server) -> str:

@@ -9,7 +9,6 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpRateLimitError
 from openzim_mcp.server import OpenZimMcpServer
-from openzim_mcp.tools.structure_tools import register_structure_tools  # noqa: F401
 
 
 class TestRegisterStructureTools:

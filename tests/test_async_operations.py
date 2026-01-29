@@ -242,7 +242,6 @@ class TestAsyncOperationsThreading:
         """Test that operations run in a separate thread."""
         import threading
 
-        _main_thread_id = threading.current_thread().ident  # noqa: F841
         operation_thread_id = None
 
         def sync_operation():

@@ -149,7 +149,6 @@ def zim_archive(
     finally:
         if archive is not None:
             logger.debug(f"Releasing ZIM archive: {file_path}")
-            del archive
 
 
 class ZimOperations:

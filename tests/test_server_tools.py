@@ -8,7 +8,6 @@ import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
-from openzim_mcp.tools.server_tools import register_server_tools  # noqa: F401
 
 
 class TestRegisterServerTools:
@@ -249,10 +248,15 @@ class TestDiskSpaceChecking:
 
     def test_adequate_disk_space_no_warning(self):
         """Test that adequate disk space doesn't generate warning."""
-        free_space_mb = 500  # More than 100MB
+        free_space_mb = 500  # More than 100MB threshold
 
+        # With adequate space, no warnings should be generated
         warnings = []
-        if free_space_mb < 100:
-            warnings.append(f"Low disk space: {free_space_mb:.1f}MB available")
+        # Only add warning if space is low (this condition is False for 500MB)
+        warnings = (
+            [f"Low disk space: {free_space_mb:.1f}MB available"]
+            if free_space_mb < 100
+            else []
+        )
 
         assert len(warnings) == 0

@@ -146,9 +146,12 @@ class TestRegexTimeout:
 
         original_handler = signal.getsignal(signal.SIGALRM)
 
-        with pytest.raises(ValueError):
+        def raise_in_timeout_context():
             with regex_timeout(5.0):
                 raise ValueError("Test exception")
+
+        with pytest.raises(ValueError):
+            raise_in_timeout_context()
 
         # Handler should be restored even after exception
         assert signal.getsignal(signal.SIGALRM) == original_handler
@@ -165,10 +168,12 @@ class TestExceptionHierarchy:
         """Test that RegexTimeoutError is a subclass of OpenZimMcpTimeoutError."""
         assert issubclass(RegexTimeoutError, OpenZimMcpTimeoutError)
 
-    def test_can_catch_with_base_class(self) -> None:
-        """Test that specific exceptions can be caught with base class."""
+    def test_can_catch_archive_timeout_with_base_class(self) -> None:
+        """Test that ArchiveOpenTimeoutError can be caught with base class."""
         with pytest.raises(OpenZimMcpTimeoutError):
             raise ArchiveOpenTimeoutError("Test")
 
+    def test_can_catch_regex_timeout_with_base_class(self) -> None:
+        """Test that RegexTimeoutError can be caught with base class."""
         with pytest.raises(OpenZimMcpTimeoutError):
             raise RegexTimeoutError("Test")

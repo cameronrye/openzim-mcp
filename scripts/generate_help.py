@@ -17,7 +17,7 @@ if os.name == "nt":
         # Enable ANSI escape sequence processing on Windows 10+
         os.system("")
     except OSError:
-        pass
+        pass  # ANSI colors not supported on older Windows versions
 
 
 class RegexTimeoutError(Exception):

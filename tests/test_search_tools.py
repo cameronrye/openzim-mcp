@@ -9,7 +9,6 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpRateLimitError
 from openzim_mcp.server import OpenZimMcpServer
-from openzim_mcp.tools.search_tools import register_search_tools  # noqa: F401
 
 
 class TestRegisterSearchTools:
@@ -87,12 +86,12 @@ class TestSearchZimFileTool:
     def test_search_offset_validation_negative(self):
         """Test that negative offset returns validation error."""
         offset = -5
-        if offset < 0:
-            error = (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: Offset must be non-negative (provided: {offset})\n\n"
-            )
-            assert "must be non-negative" in error
+        # Negative offset should produce validation error message
+        error = (
+            "**Parameter Validation Error**\n\n"
+            f"**Issue**: Offset must be non-negative (provided: {offset})\n\n"
+        )
+        assert "must be non-negative" in error
 
     @pytest.mark.asyncio
     async def test_search_zim_file_rate_limit_error(self, server: OpenZimMcpServer):

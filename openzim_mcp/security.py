@@ -325,8 +325,8 @@ def sanitize_context_for_error(context: str) -> str:
                 decoded_part = part
                 try:
                     decoded_part = unquote(part)
-                except Exception:
-                    pass
+                except ValueError:
+                    decoded_part = part  # Keep original if decoding fails
                 if (
                     decoded_part.startswith("/")
                     or decoded_part.startswith("C:\\")

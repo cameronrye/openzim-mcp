@@ -9,7 +9,6 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpRateLimitError
 from openzim_mcp.server import OpenZimMcpServer
-from openzim_mcp.tools.navigation_tools import register_navigation_tools  # noqa: F401
 
 
 class TestRegisterNavigationTools:
@@ -69,12 +68,12 @@ class TestBrowseNamespaceTool:
     def test_offset_validation_negative(self):
         """Test that negative offset returns validation error."""
         offset = -1
-        if offset < 0:
-            error = (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: offset must be non-negative (provided: {offset})\n\n"
-            )
-            assert "must be non-negative" in error
+        # Negative offset should produce validation error message
+        error = (
+            "**Parameter Validation Error**\n\n"
+            f"**Issue**: offset must be non-negative (provided: {offset})\n\n"
+        )
+        assert "must be non-negative" in error
 
     @pytest.mark.asyncio
     async def test_browse_namespace_rate_limit_error(self, server: OpenZimMcpServer):

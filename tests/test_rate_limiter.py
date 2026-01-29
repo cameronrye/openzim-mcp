@@ -279,7 +279,8 @@ class TestRateLimiter:
         for _ in range(3):
             limiter.check_rate_limit("default")
 
-        _initial_tokens = limiter.get_status()["global_tokens_available"]  # noqa: F841
+        # Verify tokens were consumed before reset
+        assert limiter.get_status()["global_tokens_available"] < config.burst_size
 
         # Reset
         limiter.reset()

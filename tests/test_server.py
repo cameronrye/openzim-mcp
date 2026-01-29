@@ -665,12 +665,6 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 partial_query = sanitize_input("test", 200)
                 limit = 10
 
-                if limit < 1 or limit > 50:
-                    return (
-                        "**Parameter Validation Error**\n\n"
-                        f"**Issue**: limit must be between 1 and 50 (provided: {limit})"
-                    )
-
                 return server.zim_operations.get_search_suggestions(
                     zim_file_path, partial_query, limit
                 )
@@ -1241,17 +1235,14 @@ class TestOpenZimMcpServerParameterValidation:
 
         # Create a mock tool function that mimics the validation logic
         async def mock_get_zim_entry():
-            max_content_length = 500  # Too small, should trigger validation error
-            # This condition is always True for the test (500 < 1000)
-            if max_content_length is not None and max_content_length < 1000:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: max_content_length must be at least 1000 characters (provided: {max_content_length})\n\n"
-                    "**Troubleshooting**: Increase the max_content_length parameter or omit it to use the default.\n"
-                    "**Example**: Use `max_content_length=5000` for longer content or omit the parameter for "
-                    "default length."
-                )
-            return "Success"  # pragma: no cover - unreachable in this test
+            max_content_length = 500  # Too small, triggers validation error
+            return (
+                "**Parameter Validation Error**\n\n"
+                f"**Issue**: max_content_length must be at least 1000 characters (provided: {max_content_length})\n\n"
+                "**Troubleshooting**: Increase the max_content_length parameter or omit it to use the default.\n"
+                "**Example**: Use `max_content_length=5000` for longer content or omit the parameter for "
+                "default length."
+            )
 
         result = asyncio.run(mock_get_zim_entry())
 
@@ -1321,12 +1312,9 @@ class TestOpenZimMcpServerParameterValidation:
     ):
         """Test offset validation in browse_namespace tool."""
 
-        # Create a mock tool function that mimics the validation logic
+        # Create a mock tool function that returns expected validation error
         async def mock_browse_namespace():
-            offset = -1  # Negative - always triggers validation error
-            if offset < 0:
-                return "Error: offset must be non-negative"
-            return "Success"  # pragma: no cover - unreachable in this test
+            return "Error: offset must be non-negative"
 
         result = asyncio.run(mock_browse_namespace())
         assert result == "Error: offset must be non-negative"

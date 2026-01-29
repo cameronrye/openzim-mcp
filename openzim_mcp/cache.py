@@ -165,7 +165,7 @@ class OpenZimMcpCache:
             try:
                 logger.debug(f"Exception during cleanup thread shutdown: {e}")
             except Exception:
-                pass
+                pass  # Silently ignore if logging fails during shutdown
         self._cleanup_thread = None
 
     def _background_cleanup_loop(self) -> None:
