@@ -8,37 +8,37 @@ OpenZIM MCP follows a modular, layered architecture designed for performance, se
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    MCP Client Layer                        │
-│              (Claude, Custom Clients, etc.)                │
+│                    MCP Client Layer                         │
+│              (Claude, Custom Clients, etc.)                 │
 └─────────────────────┬───────────────────────────────────────┘
                       │ MCP Protocol
 ┌─────────────────────▼───────────────────────────────────────┐
-│                 OpenZIM MCP Server                         │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
-│  │   Server    │ │   Security  │ │   Instance Tracker  │   │
-│  │   Core      │ │   Layer     │ │   & Health Monitor  │   │
-│  └─────────────┘ └─────────────┘ └─────────────────────┘   │
+│                 OpenZIM MCP Server                          │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐    │
+│  │   Server    │ │   Security  │ │   Instance Tracker  │    │
+│  │   Core      │ │   Layer     │ │   & Health Monitor  │    │
+│  └─────────────┘ └─────────────┘ └─────────────────────┘    │
 └─────────────────────┬───────────────────────────────────────┘
                       │
 ┌─────────────────────▼───────────────────────────────────────┐
-│                 Business Logic Layer                       │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
-│  │    Cache    │ │   Content   │ │    ZIM Operations   │   │
-│  │   Manager   │ │  Processor  │ │  & Smart Retrieval  │   │
-│  └─────────────┘ └─────────────┘ └─────────────────────┘   │
+│                 Business Logic Layer                        │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐    │
+│  │    Cache    │ │   Content   │ │    ZIM Operations   │    │
+│  │   Manager   │ │  Processor  │ │  & Smart Retrieval  │    │
+│  └─────────────┘ └─────────────┘ └─────────────────────┘    │
 └─────────────────────┬───────────────────────────────────────┘
                       │
 ┌─────────────────────▼───────────────────────────────────────┐
-│                   Data Access Layer                        │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
-│  │   libzim    │ │ File System │ │   Configuration     │   │
-│  │  Interface  │ │   Access    │ │   & Validation      │   │
-│  └─────────────┘ └─────────────┘ └─────────────────────┘   │
+│                   Data Access Layer                         │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐    │
+│  │   libzim    │ │ File System │ │   Configuration     │    │
+│  │  Interface  │ │   Access    │ │   & Validation      │    │
+│  └─────────────┘ └─────────────┘ └─────────────────────┘    │
 └─────────────────────┬───────────────────────────────────────┘
                       │
 ┌─────────────────────▼───────────────────────────────────────┐
-│                 Storage Layer                              │
-│        ZIM Files, Cache, Logs, Instance Tracking           │
+│                 Storage Layer                               │
+│        ZIM Files, Cache, Logs, Instance Tracking            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -327,16 +327,16 @@ def search_zim_file(self, zim_file_path: str, query: str) -> List[SearchResult]:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Cache Layers                            │
+│                    Cache Layers                             │
 │                                                             │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
-│  │   L1 Cache  │ │   L2 Cache  │ │     L3 Cache        │   │
-│  │  (Memory)   │ │ (Metadata)  │ │  (Path Mapping)     │   │
-│  │             │ │             │ │                     │   │
-│  │ • Search    │ │ • ZIM Meta  │ │ • Entry Paths       │   │
-│  │ • Content   │ │ • Structure │ │ • Namespace Info    │   │
-│  │ • Links     │ │ • Health    │ │ • Suggestions       │   │
-│  └─────────────┘ └─────────────┘ └─────────────────────┘   │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐    │
+│  │   L1 Cache  │ │   L2 Cache  │ │     L3 Cache        │    │
+│  │  (Memory)   │ │ (Metadata)  │ │  (Path Mapping)     │    │
+│  │             │ │             │ │                     │    │
+│  │ • Search    │ │ • ZIM Meta  │ │ • Entry Paths       │    │
+│  │ • Content   │ │ • Structure │ │ • Namespace Info    │    │
+│  │ • Links     │ │ • Health    │ │ • Suggestions       │    │
+│  └─────────────┘ └─────────────┘ └─────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -372,16 +372,16 @@ class ZimFileManager:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                  Security Layers                           │
+│                  Security Layers                            │
 │                                                             │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
-│  │   Input     │ │    Path     │ │      Access         │   │
-│  │ Validation  │ │ Validation  │ │     Control         │   │
-│  │             │ │             │ │                     │   │
-│  │ • Sanitize  │ │ • Normalize │ │ • Directory Limits  │   │
-│  │ • Length    │ │ • Traversal │ │ • File Extensions   │   │
-│  │ • Type      │ │ • Resolve   │ │ • Permission Check  │   │
-│  └─────────────┘ └─────────────┘ └─────────────────────┘   │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐    │
+│  │   Input     │ │    Path     │ │      Access         │    │
+│  │ Validation  │ │ Validation  │ │     Control         │    │
+│  │             │ │             │ │                     │    │
+│  │ • Sanitize  │ │ • Normalize │ │ • Directory Limits  │    │
+│  │ • Length    │ │ • Traversal │ │ • File Extensions   │    │
+│  │ • Type      │ │ • Resolve   │ │ • Permission Check  │    │
+│  └─────────────┘ └─────────────┘ └─────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
