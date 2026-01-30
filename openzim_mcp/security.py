@@ -1,6 +1,5 @@
 """Security and path validation for OpenZIM MCP server."""
 
-import contextlib
 import logging
 import os
 import re
@@ -287,9 +286,10 @@ def sanitize_context_for_error(context: str) -> str:
         return context
 
     # URL-decode the context to catch encoded paths (%2F = /, etc.)
-    decoded_context = context
-    with contextlib.suppress(Exception):  # nosec B110
+    try:
         decoded_context = unquote(context)
+    except Exception:  # nosec B110 - gracefully handle any decoding errors
+        decoded_context = context
 
     # Common patterns indicating file paths
     path_indicators = [

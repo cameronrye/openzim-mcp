@@ -3,7 +3,7 @@
 A modern, secure MCP server for accessing ZIM format knowledge bases offline.
 """
 
-__version__ = "0.8.2"
+__version__ = "0.8.3"
 __author__ = "Cameron Rye"
 
 from .config import OpenZimMcpConfig

@@ -833,7 +833,7 @@ wheels = [
 
 [[package]]
 name = "openzim-mcp"
-version = "0.8.2"
+version = "0.8.3"
 source = { virtual = "." }
 dependencies = [
     { name = "beautifulsoup4" },
