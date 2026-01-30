@@ -402,7 +402,7 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                                             magic = f.read(4)
                                             if magic != b"ZIM\x04":
                                                 dir_warnings.append(
-                                                    f"May not be valid ZIM: "
+                                                    f"May not be a valid ZIM: "
                                                     f"{zim_file.name}"
                                                 )
                                     except Exception:

@@ -29,6 +29,10 @@ class OpenZimMcpError(Exception):
         self.details = details
         super().__init__(message, details)
 
+    def __str__(self) -> str:
+        """Return the error message."""
+        return self.message
+
     def to_dict(self) -> dict:
         """Convert exception to a dictionary for JSON serialization."""
         return {
