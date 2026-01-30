@@ -1,10 +1,8 @@
-"""
-Content processing utilities for OpenZIM MCP server.
-"""
+"""Content processing utilities for OpenZIM MCP server."""
 
 import logging
 import re
-from typing import Any, Dict, List, Union, cast
+from typing import Any, Dict, List, Optional, Union, cast
 from urllib.parse import urlparse
 
 import html2text
@@ -42,7 +40,7 @@ class ParsedHTML:
 
     @property
     def soup(self) -> BeautifulSoup:
-        """Get a fresh copy of the parsed soup (since some operations modify it)."""
+        """Return a fresh copy of the parsed soup for modifying operations."""
         return BeautifulSoup(self._original_soup_html, "html.parser")
 
     @property
@@ -281,7 +279,7 @@ class ContentProcessor:
             }
 
     def _extract_structure_from_soup(self, soup: BeautifulSoup) -> Dict[str, Any]:
-        """Internal method to extract structure from a BeautifulSoup object.
+        """Extract structure from a BeautifulSoup object.
 
         Args:
             soup: BeautifulSoup object (will be modified)
@@ -338,7 +336,7 @@ class ContentProcessor:
 
             # Extract sections based on headings
             sections = []
-            current_section: Union[Dict[str, Union[str, int]], None] = None
+            current_section: Optional[Dict[str, Union[str, int]]] = None
 
             elements = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "div"])
             for page_element in elements:
@@ -426,7 +424,7 @@ class ContentProcessor:
             }
 
     def _extract_links_from_soup(self, soup: BeautifulSoup) -> Dict[str, Any]:
-        """Internal method to extract links from a BeautifulSoup object.
+        """Extract links from a BeautifulSoup object.
 
         Args:
             soup: BeautifulSoup object (read-only operation)

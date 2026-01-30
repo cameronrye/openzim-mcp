@@ -1,6 +1,4 @@
-"""
-Tests for rate_limiter module.
-"""
+"""Tests for rate_limiter module."""
 
 import threading
 import time

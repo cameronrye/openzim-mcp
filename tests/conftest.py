@@ -1,6 +1,4 @@
-"""
-Pytest configuration and fixtures for OpenZIM MCP tests.
-"""
+"""Pytest configuration and fixtures for OpenZIM MCP tests."""
 
 import json
 import os
@@ -88,8 +86,7 @@ def sample_html() -> str:
 
 @pytest.fixture(scope="session")
 def zim_test_data_dir() -> Optional[Path]:
-    """
-    Get the ZIM test data directory from environment variable or default location.
+    """Get the ZIM test data directory from env var or default location.
 
     Returns:
         Path to ZIM test data directory if it exists, None otherwise
@@ -111,8 +108,7 @@ def zim_test_data_dir() -> Optional[Path]:
 
 @pytest.fixture(scope="session")
 def zim_test_manifest(zim_test_data_dir: Optional[Path]) -> Optional[Dict]:
-    """
-    Load the ZIM test data manifest if available.
+    """Load the ZIM test data manifest if available.
 
     Returns:
         Manifest dictionary or None if not available
@@ -127,14 +123,13 @@ def zim_test_manifest(zim_test_data_dir: Optional[Path]) -> Optional[Dict]:
     try:
         with open(manifest_path) as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, ValueError):
         return None
 
 
 @pytest.fixture
 def available_test_zim_files(zim_test_data_dir: Optional[Path]) -> List[Path]:
-    """
-    Get list of available ZIM test files.
+    """Get list of available ZIM test files.
 
     Returns:
         List of available ZIM file paths
@@ -153,8 +148,7 @@ def available_test_zim_files(zim_test_data_dir: Optional[Path]) -> List[Path]:
 def basic_test_zim_files(
     zim_test_data_dir: Optional[Path],
 ) -> Dict[str, Optional[Path]]:
-    """
-    Get basic test ZIM files for essential testing.
+    """Get basic test ZIM files for essential testing.
 
     Returns:
         Dictionary with 'withns' and 'nons' keys pointing to small.zim files
@@ -177,8 +171,7 @@ def basic_test_zim_files(
 
 @pytest.fixture
 def invalid_test_zim_files(zim_test_data_dir: Optional[Path]) -> List[Path]:
-    """
-    Get invalid ZIM test files for error handling testing.
+    """Get invalid ZIM test files for error handling testing.
 
     Returns:
         List of invalid ZIM file paths
@@ -197,8 +190,7 @@ def invalid_test_zim_files(zim_test_data_dir: Optional[Path]) -> List[Path]:
 def real_content_zim_files(
     zim_test_data_dir: Optional[Path],
 ) -> Dict[str, Optional[Path]]:
-    """
-    Get real content ZIM files for integration testing.
+    """Get real content ZIM files for integration testing.
 
     Returns:
         Dictionary with available real content ZIM files
@@ -225,9 +217,7 @@ def real_content_zim_files(
 def test_config_with_zim_data(
     temp_dir: Path, zim_test_data_dir: Optional[Path]
 ) -> OpenZimMcpConfig:
-    """
-    Create a test configuration that includes ZIM test data directory if available.
-    """
+    """Create a test config including ZIM test data directory if available."""
     allowed_dirs = [str(temp_dir)]
 
     # Add ZIM test data directory to allowed directories if available

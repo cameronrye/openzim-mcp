@@ -1,6 +1,4 @@
-"""
-Tests for content_tools module.
-"""
+"""Tests for content_tools module."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -72,7 +70,8 @@ class TestGetZimEntryTool:
         if max_content_length is not None and max_content_length < 1000:
             error_message = (
                 "**Parameter Validation Error**\n\n"
-                f"**Issue**: max_content_length must be at least 1000 characters (provided: {max_content_length})\n\n"
+                f"**Issue**: max_content_length must be at least 1000 characters "
+                f"(provided: {max_content_length})\n\n"
             )
             assert "must be at least 1000" in error_message
 

@@ -1,6 +1,4 @@
-"""
-Configuration management for OpenZIM MCP server.
-"""
+"""Configuration management for OpenZIM MCP server."""
 
 import hashlib
 import json
@@ -85,7 +83,10 @@ class OpenZimMcpConfig(BaseSettings):
     server_name: str = "openzim-mcp"
     tool_mode: Literal["advanced", "simple"] = Field(
         default="simple",
-        description="Tool mode: 'advanced' for all 18 tools, 'simple' for 1 intelligent tool plus underlying tools",
+        description=(
+            "Tool mode: 'advanced' for all 18 tools, "
+            "'simple' for 1 intelligent tool plus underlying tools"
+        ),
     )
 
     model_config = SettingsConfigDict(

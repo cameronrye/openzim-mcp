@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Setup development environment for OpenZIM MCP.
+"""Set up development environment for OpenZIM MCP.
 
 This script helps developers set up their environment for OpenZIM MCP development,
 including downloading test data and verifying the setup.
 """
 
 import argparse
-import subprocess
+import subprocess  # nosec B404 - needed for running build commands
 import sys
-from pathlib import Path
 
 # Ensure UTF-8 encoding for Windows compatibility
 if sys.platform == "win32":
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 
 def run_command(cmd: str, description: str) -> bool:
     """Run a command and return success status."""
     print(f"[RUNNING] {description}...")
     try:
-        result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+        subprocess.run(  # nosec B602 - intentional use for dev tooling
+            cmd, shell=True, check=True, capture_output=True, text=True
+        )
         print(f"[OK] {description} completed")
         return True
     except subprocess.CalledProcessError as e:
@@ -45,7 +46,9 @@ def check_requirements() -> bool:
 
     # Check uv
     try:
-        subprocess.run(["uv", "--version"], check=True, capture_output=True)
+        subprocess.run(  # nosec B603 B607 - safe, hardcoded command
+            ["uv", "--version"], check=True, capture_output=True
+        )
         print("[OK] uv found")
     except (subprocess.CalledProcessError, FileNotFoundError):
         print("[FAIL] uv not found. Please install uv: https://docs.astral.sh/uv/")
@@ -63,11 +66,7 @@ def setup_environment() -> bool:
         ("make download-test-data", "Downloading essential test data"),
     ]
 
-    for cmd, description in steps:
-        if not run_command(cmd, description):
-            return False
-
-    return True
+    return all(run_command(cmd, description) for (cmd, description) in steps)
 
 
 def run_tests() -> bool:
@@ -111,7 +110,7 @@ def show_next_steps():
 
 
 def main():
-    """Main entry point."""
+    """Run the main entry point."""
     parser = argparse.ArgumentParser(
         description="Setup OpenZIM MCP development environment",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -127,52 +126,48 @@ Examples:
   %(prog)s                    # Full setup
   %(prog)s --skip-tests       # Setup without running tests
   %(prog)s --test-only        # Only run tests (assume setup done)
-        """
+        """,
     )
-    
+
     parser.add_argument(
-        "--skip-tests",
-        action="store_true",
-        help="Skip running tests after setup"
+        "--skip-tests", action="store_true", help="Skip running tests after setup"
     )
-    
+
     parser.add_argument(
         "--test-only",
         action="store_true",
-        help="Only run tests (skip environment setup)"
+        help="Only run tests (skip environment setup)",
     )
-    
+
     parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Enable verbose output"
+        "--verbose", "-v", action="store_true", help="Enable verbose output"
     )
-    
+
     args = parser.parse_args()
-    
+
     print("[START] OpenZIM MCP Development Environment Setup")
     print("=" * 50)
 
     # Check requirements
     if not check_requirements():
-        print("\n[FAIL] Requirements check failed. Please install missing dependencies.")
+        print(
+            "\n[FAIL] Requirements check failed. Please install missing dependencies."
+        )
         return 1
 
     # Setup environment (unless test-only)
-    if not args.test_only:
-        if not setup_environment():
-            print("\n[FAIL] Environment setup failed.")
-            return 1
+    if not args.test_only and not setup_environment():
+        print("\n[FAIL] Environment setup failed.")
+        return 1
 
     # Run tests (unless skipped)
-    if not args.skip_tests:
-        if not run_tests():
-            print("\n[WARN] Some tests failed. Environment may not be fully functional.")
-            print("   Check the error messages above and try running tests manually.")
-    
+    if not args.skip_tests and not run_tests():
+        print("\n[WARN] Some tests failed. Environment may not be fully functional.")
+        print("   Check the error messages above and try running tests manually.")
+
     # Show next steps
     show_next_steps()
-    
+
     return 0
 
 

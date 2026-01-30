@@ -1,6 +1,4 @@
-"""
-Tests for async_operations module.
-"""
+"""Tests for async_operations module."""
 
 import asyncio
 from unittest.mock import MagicMock

@@ -201,7 +201,9 @@ class RateLimiter:
             raise OpenZimMcpRateLimitError(
                 f"Rate limit exceeded for operation '{operation}'. "
                 f"Please wait {wait_time:.2f} seconds before retrying.",
-                details=f"operation={operation}, cost={cost}, wait_time={wait_time:.2f}s",
+                details=(
+                    f"operation={operation}, cost={cost}, wait_time={wait_time:.2f}s"
+                ),
             )
 
         # Check operation-specific limit if configured
@@ -214,7 +216,10 @@ class RateLimiter:
                 raise OpenZimMcpRateLimitError(
                     f"Rate limit exceeded for operation '{operation}'. "
                     f"Please wait {wait_time:.2f} seconds before retrying.",
-                    details=f"operation={operation}, cost={cost}, wait_time={wait_time:.2f}s",
+                    details=(
+                        f"operation={operation}, cost={cost}, "
+                        f"wait_time={wait_time:.2f}s"
+                    ),
                 )
 
         logger.debug(f"Rate limit check passed: operation={operation}, cost={cost}")

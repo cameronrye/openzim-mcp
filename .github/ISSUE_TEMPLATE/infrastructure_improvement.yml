@@ -10,7 +10,7 @@ body:
     attributes:
       value: |
         Thank you for suggesting an infrastructure improvement! 🏗️
-        
+
         This template is for improvements to:
         - CI/CD workflows and automation
         - Development tools and processes
@@ -27,7 +27,7 @@ body:
       description: Describe the infrastructure improvement you're suggesting
       placeholder: |
         Example: Add automated dependency vulnerability scanning with Snyk integration
-        
+
         Provide a clear description of:
         - What infrastructure component needs improvement
         - Why this improvement is needed
@@ -75,7 +75,7 @@ body:
       description: Describe the current state of the infrastructure component
       placeholder: |
         Example: Currently using basic dependency scanning with Dependabot only
-        
+
         Describe:
         - What currently exists (if anything)
         - What limitations or issues exist
@@ -90,7 +90,7 @@ body:
       description: Describe your proposed solution in detail
       placeholder: |
         Example: Integrate Snyk for advanced vulnerability scanning
-        
+
         Include:
         - Specific tools or approaches to implement
         - Configuration details if known
@@ -113,9 +113,9 @@ body:
         5. Update documentation and README badges
         6. Test integration with sample vulnerabilities
       value: |
-        1. 
-        2. 
-        3. 
+        1.
+        2.
+        3.
     validations:
       required: false
 
@@ -129,7 +129,7 @@ body:
         - Use GitHub's built-in dependency scanning
         - Integrate with SonarCloud for security analysis
         - Use CodeQL for additional security scanning
-        
+
         List any alternative solutions you've considered and why you prefer your proposed approach.
     validations:
       required: false
@@ -161,7 +161,7 @@ body:
         - Zero false positives in security scanning
         - Integration completes within existing CI time limits
         - Documentation updated with new badges and processes
-        
+
         Define measurable criteria for success.
     validations:
       required: false
@@ -206,13 +206,13 @@ body:
     attributes:
       value: |
         ---
-        
+
         **Thank you for helping improve OpenZIM MCP's infrastructure!** 🚀
-        
+
         Your suggestion will be reviewed and prioritized based on:
         - Impact on project quality and security
         - Implementation complexity and maintenance overhead
         - Alignment with project goals and roadmap
         - Community benefit and developer experience
-        
+
         We appreciate your contribution to making OpenZIM MCP a best-in-class open source project!

@@ -45,7 +45,7 @@ repos:
           - flake8-bugbear
           - flake8-comprehensions
           - flake8-simplify
-        args: ["--max-line-length=88", "--extend-ignore=E203,W503"]
+        args: ["--max-line-length=88", "--extend-ignore=E203,W503,D202"]
 
   # Type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
@@ -71,7 +71,7 @@ repos:
     rev: 6.3.0
     hooks:
       - id: pydocstyle
-        args: ["--convention=google"]
+        args: ["--convention=google", "--add-ignore=D202,D212"]
 
   # Markdown linting
   - repo: https://github.com/igorshubovych/markdownlint-cli

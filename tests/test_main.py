@@ -1,11 +1,10 @@
-"""
-Tests for main module and __main__ entry point.
-"""
+"""Tests for main module and __main__ entry point."""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import openzim_mcp.main
 from openzim_mcp.exceptions import OpenZimMcpConfigurationError
 
 
@@ -160,8 +159,6 @@ class TestMainEntryPoint:
     def test_main_py_if_name_main_coverage(self, mock_main):
         """Test the if __name__ == '__main__' block in main.py for coverage."""
         # Directly test the condition by simulating the module being run as __main__
-        import openzim_mcp.main
-
         # Save the original __name__
         original_name = openzim_mcp.main.__name__
 

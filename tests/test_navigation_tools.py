@@ -1,6 +1,4 @@
-"""
-Tests for navigation_tools module.
-"""
+"""Tests for navigation_tools module."""
 
 from unittest.mock import AsyncMock, MagicMock
 

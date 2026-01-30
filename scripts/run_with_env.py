@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""
-Run commands with environment variables set.
+"""Run commands with environment variables set.
+
 This script provides cross-platform compatibility for setting environment variables.
 """
 
 import os
-import subprocess
+import subprocess  # nosec B404 - needed for running build commands
 import sys
 
 
 def main():
-    """Main function to run commands with environment variables."""
+    """Run commands with environment variables set."""
     if len(sys.argv) < 3:
         print("Usage: python run_with_env.py ENV_VAR=value command [args...]")
         sys.exit(1)
@@ -34,7 +34,7 @@ def main():
     # Run the command
     try:
         print(f"Running with {env_var}={env_value}: {' '.join(command_args)}")
-        result = subprocess.run(command_args, env=env, check=True)
+        result = subprocess.run(command_args, env=env, check=True)  # nosec B603
         sys.exit(result.returncode)
     except subprocess.CalledProcessError as e:
         sys.exit(e.returncode)

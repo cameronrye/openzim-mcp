@@ -1,6 +1,4 @@
-"""
-Tests for server_tools module.
-"""
+"""Tests for server_tools module."""
 
 import os
 

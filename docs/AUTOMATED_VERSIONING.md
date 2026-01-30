@@ -27,6 +27,7 @@ Commit messages follow the conventional commit format to trigger appropriate ver
 ```
 
 **Version Bump Types:**
+
 - `feat:` → Minor version bump (0.2.0 → 0.3.0)
 - `fix:` → Patch version bump (0.2.0 → 0.2.1)
 - `feat!:` or `BREAKING CHANGE:` → Major version bump (0.2.0 → 1.0.0)
@@ -36,10 +37,12 @@ Commit messages follow the conventional commit format to trigger appropriate ver
 ### 2. Automated Workflow
 
 The release-please workflow (`.github/workflows/release-please.yml`) runs on:
+
 - Every push to the `main` branch
 - Manual workflow dispatch (for emergency releases)
 
 **Process:**
+
 1. Analyzes commits since last release
 2. Determines appropriate version bump
 3. Creates a "Release PR" with:
@@ -61,16 +64,20 @@ The release-please workflow (`.github/workflows/release-please.yml`) runs on:
 ## Configuration Files
 
 ### `.github/workflows/release-please.yml`
+
 Main workflow that handles version bumping and release PR creation.
 
 ### `release-please-config.json`
+
 Configuration for release-please behavior:
+
 - Package type: Python
 - Changelog sections mapping
 - File update patterns
 - Release settings
 
 ### `.release-please-manifest.json`
+
 Tracks current version state for release-please.
 
 ## Usage Examples
@@ -147,6 +154,7 @@ The automated versioning integrates seamlessly with existing workflows:
 ### Manual Intervention
 
 If automatic process fails:
+
 1. Check workflow logs for errors
 2. Manually create release PR if needed
 3. Use workflow dispatch for emergency releases
@@ -168,6 +176,7 @@ If automatic process fails:
 - Manual releases still possible as fallback
 
 For more information, see:
+
 - [Conventional Commits](https://www.conventionalcommits.org/)
 - [release-please Documentation](https://github.com/googleapis/release-please)
 - [Semantic Versioning](https://semver.org/)

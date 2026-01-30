@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""
-Check required tools for the OpenZIM MCP development environment.
+"""Check required tools for the OpenZIM MCP development environment.
+
 This script provides cross-platform compatibility for the make check-tools command.
 """
 
 import shutil
-import subprocess
+import subprocess  # nosec B404 - needed for running build commands
 import sys
 
 
@@ -17,7 +17,7 @@ def check_command_exists(command: str) -> bool:
 def get_command_version(command: str, version_arg: str = "--version") -> str:
     """Get the version of a command."""
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 - safe, hardcoded commands only
             [command, version_arg], capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
@@ -31,7 +31,7 @@ def get_command_version(command: str, version_arg: str = "--version") -> str:
 def check_python_version() -> tuple[bool, str]:
     """Check if Python version meets requirements (3.12+)."""
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 - safe, sys.executable only
             [sys.executable, "--version"], capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
@@ -59,7 +59,7 @@ def check_python_version() -> tuple[bool, str]:
 
 
 def main():
-    """Main function to check all required tools."""
+    """Check all required tools for the development environment."""
     print("Checking required tools...")
 
     all_good = True

@@ -2,16 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   pull_request_target:
     branches: [main]
     types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to test (optional)'
+        description: "PR number to test (optional)"
         required: false
         type: string
 
@@ -29,102 +29,102 @@ jobs:
         python-version: ["3.12", "3.13"]
 
     steps:
-    - uses: actions/checkout@v6
-      with:
-        # For pull_request_target, checkout the PR head
-        ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@v6
+        with:
+          # For pull_request_target, checkout the PR head
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v7
-      with:
-        version: "latest"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
 
-    - name: Set up Python ${{ matrix.python-version }}
-      run: uv python install ${{ matrix.python-version }}
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
 
-    - name: Install dependencies
-      run: |
-        uv sync
+      - name: Install dependencies
+        run: |
+          uv sync
 
-    - name: Run linting
-      run: |
-        make lint
+      - name: Run linting
+        run: |
+          make lint
 
-    - name: Run type checking
-      run: |
-        make type-check
+      - name: Run type checking
+        run: |
+          make type-check
 
-    - name: Run unit tests
-      run: |
-        make test-cov
+      - name: Run unit tests
+        run: |
+          make test-cov
 
-    - name: Download ZIM test data
-      run: |
-        make download-test-data
+      - name: Download ZIM test data
+        run: |
+          make download-test-data
 
-    - name: Run integration tests with ZIM data
-      run: |
-        make test-requires-zim-data
+      - name: Run integration tests with ZIM data
+        run: |
+          make test-requires-zim-data
 
-    - name: Upload coverage to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
-      uses: codecov/codecov-action@v5
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      with:
-        file: ./coverage.xml
-        fail_ci_if_error: false
-        token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v5
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
-    - name: Upload coverage reports to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
-      uses: codecov/codecov-action@v5
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
-        verbose: true
-        token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload coverage reports to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v5
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+          verbose: true
+          token: ${{ secrets.CODECOV_TOKEN }}
 
-    - name: Generate coverage summary
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-      run: |
-        echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        uv run coverage report >> $GITHUB_STEP_SUMMARY || echo "Coverage report not available" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        if [ "${CODECOV_TOKEN}" = "" ]; then
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "INFO: **Codecov not configured** - Coverage reports are generated locally only." >> $GITHUB_STEP_SUMMARY
-          echo "To enable Codecov uploads, add CODECOV_TOKEN to repository secrets." >> $GITHUB_STEP_SUMMARY
-        fi
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Generate coverage summary
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          uv run coverage report >> $GITHUB_STEP_SUMMARY || echo "Coverage report not available" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          if [ "${CODECOV_TOKEN}" = "" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "INFO: **Codecov not configured** - Coverage reports are generated locally only." >> $GITHUB_STEP_SUMMARY
+            echo "To enable Codecov uploads, add CODECOV_TOKEN to repository secrets." >> $GITHUB_STEP_SUMMARY
+          fi
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-    - name: Upload coverage reports as artifacts
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-      uses: actions/upload-artifact@v6
-      with:
-        name: coverage-reports
-        path: |
-          coverage.xml
-          htmlcov/
-        retention-days: 30
+      - name: Upload coverage reports as artifacts
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-reports
+          path: |
+            coverage.xml
+            htmlcov/
+          retention-days: 30
 
-    - name: Codecov setup reminder
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN == ''
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      run: |
-        echo "INFO: Codecov token not configured. Coverage reports will not be uploaded."
-        echo "To enable Codecov:"
-        echo "1. Sign up at https://codecov.io and link your repository"
-        echo "2. Get your repository upload token"
-        echo "3. Add it as CODECOV_TOKEN in GitHub repository secrets"
-        echo "4. Re-run this workflow to upload coverage reports"
+      - name: Codecov setup reminder
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN == ''
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          echo "INFO: Codecov token not configured. Coverage reports will not be uploaded."
+          echo "To enable Codecov:"
+          echo "1. Sign up at https://codecov.io and link your repository"
+          echo "2. Get your repository upload token"
+          echo "3. Add it as CODECOV_TOKEN in GitHub repository secrets"
+          echo "4. Re-run this workflow to upload coverage reports"
 
   security:
     name: Security Scanning
@@ -135,90 +135,90 @@ jobs:
       actions: read
 
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v7
-      with:
-        version: "latest"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
 
-    - name: Set up Python
-      run: uv python install 3.12
+      - name: Set up Python
+        run: uv python install 3.12
 
-    - name: Install dependencies
-      run: |
-        uv sync
+      - name: Install dependencies
+        run: |
+          uv sync
 
-    - name: Run safety check
-      run: |
-        uv run pip install safety
-        # Run safety check and create report (continue on failure)
-        uv run safety check --json --output safety-report.json || echo '{"vulnerabilities": [], "scanned_packages": 0}' > safety-report.json
+      - name: Run safety check
+        run: |
+          uv run pip install safety
+          # Run safety check and create report (continue on failure)
+          uv run safety check --json --output safety-report.json || echo '{"vulnerabilities": [], "scanned_packages": 0}' > safety-report.json
 
-    - name: Run bandit security linter
-      run: |
-        uv run pip install bandit[toml]
-        # Run bandit and create reports (continue on failure)
-        uv run bandit -r openzim_mcp -f json -o bandit-report.json || echo '{"results": [], "errors": []}' > bandit-report.json
-        # Also generate SARIF format for GitHub Security tab
-        uv run bandit -r openzim_mcp -f sarif -o bandit-report.sarif || echo '{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "bandit"}}, "results": []}]}' > bandit-report.sarif
+      - name: Run bandit security linter
+        run: |
+          uv run pip install bandit[toml]
+          # Run bandit and create reports (continue on failure)
+          uv run bandit -r openzim_mcp -f json -o bandit-report.json || echo '{"results": [], "errors": []}' > bandit-report.json
+          # Also generate SARIF format for GitHub Security tab
+          uv run bandit -r openzim_mcp -f sarif -o bandit-report.sarif || echo '{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "bandit"}}, "results": []}]}' > bandit-report.sarif
 
-    - name: Upload Bandit SARIF results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v4
-      if: always() && hashFiles('bandit-report.sarif') != ''
-      continue-on-error: true
-      with:
-        sarif_file: bandit-report.sarif
-        category: bandit
+      - name: Upload Bandit SARIF results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('bandit-report.sarif') != ''
+        continue-on-error: true
+        with:
+          sarif_file: bandit-report.sarif
+          category: bandit
 
-    - name: Generate security scan summary
-      if: always() && (hashFiles('bandit-report.json') != '' || hashFiles('safety-report.json') != '')
-      run: |
-        echo "## Security Scan Results" >> $GITHUB_STEP_SUMMARY
+      - name: Generate security scan summary
+        if: always() && (hashFiles('bandit-report.json') != '' || hashFiles('safety-report.json') != '')
+        run: |
+          echo "## Security Scan Results" >> $GITHUB_STEP_SUMMARY
 
-        if [ -f "bandit-report.json" ]; then
-          echo "### Bandit Security Linter" >> $GITHUB_STEP_SUMMARY
-          BANDIT_ISSUES=$(jq '.results | length' bandit-report.json 2>/dev/null || echo "0")
-          if [ "$BANDIT_ISSUES" = "0" ]; then
-            echo "[OK] No security issues found by Bandit" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "[WARN] Found $BANDIT_ISSUES potential security issues" >> $GITHUB_STEP_SUMMARY
+          if [ -f "bandit-report.json" ]; then
+            echo "### Bandit Security Linter" >> $GITHUB_STEP_SUMMARY
+            BANDIT_ISSUES=$(jq '.results | length' bandit-report.json 2>/dev/null || echo "0")
+            if [ "$BANDIT_ISSUES" = "0" ]; then
+              echo "[OK] No security issues found by Bandit" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "[WARN] Found $BANDIT_ISSUES potential security issues" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-        fi
 
-        if [ -f "safety-report.json" ]; then
-          echo "### Safety Vulnerability Check" >> $GITHUB_STEP_SUMMARY
-          SAFETY_VULNS=$(jq '.vulnerabilities | length' safety-report.json 2>/dev/null || echo "0")
-          if [ "$SAFETY_VULNS" = "0" ]; then
-            echo "[OK] No known vulnerabilities found by Safety" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "[WARN] Found $SAFETY_VULNS known vulnerabilities" >> $GITHUB_STEP_SUMMARY
+          if [ -f "safety-report.json" ]; then
+            echo "### Safety Vulnerability Check" >> $GITHUB_STEP_SUMMARY
+            SAFETY_VULNS=$(jq '.vulnerabilities | length' safety-report.json 2>/dev/null || echo "0")
+            if [ "$SAFETY_VULNS" = "0" ]; then
+              echo "[OK] No known vulnerabilities found by Safety" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "[WARN] Found $SAFETY_VULNS known vulnerabilities" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-        fi
 
-        echo "**Security reports available as artifacts** - Download for detailed analysis" >> $GITHUB_STEP_SUMMARY
+          echo "**Security reports available as artifacts** - Download for detailed analysis" >> $GITHUB_STEP_SUMMARY
 
-    - name: Code scanning setup reminder
-      if: always() && hashFiles('bandit-report.sarif') != ''
-      run: |
-        echo "INFO: Security scan completed. SARIF report generated."
-        echo "To enable GitHub Code Scanning:"
-        echo "1. Go to repository Settings → Security & analysis"
-        echo "2. Enable 'Code scanning alerts'"
-        echo "3. Re-run this workflow to upload security findings to GitHub Security tab"
-        echo "4. Or download the security-reports artifact to view results locally"
+      - name: Code scanning setup reminder
+        if: always() && hashFiles('bandit-report.sarif') != ''
+        run: |
+          echo "INFO: Security scan completed. SARIF report generated."
+          echo "To enable GitHub Code Scanning:"
+          echo "1. Go to repository Settings → Security & analysis"
+          echo "2. Enable 'Code scanning alerts'"
+          echo "3. Re-run this workflow to upload security findings to GitHub Security tab"
+          echo "4. Or download the security-reports artifact to view results locally"
 
-    - name: Upload security scan results
-      uses: actions/upload-artifact@v6
-      if: always() && (hashFiles('safety-report.json') != '' || hashFiles('bandit-report.json') != '' || hashFiles('bandit-report.sarif') != '')
-      with:
-        name: security-reports
-        path: |
-          safety-report.json
-          bandit-report.json
-          bandit-report.sarif
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v6
+        if: always() && (hashFiles('safety-report.json') != '' || hashFiles('bandit-report.json') != '' || hashFiles('bandit-report.sarif') != '')
+        with:
+          name: security-reports
+          path: |
+            safety-report.json
+            bandit-report.json
+            bandit-report.sarif
 
   test-comprehensive:
     name: Comprehensive Testing
@@ -226,41 +226,41 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v7
-      with:
-        version: "latest"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
 
-    - name: Set up Python
-      run: uv python install 3.12
+      - name: Set up Python
+        run: uv python install 3.12
 
-    - name: Install dependencies
-      run: |
-        uv sync
+      - name: Install dependencies
+        run: |
+          uv sync
 
-    - name: Download all ZIM test data
-      run: |
-        make download-test-data-all
+      - name: Download all ZIM test data
+        run: |
+          make download-test-data-all
 
-    - name: Run comprehensive tests
-      run: |
-        ZIM_TEST_DATA_DIR=test_data/zim-testing-suite uv run pytest --cov=openzim_mcp --cov-report=xml --cov-report=term-missing
+      - name: Run comprehensive tests
+        run: |
+          ZIM_TEST_DATA_DIR=test_data/zim-testing-suite uv run pytest --cov=openzim_mcp --cov-report=xml --cov-report=term-missing
 
-    - name: Run slow tests
-      run: |
-        uv run pytest -m "slow" --maxfail=5
+      - name: Run slow tests
+        run: |
+          uv run pytest -m "slow" --maxfail=5
 
-    - name: Upload comprehensive coverage to Codecov
-      if: env.CODECOV_TOKEN != ''
-      uses: codecov/codecov-action@v5
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      with:
-        file: ./coverage.xml
-        flags: comprehensive
-        name: codecov-comprehensive
-        fail_ci_if_error: false
-        verbose: true
-        token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload comprehensive coverage to Codecov
+        if: env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v5
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          file: ./coverage.xml
+          flags: comprehensive
+          name: codecov-comprehensive
+          fail_ci_if_error: false
+          verbose: true
+          token: ${{ secrets.CODECOV_TOKEN }}

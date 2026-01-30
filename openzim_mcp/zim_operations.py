@@ -1,6 +1,4 @@
-"""
-ZIM file operations with proper resource management.
-"""
+"""ZIM file operations with proper resource management."""
 
 import base64
 import json
@@ -31,8 +29,7 @@ ARCHIVE_OPEN_TIMEOUT = 30.0
 
 
 class PaginationCursor:
-    """
-    Utility class for creating and parsing pagination cursors.
+    """Utility class for creating and parsing pagination cursors.
 
     Cursors encode pagination state as base64 tokens, making it easy for
     clients to continue from where they left off without tracking offset manually.
@@ -40,8 +37,7 @@ class PaginationCursor:
 
     @staticmethod
     def encode(offset: int, limit: int, query: Optional[str] = None) -> str:
-        """
-        Encode pagination state into a cursor token.
+        """Encode pagination state into a cursor token.
 
         Args:
             offset: Current offset position
@@ -59,8 +55,7 @@ class PaginationCursor:
 
     @staticmethod
     def decode(cursor: str) -> Dict[str, Any]:
-        """
-        Decode a cursor token back to pagination state.
+        """Decode a cursor token back to pagination state.
 
         Args:
             cursor: Base64-encoded cursor string
@@ -86,8 +81,7 @@ class PaginationCursor:
     def create_next_cursor(
         current_offset: int, limit: int, total: int, query: Optional[str] = None
     ) -> Optional[str]:
-        """
-        Create cursor for the next page, or None if no more results.
+        """Create cursor for the next page, or None if no more results.
 
         Args:
             current_offset: Current offset position
@@ -161,8 +155,7 @@ class ZimOperations:
         cache: OpenZimMcpCache,
         content_processor: ContentProcessor,
     ):
-        """
-        Initialize ZIM operations.
+        """Initialize ZIM operations.
 
         Args:
             config: Server configuration
@@ -177,8 +170,7 @@ class ZimOperations:
         logger.info("ZimOperations initialized")
 
     def list_zim_files_data(self) -> List[Dict[str, Any]]:
-        """
-        List all ZIM files in allowed directories as structured data.
+        """List all ZIM files in allowed directories as structured data.
 
         Returns:
             List of dictionaries containing ZIM file information.
@@ -236,8 +228,7 @@ class ZimOperations:
         return all_zim_files
 
     def list_zim_files(self) -> str:
-        """
-        List all ZIM files in allowed directories.
+        """List all ZIM files in allowed directories.
 
         Returns:
             JSON string containing the list of ZIM files
@@ -272,8 +263,7 @@ class ZimOperations:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> str:
-        """
-        Search within ZIM file content.
+        """Search within ZIM file content.
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -330,6 +320,13 @@ class ZimOperations:
         if total_results == 0:
             return f'No search results found for "{query}"'
 
+        # Guard against offset exceeding total results (would produce negative count)
+        if offset >= total_results:
+            return (
+                f'Found {total_results} matches for "{query}", '
+                f"but offset {offset} exceeds total results."
+            )
+
         result_count = min(limit, total_results - offset)
 
         # Get search results
@@ -370,7 +367,10 @@ class ZimOperations:
         # Add pagination information
         has_more = (offset + len(results)) < total_results
         result_text += "---\n"
-        result_text += f"**Pagination**: Showing {offset + 1}-{offset + len(results)} of {total_results}\n"
+        result_text += (
+            f"**Pagination**: Showing {offset + 1}-{offset + len(results)} "
+            f"of {total_results}\n"
+        )
 
         if has_more:
             next_cursor = PaginationCursor.create_next_cursor(
@@ -406,17 +406,16 @@ class ZimOperations:
         entry_path: str,
         max_content_length: Optional[int] = None,
     ) -> str:
-        """
-        Get detailed content of a specific entry in a ZIM file with smart retrieval.
+        """Get detailed content of a ZIM entry with smart retrieval.
 
         This function implements intelligent entry retrieval that automatically handles
         path encoding inconsistencies common in ZIM files:
 
-        1. **Direct Access**: First attempts to retrieve the entry using the provided path
-        2. **Automatic Fallback**: If direct access fails, searches for the entry using
-           various search terms derived from the path
+        1. **Direct Access**: First attempts to retrieve entry using provided path
+        2. **Automatic Fallback**: If direct access fails, searches for the entry
+           using various search terms derived from the path
         3. **Path Mapping Cache**: Caches successful path mappings for performance
-        4. **Enhanced Error Guidance**: Provides clear guidance when entries cannot be found
+        4. **Enhanced Error Guidance**: Provides guidance when entries not found
 
         This eliminates the need for manual search-first methodology and provides
         transparent operation regardless of path encoding differences.
@@ -430,7 +429,7 @@ class ZimOperations:
             Entry content text with metadata including actual path used
 
         Raises:
-            OpenZimMcpArchiveError: If entry cannot be found through direct access or search
+            OpenZimMcpArchiveError: If entry cannot be found via direct access or search
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -475,8 +474,7 @@ class ZimOperations:
     def _get_entry_content(
         self, archive: Archive, entry_path: str, max_content_length: int
     ) -> str:
-        """
-        Get the actual entry content with smart retrieval.
+        """Get the actual entry content with smart retrieval.
 
         Implements smart retrieval logic:
         1. Try direct entry access first
@@ -538,7 +536,8 @@ class ZimOperations:
                 raise
             except Exception as search_error:
                 logger.error(
-                    f"Search-based retrieval also failed for {entry_path}: {search_error}"
+                    f"Search-based retrieval failed for {entry_path}: "
+                    f"{search_error}"
                 )
                 # Provide comprehensive error message with guidance
                 raise OpenZimMcpArchiveError(
@@ -556,13 +555,12 @@ class ZimOperations:
         requested_path: str,
         max_content_length: int,
     ) -> str:
-        """
-        Get entry content using the actual path from the ZIM file.
+        """Get entry content using the actual path from the ZIM file.
 
         Args:
             archive: ZIM archive instance
             actual_path: The actual path as it exists in the ZIM file
-            requested_path: The originally requested path (for display purposes)
+            requested_path: The originally requested path (for display)
             max_content_length: Maximum content length
         """
         entry = archive.get_entry_by_path(actual_path)
@@ -603,8 +601,7 @@ class ZimOperations:
         return result_text
 
     def _find_entry_by_search(self, archive: Archive, entry_path: str) -> Optional[str]:
-        """
-        Find the actual entry path by searching for the entry.
+        """Find the actual entry path by searching for the entry.
 
         This method attempts to find an entry by searching for various parts
         of the provided path, handling common path encoding issues.
@@ -653,8 +650,7 @@ class ZimOperations:
         return None
 
     def _extract_search_terms_from_path(self, entry_path: str) -> List[str]:
-        """
-        Extract potential search terms from an entry path.
+        """Extract potential search terms from an entry path.
 
         Args:
             entry_path: The entry path to extract terms from
@@ -703,8 +699,7 @@ class ZimOperations:
         return unique_terms
 
     def _is_path_match(self, requested_path: str, actual_path: str) -> bool:
-        """
-        Check if an actual path from search results matches the requested path.
+        """Check if an actual path from search results matches the requested path.
 
         Args:
             requested_path: The originally requested path
@@ -749,8 +744,7 @@ class ZimOperations:
         return False
 
     def get_zim_metadata(self, zim_file_path: str) -> str:
-        """
-        Get ZIM file metadata from M namespace entries.
+        """Get ZIM file metadata from M namespace entries.
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -788,13 +782,13 @@ class ZimOperations:
 
     def _extract_zim_metadata(self, archive: Archive) -> str:
         """Extract metadata from ZIM archive."""
-        metadata = {}
-
         # Basic archive information
-        metadata["entry_count"] = archive.entry_count
-        metadata["all_entry_count"] = archive.all_entry_count
-        metadata["article_count"] = archive.article_count
-        metadata["media_count"] = archive.media_count
+        metadata = {
+            "entry_count": archive.entry_count,
+            "all_entry_count": archive.all_entry_count,
+            "article_count": archive.article_count,
+            "media_count": archive.media_count,
+        }
 
         # Try to get metadata from M namespace
         metadata_entries = {}
@@ -827,8 +821,8 @@ class ZimOperations:
                         if content:
                             metadata_entries[meta_key] = content
                 except Exception as e:
-                    # Entry doesn't exist or can't be read - expected for optional metadata
-                    logger.debug(f"Metadata entry 'M/{meta_key}' not available: {e}")
+                    # Entry doesn't exist or can't be read - expected for optional
+                    logger.debug(f"Metadata 'M/{meta_key}' not available: {e}")
 
         except Exception as e:
             logger.warning(f"Error extracting metadata entries: {e}")
@@ -839,8 +833,7 @@ class ZimOperations:
         return json.dumps(metadata, indent=2, ensure_ascii=False)
 
     def get_main_page(self, zim_file_path: str) -> str:
-        """
-        Get the main page entry from W namespace.
+        """Get the main page entry from W namespace.
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -953,7 +946,7 @@ class ZimOperations:
                             logger.warning(f"Error getting content for {path}: {e}")
                             continue
 
-                except Exception:
+                except Exception:  # nosec B112 - intentional fallback
                     # Path doesn't exist, try next
                     continue
 
@@ -968,8 +961,7 @@ class ZimOperations:
             return f"# Main Page\n\nError retrieving main page: {e}"
 
     def list_namespaces(self, zim_file_path: str) -> str:
-        """
-        List available namespaces and their entry counts.
+        """List available namespaces and their entry counts.
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -1062,7 +1054,7 @@ class ZimOperations:
 
                     namespaces[namespace]["count"] += 1
 
-                    # Add sample entries (up to 5 per namespace for better representation)
+                    # Add sample entries (up to 5 per namespace for representation)
                     if len(namespaces[namespace]["sample_entries"]) < 5:
                         title = entry.title or path
                         namespaces[namespace]["sample_entries"].append(
@@ -1128,12 +1120,11 @@ class ZimOperations:
     def browse_namespace(
         self, zim_file_path: str, namespace: str, limit: int = 50, offset: int = 0
     ) -> str:
-        """
-        Browse entries in a specific namespace with pagination.
+        """Browse entries in a specific namespace with pagination.
 
         Args:
             zim_file_path: Path to the ZIM file
-            namespace: Namespace to browse (C, M, W, X, A, I, etc. for old format; domain names for new format)
+            namespace: Namespace to browse (C, M, W, X, A, I for old; domains for new)
             limit: Maximum number of entries to return
             offset: Starting offset for pagination
 
@@ -1306,16 +1297,16 @@ class ZimOperations:
         common_patterns = self._get_common_namespace_patterns(namespace)
         for pattern in common_patterns:
             try:
-                if archive.has_entry_by_path(pattern):
-                    if pattern not in seen_entries:
-                        namespace_entries.append(pattern)
-                        seen_entries.add(pattern)
+                if archive.has_entry_by_path(pattern) and pattern not in seen_entries:
+                    namespace_entries.append(pattern)
+                    seen_entries.add(pattern)
             except Exception as e:
                 logger.debug(f"Error checking pattern {pattern}: {e}")
                 continue
 
         logger.info(
-            f"Found {len(namespace_entries)} entries in namespace '{namespace}' after {sample_attempts} samples"
+            f"Found {len(namespace_entries)} entries in namespace '{namespace}' "
+            f"after {sample_attempts} samples"
         )
         return sorted(namespace_entries)  # Sort for consistent pagination
 
@@ -1376,8 +1367,7 @@ class ZimOperations:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> str:
-        """
-        Search within ZIM file content with namespace and content type filters.
+        """Search within ZIM file content with namespace and content type filters.
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -1402,7 +1392,7 @@ class ZimOperations:
             raise OpenZimMcpArchiveError("Limit must be between 1 and 100")
         if offset < 0:
             raise OpenZimMcpArchiveError("Offset must be non-negative")
-        # Validate namespace - allow single chars (old format) or longer names (new format)
+        # Validate namespace - single chars (old) or longer names (new format)
         if namespace and (len(namespace) > 50 or not namespace.strip()):
             raise OpenZimMcpArchiveError(
                 "Namespace must be a non-empty string (max 50 characters)"
@@ -1493,7 +1483,7 @@ class ZimOperations:
                             content_type
                         ):
                             continue
-                    except Exception:
+                    except Exception:  # nosec B112 - intentional filter skip
                         continue
 
                 filtered_results.append(entry_id)
@@ -1581,8 +1571,7 @@ class ZimOperations:
     def get_search_suggestions(
         self, zim_file_path: str, partial_query: str, limit: int = 10
     ) -> str:
-        """
-        Get search suggestions and auto-complete for partial queries.
+        """Get search suggestions and auto-complete for partial queries.
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -1887,8 +1876,7 @@ class ZimOperations:
             return []
 
     def get_article_structure(self, zim_file_path: str, entry_path: str) -> str:
-        """
-        Extract article structure including headings, sections, and key metadata.
+        """Extract article structure including headings, sections, and key metadata.
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -1978,8 +1966,7 @@ class ZimOperations:
             ) from e
 
     def extract_article_links(self, zim_file_path: str, entry_path: str) -> str:
-        """
-        Extract internal and external links from an article.
+        """Extract internal and external links from an article.
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -2065,8 +2052,7 @@ class ZimOperations:
         max_size_bytes: Optional[int] = None,
         include_data: bool = True,
     ) -> str:
-        """
-        Retrieve binary content from a ZIM entry.
+        """Retrieve binary content from a ZIM entry.
 
         This method returns raw binary content encoded in base64, enabling
         integration with external tools for processing embedded media like
@@ -2144,8 +2130,10 @@ class ZimOperations:
                         result["truncated"] = True
                         result["message"] = (
                             f"Content size ({self._format_size(content_size)}) "
-                            f"exceeds max_size_bytes ({self._format_size(max_size_bytes)}). "
-                            f"Set include_data=False for metadata only, or increase max_size_bytes."
+                            f"exceeds max_size_bytes "
+                            f"({self._format_size(max_size_bytes)}). "
+                            f"Set include_data=False for metadata only, "
+                            f"or increase max_size_bytes."
                         )
                 else:
                     result["encoding"] = None
@@ -2186,8 +2174,7 @@ class ZimOperations:
         entry_path: str,
         max_words: int = 200,
     ) -> str:
-        """
-        Get a concise summary of an article without returning the full content.
+        """Get a concise summary of an article without returning the full content.
 
         This method extracts the opening paragraph(s) or introduction section,
         providing a quick overview of the article content. Useful for getting
@@ -2296,8 +2283,7 @@ class ZimOperations:
     def _extract_html_summary(
         self, html_content: str, max_words: int
     ) -> Dict[str, Any]:
-        """
-        Extract summary from HTML content.
+        """Extract summary from HTML content.
 
         Prioritizes:
         1. First paragraph after the title/infobox
@@ -2385,8 +2371,7 @@ class ZimOperations:
         return result
 
     def get_table_of_contents(self, zim_file_path: str, entry_path: str) -> str:
-        """
-        Extract a hierarchical table of contents from an article.
+        """Extract a hierarchical table of contents from an article.
 
         Returns a structured TOC tree based on heading levels (h1-h6),
         suitable for navigation and content overview.
@@ -2476,8 +2461,7 @@ class ZimOperations:
             ) from e
 
     def _build_hierarchical_toc(self, html_content: str) -> Dict[str, Any]:
-        """
-        Build a hierarchical table of contents from HTML headings.
+        """Build a hierarchical table of contents from HTML headings.
 
         Returns a tree structure where each node has:
         - level: heading level (1-6)
@@ -2536,8 +2520,7 @@ class ZimOperations:
         return result
 
     def _headings_to_tree(self, headings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Convert flat list of headings to hierarchical tree structure.
+        """Convert flat list of headings to hierarchical tree structure.
 
         Uses a stack-based approach to properly nest headings based on level.
         """

@@ -1,6 +1,4 @@
-"""
-Tests for diagnostic functionality in the OpenZIM MCP server.
-"""
+"""Tests for diagnostic functionality in the OpenZIM MCP server."""
 
 import json
 import tempfile

@@ -66,7 +66,7 @@ class TestContentProcessorBenchmarks:
         <head><title>Test Document</title></head>
         <body>
             <h1>Main Heading</h1>
-            <p>This is a paragraph with <strong>bold text</strong> and <em>italic text</em>.</p>
+            <p>This is paragraph with <strong>bold</strong> and <em>italic</em>.</p>
             <ul>
                 <li>List item 1</li>
                 <li>List item 2 with <a href="http://example.com">a link</a></li>
@@ -190,7 +190,11 @@ class TestZimOperationsBenchmarks:
 
             # Mock the search method to return a proper JSON string
             def mock_search(*args, **kwargs):
-                return '{"matches": 50, "results": [{"path": "A/Article_1", "title": "Article 1", "snippet": "Test snippet"}]}'
+                return (
+                    '{"matches": 50, "results": '
+                    '[{"path": "A/Article_1", "title": "Article 1", '
+                    '"snippet": "Test snippet"}]}'
+                )
 
             zim_ops.search_zim_file = mock_search
 
@@ -239,7 +243,10 @@ class TestZimOperationsBenchmarks:
 
             # Mock the get_entry method to return a proper string
             def mock_get_entry(*args, **kwargs):
-                return "# Test Article\n\nPath: A/Test_Article\nType: text/html\n\nTest content here"
+                return (
+                    "# Test Article\n\nPath: A/Test_Article\n"
+                    "Type: text/html\n\nTest content here"
+                )
 
             zim_ops.get_zim_entry = mock_get_entry
 

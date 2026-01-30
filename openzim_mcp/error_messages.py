@@ -124,7 +124,8 @@ GENERIC_ERROR_TEMPLATE = """**Operation Failed**
 
 **Technical Details**: {details}
 
-**Need Help?** Use `get_server_configuration()` to check server status or try simpler operations first."""
+**Need Help?** Use `get_server_configuration()` to check server status \
+or try simpler operations first."""
 
 
 def format_error_message(

@@ -1,6 +1,4 @@
-"""
-Tests for content processor module.
-"""
+"""Tests for content processor module."""
 
 from openzim_mcp.content_processor import ContentProcessor
 
@@ -286,7 +284,8 @@ class TestContentProcessor:
         external_links = links_data["external_links"]
         assert len(external_links) >= 1
         example_link = next(
-            (link for link in external_links if "example.com" in link["url"]), None
+            (link for link in external_links if link.get("domain") == "example.com"),
+            None,
         )
         assert example_link is not None
         assert example_link["domain"] == "example.com"

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""
-Test to verify that the regex patterns used in the codebase are secure
+"""Test regex pattern security.
+
+Verify that the regex patterns used in the codebase are secure
 and don't suffer from catastrophic backtracking vulnerabilities.
 """
 
@@ -109,7 +110,7 @@ class TestRegexSecurity:
                 test_makefile.unlink()
 
     def test_makefile_parsing_with_many_lines(self):
-        """Test parsing with many lines to ensure it doesn't cause performance issues."""
+        """Test parsing with many lines for performance."""
         test_makefile = Path("test_makefile_many_lines")
 
         try:

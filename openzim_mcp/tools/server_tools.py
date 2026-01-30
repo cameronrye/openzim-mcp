@@ -1,6 +1,4 @@
-"""
-Server health and diagnostics tools for OpenZIM MCP server.
-"""
+"""Server health and diagnostics tools for OpenZIM MCP server."""
 
 import json
 import logging
@@ -19,8 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def register_server_tools(server: "OpenZimMcpServer") -> None:
-    """
-    Register server health and diagnostics tools.
+    """Register server health and diagnostics tools.
 
     Args:
         server: The OpenZimMcpServer instance to register tools on
@@ -89,7 +86,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                             f"Server conflicts detected ({len(conflicts)} instances)"
                         )
                         recommendations.append(
-                            "Use 'resolve_server_conflicts()' to address instance conflicts"
+                            "Use 'resolve_server_conflicts()' to address "
+                            "instance conflicts"
                         )
 
                     # Check for stale instances
@@ -109,7 +107,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                                 f"Stale instance files detected ({stale_count})"
                             )
                             recommendations.append(
-                                "Use 'resolve_server_conflicts()' to clean up stale instances"
+                                "Use 'resolve_server_conflicts()' to clean "
+                                "up stale instances"
                             )
                     except Exception as e:
                         logger.debug(f"Failed to get instance stats: {e}")
@@ -163,7 +162,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                 hit_rate = cache_stats.get("hit_rate", 0)
                 if hit_rate < CACHE_LOW_HIT_RATE_THRESHOLD:
                     recommendations.append(
-                        "Cache hit rate is low - consider warming up cache with common queries"
+                        "Cache hit rate is low - consider warming up "
+                        "cache with common queries"
                     )
                 elif hit_rate > CACHE_HIGH_HIT_RATE_THRESHOLD:
                     recommendations.append("Cache is performing well")
@@ -250,8 +250,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                             f"Found {len(conflicts)} potential server conflicts"
                         )
                         recommendations_list.append(
-                            "Multiple server instances detected. Consider using diagnose_server_state() for "
-                            "detailed analysis."
+                            "Multiple server instances detected. Use "
+                            "diagnose_server_state() for detailed analysis."
                         )
                 except Exception as e:
                     warnings_list.append(f"Could not check for conflicts: {e}")
@@ -333,13 +333,15 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                         for conflict in conflicts:
                             if conflict["type"] == "configuration_mismatch":
                                 recommendations_list.append(
-                                    "Configuration mismatch detected with another server instance. "
-                                    "Consider stopping other instances or ensuring they use the same configuration."
+                                    "Configuration mismatch detected with "
+                                    "another server. Consider stopping other "
+                                    "instances or using same configuration."
                                 )
                             elif conflict["type"] == "multiple_instances":
                                 recommendations_list.append(
-                                    f"Multiple server instances detected (PID: {conflict['instance']['pid']}). "
-                                    "This may cause unexpected behavior. Consider stopping unused instances."
+                                    f"Multiple servers detected "
+                                    f"(PID: {conflict['instance']['pid']}). "
+                                    f"Consider stopping unused instances."
                                 )
                 except Exception as e:
                     issues_list.append(f"Failed to check for conflicts: {e}")
@@ -400,18 +402,20 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                                             magic = f.read(4)
                                             if magic != b"ZIM\x04":
                                                 dir_warnings.append(
-                                                    f"File may not be a valid ZIM file: {zim_file.name}"
+                                                    f"May not be valid ZIM: "
+                                                    f"{zim_file.name}"
                                                 )
                                     except Exception:
                                         dir_warnings.append(
-                                            f"Cannot read ZIM file header: {zim_file.name}"
+                                            f"Cannot read ZIM header: "
+                                            f"{zim_file.name}"
                                         )
                                 else:
                                     dir_issues.append(
                                         f"ZIM file path is not a file: {zim_file}"
                                     )
 
-                            except (PermissionError, OSError) as e:
+                            except OSError as e:
                                 dir_issues.append(
                                     f"Cannot access ZIM file {zim_file.name}: {e}"
                                 )
@@ -429,7 +433,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                             )
                         elif accessible_count < cast(int, dir_check["zim_files_count"]):
                             dir_issues.append(
-                                f"Some ZIM files are not accessible ({accessible_count}/{dir_check['zim_files_count']})"
+                                f"Some ZIM files not accessible "
+                                f"({accessible_count}/{dir_check['zim_files_count']})"
                             )
                             recommendations_list.append(
                                 f"Check file permissions for ZIM files in: {directory}"
@@ -445,7 +450,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                                     f"Low disk space: {free_space:.1f}MB available"
                                 )
                                 recommendations_list.append(
-                                    "Consider freeing up disk space for optimal performance"
+                                    "Consider freeing up disk space "
+                                    "for optimal performance"
                                 )
                         except Exception as e:
                             logger.debug(f"Could not check disk space: {e}")
@@ -481,9 +487,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                 # Add directory-specific issues to main diagnostics
                 if dir_issues:
                     diagnostics["status"] = "error"
-                elif dir_warnings:
-                    if diagnostics["status"] == "healthy":
-                        diagnostics["status"] = "warning"
+                elif dir_warnings and diagnostics["status"] == "healthy":
+                    diagnostics["status"] = "warning"
 
                 environment_checks[directory] = dir_check
 
@@ -546,7 +551,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             if not server.instance_tracker:
                 resolution_results["status"] = "error"
                 recommendations_list.append(
-                    "Instance tracker not available. Server may not be properly configured for conflict detection."
+                    "Instance tracker not available. Server may not be "
+                    "properly configured for conflict detection."
                 )
                 return json.dumps(resolution_results, indent=2)
 
@@ -578,13 +584,15 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                     for conflict in conflicts:
                         if conflict["type"] == "configuration_mismatch":
                             recommendations_list.append(
-                                f"Configuration conflict with PID {conflict['instance']['pid']}: "
-                                "Stop the conflicting server or ensure both use the same configuration."
+                                f"Configuration conflict with "
+                                f"PID {conflict['instance']['pid']}: "
+                                f"Stop the conflicting server or use same config."
                             )
                         elif conflict["type"] == "multiple_instances":
                             recommendations_list.append(
-                                f"Multiple server detected (PID {conflict['instance']['pid']}): "
-                                "Consider stopping unused instances to avoid confusion."
+                                f"Multiple server detected "
+                                f"(PID {conflict['instance']['pid']}): "
+                                f"Consider stopping unused instances."
                             )
                 else:
                     recommendations_list.append("No active conflicts detected.")
@@ -599,7 +607,7 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                         "",
                         "**Conflict Resolution Steps**:",
                         "1. Identify which server instance you want to keep running",
-                        "2. Stop other server processes using their PID (kill <PID> on Unix/Mac)",
+                        "2. Stop other servers using PID (kill <PID> on Unix/Mac)",
                         "3. Run this tool again to verify conflicts are resolved",
                         "4. Use 'diagnose_server_state()' for detailed server analysis",
                         "",
@@ -613,7 +621,7 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                 recommendations_list.extend(
                     [
                         "Server instance management is healthy.",
-                        "TIP: Use 'diagnose_server_state()' for comprehensive server diagnostics.",
+                        "TIP: Use 'diagnose_server_state()' for diagnostics.",
                     ]
                 )
 

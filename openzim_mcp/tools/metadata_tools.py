@@ -1,6 +1,4 @@
-"""
-Metadata and namespace listing tools for OpenZIM MCP server.
-"""
+"""Metadata and namespace listing tools for OpenZIM MCP server."""
 
 import logging
 from typing import TYPE_CHECKING

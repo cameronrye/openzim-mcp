@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""
-Clean up generated files and directories.
+"""Clean up generated files and directories.
+
 This script provides cross-platform compatibility for the make clean command.
 """
 
@@ -24,7 +24,7 @@ def remove_path(path: Path, description: str = None) -> bool:
                     print(f"  Removed directory: {description}")
                 return True
         return False
-    except (OSError, PermissionError) as e:
+    except OSError as e:
         print(f"  Warning: Could not remove {path}: {e}")
         return False
 
@@ -38,13 +38,13 @@ def remove_pattern(root_dir: Path, pattern: str, description: str = None) -> int
                 count += 1
         if count > 0 and description:
             print(f"  Removed {count} {description}")
-    except (OSError, PermissionError) as e:
+    except OSError as e:
         print(f"  Warning: Error processing pattern {pattern}: {e}")
     return count
 
 
 def main():
-    """Main function to clean up generated files."""
+    """Clean up generated files and directories."""
     print("Cleaning up generated files...")
 
     # Get the project root directory

@@ -1,6 +1,4 @@
-"""
-Tests for security module.
-"""
+"""Tests for security module."""
 
 from pathlib import Path
 
@@ -151,9 +149,11 @@ class TestSanitizeInput:
         # Mock Path.resolve to raise OSError
         from unittest.mock import patch
 
-        with patch("pathlib.Path.resolve", side_effect=OSError("Test error")):
-            with pytest.raises(OpenZimMcpValidationError, match="Invalid path"):
-                validator.validate_path("valid_path")
+        with (
+            patch("pathlib.Path.resolve", side_effect=OSError("Test error")),
+            pytest.raises(OpenZimMcpValidationError, match="Invalid path"),
+        ):
+            validator.validate_path("valid_path")
 
     def test_is_path_within_directory_exception_handling(self, temp_dir: Path):
         """Test _is_path_within_directory exception handling."""

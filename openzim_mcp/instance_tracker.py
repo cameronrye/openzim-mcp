@@ -1,5 +1,4 @@
-"""
-Cross-platform instance tracking for OpenZIM MCP servers.
+"""Cross-platform instance tracking for OpenZIM MCP servers.
 
 This module provides functionality to track running OpenZIM MCP server instances
 using file-based tracking in the user's home directory, replacing the
@@ -9,11 +8,12 @@ File locking is used to prevent race conditions when multiple processes
 attempt to read/write instance files simultaneously.
 """
 
+import contextlib
 import json
 import logging
 import os
 import platform
-import subprocess
+import subprocess  # nosec B404 - needed for Windows process detection
 import sys
 import tempfile
 import time
@@ -83,16 +83,12 @@ def file_lock(file_handle: Any, exclusive: bool = True) -> Generator[None, None,
             yield
         finally:
             if lock_acquired:
-                try:
+                with contextlib.suppress(OSError):
                     fcntl.flock(file_handle.fileno(), fcntl.LOCK_UN)
-                except OSError:
-                    # Unlock errors are non-fatal - file will be unlocked on close
-                    pass
 
 
 def atomic_write_json(file_path: Path, data: Dict[str, Any]) -> None:
-    """
-    Atomically write JSON data to a file using a temporary file and rename.
+    """Atomically write JSON data to a file using temporary file and rename.
 
     This prevents corruption if the process is interrupted during writing.
 
@@ -117,34 +113,32 @@ def atomic_write_json(file_path: Path, data: Dict[str, Any]) -> None:
 
         # Atomic rename (on POSIX systems; best-effort on Windows)
         tmp_path.replace(file_path)
-    except (OSError, IOError) as write_error:
+    except OSError as write_error:
         # Clean up temp file if rename failed
         if tmp_path is not None:
-            try:
+            with contextlib.suppress(OSError):
                 if tmp_path.exists():
                     tmp_path.unlink()
-            except OSError:
-                # Cleanup failure is non-fatal
-                pass
         raise write_error
 
 
 def safe_log(log_func: Any, message: str) -> None:
-    """
-    Safely log a message, handling cases where logging system is shut down.
+    """Safely log a message, handling cases where logging is shut down.
 
     This is particularly important for atexit handlers that may run after
     the logging system has been shut down.
     """
     try:
         log_func(message)
-    except Exception:
+    except Exception:  # noqa: BLE001 - intentionally broad for shutdown safety
         # Catch all exceptions during logging, including:
         # - ValueError: I/O operation on closed file
         # - OSError: file descriptor issues
         # - AttributeError: logging objects may be None during shutdown
         # - Any other logging-related errors during shutdown
-        pass
+        # Try stderr as a fallback (may also fail during shutdown)
+        with contextlib.suppress(Exception):  # nosec B110
+            sys.stderr.write(f"{message}\n")
 
 
 class ServerInstance:
@@ -157,7 +151,8 @@ class ServerInstance:
         allowed_directories: List[str],
         start_time: float,
         server_name: str = "openzim-mcp",
-    ):
+    ) -> None:
+        """Initialize a server instance with the given parameters."""
         self.pid = pid
         self.config_hash = config_hash
         self.allowed_directories = allowed_directories
@@ -202,7 +197,7 @@ class ServerInstance:
             # On Windows, this will raise an exception for non-existent processes
             os.kill(self.pid, 0)
             return True
-        except (OSError, ProcessLookupError):
+        except OSError:
             return False
 
     def update_heartbeat(self) -> None:
@@ -214,6 +209,7 @@ class InstanceTracker:
     """Manages OpenZIM MCP server instance tracking using file-based storage."""
 
     def __init__(self) -> None:
+        """Initialize the instance tracker with the default directory."""
         self.instances_dir = Path.home() / ".openzim_mcp_instances"
         self.instances_dir.mkdir(exist_ok=True)
         self.current_instance: Optional[ServerInstance] = None
@@ -242,16 +238,15 @@ class InstanceTracker:
         # can interfere with mocked PIDs in tests.
         instance_file = self.instances_dir / f"server_{pid}.json"
         try:
-            with open(instance_file, "w") as f:
-                with file_lock(f, exclusive=True):
-                    json.dump(instance.to_dict(), f, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
+            with open(instance_file, "w") as f, file_lock(f, exclusive=True):
+                json.dump(instance.to_dict(), f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
             safe_log(
                 logger.info,
                 f"Registered server instance: PID {pid}, config hash {config_hash[:8]}",
             )
-        except (OSError, IOError, json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:
             safe_log(logger.warning, f"Failed to register instance: {e}")
 
         self.current_instance = instance
@@ -283,20 +278,18 @@ class InstanceTracker:
 
         for instance_file in self.instances_dir.glob("server_*.json"):
             try:
-                with open(instance_file, "r") as f:
-                    # Use shared (read) lock to allow concurrent reads
-                    with file_lock(f, exclusive=False):
-                        data = json.load(f)
+                with (
+                    open(instance_file, "r") as f,
+                    file_lock(f, exclusive=False),
+                ):
+                    data = json.load(f)
                 instance = ServerInstance.from_dict(data)
                 instances.append(instance)
-            except (OSError, IOError, json.JSONDecodeError, KeyError, ValueError) as e:
+            except (OSError, KeyError, ValueError) as e:
                 logger.warning(f"Failed to load instance from {instance_file}: {e}")
                 # Clean up corrupted files
-                try:
+                with contextlib.suppress(OSError):
                     instance_file.unlink()
-                except OSError:
-                    # Cleanup failure is non-fatal
-                    pass
 
         return instances
 
@@ -345,25 +338,23 @@ class InstanceTracker:
 
         for instance_file in self.instances_dir.glob("server_*.json"):
             try:
-                with open(instance_file, "r") as f:
-                    # Use shared (read) lock when checking
-                    with file_lock(f, exclusive=False):
-                        data = json.load(f)
+                with (
+                    open(instance_file, "r") as f,
+                    file_lock(f, exclusive=False),
+                ):
+                    data = json.load(f)
                 instance = ServerInstance.from_dict(data)
 
                 if not self._is_process_running(instance.pid):
                     instance_file.unlink()
                     cleaned_count += 1
                     logger.debug(f"Cleaned up stale instance file: {instance_file}")
-            except (OSError, IOError, json.JSONDecodeError, KeyError, ValueError):
+            except (OSError, KeyError, ValueError):
                 # If we can't read the file, it's probably corrupted
-                try:
+                with contextlib.suppress(OSError):
                     instance_file.unlink()
                     cleaned_count += 1
                     logger.debug(f"Cleaned up corrupted instance file: {instance_file}")
-                except OSError:
-                    # Cleanup failure is non-fatal
-                    pass
 
         return cleaned_count
 
@@ -376,19 +367,18 @@ class InstanceTracker:
                 self.instances_dir / f"server_{self.current_instance.pid}.json"
             )
             try:
-                with open(instance_file, "w") as f:
-                    with file_lock(f, exclusive=True):
-                        json.dump(self.current_instance.to_dict(), f, indent=2)
-                        f.flush()
-                        os.fsync(f.fileno())
-            except (OSError, IOError) as e:
+                with open(instance_file, "w") as f, file_lock(f, exclusive=True):
+                    json.dump(self.current_instance.to_dict(), f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except OSError as e:
                 logger.warning(f"Failed to update heartbeat: {e}")
 
     def _is_process_running(self, pid: int) -> bool:
         """Check if a process is running by PID."""
         if platform.system() == "Windows":
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603 B607 - safe, hardcoded command
                     ["tasklist", "/FI", f"PID eq {pid}"],
                     capture_output=True,
                     text=True,
@@ -398,15 +388,16 @@ class InstanceTracker:
                 # When no process matches, output contains "No tasks are running"
                 # or similar message instead of the actual PID
                 return str(pid) in result.stdout
-            except (subprocess.TimeoutExpired, FileNotFoundError):
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                logger.debug(f"Failed to check process {pid} on Windows: {e}")
                 return False
         else:
             try:
                 # On Unix-like systems, sending signal 0 checks if process exists
                 os.kill(pid, 0)
                 return True
-            except (OSError, ProcessLookupError):
-                return False
             except PermissionError:
                 # Process exists but we don't have permission to signal it
                 return True
+            except OSError:
+                return False

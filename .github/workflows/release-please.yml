@@ -9,7 +9,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  actions: write  # Required to trigger workflow dispatches
+  actions: write # Required to trigger workflow dispatches
 
 jobs:
   release-please:
@@ -30,6 +30,9 @@ jobs:
           # Configuration file location
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+          # Skip automatic GitHub release creation (handled by separate release.yml workflow)
+          skip-github-release: true
 
           # Token for creating PRs and releases
           token: ${{ secrets.GITHUB_TOKEN }}

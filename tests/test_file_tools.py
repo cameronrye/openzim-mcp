@@ -1,6 +1,4 @@
-"""
-Tests for file_tools module.
-"""
+"""Tests for file_tools module."""
 
 from unittest.mock import AsyncMock, MagicMock
 

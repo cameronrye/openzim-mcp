@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""
-Generate help output for the Makefile by parsing targets and their comments.
+"""Generate help output for the Makefile by parsing targets and their comments.
+
 This script provides cross-platform compatibility for the make help command.
 """
 
@@ -13,11 +13,11 @@ from typing import Dict, List, Tuple
 
 # Enable ANSI colors on Windows
 if os.name == "nt":
-    try:
+    import contextlib
+
+    with contextlib.suppress(OSError):
         # Enable ANSI escape sequence processing on Windows 10+
-        os.system("")
-    except OSError:
-        pass  # ANSI colors not supported on older Windows versions
+        os.system("")  # nosec B605,B607 - empty string to enable ANSI on Windows
 
 
 class RegexTimeoutError(Exception):
@@ -115,7 +115,8 @@ def parse_makefile(makefile_path: Path) -> Dict[str, List[Tuple[str, str]]]:
         max_lines = 10000
         if len(lines) > max_lines:
             print(
-                f"Warning: Makefile has {len(lines)} lines, processing only first {max_lines}",
+                f"Warning: Makefile has {len(lines)} lines, "
+                f"processing only first {max_lines}",
                 file=sys.stderr,
             )
             lines = lines[:max_lines]
@@ -239,7 +240,7 @@ def format_help_output(categories: Dict[str, List[Tuple[str, str]]]) -> str:
 
 
 def main():
-    """Main function to generate and display help."""
+    """Generate and display help from the Makefile."""
     # Find the Makefile (should be in the parent directory of this script)
     script_dir = Path(__file__).parent
     makefile_path = script_dir.parent / "Makefile"

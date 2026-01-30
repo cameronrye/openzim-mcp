@@ -1,6 +1,4 @@
-"""
-Integration tests for OpenZIM MCP server.
-"""
+"""Integration tests for OpenZIM MCP server."""
 
 from pathlib import Path
 
@@ -47,12 +45,12 @@ class TestOpenZimMcpServerIntegration:
 
     def test_search_zim_file_invalid_path(self, server: OpenZimMcpServer):
         """Test searching with invalid ZIM file path."""
-        with pytest.raises(Exception):  # Should raise security or validation error
+        with pytest.raises(Exception, match="Access denied|does not exist"):
             server.zim_operations.search_zim_file("/invalid/path.zim", "test")
 
     def test_get_zim_entry_invalid_path(self, server: OpenZimMcpServer):
         """Test getting entry with invalid ZIM file path."""
-        with pytest.raises(Exception):  # Should raise security or validation error
+        with pytest.raises(Exception, match="Access denied|does not exist"):
             server.zim_operations.get_zim_entry("/invalid/path.zim", "A/Test")
 
     def test_server_health_check(self, server: OpenZimMcpServer):

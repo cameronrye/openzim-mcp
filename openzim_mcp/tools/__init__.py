@@ -1,5 +1,4 @@
-"""
-Tool registration modules for OpenZIM MCP server.
+"""Tool registration modules for OpenZIM MCP server.
 
 This package contains modular tool registration functions that are called
 by the main server to register MCP tools. Each module handles a specific
@@ -32,8 +31,7 @@ __all__ = [
 
 
 def register_all_tools(server: "OpenZimMcpServer") -> None:
-    """
-    Register all advanced mode tools.
+    """Register all advanced mode tools.
 
     This function orchestrates the registration of all tool categories
     by calling each specialized registration function.

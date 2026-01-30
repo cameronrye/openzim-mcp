@@ -1,6 +1,4 @@
-"""
-Main OpenZIM MCP server implementation.
-"""
+"""Main OpenZIM MCP server implementation."""
 
 import logging
 from typing import Any, Dict, List, Literal, Optional
@@ -36,8 +34,7 @@ class OpenZimMcpServer:
         config: OpenZimMcpConfig,
         instance_tracker: Optional[InstanceTracker] = None,
     ):
-        """
-        Initialize OpenZIM MCP server.
+        """Initialize OpenZIM MCP server.
 
         Args:
             config: Server configuration
@@ -88,7 +85,8 @@ class OpenZimMcpServer:
         )
         if config.tool_mode == TOOL_MODE_SIMPLE:
             logger.info(
-                "Running in SIMPLE mode with 1 intelligent tool (zim_query) plus all underlying tools"
+                "Running in SIMPLE mode with 1 intelligent tool (zim_query) "
+                "plus all underlying tools"
             )
         else:
             logger.debug(
@@ -99,8 +97,7 @@ class OpenZimMcpServer:
     def _create_enhanced_error_message(
         self, operation: str, error: Exception, context: str = ""
     ) -> str:
-        """
-        Create educational, actionable error messages for LLM users.
+        """Create educational, actionable error messages for LLM users.
 
         Uses externalized error message templates from error_messages module.
 
@@ -140,13 +137,15 @@ class OpenZimMcpServer:
         for conflict in conflicts:
             if conflict["type"] == "configuration_mismatch":
                 warning += (
-                    f"WARNING: Configuration mismatch with server PID {conflict['instance']['pid']}. "
-                    "Results may be inconsistent.\n"
+                    f"WARNING: Configuration mismatch with server "
+                    f"PID {conflict['instance']['pid']}. "
+                    f"Results may be inconsistent.\n"
                 )
             elif conflict["type"] == "multiple_instances":
                 warning += (
-                    f"WARNING: Multiple servers detected (PID {conflict['instance']['pid']}). "
-                    "Results may come from different server instances.\n"
+                    f"WARNING: Multiple servers detected "
+                    f"(PID {conflict['instance']['pid']}). "
+                    f"Results may come from different server instances.\n"
                 )
         warning += "\nTIP: Use 'resolve_server_conflicts()' to fix these issues.\n"
         return warning
@@ -178,7 +177,7 @@ class OpenZimMcpServer:
         return result
 
     def _register_simple_tools(self) -> None:
-        """Register simple mode tools (2 intelligent tools + underlying tools for routing)."""
+        """Register simple mode tools with underlying tools for routing."""
 
         # Register the simple wrapper tools that LLMs will primarily use
         @self.mcp.tool()
@@ -208,8 +207,8 @@ class OpenZimMcpServer:
 
             Args:
                 query: Natural language query (REQUIRED)
-                zim_file_path: Optional path to ZIM file (auto-selects if only one exists)
-                limit: Optional maximum number of results (for search/browse operations)
+                zim_file_path: Optional ZIM file path (auto-selects if one exists)
+                limit: Max results for search/browse operations
                 offset: Optional starting offset for pagination (default: 0)
                 max_content_length: Optional maximum content length for articles
 
@@ -253,9 +252,7 @@ class OpenZimMcpServer:
         # This allows the simple mode to still have access to all functionality
         self._register_advanced_tools()
 
-        logger.info(
-            "Simple mode tools registered successfully (zim_query + all underlying tools)"
-        )
+        logger.info("Simple mode tools registered (zim_query + all underlying tools)")
 
     def _register_tools(self) -> None:
         """Register MCP tools based on configured mode."""
@@ -294,9 +291,10 @@ class OpenZimMcpServer:
     #      server_tools.py, metadata_tools.py, navigation_tools.py,
     #      structure_tools.py
     #
-    # REMOVED: _register_file_tools, _register_search_tools, _register_content_tools,
-    #          _register_server_tools, _register_metadata_tools, _register_navigation_tools,
-    #          _register_structure_tools (moved to tools/ package)
+    # REMOVED: _register_file_tools, _register_search_tools,
+    #          _register_content_tools, _register_server_tools,
+    #          _register_metadata_tools, _register_navigation_tools,
+    #          _register_structure_tools (all moved to tools/ package)
 
     def run(
         self, transport: Literal["stdio", "sse", "streamable-http"] = "stdio"

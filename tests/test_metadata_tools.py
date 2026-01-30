@@ -1,6 +1,4 @@
-"""
-Tests for metadata_tools module.
-"""
+"""Tests for metadata_tools module."""
 
 from unittest.mock import AsyncMock, MagicMock
 

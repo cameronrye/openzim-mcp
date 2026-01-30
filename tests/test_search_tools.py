@@ -1,6 +1,4 @@
-"""
-Tests for search_tools module.
-"""
+"""Tests for search_tools module."""
 
 from unittest.mock import AsyncMock, MagicMock
 

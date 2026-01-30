@@ -33,7 +33,7 @@ def zim_tool(
     rate_limit_operation: Optional[str] = None,
     check_conflicts: bool = True,
 ) -> Callable[[F], F]:
-    """Decorator to standardize MCP tool handler behavior.
+    """Decorate MCP tool handlers with standardized behavior.
 
     This decorator wraps tool handlers with:
     - Rate limiting (if enabled)
@@ -41,8 +41,8 @@ def zim_tool(
     - Conflict warning appending (if enabled)
 
     Args:
-        operation_name: Human-readable name for the operation (used in error messages)
-        rate_limit_operation: Operation name for rate limiting (defaults to operation_name)
+        operation_name: Human-readable name for the operation (for errors)
+        rate_limit_operation: Operation name for rate limiting (default: operation_name)
         check_conflicts: Whether to check for and append conflict warnings
 
     Returns:
@@ -115,9 +115,9 @@ def sync_zim_tool(
     rate_limit_operation: Optional[str] = None,
     check_conflicts: bool = True,
 ) -> Callable[[F], F]:
-    """Synchronous version of zim_tool decorator.
+    """Decorate synchronous tool handlers with standardized behavior.
 
-    For use with synchronous tool handlers that don't need async operations.
+    Use for synchronous tool handlers that don't need async operations.
 
     Args:
         operation_name: Human-readable name for the operation

@@ -1,6 +1,4 @@
-"""
-Tests for structure_tools module.
-"""
+"""Tests for structure_tools module."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -86,7 +84,7 @@ class TestExtractArticleLinksTool:
     async def test_extract_article_links_success(self, server: OpenZimMcpServer):
         """Test successful link extraction."""
         server.async_zim_operations.extract_article_links = AsyncMock(
-            return_value='{"internal": ["A/Link1"], "external": ["https://example.com"]}'
+            return_value='{"internal": ["A/Link1"], "external": ["example.com"]}'
         )
         server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -125,7 +123,7 @@ class TestGetEntrySummaryTool:
     async def test_get_entry_summary_success(self, server: OpenZimMcpServer):
         """Test successful entry summary retrieval."""
         server.async_zim_operations.get_entry_summary = AsyncMock(
-            return_value='{"title": "Article", "summary": "This is a summary.", "word_count": 5}'
+            return_value='{"title": "Article", "summary": "Summary.", "word_count": 5}'
         )
         server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -164,7 +162,7 @@ class TestGetTableOfContentsTool:
     async def test_get_table_of_contents_success(self, server: OpenZimMcpServer):
         """Test successful TOC retrieval."""
         server.async_zim_operations.get_table_of_contents = AsyncMock(
-            return_value='{"toc": [{"level": 1, "text": "Introduction"}], "heading_count": 1}'
+            return_value='{"toc": [{"level": 1, "text": "Intro"}], "heading_count": 1}'
         )
         server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -203,7 +201,7 @@ class TestGetBinaryEntryTool:
     async def test_get_binary_entry_success(self, server: OpenZimMcpServer):
         """Test successful binary entry retrieval."""
         server.async_zim_operations.get_binary_entry = AsyncMock(
-            return_value='{"path": "I/image.png", "mime_type": "image/png", "size": 1024}'
+            return_value='{"path": "I/img.png", "mime_type": "image/png", "size": 1024}'
         )
         server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -220,7 +218,7 @@ class TestGetBinaryEntryTool:
     async def test_get_binary_entry_metadata_only(self, server: OpenZimMcpServer):
         """Test binary entry retrieval with metadata only."""
         server.async_zim_operations.get_binary_entry = AsyncMock(
-            return_value='{"path": "I/image.png", "mime_type": "image/png", "size": 1024}'
+            return_value='{"path": "I/img.png", "mime_type": "image/png", "size": 1024}'
         )
 
         result = await server.async_zim_operations.get_binary_entry(
@@ -376,7 +374,7 @@ class TestStructureToolsDirectInvocation:
     async def test_get_entry_summary_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking get_entry_summary tool handler directly."""
         advanced_server.async_zim_operations.get_entry_summary = AsyncMock(
-            return_value='{"title": "Article", "summary": "Test summary", "word_count": 50}'
+            return_value='{"title": "Article", "summary": "Test", "word_count": 50}'
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -445,7 +443,7 @@ class TestStructureToolsDirectInvocation:
     async def test_get_binary_entry_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking get_binary_entry tool handler directly."""
         advanced_server.async_zim_operations.get_binary_entry = AsyncMock(
-            return_value='{"path": "I/image.png", "mime_type": "image/png", "size": 1024}'
+            return_value='{"path": "I/img.png", "mime_type": "image/png", "size": 1024}'
         )
 
         tools = advanced_server.mcp._tool_manager._tools

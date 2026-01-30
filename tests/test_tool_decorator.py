@@ -1,6 +1,4 @@
-"""
-Tests for tool_decorator module.
-"""
+"""Tests for tool_decorator module."""
 
 import logging
 from unittest.mock import MagicMock
@@ -15,6 +13,7 @@ class MockServer:
     """Mock server for testing decorators."""
 
     def __init__(self, rate_limit_enabled: bool = True):
+        """Initialize mock server."""
         self.rate_limiter = MagicMock()
         self.rate_limit_enabled = rate_limit_enabled
         if not rate_limit_enabled:
@@ -105,7 +104,7 @@ class TestZimToolDecorator:
 
         result = await no_conflict_tool(server)
 
-        assert "result without conflict check" == result
+        assert result == "result without conflict check"
         assert "[conflict check done]" not in result
 
     @pytest.mark.asyncio

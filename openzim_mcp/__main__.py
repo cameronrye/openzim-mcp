@@ -1,6 +1,4 @@
-"""
-Entry point for running OpenZIM MCP as a module.
-"""
+"""Entry point for running OpenZIM MCP as a module."""
 
 from .main import main
 

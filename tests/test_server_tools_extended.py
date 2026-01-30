@@ -447,7 +447,7 @@ class TestDiagnoseServerStateToolInvocation:
             diagnostics = json.loads(result)
 
             # Check the directory in environment_checks
-            # Use the resolved path from config (handles macOS /var -> /private/var symlink)
+            # Use resolved path from config (handles /var -> /private/var symlink)
             dir_key = server.config.allowed_directories[0]
             assert dir_key in diagnostics["environment_checks"]
             dir_check = diagnostics["environment_checks"][dir_key]
@@ -476,7 +476,7 @@ class TestDiagnoseServerStateToolInvocation:
             result = await tool_handler()
             diagnostics = json.loads(result)
 
-            # Use the resolved path from config (handles macOS /var -> /private/var symlink)
+            # Use resolved path from config (handles /var -> /private/var symlink)
             dir_key = server.config.allowed_directories[0]
             dir_check = diagnostics["environment_checks"][dir_key]
             # Should have warning about invalid ZIM file

@@ -1,6 +1,4 @@
-"""
-Content retrieval tools for OpenZIM MCP server.
-"""
+"""Content retrieval tools for OpenZIM MCP server."""
 
 import logging
 from typing import TYPE_CHECKING, Optional
@@ -16,8 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def register_content_tools(server: "OpenZimMcpServer") -> None:
-    """
-    Register content retrieval tools.
+    """Register content retrieval tools.
 
     Args:
         server: The OpenZimMcpServer instance to register tools on
@@ -58,10 +55,12 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
             if max_content_length is not None and max_content_length < 1000:
                 return (
                     "**Parameter Validation Error**\n\n"
-                    f"**Issue**: max_content_length must be at least 1000 characters (provided: {max_content_length})\n\n"
-                    "**Troubleshooting**: Increase the max_content_length parameter or omit it to use the default.\n"
-                    "**Example**: Use `max_content_length=5000` for longer content or omit the parameter for "
-                    "default length."
+                    f"**Issue**: max_content_length must be at least 1000 characters "
+                    f"(provided: {max_content_length})\n\n"
+                    "**Troubleshooting**: Increase the max_content_length parameter "
+                    "or omit it to use the default.\n"
+                    "**Example**: Use `max_content_length=5000` for longer content "
+                    "or omit the parameter for default length."
                 )
 
             # Use async operations to avoid blocking

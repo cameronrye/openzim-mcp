@@ -1,6 +1,4 @@
-"""
-Tests for ZIM operations module.
-"""
+"""Tests for ZIM operations module."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -285,7 +283,7 @@ class TestZimOperations:
 
             # Mock entries
             mock_entries = []
-            for i, (path, title) in enumerate(
+            for _i, (path, title) in enumerate(
                 [
                     ("C/Article1", "Article 1"),
                     ("M/Title", "Test ZIM"),
@@ -337,7 +335,7 @@ class TestZimOperations:
 
             # Mock entries - some in C namespace, some in other namespaces
             mock_entries = []
-            for i, (path, title) in enumerate(
+            for _i, (path, title) in enumerate(
                 [
                     ("C/Article1", "Article 1"),
                     ("C/Article2", "Article 2"),
@@ -469,7 +467,7 @@ class TestZimOperations:
 
             # Mock entries with titles that could match suggestions
             mock_entries = []
-            for i, (path, title) in enumerate(
+            for _i, (path, title) in enumerate(
                 [
                     ("C/Biology", "Biology"),
                     ("C/Biochemistry", "Biochemistry"),
@@ -512,12 +510,14 @@ class TestZimOperations:
         mock_file.stat.side_effect = OSError("Permission denied")
         mock_file.name = "test.zim"
 
-        with patch.object(zim_operations.config, "allowed_directories", ["/tmp"]):
-            with patch("pathlib.Path.glob", return_value=[mock_file]):
-                # This should handle the OSError gracefully (lines 109-112)
-                result = zim_operations.list_zim_files()
-                # Should still return a result, just without the problematic file
-                assert isinstance(result, str)
+        with (
+            patch.object(zim_operations.config, "allowed_directories", ["/tmp"]),
+            patch("pathlib.Path.glob", return_value=[mock_file]),
+        ):
+            # This should handle the OSError gracefully (lines 109-112)
+            result = zim_operations.list_zim_files()
+            # Should still return a result, just without the problematic file
+            assert isinstance(result, str)
 
     def test_list_zim_files_directory_exception_handling(
         self, zim_operations: ZimOperations
@@ -525,13 +525,13 @@ class TestZimOperations:
         """Test list_zim_files with exception during directory processing."""
         from unittest.mock import patch
 
-        with patch.object(zim_operations.config, "allowed_directories", ["/tmp"]):
-            with patch(
-                "pathlib.Path.glob", side_effect=Exception("Directory access error")
-            ):
-                # This should handle the exception gracefully (lines 114-115)
-                result = zim_operations.list_zim_files()
-                assert isinstance(result, str)
+        with (
+            patch.object(zim_operations.config, "allowed_directories", ["/tmp"]),
+            patch("pathlib.Path.glob", side_effect=Exception("Directory access error")),
+        ):
+            # This should handle the exception gracefully (lines 114-115)
+            result = zim_operations.list_zim_files()
+            assert isinstance(result, str)
 
     def test_search_zim_file_exception_in_result_processing(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -564,13 +564,15 @@ class TestZimOperations:
                 "Entry access error"
             )
 
-            with patch(
-                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            with (
+                patch(
+                    "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+                ),
+                patch("openzim_mcp.zim_operations.Query"),
             ):
-                with patch("openzim_mcp.zim_operations.Query"):
-                    result = zim_operations.search_zim_file(str(zim_file), "test")
-                    # Should handle the exception and include error message
-                    assert "Error getting entry details" in result
+                result = zim_operations.search_zim_file(str(zim_file), "test")
+                # Should handle the exception and include error message
+                assert "Error getting entry details" in result
 
     def test_zim_archive_context_manager_exception(self, temp_dir: Path):
         """Test zim_archive context manager exception handling."""
@@ -581,9 +583,11 @@ class TestZimOperations:
         invalid_file = temp_dir / "invalid.zim"
         invalid_file.write_text("not a zim file")
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Failed to open ZIM archive"):
-            with zim_archive(invalid_file):
-                pass
+        with (
+            pytest.raises(OpenZimMcpArchiveError, match="Failed to open ZIM archive"),
+            zim_archive(invalid_file),
+        ):
+            pass
 
     def test_get_zim_entry_exception_handling(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -739,10 +743,12 @@ class TestZimOperations:
         mock_search_result.getEstimatedMatches.return_value = 0
         mock_searcher.search.return_value = mock_search_result
 
-        with patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher):
-            with patch("openzim_mcp.zim_operations.Query"):
-                result = zim_operations._perform_search(mock_archive, "test", 10, 0)
-                assert "No search results found" in result
+        with (
+            patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher),
+            patch("openzim_mcp.zim_operations.Query"),
+        ):
+            result = zim_operations._perform_search(mock_archive, "test", 10, 0)
+            assert "No search results found" in result
 
     def test_get_entry_content_with_redirect(self, zim_operations: ZimOperations):
         """Test _get_entry_content with redirect entry."""
@@ -888,14 +894,16 @@ class TestZimOperations:
             mock_entry.get_item.return_value = mock_item
             mock_archive_instance.get_entry_by_path.return_value = mock_entry
 
-            with patch(
-                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            with (
+                patch(
+                    "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+                ),
+                patch("openzim_mcp.zim_operations.Query"),
             ):
-                with patch("openzim_mcp.zim_operations.Query"):
-                    result = zim_operations.search_with_filters(
-                        str(zim_file), "test", namespace="A", content_type="text/html"
-                    )
-                    assert "Test Entry" in result
+                result = zim_operations.search_with_filters(
+                    str(zim_file), "test", namespace="A", content_type="text/html"
+                )
+                assert "Test Entry" in result
 
     def test_get_search_suggestions_limit_validation(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -918,7 +926,6 @@ class TestZimOperations:
 
     def test_cache_hit_scenarios(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test cache hit scenarios to cover cache return lines."""
-
         zim_file = temp_dir / "test.zim"
         zim_file.touch()
 
@@ -1012,16 +1019,18 @@ class TestZimOperations:
 
             mock_archive_instance.get_entry_by_path.side_effect = mock_get_entry_by_path
 
-            with patch(
-                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            with (
+                patch(
+                    "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+                ),
+                patch("openzim_mcp.zim_operations.Query"),
             ):
-                with patch("openzim_mcp.zim_operations.Query"):
-                    # Test search with multiple results and error handling
-                    result = zim_operations.search_zim_file(
-                        str(zim_file), "test", limit=5, offset=0
-                    )
-                    assert "Test Entry 0" in result
-                    assert "Unable to get content preview" in result
+                # Test search with multiple results and error handling
+                result = zim_operations.search_zim_file(
+                    str(zim_file), "test", limit=5, offset=0
+                )
+                assert "Test Entry 0" in result
+                assert "Unable to get content preview" in result
 
     def test_namespace_browsing_edge_cases(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1392,17 +1401,19 @@ class TestZimOperations:
             mock_search.getEstimatedMatches.return_value = 0
             mock_searcher.search.return_value = mock_search
 
-            with patch(
-                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            with (
+                patch(
+                    "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+                ),
+                patch("openzim_mcp.zim_operations.Query"),
+                pytest.raises(OpenZimMcpArchiveError) as exc_info,
             ):
-                with patch("openzim_mcp.zim_operations.Query"):
-                    with pytest.raises(OpenZimMcpArchiveError) as exc_info:
-                        zim_operations.get_zim_entry(str(zim_file), "A/Nonexistent")
+                zim_operations.get_zim_entry(str(zim_file), "A/Nonexistent")
 
-                    error_msg = str(exc_info.value)
-                    assert "Entry not found: 'A/Nonexistent'" in error_msg
-                    assert "Try using search_zim_file()" in error_msg
-                    assert "browse_namespace()" in error_msg
+            error_msg = str(exc_info.value)
+            assert "Entry not found: 'A/Nonexistent'" in error_msg
+            assert "Try using search_zim_file()" in error_msg
+            assert "browse_namespace()" in error_msg
 
     def test_smart_retrieval_search_failure(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1525,21 +1536,23 @@ class TestZimOperations:
 
             mock_archive_instance.get_entry_by_path.side_effect = mock_get_entry_by_path
 
-            with patch(
-                "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+            with (
+                patch(
+                    "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+                ),
+                patch("openzim_mcp.zim_operations.Query"),
             ):
-                with patch("openzim_mcp.zim_operations.Query"):
-                    # Test search with filters
-                    result = zim_operations.search_with_filters(
-                        str(zim_file),
-                        "test",
-                        namespace="A",
-                        content_type="text/html",
-                        limit=10,
-                        offset=0,
-                    )
-                    assert "Title for" in result
-                    assert "namespace" in result
+                # Test search with filters
+                result = zim_operations.search_with_filters(
+                    str(zim_file),
+                    "test",
+                    namespace="A",
+                    content_type="text/html",
+                    limit=10,
+                    offset=0,
+                )
+                assert "Title for" in result
+                assert "namespace" in result
 
     def test_namespace_browsing_comprehensive(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1680,7 +1693,6 @@ class TestZimOperations:
         self, zim_operations: ZimOperations, temp_dir: Path
     ):
         """Test additional edge cases to push coverage over 90%."""
-
         zim_file = temp_dir / "test.zim"
         zim_file.touch()
 

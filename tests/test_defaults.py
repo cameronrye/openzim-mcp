@@ -1,6 +1,4 @@
-"""
-Tests for defaults module.
-"""
+"""Tests for defaults module."""
 
 import pytest
 

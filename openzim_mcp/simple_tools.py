@@ -1,5 +1,4 @@
-"""
-Simple tools implementation for OpenZIM MCP server.
+"""Simple tools implementation for OpenZIM MCP server.
 
 This module provides intelligent, natural language-based tools that abstract
 away the complexity of multiple specialized tools. Designed for LLMs with
@@ -25,8 +24,7 @@ def safe_regex_search(
     flags: int = 0,
     timeout_seconds: float = REGEX_TIMEOUT_SECONDS,
 ) -> Optional[re.Match[str]]:
-    """
-    Perform a regex search with cross-platform timeout protection.
+    """Perform a regex search with cross-platform timeout protection.
 
     This function provides ReDoS protection on all platforms by wrapping
     the regex operation with appropriate timeout mechanisms.
@@ -105,7 +103,8 @@ class IntentParser:
         (r"\b(links?|references?|related)\s+(in|from|to)\b", "links", 0.85, 7),
         # Binary/media - specific keywords
         (
-            r"\b(get|retrieve|download|extract|fetch)\s+(binary|raw|pdf|image|video|audio|media)\b",
+            r"\b(get|retrieve|download|extract|fetch)\s+"
+            r"(binary|raw|pdf|image|video|audio|media)\b",
             "binary",
             0.9,
             9,
@@ -138,12 +137,11 @@ class IntentParser:
 
     @classmethod
     def parse_intent(cls, query: str) -> Tuple[str, Dict[str, Any], float]:
-        """
-        Parse a natural language query to determine intent with multi-match resolution.
+        """Parse a natural language query to determine intent.
 
-        This method collects ALL matching patterns and uses a weighted scoring system
-        to select the best match. This prevents earlier patterns from incorrectly
-        shadowing more specific patterns that match later.
+        This method collects ALL matching patterns and uses a weighted scoring
+        system to select the best match. This prevents earlier patterns from
+        incorrectly shadowing more specific patterns that match later.
 
         Args:
             query: Natural language query string
@@ -183,8 +181,7 @@ class IntentParser:
     def _select_best_match(
         cls, matches: List[Tuple[str, Dict[str, Any], float, int]]
     ) -> Tuple[str, Dict[str, Any], float]:
-        """
-        Select the best match from multiple matching patterns.
+        """Select the best match from multiple matching patterns.
 
         Uses a weighted scoring algorithm:
         - Primary factor: confidence score (0-1)
@@ -217,7 +214,8 @@ class IntentParser:
         if len(matches) > 1:
             logger.debug(
                 f"Multi-match resolution: {len(matches)} patterns matched, "
-                f"selected '{scored_matches[0][0]}' with score {scored_matches[0][3]:.3f}"
+                f"selected '{scored_matches[0][0]}' "
+                f"with score {scored_matches[0][3]:.3f}"
             )
 
         best = scored_matches[0]
@@ -225,8 +223,7 @@ class IntentParser:
 
     @classmethod
     def _extract_params(cls, query: str, intent: str) -> Dict[str, Any]:
-        """
-        Extract parameters from query based on intent.
+        """Extract parameters from query based on intent.
 
         Uses cross-platform timeout protection to prevent ReDoS attacks.
 
@@ -254,7 +251,8 @@ class IntentParser:
                 # Extract search query and filters
                 # Try to extract the search term
                 search_match = safe_regex_search(
-                    r"(?:search|find|look)\s+(?:for\s+)?['\"]?([^'\"]+?)['\"]?\s+(?:in|within)",
+                    r"(?:search|find|look)\s+(?:for\s+)?['\"]?"
+                    r"([^'\"]+?)['\"]?\s+(?:in|within)",
                     query,
                     re.IGNORECASE,
                 )
@@ -290,8 +288,12 @@ class IntentParser:
                     # For toc: "table of contents for Biology"
                     # For summary: "summary of Biology"
                     # For get_article: "get article Biology"
+                    path_pattern = (
+                        r"(?:article|entry|page|of|for|in|from|to|contents)"
+                        r"\s+([A-Za-z0-9_/.-]+)"
+                    )
                     path_match = safe_regex_search(
-                        r"(?:article|entry|page|of|for|in|from|to|contents)\s+([A-Za-z0-9_/.-]+)",
+                        path_pattern,
                         query,
                         re.IGNORECASE,
                     )
@@ -309,8 +311,13 @@ class IntentParser:
                     # "get binary content from I/image.png"
                     # "extract pdf I/document.pdf"
                     # "retrieve image logo.png"
+                    binary_pattern = (
+                        r"(?:content|data|entry|from|of|for|"
+                        r"pdf|image|video|audio|media)"
+                        r"\s+['\"]?([A-Za-z0-9_/.-]+)['\"]?"
+                    )
                     path_match = safe_regex_search(
-                        r"(?:content|data|entry|from|of|for|pdf|image|video|audio|media)\s+['\"]?([A-Za-z0-9_/.-]+)['\"]?",
+                        binary_pattern,
                         query,
                         re.IGNORECASE,
                     )
@@ -326,8 +333,12 @@ class IntentParser:
 
             elif intent == "suggestions":
                 # Extract partial query
+                suggest_pattern = (
+                    r"(?:suggestions?|autocomplete|complete|hints?)"
+                    r"\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?"
+                )
                 suggest_match = safe_regex_search(
-                    r"(?:suggestions?|autocomplete|complete|hints?)\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?",
+                    suggest_pattern,
                     query,
                     re.IGNORECASE,
                 )
@@ -348,7 +359,8 @@ class IntentParser:
 
         except RegexTimeoutError:
             logger.warning(
-                f"Regex timeout during param extraction for intent {intent}: {query[:50]}..."
+                f"Regex timeout during param extraction for intent {intent}: "
+                f"{query[:50]}..."
             )
             # Return empty params on timeout - caller will handle gracefully
 
@@ -359,8 +371,7 @@ class SimpleToolsHandler:
     """Handler for simple, intelligent MCP tools."""
 
     def __init__(self, zim_operations: ZimOperations):
-        """
-        Initialize simple tools handler.
+        """Initialize simple tools handler.
 
         Args:
             zim_operations: ZimOperations instance for underlying operations
@@ -374,8 +385,7 @@ class SimpleToolsHandler:
         zim_file_path: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """
-        Handle a natural language query about ZIM file content.
+        """Handle a natural language query about ZIM file content.
 
         This is the main intelligent tool that routes queries to appropriate
         underlying operations based on intent parsing.
@@ -394,7 +404,8 @@ class SimpleToolsHandler:
             # Parse intent from query (now returns confidence score)
             intent, params, confidence = self.intent_parser.parse_intent(query)
             logger.info(
-                f"Parsed intent: {intent}, params: {params}, confidence: {confidence:.2f}"
+                f"Parsed intent: {intent}, params: {params}, "
+                f"confidence: {confidence:.2f}"
             )
 
             # If confidence is very low, add a note to the response
@@ -402,7 +413,8 @@ class SimpleToolsHandler:
             if confidence < 0.6:
                 low_confidence_note = (
                     "\n\n*Note: This query interpretation has moderate confidence. "
-                    "If the results aren't what you expected, try rephrasing your query.*\n"
+                    "If the results aren't what you expected, "
+                    "try rephrasing your query.*\n"
                 )
 
             # Handle file listing (doesn't require zim_file_path)
@@ -416,7 +428,8 @@ class SimpleToolsHandler:
                 if not zim_file_path:
                     return (
                         "**No ZIM File Specified**\n\n"
-                        "Please specify a ZIM file path, or ensure there is exactly one ZIM file available.\n\n"
+                        "Please specify a ZIM file path, or ensure there is "
+                        "exactly one ZIM file available.\n\n"
                         "**Available files:**\n"
                         f"{self.zim_operations.list_zim_files()}"
                     )
@@ -448,8 +461,9 @@ class SimpleToolsHandler:
                 if not entry_path:
                     return (
                         "**Missing Article Path**\n\n"
-                        "Please specify which article you want to get the structure for.\n"
-                        "**Example**: 'structure of Biology' or 'structure of \"C/Evolution\"'"
+                        "Please specify which article you want the structure for.\n"
+                        "**Example**: 'structure of Biology' or "
+                        "'structure of \"C/Evolution\"'"
                     )
                 result = self.zim_operations.get_article_structure(
                     zim_file_path, entry_path
@@ -461,8 +475,9 @@ class SimpleToolsHandler:
                 if not entry_path:
                     return (
                         "**Missing Article Path**\n\n"
-                        "Please specify which article you want the table of contents for.\n"
-                        "**Example**: 'table of contents for Biology' or 'toc of \"C/Evolution\"'"
+                        "Please specify which article you want the TOC for.\n"
+                        "**Example**: 'table of contents for Biology' or "
+                        "'toc of \"C/Evolution\"'"
                     )
                 result = self.zim_operations.get_table_of_contents(
                     zim_file_path, entry_path
@@ -475,7 +490,8 @@ class SimpleToolsHandler:
                     return (
                         "**Missing Article Path**\n\n"
                         "Please specify which article you want a summary for.\n"
-                        "**Example**: 'summary of Biology' or 'summarize \"C/Evolution\"'"
+                        "**Example**: 'summary of Biology' or "
+                        "'summarize \"C/Evolution\"'"
                     )
                 max_words = options.get("max_words", 200)
                 result = self.zim_operations.get_entry_summary(
@@ -488,8 +504,9 @@ class SimpleToolsHandler:
                 if not entry_path:
                     return (
                         "**Missing Article Path**\n\n"
-                        "Please specify which article you want to extract links from.\n"
-                        "**Example**: 'links in Biology' or 'links from \"C/Evolution\"'"
+                        "Please specify which article to extract links from.\n"
+                        "**Example**: 'links in Biology' or "
+                        "'links from \"C/Evolution\"'"
                     )
                 result = self.zim_operations.extract_article_links(
                     zim_file_path, entry_path
@@ -501,12 +518,13 @@ class SimpleToolsHandler:
                 if not entry_path:
                     return (
                         "**Missing Entry Path**\n\n"
-                        "Please specify the path of the binary content to retrieve.\n"
+                        "Please specify the path of the binary content.\n"
                         "**Examples**:\n"
                         "- 'get binary content from \"I/image.png\"'\n"
                         "- 'extract pdf \"I/document.pdf\"'\n"
                         "- 'retrieve image I/logo.png'\n\n"
-                        "**Tip**: Use `extract_article_links` to discover embedded media paths."
+                        "**Tip**: Use `extract_article_links` to discover "
+                        "embedded media paths."
                     )
                 include_data = params.get("include_data", True)
                 max_size_bytes = options.get("max_size_bytes")
@@ -521,7 +539,8 @@ class SimpleToolsHandler:
                     return (
                         "**Missing Search Term**\n\n"
                         "Please specify what you want suggestions for.\n"
-                        "**Example**: 'suggestions for bio' or 'autocomplete \"evol\"'"
+                        "**Example**: 'suggestions for bio' or "
+                        "'autocomplete \"evol\"'"
                     )
                 limit = options.get("limit", 10)
                 result = self.zim_operations.get_search_suggestions(
@@ -557,7 +576,8 @@ class SimpleToolsHandler:
                         return (
                             "**Missing Article Path**\n\n"
                             "Please specify which article you want to read.\n"
-                            "**Example**: 'get article Biology' or 'show \"C/Evolution\"'"
+                            "**Example**: 'get article Biology' or "
+                            "'show \"C/Evolution\"'"
                         )
                 max_content_length = options.get("max_content_length")
                 result = self.zim_operations.get_zim_entry(
@@ -595,15 +615,15 @@ class SimpleToolsHandler:
             )
 
     def _auto_select_zim_file(self) -> Optional[str]:
-        """
-        Auto-select a ZIM file if only one is available.
+        """Auto-select a ZIM file if only one is available.
 
         Returns:
             Path to ZIM file if exactly one exists, None otherwise.
-            Returns None with appropriate logging if multiple files exist or on error.
+            Returns None with appropriate logging if multiple files exist
+            or on error.
         """
         try:
-            # Use the structured data method directly instead of parsing JSON from string
+            # Use structured data method directly (not parsing JSON from string)
             files = self.zim_operations.list_zim_files_data()
 
             if len(files) == 0:

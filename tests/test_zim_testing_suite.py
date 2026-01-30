@@ -212,7 +212,7 @@ class TestZimTestingSuiteIntegration:
         assert isinstance(zim_test_manifest["files"], dict)
 
         # Verify file entries have required fields
-        for file_path, file_info in zim_test_manifest["files"].items():
+        for _file_path, file_info in zim_test_manifest["files"].items():
             assert "category" in file_info
             assert "description" in file_info
             assert "priority" in file_info

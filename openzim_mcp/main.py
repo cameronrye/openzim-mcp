@@ -1,6 +1,4 @@
-"""
-Main entry point for OpenZIM MCP server.
-"""
+"""Main entry point for OpenZIM MCP server."""
 
 import argparse
 import atexit
@@ -14,7 +12,7 @@ from .server import OpenZimMcpServer
 
 
 def main() -> None:
-    """Main entry point for OpenZIM MCP server."""
+    """Run the OpenZIM MCP server."""
     # Parse command line arguments
     parser = argparse.ArgumentParser(
         description="OpenZIM MCP Server - Access ZIM files through MCP",
@@ -43,8 +41,8 @@ Environment Variables:
         default=None,
         help=(
             f"Tool mode: 'advanced' for all 18 tools, 'simple' for 1 "
-            f"intelligent NL tool + underlying tools (default: {TOOL_MODE_SIMPLE}, or from "
-            f"OPENZIM_MCP_TOOL_MODE env var)"
+            f"intelligent NL tool + underlying tools "
+            f"(default: {TOOL_MODE_SIMPLE}, or from OPENZIM_MCP_TOOL_MODE env var)"
         ),
     )
 
@@ -75,7 +73,7 @@ Environment Variables:
 
         # Register cleanup function
         def cleanup_instance() -> None:
-            # Use silent mode to avoid logging during shutdown when logging system may be closed
+            # Use silent mode - logging may be closed during shutdown
             instance_tracker.unregister_instance(silent=True)
 
         atexit.register(cleanup_instance)

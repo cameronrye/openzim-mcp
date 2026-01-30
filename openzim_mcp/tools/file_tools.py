@@ -1,6 +1,4 @@
-"""
-File listing tools for OpenZIM MCP server.
-"""
+"""File listing tools for OpenZIM MCP server."""
 
 import logging
 from typing import TYPE_CHECKING
@@ -60,7 +58,8 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
                                         "type": "configuration_conflict",
                                         "message": (
                                             "WARNING: Configuration mismatch detected "
-                                            f"with server PID {conflict['instance']['pid']}"
+                                            f"with server PID "
+                                            f"{conflict['instance']['pid']}"
                                         ),
                                         "resolution": (
                                             "Different server configurations may "
@@ -76,12 +75,13 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
                                     {
                                         "type": "multiple_servers",
                                         "message": (
-                                            "WARNING: Multiple server instances detected "
-                                            f"(PID {conflict['instance']['pid']})"
+                                            "WARNING: Multiple server instances "
+                                            f"detected (PID "
+                                            f"{conflict['instance']['pid']})"
                                         ),
                                         "resolution": (
                                             "Multiple servers may cause confusion. "
-                                            "Use 'diagnose_server_state()' for detailed "
+                                            "Use 'diagnose_server_state()' for "
                                             "analysis or stop unused instances."
                                         ),
                                         "severity": "medium",

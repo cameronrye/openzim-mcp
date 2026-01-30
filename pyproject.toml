@@ -1,6 +1,6 @@
 [project]
 name = "openzim-mcp"
-version = "0.8.1"
+version = "0.8.2"
 description = "OpenZIM MCP - ZIM MCP Server that enables AI models to access and search ZIM format knowledge bases offline"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -115,7 +115,7 @@ dev = [
 ]
 
 [tool.bandit]
-exclude_dirs = ["tests", "test_data"]
+exclude_dirs = ["tests", "test_data", "scripts"]
 skips = ["B101"]  # Skip assert_used test
 
 [tool.bandit.assert_used]

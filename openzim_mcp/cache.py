@@ -7,6 +7,7 @@ for cache warmup between restarts.
 """
 
 import atexit
+import contextlib
 import heapq
 import json
 import logging
@@ -162,10 +163,8 @@ class OpenZimMcpCache:
                 logger.debug("Cache background cleanup thread stopped")
         except Exception as e:
             # Logging may fail during shutdown - best effort debug log
-            try:
+            with contextlib.suppress(Exception):
                 logger.debug(f"Exception during cleanup thread shutdown: {e}")
-            except Exception:
-                pass  # Silently ignore if logging fails during shutdown
         self._cleanup_thread = None
 
     def _background_cleanup_loop(self) -> None:
@@ -212,7 +211,7 @@ class OpenZimMcpCache:
             # Update access time for LRU
             access_time = time.time()
             self._access_order[key] = access_time
-            # Push updated access time to heap (lazy - old entries will be skipped during eviction)
+            # Push to heap - old entries skipped during eviction (lazy cleanup)
             heapq.heappush(self._lru_heap, (access_time, key))
             self._hits += 1
             logger.debug(f"Cache hit: {key}")

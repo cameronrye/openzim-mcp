@@ -1,6 +1,4 @@
-"""
-Tests for error_messages module.
-"""
+"""Tests for error_messages module."""
 
 import pytest
 

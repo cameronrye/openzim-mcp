@@ -1,3 +1,1 @@
-"""
-Test package for OpenZIM MCP server.
-"""
+"""Test package for OpenZIM MCP server."""

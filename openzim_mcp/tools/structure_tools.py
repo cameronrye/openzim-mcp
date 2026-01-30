@@ -1,6 +1,4 @@
-"""
-Article structure and content analysis tools for OpenZIM MCP server.
-"""
+"""Article structure and content analysis tools for OpenZIM MCP server."""
 
 import logging
 from typing import TYPE_CHECKING, Optional
@@ -250,9 +248,9 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
             - truncated: Boolean indicating if content exceeded size limit
 
         Examples:
-            - Get a PDF: get_binary_entry("/path/to/file.zim", "I/document.pdf")
-            - Get image metadata: get_binary_entry(..., "I/logo.png", include_data=False)
-            - Large video: get_binary_entry(..., "I/video.mp4", max_size_bytes=100000000)
+            - Get a PDF: get_binary_entry("/path/file.zim", "I/document.pdf")
+            - Get image metadata: get_binary_entry(..., "I/logo.png", False)
+            - Large video: get_binary_entry(..., "I/video.mp4", 100000000)
         """
         try:
             # Check rate limit (binary is most expensive)

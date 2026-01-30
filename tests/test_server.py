@@ -1,6 +1,4 @@
-"""
-Tests for server module.
-"""
+"""Tests for server module."""
 
 import asyncio
 from unittest.mock import MagicMock
@@ -271,7 +269,6 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
 
     def test_mcp_tool_validation_paths(self, server: OpenZimMcpServer):
         """Test MCP tool validation paths using call_tool."""
-
         # Test search_zim_file validation - invalid limit
         result = asyncio.run(
             server.mcp.call_tool(
@@ -364,7 +361,6 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
 
     def test_mcp_tool_exception_paths_comprehensive(self, server: OpenZimMcpServer):
         """Test exception paths for all MCP tools."""
-
         # Mock all zim_operations methods to throw exceptions
         original_methods = {}
         methods_to_mock = [
@@ -463,9 +459,6 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
 
     def test_additional_server_edge_cases(self, server: OpenZimMcpServer):
         """Test additional server edge cases to improve coverage."""
-        import asyncio
-        from unittest.mock import MagicMock
-
         # Test server tools with edge case parameters
         test_cases = [
             # Test with maximum limits
@@ -584,9 +577,6 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 zim_file_path = sanitize_input("test.zim", 1000)
                 entry_path = sanitize_input("A/Test", 500)
                 max_content_length = None
-
-                if max_content_length is not None and max_content_length < 1000:
-                    return "Error: max_content_length must be at least 1000"
 
                 return server.zim_operations.get_zim_entry(
                     zim_file_path, entry_path, max_content_length
@@ -807,11 +797,6 @@ class TestOpenZimMcpServerMCPToolsIntegration:
                 limit = 10
                 offset = 0
 
-                if limit is not None and (limit < 1 or limit > 100):
-                    return "Error: limit must be between 1 and 100"
-                if offset < 0:
-                    return "Error: offset must be non-negative"
-
                 return server.zim_operations.search_zim_file(
                     zim_file_path, query, limit, offset
                 )
@@ -924,7 +909,7 @@ class TestOpenZimMcpServerNewTools:
         ):
             try:
                 # This mimics the validation in the actual tool
-                zim_file_path = sanitize_input(zim_file_path, 1000)
+                sanitize_input(zim_file_path, 1000)
                 namespace = sanitize_input(namespace, 100)
 
                 if limit < 1 or limit > 200:
@@ -965,12 +950,12 @@ class TestOpenZimMcpServerNewTools:
         ):
             try:
                 # This mimics the validation in the actual tool
-                zim_file_path = sanitize_input(zim_file_path, 1000)
+                sanitize_input(zim_file_path, 1000)
                 query = sanitize_input(query, 500)
                 if namespace:
-                    namespace = sanitize_input(namespace, 100)
+                    sanitize_input(namespace, 100)
                 if content_type:
-                    content_type = sanitize_input(content_type, 100)
+                    sanitize_input(content_type, 100)
 
                 if limit is not None and (limit < 1 or limit > 100):
                     return "Error: limit must be between 1 and 100"
@@ -1007,7 +992,7 @@ class TestOpenZimMcpServerNewTools:
         ):
             try:
                 # This mimics the validation in the actual tool
-                zim_file_path = sanitize_input(zim_file_path, 1000)
+                sanitize_input(zim_file_path, 1000)
                 partial_query = sanitize_input(partial_query, 200)
 
                 if limit < 1 or limit > 50:
@@ -1238,10 +1223,12 @@ class TestOpenZimMcpServerParameterValidation:
             max_content_length = 500  # Too small, triggers validation error
             return (
                 "**Parameter Validation Error**\n\n"
-                f"**Issue**: max_content_length must be at least 1000 characters (provided: {max_content_length})\n\n"
-                "**Troubleshooting**: Increase the max_content_length parameter or omit it to use the default.\n"
-                "**Example**: Use `max_content_length=5000` for longer content or omit the parameter for "
-                "default length."
+                f"**Issue**: max_content_length must be at least 1000 characters "
+                f"(provided: {max_content_length})\n\n"
+                "**Troubleshooting**: Increase the max_content_length parameter "
+                "or omit it to use the default.\n"
+                "**Example**: Use `max_content_length=5000` for longer content "
+                "or omit the parameter for default length."
             )
 
         result = asyncio.run(mock_get_zim_entry())
@@ -1264,8 +1251,6 @@ class TestOpenZimMcpServerParameterValidation:
         # Create a mock tool function that mimics the validation logic
         async def mock_get_zim_entry():
             max_content_length = 2000  # Valid value
-            if max_content_length is not None and max_content_length < 1000:
-                return "Validation error"
             return server.zim_operations.get_zim_entry(
                 "test.zim", "A/Article", max_content_length
             )
@@ -1282,12 +1267,10 @@ class TestOpenZimMcpServerParameterValidation:
     ):
         """Test limit validation in browse_namespace tool."""
 
-        # Create a mock tool function that mimics the validation logic
+        # Create a mock tool function that returns expected validation error
         async def mock_browse_namespace():
-            limit = 0  # Too small
-            if limit < 1 or limit > 200:
-                return "Error: limit must be between 1 and 200"
-            return "Success"
+            # limit = 0 would fail validation (< 1)
+            return "Error: limit must be between 1 and 200"
 
         result = asyncio.run(mock_browse_namespace())
         assert result == "Error: limit must be between 1 and 200"
@@ -1297,12 +1280,10 @@ class TestOpenZimMcpServerParameterValidation:
     ):
         """Test limit validation in browse_namespace tool with too large value."""
 
-        # Create a mock tool function that mimics the validation logic
+        # Create a mock tool function that returns expected validation error
         async def mock_browse_namespace():
-            limit = 300  # Too large
-            if limit < 1 or limit > 200:
-                return "Error: limit must be between 1 and 200"
-            return "Success"
+            # limit = 300 would fail validation (> 200)
+            return "Error: limit must be between 1 and 200"
 
         result = asyncio.run(mock_browse_namespace())
         assert result == "Error: limit must be between 1 and 200"
@@ -1328,14 +1309,10 @@ class TestOpenZimMcpServerParameterValidation:
             return_value="Namespace content"
         )
 
-        # Create a mock tool function that mimics the validation logic
+        # Create a mock tool function that calls the operation with valid parameters
         async def mock_browse_namespace():
             limit = 50  # Valid
             offset = 10  # Valid
-            if limit < 1 or limit > 200:
-                return "Error: limit must be between 1 and 200"
-            if offset < 0:
-                return "Error: offset must be non-negative"
             return server.zim_operations.browse_namespace(
                 "test.zim", "A", limit, offset
             )

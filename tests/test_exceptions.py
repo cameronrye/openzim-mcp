@@ -1,6 +1,4 @@
-"""
-Tests for exceptions module.
-"""
+"""Tests for exceptions module."""
 
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,

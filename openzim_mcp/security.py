@@ -1,7 +1,6 @@
-"""
-Security and path validation for OpenZIM MCP server.
-"""
+"""Security and path validation for OpenZIM MCP server."""
 
+import contextlib
 import logging
 import os
 import re
@@ -26,8 +25,7 @@ class PathValidator:
     """Secure path validation and access control."""
 
     def __init__(self, allowed_directories: List[str]):
-        """
-        Initialize path validator with allowed directories.
+        """Initialize path validator with allowed directories.
 
         Args:
             allowed_directories: List of directories allowed for access
@@ -58,8 +56,7 @@ class PathValidator:
         )
 
     def _normalize_path(self, filepath: str) -> str:
-        """
-        Normalize and sanitize file path.
+        """Normalize and sanitize file path.
 
         Args:
             filepath: Path to normalize
@@ -68,7 +65,8 @@ class PathValidator:
             Normalized path string
 
         Raises:
-            OpenZimMcpValidationError: If path contains invalid characters or exceeds length limit
+            OpenZimMcpValidationError: If path contains invalid characters or
+                exceeds length limit
             OpenZimMcpSecurityError: If path contains traversal attempts
         """
         if not filepath or not isinstance(filepath, str):
@@ -77,7 +75,7 @@ class PathValidator:
         # Check path length to prevent buffer exhaustion attacks
         if len(filepath) > MAX_PATH_LENGTH:
             raise OpenZimMcpValidationError(
-                f"Path too long: {len(filepath)} characters exceeds maximum of {MAX_PATH_LENGTH}"
+                f"Path too long: {len(filepath)} chars exceeds max {MAX_PATH_LENGTH}"
             )
 
         # URL-decode the path to catch encoded traversal attempts (%2e%2e, %2f, etc.)
@@ -114,8 +112,7 @@ class PathValidator:
         return os.path.normpath(filepath)
 
     def validate_path(self, requested_path: str) -> Path:
-        """
-        Validate if the requested path is within allowed directories.
+        """Validate if the requested path is within allowed directories.
 
         Args:
             requested_path: Path requested for access
@@ -148,8 +145,7 @@ class PathValidator:
         return resolved_path
 
     def _is_path_within_directory(self, path: Path, directory: Path) -> bool:
-        """
-        Securely check if path is within directory.
+        """Securely check if path is within directory.
 
         Args:
             path: Path to check
@@ -173,8 +169,7 @@ class PathValidator:
             return False
 
     def validate_zim_file(self, file_path: Path) -> Path:
-        """
-        Validate that the file is a valid ZIM file.
+        """Validate that the file is a valid ZIM file.
 
         Args:
             file_path: Path to validate
@@ -201,19 +196,20 @@ class PathValidator:
 def sanitize_input(
     input_string: str, max_length: int = 1000, allow_empty: bool = False
 ) -> str:
-    """
-    Sanitize user input string.
+    """Sanitize user input string.
 
     Args:
         input_string: String to sanitize
         max_length: Maximum allowed length
-        allow_empty: If False (default), raises error if result is empty after sanitization
+        allow_empty: If False (default), raises error if result is empty
+            after sanitization
 
     Returns:
         Sanitized string
 
     Raises:
-        OpenZimMcpValidationError: If input is invalid or empty (when allow_empty=False)
+        OpenZimMcpValidationError: If input is invalid or empty
+            (when allow_empty=False)
     """
     if not isinstance(input_string, str):
         raise OpenZimMcpValidationError("Input must be a string")
@@ -237,8 +233,7 @@ def sanitize_input(
 
 
 def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
-    """
-    Sanitize a file path for inclusion in error messages.
+    """Sanitize a file path for inclusion in error messages.
 
     This function obscures the full directory path while keeping the filename
     visible for debugging purposes. This helps prevent information disclosure
@@ -254,7 +249,9 @@ def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
     Example:
         >>> sanitize_path_for_error("/home/user/data/wikipedia.zim")
         '...wikipedia.zim'
-        >>> sanitize_path_for_error("/home/user/data/wikipedia.zim", show_filename=False)
+        >>> sanitize_path_for_error(
+        ...     "/home/user/data/wikipedia.zim", show_filename=False
+        ... )
         '<path-hidden>'
     """
     if not path:
@@ -275,8 +272,7 @@ def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
 
 
 def sanitize_context_for_error(context: str) -> str:
-    """
-    Sanitize context strings for error messages.
+    """Sanitize context strings for error messages.
 
     Looks for patterns that might be file paths and sanitizes them.
     Also handles URL-encoded paths to prevent information leakage.
@@ -292,10 +288,8 @@ def sanitize_context_for_error(context: str) -> str:
 
     # URL-decode the context to catch encoded paths (%2F = /, etc.)
     decoded_context = context
-    try:
+    with contextlib.suppress(Exception):  # nosec B110
         decoded_context = unquote(context)
-    except Exception:
-        pass  # If decode fails, use original
 
     # Common patterns indicating file paths
     path_indicators = [
@@ -305,7 +299,7 @@ def sanitize_context_for_error(context: str) -> str:
         "/home/",
         "/Users/",
         "/var/",
-        "/tmp/",
+        "/tmp/",  # nosec B108 - string pattern for detection, not temp file usage
         "C:\\",
         "D:\\",
     ]
@@ -322,7 +316,6 @@ def sanitize_context_for_error(context: str) -> str:
             sanitized_parts = []
             for part in parts:
                 # Check if this part looks like a file path (also check decoded version)
-                decoded_part = part
                 try:
                     decoded_part = unquote(part)
                 except ValueError:

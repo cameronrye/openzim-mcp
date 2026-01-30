@@ -13,18 +13,21 @@ OpenZIM MCP uses a hybrid testing approach that combines:
 ## Test Categories
 
 ### Unit Tests
+
 - **Location**: `tests/test_*.py` (excluding `test_zim_testing_suite.py`)
 - **Purpose**: Fast feedback during development
 - **Dependencies**: Mock objects, temporary files
 - **Runtime**: < 1 second
 
 ### Integration Tests
+
 - **Location**: `tests/test_zim_testing_suite.py`
 - **Purpose**: Validate functionality with real ZIM files
 - **Dependencies**: zim-testing-suite files
 - **Runtime**: 1-10 seconds
 
 ### Performance Tests
+
 - **Markers**: `@pytest.mark.slow`
 - **Purpose**: Validate caching and performance characteristics
 - **Dependencies**: Real ZIM files
@@ -43,23 +46,31 @@ OpenZIM MCP integrates with the [zim-testing-suite](https://github.com/openzim/z
 ### Test File Categories
 
 #### Basic Files (Priority 1)
+
 Essential files for core functionality testing:
+
 - `withns/small.zim` - Small ZIM with namespaces
 - `nons/small.zim` - Small ZIM without namespaces
 
 #### Real Content (Priority 2-3)
+
 Actual content for integration testing:
+
 - `withns/wikibooks_be_all_nopic_2017-02.zim` - Real Wikibooks content
 - `withns/wikipedia_en_climate_change_mini_2024-06.zim` - Wikipedia content
 
 #### Invalid Files (Priority 2)
+
 For error handling validation:
+
 - `invalid.smaller_than_header.zim` - Truncated file
 - `invalid.bad_mimetype_in_dirent.zim` - Corrupted MIME types
 - `invalid.outofbounds_clusterptrpos.zim` - Invalid pointers
 
 #### Special Cases (Priority 3)
+
 Advanced testing scenarios:
+
 - `small.zim.embedded` - Embedded content
 - `*.zimaa`, `*.zimab`, `*.zimac` - Split files
 
@@ -194,13 +205,13 @@ def test_zim_operations_basic(self, zim_operations: ZimOperations, temp_dir: Pat
     # Create mock ZIM file
     zim_file = temp_dir / "test.zim"
     zim_file.write_text("test content")
-    
+
     # Test with mocks
     with patch("openzim-mcp.zim_operations.Archive") as mock_archive:
         # Setup mock behavior
         mock_archive_instance = MagicMock()
         mock_archive.return_value = mock_archive_instance
-        
+
         # Test functionality
         result = zim_operations.list_zim_files()
         assert "test.zim" in result

@@ -107,9 +107,8 @@ class TestRegexTimeout:
     )
     def test_timeout_raises_regex_timeout_error(self) -> None:
         """Test that timeout raises RegexTimeoutError on Unix."""
-        with pytest.raises(RegexTimeoutError) as exc_info:
-            with regex_timeout(0.1):
-                time.sleep(10)
+        with pytest.raises(RegexTimeoutError) as exc_info, regex_timeout(0.1):
+            time.sleep(10)
 
         assert "timed out" in str(exc_info.value).lower()
 

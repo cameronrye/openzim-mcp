@@ -76,7 +76,7 @@ Unlike basic file readers, OpenZIM MCP provides **intelligent, structured access
 
 ## Project Status
 
-- **Version**: 0.8.0
+- **Version**: 0.8.2
 - **License**: MIT
 - **Python**: 3.12+ (3.13 supported)
 - **Test Coverage**: 90%+

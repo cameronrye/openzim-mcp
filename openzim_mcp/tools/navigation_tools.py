@@ -1,6 +1,4 @@
-"""
-Navigation and browsing tools for OpenZIM MCP server.
-"""
+"""Navigation and browsing tools for OpenZIM MCP server."""
 
 import logging
 from typing import TYPE_CHECKING, Optional
@@ -40,7 +38,7 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file
-            namespace: Namespace to browse (C, M, W, X, A, I, etc. for old format; domain names for new format)
+            namespace: Namespace to browse (C, M, W, X, A, I for old; domains for new)
             limit: Maximum number of entries to return (1-200, default: 50)
             offset: Starting offset for pagination (default: 0)
 
@@ -68,8 +66,10 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
             if limit < 1 or limit > 200:
                 return (
                     "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 200 (provided: {limit})\n\n"
-                    "**Troubleshooting**: Adjust the limit parameter to a value within the valid range.\n"
+                    f"**Issue**: limit must be between 1 and 200 "
+                    f"(provided: {limit})\n\n"
+                    "**Troubleshooting**: Adjust the limit parameter to a "
+                    "value within the valid range.\n"
                     "**Example**: Use `limit=50` for reasonable pagination."
                 )
             if offset < 0:
@@ -91,7 +91,10 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
             return server._create_enhanced_error_message(
                 operation="browse namespace",
                 error=e,
-                context=f"File: {zim_file_path}, Namespace: {namespace}, Limit: {limit}, Offset: {offset}",
+                context=(
+                    f"File: {zim_file_path}, Namespace: {namespace}, "
+                    f"Limit: {limit}, Offset: {offset}"
+                ),
             )
 
     @server.mcp.tool()
@@ -141,9 +144,11 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
             if limit is not None and (limit < 1 or limit > 100):
                 return (
                     "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 100 (provided: {limit})\n\n"
-                    "**Troubleshooting**: Adjust the limit parameter or omit it to use the default.\n"
-                    "**Example**: Use `limit=20` for a reasonable number of results."
+                    f"**Issue**: limit must be between 1 and 100 "
+                    f"(provided: {limit})\n\n"
+                    "**Troubleshooting**: Adjust the limit parameter or "
+                    "omit it to use the default.\n"
+                    "**Example**: Use `limit=20` for a reasonable number."
                 )
             if offset < 0:
                 return (
@@ -203,9 +208,11 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
             if limit < 1 or limit > 50:
                 return (
                     "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 50 (provided: {limit})\n\n"
-                    "**Troubleshooting**: Adjust the limit parameter to a value within the valid range.\n"
-                    "**Example**: Use `limit=10` for a reasonable number of suggestions."
+                    f"**Issue**: limit must be between 1 and 50 "
+                    f"(provided: {limit})\n\n"
+                    "**Troubleshooting**: Adjust the limit parameter to a "
+                    "value within the valid range.\n"
+                    "**Example**: Use `limit=10` for reasonable suggestions."
                 )
 
             # Use async operations

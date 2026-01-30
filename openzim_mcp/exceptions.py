@@ -1,5 +1,4 @@
-"""
-Custom exceptions for OpenZIM MCP server.
+"""Custom exceptions for OpenZIM MCP server.
 
 Each exception has an error_code for programmatic handling and categorization.
 Error codes follow the pattern: OPENZIM_<CATEGORY>_<SPECIFIC>
@@ -20,9 +19,15 @@ class OpenZimMcpError(Exception):
     error_code: str = "OPENZIM_ERROR"
 
     def __init__(self, message: str, details: Optional[str] = None):
+        """Initialize the exception.
+
+        Args:
+            message: Human-readable error message
+            details: Optional additional details about the error
+        """
         self.message = message
         self.details = details
-        super().__init__(self.message)
+        super().__init__(message, details)
 
     def to_dict(self) -> dict:
         """Convert exception to a dictionary for JSON serialization."""

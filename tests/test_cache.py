@@ -1,6 +1,4 @@
-"""
-Tests for cache module.
-"""
+"""Tests for cache module."""
 
 import time
 

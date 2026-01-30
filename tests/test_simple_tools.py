@@ -1,6 +1,4 @@
-"""
-Tests for simple tools functionality.
-"""
+"""Tests for simple tools functionality."""
 
 from unittest.mock import Mock
 
