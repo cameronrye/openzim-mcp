@@ -5,36 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.0](https://github.com/cameronrye/openzim-mcp/compare/v0.7.1...v0.8.0) (2026-01-29)
-
+## [0.8.1](https://github.com/cameronrye/openzim-mcp/compare/v0.7.1...v0.8.1) (2026-01-29)
 
 ### Features
 
 * add article summaries, table of contents, and pagination cursors ([bf5d18f](https://github.com/cameronrye/openzim-mcp/commit/bf5d18fcfecb2e6b03c667565640439b145a4e30))
-
 
 ### Bug Fixes
 
 * remove unused imports in test files for CI linting ([0ddb250](https://github.com/cameronrye/openzim-mcp/commit/0ddb250d49fb627ee7adb41cf3fa52a8caf69172))
 * resolve GitHub code scanning alerts ([2ad2c56](https://github.com/cameronrye/openzim-mcp/commit/2ad2c56a6e7a958ed63d6bd23ad975dd80e1e1f0))
 
-## [0.8.0](https://github.com/cameronrye/openzim-mcp/compare/v0.7.1...v0.8.0) (2026-01-29)
-
-
-### Features
-
-* add article summaries, table of contents, and pagination cursors ([19b60a7](https://github.com/cameronrye/openzim-mcp/commit/19b60a771f09e3154ed7244316201e54e05364d5))
-
-
-### Bug Fixes
-
-* remove unused imports in test files for CI linting ([182d10c](https://github.com/cameronrye/openzim-mcp/commit/182d10ca0ca32f45e595c675f9e7d64f07bfce39))
-
-## [Unreleased]
-
-## [0.8.0](https://github.com/cameronrye/openzim-mcp/compare/v0.7.1...v0.8.0) (2026-01-29)
-
-### Features
+### Details
 
 - **Article Summaries** (`get_entry_summary`): Extract concise article summaries from opening paragraphs
   - Removes infoboxes, navigation, and sidebars for clean summaries
