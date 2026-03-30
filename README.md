@@ -73,6 +73,10 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 - **Configurable**: Flexible configuration with validation
 - **Observable**: Structured logging and health monitoring
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/cameronrye-openzim-mcp).
+
 ## Quick Start
 
 ### Installation
