@@ -1,8 +1,8 @@
 """Main entry point for OpenZIM MCP server."""
 
 import argparse
-import os
 import atexit
+import os
 import sys
 
 from .config import OpenZimMcpConfig
