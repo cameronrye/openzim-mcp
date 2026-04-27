@@ -1,11 +1,12 @@
 """Main entry point for OpenZIM MCP server."""
 
 import argparse
+import os
 import atexit
 import sys
 
 from .config import OpenZimMcpConfig
-from .constants import TOOL_MODE_SIMPLE, VALID_TOOL_MODES
+from .constants import TOOL_MODE_SIMPLE, VALID_TOOL_MODES, VALID_TRANSPORT_TYPES
 from .exceptions import OpenZimMcpConfigurationError
 from .instance_tracker import InstanceTracker
 from .server import OpenZimMcpServer
@@ -45,6 +46,26 @@ Environment Variables:
             f"(default: {TOOL_MODE_SIMPLE}, or from OPENZIM_MCP_TOOL_MODE env var)"
         ),
     )
+    parser.add_argument(
+        "--transport",
+        choices=sorted(VALID_TRANSPORT_TYPES),
+        default=os.environ.get("OPENZIM_MCP_TRANSPORT", "stdio"),
+        help=(
+            "Transport type: stdio, sse, or streamable-http"
+            " (default: stdio, or from OPENZIM_MCP_TRANSPORT env var)"
+        ),
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("OPENZIM_MCP_HOST", "127.0.0.1"),
+        help="Host to bind for HTTP transports (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("OPENZIM_MCP_PORT", "8000")),
+        help="Port to bind for HTTP transports (default: 8000)",
+    )
 
     # Handle case where no arguments provided
     if len(sys.argv) == 1:
@@ -79,7 +100,12 @@ Environment Variables:
         atexit.register(cleanup_instance)
 
         # Create and run server
-        server = OpenZimMcpServer(config, instance_tracker)
+        server = OpenZimMcpServer(
+            config,
+            instance_tracker,
+            host=args.host,
+            port=args.port,
+        )
 
         mode_desc = (
             "SIMPLE mode (1 intelligent tool + all underlying tools)"
@@ -95,7 +121,7 @@ Environment Variables:
             file=sys.stderr,
         )
 
-        server.run(transport="stdio")
+        server.run(transport=args.transport)
 
     except OpenZimMcpConfigurationError as e:
         print(f"Configuration error: {e}", file=sys.stderr)

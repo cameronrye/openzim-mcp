@@ -33,12 +33,16 @@ class OpenZimMcpServer:
         self,
         config: OpenZimMcpConfig,
         instance_tracker: Optional[InstanceTracker] = None,
+        host: str = "127.0.0.1",
+        port: int = 8000,
     ):
         """Initialize OpenZIM MCP server.
 
         Args:
             config: Server configuration
             instance_tracker: Optional instance tracker for multi-server management
+            host: Host to bind to for HTTP transports (SSE, streamable-http)
+            port: Port to bind to for HTTP transports (SSE, streamable-http)
         """
         self.config = config
         self.instance_tracker = instance_tracker
@@ -69,7 +73,7 @@ class OpenZimMcpServer:
             self.simple_tools_handler = SimpleToolsHandler(self.zim_operations)
 
         # Initialize MCP server
-        self.mcp = FastMCP(config.server_name)
+        self.mcp = FastMCP(config.server_name, host=host, port=port)
         self._register_tools()
 
         logger.info(

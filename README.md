@@ -118,6 +118,16 @@ python -m openzim_mcp /path/to/zim/files
 openzim-mcp --mode advanced /path/to/zim/files
 python -m openzim_mcp --mode advanced /path/to/zim/files
 
+# HTTP transport modes (SSE or streamable-http)
+openzim-mcp --transport sse --host 0.0.0.0 --port 9000 /path/to/zim/files
+openzim-mcp --transport streamable-http --host 0.0.0.0 --port 9000 /path/to/zim/files
+
+# Or use environment variables
+export OPENZIM_MCP_TRANSPORT=sse
+export OPENZIM_MCP_HOST=0.0.0.0
+export OPENZIM_MCP_PORT=9000
+openzim-mcp /path/to/zim/files
+
 # For development (from source)
 uv run python -m openzim_mcp /path/to/zim/files
 uv run python -m openzim_mcp --mode advanced /path/to/zim/files
@@ -155,6 +165,28 @@ See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
   "openzim-mcp-advanced": {
     "command": "openzim-mcp",
     "args": ["--mode", "advanced", "/path/to/zim/files"]
+  }
+}
+```
+
+**SSE Transport:**
+
+```json
+{
+  "openzim-mcp-sse": {
+    "command": "openzim-mcp",
+    "args": ["--transport", "sse", "--host", "0.0.0.0", "--port", "9000", "/path/to/zim/files"]
+  }
+}
+```
+
+**Streamable HTTP Transport:**
+
+```json
+{
+  "openzim-mcp-http": {
+    "command": "openzim-mcp",
+    "args": ["--transport", "streamable-http", "--host", "0.0.0.0", "--port", "9000", "/path/to/zim/files"]
   }
 }
 ```
@@ -1243,6 +1275,11 @@ export OPENZIM_MCP_LOGGING__FORMAT="%(asctime)s - %(name)s - %(levelname)s - %(m
 
 # Server configuration
 export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
+
+# Transport configuration
+export OPENZIM_MCP_TRANSPORT=sse
+export OPENZIM_MCP_HOST=0.0.0.0
+export OPENZIM_MCP_PORT=9000
 ```
 
 ### Configuration Options
@@ -1258,6 +1295,9 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 | `OPENZIM_MCP_LOGGING__LEVEL` | `INFO` | Logging level |
 | `OPENZIM_MCP_LOGGING__FORMAT` | `%(asctime)s - %(name)s - %(levelname)s - %(message)s` | Log message format |
 | `OPENZIM_MCP_SERVER_NAME` | `openzim-mcp` | Server instance name |
+| `OPENZIM_MCP_TRANSPORT` | `stdio` | Transport type (stdio, sse, streamable-http) |
+| `OPENZIM_MCP_HOST` | `127.0.0.1` | Host to bind for HTTP transports |
+| `OPENZIM_MCP_PORT` | `8000` | Port to bind for HTTP transports |
 
 ---
 
