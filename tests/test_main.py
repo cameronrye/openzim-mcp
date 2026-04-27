@@ -33,7 +33,9 @@ class TestMainModule:
 
         # Verify calls
         mock_config_class.assert_called_once_with(allowed_directories=["/test/dir"])
-        mock_server_class.assert_called_once_with(mock_config, mock_tracker)
+        mock_server_class.assert_called_once_with(
+            mock_config, mock_tracker, host="127.0.0.1", port=8000
+        )
         mock_server.run.assert_called_once_with(transport="stdio")
 
     @patch("openzim_mcp.main.InstanceTracker")
