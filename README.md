@@ -174,7 +174,7 @@ make run ZIM_DIR=/path/to/zim/files
 OpenZIM MCP supports two modes:
 
 - **Simple Mode** (default): Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
-- **Advanced Mode**: Exposes all 18 specialized MCP tools for maximum control
+- **Advanced Mode**: Exposes all 26 specialized MCP tools for maximum control
 
 See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
 
