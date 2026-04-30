@@ -1604,46 +1604,62 @@ class ZimOperations:
         if total_results == 0:
             return f'No search results found for "{query}"'
 
-        # Get all search results first, then filter. The 1000-hit cap bounds
-        # memory; if upstream had more than that we want callers to know the
-        # filtered total reflects only this initial slice.
-        raw_fetch_limit = 1000
-        results_capped = total_results > raw_fetch_limit
-        all_results = list(search.getResults(0, min(total_results, raw_fetch_limit)))
-
-        # Filter results, retaining each fetched entry so we don't re-fetch
-        # it during the collection pass below.
+        # Stream raw results in batches and filter as we go, stopping once
+        # we have enough filtered matches to satisfy offset+limit or we
+        # exceed a generous scan cap. This avoids the previous "first 1000
+        # hits" cliff where a rare filter (e.g. image/png on an HTML corpus)
+        # returned 0 even when matches existed deeper in the result list.
+        BATCH_SIZE = 500
+        MAX_SCAN = 10000  # bound memory and CPU for pathological queries
+        target_filtered = offset + limit
         filtered_results: List[Tuple[str, Any, str, str]] = []
-        for entry_id in all_results:
-            try:
-                entry = archive.get_entry_by_path(entry_id)
+        scanned = 0
+        scan_cap_hit = False
 
-                entry_namespace = ""
-                if "/" in entry.path:
-                    entry_namespace = entry.path.split("/", 1)[0]
-                elif entry.path:
-                    entry_namespace = entry.path[0]
+        while scanned < total_results and len(filtered_results) < target_filtered:
+            if scanned >= MAX_SCAN:
+                scan_cap_hit = True
+                break
+            batch_end = min(scanned + BATCH_SIZE, total_results, MAX_SCAN)
+            batch = list(search.getResults(scanned, batch_end - scanned))
+            scanned = batch_end
+            if not batch:
+                break
 
-                if namespace and entry_namespace != namespace:
-                    continue
+            for entry_id in batch:
+                try:
+                    entry = archive.get_entry_by_path(entry_id)
 
-                content_mime = ""
-                if content_type:
-                    try:
-                        content_mime = entry.get_item().mimetype or ""
-                        if not content_mime.startswith(content_type):
-                            continue
-                    except Exception:  # nosec B112 - intentional filter skip
+                    entry_namespace = ""
+                    if "/" in entry.path:
+                        entry_namespace = entry.path.split("/", 1)[0]
+                    elif entry.path:
+                        entry_namespace = entry.path[0]
+
+                    if namespace and entry_namespace != namespace:
                         continue
 
-                filtered_results.append(
-                    (entry_id, entry, entry_namespace, content_mime)
-                )
+                    content_mime = ""
+                    if content_type:
+                        try:
+                            content_mime = entry.get_item().mimetype or ""
+                            if not content_mime.startswith(content_type):
+                                continue
+                        except Exception:  # nosec B112 - intentional filter skip
+                            continue
 
-            except Exception as e:
-                logger.warning(f"Error filtering search result {entry_id}: {e}")
-                continue
+                    filtered_results.append(
+                        (entry_id, entry, entry_namespace, content_mime)
+                    )
 
+                except Exception as e:
+                    logger.warning(f"Error filtering search result {entry_id}: {e}")
+                    continue
+
+        # Preserve the legacy "results_capped" semantics for the message —
+        # true if there are more raw results we haven't scanned.
+        results_capped = scan_cap_hit or scanned < total_results
+        raw_fetch_limit = scanned  # what we actually scanned
         total_filtered = len(filtered_results)
 
         filters_applied = []
