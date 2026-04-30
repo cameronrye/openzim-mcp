@@ -56,15 +56,15 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
             # Validate parameters
-            if max_content_length is not None and max_content_length < 1000:
+            if max_content_length is not None and max_content_length < 100:
                 return (
                     "**Parameter Validation Error**\n\n"
-                    f"**Issue**: max_content_length must be at least 1000 characters "
+                    f"**Issue**: max_content_length must be at least 100 characters "
                     f"(provided: {max_content_length})\n\n"
                     "**Troubleshooting**: Increase the max_content_length parameter "
                     "or omit it to use the default.\n"
-                    "**Example**: Use `max_content_length=5000` for longer content "
-                    "or omit the parameter for default length."
+                    "**Example**: Use `max_content_length=500` for a short preview, "
+                    "`5000` for longer content, or omit for default."
                 )
 
             if content_offset < 0:

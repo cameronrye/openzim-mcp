@@ -34,7 +34,7 @@ class RateLimitConfig(BaseModel):
 class ContentConfig(BaseModel):
     """Content processing configuration."""
 
-    max_content_length: int = Field(default=CONTENT.MAX_CONTENT_LENGTH, ge=1000)
+    max_content_length: int = Field(default=CONTENT.MAX_CONTENT_LENGTH, ge=100)
     snippet_length: int = Field(default=CONTENT.SNIPPET_LENGTH, ge=100)
     default_search_limit: int = Field(default=CONTENT.SEARCH_LIMIT, ge=1, le=100)
 
