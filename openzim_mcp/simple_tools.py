@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .constants import REGEX_TIMEOUT_SECONDS
 from .exceptions import RegexTimeoutError
+from .security import sanitize_context_for_error
 from .timeout_utils import regex_timeout, run_with_timeout
 from .zim_operations import ZimOperations
 
@@ -603,10 +604,14 @@ class SimpleToolsHandler:
 
         except Exception as e:
             logger.error(f"Error handling zim_query: {e}")
+            # Sanitize both the query and error text to avoid leaking
+            # absolute filesystem paths back to the MCP client.
+            safe_query = sanitize_context_for_error(query)
+            safe_error = sanitize_context_for_error(str(e))
             return (
                 f"**Error Processing Query**\n\n"
-                f"**Query**: {query}\n"
-                f"**Error**: {str(e)}\n\n"
+                f"**Query**: {safe_query}\n"
+                f"**Error**: {safe_error}\n\n"
                 f"**Troubleshooting**:\n"
                 f"1. Check that the ZIM file path is correct\n"
                 f"2. Verify the query format\n"

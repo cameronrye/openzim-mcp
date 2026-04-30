@@ -44,12 +44,14 @@ class CacheEntry:
             False
         """
         self.value = value
-        self.created_at = time.time()
+        # Use monotonic clock for in-memory expiry/LRU so wall-clock
+        # adjustments (NTP, DST, manual changes) can't break expiry.
+        self.created_at = time.monotonic()
         self.ttl_seconds = ttl_seconds
 
     def is_expired(self) -> bool:
         """Check if cache entry has expired."""
-        return time.time() - self.created_at > self.ttl_seconds
+        return time.monotonic() - self.created_at > self.ttl_seconds
 
 
 class OpenZimMcpCache:
@@ -209,7 +211,7 @@ class OpenZimMcpCache:
                 return None
 
             # Update access time for LRU
-            access_time = time.time()
+            access_time = time.monotonic()
             self._access_order[key] = access_time
             # Push to heap - old entries skipped during eviction (lazy cleanup)
             heapq.heappush(self._lru_heap, (access_time, key))
@@ -235,7 +237,7 @@ class OpenZimMcpCache:
 
             # Add/update entry
             self._cache[key] = CacheEntry(value, self.config.ttl_seconds)
-            access_time = time.time()
+            access_time = time.monotonic()
             self._access_order[key] = access_time
             # Push to heap for O(log n) LRU eviction
             heapq.heappush(self._lru_heap, (access_time, key))
@@ -371,46 +373,53 @@ class OpenZimMcpCache:
             return
 
         try:
+            # Hold the lock for the whole snapshot+write so concurrent set/
+            # delete calls can't be silently dropped between the snapshot and
+            # the rename, and so the empty-cache file deletion doesn't race
+            # with a concurrent set().
             with self._lock:
-                # Collect non-expired entries
+                # Collect non-expired entries. created_at is monotonic
+                # in memory; convert to wall-clock for persistence so the
+                # data is meaningful across process restarts.
                 entries_to_save: Dict[str, Dict[str, Any]] = {}
+                now_monotonic = time.monotonic()
+                now_wall = time.time()
                 for key, entry in self._cache.items():
-                    if not entry.is_expired():
+                    age = now_monotonic - entry.created_at
+                    if age <= entry.ttl_seconds:
                         entries_to_save[key] = {
                             "value": entry.value,
-                            "created_at": entry.created_at,
+                            "created_at": now_wall - age,
                             "ttl_seconds": entry.ttl_seconds,
                         }
 
-            if not entries_to_save:
-                # Remove persistence file if cache is empty
                 persistence_file = self._get_persistence_file()
-                if persistence_file.exists():
-                    persistence_file.unlink()
-                    logger.debug("Removed empty cache persistence file")
-                return
 
-            # Ensure parent directory exists
-            persistence_file = self._get_persistence_file()
-            persistence_file.parent.mkdir(parents=True, exist_ok=True)
+                if not entries_to_save:
+                    if persistence_file.exists():
+                        persistence_file.unlink()
+                        logger.debug("Removed empty cache persistence file")
+                    return
 
-            # Write to temp file first, then rename for atomicity
-            temp_file = persistence_file.with_suffix(".tmp")
-            with open(temp_file, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "version": 1,
-                        "saved_at": time.time(),
-                        "entries": entries_to_save,
-                    },
-                    f,
-                    indent=2,
-                    default=str,  # Handle non-serializable values
-                )
+                persistence_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # Atomic rename
-            temp_file.replace(persistence_file)
-            logger.debug(f"Saved {len(entries_to_save)} cache entries to disk")
+                # Write to temp file first, then rename for atomicity
+                temp_file = persistence_file.with_suffix(".tmp")
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "version": 1,
+                            "saved_at": now_wall,
+                            "entries": entries_to_save,
+                        },
+                        f,
+                        indent=2,
+                        default=str,  # Handle non-serializable values
+                    )
+
+                # Atomic rename
+                temp_file.replace(persistence_file)
+                logger.debug(f"Saved {len(entries_to_save)} cache entries to disk")
 
         except Exception as e:
             logger.warning(f"Failed to save cache to disk: {e}")
@@ -440,25 +449,29 @@ class OpenZimMcpCache:
 
             entries = data.get("entries", {})
             loaded_count = 0
-            current_time = time.time()
+            now_wall = time.time()
+            now_monotonic = time.monotonic()
 
             with self._lock:
                 for key, entry_data in entries.items():
                     created_at = entry_data.get("created_at", 0)
                     ttl_seconds = entry_data.get("ttl_seconds", self.config.ttl_seconds)
 
-                    # Skip expired entries
-                    if current_time - created_at > ttl_seconds:
+                    # Skip expired entries (compare wall-clock-to-wall-clock)
+                    age = now_wall - created_at
+                    if age > ttl_seconds:
                         continue
 
-                    # Restore entry
+                    # Restore entry. CacheEntry.__init__ stamps a monotonic
+                    # created_at; rewind it by the entry's age so remaining
+                    # TTL is preserved across the restart.
                     entry = CacheEntry(entry_data["value"], ttl_seconds)
-                    entry.created_at = created_at
+                    entry.created_at = now_monotonic - age
                     self._cache[key] = entry
 
-                    # Restore access order (use created_at as initial access time)
-                    self._access_order[key] = created_at
-                    heapq.heappush(self._lru_heap, (created_at, key))
+                    # Use the same monotonic timestamp for LRU ordering
+                    self._access_order[key] = entry.created_at
+                    heapq.heappush(self._lru_heap, (entry.created_at, key))
                     loaded_count += 1
 
             logger.info(f"Loaded {loaded_count} cache entries from disk")

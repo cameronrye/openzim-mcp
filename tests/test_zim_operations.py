@@ -767,7 +767,9 @@ class TestZimOperations:
 
         mock_archive.get_entry_by_path.return_value = mock_entry
 
-        result = zim_operations._get_entry_content(mock_archive, "A/Test", 1000)
+        result = zim_operations._get_entry_content(
+            mock_archive, "A/Test", 1000, Path("/tmp/test.zim")
+        )
         assert "Test Article" in result
 
     def test_get_metadata_with_missing_entries(
@@ -1239,8 +1241,8 @@ class TestZimOperations:
             assert "Path: A/Test_Article" in result
             assert "Test content" in result
 
-            # Verify path mapping was cached
-            cache_key = "path_mapping:A/Test_Article"
+            # Verify path mapping was cached (key includes resolved archive path)
+            cache_key = f"path_mapping:{zim_file.resolve()}:A/Test_Article"
             cached_path = zim_operations.cache.get(cache_key)
             assert cached_path == "A/Test_Article"
 
@@ -1285,8 +1287,8 @@ class TestZimOperations:
                 assert "Actual Path: A/Test_Article" in result
                 assert "Test content" in result
 
-                # Verify path mapping was cached
-                cache_key = "path_mapping:A/Test Article"
+                # Verify path mapping was cached (key includes resolved archive path)
+                cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
                 cached_path = zim_operations.cache.get(cache_key)
                 assert cached_path == "A/Test_Article"
 
@@ -1300,7 +1302,7 @@ class TestZimOperations:
         zim_file.touch()
 
         # Pre-populate cache with path mapping
-        cache_key = "path_mapping:A/Test Article"
+        cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
         zim_operations.cache.set(cache_key, "A/Test_Article")
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
@@ -1338,7 +1340,7 @@ class TestZimOperations:
         zim_file.touch()
 
         # Pre-populate cache with invalid path mapping
-        cache_key = "path_mapping:A/Test Article"
+        cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
         zim_operations.cache.set(cache_key, "A/Invalid_Path")
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
@@ -2028,6 +2030,7 @@ class TestGetBinaryEntry:
         # Create a small binary content
         binary_content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
         mock_item.content = binary_content
+        mock_item.size = len(binary_content)
         mock_entry.get_item.return_value = mock_item
         mock_archive_instance.get_entry_by_path.return_value = mock_entry
         mock_archive.return_value.__enter__.return_value = mock_archive_instance
@@ -2062,6 +2065,7 @@ class TestGetBinaryEntry:
         mock_item = MagicMock()
         mock_item.mimetype = "application/pdf"
         mock_item.content = b"%PDF-1.4 test content"
+        mock_item.size = len(b"%PDF-1.4 test content")
         mock_entry.get_item.return_value = mock_item
         mock_archive_instance.get_entry_by_path.return_value = mock_entry
         mock_archive.return_value.__enter__.return_value = mock_archive_instance
@@ -2094,6 +2098,7 @@ class TestGetBinaryEntry:
         mock_item.mimetype = "video/mp4"
         # Create content larger than the limit we'll set
         mock_item.content = b"x" * 1000
+        mock_item.size = 1000
         mock_entry.get_item.return_value = mock_item
         mock_archive_instance.get_entry_by_path.return_value = mock_entry
         mock_archive.return_value.__enter__.return_value = mock_archive_instance

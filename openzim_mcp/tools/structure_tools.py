@@ -143,6 +143,17 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
+            # Validate parameters
+            if max_words < 1 or max_words > 1000:
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    f"**Issue**: max_words must be between 1 and 1000 "
+                    f"(provided: {max_words})\n\n"
+                    "**Troubleshooting**: Adjust max_words to a value within the "
+                    "valid range.\n"
+                    "**Example**: Use `max_words=200` for a typical summary."
+                )
+
             # Use async operations
             return await server.async_zim_operations.get_entry_summary(
                 zim_file_path, entry_path, max_words

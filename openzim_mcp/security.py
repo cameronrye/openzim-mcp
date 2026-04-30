@@ -178,6 +178,9 @@ class PathValidator:
 
         Raises:
             OpenZimMcpValidationError: If file is not valid
+            OpenZimMcpSecurityError: If the path resolves outside allowed
+                directories (e.g., a symlink was swapped between
+                ``validate_path`` and this call)
         """
         if not file_path.exists():
             raise OpenZimMcpValidationError(f"File does not exist: {file_path}")
@@ -187,6 +190,26 @@ class PathValidator:
 
         if file_path.suffix.lower() != ZIM_FILE_EXTENSION:
             raise OpenZimMcpValidationError(f"File is not a ZIM file: {file_path}")
+
+        # Re-resolve and re-check containment to close the TOCTOU window
+        # between validate_path()'s resolve and the caller eventually opening
+        # the file. If a symlink was swapped in to point outside the allowed
+        # tree, resolve() will follow it to the new target.
+        try:
+            current_resolved = file_path.resolve(strict=True)
+        except (OSError, ValueError) as e:
+            raise OpenZimMcpValidationError(
+                f"Failed to resolve file path: {file_path}"
+            ) from e
+
+        if not any(
+            self._is_path_within_directory(current_resolved, allowed_dir)
+            for allowed_dir in self.allowed_directories
+        ):
+            raise OpenZimMcpSecurityError(
+                f"Access denied - Path resolves outside allowed directories: "
+                f"{current_resolved}"
+            )
 
         logger.debug(f"ZIM file validation successful: {file_path}")
         return file_path

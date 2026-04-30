@@ -59,7 +59,7 @@ class TestOpenZimMcpCache:
         cache.set("key", "value")
         # Manually expire the entry by setting its created_at to the past
         if "key" in cache._cache:
-            cache._cache["key"].created_at = time.time() - 61  # 61 seconds ago
+            cache._cache["key"].created_at = time.monotonic() - 61  # 61 seconds ago
 
         result = cache.get("key")
         assert result is None
@@ -129,7 +129,9 @@ class TestOpenZimMcpCache:
 
         # Manually expire the entries by setting their created_at to the past
         for key in cache._cache:
-            cache._cache[key].created_at = time.time() - 61  # 61 seconds ago (past TTL)
+            cache._cache[key].created_at = (
+                time.monotonic() - 61
+            )  # 61 seconds ago (past TTL)
 
         # Verify entries are expired
         assert cache._cache["key1"].is_expired()
@@ -168,8 +170,8 @@ class TestOpenZimMcpCache:
         cache.set("valid", "value3")
 
         # Manually expire some entries
-        cache._cache["expired1"].created_at = time.time() - 61  # Expired
-        cache._cache["expired2"].created_at = time.time() - 61  # Expired
+        cache._cache["expired1"].created_at = time.monotonic() - 61  # Expired
+        cache._cache["expired2"].created_at = time.monotonic() - 61  # Expired
         # "valid" entry remains with current timestamp (not expired)
 
         # Call _cleanup_expired to trigger the missing lines

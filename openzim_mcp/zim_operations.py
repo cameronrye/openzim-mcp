@@ -452,7 +452,7 @@ class ZimOperations:
         try:
             with zim_archive(validated_path) as archive:
                 result = self._get_entry_content(
-                    archive, entry_path, max_content_length
+                    archive, entry_path, max_content_length, validated_path
                 )
 
             # Cache the result
@@ -472,7 +472,11 @@ class ZimOperations:
             ) from e
 
     def _get_entry_content(
-        self, archive: Archive, entry_path: str, max_content_length: int
+        self,
+        archive: Archive,
+        entry_path: str,
+        max_content_length: int,
+        validated_path: Path,
     ) -> str:
         """Get the actual entry content with smart retrieval.
 
@@ -481,8 +485,9 @@ class ZimOperations:
         2. If direct access fails, fall back to search-based retrieval
         3. Cache successful path mappings for future use
         """
-        # Check path mapping cache first
-        cache_key = f"path_mapping:{entry_path}"
+        # Path mapping cache key includes archive path so identical entry
+        # names in different ZIM files don't collide.
+        cache_key = f"path_mapping:{validated_path}:{entry_path}"
         cached_actual_path = self.cache.get(cache_key)
         if cached_actual_path:
             logger.debug(
@@ -1239,6 +1244,11 @@ class ZimOperations:
                 offset, limit, total_in_namespace
             )
 
+        # When the sample hits NAMESPACE_MAX_ENTRIES, total_in_namespace is a
+        # sample-bound, not the true count. has_more=False just means the sample
+        # is exhausted; the real namespace may be larger.
+        results_may_be_incomplete = total_in_namespace >= NAMESPACE_MAX_ENTRIES
+
         result = {
             "namespace": namespace,
             "total_in_namespace": total_in_namespace,
@@ -1249,6 +1259,7 @@ class ZimOperations:
             "next_cursor": next_cursor,
             "entries": entries,
             "sampling_based": True,
+            "results_may_be_incomplete": results_may_be_incomplete,
         }
 
         return json.dumps(result, indent=2, ensure_ascii=False)
@@ -1453,10 +1464,12 @@ class ZimOperations:
         if total_results == 0:
             return f'No search results found for "{query}"'
 
-        # Get all search results first, then filter
-        all_results = list(
-            search.getResults(0, min(total_results, 1000))
-        )  # Limit to prevent memory issues
+        # Get all search results first, then filter. The 1000-hit cap bounds
+        # memory; if upstream had more than that we want callers to know the
+        # filtered total reflects only this initial slice.
+        raw_fetch_limit = 1000
+        results_capped = total_results > raw_fetch_limit
+        all_results = list(search.getResults(0, min(total_results, raw_fetch_limit)))
 
         # Filter results
         filtered_results = []
@@ -1554,9 +1567,15 @@ class ZimOperations:
             f" (filters: {', '.join(filters_applied)})" if filters_applied else ""
         )
 
+        capped_note = (
+            f" (filtered from first {raw_fetch_limit} of "
+            f"~{total_results} unfiltered hits)"
+            if results_capped
+            else ""
+        )
         result_text = (
             f'Found {total_filtered} filtered matches for "{query}"{filter_text}, '
-            f"showing {offset + 1}-{offset + len(results)}:\n\n"
+            f"showing {offset + 1}-{offset + len(results)}{capped_note}:\n\n"
         )
 
         for i, result in enumerate(results):
@@ -1760,16 +1779,6 @@ class ZimOperations:
                     }
                 )
 
-            # Take the best matches from direct entry iteration
-            for match in title_matches[:limit]:
-                suggestions.append(
-                    {
-                        "text": match["suggestion"],
-                        "path": match["path"],
-                        "type": match["type"],
-                    }
-                )
-
         except Exception as e:
             logger.error(f"Error generating suggestions: {e}")
             return json.dumps(
@@ -1941,9 +1950,11 @@ class ZimOperations:
                     self.content_processor.extract_html_structure(raw_content)
                 )
             elif mime_type.startswith("text/"):
-                # For plain text, try to extract basic structure
+                # For plain text, try to extract basic structure. Re-encode the
+                # already-decoded raw_content rather than re-reading item.content,
+                # which can trigger another full decompression from the archive.
                 plain_text = self.content_processor.process_mime_content(
-                    bytes(item.content), mime_type
+                    raw_content.encode("utf-8"), mime_type
                 )
                 structure["word_count"] = len(plain_text.split())
                 structure["sections"] = [
@@ -2104,8 +2115,7 @@ class ZimOperations:
                 item = entry.get_item()
                 title = entry.title or "Untitled"
                 mime_type = item.mimetype or "application/octet-stream"
-                raw_content = bytes(item.content)
-                content_size = len(raw_content)
+                content_size = item.size
 
                 result: Dict[str, Any] = {
                     "path": entry_path,
@@ -2115,10 +2125,12 @@ class ZimOperations:
                     "size_human": self._format_size(content_size),
                 }
 
-                # Determine if we should include the data
+                # Determine if we should include the data. Only materialise
+                # bytes when we'll actually serve them — reading item.content
+                # decompresses the entire entry into memory.
                 if include_data:
                     if content_size <= max_size_bytes:
-                        # Encode content as base64
+                        raw_content = bytes(item.content)
                         encoded_data = base64.b64encode(raw_content).decode("ascii")
                         result["encoding"] = "base64"
                         result["data"] = encoded_data
