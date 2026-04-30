@@ -343,3 +343,9 @@ class AsyncZimOperations:
             cross_file,
             limit,
         )
+
+    async def get_random_entry(self, zim_file_path: str, namespace: str = "C") -> str:
+        """Get random entry (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_random_entry, zim_file_path, namespace
+        )

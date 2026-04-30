@@ -3083,3 +3083,64 @@ class ZimOperations:
             indent=2,
             ensure_ascii=False,
         )
+
+    def get_random_entry(self, zim_file_path: str, namespace: str = "C") -> str:
+        """Return one random entry from the ZIM, optionally namespace-constrained.
+
+        Wraps libzim archive.get_random_entry(). When namespace is set,
+        retries up to 20 times to land in that namespace before giving up.
+        """
+        validated = self.path_validator.validate_path(zim_file_path)
+        validated = self.path_validator.validate_zim_file(validated)
+
+        MAX_RETRIES = 20
+        with zim_archive(validated) as archive:
+            has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
+            for _ in range(MAX_RETRIES):
+                try:
+                    entry = archive.get_random_entry()
+                except Exception as e:
+                    raise OpenZimMcpArchiveError(f"get_random_entry failed: {e}") from e
+
+                entry_namespace = self._extract_namespace_from_path(
+                    entry.path, has_new_scheme
+                )
+                if not namespace or entry_namespace == namespace:
+                    preview = ""
+                    try:
+                        raw = entry.get_item().content
+                        if isinstance(raw, (bytes, bytearray)):
+                            text = bytes(raw).decode("utf-8", errors="replace")
+                        else:
+                            text = str(raw)
+                        preview = (
+                            self.content_processor.html_to_plain_text(text)
+                            if "<" in text
+                            else text
+                        )
+                        if len(preview) > 200:
+                            preview = preview[:200].rstrip() + "…"
+                    except Exception as e:
+                        logger.debug(f"get_random_entry preview failed: {e}")
+                    return json.dumps(
+                        {
+                            "path": entry.path,
+                            "title": entry.title or entry.path,
+                            "namespace": entry_namespace,
+                            "preview": preview,
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+
+            return json.dumps(
+                {
+                    "error": (
+                        f"Could not find a random entry in namespace '{namespace}' "
+                        f"after {MAX_RETRIES} attempts. The namespace may be very "
+                        f"sparse in this archive — try list_namespaces to verify "
+                        f"presence, or pass namespace='' to accept any namespace."
+                    )
+                },
+                indent=2,
+            )

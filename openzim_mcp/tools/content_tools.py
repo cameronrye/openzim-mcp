@@ -3,7 +3,11 @@
 import logging
 from typing import TYPE_CHECKING, Optional
 
-from ..constants import INPUT_LIMIT_ENTRY_PATH, INPUT_LIMIT_FILE_PATH
+from ..constants import (
+    INPUT_LIMIT_ENTRY_PATH,
+    INPUT_LIMIT_FILE_PATH,
+    INPUT_LIMIT_NAMESPACE,
+)
 from ..exceptions import OpenZimMcpRateLimitError
 from ..security import sanitize_input
 
@@ -87,4 +91,44 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
                 operation="get ZIM entry",
                 error=e,
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
+            )
+
+    @server.mcp.tool()
+    async def get_random_entry(zim_file_path: str, namespace: str = "C") -> str:
+        """Return one random entry from a ZIM file.
+
+        Useful for exploration — pair with /explore prompt or call directly
+        when sampling content. Default namespace 'C' returns articles. Pass
+        namespace='' to accept any namespace.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            namespace: Constrain to this namespace (default 'C' for articles)
+
+        Returns:
+            JSON with path, title, namespace, preview (200-char snippet)
+        """
+        try:
+            try:
+                server.rate_limiter.check_rate_limit("get_random_entry")
+            except OpenZimMcpRateLimitError as e:
+                return server._create_enhanced_error_message(
+                    operation="get random entry",
+                    error=e,
+                    context=f"Namespace: {namespace}",
+                )
+
+            zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+            namespace = sanitize_input(namespace, INPUT_LIMIT_NAMESPACE)
+
+            return await server.async_zim_operations.get_random_entry(
+                zim_file_path, namespace
+            )
+
+        except Exception as e:
+            logger.error(f"Error in get_random_entry: {e}")
+            return server._create_enhanced_error_message(
+                operation="get random entry",
+                error=e,
+                context=f"File: {zim_file_path}, Namespace: {namespace}",
             )
