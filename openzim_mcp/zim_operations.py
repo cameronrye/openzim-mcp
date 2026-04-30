@@ -3062,6 +3062,8 @@ class ZimOperations:
                                         f"failed for {path}: {e}"
                                     )
                     except Exception as e:
+                        if not cross_file:
+                            raise
                         logger.debug(
                             f"find_entry_by_title suggest() failed for "
                             f"{file_path}: {e}"

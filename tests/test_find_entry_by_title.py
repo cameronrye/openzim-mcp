@@ -72,7 +72,10 @@ class TestFindEntryByTitle:
         """No matches returns empty results, not an error."""
         mock_archive = MagicMock()
         mock_archive.has_entry_by_path.return_value = False
-        mock_archive.suggest.return_value = MagicMock(getResults=lambda *a: [])
+        mock_suggest = MagicMock()
+        mock_suggest.getEstimatedMatches.return_value = 0
+        mock_suggest.getResults.return_value = []
+        mock_archive.suggest.return_value = mock_suggest
         mock_archive.suggestions_count = 0
 
         monkeypatch.setattr(
@@ -94,6 +97,39 @@ class TestFindEntryByTitle:
         assert result["results"] == []
         assert result["fast_path_hit"] is False
         assert result["files_searched"] == 1
+
+    def test_cross_file_aggregates_and_skips_failures(
+        self, server: OpenZimMcpServer, monkeypatch
+    ):
+        """Cross-file mode aggregates results and skips files that can't open."""
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[
+                {"path": "/zim/good.zim", "name": "good.zim"},
+                {"path": "/zim/bad.zim", "name": "bad.zim"},
+            ]
+        )
+
+        good_archive = MagicMock()
+        good_archive.has_entry_by_path.return_value = True
+        good_entry = MagicMock()
+        good_entry.path = "C/Python"
+        good_entry.title = "Python"
+        good_archive.get_entry_by_path.return_value = good_entry
+
+        def archive_factory(path, *a, **kw):
+            if "bad" in str(path):
+                raise RuntimeError("corrupt archive")
+            return _ctx(good_archive)
+
+        monkeypatch.setattr("openzim_mcp.zim_operations.zim_archive", archive_factory)
+
+        result_json = server.zim_operations.find_entry_by_title(
+            "/unused.zim", "Python", cross_file=True, limit=10
+        )
+        result = json.loads(result_json)
+        assert result["files_searched"] == 2
+        assert len(result["results"]) == 1
+        assert result["results"][0]["zim_file"] == "/zim/good.zim"
 
 
 def _ctx(value):
