@@ -9,7 +9,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, cast
 
-from ..constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
+from ..constants import (
+    CACHE_HIGH_HIT_RATE_THRESHOLD,
+    CACHE_LOW_HIT_RATE_THRESHOLD,
+    INPUT_LIMIT_FILE_PATH,
+)
+from ..exceptions import OpenZimMcpRateLimitError
+from ..security import sanitize_input
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -649,4 +655,42 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                 operation="resolve server conflicts",
                 error=e,
                 context="Attempting to identify and resolve server instance conflicts",
+            )
+
+    @server.mcp.tool()
+    async def warm_cache(zim_file_path: str) -> str:
+        """Pre-populate the cache for a ZIM file with frequently-needed lookups.
+
+        Calls list_zim_files, get_zim_metadata, list_namespaces, and
+        get_main_page so the next series of queries against this ZIM file
+        hits cache instead of re-opening the archive each time. Useful
+        before a long session that will repeatedly read from the same ZIM.
+
+        Args:
+            zim_file_path: Path to the ZIM file to warm
+
+        Returns:
+            JSON listing which lookups succeeded, which failed, and the
+            resulting cache size
+        """
+        try:
+            try:
+                server.rate_limiter.check_rate_limit("warm_cache")
+            except OpenZimMcpRateLimitError as e:
+                return server._create_enhanced_error_message(
+                    operation="warm cache",
+                    error=e,
+                    context=f"File: {zim_file_path}",
+                )
+
+            zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+
+            return await server.async_zim_operations.warm_cache(zim_file_path)
+
+        except Exception as e:
+            logger.error(f"Error in warm_cache: {e}")
+            return server._create_enhanced_error_message(
+                operation="warm cache",
+                error=e,
+                context=f"File: {zim_file_path}",
             )

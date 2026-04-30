@@ -20,7 +20,11 @@ from .constants import (
     NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER,
 )
 from .content_processor import ContentProcessor
-from .exceptions import ArchiveOpenTimeoutError, OpenZimMcpArchiveError
+from .exceptions import (
+    ArchiveOpenTimeoutError,
+    OpenZimMcpArchiveError,
+    OpenZimMcpValidationError,
+)
 from .security import PathValidator
 from .timeout_utils import run_with_timeout
 
@@ -2767,3 +2771,211 @@ class ZimOperations:
             stack.append((level, node["children"]))
 
         return root
+
+    # ------------------------------------------------------------------
+    # Convenience tools: warm_cache, walk_namespace, search_all
+    # ------------------------------------------------------------------
+
+    def warm_cache(self, zim_file_path: str) -> str:
+        """Pre-populate the cache with frequently-needed lookups for a ZIM file.
+
+        Calls list_zim_files, get_zim_metadata, list_namespaces, and
+        get_main_page so subsequent queries hit cache. Each step is
+        best-effort — a failure on one (e.g. main page missing) doesn't
+        block the others.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+
+        Returns:
+            JSON summary of which lookups succeeded and which were skipped
+        """
+        validated = self.path_validator.validate_path(zim_file_path)
+        validated = self.path_validator.validate_zim_file(validated)
+
+        results: Dict[str, Any] = {
+            "zim_file_path": str(validated),
+            "warmed": [],
+            "failed": [],
+        }
+
+        steps: List[Tuple[str, Any]] = [
+            ("list_zim_files", lambda: self.list_zim_files()),
+            ("get_zim_metadata", lambda: self.get_zim_metadata(str(validated))),
+            ("list_namespaces", lambda: self.list_namespaces(str(validated))),
+            ("get_main_page", lambda: self.get_main_page(str(validated))),
+        ]
+
+        for name, fn in steps:
+            try:
+                fn()
+                results["warmed"].append(name)
+            except Exception as e:
+                logger.debug(f"warm_cache: {name} failed: {e}")
+                results["failed"].append({"step": name, "reason": str(e)})
+
+        results["cache_size"] = self.cache.stats().get("size", 0)
+        return json.dumps(results, indent=2, ensure_ascii=False)
+
+    def walk_namespace(
+        self,
+        zim_file_path: str,
+        namespace: str,
+        cursor: int = 0,
+        limit: int = 200,
+    ) -> str:
+        """Walk every entry in a namespace by entry ID, with cursor pagination.
+
+        Unlike browse_namespace (which samples), this iterates the archive
+        deterministically from ``cursor`` onward and returns up to ``limit``
+        entries that belong to the requested namespace. Pair the returned
+        ``next_cursor`` with a follow-up call to walk the rest. Set to None
+        when iteration is complete.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            namespace: Namespace to walk (C, M, W, X, A, I, etc.)
+            cursor: Entry ID to resume from (default 0; use the value from
+                ``next_cursor`` of the previous call)
+            limit: Maximum entries to return per page (1–500, default 200)
+
+        Returns:
+            JSON containing entries in the namespace, the next cursor, and
+            ``done: true`` if iteration finished
+        """
+        if limit < 1 or limit > 500:
+            return (
+                "**Parameter Validation Error**\n\n"
+                f"**Issue**: limit must be between 1 and 500 (provided: {limit})\n"
+                "**Example**: Use `limit=200` for a typical page."
+            )
+        if cursor < 0:
+            cursor = 0
+
+        validated = self.path_validator.validate_path(zim_file_path)
+        validated = self.path_validator.validate_zim_file(validated)
+
+        try:
+            with zim_archive(validated) as archive:
+                total = archive.entry_count
+                has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
+                entries: List[Dict[str, Any]] = []
+                entry_id = cursor
+                while entry_id < total and len(entries) < limit:
+                    try:
+                        entry = archive._get_entry_by_id(entry_id)
+                        path = entry.path
+                        if (
+                            self._extract_namespace_from_path(path, has_new_scheme)
+                            == namespace
+                        ):
+                            entries.append(
+                                {
+                                    "path": path,
+                                    "title": entry.title or path,
+                                }
+                            )
+                    except Exception as e:
+                        logger.debug(f"walk_namespace: entry {entry_id} skipped: {e}")
+                    entry_id += 1
+
+                done = entry_id >= total
+                next_cursor = None if done else entry_id
+                # scanned_through_id reflects the last ID we examined regardless
+                # of whether it matched the filter. None if we never entered the
+                # loop (cursor was already past the end).
+                scanned_through_id = entry_id - 1 if entry_id > cursor else None
+                result = {
+                    "namespace": namespace,
+                    "cursor": cursor,
+                    "limit": limit,
+                    "returned_count": len(entries),
+                    "scanned_count": entry_id - cursor,
+                    "next_cursor": next_cursor,
+                    "done": done,
+                    "scanned_through_id": scanned_through_id,
+                    "total_entries": total,
+                    "entries": entries,
+                }
+                return json.dumps(result, indent=2, ensure_ascii=False)
+        except OpenZimMcpArchiveError:
+            raise
+        except Exception as e:
+            raise OpenZimMcpArchiveError(f"walk_namespace failed: {e}") from e
+
+    def search_all(
+        self,
+        query: str,
+        limit_per_file: int = 5,
+    ) -> str:
+        """Search every ZIM file in allowed directories and return merged results.
+
+        Useful when the model doesn't know which ZIM file holds the
+        information it needs. Skips files that can't be searched (corrupt,
+        no full-text index) without aborting the rest.
+
+        Args:
+            query: Search query
+            limit_per_file: Maximum hits to return per ZIM file (1–50, default 5)
+
+        Returns:
+            JSON with per-file result groups and a flat ``hits`` list sorted
+            by file then rank
+        """
+        if not query or not query.strip():
+            raise OpenZimMcpValidationError(
+                "Input is empty or contains only whitespace/control characters"
+            )
+        if limit_per_file < 1 or limit_per_file > 50:
+            return (
+                "**Parameter Validation Error**\n\n"
+                f"**Issue**: limit_per_file must be between 1 and 50 "
+                f"(provided: {limit_per_file})"
+            )
+
+        files = self.list_zim_files_data()
+        per_file: List[Dict[str, Any]] = []
+        for file_info in files:
+            path = file_info.get("path")
+            if not path:
+                continue
+            try:
+                result_text = self.search_zim_file(path, query, limit_per_file, 0)
+                # Real result text begins with "Found N matches..." while
+                # empty results begin with "No search results found...". We
+                # can't filter on `**` because real search snippets contain
+                # bold markdown for emphasis. Match on the leading prefix.
+                stripped = result_text.lstrip()
+                has_hits = stripped.startswith("Found ")
+                per_file.append(
+                    {
+                        "zim_file_path": path,
+                        "name": file_info.get("name"),
+                        "result": result_text,
+                        "has_hits": has_hits,
+                    }
+                )
+            except Exception as e:
+                logger.debug(f"search_all: skipped {path}: {e}")
+                per_file.append(
+                    {
+                        "zim_file_path": path,
+                        "name": file_info.get("name"),
+                        "error": str(e),
+                    }
+                )
+
+        return json.dumps(
+            {
+                "query": query,
+                "files_searched": len(files),
+                "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
+                "files_searched_successfully": sum(
+                    1 for r in per_file if "result" in r
+                ),
+                "files_failed": sum(1 for r in per_file if "error" in r),
+                "per_file": per_file,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )

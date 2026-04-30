@@ -98,6 +98,62 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
             )
 
     @server.mcp.tool()
+    async def walk_namespace(
+        zim_file_path: str,
+        namespace: str,
+        cursor: int = 0,
+        limit: int = 200,
+    ) -> str:
+        """Iterate every entry in a namespace via deterministic cursor pagination.
+
+        Unlike browse_namespace (which samples and may cap at 200 entries
+        for large archives), walk_namespace scans the archive by entry ID
+        from `cursor` onward. Pair the returned `next_cursor` with a
+        follow-up call to walk the rest. `done: true` indicates iteration
+        is complete.
+
+        Use this when you need exhaustive enumeration of a namespace —
+        e.g. to dump every M/* metadata entry, or to find an entry whose
+        path doesn't follow common patterns.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            namespace: Namespace to walk (C, M, W, X, A, I, etc.)
+            cursor: Entry ID to resume from (default: 0)
+            limit: Max entries per page (1-500, default: 200)
+
+        Returns:
+            JSON containing entries, `next_cursor`, and `done` flag
+        """
+        try:
+            try:
+                server.rate_limiter.check_rate_limit("browse_namespace")
+            except OpenZimMcpRateLimitError as e:
+                return server._create_enhanced_error_message(
+                    operation="walk namespace",
+                    error=e,
+                    context=f"Namespace: {namespace}",
+                )
+
+            zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+            namespace = sanitize_input(namespace, INPUT_LIMIT_NAMESPACE)
+
+            return await server.async_zim_operations.walk_namespace(
+                zim_file_path, namespace, cursor, limit
+            )
+
+        except Exception as e:
+            logger.error(f"Error in walk_namespace: {e}")
+            return server._create_enhanced_error_message(
+                operation="walk namespace",
+                error=e,
+                context=(
+                    f"File: {zim_file_path}, Namespace: {namespace}, "
+                    f"Cursor: {cursor}, Limit: {limit}"
+                ),
+            )
+
+    @server.mcp.tool()
     async def search_with_filters(
         zim_file_path: str,
         query: str,
