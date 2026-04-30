@@ -6,13 +6,10 @@ operations (search, summarize, explore) the LLM would otherwise have
 to chain manually.
 """
 
-import logging
 from typing import TYPE_CHECKING, Any, Dict, List
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
-
-logger = logging.getLogger(__name__)
 
 
 def _msg(role: str, text: str) -> Dict[str, Any]:
@@ -28,7 +25,7 @@ def _research_body(topic: str) -> List[Dict[str, Any]]:
             (
                 f"Research the topic: {topic}\n\n"
                 "Workflow:\n"
-                "1. Call search_all with query='" + topic + "' to find which "
+                f"1. Call search_all with query='{topic}' to find which "
                 "ZIM files have relevant content.\n"
                 "2. For the top 3 hits across files, call get_entry_summary "
                 "to get a concise overview.\n"
