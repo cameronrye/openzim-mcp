@@ -1031,7 +1031,7 @@ class ZimOperations:
 
         seen_entries: set[str] = set()
 
-        def _record(path: str, title: str) -> None:
+        def _record(path: str, title: str, is_probe: bool = False) -> None:
             if path in seen_entries:
                 return
             seen_entries.add(path)
@@ -1044,8 +1044,17 @@ class ZimOperations:
                         namespace, f"Namespace '{namespace}'"
                     ),
                     "sample_entries": [],
+                    # Track sampled vs probed separately. Probed entries are
+                    # deterministic existence proofs — they do NOT carry the
+                    # sampling-frequency signal needed for ratio extrapolation.
+                    "_probed_count": 0,
+                    "_sampled_count": 0,
                 },
             )
+            if is_probe:
+                ns_info["_probed_count"] += 1
+            else:
+                ns_info["_sampled_count"] += 1
             ns_info["count"] += 1
             if len(ns_info["sample_entries"]) < 5:
                 ns_info["sample_entries"].append({"path": path, "title": title or path})
@@ -1066,6 +1075,9 @@ class ZimOperations:
             for ns_info in namespaces.values():
                 ns_info["sampled_count"] = ns_info["count"]
                 ns_info["estimated_total"] = ns_info["count"]
+                # Drop internal counters before serialization.
+                ns_info.pop("_probed_count", None)
+                ns_info.pop("_sampled_count", None)
         else:
             sample_size = min(NAMESPACE_MAX_SAMPLE_SIZE, total_entries)
             max_sample_attempts = sample_size * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
@@ -1078,20 +1090,64 @@ class ZimOperations:
                         break
                     try:
                         entry = archive.get_random_entry()
-                        _record(entry.path, entry.title or "")
+                        _record(entry.path, entry.title or "", is_probe=False)
                     except Exception as e:
                         logger.debug(f"Error sampling entry: {e}")
                         continue
             except Exception as e:
                 logger.warning(f"Error during namespace sampling: {e}")
 
-            if seen_entries:
-                sampling_ratio = len(seen_entries) / total_entries
-                for ns_info in namespaces.values():
-                    estimated = int(ns_info["count"] / sampling_ratio)
-                    ns_info["sampled_count"] = ns_info["count"]
-                    ns_info["estimated_total"] = estimated
-                    ns_info["count"] = estimated
+            # Known-prefix probe: random sampling on a large archive will
+            # silently miss minority namespaces (e.g. M, W, X, I when A holds
+            # 99%+ of entries). Try canonical paths in each common namespace
+            # to surface them deterministically.
+            sampled_only_count = sum(v["_sampled_count"] for v in namespaces.values())
+            for canonical_path in self._get_known_namespace_probes():
+                try:
+                    if (
+                        archive.has_entry_by_path(canonical_path)
+                        and canonical_path not in seen_entries
+                    ):
+                        try:
+                            entry = archive.get_entry_by_path(canonical_path)
+                            _record(entry.path, entry.title or "", is_probe=True)
+                        except Exception as e:
+                            logger.debug(
+                                f"Error reading canonical entry {canonical_path}: {e}"
+                            )
+                except Exception as e:
+                    logger.debug(f"Error probing canonical path {canonical_path}: {e}")
+
+            # Build the final per-namespace numbers. We extrapolate ONLY the
+            # randomly-sampled count via sampling ratio — probed entries are
+            # confirmed-present-but-frequency-unknown, so they only contribute
+            # a lower-bound floor. This avoids the previous bug where, e.g.,
+            # probing 5 M/* paths produced an estimated_total of ~100 from a
+            # 1000-of-20565 sample (5 / 0.0486), a fabricated number.
+            sampling_ratio = (
+                sampled_only_count / total_entries if sampled_only_count else 0.0
+            )
+            # Project only when we have enough sampled signal to make a stable
+            # estimate. Below the threshold, single-hit projections vary by
+            # 100%+ and effectively manufacture numbers — better to report the
+            # lower-bound (confirmed sightings) honestly.
+            PROJECTION_MIN_SAMPLES = 3
+            for ns_info in namespaces.values():
+                sampled = ns_info["_sampled_count"]
+                probed = ns_info["_probed_count"]
+                if sampling_ratio > 0 and sampled >= PROJECTION_MIN_SAMPLES:
+                    estimated_from_sample = int(sampled / sampling_ratio)
+                else:
+                    estimated_from_sample = 0
+                lower_bound = sampled + probed
+                estimated_total = max(estimated_from_sample, lower_bound)
+
+                ns_info["sampled_count"] = sampled
+                ns_info["probed_count"] = probed
+                ns_info["estimated_total"] = estimated_total
+                ns_info["count"] = estimated_total
+                ns_info.pop("_probed_count", None)
+                ns_info.pop("_sampled_count", None)
 
         result = {
             "total_entries": total_entries,
@@ -1132,6 +1188,33 @@ class ZimOperations:
         else:
             # Return as-is for other namespaces
             return namespace
+
+    @staticmethod
+    def _get_known_namespace_probes() -> List[str]:
+        """Canonical paths that, if present, prove a namespace exists.
+
+        Used by list_namespaces to deterministically surface minority
+        namespaces (M, W, X, I, -) that random sampling would otherwise miss
+        on archives where one namespace dominates.
+        """
+        return [
+            # Metadata
+            "M/Title",
+            "M/Description",
+            "M/Language",
+            "M/Creator",
+            "M/Date",
+            # Well-known
+            "W/mainPage",
+            "W/favicon",
+            # Search indexes
+            "X/fulltext/xapian",
+            "X/title/xapian",
+            # Images / media
+            "I/favicon.png",
+            # Layout / templates
+            "-/favicon",
+        ]
 
     def browse_namespace(
         self, zim_file_path: str, namespace: str, limit: int = 50, offset: int = 0
