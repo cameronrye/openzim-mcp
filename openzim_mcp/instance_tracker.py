@@ -314,13 +314,30 @@ class InstanceTracker:
         return active_instances
 
     def detect_conflicts(self, current_config_hash: str) -> List[Dict[str, Any]]:
-        """Detect potential conflicts with other server instances."""
+        """Detect potential conflicts with other server instances.
+
+        Re-verifies each candidate's liveness right before reporting it.
+        Catches the TOCTOU window where a process died between
+        get_active_instances() and now (zombies, just-killed processes,
+        PID-file-without-process). Phantoms get auto-unregistered.
+        """
         active_instances = self.get_active_instances()
         conflicts = []
+        phantoms_cleaned = 0
 
         for instance in active_instances:
             if instance.pid == os.getpid():
                 continue  # Skip current instance
+
+            # Defensive re-check — if the process is gone now, drop the file
+            # and don't surface a stale "conflict".
+            if not self._is_process_running(instance.pid):
+                self.unregister_instance(instance.pid, silent=True)
+                phantoms_cleaned += 1
+                logger.debug(
+                    f"Auto-cleaned phantom instance file for PID {instance.pid}"
+                )
+                continue
 
             conflict_info = {
                 "type": "multiple_instances",
@@ -335,6 +352,12 @@ class InstanceTracker:
                 conflict_info["details"] = "Different server configurations detected"
 
             conflicts.append(conflict_info)
+
+        if phantoms_cleaned:
+            logger.info(
+                f"Auto-cleaned {phantoms_cleaned} phantom instance files during "
+                f"conflict detection"
+            )
 
         return conflicts
 
