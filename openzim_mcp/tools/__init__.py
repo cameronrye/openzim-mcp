@@ -11,6 +11,7 @@ from .content_tools import register_content_tools
 from .file_tools import register_file_tools
 from .metadata_tools import register_metadata_tools
 from .navigation_tools import register_navigation_tools
+from .prompts import register_prompts
 from .resource_tools import register_resources
 from .search_tools import register_search_tools
 from .server_tools import register_server_tools
@@ -29,6 +30,7 @@ __all__ = [
     "register_navigation_tools",
     "register_structure_tools",
     "register_resources",
+    "register_prompts",
 ]
 
 
@@ -49,3 +51,4 @@ def register_all_tools(server: "OpenZimMcpServer") -> None:
     register_navigation_tools(server)
     register_structure_tools(server)
     register_resources(server)
+    register_prompts(server)
