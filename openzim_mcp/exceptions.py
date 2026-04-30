@@ -33,14 +33,6 @@ class OpenZimMcpError(Exception):
         """Return the error message."""
         return self.message
 
-    def to_dict(self) -> dict:
-        """Convert exception to a dictionary for JSON serialization."""
-        return {
-            "error_code": self.error_code,
-            "message": self.message,
-            "details": self.details,
-        }
-
 
 class OpenZimMcpSecurityError(OpenZimMcpError):
     """Raised when security validation fails."""

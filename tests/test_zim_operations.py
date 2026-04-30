@@ -302,23 +302,23 @@ class TestZimOperations:
                 return random.choice(mock_entries)
 
             mock_archive_instance.get_random_entry = mock_get_random_entry
-            mock_archive_instance.get_entry_by_id.side_effect = mock_entries
+            mock_archive_instance._get_entry_by_id.side_effect = lambda i: mock_entries[
+                i
+            ]
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             result = zim_operations.list_namespaces(str(zim_file))
 
             assert "namespaces" in result
-            # Due to random sampling, we can't guarantee all namespaces will be found
-            # but we should find at least some namespaces
+            # entry_count=3 triggers full iteration; counts are exact.
             import json
 
             result_data = json.loads(result)
             assert "namespaces" in result_data
-            assert len(result_data["namespaces"]) > 0
-            # Check that at least one of our expected namespaces is found
+            assert result_data["is_total_authoritative"] is True
+            assert result_data["discovery_method"] == "full_iteration"
             found_namespaces = set(result_data["namespaces"].keys())
-            expected_namespaces = {"C", "M", "W"}
-            assert len(found_namespaces.intersection(expected_namespaces)) > 0
+            assert found_namespaces == {"C", "M", "W"}
 
     def test_browse_namespace(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test namespace browsing."""
@@ -936,7 +936,7 @@ class TestZimOperations:
         validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
 
         # Test get_zim_entry cache hit (lines 283-284)
-        cache_key = f"entry:{validated_path}:A/Test:1000"
+        cache_key = f"entry:{validated_path}:A/Test:1000:0"
         zim_operations.cache.set(cache_key, "cached entry content")
 
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
@@ -1621,13 +1621,13 @@ class TestZimOperations:
 
             mock_archive_instance.get_entry_by_path = mock_get_entry_by_path
 
-            # Mock get_entry_by_id to return proper entries
+            # Mock _get_entry_by_id to return proper entries
             def mock_get_entry_by_id(entry_id):
                 if entry_id < len(mock_entries):
                     return mock_entries[entry_id]
                 raise Exception("Entry not found")
 
-            mock_archive_instance.get_entry_by_id.side_effect = mock_get_entry_by_id
+            mock_archive_instance._get_entry_by_id.side_effect = mock_get_entry_by_id
 
             mock_archive_instance.__iter__.return_value = iter(mock_entries)
 

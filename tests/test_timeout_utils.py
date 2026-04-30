@@ -1,6 +1,5 @@
 """Tests for timeout_utils module."""
 
-import sys
 import time
 
 import pytest
@@ -10,7 +9,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpTimeoutError,
     RegexTimeoutError,
 )
-from openzim_mcp.timeout_utils import regex_timeout, run_with_timeout
+from openzim_mcp.timeout_utils import run_with_timeout
 
 
 class TestRunWithTimeout:
@@ -90,70 +89,35 @@ class TestRunWithTimeout:
         assert run_with_timeout(empty_list_func, 5.0, "msg") == []
 
 
-class TestRegexTimeout:
-    """Tests for regex_timeout context manager."""
+class TestSafeRegexSearch:
+    """Tests for thread-based regex timeout via safe_regex_search."""
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="Signal-based timeout not available on Windows"
-    )
-    def test_successful_operation_within_timeout(self) -> None:
-        """Test that operations complete successfully within timeout."""
-        with regex_timeout(5.0):
-            result = 1 + 1
-        assert result == 2
+    def test_runs_off_main_thread_without_signal_error(self) -> None:
+        """safe_regex_search must work from worker threads.
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="Signal-based timeout not available on Windows"
-    )
-    def test_timeout_raises_regex_timeout_error(self) -> None:
-        """Test that timeout raises RegexTimeoutError on Unix."""
-        with pytest.raises(RegexTimeoutError) as exc_info, regex_timeout(0.1):
-            time.sleep(10)
+        The previous SIGALRM-based implementation raised
+        ``ValueError: signal only works in main thread`` when called from
+        anywhere but the main thread. The thread-based replacement must
+        complete cleanly.
+        """
+        import threading
 
-        assert "timed out" in str(exc_info.value).lower()
+        from openzim_mcp.simple_tools import safe_regex_search
 
-    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific test")
-    def test_windows_yields_without_timeout(self) -> None:
-        """Test that Windows implementation yields without enforcing timeout."""
-        # On Windows, the context manager just yields without timeout enforcement
-        with regex_timeout(0.001):
-            # This should complete even though timeout is very short
-            result = "completed"
-        assert result == "completed"
+        outcome: list[object] = []
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="Signal-based timeout not available on Windows"
-    )
-    def test_signal_handler_restored(self) -> None:
-        """Test that the original signal handler is restored after context."""
-        import signal
+        def worker() -> None:
+            try:
+                match = safe_regex_search(r"hello", "hello world")
+                outcome.append(("ok", match.group() if match else None))
+            except BaseException as e:  # noqa: B036 - test records every outcome
+                outcome.append(("err", e))
 
-        original_handler = signal.getsignal(signal.SIGALRM)
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join(timeout=5.0)
 
-        with regex_timeout(5.0):
-            pass
-
-        # Handler should be restored
-        assert signal.getsignal(signal.SIGALRM) == original_handler
-
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="Signal-based timeout not available on Windows"
-    )
-    def test_signal_handler_restored_after_exception(self) -> None:
-        """Test that signal handler is restored even after exception."""
-        import signal
-
-        original_handler = signal.getsignal(signal.SIGALRM)
-
-        def raise_in_timeout_context():
-            with regex_timeout(5.0):
-                raise ValueError("Test exception")
-
-        with pytest.raises(ValueError):
-            raise_in_timeout_context()
-
-        # Handler should be restored even after exception
-        assert signal.getsignal(signal.SIGALRM) == original_handler
+        assert outcome == [("ok", "hello")]
 
 
 class TestExceptionHierarchy:

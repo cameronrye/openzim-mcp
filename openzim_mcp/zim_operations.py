@@ -3,10 +3,10 @@
 import base64
 import json
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 from libzim.search import Query, Searcher  # type: ignore[import-untyped]
@@ -36,46 +36,13 @@ class PaginationCursor:
     """
 
     @staticmethod
-    def encode(offset: int, limit: int, query: Optional[str] = None) -> str:
-        """Encode pagination state into a cursor token.
-
-        Args:
-            offset: Current offset position
-            limit: Page size
-            query: Optional query string for search cursors
-
-        Returns:
-            Base64-encoded cursor string
-        """
+    def _encode(offset: int, limit: int, query: Optional[str] = None) -> str:
+        """Encode pagination state into a base64 cursor token."""
         cursor_data: Dict[str, Any] = {"o": offset, "l": limit}
         if query:
             cursor_data["q"] = query
         json_str = json.dumps(cursor_data, separators=(",", ":"))
         return base64.urlsafe_b64encode(json_str.encode()).decode()
-
-    @staticmethod
-    def decode(cursor: str) -> Dict[str, Any]:
-        """Decode a cursor token back to pagination state.
-
-        Args:
-            cursor: Base64-encoded cursor string
-
-        Returns:
-            Dictionary with offset, limit, and optional query
-
-        Raises:
-            ValueError: If cursor is invalid
-        """
-        try:
-            json_str = base64.urlsafe_b64decode(cursor.encode()).decode()
-            data = json.loads(json_str)
-            return {
-                "offset": data.get("o", 0),
-                "limit": data.get("l", 10),
-                "query": data.get("q"),
-            }
-        except Exception as e:
-            raise ValueError(f"Invalid pagination cursor: {e}") from e
 
     @staticmethod
     def create_next_cursor(
@@ -95,7 +62,7 @@ class PaginationCursor:
         next_offset = current_offset + limit
         if next_offset >= total:
             return None
-        return PaginationCursor.encode(next_offset, limit, query)
+        return PaginationCursor._encode(next_offset, limit, query)
 
 
 logger = logging.getLogger(__name__)
@@ -117,32 +84,31 @@ def zim_archive(
     Raises:
         OpenZimMcpArchiveError: If archive fails to open or times out
     """
-    archive: Optional[Archive] = None
+
+    # Open phase: wrap any failure as OpenZimMcpArchiveError so callers see
+    # a consistent error type. This block must NOT contain the yield —
+    # otherwise exceptions from the with-body get re-wrapped here as
+    # misleading "Failed to open ZIM archive" errors.
+    def open_archive() -> Archive:
+        return Archive(str(file_path))
+
     try:
-        # Use timeout to prevent hanging on corrupted or locked files
-        def open_archive() -> Archive:
-            return Archive(str(file_path))
-
-        try:
-            archive = run_with_timeout(
-                open_archive,
-                timeout_seconds,
-                f"Timed out opening ZIM archive after {timeout_seconds}s: {file_path}",
-                ArchiveOpenTimeoutError,
-            )
-        except ArchiveOpenTimeoutError as e:
-            raise OpenZimMcpArchiveError(str(e)) from e
-
-        logger.debug(f"Opened ZIM archive: {file_path}")
-        yield archive
-    except OpenZimMcpArchiveError:
-        # Re-raise our custom errors as-is
-        raise
+        archive = run_with_timeout(
+            open_archive,
+            timeout_seconds,
+            f"Timed out opening ZIM archive after {timeout_seconds}s: {file_path}",
+            ArchiveOpenTimeoutError,
+        )
+    except ArchiveOpenTimeoutError as e:
+        raise OpenZimMcpArchiveError(str(e)) from e
     except Exception as e:
         raise OpenZimMcpArchiveError(f"Failed to open ZIM archive: {file_path}") from e
+
+    logger.debug(f"Opened ZIM archive: {file_path}")
+    try:
+        yield archive
     finally:
-        if archive is not None:
-            logger.debug(f"Releasing ZIM archive: {file_path}")
+        logger.debug(f"Releasing ZIM archive: {file_path}")
 
 
 class ZimOperations:
@@ -405,6 +371,7 @@ class ZimOperations:
         zim_file_path: str,
         entry_path: str,
         max_content_length: Optional[int] = None,
+        content_offset: int = 0,
     ) -> str:
         """Get detailed content of a ZIM entry with smart retrieval.
 
@@ -424,26 +391,32 @@ class ZimOperations:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'A/Some_Article'
             max_content_length: Maximum length of content to return
+            content_offset: Character offset to start reading from (default 0).
+                Combine with max_content_length to page through long articles
+                without re-fetching from the beginning.
 
         Returns:
             Entry content text with metadata including actual path used
 
         Raises:
-            OpenZimMcpArchiveError: If entry cannot be found via direct access or search
-
-        Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
-            OpenZimMcpArchiveError: If entry retrieval fails
+            OpenZimMcpArchiveError: If entry retrieval fails or entry cannot
+                be found via direct access or search
         """
         if max_content_length is None:
             max_content_length = self.config.content.max_content_length
+        if content_offset < 0:
+            content_offset = 0
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
         # Check cache
-        cache_key = f"entry:{validated_path}:{entry_path}:{max_content_length}"
+        cache_key = (
+            f"entry:{validated_path}:{entry_path}:"
+            f"{max_content_length}:{content_offset}"
+        )
         cached_result = self.cache.get(cache_key)
         if cached_result:
             logger.debug(f"Returning cached entry: {entry_path}")
@@ -452,7 +425,11 @@ class ZimOperations:
         try:
             with zim_archive(validated_path) as archive:
                 result = self._get_entry_content(
-                    archive, entry_path, max_content_length, validated_path
+                    archive,
+                    entry_path,
+                    max_content_length,
+                    validated_path,
+                    content_offset,
                 )
 
             # Cache the result
@@ -477,6 +454,7 @@ class ZimOperations:
         entry_path: str,
         max_content_length: int,
         validated_path: Path,
+        content_offset: int = 0,
     ) -> str:
         """Get the actual entry content with smart retrieval.
 
@@ -495,7 +473,11 @@ class ZimOperations:
             )
             try:
                 return self._get_entry_content_direct(
-                    archive, cached_actual_path, entry_path, max_content_length
+                    archive,
+                    cached_actual_path,
+                    entry_path,
+                    max_content_length,
+                    content_offset,
                 )
             except Exception as e:
                 logger.warning(f"Cached path mapping failed: {e}")
@@ -506,7 +488,7 @@ class ZimOperations:
         try:
             logger.debug(f"Attempting direct entry access: {entry_path}")
             result = self._get_entry_content_direct(
-                archive, entry_path, entry_path, max_content_length
+                archive, entry_path, entry_path, max_content_length, content_offset
             )
             # Cache successful direct access
             self.cache.set(cache_key, entry_path)
@@ -520,7 +502,11 @@ class ZimOperations:
                 actual_path = self._find_entry_by_search(archive, entry_path)
                 if actual_path:
                     result = self._get_entry_content_direct(
-                        archive, actual_path, entry_path, max_content_length
+                        archive,
+                        actual_path,
+                        entry_path,
+                        max_content_length,
+                        content_offset,
                     )
                     # Cache successful path mapping
                     self.cache.set(cache_key, actual_path)
@@ -559,6 +545,7 @@ class ZimOperations:
         actual_path: str,
         requested_path: str,
         max_content_length: int,
+        content_offset: int = 0,
     ) -> str:
         """Get entry content using the actual path from the ZIM file.
 
@@ -567,6 +554,7 @@ class ZimOperations:
             actual_path: The actual path as it exists in the ZIM file
             requested_path: The originally requested path (for display)
             max_content_length: Maximum content length
+            content_offset: Character offset to start reading from
         """
         entry = archive.get_entry_by_path(actual_path)
         title = entry.title or "Untitled"
@@ -589,6 +577,15 @@ class ZimOperations:
             logger.warning(f"Error getting entry content: {e}")
             content = f"(Error retrieving content: {e})"
 
+        total_length = len(content)
+        offset_applied = False
+        if content_offset and content_offset > 0:
+            if content_offset >= total_length:
+                content = ""
+            else:
+                content = content[content_offset:]
+            offset_applied = True
+
         # Truncate if necessary
         content = self.content_processor.truncate_content(content, max_content_length)
 
@@ -600,6 +597,10 @@ class ZimOperations:
         else:
             result_text += f"Path: {actual_path}\n"
         result_text += f"Type: {content_type or 'Unknown'}\n"
+        if offset_applied:
+            result_text += (
+                f"Content Offset: {content_offset} of {total_length:,} characters\n"
+            )
         result_text += "## Content\n\n"
         result_text += content or "(No content)"
 
@@ -920,7 +921,7 @@ class ZimOperations:
                     else:
                         # Try to get the first entry as fallback
                         if archive.entry_count > 0:
-                            entry = archive.get_entry_by_id(0)
+                            entry = archive._get_entry_by_id(0)
                         else:
                             continue
 
@@ -1003,7 +1004,14 @@ class ZimOperations:
             raise OpenZimMcpArchiveError(f"Namespace listing failed: {e}") from e
 
     def _list_archive_namespaces(self, archive: Archive) -> str:
-        """List namespaces in the archive using sampling-based discovery."""
+        """List namespaces in the archive.
+
+        For small archives (entry_count <= NAMESPACE_MAX_SAMPLE_SIZE) iterate
+        every entry by ID so the namespace inventory is exhaustive. For larger
+        archives, fall back to random sampling and return estimated counts.
+        Random sampling on small entry pools collides heavily, leaving
+        namespaces undiscovered and counts wildly off.
+        """
         namespaces: Dict[str, Dict[str, Any]] = {}
         namespace_descriptions = {
             "C": "User content entries (articles, main content)",
@@ -1015,79 +1023,82 @@ class ZimOperations:
             "-": "Layout and template files",
         }
 
-        # Check if archive uses new namespace scheme
         has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
         logger.debug(f"Archive uses new namespace scheme: {has_new_scheme}")
 
-        # Use sampling approach since direct iteration is not available
-        sample_size = min(NAMESPACE_MAX_SAMPLE_SIZE, archive.entry_count)
-        sampled_entries: set[str] = set()  # Track sampled paths to avoid duplicates
-        max_sample_attempts = sample_size * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
+        total_entries = archive.entry_count
+        full_iteration = total_entries <= NAMESPACE_MAX_SAMPLE_SIZE
 
-        logger.debug(
-            f"Sampling {sample_size} entries from {archive.entry_count} total entries"
-        )
+        seen_entries: set[str] = set()
 
-        try:
-            # Sample random entries to discover namespaces
-            for _ in range(
-                max_sample_attempts
-            ):  # Try more samples to account for duplicates
-                if len(sampled_entries) >= sample_size:
-                    break
+        def _record(path: str, title: str) -> None:
+            if path in seen_entries:
+                return
+            seen_entries.add(path)
+            namespace = self._extract_namespace_from_path(path, has_new_scheme)
+            ns_info = namespaces.setdefault(
+                namespace,
+                {
+                    "count": 0,
+                    "description": namespace_descriptions.get(
+                        namespace, f"Namespace '{namespace}'"
+                    ),
+                    "sample_entries": [],
+                },
+            )
+            ns_info["count"] += 1
+            if len(ns_info["sample_entries"]) < 5:
+                ns_info["sample_entries"].append({"path": path, "title": title or path})
 
+        if full_iteration:
+            logger.debug(
+                f"Iterating all {total_entries} entries for exhaustive "
+                f"namespace listing"
+            )
+            for entry_id in range(total_entries):
                 try:
-                    entry = archive.get_random_entry()
-                    path = entry.path
-
-                    # Skip if we've already sampled this entry
-                    if path in sampled_entries:
-                        continue
-                    sampled_entries.add(path)
-
-                    # Extract namespace based on ZIM format
-                    namespace = self._extract_namespace_from_path(path, has_new_scheme)
-
-                    if namespace not in namespaces:
-                        namespaces[namespace] = {
-                            "count": 0,
-                            "description": namespace_descriptions.get(
-                                namespace, f"Namespace '{namespace}'"
-                            ),
-                            "sample_entries": [],
-                        }
-
-                    namespaces[namespace]["count"] += 1
-
-                    # Add sample entries (up to 5 per namespace for representation)
-                    if len(namespaces[namespace]["sample_entries"]) < 5:
-                        title = entry.title or path
-                        namespaces[namespace]["sample_entries"].append(
-                            {"path": path, "title": title}
-                        )
-
+                    entry = archive._get_entry_by_id(entry_id)
+                    _record(entry.path, entry.title or "")
                 except Exception as e:
-                    logger.debug(f"Error sampling entry: {e}")
+                    logger.debug(f"Error reading entry {entry_id}: {e}")
                     continue
 
-        except Exception as e:
-            logger.warning(f"Error during namespace sampling: {e}")
+            for ns_info in namespaces.values():
+                ns_info["sampled_count"] = ns_info["count"]
+                ns_info["estimated_total"] = ns_info["count"]
+        else:
+            sample_size = min(NAMESPACE_MAX_SAMPLE_SIZE, total_entries)
+            max_sample_attempts = sample_size * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
+            logger.debug(
+                f"Sampling {sample_size} entries from {total_entries} total entries"
+            )
+            try:
+                for _ in range(max_sample_attempts):
+                    if len(seen_entries) >= sample_size:
+                        break
+                    try:
+                        entry = archive.get_random_entry()
+                        _record(entry.path, entry.title or "")
+                    except Exception as e:
+                        logger.debug(f"Error sampling entry: {e}")
+                        continue
+            except Exception as e:
+                logger.warning(f"Error during namespace sampling: {e}")
 
-        # Estimate total counts based on sampling ratio
-        if sampled_entries:
-            sampling_ratio = len(sampled_entries) / archive.entry_count
-            for namespace_info in namespaces.values():
-                # Estimate total count based on sampling
-                estimated_count = int(namespace_info["count"] / sampling_ratio)
-                namespace_info["estimated_total"] = estimated_count
-                namespace_info["sampled_count"] = namespace_info["count"]
-                namespace_info["count"] = estimated_count
+            if seen_entries:
+                sampling_ratio = len(seen_entries) / total_entries
+                for ns_info in namespaces.values():
+                    estimated = int(ns_info["count"] / sampling_ratio)
+                    ns_info["sampled_count"] = ns_info["count"]
+                    ns_info["estimated_total"] = estimated
+                    ns_info["count"] = estimated
 
-        # Build result
         result = {
-            "total_entries": archive.entry_count,
-            "sampled_entries": len(sampled_entries),
+            "total_entries": total_entries,
+            "sampled_entries": len(seen_entries),
             "has_new_namespace_scheme": has_new_scheme,
+            "is_total_authoritative": full_iteration,
+            "discovery_method": "full_iteration" if full_iteration else "sampling",
             "namespaces": namespaces,
         }
 
@@ -1185,8 +1196,8 @@ class ZimOperations:
         # Check if archive uses new namespace scheme
         has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
 
-        # Use sampling approach to find entries in the namespace
-        namespace_entries = self._find_entries_in_namespace(
+        # Discover entries in the namespace.
+        namespace_entries, full_iteration = self._find_entries_in_namespace(
             archive, namespace, has_new_scheme
         )
 
@@ -1236,8 +1247,11 @@ class ZimOperations:
                 logger.warning(f"Error processing entry {entry_path}: {e}")
                 continue
 
-        # Build result with pagination cursor
-        has_more = total_in_namespace > offset + len(entries)
+        # Build result with pagination cursor. Base has_more on the slice
+        # bounds, not on len(entries) — entries can be shorter than the page
+        # when individual entries fail to load, and we don't want to advertise
+        # a non-existent next page in that case.
+        has_more = end_idx < total_in_namespace
         next_cursor = None
         if has_more:
             next_cursor = PaginationCursor.create_next_cursor(
@@ -1246,8 +1260,12 @@ class ZimOperations:
 
         # When the sample hits NAMESPACE_MAX_ENTRIES, total_in_namespace is a
         # sample-bound, not the true count. has_more=False just means the sample
-        # is exhausted; the real namespace may be larger.
-        results_may_be_incomplete = total_in_namespace >= NAMESPACE_MAX_ENTRIES
+        # is exhausted; the real namespace may be larger. Full iteration on
+        # small archives produces an authoritative count.
+        if full_iteration:
+            results_may_be_incomplete = False
+        else:
+            results_may_be_incomplete = total_in_namespace >= NAMESPACE_MAX_ENTRIES
 
         result = {
             "namespace": namespace,
@@ -1258,7 +1276,9 @@ class ZimOperations:
             "has_more": has_more,
             "next_cursor": next_cursor,
             "entries": entries,
-            "sampling_based": True,
+            "sampling_based": not full_iteration,
+            "discovery_method": "full_iteration" if full_iteration else "sampling",
+            "is_total_authoritative": full_iteration,
             "results_may_be_incomplete": results_may_be_incomplete,
         }
 
@@ -1266,18 +1286,52 @@ class ZimOperations:
 
     def _find_entries_in_namespace(
         self, archive: Archive, namespace: str, has_new_scheme: bool
-    ) -> List[str]:
-        """Find entries in a specific namespace using sampling and search strategies."""
-        namespace_entries: list[str] = []
-        seen_entries = set()
+    ) -> Tuple[List[str], bool]:
+        """Find entries in a specific namespace.
 
-        # Strategy 1: Use random sampling to find entries
-        # Use 2x the sample size for namespace browsing to improve coverage
-        max_samples = min(NAMESPACE_MAX_SAMPLE_SIZE * 2, archive.entry_count)
+        Returns ``(sorted_paths, full_iteration)`` where ``full_iteration`` is
+        True when every entry in the archive was inspected (so the result is
+        exhaustive). For larger archives, falls back to random sampling and
+        returns False — counts/paths are then a lower bound.
+        """
+        namespace_entries: list[str] = []
+        seen_entries: set[str] = set()
+        total_entries = archive.entry_count
+
+        # Full iteration is exhaustive and far more accurate than sampling for
+        # small archives. The threshold mirrors _list_archive_namespaces.
+        if total_entries <= NAMESPACE_MAX_SAMPLE_SIZE:
+            logger.debug(
+                f"Iterating all {total_entries} entries to enumerate namespace "
+                f"'{namespace}'"
+            )
+            for entry_id in range(total_entries):
+                try:
+                    entry = archive._get_entry_by_id(entry_id)
+                    path = entry.path
+                    if path in seen_entries:
+                        continue
+                    seen_entries.add(path)
+                    if (
+                        self._extract_namespace_from_path(path, has_new_scheme)
+                        == namespace
+                    ):
+                        namespace_entries.append(path)
+                except Exception as e:
+                    logger.debug(f"Error reading entry {entry_id}: {e}")
+                    continue
+            logger.info(
+                f"Found {len(namespace_entries)} entries in namespace '{namespace}' "
+                f"via full iteration of {total_entries} entries"
+            )
+            return sorted(namespace_entries), True
+
+        # Sampling fallback for large archives.
+        max_samples = min(NAMESPACE_MAX_SAMPLE_SIZE * 2, total_entries)
         sample_attempts = 0
         max_attempts = max_samples * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
 
-        logger.debug(f"Searching for entries in namespace '{namespace}' using sampling")
+        logger.debug(f"Sampling for entries in namespace '{namespace}'")
 
         while (
             len(namespace_entries) < NAMESPACE_MAX_ENTRIES
@@ -1288,27 +1342,30 @@ class ZimOperations:
                 entry = archive.get_random_entry()
                 path = entry.path
 
-                # Skip duplicates
                 if path in seen_entries:
                     continue
                 seen_entries.add(path)
 
-                # Check if entry belongs to target namespace
-                entry_namespace = self._extract_namespace_from_path(
-                    path, has_new_scheme
-                )
-                if entry_namespace == namespace:
+                if self._extract_namespace_from_path(path, has_new_scheme) == namespace:
                     namespace_entries.append(path)
 
             except Exception as e:
                 logger.debug(f"Error sampling entry: {e}")
                 continue
 
-        # Strategy 2: Try common path patterns for the namespace
+        # Strategy 2: Try common path patterns for the namespace. The pattern
+        # list contains both namespace-prefixed paths (e.g. "C/index.html")
+        # and bare paths (e.g. "index.html"); the latter live in *some other*
+        # namespace, so we must verify membership before appending.
         common_patterns = self._get_common_namespace_patterns(namespace)
         for pattern in common_patterns:
             try:
-                if archive.has_entry_by_path(pattern) and pattern not in seen_entries:
+                if (
+                    archive.has_entry_by_path(pattern)
+                    and pattern not in seen_entries
+                    and self._extract_namespace_from_path(pattern, has_new_scheme)
+                    == namespace
+                ):
                     namespace_entries.append(pattern)
                     seen_entries.add(pattern)
             except Exception as e:
@@ -1319,7 +1376,7 @@ class ZimOperations:
             f"Found {len(namespace_entries)} entries in namespace '{namespace}' "
             f"after {sample_attempts} samples"
         )
-        return sorted(namespace_entries)  # Sort for consistent pagination
+        return sorted(namespace_entries), False
 
     def _get_common_namespace_patterns(self, namespace: str) -> List[str]:
         """Get common path patterns for a namespace."""
@@ -1471,67 +1528,78 @@ class ZimOperations:
         results_capped = total_results > raw_fetch_limit
         all_results = list(search.getResults(0, min(total_results, raw_fetch_limit)))
 
-        # Filter results
-        filtered_results = []
+        # Filter results, retaining each fetched entry so we don't re-fetch
+        # it during the collection pass below.
+        filtered_results: List[Tuple[str, Any, str, str]] = []
         for entry_id in all_results:
             try:
                 entry = archive.get_entry_by_path(entry_id)
 
-                # Apply namespace filter
-                if namespace:
-                    entry_namespace = ""
-                    if "/" in entry.path:
-                        entry_namespace = entry.path.split("/", 1)[0]
-                    elif entry.path:
-                        entry_namespace = entry.path[0]
-
-                    if entry_namespace != namespace:
-                        continue
-
-                # Apply content type filter
-                if content_type:
-                    try:
-                        item = entry.get_item()
-                        if not item.mimetype or not item.mimetype.startswith(
-                            content_type
-                        ):
-                            continue
-                    except Exception:  # nosec B112 - intentional filter skip
-                        continue
-
-                filtered_results.append(entry_id)
-
-            except Exception as e:
-                logger.warning(f"Error filtering search result {entry_id}: {e}")
-                continue
-
-        # Apply pagination to filtered results
-        total_filtered = len(filtered_results)
-        paginated_results = filtered_results[offset : offset + limit]
-
-        # Collect detailed results
-        results = []
-        for i, entry_id in enumerate(paginated_results):
-            try:
-                entry = archive.get_entry_by_path(entry_id)
-                title = entry.title or "Untitled"
-
-                # Get content snippet
-                snippet = self._get_entry_snippet(entry)
-
-                # Get additional metadata
                 entry_namespace = ""
                 if "/" in entry.path:
                     entry_namespace = entry.path.split("/", 1)[0]
                 elif entry.path:
                     entry_namespace = entry.path[0]
 
+                if namespace and entry_namespace != namespace:
+                    continue
+
                 content_mime = ""
-                try:
-                    item = entry.get_item()
-                    content_mime = item.mimetype or ""
-                except Exception as e:
-                    logger.debug(f"Could not get mimetype for entry {entry_id}: {e}")
+                if content_type:
+                    try:
+                        content_mime = entry.get_item().mimetype or ""
+                        if not content_mime.startswith(content_type):
+                            continue
+                    except Exception:  # nosec B112 - intentional filter skip
+                        continue
+
+                filtered_results.append(
+                    (entry_id, entry, entry_namespace, content_mime)
+                )
+
+            except Exception as e:
+                logger.warning(f"Error filtering search result {entry_id}: {e}")
+                continue
+
+        total_filtered = len(filtered_results)
+
+        filters_applied = []
+        if namespace:
+            filters_applied.append(f"namespace={namespace}")
+        if content_type:
+            filters_applied.append(f"content_type={content_type}")
+        filter_text = (
+            f" (filters: {', '.join(filters_applied)})" if filters_applied else ""
+        )
+
+        if total_filtered == 0:
+            return f'No filtered matches for "{query}"{filter_text}'
+
+        if offset >= total_filtered:
+            return (
+                f'Found {total_filtered} filtered matches for "{query}"{filter_text}, '
+                f"but offset {offset} exceeds total results."
+            )
+
+        paginated_results = filtered_results[offset : offset + limit]
+
+        # Collect detailed results, reusing the entries already fetched above.
+        results = []
+        for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(
+            paginated_results
+        ):
+            try:
+                title = entry.title or "Untitled"
+                snippet = self._get_entry_snippet(entry)
+
+                # When content_type wasn't filtered, mimetype hasn't been read yet.
+                if not content_type:
+                    try:
+                        content_mime = entry.get_item().mimetype or ""
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not get mimetype for entry {entry_id}: {e}"
+                        )
 
                 results.append(
                     {
@@ -1556,17 +1624,6 @@ class ZimOperations:
                     }
                 )
 
-        # Build result text
-        filters_applied = []
-        if namespace:
-            filters_applied.append(f"namespace={namespace}")
-        if content_type:
-            filters_applied.append(f"content_type={content_type}")
-
-        filter_text = (
-            f" (filters: {', '.join(filters_applied)})" if filters_applied else ""
-        )
-
         capped_note = (
             f" (filtered from first {raw_fetch_limit} of "
             f"~{total_results} unfiltered hits)"
@@ -1584,6 +1641,25 @@ class ZimOperations:
             result_text += f"Namespace: {result['namespace']}\n"
             result_text += f"Content Type: {result['content_type']}\n"
             result_text += f"Snippet: {result['snippet']}\n\n"
+
+        # Pagination footer — mirrors _perform_search so callers have a
+        # consistent way to detect and navigate additional pages.
+        has_more = (offset + len(results)) < total_filtered
+        result_text += "---\n"
+        result_text += (
+            f"**Pagination**: Showing {offset + 1}-{offset + len(results)} "
+            f"of {total_filtered}\n"
+        )
+        if has_more:
+            next_cursor = PaginationCursor.create_next_cursor(
+                offset, limit, total_filtered, query
+            )
+            result_text += f"**Next cursor**: `{next_cursor}`\n"
+            result_text += (
+                f"**Hint**: Use offset={offset + limit} to get the next page\n"
+            )
+        else:
+            result_text += "**End of results**\n"
 
         return result_text
 
@@ -1693,7 +1769,7 @@ class ZimOperations:
 
             for entry_id in range(0, archive.entry_count, step):
                 try:
-                    entry = archive.get_entry_by_id(entry_id)
+                    entry = archive._get_entry_by_id(entry_id)
                     title = entry.title or ""
                     path = entry.path or ""
 
@@ -1925,7 +2001,7 @@ class ZimOperations:
     def _extract_article_structure(self, archive: Archive, entry_path: str) -> str:
         """Extract structure from article content."""
         try:
-            entry = archive.get_entry_by_path(entry_path)
+            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
             title = entry.title or "Untitled"
 
             # Get raw content
@@ -2017,7 +2093,7 @@ class ZimOperations:
     def _extract_article_links(self, archive: Archive, entry_path: str) -> str:
         """Extract links from article content."""
         try:
-            entry = archive.get_entry_by_path(entry_path)
+            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
             title = entry.title or "Untitled"
 
             # Get raw content
@@ -2091,8 +2167,21 @@ class ZimOperations:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key for metadata (not data, as that could be large)
+        # Cache key for invariant metadata (size, mime_type, etc.) — not data,
+        # since data is potentially large and varies with max_size_bytes.
         cache_key = f"binary_meta:{validated_path}:{entry_path}"
+
+        # If we already know the entry's metadata, we can short-circuit calls
+        # that don't need bytes (include_data=False) or that would be rejected
+        # for being over the size limit. include_data=True under the limit still
+        # requires opening the archive to read the bytes.
+        cached_meta = self.cache.get(cache_key)
+        if cached_meta and (not include_data or cached_meta["size"] > max_size_bytes):
+            logger.debug(f"Returning cached binary metadata for: {entry_path}")
+            result = self._format_binary_response(
+                cached_meta, include_data, max_size_bytes, data=None
+            )
+            return json.dumps(result, indent=2, ensure_ascii=False)
 
         try:
             with zim_archive(validated_path) as archive:
@@ -2113,53 +2202,31 @@ class ZimOperations:
                         )
 
                 item = entry.get_item()
-                title = entry.title or "Untitled"
-                mime_type = item.mimetype or "application/octet-stream"
                 content_size = item.size
-
-                result: Dict[str, Any] = {
+                meta = {
                     "path": entry_path,
-                    "title": title,
-                    "mime_type": mime_type,
+                    "title": entry.title or "Untitled",
+                    "mime_type": item.mimetype or "application/octet-stream",
                     "size": content_size,
                     "size_human": self._format_size(content_size),
                 }
 
-                # Determine if we should include the data. Only materialise
-                # bytes when we'll actually serve them — reading item.content
+                # Read bytes only when we'll actually serve them — item.content
                 # decompresses the entire entry into memory.
-                if include_data:
-                    if content_size <= max_size_bytes:
-                        raw_content = bytes(item.content)
-                        encoded_data = base64.b64encode(raw_content).decode("ascii")
-                        result["encoding"] = "base64"
-                        result["data"] = encoded_data
-                        result["truncated"] = False
-                    else:
-                        # Content too large
-                        result["encoding"] = None
-                        result["data"] = None
-                        result["truncated"] = True
-                        result["message"] = (
-                            f"Content size ({self._format_size(content_size)}) "
-                            f"exceeds max_size_bytes "
-                            f"({self._format_size(max_size_bytes)}). "
-                            f"Set include_data=False for metadata only, "
-                            f"or increase max_size_bytes."
-                        )
-                else:
-                    result["encoding"] = None
-                    result["data"] = None
-                    result["truncated"] = False
-                    result["message"] = "Data not included (include_data=False)"
+                encoded_data: Optional[str] = None
+                if include_data and content_size <= max_size_bytes:
+                    raw_content = bytes(item.content)
+                    encoded_data = base64.b64encode(raw_content).decode("ascii")
 
-                # Cache the metadata (without data)
-                meta_for_cache = {k: v for k, v in result.items() if k != "data"}
-                self.cache.set(cache_key, meta_for_cache)
+                # Cache invariant metadata for future calls.
+                self.cache.set(cache_key, meta)
 
+                result = self._format_binary_response(
+                    meta, include_data, max_size_bytes, data=encoded_data
+                )
                 logger.info(
                     f"Retrieved binary entry: {entry_path} "
-                    f"({mime_type}, {self._format_size(content_size)})"
+                    f"({meta['mime_type']}, {self._format_size(content_size)})"
                 )
                 return json.dumps(result, indent=2, ensure_ascii=False)
 
@@ -2168,6 +2235,38 @@ class ZimOperations:
         except Exception as e:
             logger.error(f"Binary entry retrieval failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Failed to retrieve binary entry: {e}") from e
+
+    def _format_binary_response(
+        self,
+        meta: Dict[str, Any],
+        include_data: bool,
+        max_size_bytes: int,
+        data: Optional[str],
+    ) -> Dict[str, Any]:
+        """Build the response dict for get_binary_entry from cached/fresh metadata."""
+        result: Dict[str, Any] = dict(meta)
+        size = meta["size"]
+        if include_data:
+            if size <= max_size_bytes and data is not None:
+                result["encoding"] = "base64"
+                result["data"] = data
+                result["truncated"] = False
+            else:
+                result["encoding"] = None
+                result["data"] = None
+                result["truncated"] = True
+                result["message"] = (
+                    f"Content size ({self._format_size(size)}) "
+                    f"exceeds max_size_bytes ({self._format_size(max_size_bytes)}). "
+                    f"Set include_data=False for metadata only, "
+                    f"or increase max_size_bytes."
+                )
+        else:
+            result["encoding"] = None
+            result["data"] = None
+            result["truncated"] = False
+            result["message"] = "Data not included (include_data=False)"
+        return result
 
     def _format_size(self, size_bytes: int) -> str:
         """Format size in bytes to human-readable string."""
@@ -2237,24 +2336,34 @@ class ZimOperations:
             logger.error(f"Summary extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Summary extraction failed: {e}") from e
 
+    def _resolve_entry_with_fallback(
+        self, archive: Archive, entry_path: str
+    ) -> Tuple[Any, str]:
+        """Resolve an entry by direct path, falling back to search.
+
+        Returns (entry, resolved_path). Raises OpenZimMcpArchiveError cleanly
+        (without an implicit __context__ chain to a transient direct-access
+        error) if neither direct access nor search yields a result.
+        """
+        # Suppress the transient direct-access error chain so callers see a
+        # clean "not found" message rather than a chained exception with the
+        # underlying archive error as context.
+        with suppress(Exception):
+            return archive.get_entry_by_path(entry_path), entry_path
+        actual_path = self._find_entry_by_search(archive, entry_path)
+        if actual_path:
+            return archive.get_entry_by_path(actual_path), actual_path
+        raise OpenZimMcpArchiveError(
+            f"Entry not found: '{entry_path}'. "
+            f"Try using search_zim_file() to find available entries."
+        ) from None
+
     def _extract_entry_summary(
         self, archive: Archive, entry_path: str, max_words: int
     ) -> str:
         """Extract summary from article content."""
         try:
-            # Try direct access first, fall back to search
-            try:
-                entry = archive.get_entry_by_path(entry_path)
-            except Exception:
-                actual_path = self._find_entry_by_search(archive, entry_path)
-                if actual_path:
-                    entry = archive.get_entry_by_path(actual_path)
-                    entry_path = actual_path
-                else:
-                    raise OpenZimMcpArchiveError(
-                        f"Entry not found: '{entry_path}'. "
-                        f"Try using search_zim_file() to find available entries."
-                    )
+            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
 
             title = entry.title or "Untitled"
             item = entry.get_item()
@@ -2429,19 +2538,7 @@ class ZimOperations:
     def _extract_table_of_contents(self, archive: Archive, entry_path: str) -> str:
         """Extract hierarchical table of contents from article."""
         try:
-            # Try direct access first, fall back to search
-            try:
-                entry = archive.get_entry_by_path(entry_path)
-            except Exception:
-                actual_path = self._find_entry_by_search(archive, entry_path)
-                if actual_path:
-                    entry = archive.get_entry_by_path(actual_path)
-                    entry_path = actual_path
-                else:
-                    raise OpenZimMcpArchiveError(
-                        f"Entry not found: '{entry_path}'. "
-                        f"Try using search_zim_file() to find available entries."
-                    )
+            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
 
             title = entry.title or "Untitled"
             item = entry.get_item()

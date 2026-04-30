@@ -274,6 +274,22 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                     context=f"Entry: {entry_path}",
                 )
 
+            # Bound max_size_bytes — reading and base64-encoding is performed
+            # in memory, so an unbounded value lets a single call attempt to
+            # buffer arbitrarily large data and exhaust the process.
+            MAX_BINARY_LIMIT = 100 * 1024 * 1024  # 100 MB
+            if max_size_bytes is not None and (
+                max_size_bytes < 1 or max_size_bytes > MAX_BINARY_LIMIT
+            ):
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    f"**Issue**: max_size_bytes must be between 1 and "
+                    f"{MAX_BINARY_LIMIT} bytes (100 MB), got {max_size_bytes}.\n"
+                    "**Tip**: For larger entries, retrieve the entry in "
+                    "chunks via repeated calls or use include_data=False to "
+                    "fetch metadata only."
+                )
+
             # Sanitize inputs
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)

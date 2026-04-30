@@ -92,7 +92,7 @@ class TestAsyncZimOperations:
 
         assert result == "Entry content"
         mock_zim_operations.get_zim_entry.assert_called_once_with(
-            "/path/to/file.zim", "A/Article", 5000
+            "/path/to/file.zim", "A/Article", 5000, 0
         )
 
     @pytest.mark.asyncio

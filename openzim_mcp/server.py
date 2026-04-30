@@ -1,5 +1,6 @@
 """Main OpenZIM MCP server implementation."""
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
@@ -232,10 +233,13 @@ class OpenZimMcpServer:
                 if max_content_length is not None:
                     options["max_content_length"] = max_content_length
 
-                # Use simple tools handler
+                # Use simple tools handler. handle_zim_query is synchronous and
+                # performs blocking ZIM I/O, so dispatch it to a worker thread
+                # rather than blocking the asyncio event loop.
                 if self.simple_tools_handler:
-                    return self.simple_tools_handler.handle_zim_query(
-                        query, zim_file_path, options
+                    handler = self.simple_tools_handler
+                    return await asyncio.to_thread(
+                        handler.handle_zim_query, query, zim_file_path, options
                     )
                 else:
                     return "Error: Simple tools handler not initialized"

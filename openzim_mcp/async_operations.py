@@ -80,6 +80,7 @@ class AsyncZimOperations:
         zim_file_path: str,
         entry_path: str,
         max_content_length: Optional[int] = None,
+        content_offset: int = 0,
     ) -> str:
         """Get an entry from a ZIM file (async).
 
@@ -87,12 +88,17 @@ class AsyncZimOperations:
             zim_file_path: Path to the ZIM file
             entry_path: Path to the entry within the ZIM file
             max_content_length: Maximum content length to return
+            content_offset: Character offset to start reading from (default 0)
 
         Returns:
             Entry content as text
         """
         return await asyncio.to_thread(
-            self._ops.get_zim_entry, zim_file_path, entry_path, max_content_length
+            self._ops.get_zim_entry,
+            zim_file_path,
+            entry_path,
+            max_content_length,
+            content_offset,
         )
 
     async def get_zim_metadata(self, zim_file_path: str) -> str:

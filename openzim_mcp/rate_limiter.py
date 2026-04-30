@@ -163,23 +163,26 @@ class RateLimiter:
         Returns:
             TokenBucket for the operation
         """
-        if operation not in self._buckets:
-            with self._lock:
-                if operation not in self._buckets:
-                    # Check for operation-specific config
-                    if operation in self.config.per_operation_limits:
-                        op_config = self.config.per_operation_limits[operation]
-                        self._buckets[operation] = TokenBucket(
-                            rate=op_config.requests_per_second,
-                            capacity=op_config.burst_size,
-                        )
-                    else:
-                        # Use global config
-                        self._buckets[operation] = TokenBucket(
-                            rate=self.config.requests_per_second,
-                            capacity=self.config.burst_size,
-                        )
-        return self._buckets[operation]
+        # Hold the lock for the full read-or-create. Reset() concurrently
+        # clears self._buckets, so any unlocked read can race and miss.
+        with self._lock:
+            bucket = self._buckets.get(operation)
+            if bucket is not None:
+                return bucket
+            # Check for operation-specific config
+            if operation in self.config.per_operation_limits:
+                op_config = self.config.per_operation_limits[operation]
+                bucket = TokenBucket(
+                    rate=op_config.requests_per_second,
+                    capacity=op_config.burst_size,
+                )
+            else:
+                bucket = TokenBucket(
+                    rate=self.config.requests_per_second,
+                    capacity=self.config.burst_size,
+                )
+            self._buckets[operation] = bucket
+            return bucket
 
     def check_rate_limit(self, operation: str = "default") -> None:
         """Check if operation is allowed under rate limit.
@@ -230,14 +233,19 @@ class RateLimiter:
         Returns:
             Dictionary with rate limiter status information
         """
+        # Snapshot self._buckets under the lock — reset() clears it under
+        # the same lock, and iterating concurrently raises
+        # "dictionary changed size during iteration".
+        with self._lock:
+            operation_buckets = {
+                op: bucket.available_tokens for op, bucket in self._buckets.items()
+            }
         return {
             "enabled": self.config.enabled,
             "global_tokens_available": self._global_bucket.available_tokens,
             "global_capacity": self.config.burst_size,
             "requests_per_second": self.config.requests_per_second,
-            "operation_buckets": {
-                op: bucket.available_tokens for op, bucket in self._buckets.items()
-            },
+            "operation_buckets": operation_buckets,
         }
 
     def reset(self) -> None:

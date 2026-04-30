@@ -119,14 +119,17 @@ class OpenZimMcpCache:
         if config.enabled and self._persistence_enabled:
             self._load_from_disk()
 
-        if config.enabled and enable_background_cleanup:
-            self._start_cleanup_thread()
-            # Register shutdown handler to stop cleanup thread gracefully
-            atexit.register(self._stop_cleanup_thread)
-
-        # Register persistence handler on shutdown
+        # atexit handlers fire in LIFO order, so register persistence FIRST
+        # and the cleanup-thread stop SECOND. That way at shutdown the cleanup
+        # thread is signalled to stop *before* _save_to_disk runs, so the save
+        # snapshot doesn't race with concurrent expirations from the cleanup
+        # loop.
         if config.enabled and self._persistence_enabled:
             atexit.register(self._save_to_disk)
+
+        if config.enabled and enable_background_cleanup:
+            self._start_cleanup_thread()
+            atexit.register(self._stop_cleanup_thread)
 
         logger.info(
             f"Cache initialized: enabled={config.enabled}, "
@@ -264,7 +267,13 @@ class OpenZimMcpCache:
         self._access_order.pop(key, None)
 
     def _cleanup_expired(self) -> None:
-        """Remove all expired entries (thread-safe)."""
+        """Remove all expired entries (thread-safe).
+
+        Also compacts the LRU heap when stale entries dominate. get()/set()
+        push a new (access_time, key) on every access for lazy LRU; without
+        compaction the heap grows unboundedly with total operations rather
+        than with cache size.
+        """
         with self._lock:
             expired_keys = [
                 key for key, entry in self._cache.items() if entry.is_expired()
@@ -275,6 +284,14 @@ class OpenZimMcpCache:
 
             if expired_keys:
                 logger.debug(f"Cleaned up {len(expired_keys)} expired cache entries")
+
+            # Compact the heap when it grew well past the live cache size.
+            # 4x is a cheap heuristic — small enough to keep memory bounded,
+            # large enough that we don't rebuild the heap on every cleanup.
+            if len(self._lru_heap) > 4 * max(len(self._access_order), 1):
+                self._lru_heap = [(t, k) for k, t in self._access_order.items()]
+                heapq.heapify(self._lru_heap)
+                logger.debug(f"Compacted LRU heap to {len(self._lru_heap)} entries")
 
     def _evict_lru(self) -> None:
         """Evict least recently used entry using heap (must be called with lock held).
@@ -315,13 +332,6 @@ class OpenZimMcpCache:
             self._hits = 0
             self._misses = 0
         logger.info("Cache cleared")
-
-    def reset_stats(self) -> None:
-        """Reset hit/miss statistics without clearing cache entries (thread-safe)."""
-        with self._lock:
-            self._hits = 0
-            self._misses = 0
-        logger.debug("Cache statistics reset")
 
     def stats(self) -> Dict[str, Any]:
         """Get cache statistics including hit/miss rates (thread-safe)."""
@@ -480,20 +490,3 @@ class OpenZimMcpCache:
             logger.warning(f"Failed to parse cache persistence file: {e}")
         except Exception as e:
             logger.warning(f"Failed to load cache from disk: {e}")
-
-    def persist(self) -> bool:
-        """Manually trigger cache persistence.
-
-        Returns:
-            True if persistence succeeded, False otherwise
-        """
-        if not self._persistence_enabled:
-            logger.debug("Cache persistence is not enabled")
-            return False
-
-        try:
-            self._save_to_disk()
-            return True
-        except Exception as e:
-            logger.error(f"Manual cache persistence failed: {e}")
-            return False

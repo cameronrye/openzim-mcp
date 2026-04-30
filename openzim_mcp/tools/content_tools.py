@@ -25,6 +25,7 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         max_content_length: Optional[int] = None,
+        content_offset: int = 0,
     ) -> str:
         """Get detailed content of a specific entry in a ZIM file.
 
@@ -32,6 +33,9 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'A/Some_Article'
             max_content_length: Maximum length of content to return
+            content_offset: Character offset to start reading from (default 0).
+                Combine with max_content_length to page through long articles
+                without re-fetching the prefix each time.
 
         Returns:
             Entry content text
@@ -63,9 +67,18 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
                     "or omit the parameter for default length."
                 )
 
+            if content_offset < 0:
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    f"**Issue**: content_offset must be non-negative "
+                    f"(provided: {content_offset})\n\n"
+                    "**Troubleshooting**: Use 0 to read from the start, or a "
+                    "positive integer to skip that many leading characters."
+                )
+
             # Use async operations to avoid blocking
             return await server.async_zim_operations.get_zim_entry(
-                zim_file_path, entry_path, max_content_length
+                zim_file_path, entry_path, max_content_length, content_offset
             )
 
         except Exception as e:

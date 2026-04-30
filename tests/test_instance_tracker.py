@@ -7,62 +7,62 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openzim_mcp.instance_tracker import InstanceTracker, ServerInstance, safe_log
+from openzim_mcp.instance_tracker import InstanceTracker, ServerInstance, _safe_log
 
 
 class TestSafeLog:
-    """Test the safe_log utility function."""
+    """Test the _safe_log utility function."""
 
     def test_safe_log_success(self):
-        """Test safe_log with successful logging."""
+        """Test _safe_log with successful logging."""
         mock_log_func = MagicMock()
         message = "Test log message"
 
-        safe_log(mock_log_func, message)
+        _safe_log(mock_log_func, message)
 
         mock_log_func.assert_called_once_with(message)
 
     def test_safe_log_handles_value_error(self):
-        """Test safe_log handles ValueError (I/O operation on closed file)."""
+        """Test _safe_log handles ValueError (I/O operation on closed file)."""
         mock_log_func = MagicMock(
             side_effect=ValueError("I/O operation on closed file")
         )
         message = "Test log message"
 
         # Should not raise an exception
-        safe_log(mock_log_func, message)
+        _safe_log(mock_log_func, message)
 
         mock_log_func.assert_called_once_with(message)
 
     def test_safe_log_handles_os_error(self):
-        """Test safe_log handles OSError (file descriptor issues)."""
+        """Test _safe_log handles OSError (file descriptor issues)."""
         mock_log_func = MagicMock(side_effect=OSError("Bad file descriptor"))
         message = "Test log message"
 
         # Should not raise an exception
-        safe_log(mock_log_func, message)
+        _safe_log(mock_log_func, message)
 
         mock_log_func.assert_called_once_with(message)
 
     def test_safe_log_handles_attribute_error(self):
-        """Test safe_log handles AttributeError (logging objects may be None)."""
+        """Test _safe_log handles AttributeError (logging objects may be None)."""
         mock_log_func = MagicMock(
             side_effect=AttributeError("'NoneType' object has no attribute 'write'")
         )
         message = "Test log message"
 
         # Should not raise an exception
-        safe_log(mock_log_func, message)
+        _safe_log(mock_log_func, message)
 
         mock_log_func.assert_called_once_with(message)
 
     def test_safe_log_handles_generic_exception(self):
-        """Test safe_log handles any other exception during logging."""
+        """Test _safe_log handles any other exception during logging."""
         mock_log_func = MagicMock(side_effect=RuntimeError("Unexpected logging error"))
         message = "Test log message"
 
         # Should not raise an exception
-        safe_log(mock_log_func, message)
+        _safe_log(mock_log_func, message)
 
         mock_log_func.assert_called_once_with(message)
 

@@ -97,7 +97,6 @@ class TestInputLimitDefaults:
         assert InputLimitDefaults.NAMESPACE == 100
         assert InputLimitDefaults.CONTENT_TYPE == 100
         assert InputLimitDefaults.PARTIAL_QUERY == 200
-        assert InputLimitDefaults.NAMESPACE_MAX_LENGTH == 50
 
     def test_input_limits_instance(self):
         """Test INPUT_LIMITS instance has correct values."""

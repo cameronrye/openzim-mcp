@@ -154,16 +154,7 @@ class PathValidator:
             True if path is within directory
         """
         try:
-            # Use is_relative_to for secure path checking (Python 3.9+)
-            if hasattr(path, "is_relative_to"):
-                return path.is_relative_to(directory)
-            else:
-                # Fallback for older Python versions
-                try:
-                    path.relative_to(directory)
-                    return True
-                except ValueError:
-                    return False
+            return path.is_relative_to(directory)
         except (OSError, ValueError):
             return False
 
@@ -332,20 +323,19 @@ def sanitize_context_for_error(context: str) -> str:
 
     sanitized = context
 
-    # Check if context (original or decoded) contains file path indicators
+    # Detect indicators against the decoded form (so URL-encoded paths are
+    # caught), but tokenise from the ORIGINAL string so non-path tokens keep
+    # their original encoding instead of being silently URL-decoded.
     context_to_check = decoded_context if decoded_context != context else context
     for indicator in path_indicators:
         if indicator in context_to_check:
-            # Try to extract and sanitize any paths
-            # Split by common delimiters and check each part
-            parts = context_to_check.replace(",", " ").split()
+            parts = context.replace(",", " ").split()
             sanitized_parts = []
             for part in parts:
-                # Check if this part looks like a file path (also check decoded version)
                 try:
                     decoded_part = unquote(part)
                 except ValueError:
-                    decoded_part = part  # Keep original if decoding fails
+                    decoded_part = part
                 if (
                     decoded_part.startswith("/")
                     or decoded_part.startswith("C:\\")

@@ -88,8 +88,14 @@ class TestGetServerHealthToolInvocation:
         """Test get_server_health when stale instances are detected."""
         mock_instance = MagicMock()
         mock_instance.pid = 99999
-        server_with_tracker.instance_tracker.get_active_instances = MagicMock(
+        # get_active_instances() filters out stale entries, so an active
+        # instance whose PID is not running is impossible — stale_count is
+        # computed from get_all_instances() before that filtering runs.
+        server_with_tracker.instance_tracker.get_all_instances = MagicMock(
             return_value=[mock_instance]
+        )
+        server_with_tracker.instance_tracker.get_active_instances = MagicMock(
+            return_value=[]
         )
         server_with_tracker.instance_tracker.detect_conflicts = MagicMock(
             return_value=[]
@@ -105,10 +111,8 @@ class TestGetServerHealthToolInvocation:
             result = await tool_handler()
             health = json.loads(result)
 
-            assert health["instance_tracking"]["stale_instances"] >= 0
-            # Should have warning about stale instances if any found
-            if health["instance_tracking"]["stale_instances"] > 0:
-                assert any("stale" in w.lower() for w in health["warnings"])
+            assert health["instance_tracking"]["stale_instances"] == 1
+            assert any("stale" in w.lower() for w in health["warnings"])
 
     @pytest.mark.asyncio
     async def test_get_server_health_instance_tracker_fails(self, server_with_tracker):

@@ -1,5 +1,6 @@
 """Server health and diagnostics tools for OpenZIM MCP server."""
 
+import asyncio
 import json
 import logging
 import os
@@ -33,6 +34,9 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
         Returns:
             JSON string containing detailed server health information
         """
+        return await asyncio.to_thread(_get_server_health_sync)
+
+    def _get_server_health_sync() -> str:
         try:
             cache_stats = server.cache.stats()
             recommendations: List[str] = []
@@ -72,8 +76,23 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             # Instance tracking health
             if server.instance_tracker:
                 try:
+                    # Count stale instance files BEFORE get_active_instances(),
+                    # since that call cleans them up as a side effect — once
+                    # it runs, the stale count is always 0.
+                    try:
+                        all_instances = server.instance_tracker.get_all_instances()
+                        stale_count = sum(
+                            1
+                            for inst in all_instances
+                            if not server.instance_tracker._is_process_running(inst.pid)
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to get instance stats: {e}")
+                        stale_count = 0
+
                     active_instances = server.instance_tracker.get_active_instances()
                     instance_tracking["active_instances"] = len(active_instances)
+                    instance_tracking["stale_instances"] = stale_count
 
                     conflicts = server.instance_tracker.detect_conflicts(
                         server.config.get_config_hash()
@@ -90,28 +109,14 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                             "instance conflicts"
                         )
 
-                    # Check for stale instances
-                    try:
-                        stale_count = len(
-                            [
-                                inst
-                                for inst in active_instances
-                                if not server.instance_tracker._is_process_running(
-                                    inst.pid
-                                )
-                            ]
+                    if stale_count > 0:
+                        warnings.append(
+                            f"Stale instance files detected ({stale_count})"
                         )
-                        instance_tracking["stale_instances"] = stale_count
-                        if stale_count > 0:
-                            warnings.append(
-                                f"Stale instance files detected ({stale_count})"
-                            )
-                            recommendations.append(
-                                "Use 'resolve_server_conflicts()' to clean "
-                                "up stale instances"
-                            )
-                    except Exception as e:
-                        logger.debug(f"Failed to get instance stats: {e}")
+                        recommendations.append(
+                            "Use 'resolve_server_conflicts()' to clean "
+                            "up stale instances"
+                        )
 
                 except Exception as e:
                     warnings.append(f"Instance tracking check failed: {e}")
@@ -211,6 +216,9 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             Server configuration information including conflict detection,
             validation results, and recommendations
         """
+        return await asyncio.to_thread(_get_server_configuration_sync)
+
+    def _get_server_configuration_sync() -> str:
         try:
             # Basic configuration info
             config_info = {
@@ -296,6 +304,9 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
         Returns:
             JSON string containing diagnostic results and recommendations
         """
+        return await asyncio.to_thread(_diagnose_server_state_sync)
+
+    def _diagnose_server_state_sync() -> str:
         try:
             conflicts_list: List[Dict[str, Any]] = []
             issues_list: List[str] = []
@@ -492,8 +503,10 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
 
                 environment_checks[directory] = dir_check
 
-            # Set overall status based on issues
-            if issues_list:
+            # Set overall status based on issues — only escalate, never
+            # downgrade. A previously-set "error" from per-directory checks
+            # must not be overwritten by a softer global classification.
+            if issues_list and diagnostics["status"] != "error":
                 diagnostics["status"] = (
                     "error"
                     if any(
@@ -530,6 +543,9 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
         Returns:
             JSON string containing conflict resolution results and actions taken
         """
+        return await asyncio.to_thread(_resolve_server_conflicts_sync)
+
+    def _resolve_server_conflicts_sync() -> str:
         try:
             conflicts_found_list: List[Dict[str, Any]] = []
             actions_taken_list: List[str] = []
