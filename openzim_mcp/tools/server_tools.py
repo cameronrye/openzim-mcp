@@ -694,3 +694,59 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                 error=e,
                 context=f"File: {zim_file_path}",
             )
+
+    @server.mcp.tool()
+    async def cache_stats() -> str:
+        """Return current cache state.
+
+        Useful for sizing decisions — checking hit_rate before deciding
+        whether to call warm_cache, or confirming cache_clear took effect.
+
+        Returns:
+            JSON with size, max_size, hits, misses, and hit_rate (0-1)
+        """
+        try:
+            stats = server.cache.stats()
+            # Compute hit_rate defensively in case stats doesn't include it.
+            hits = stats.get("hits", 0)
+            misses = stats.get("misses", 0)
+            total = hits + misses
+            stats["hit_rate"] = (hits / total) if total > 0 else 0.0
+            return json.dumps(stats, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Error in cache_stats: {e}")
+            return server._create_enhanced_error_message(
+                operation="cache stats",
+                error=e,
+                context="No additional context",
+            )
+
+    @server.mcp.tool()
+    async def cache_clear() -> str:
+        """Clear all cached entries.
+
+        Use when ZIM files have been modified on disk and stale cache
+        entries are returning outdated content.
+
+        Returns:
+            JSON with prior_size and confirmation message
+        """
+        try:
+            prior = server.cache.stats().get("size", 0)
+            server.cache.clear()
+            return json.dumps(
+                {
+                    "cleared": True,
+                    "prior_size": prior,
+                    "current_size": server.cache.stats().get("size", 0),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        except Exception as e:
+            logger.error(f"Error in cache_clear: {e}")
+            return server._create_enhanced_error_message(
+                operation="cache clear",
+                error=e,
+                context="No additional context",
+            )
