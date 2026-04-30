@@ -102,6 +102,129 @@ class TestGetRelatedArticles:
         assert result["inbound_next_cursor"] is not None
         assert result["inbound_scanned"] == 10
 
+    def test_both_direction_runs_outbound_and_inbound(
+        self, server: OpenZimMcpServer, monkeypatch
+    ):
+        """direction='both' returns both outbound_results and inbound_results."""
+        server.zim_operations.extract_article_links = MagicMock(
+            return_value=json.dumps(
+                {"internal_links": [{"path": "C/Out", "title": "Out"}]}
+            )
+        )
+        mock_archive = MagicMock()
+        mock_archive.entry_count = 0  # no inbound to scan
+        mock_archive.has_new_namespace_scheme = True
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result_json = server.zim_operations.get_related_articles(
+            "/zim/test.zim", "C/Source", direction="both", limit=10
+        )
+        result = json.loads(result_json)
+        assert result["direction"] == "both"
+        assert "outbound_results" in result
+        assert "inbound_results" in result
+        assert result["inbound_done"] is True  # 0 entries → done
+
+    def test_inbound_limit_hit_returns_resumable_cursor(
+        self, server: OpenZimMcpServer, monkeypatch
+    ):
+        """When limit is reached before cap, return done=False and a cursor."""
+        mock_archive = MagicMock()
+        mock_archive.entry_count = 100
+        mock_archive.has_new_namespace_scheme = True
+
+        def get_entry_by_id(entry_id):
+            entry = MagicMock()
+            entry.path = f"C/Article_{entry_id}"
+            entry.title = f"Article {entry_id}"
+            return entry
+
+        mock_archive._get_entry_by_id.side_effect = get_entry_by_id
+
+        server.zim_operations.extract_article_links = MagicMock(
+            return_value=json.dumps(
+                {"internal_links": [{"path": "C/Source", "title": "Source"}]}
+            )
+        )
+
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        # limit=3 hits before cap=100 and before entry_count=100.
+        result_json = server.zim_operations.get_related_articles(
+            "/zim/test.zim",
+            "C/Source",
+            limit=3,
+            direction="inbound",
+            inbound_scan_cap=100,
+        )
+        result = json.loads(result_json)
+        assert len(result["inbound_results"]) == 3
+        assert result["inbound_done"] is False
+        assert result["inbound_next_cursor"] is not None
+
+    def test_inbound_completion_returns_done(
+        self, server: OpenZimMcpServer, monkeypatch
+    ):
+        """When entire archive is scanned, done=True and next_cursor=None."""
+        mock_archive = MagicMock()
+        mock_archive.entry_count = 5
+        mock_archive.has_new_namespace_scheme = True
+
+        def get_entry_by_id(entry_id):
+            entry = MagicMock()
+            entry.path = f"C/Article_{entry_id}"
+            entry.title = f"Article {entry_id}"
+            return entry
+
+        mock_archive._get_entry_by_id.side_effect = get_entry_by_id
+
+        server.zim_operations.extract_article_links = MagicMock(
+            return_value=json.dumps({"internal_links": []})
+        )
+
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result_json = server.zim_operations.get_related_articles(
+            "/zim/test.zim",
+            "C/Source",
+            direction="inbound",
+            inbound_scan_cap=100,
+        )
+        result = json.loads(result_json)
+        assert result["inbound_done"] is True
+        assert result["inbound_next_cursor"] is None
+        assert result["inbound_scanned"] == 5
+
 
 def _ctx(value):
     """Build a context manager that yields the given value."""

@@ -356,7 +356,7 @@ class AsyncZimOperations:
         entry_path: str,
         limit: int = 10,
         direction: str = "outbound",
-        inbound_scan_cap: int = 5000,
+        inbound_scan_cap: int = 1000,
         inbound_cursor: int = 0,
     ) -> str:
         """Get related articles via link graph (async)."""

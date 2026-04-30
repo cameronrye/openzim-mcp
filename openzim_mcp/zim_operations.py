@@ -3156,7 +3156,7 @@ class ZimOperations:
         entry_path: str,
         limit: int = 10,
         direction: str = "outbound",
-        inbound_scan_cap: int = 5000,
+        inbound_scan_cap: int = 1000,
         inbound_cursor: int = 0,
     ) -> str:
         """Find articles related to entry_path via link graph."""
@@ -3248,10 +3248,14 @@ class ZimOperations:
                         entry_id += 1
                         scanned += 1
 
-                    done = entry_id >= total or len(inbound) >= limit
+                    # done means: scanned to end of archive, not just hit the
+                    # limit/cap. Limit-hit and cap-hit must both stay resumable
+                    # so callers can paginate past the initial limit.
+                    done = entry_id >= total
+                    next_cursor = None if done else entry_id
                     result["inbound_results"] = inbound
                     result["inbound_scanned"] = scanned
-                    result["inbound_next_cursor"] = None if done else entry_id
+                    result["inbound_next_cursor"] = next_cursor
                     result["inbound_done"] = done
             except Exception as e:
                 logger.debug(f"get_related_articles inbound scan failed: {e}")

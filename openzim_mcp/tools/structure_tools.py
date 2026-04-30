@@ -324,7 +324,7 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         limit: int = 10,
         direction: str = "outbound",
-        inbound_scan_cap: int = 5000,
+        inbound_scan_cap: int = 1000,
         inbound_cursor: int = 0,
     ) -> str:
         """Find articles related to entry_path via link graph.
@@ -333,10 +333,11 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
             deduplicates internal links, returning up to `limit`.
 
         direction='inbound': bounded scan of C/ namespace up to
-            `inbound_scan_cap` entries (default 5000), checking each for an
-            outbound link to entry_path. Returns `inbound_next_cursor` if
-            the cap is hit before completion — pass it as `inbound_cursor`
-            in the next call to continue.
+            `inbound_scan_cap` entries (default 1000). **Expensive** — each
+            scanned candidate triggers a full article parse via
+            `extract_article_links` to test whether it links back to
+            entry_path. For interactive use prefer the default cap or lower;
+            for completeness paginate via `inbound_next_cursor`.
 
         direction='both': run outbound (full), then inbound (bounded).
 
@@ -345,7 +346,7 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
             entry_path: Source entry, e.g. 'C/Some_Article'
             limit: Max results per direction (1-100, default: 10)
             direction: 'outbound' | 'inbound' | 'both'
-            inbound_scan_cap: Max entries to scan for inbound (default: 5000)
+            inbound_scan_cap: Max entries to scan for inbound (default: 1000)
             inbound_cursor: Resume scan from this entry ID (default: 0)
 
         Returns:
