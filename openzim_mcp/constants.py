@@ -60,3 +60,9 @@ CACHE_HIGH_HIT_RATE_THRESHOLD = CACHE_PERFORMANCE.HIGH_HIT_RATE
 NAMESPACE_MAX_SAMPLE_SIZE = NAMESPACE_SAMPLING.MAX_SAMPLE_SIZE
 NAMESPACE_MAX_ENTRIES = NAMESPACE_SAMPLING.MAX_NAMESPACE_ENTRIES
 NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER = NAMESPACE_SAMPLING.MAX_SAMPLE_ATTEMPTS_MULTIPLIER
+
+# Maximum random-entry retries before giving up on a namespace constraint.
+# Used by get_random_entry; balanced against the worst-case "namespace
+# represented at <5%" archive shape — beyond 20 attempts the namespace
+# is effectively too sparse to sample randomly.
+RANDOM_ENTRY_MAX_RETRIES = 20

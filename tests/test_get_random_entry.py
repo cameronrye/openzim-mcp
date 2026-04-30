@@ -26,6 +26,7 @@ class TestGetRandomEntry:
         mock_entry.title = "Some Article"
         mock_item = MagicMock()
         mock_item.content = b"<p>Article content</p>"
+        mock_item.mimetype = "text/html"
         mock_entry.get_item.return_value = mock_item
         mock_archive.get_random_entry.return_value = mock_entry
 
@@ -73,6 +74,36 @@ class TestGetRandomEntry:
         result = json.loads(result_json)
         assert "error" in result
         assert "C" in result["error"]
+
+    def test_random_entry_namespace_any(self, server: OpenZimMcpServer, monkeypatch):
+        """Test that namespace='' accepts any namespace on the first random pick."""
+        mock_archive = MagicMock()
+        mock_archive.has_new_namespace_scheme = True
+        mock_entry = MagicMock()
+        mock_entry.path = "M/Title"
+        mock_entry.title = "Title"
+        mock_item = MagicMock()
+        mock_item.content = b"Some metadata"
+        mock_item.mimetype = "text/plain"
+        mock_entry.get_item.return_value = mock_item
+        mock_archive.get_random_entry.return_value = mock_entry
+
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result_json = server.zim_operations.get_random_entry("/zim/test.zim", "")
+        result = json.loads(result_json)
+        assert result["namespace"] == "M"
+        assert result["path"] == "M/Title"
 
 
 def _ctx(value):

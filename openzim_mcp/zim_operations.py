@@ -18,6 +18,7 @@ from .constants import (
     NAMESPACE_MAX_ENTRIES,
     NAMESPACE_MAX_SAMPLE_SIZE,
     NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER,
+    RANDOM_ENTRY_MAX_RETRIES,
 )
 from .content_processor import ContentProcessor
 from .exceptions import (
@@ -3088,15 +3089,15 @@ class ZimOperations:
         """Return one random entry from the ZIM, optionally namespace-constrained.
 
         Wraps libzim archive.get_random_entry(). When namespace is set,
-        retries up to 20 times to land in that namespace before giving up.
+        retries up to RANDOM_ENTRY_MAX_RETRIES times to land in that
+        namespace before giving up.
         """
         validated = self.path_validator.validate_path(zim_file_path)
         validated = self.path_validator.validate_zim_file(validated)
 
-        MAX_RETRIES = 20
         with zim_archive(validated) as archive:
             has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
-            for _ in range(MAX_RETRIES):
+            for _ in range(RANDOM_ENTRY_MAX_RETRIES):
                 try:
                     entry = archive.get_random_entry()
                 except Exception as e:
@@ -3108,18 +3109,21 @@ class ZimOperations:
                 if not namespace or entry_namespace == namespace:
                     preview = ""
                     try:
-                        raw = entry.get_item().content
-                        if isinstance(raw, (bytes, bytearray)):
-                            text = bytes(raw).decode("utf-8", errors="replace")
-                        else:
-                            text = str(raw)
-                        preview = (
-                            self.content_processor.html_to_plain_text(text)
-                            if "<" in text
-                            else text
+                        item = entry.get_item()
+                        mime = (item.mimetype or "").lower()
+                        # Normalize xhtml so process_mime_content strips tags.
+                        proc_mime = (
+                            "text/html" if mime == "application/xhtml+xml" else mime
                         )
-                        if len(preview) > 200:
-                            preview = preview[:200].rstrip() + "…"
+                        if mime.startswith("text/") or mime == "application/xhtml+xml":
+                            text = self.content_processor.process_mime_content(
+                                bytes(item.content), proc_mime
+                            )
+                            preview = self.content_processor.create_snippet(
+                                text, max_paragraphs=1
+                            )
+                        else:
+                            preview = f"[binary: {mime or 'unknown'}]"
                     except Exception as e:
                         logger.debug(f"get_random_entry preview failed: {e}")
                     return json.dumps(
@@ -3137,9 +3141,10 @@ class ZimOperations:
                 {
                     "error": (
                         f"Could not find a random entry in namespace '{namespace}' "
-                        f"after {MAX_RETRIES} attempts. The namespace may be very "
-                        f"sparse in this archive — try list_namespaces to verify "
-                        f"presence, or pass namespace='' to accept any namespace."
+                        f"after {RANDOM_ENTRY_MAX_RETRIES} attempts. The namespace "
+                        f"may be very sparse in this archive — try list_namespaces "
+                        f"to verify presence, or pass namespace='' to accept any "
+                        f"namespace."
                     )
                 },
                 indent=2,
