@@ -96,10 +96,17 @@ class OpenZimMcpCache:
         """
         self.config = config
         self._cache: Dict[str, CacheEntry] = {}
-        self._access_order: Dict[str, float] = {}
-        # Heap for O(log n) LRU eviction: (access_time, key)
+        # Monotonic counter for LRU access ordering. A counter is used in
+        # preference to a wall-clock or monotonic timestamp because clock
+        # resolution varies by platform (Windows ticks at ~15.6ms by default),
+        # which would let multiple operations land on the same timestamp and
+        # break LRU ordering when (timestamp, key) tuples fall back to
+        # lexicographic key comparison.
+        self._access_counter: int = 0
+        self._access_order: Dict[str, int] = {}
+        # Heap for O(log n) LRU eviction: (access_counter, key)
         # Uses lazy deletion - entries may be stale if key was updated or removed
-        self._lru_heap: List[Tuple[float, str]] = []
+        self._lru_heap: List[Tuple[int, str]] = []
         self._hits: int = 0
         self._misses: int = 0
         self._lock = threading.RLock()  # Reentrant lock for thread safety
@@ -213,11 +220,12 @@ class OpenZimMcpCache:
                 logger.debug(f"Cache entry expired: {key}")
                 return None
 
-            # Update access time for LRU
-            access_time = time.monotonic()
-            self._access_order[key] = access_time
+            # Update access counter for LRU
+            self._access_counter += 1
+            access_counter = self._access_counter
+            self._access_order[key] = access_counter
             # Push to heap - old entries skipped during eviction (lazy cleanup)
-            heapq.heappush(self._lru_heap, (access_time, key))
+            heapq.heappush(self._lru_heap, (access_counter, key))
             self._hits += 1
             logger.debug(f"Cache hit: {key}")
             return entry.value
@@ -240,10 +248,11 @@ class OpenZimMcpCache:
 
             # Add/update entry
             self._cache[key] = CacheEntry(value, self.config.ttl_seconds)
-            access_time = time.monotonic()
-            self._access_order[key] = access_time
+            self._access_counter += 1
+            access_counter = self._access_counter
+            self._access_order[key] = access_counter
             # Push to heap for O(log n) LRU eviction
-            heapq.heappush(self._lru_heap, (access_time, key))
+            heapq.heappush(self._lru_heap, (access_counter, key))
             logger.debug(f"Cache set: {key}")
 
     def delete(self, key: str) -> None:
@@ -270,9 +279,9 @@ class OpenZimMcpCache:
         """Remove all expired entries (thread-safe).
 
         Also compacts the LRU heap when stale entries dominate. get()/set()
-        push a new (access_time, key) on every access for lazy LRU; without
-        compaction the heap grows unboundedly with total operations rather
-        than with cache size.
+        push a new (access_counter, key) on every access for lazy LRU;
+        without compaction the heap grows unboundedly with total operations
+        rather than with cache size.
         """
         with self._lock:
             expired_keys = [
@@ -301,13 +310,13 @@ class OpenZimMcpCache:
         """
         while self._lru_heap:
             # Pop the oldest entry from heap
-            access_time, key = heapq.heappop(self._lru_heap)
+            access_counter, key = heapq.heappop(self._lru_heap)
 
             # Check if this entry is still valid (not stale)
             # An entry is valid if:
             # 1. The key still exists in cache
-            # 2. The access time matches (not updated since)
-            if key in self._access_order and self._access_order[key] == access_time:
+            # 2. The access counter matches (not updated since)
+            if key in self._access_order and self._access_order[key] == access_counter:
                 self._remove(key)
                 logger.debug(f"Evicted LRU cache entry: {key}")
                 return
@@ -479,9 +488,13 @@ class OpenZimMcpCache:
                     entry.created_at = now_monotonic - age
                     self._cache[key] = entry
 
-                    # Use the same monotonic timestamp for LRU ordering
-                    self._access_order[key] = entry.created_at
-                    heapq.heappush(self._lru_heap, (entry.created_at, key))
+                    # Assign a fresh access_counter value to preserve LRU
+                    # ordering across restart. Loaded entries get successively
+                    # higher counters in iteration order; live operations
+                    # after restart will continue from a higher counter.
+                    self._access_counter += 1
+                    self._access_order[key] = self._access_counter
+                    heapq.heappush(self._lru_heap, (self._access_counter, key))
                     loaded_count += 1
 
             logger.info(f"Loaded {loaded_count} cache entries from disk")
