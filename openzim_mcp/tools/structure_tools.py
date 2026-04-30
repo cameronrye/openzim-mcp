@@ -25,6 +25,11 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
     async def get_article_structure(zim_file_path: str, entry_path: str) -> str:
         """Extract article structure including headings, sections, and key metadata.
 
+        Note: depends on heading markup in the source HTML. ZIM builds with
+        the "mini" or "nopic" flavour often strip sub-section headings, in
+        which case this tool returns only the top-level H1. Check the ZIM's
+        Flavour metadata via get_zim_metadata() if you expect rich structure.
+
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'C/Some_Article'
@@ -176,6 +181,12 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
 
         Returns a structured TOC tree based on heading levels (h1-h6),
         suitable for navigation and content overview.
+
+        Note: depends on heading markup in the source HTML. ZIM builds with
+        the "mini" or "nopic" flavour often strip sub-section headings, in
+        which case this tool returns only the top-level H1 (heading_count=1).
+        If you expect rich structure, check the ZIM's Flavour metadata via
+        get_zim_metadata() first.
 
         Args:
             zim_file_path: Path to the ZIM file
