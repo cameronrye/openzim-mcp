@@ -57,3 +57,30 @@ class TestPromptRendering:
             for m in messages
         )
         assert "/zim/wikipedia.zim" in body_text
+
+    def test_research_empty_topic_asks_for_input(self):
+        """research(topic='') returns guard message rather than malformed workflow."""
+        from openzim_mcp.tools.prompts import _research_body
+
+        messages = _research_body("")
+        body = "\n".join(m["content"]["text"] for m in messages)
+        assert "research" in body.lower() or "topic" in body.lower()
+        assert "search_all" not in body  # don't render the workflow
+
+    def test_summarize_empty_args_asks_for_input(self):
+        """Summarize with empty zim_file_path or entry_path returns guard."""
+        from openzim_mcp.tools.prompts import _summarize_body
+
+        messages = _summarize_body("", "")
+        body = "\n".join(m["content"]["text"] for m in messages)
+        assert "summarize" in body.lower() or "path" in body.lower()
+        assert "get_table_of_contents" not in body
+
+    def test_explore_empty_path_asks_for_input(self):
+        """explore('') returns a guard message."""
+        from openzim_mcp.tools.prompts import _explore_body
+
+        messages = _explore_body("")
+        body = "\n".join(m["content"]["text"] for m in messages)
+        assert "explore" in body.lower() or "path" in body.lower()
+        assert "get_zim_metadata" not in body

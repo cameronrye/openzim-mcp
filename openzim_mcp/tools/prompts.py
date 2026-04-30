@@ -19,6 +19,18 @@ def _msg(role: str, text: str) -> Dict[str, Any]:
 
 def _research_body(topic: str) -> List[Dict[str, Any]]:
     """Body of the research prompt — the message list returned to the client."""
+    if not topic or not topic.strip():
+        return [
+            _msg(
+                "user",
+                (
+                    "I want to use the /research prompt, but I haven't "
+                    "given you a topic. Please ask me what subject I want "
+                    "to research, then re-run the /research prompt with "
+                    "that topic."
+                ),
+            )
+        ]
     return [
         _msg(
             "user",
@@ -41,6 +53,24 @@ def _research_body(topic: str) -> List[Dict[str, Any]]:
 
 def _summarize_body(zim_file_path: str, entry_path: str) -> List[Dict[str, Any]]:
     """Body of the summarize prompt."""
+    if (
+        not zim_file_path
+        or not zim_file_path.strip()
+        or not entry_path
+        or not entry_path.strip()
+    ):
+        return [
+            _msg(
+                "user",
+                (
+                    "I want to use the /summarize prompt, but I haven't "
+                    "given you the required arguments. Please ask me "
+                    "which ZIM file path and which article path "
+                    "(e.g. 'C/Photosynthesis'), then re-run the "
+                    "/summarize prompt with both."
+                ),
+            )
+        ]
     return [
         _msg(
             "user",
@@ -62,6 +92,18 @@ def _summarize_body(zim_file_path: str, entry_path: str) -> List[Dict[str, Any]]
 
 def _explore_body(zim_file_path: str) -> List[Dict[str, Any]]:
     """Body of the explore prompt."""
+    if not zim_file_path or not zim_file_path.strip():
+        return [
+            _msg(
+                "user",
+                (
+                    "I want to use the /explore prompt, but I haven't "
+                    "given you a ZIM file path. Please ask me which "
+                    "ZIM file path, then re-run the /explore prompt "
+                    "with that path."
+                ),
+            )
+        ]
     return [
         _msg(
             "user",

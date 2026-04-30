@@ -205,6 +205,16 @@ class OpenZimMcpServer:
             - Filtered search: "search evolution in namespace C"
             - Get article: "get article Biology", "show Evolution"
             - General search: "search for biology", "find evolution"
+            - Cross-file search: "search all files for python" → search_all
+            - Namespace walk: "walk namespace M" → walk_namespace
+            - Cache warming: "warm cache" → warm_cache
+            - Title lookup: "find article titled Photosynthesis"
+              → find_entry_by_title
+            - Random article: "random article" → get_random_entry
+            - Related articles: "articles related to Climate_Change"
+              → get_related_articles
+            - Cache stats: "cache stats" → cache_stats
+            - Cache clear: "clear cache" → cache_clear
 
             Args:
                 query: Natural language query (REQUIRED)
@@ -222,6 +232,14 @@ class OpenZimMcpServer:
                 - "get article Evolution"
                 - "show structure of Biology"
                 - "browse namespace C with limit 10"
+                - "search all files for python"
+                - "walk namespace M"
+                - "warm cache"
+                - "find article titled Photosynthesis"
+                - "random article"
+                - "articles related to Climate_Change"
+                - "cache stats"
+                - "clear cache"
             """
             try:
                 # Build options dict from parameters
