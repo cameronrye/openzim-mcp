@@ -327,3 +327,19 @@ class AsyncZimOperations:
     async def search_all(self, query: str, limit_per_file: int = 5) -> str:
         """Search across every ZIM file in allowed dirs (async)."""
         return await asyncio.to_thread(self._ops.search_all, query, limit_per_file)
+
+    async def find_entry_by_title(
+        self,
+        zim_file_path: str,
+        title: str,
+        cross_file: bool = False,
+        limit: int = 10,
+    ) -> str:
+        """Resolve title to entry path(s) (async)."""
+        return await asyncio.to_thread(
+            self._ops.find_entry_by_title,
+            zim_file_path,
+            title,
+            cross_file,
+            limit,
+        )

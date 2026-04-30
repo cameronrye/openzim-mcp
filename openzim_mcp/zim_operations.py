@@ -2979,3 +2979,105 @@ class ZimOperations:
             indent=2,
             ensure_ascii=False,
         )
+
+    def find_entry_by_title(
+        self,
+        zim_file_path: str,
+        title: str,
+        cross_file: bool = False,
+        limit: int = 10,
+    ) -> str:
+        """Resolve a title or partial title to one or more entry paths.
+
+        Implementation order:
+          1. Direct path probe in C/ namespace for normalized title (fast path).
+          2. libzim suggestion search (title-indexed) — primary fallback.
+          3. Return ranked list with score.
+        """
+        if not title or not title.strip():
+            raise OpenZimMcpValidationError(
+                "Input is empty or contains only whitespace/control characters"
+            )
+        if limit < 1 or limit > 50:
+            return (
+                "**Parameter Validation Error**\n\n"
+                f"**Issue**: limit must be between 1 and 50 (provided: {limit})"
+            )
+
+        if cross_file:
+            files = [f["path"] for f in self.list_zim_files_data() if f.get("path")]
+        else:
+            validated = self.path_validator.validate_path(zim_file_path)
+            validated = self.path_validator.validate_zim_file(validated)
+            files = [str(validated)]
+
+        aggregate_results: List[Dict[str, Any]] = []
+        fast_path_hit = False
+
+        for file_path in files:
+            try:
+                with zim_archive(file_path) as archive:
+                    # Fast path: C/<normalized_title>
+                    normalized = title.replace(" ", "_")
+                    candidate = f"C/{normalized}"
+                    if archive.has_entry_by_path(candidate):
+                        try:
+                            entry = archive.get_entry_by_path(candidate)
+                            aggregate_results.append(
+                                {
+                                    "path": entry.path,
+                                    "title": entry.title or candidate,
+                                    "score": 1.0,
+                                    "zim_file": file_path,
+                                }
+                            )
+                            fast_path_hit = True
+                            if not cross_file:
+                                break
+                            continue
+                        except Exception as e:
+                            logger.debug(
+                                f"find_entry_by_title fast-path read failed: {e}"
+                            )
+
+                    # Fallback: libzim suggestion search (title-indexed).
+                    try:
+                        suggestion_search = archive.suggest(title)
+                        total = suggestion_search.getEstimatedMatches()
+                        if total > 0:
+                            for path in suggestion_search.getResults(0, limit):
+                                try:
+                                    entry = archive.get_entry_by_path(path)
+                                    aggregate_results.append(
+                                        {
+                                            "path": entry.path,
+                                            "title": entry.title or path,
+                                            "score": 0.8,
+                                            "zim_file": file_path,
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.debug(
+                                        f"find_entry_by_title suggestion read "
+                                        f"failed for {path}: {e}"
+                                    )
+                    except Exception as e:
+                        logger.debug(
+                            f"find_entry_by_title suggest() failed for "
+                            f"{file_path}: {e}"
+                        )
+            except Exception as e:
+                if not cross_file:
+                    raise
+                logger.debug(f"find_entry_by_title: skipped {file_path}: {e}")
+
+        return json.dumps(
+            {
+                "query": title,
+                "results": aggregate_results[:limit],
+                "fast_path_hit": fast_path_hit,
+                "files_searched": len(files),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
