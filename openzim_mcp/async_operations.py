@@ -349,3 +349,23 @@ class AsyncZimOperations:
         return await asyncio.to_thread(
             self._ops.get_random_entry, zim_file_path, namespace
         )
+
+    async def get_related_articles(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 10,
+        direction: str = "outbound",
+        inbound_scan_cap: int = 5000,
+        inbound_cursor: int = 0,
+    ) -> str:
+        """Get related articles via link graph (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_related_articles,
+            zim_file_path,
+            entry_path,
+            limit,
+            direction,
+            inbound_scan_cap,
+            inbound_cursor,
+        )

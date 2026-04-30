@@ -317,3 +317,66 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                 error=e,
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
+
+    @server.mcp.tool()
+    async def get_related_articles(
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 10,
+        direction: str = "outbound",
+        inbound_scan_cap: int = 5000,
+        inbound_cursor: int = 0,
+    ) -> str:
+        """Find articles related to entry_path via link graph.
+
+        direction='outbound': cheap — composes extract_article_links and
+            deduplicates internal links, returning up to `limit`.
+
+        direction='inbound': bounded scan of C/ namespace up to
+            `inbound_scan_cap` entries (default 5000), checking each for an
+            outbound link to entry_path. Returns `inbound_next_cursor` if
+            the cap is hit before completion — pass it as `inbound_cursor`
+            in the next call to continue.
+
+        direction='both': run outbound (full), then inbound (bounded).
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Source entry, e.g. 'C/Some_Article'
+            limit: Max results per direction (1-100, default: 10)
+            direction: 'outbound' | 'inbound' | 'both'
+            inbound_scan_cap: Max entries to scan for inbound (default: 5000)
+            inbound_cursor: Resume scan from this entry ID (default: 0)
+
+        Returns:
+            JSON with outbound_results / inbound_results, scanned, cursor, done
+        """
+        try:
+            try:
+                server.rate_limiter.check_rate_limit("get_related_articles")
+            except OpenZimMcpRateLimitError as e:
+                return server._create_enhanced_error_message(
+                    operation="get related articles",
+                    error=e,
+                    context=f"Entry: {entry_path}",
+                )
+
+            zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+            entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
+
+            return await server.async_zim_operations.get_related_articles(
+                zim_file_path,
+                entry_path,
+                limit,
+                direction,
+                inbound_scan_cap,
+                inbound_cursor,
+            )
+
+        except Exception as e:
+            logger.error(f"Error in get_related_articles: {e}")
+            return server._create_enhanced_error_message(
+                operation="get related articles",
+                error=e,
+                context=f"File: {zim_file_path}, Entry: {entry_path}",
+            )

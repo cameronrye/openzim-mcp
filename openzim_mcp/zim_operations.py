@@ -3149,3 +3149,114 @@ class ZimOperations:
                 },
                 indent=2,
             )
+
+    def get_related_articles(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 10,
+        direction: str = "outbound",
+        inbound_scan_cap: int = 5000,
+        inbound_cursor: int = 0,
+    ) -> str:
+        """Find articles related to entry_path via link graph."""
+        if direction not in ("outbound", "inbound", "both"):
+            return (
+                "**Parameter Validation Error**\n\n"
+                f"**Issue**: direction must be one of 'outbound', 'inbound', "
+                f"'both' (provided: '{direction}')"
+            )
+        if limit < 1 or limit > 100:
+            return (
+                "**Parameter Validation Error**\n\n"
+                f"**Issue**: limit must be between 1 and 100 (provided: {limit})"
+            )
+
+        result: Dict[str, Any] = {
+            "entry_path": entry_path,
+            "direction": direction,
+        }
+
+        # Outbound: compose extract_article_links and dedupe.
+        if direction in ("outbound", "both"):
+            try:
+                links_json = self.extract_article_links(zim_file_path, entry_path)
+                links_data = json.loads(links_json)
+                seen: set[str] = set()
+                outbound: List[Dict[str, Any]] = []
+                for link in links_data.get("internal_links", []):
+                    path = link.get("path")
+                    if not path or path in seen:
+                        continue
+                    seen.add(path)
+                    outbound.append({"path": path, "title": link.get("title") or path})
+                    if len(outbound) >= limit:
+                        break
+                result["outbound_results"] = outbound
+            except Exception as e:
+                logger.debug(f"get_related_articles outbound failed: {e}")
+                result["outbound_results"] = []
+                result["outbound_error"] = str(e)
+
+        # Inbound: bounded scan of C/.
+        if direction in ("inbound", "both"):
+            validated = self.path_validator.validate_path(zim_file_path)
+            validated = self.path_validator.validate_zim_file(validated)
+            inbound: List[Dict[str, Any]] = []
+            scanned = 0
+            try:
+                with zim_archive(validated) as archive:
+                    total = archive.entry_count
+                    has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
+                    entry_id = max(0, inbound_cursor)
+                    while (
+                        entry_id < total
+                        and scanned < inbound_scan_cap
+                        and len(inbound) < limit
+                    ):
+                        try:
+                            candidate = archive._get_entry_by_id(entry_id)
+                            candidate_path = candidate.path
+                            candidate_ns = self._extract_namespace_from_path(
+                                candidate_path, has_new_scheme
+                            )
+                            if candidate_ns == "C" and candidate_path != entry_path:
+                                try:
+                                    links_json = self.extract_article_links(
+                                        zim_file_path, candidate_path
+                                    )
+                                    links = json.loads(links_json).get(
+                                        "internal_links", []
+                                    )
+                                    if any(
+                                        link.get("path") == entry_path for link in links
+                                    ):
+                                        inbound.append(
+                                            {
+                                                "path": candidate_path,
+                                                "title": candidate.title
+                                                or candidate_path,
+                                            }
+                                        )
+                                except Exception as e:
+                                    logger.debug(
+                                        f"inbound link scan failed for "
+                                        f"{candidate_path}: {e}"
+                                    )
+                        except Exception as e:
+                            logger.debug(f"inbound scan: skipped entry {entry_id}: {e}")
+                        entry_id += 1
+                        scanned += 1
+
+                    done = entry_id >= total or len(inbound) >= limit
+                    result["inbound_results"] = inbound
+                    result["inbound_scanned"] = scanned
+                    result["inbound_next_cursor"] = None if done else entry_id
+                    result["inbound_done"] = done
+            except Exception as e:
+                logger.debug(f"get_related_articles inbound scan failed: {e}")
+                result["inbound_results"] = []
+                result["inbound_error"] = str(e)
+                result["inbound_done"] = True
+
+        return json.dumps(result, indent=2, ensure_ascii=False)
