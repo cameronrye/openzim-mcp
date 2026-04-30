@@ -60,7 +60,7 @@ class TestPathValidator:
         zim_file.write_text("test content")
 
         result = path_validator.validate_zim_file(zim_file)
-        assert result == zim_file
+        assert result == zim_file.resolve()
 
     def test_validate_zim_file_wrong_extension(
         self, path_validator: PathValidator, temp_dir: Path
@@ -80,6 +80,25 @@ class TestPathValidator:
 
         with pytest.raises(OpenZimMcpValidationError, match="File does not exist"):
             path_validator.validate_zim_file(nonexistent_file)
+
+    def test_validate_zim_file_returns_resolved_path(
+        self, path_validator: PathValidator, temp_dir: Path
+    ):
+        """Returned path must be the symlink-resolved path.
+
+        Otherwise callers open through the original symlink rather than the
+        inode whose containment was just verified, leaving the TOCTOU window
+        between validate and open open.
+        """
+        target = temp_dir / "real.zim"
+        target.write_text("test content")
+
+        link = temp_dir / "link.zim"
+        link.symlink_to(target)
+
+        result = path_validator.validate_zim_file(link)
+        assert result == target.resolve()
+        assert result != link
 
 
 class TestSanitizeInput:

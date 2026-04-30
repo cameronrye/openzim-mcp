@@ -212,7 +212,10 @@ class PathValidator:
             )
 
         logger.debug(f"ZIM file validation successful: {file_path}")
-        return file_path
+        # Return the re-resolved path so callers open the exact inode whose
+        # containment was just verified, not the original (possibly
+        # symlinked) input.
+        return current_resolved
 
 
 def sanitize_input(

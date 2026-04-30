@@ -2204,9 +2204,12 @@ class ZimOperations:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If summary extraction fails
         """
-        # Validate parameters
-        if max_words < 10:
-            max_words = 10
+        # Clamp to a sane upper bound; the tool layer enforces the
+        # documented [1, 1000] range, so we don't impose a silent floor
+        # here (callers asking for max_words=1 should get one word, not
+        # ten).
+        if max_words < 1:
+            max_words = 1
         elif max_words > 1000:
             max_words = 1000
 

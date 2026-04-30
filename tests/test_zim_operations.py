@@ -2153,3 +2153,53 @@ class TestGetBinaryEntry:
         """Test _format_size helper with gigabytes."""
         assert zim_operations._format_size(1024 * 1024 * 1024) == "1.00 GB"
         assert zim_operations._format_size(2 * 1024 * 1024 * 1024) == "2.00 GB"
+
+
+class TestGetEntrySummaryMaxWords:
+    """Tests that get_entry_summary honors the documented max_words range.
+
+    The tool layer enforces a [1, 1000] contract; the operation layer must
+    not silently floor low values.
+    """
+
+    @pytest.fixture
+    def zim_operations(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator: PathValidator,
+        openzim_mcp_cache: OpenZimMcpCache,
+        content_processor: ContentProcessor,
+    ) -> ZimOperations:
+        """Provide a ZimOperations instance for max_words tests."""
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    @patch("openzim_mcp.zim_operations.zim_archive")
+    def test_get_entry_summary_max_words_one_returns_one_word(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """max_words=1 must return exactly 1 word, not silently bumped to 10."""
+        import json as _json
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.write_bytes(b"")
+
+        mock_archive_instance = MagicMock()
+        mock_entry = MagicMock()
+        mock_entry.title = "Plain"
+        mock_item = MagicMock()
+        mock_item.mimetype = "text/plain"
+        body = b"alpha beta gamma delta epsilon zeta eta theta iota kappa lambda"
+        mock_item.content = body
+        mock_item.size = len(body)
+        mock_entry.get_item.return_value = mock_item
+        mock_archive_instance.get_entry_by_path.return_value = mock_entry
+        mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+        result = zim_operations.get_entry_summary(str(zim_file), "A/Plain", max_words=1)
+        data = _json.loads(result)
+
+        assert data["word_count"] == 1
+        assert data["summary"] == "alpha..."
+        assert data["is_truncated"] is True
