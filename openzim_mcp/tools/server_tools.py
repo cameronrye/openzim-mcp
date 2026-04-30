@@ -707,11 +707,6 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
         """
         try:
             stats = server.cache.stats()
-            # Compute hit_rate defensively in case stats doesn't include it.
-            hits = stats.get("hits", 0)
-            misses = stats.get("misses", 0)
-            total = hits + misses
-            stats["hit_rate"] = (hits / total) if total > 0 else 0.0
             return json.dumps(stats, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.error(f"Error in cache_stats: {e}")

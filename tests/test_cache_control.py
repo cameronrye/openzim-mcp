@@ -1,5 +1,7 @@
 """Tests for cache_stats and cache_clear tools."""
 
+import json
+
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
@@ -23,6 +25,38 @@ class TestCacheStats:
         assert "hits" in stats
         assert "misses" in stats
 
+    @pytest.mark.asyncio
+    async def test_cache_stats_wrapper_returns_cache_stats(
+        self, server: OpenZimMcpServer
+    ):
+        """End-to-end: cache_stats tool wrapper returns the cache.stats() shape.
+
+        Drives the registered MCP tool function so the JSON serialization
+        path is exercised, not just the underlying cache object.
+        """
+        tools = server.mcp._tool_manager._tools
+        assert "cache_stats" in tools, "cache_stats tool not registered"
+        tool_handler = tools["cache_stats"].fn
+
+        # Generate at least one hit and one miss so hit_rate is meaningful.
+        server.cache.set("k", "v")
+        server.cache.get("k")  # hit
+        server.cache.get("missing")  # miss
+
+        result_json = await tool_handler()
+        result = json.loads(result_json)
+
+        # Confirm the wrapper passes through the cache.stats() shape, including
+        # hit_rate (which the wrapper now sources directly from cache.stats()).
+        assert "size" in result
+        assert "max_size" in result
+        assert "hits" in result
+        assert "misses" in result
+        assert "hit_rate" in result
+        # cache.stats() rounds hit_rate to 4 decimals — confirm the wrapper
+        # didn't re-compute and clobber that rounding.
+        assert result["hit_rate"] == round(result["hit_rate"], 4)
+
 
 class TestCacheClear:
     """Test cache_clear."""
@@ -42,3 +76,30 @@ class TestCacheClear:
         server.cache.clear()
         after = server.cache.stats()["size"]
         assert after == 0
+
+    @pytest.mark.asyncio
+    async def test_cache_clear_wrapper_captures_prior_size(
+        self, server: OpenZimMcpServer
+    ):
+        """End-to-end: cache_clear's JSON includes prior_size and current_size=0.
+
+        The wrapper records prior_size *before* calling clear() — that ordering
+        is unique to the tool layer and not exercised by direct cache calls.
+        """
+        tools = server.mcp._tool_manager._tools
+        assert "cache_clear" in tools, "cache_clear tool not registered"
+        tool_handler = tools["cache_clear"].fn
+
+        server.cache.set("k1", "v1")
+        server.cache.set("k2", "v2")
+        prior = server.cache.stats()["size"]
+        assert prior >= 2
+
+        result_json = await tool_handler()
+        result = json.loads(result_json)
+
+        assert result["cleared"] is True
+        assert result["prior_size"] == prior
+        assert result["current_size"] == 0
+        # And the cache really is empty.
+        assert server.cache.stats()["size"] == 0
