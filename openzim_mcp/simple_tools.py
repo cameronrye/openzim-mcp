@@ -441,11 +441,11 @@ class IntentParser:
                     flags=re.IGNORECASE,
                 ).strip()
             elif intent == "walk_namespace":
-                m = re.search(r"namespace\s+([A-Za-z\-])\b", query, re.IGNORECASE)
+                m = safe_regex_search(r"namespace\s+([A-Za-z])\b", query, re.IGNORECASE)
                 if m:
                     params["namespace"] = m.group(1).upper()
             elif intent == "find_by_title":
-                m = re.search(
+                m = safe_regex_search(
                     r"(?:titled|named|called|path\s+for)\s+(.+?)$",
                     query,
                     re.IGNORECASE,
@@ -453,7 +453,7 @@ class IntentParser:
                 if m:
                     params["title"] = m.group(1).strip().rstrip("?.")
             elif intent == "related":
-                m = re.search(
+                m = safe_regex_search(
                     r"(?:related\s+to|linking\s+to|links\s+(?:to|from))\s+(.+?)$",
                     query,
                     re.IGNORECASE,
@@ -741,8 +741,19 @@ class SimpleToolsHandler:
                     self.zim_operations.cache.stats(), indent=2, ensure_ascii=False
                 )
             elif intent == "cache_clear":
+                prior = self.zim_operations.cache.stats().get("size", 0)
                 self.zim_operations.cache.clear()
-                return '{"cleared": true}'
+                return json.dumps(
+                    {
+                        "cleared": True,
+                        "prior_size": prior,
+                        "current_size": self.zim_operations.cache.stats().get(
+                            "size", 0
+                        ),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
 
             else:
                 # Fallback to search
