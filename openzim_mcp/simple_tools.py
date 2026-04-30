@@ -5,6 +5,7 @@ away the complexity of multiple specialized tools. Designed for LLMs with
 limited tool-calling capabilities or context windows.
 """
 
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -153,6 +154,48 @@ class IntentParser:
             0.75,
             5,
         ),
+        # search_all - very specific
+        (
+            r"\bsearch\s+(all|every(thing|where)?|across)\s+(files?|zims?)?\b",
+            "search_all",
+            0.95,
+            10,
+        ),
+        # walk_namespace - very specific
+        (
+            r"\b(walk|iterate|dump|enumerate)\s+namespace\b",
+            "walk_namespace",
+            0.95,
+            10,
+        ),
+        # warm_cache - very specific
+        (
+            r"\b(warm|preload|prefetch|prime)\s+(the\s+)?cache\b",
+            "warm_cache",
+            0.95,
+            10,
+        ),
+        # find_by_title - moderately specific
+        (
+            r"\b(find|locate|resolve)\s+(article|entry|page)?"
+            r"\s*(titled|named|called)\b",
+            "find_by_title",
+            0.9,
+            8,
+        ),
+        (r"\bwhat'?s\s+the\s+path\s+for\b", "find_by_title", 0.9, 8),
+        # random_entry - specific
+        (r"\brandom\s+(article|entry|page)\b", "random_entry", 0.95, 9),
+        # related - moderately specific
+        (
+            r"\b(related\s+to|articles?\s+linking\s+to|what\s+links\s+(to|from))\b",
+            "related",
+            0.9,
+            8,
+        ),
+        # cache stats / clear - specific
+        (r"\bcache\s+(stats?|statistics|status)\b", "cache_stats", 0.95, 10),
+        (r"\b(clear|empty|flush|reset)\s+(the\s+)?cache\b", "cache_clear", 0.95, 10),
         # Search - general fallback
         (r"\b(search|find|look\s+for|query)\b", "search", 0.7, 3),
     ]
@@ -387,6 +430,36 @@ class IntentParser:
                     params["query"] = search_match.group(1).strip()
                 else:
                     params["query"] = query
+
+            elif intent == "search_all":
+                # Strip the "search all files for" prefix to get the query.
+                params["query"] = re.sub(
+                    r"^.*?(search\s+(all|every(thing|where)?|across)"
+                    r"\s+(files?|zims?)?\s*for\s*)",
+                    "",
+                    query,
+                    flags=re.IGNORECASE,
+                ).strip()
+            elif intent == "walk_namespace":
+                m = re.search(r"namespace\s+([A-Za-z\-])\b", query, re.IGNORECASE)
+                if m:
+                    params["namespace"] = m.group(1).upper()
+            elif intent == "find_by_title":
+                m = re.search(
+                    r"(?:titled|named|called|path\s+for)\s+(.+?)$",
+                    query,
+                    re.IGNORECASE,
+                )
+                if m:
+                    params["title"] = m.group(1).strip().rstrip("?.")
+            elif intent == "related":
+                m = re.search(
+                    r"(?:related\s+to|linking\s+to|links\s+(?:to|from))\s+(.+?)$",
+                    query,
+                    re.IGNORECASE,
+                )
+                if m:
+                    params["entry_path"] = m.group(1).strip().rstrip("?.")
 
         except RegexTimeoutError:
             logger.warning(
@@ -624,6 +697,52 @@ class SimpleToolsHandler:
                     zim_file_path, search_query, limit, offset
                 )
                 return result + low_confidence_note
+
+            elif intent == "search_all":
+                return self.zim_operations.search_all(
+                    params.get("query", query), limit_per_file=5
+                )
+            elif intent == "walk_namespace":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.walk_namespace(
+                    zim_path, params.get("namespace", "C"), cursor=0, limit=200
+                )
+            elif intent == "warm_cache":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.warm_cache(zim_path)
+            elif intent == "find_by_title":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.find_entry_by_title(
+                    zim_path, params.get("title", query), cross_file=False, limit=10
+                )
+            elif intent == "random_entry":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.get_random_entry(zim_path, "C")
+            elif intent == "related":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.get_related_articles(
+                    zim_path,
+                    params.get("entry_path", ""),
+                    limit=10,
+                    direction="outbound",
+                )
+            elif intent == "cache_stats":
+                return json.dumps(
+                    self.zim_operations.cache.stats(), indent=2, ensure_ascii=False
+                )
+            elif intent == "cache_clear":
+                self.zim_operations.cache.clear()
+                return '{"cleared": true}'
 
             else:
                 # Fallback to search
