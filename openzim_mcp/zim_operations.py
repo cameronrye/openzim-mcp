@@ -34,6 +34,11 @@ from .timeout_utils import run_with_timeout
 # Timeout for opening ZIM archives (seconds)
 ARCHIVE_OPEN_TIMEOUT = 30.0
 
+# Maximum redirect chain length before bailing out. Real ZIM redirects rarely
+# chain more than once or twice; ten is well above any legitimate depth and
+# guards against pathological data or cycles libzim itself does not detect.
+MAX_REDIRECT_DEPTH = 10
+
 
 class PaginationCursor:
     """Utility class for creating and parsing pagination cursors.
@@ -633,6 +638,12 @@ class ZimOperations:
             # resolved, only the body raised).
             self.cache.set(cache_key, entry_path)
             return result, content_ok
+        except OpenZimMcpArchiveError:
+            # Structural failures we raised ourselves (redirect cycles,
+            # depth-limit) are not "entry not found" cases — searching for
+            # the same path again would either return the same broken
+            # redirect or a misleading match. Propagate unchanged.
+            raise
         except Exception as direct_error:
             logger.debug(f"Direct entry access failed for {entry_path}: {direct_error}")
 
@@ -702,6 +713,30 @@ class ZimOperations:
             ``(Error retrieving content: ...)`` sentinel.
         """
         entry = archive.get_entry_by_path(actual_path)
+
+        # Resolve redirects to the target entry so the response reflects
+        # the resolved page (path, title, content) rather than the redirect
+        # stub. Detect cycles and runaway chains explicitly — libzim's
+        # ``Entry.get_item()`` silently follows the chain and would hang on
+        # a cycle.
+        seen_paths: set[str] = set()
+        depth = 0
+        while getattr(entry, "is_redirect", False):
+            if depth >= MAX_REDIRECT_DEPTH:
+                raise OpenZimMcpArchiveError(
+                    f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
+                    f"starting at {actual_path}"
+                )
+            if entry.path in seen_paths:
+                raise OpenZimMcpArchiveError(f"Redirect cycle detected at {entry.path}")
+            seen_paths.add(entry.path)
+            entry = entry.get_redirect_entry()
+            depth += 1
+
+        # From here on, ``entry`` is the resolved target. Update
+        # ``actual_path`` so the response and the path-mapping cache
+        # reflect the target — subsequent lookups skip the chain entirely.
+        actual_path = entry.path
         title = entry.title or "Untitled"
 
         # Get content

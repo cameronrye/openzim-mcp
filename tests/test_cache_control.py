@@ -56,6 +56,8 @@ def test_get_zim_entry_does_not_cache_error_strings(
     with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
+        mock_entry.path = "A/Foo"
         mock_entry.title = "Foo"
         mock_item = MagicMock()
         mock_item.mimetype = "text/html"

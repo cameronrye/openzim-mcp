@@ -159,6 +159,8 @@ class TestZimOperations:
         mock_archive.return_value = mock_archive_instance
 
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
+        mock_entry.path = "A/Test_Article"
         mock_entry.title = "Test Article"
         mock_item = MagicMock()
         mock_item.mimetype = "text/html"
@@ -769,27 +771,142 @@ class TestZimOperations:
     def test_get_entry_content_with_redirect(
         self, zim_operations: ZimOperations, tmp_path: Path
     ):
-        """Test _get_entry_content with redirect entry."""
+        """Test _get_entry_content with a single-step redirect.
+
+        Single-hop redirects must resolve to the target's path/title and
+        return the target's content.
+        """
         from unittest.mock import MagicMock
 
         mock_archive = MagicMock()
-        mock_entry = MagicMock()
-        mock_entry.is_redirect = True
-        mock_entry.get_redirect_entry.return_value = mock_entry
-        mock_entry.title = "Test Article"
 
-        mock_item = MagicMock()
-        mock_item.content = b"<html>Test content</html>"
-        mock_item.mimetype = "text/html"
-        mock_entry.get_item.return_value = mock_item
+        # Target (resolved) entry.
+        target_entry = MagicMock()
+        target_entry.is_redirect = False
+        target_entry.path = "A/United_States"
+        target_entry.title = "United States"
+        target_item = MagicMock()
+        target_item.content = b"<html>Target content</html>"
+        target_item.mimetype = "text/html"
+        target_entry.get_item.return_value = target_item
 
-        mock_archive.get_entry_by_path.return_value = mock_entry
+        # Redirect entry pointing at the target.
+        redirect_entry = MagicMock()
+        redirect_entry.is_redirect = True
+        redirect_entry.path = "A/USA"
+        redirect_entry.title = "USA"
+        redirect_entry.get_redirect_entry.return_value = target_entry
+
+        mock_archive.get_entry_by_path.return_value = redirect_entry
 
         result, content_ok = zim_operations._get_entry_content(
-            mock_archive, "A/Test", 1000, tmp_path / "test.zim"
+            mock_archive, "A/USA", 1000, tmp_path / "test.zim"
         )
-        assert "Test Article" in result
+        # Response should reflect the resolved target, not the redirect.
+        assert "United States" in result
+        assert "A/United_States" in result
         assert content_ok is True
+
+    def test_get_entry_content_redirect_resolution_display(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
+        """Redirect resolution should surface target's Actual Path and Title."""
+        from unittest.mock import MagicMock
+
+        mock_archive = MagicMock()
+
+        target_entry = MagicMock()
+        target_entry.is_redirect = False
+        target_entry.path = "A/United_States"
+        target_entry.title = "United States"
+        target_item = MagicMock()
+        target_item.content = b"Target body"
+        target_item.mimetype = "text/plain"
+        target_entry.get_item.return_value = target_item
+
+        redirect_entry = MagicMock()
+        redirect_entry.is_redirect = True
+        redirect_entry.path = "A/USA"
+        redirect_entry.title = "USA"
+        redirect_entry.get_redirect_entry.return_value = target_entry
+
+        mock_archive.get_entry_by_path.return_value = redirect_entry
+
+        result, content_ok = zim_operations._get_entry_content(
+            mock_archive, "A/USA", 1000, tmp_path / "test.zim"
+        )
+
+        # Title heading should reflect the target.
+        assert result.startswith("# United States")
+        # When requested != actual, Requested Path / Actual Path are shown.
+        assert "Requested Path: A/USA" in result
+        assert "Actual Path: A/United_States" in result
+        # The redirect's title must NOT appear as the heading.
+        assert not result.startswith("# USA")
+        assert content_ok is True
+
+    def test_get_entry_content_redirect_cycle_detection(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
+        """A redirect cycle (A->B->A) must raise OpenZimMcpArchiveError."""
+        from unittest.mock import MagicMock
+
+        mock_archive = MagicMock()
+
+        entry_a = MagicMock()
+        entry_a.is_redirect = True
+        entry_a.path = "A/A"
+        entry_a.title = "A"
+
+        entry_b = MagicMock()
+        entry_b.is_redirect = True
+        entry_b.path = "A/B"
+        entry_b.title = "B"
+
+        # A -> B -> A (cycle).
+        entry_a.get_redirect_entry.return_value = entry_b
+        entry_b.get_redirect_entry.return_value = entry_a
+
+        mock_archive.get_entry_by_path.return_value = entry_a
+
+        with pytest.raises(OpenZimMcpArchiveError) as exc_info:
+            zim_operations._get_entry_content(
+                mock_archive, "A/A", 1000, tmp_path / "test.zim"
+            )
+
+        msg = str(exc_info.value).lower()
+        assert "cycle" in msg or "redirect" in msg
+
+    def test_get_entry_content_redirect_depth_limit(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
+        """A redirect chain longer than MAX_REDIRECT_DEPTH must raise."""
+        from unittest.mock import MagicMock
+
+        mock_archive = MagicMock()
+
+        # Build a long chain of distinct redirects that never resolves.
+        entries = []
+        for i in range(20):
+            e = MagicMock()
+            e.is_redirect = True
+            e.path = f"A/r{i}"
+            e.title = f"r{i}"
+            entries.append(e)
+        for i in range(len(entries) - 1):
+            entries[i].get_redirect_entry.return_value = entries[i + 1]
+        # Last one keeps redirecting to itself's neighbour to keep chain growing.
+        entries[-1].get_redirect_entry.return_value = entries[-2]
+
+        mock_archive.get_entry_by_path.return_value = entries[0]
+
+        with pytest.raises(OpenZimMcpArchiveError) as exc_info:
+            zim_operations._get_entry_content(
+                mock_archive, "A/r0", 1000, tmp_path / "test.zim"
+            )
+
+        msg = str(exc_info.value).lower()
+        assert "redirect" in msg
 
     def test_get_metadata_with_missing_entries(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1247,6 +1364,8 @@ class TestZimOperations:
 
             # Mock successful direct entry access
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
+            mock_entry.path = "A/Test_Article"
             mock_entry.title = "Test Article"
             mock_item = MagicMock()
             mock_item.mimetype = "text/html"
@@ -1284,6 +1403,8 @@ class TestZimOperations:
                     raise Exception("Entry not found")
                 elif path == "A/Test_Article":  # Found via search with underscore
                     mock_entry = MagicMock()
+                    mock_entry.is_redirect = False
+                    mock_entry.path = "A/Test_Article"
                     mock_entry.title = "Test Article"
                     mock_item = MagicMock()
                     mock_item.mimetype = "text/html"
@@ -1330,6 +1451,8 @@ class TestZimOperations:
 
             # Mock successful access using cached path
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
+            mock_entry.path = "A/Test_Article"
             mock_entry.title = "Test Article"
             mock_item = MagicMock()
             mock_item.mimetype = "text/html"
@@ -1374,6 +1497,8 @@ class TestZimOperations:
                     raise Exception("Direct access failed")
                 elif path == "A/Test_Article":  # Found via search
                     mock_entry = MagicMock()
+                    mock_entry.is_redirect = False
+                    mock_entry.path = "A/Test_Article"
                     mock_entry.title = "Test Article"
                     mock_item = MagicMock()
                     mock_item.mimetype = "text/html"
@@ -2301,6 +2426,8 @@ class TestZimOperationsGetEntries:
 
         # First call returns a real entry, second raises.
         good = MagicMock()
+        good.is_redirect = False
+        good.path = "A/Good"
         good.title = "ok"
         good_item = MagicMock()
         good_item.mimetype = "text/html"
