@@ -106,7 +106,7 @@ jobs:
 
       - name: Upload coverage reports as artifacts
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-reports
           path: |
@@ -211,7 +211,7 @@ jobs:
           echo "4. Or download the security-reports artifact to view results locally"
 
       - name: Upload security scan results
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: always() && (hashFiles('safety-report.json') != '' || hashFiles('bandit-report.json') != '' || hashFiles('bandit-report.sarif') != '')
         with:
           name: security-reports
