@@ -412,3 +412,64 @@ class TestIntentParserBatchEntries:
 
         intent, _params, _ = IntentParser.parse_intent("get article A/Foo")
         assert intent == "get_article"
+
+
+class TestExplicitZimPathHonored:
+    """Regression: H14 - explicit zim_file_path must not be overwritten."""
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        """Create mock ZimOperations that records the zim path it receives."""
+        mock = Mock()
+        # Auto-select would return a different path; if the fix is wrong and
+        # the intent branch calls _auto_select_zim_file, this is what would
+        # be passed through to the backend.
+        mock.list_zim_files_data.return_value = [
+            {"path": "/auto/selected.zim", "name": "selected.zim"}
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/auto/selected.zim", "name": "selected.zim"}]'
+        )
+        mock.walk_namespace.return_value = "{}"
+        mock.find_entry_by_title.return_value = "{}"
+        mock.get_related_articles.return_value = "{}"
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        """Build a SimpleToolsHandler wired to the mock backend."""
+        return SimpleToolsHandler(mock_zim_operations)
+
+    @pytest.mark.parametrize(
+        "intent_query,backend_attr",
+        [
+            ("walk namespace M", "walk_namespace"),
+            ("find article titled Photosynthesis", "find_entry_by_title"),
+            ("articles related to Climate_Change", "get_related_articles"),
+        ],
+    )
+    def test_simple_tools_uses_explicit_zim_path(
+        self, handler, mock_zim_operations, intent_query, backend_attr
+    ):
+        """The caller-supplied zim_file_path must reach the backend.
+
+        Previously, walk_namespace / find_by_title / related branches
+        called self._auto_select_zim_file() again, silently overwriting
+        the explicit path the caller supplied. Now the explicit path
+        must be honored.
+        """
+        explicit = "/zims/wikipedia_en_simple.zim"
+        handler.handle_zim_query(intent_query, zim_file_path=explicit)
+
+        backend = getattr(mock_zim_operations, backend_attr)
+        assert backend.called, f"{backend_attr} was not called"
+        # First positional arg is the zim path
+        call_args = backend.call_args
+        actual_path = (
+            call_args.args[0]
+            if call_args.args
+            else call_args.kwargs.get("zim_file_path")
+        )
+        assert (
+            actual_path == explicit
+        ), f"{backend_attr}: expected {explicit}, got {actual_path}"

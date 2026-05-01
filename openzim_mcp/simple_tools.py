@@ -700,25 +700,24 @@ class SimpleToolsHandler:
                     params.get("query", query), limit_per_file=5
                 )
             elif intent == "walk_namespace":
-                zim_path = self._auto_select_zim_file()
-                if not zim_path:
-                    return "No ZIM file available; please specify zim_file_path."
+                # zim_file_path was already populated by the function-level
+                # auto-select guard above; honor whatever the caller supplied.
                 return self.zim_operations.walk_namespace(
-                    zim_path, params.get("namespace", "C"), cursor=0, limit=200
+                    zim_file_path,
+                    params.get("namespace", "C"),
+                    cursor=0,
+                    limit=200,
                 )
             elif intent == "find_by_title":
-                zim_path = self._auto_select_zim_file()
-                if not zim_path:
-                    return "No ZIM file available; please specify zim_file_path."
                 return self.zim_operations.find_entry_by_title(
-                    zim_path, params.get("title", query), cross_file=False, limit=10
+                    zim_file_path,
+                    params.get("title", query),
+                    cross_file=False,
+                    limit=10,
                 )
             elif intent == "related":
-                zim_path = self._auto_select_zim_file()
-                if not zim_path:
-                    return "No ZIM file available; please specify zim_file_path."
                 return self.zim_operations.get_related_articles(
-                    zim_path,
+                    zim_file_path,
                     params.get("entry_path", ""),
                     limit=10,
                 )
