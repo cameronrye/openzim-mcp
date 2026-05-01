@@ -3,6 +3,7 @@
 import argparse
 import atexit
 import sys
+from typing import Literal
 
 from .config import OpenZimMcpConfig
 from .constants import TOOL_MODE_SIMPLE, VALID_TOOL_MODES
@@ -45,6 +46,26 @@ Environment Variables:
             f"(default: {TOOL_MODE_SIMPLE}, or from OPENZIM_MCP_TOOL_MODE env var)"
         ),
     )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default=None,
+        help=(
+            "Transport: 'stdio' (default, for local MCP clients) or 'http' "
+            "(streamable HTTP). Env: OPENZIM_MCP_TRANSPORT"
+        ),
+    )
+    parser.add_argument(
+        "--host",
+        default=None,
+        help=("HTTP bind host (default 127.0.0.1). Env: OPENZIM_MCP_HOST"),
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=("HTTP bind port (default 8000). Env: OPENZIM_MCP_PORT"),
+    )
 
     # Handle case where no arguments provided
     if len(sys.argv) == 1:
@@ -58,6 +79,12 @@ Environment Variables:
         config_kwargs = {"allowed_directories": args.directories}
         if args.mode:
             config_kwargs["tool_mode"] = args.mode
+        if args.transport:
+            config_kwargs["transport"] = args.transport
+        if args.host:
+            config_kwargs["host"] = args.host
+        if args.port is not None:
+            config_kwargs["port"] = args.port
 
         config = OpenZimMcpConfig(**config_kwargs)
 
@@ -104,7 +131,11 @@ Environment Variables:
             file=sys.stderr,
         )
 
-        server.run(transport="stdio")
+        # Map user-facing 'http' to FastMCP's wire value 'streamable-http'.
+        transport_arg: Literal["stdio", "streamable-http"] = (
+            "streamable-http" if config.transport == "http" else "stdio"
+        )
+        server.run(transport=transport_arg)
 
     except OpenZimMcpConfigurationError as e:
         print(f"Configuration error: {e}", file=sys.stderr)

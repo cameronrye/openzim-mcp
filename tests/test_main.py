@@ -130,6 +130,78 @@ class TestMainModule:
 
         assert exc_info.value.code == 1
 
+    @patch("openzim_mcp.main.InstanceTracker")
+    @patch("openzim_mcp.main.OpenZimMcpServer")
+    @patch("openzim_mcp.main.OpenZimMcpConfig")
+    @patch("sys.argv", ["openzim_mcp", "--transport", "http", "/test/dir"])
+    def test_main_http_transport(
+        self, mock_config_class, mock_server_class, mock_tracker_class
+    ):
+        """--transport http maps to streamable-http at server.run()."""
+        from openzim_mcp.main import main
+
+        mock_config = MagicMock()
+        mock_config.transport = "http"
+        mock_config_class.return_value = mock_config
+        mock_server = MagicMock()
+        mock_server_class.return_value = mock_server
+        mock_tracker_class.return_value = MagicMock()
+
+        main()
+
+        mock_server.run.assert_called_once_with(transport="streamable-http")
+
+    @patch("openzim_mcp.main.InstanceTracker")
+    @patch("openzim_mcp.main.OpenZimMcpServer")
+    @patch("openzim_mcp.main.OpenZimMcpConfig")
+    @patch(
+        "sys.argv",
+        [
+            "openzim_mcp",
+            "--transport",
+            "http",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9000",
+            "/test/dir",
+        ],
+    )
+    def test_main_http_with_host_port(
+        self, mock_config_class, mock_server_class, mock_tracker_class
+    ):
+        """--host and --port pass through to config kwargs."""
+        from openzim_mcp.main import main
+
+        mock_config_class.return_value = MagicMock(transport="http")
+        mock_server_class.return_value = MagicMock()
+        mock_tracker_class.return_value = MagicMock()
+
+        main()
+
+        call_kwargs = mock_config_class.call_args.kwargs
+        assert call_kwargs["transport"] == "http"
+        assert call_kwargs["host"] == "0.0.0.0"
+        assert call_kwargs["port"] == 9000
+
+    @patch("openzim_mcp.main.InstanceTracker")
+    @patch("openzim_mcp.main.OpenZimMcpServer")
+    @patch("openzim_mcp.main.OpenZimMcpConfig")
+    @patch("sys.argv", ["openzim_mcp", "/test/dir"])
+    def test_main_default_still_stdio(
+        self, mock_config_class, mock_server_class, mock_tracker_class
+    ):
+        """Existing behavior preserved: no flags = stdio."""
+        from openzim_mcp.main import main
+
+        mock_config_class.return_value = MagicMock(transport="stdio")
+        mock_server_class.return_value = MagicMock()
+        mock_tracker_class.return_value = MagicMock()
+
+        main()
+
+        mock_server_class.return_value.run.assert_called_once_with(transport="stdio")
+
 
 class TestMainEntryPoint:
     """Test __main__ entry point."""
