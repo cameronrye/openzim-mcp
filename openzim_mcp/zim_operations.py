@@ -310,10 +310,15 @@ class ZimOperations:
 
         try:
             with zim_archive(validated_path) as archive:
-                result = self._perform_search(archive, query, limit, offset)
+                result, total_results = self._perform_search(
+                    archive, query, limit, offset
+                )
 
-            # Cache the result
-            self.cache.set(cache_key, result)
+            # Don't cache zero-result responses: libzim's lazy index warm-up
+            # can return 0 matches transiently, and a TTL-cached "no results"
+            # would mask the index becoming ready.
+            if total_results > 0:
+                self.cache.set(cache_key, result)
             logger.debug(f"Search completed: query='{query}', results found")
             return result
 
@@ -323,8 +328,13 @@ class ZimOperations:
 
     def _perform_search(
         self, archive: Archive, query: str, limit: int, offset: int
-    ) -> str:
-        """Perform the actual search operation."""
+    ) -> Tuple[str, int]:
+        """Perform the actual search operation.
+
+        Returns:
+            (result_text, total_results) — caller uses total_results to decide
+            whether the response is safe to cache.
+        """
         # Create searcher and execute search
         query_obj = Query().set_query(query)
         searcher = Searcher(archive)
@@ -334,14 +344,14 @@ class ZimOperations:
         total_results = search.getEstimatedMatches()
 
         if total_results == 0:
-            return f'No search results found for "{query}"'
+            return f'No search results found for "{query}"', 0
 
         # Guard against offset exceeding total results (would produce negative count)
         if offset >= total_results:
             return (
                 f'Found {total_results} matches for "{query}", '
                 f"but offset {offset} exceeds total results."
-            )
+            ), total_results
 
         result_count = min(limit, total_results - offset)
 
@@ -400,7 +410,7 @@ class ZimOperations:
         else:
             result_text += "**End of results**\n"
 
-        return result_text
+        return result_text, total_results
 
     def _get_entry_snippet(self, entry: Any) -> str:
         """Get content snippet for search result."""
@@ -475,7 +485,7 @@ class ZimOperations:
 
         try:
             with zim_archive(validated_path) as archive:
-                result = self._get_entry_content(
+                result, content_ok = self._get_entry_content(
                     archive,
                     entry_path,
                     max_content_length,
@@ -483,8 +493,11 @@ class ZimOperations:
                     content_offset,
                 )
 
-            # Cache the result
-            self.cache.set(cache_key, result)
+            # Only cache successful content retrieval. If process_mime_content
+            # raised and we returned an error sentinel, recompute on the next
+            # request rather than locking the failure in for the TTL.
+            if content_ok:
+                self.cache.set(cache_key, result)
             logger.info(f"Retrieved entry: {entry_path}")
             return result
 
@@ -574,13 +587,19 @@ class ZimOperations:
         max_content_length: int,
         validated_path: Path,
         content_offset: int = 0,
-    ) -> str:
+    ) -> Tuple[str, bool]:
         """Get the actual entry content with smart retrieval.
 
         Implements smart retrieval logic:
         1. Try direct entry access first
         2. If direct access fails, fall back to search-based retrieval
         3. Cache successful path mappings for future use
+
+        Returns:
+            (result_text, content_ok) — ``content_ok`` is False when
+            ``process_mime_content`` raised and the result text is the
+            ``(Error retrieving content: ...)`` sentinel; the caller must
+            not cache the response in that case.
         """
         # Path mapping cache key includes archive path so identical entry
         # names in different ZIM files don't collide.
@@ -606,12 +625,14 @@ class ZimOperations:
         # Try direct access first
         try:
             logger.debug(f"Attempting direct entry access: {entry_path}")
-            result = self._get_entry_content_direct(
+            result, content_ok = self._get_entry_content_direct(
                 archive, entry_path, entry_path, max_content_length, content_offset
             )
-            # Cache successful direct access
+            # Cache successful direct access (path mapping is valid even if
+            # content extraction hit a transient MIME error — the path
+            # resolved, only the body raised).
             self.cache.set(cache_key, entry_path)
-            return result
+            return result, content_ok
         except Exception as direct_error:
             logger.debug(f"Direct entry access failed for {entry_path}: {direct_error}")
 
@@ -620,7 +641,7 @@ class ZimOperations:
                 logger.info(f"Falling back to search-based retrieval for: {entry_path}")
                 actual_path = self._find_entry_by_search(archive, entry_path)
                 if actual_path:
-                    result = self._get_entry_content_direct(
+                    result, content_ok = self._get_entry_content_direct(
                         archive,
                         actual_path,
                         entry_path,
@@ -632,7 +653,7 @@ class ZimOperations:
                     logger.info(
                         f"Smart retrieval successful: {entry_path} -> {actual_path}"
                     )
-                    return result
+                    return result, content_ok
                 else:
                     # No entry found via search
                     raise OpenZimMcpArchiveError(
@@ -665,7 +686,7 @@ class ZimOperations:
         requested_path: str,
         max_content_length: int,
         content_offset: int = 0,
-    ) -> str:
+    ) -> Tuple[str, bool]:
         """Get entry content using the actual path from the ZIM file.
 
         Args:
@@ -674,6 +695,11 @@ class ZimOperations:
             requested_path: The originally requested path (for display)
             max_content_length: Maximum content length
             content_offset: Character offset to start reading from
+
+        Returns:
+            (result_text, content_ok) — ``content_ok`` is False when MIME
+            processing raised and the body holds the
+            ``(Error retrieving content: ...)`` sentinel.
         """
         entry = archive.get_entry_by_path(actual_path)
         title = entry.title or "Untitled"
@@ -681,6 +707,7 @@ class ZimOperations:
         # Get content
         content = ""
         content_type = ""
+        content_ok = True
 
         try:
             item = entry.get_item()
@@ -695,6 +722,7 @@ class ZimOperations:
         except Exception as e:
             logger.warning(f"Error getting entry content: {e}")
             content = f"(Error retrieving content: {e})"
+            content_ok = False
 
         total_length = len(content)
         offset_applied = False
@@ -723,7 +751,7 @@ class ZimOperations:
         result_text += "## Content\n\n"
         result_text += content or "(No content)"
 
-        return result_text
+        return result_text, content_ok
 
     def _find_entry_by_search(self, archive: Archive, entry_path: str) -> Optional[str]:
         """Find the actual entry path by searching for the entry.
@@ -983,10 +1011,12 @@ class ZimOperations:
 
         try:
             with zim_archive(validated_path) as archive:
-                result = self._get_main_page_content(archive)
+                result, content_ok = self._get_main_page_content(archive)
 
-            # Cache the result
-            self.cache.set(cache_key, result)
+            # Don't cache error sentinels: a transient failure (e.g. MIME
+            # processing error) should not be locked in for the TTL.
+            if content_ok:
+                self.cache.set(cache_key, result)
             logger.info(f"Retrieved main page for: {validated_path}")
             return result
 
@@ -994,8 +1024,14 @@ class ZimOperations:
             logger.error(f"Main page retrieval failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Main page retrieval failed: {e}") from e
 
-    def _get_main_page_content(self, archive: Archive) -> str:
-        """Get main page content from archive."""
+    def _get_main_page_content(self, archive: Archive) -> Tuple[str, bool]:
+        """Get main page content from archive.
+
+        Returns:
+            (text, content_ok) — ``content_ok`` is False when the body holds an
+            error sentinel produced by a fallback path (MIME processing or
+            outer exception), so the caller can skip caching it.
+        """
         try:
             # Try to get main page from archive metadata
             if hasattr(archive, "main_entry") and archive.main_entry:
@@ -1021,14 +1057,14 @@ class ZimOperations:
                     result += "## Content\n\n"
                     result += content
 
-                    return result
+                    return result, True
 
                 except Exception as e:
                     logger.warning(f"Error getting main page content: {e}")
                     return (
                         f"# Main Page\n\nPath: {path}\n\n"
                         f"(Error retrieving content: {e})"
-                    )
+                    ), False
 
             # Fallback: try common main page paths
             main_page_paths = ["W/mainPage", "A/Main_Page", "A/index", ""]
@@ -1065,7 +1101,7 @@ class ZimOperations:
                             result += "## Content\n\n"
                             result += content
 
-                            return result
+                            return result, True
 
                         except Exception as e:
                             logger.warning(f"Error getting content for {path}: {e}")
@@ -1075,15 +1111,16 @@ class ZimOperations:
                     # Path doesn't exist, try next
                     continue
 
-            # No main page found
+            # No main page found — this is a structural property of the
+            # archive, so it's safe to cache.
             return (
                 "# Main Page\n\nNo main page found in this ZIM file.\n\n"
                 "The archive may not have a designated main page entry."
-            )
+            ), True
 
         except Exception as e:
             logger.error(f"Error getting main page: {e}")
-            return f"# Main Page\n\nError retrieving main page: {e}"
+            return f"# Main Page\n\nError retrieving main page: {e}", False
 
     def list_namespaces(self, zim_file_path: str) -> str:
         """List available namespaces and their entry counts.
@@ -1684,12 +1721,15 @@ class ZimOperations:
 
         try:
             with zim_archive(validated_path) as archive:
-                result = self._perform_filtered_search(
+                result, total_filtered = self._perform_filtered_search(
                     archive, query, namespace, content_type, limit, offset
                 )
 
-            # Cache the result
-            self.cache.set(cache_key, result)
+            # Don't cache zero-result responses: libzim's lazy index warm-up
+            # can return 0 matches transiently, and a TTL-cached "no results"
+            # would mask the index becoming ready.
+            if total_filtered > 0:
+                self.cache.set(cache_key, result)
             logger.info(
                 f"Filtered search completed: query='{query}', "
                 f"namespace={namespace}, type={content_type}"
@@ -1710,8 +1750,14 @@ class ZimOperations:
         content_type: Optional[str],
         limit: int,
         offset: int,
-    ) -> str:
-        """Perform filtered search operation."""
+    ) -> Tuple[str, int]:
+        """Perform filtered search operation.
+
+        Returns:
+            (result_text, total_filtered) — caller uses total_filtered to decide
+            whether the response is safe to cache. ``total_filtered`` is 0 for
+            both the unfiltered no-results and the post-filter no-matches cases.
+        """
         # Create searcher and execute search
         query_obj = Query().set_query(query)
         searcher = Searcher(archive)
@@ -1721,7 +1767,7 @@ class ZimOperations:
         total_results = search.getEstimatedMatches()
 
         if total_results == 0:
-            return f'No search results found for "{query}"'
+            return f'No search results found for "{query}"', 0
 
         # Stream raw results in batches and filter as we go, stopping once
         # we have enough filtered matches to satisfy offset+limit or we
@@ -1791,13 +1837,13 @@ class ZimOperations:
         )
 
         if total_filtered == 0:
-            return f'No filtered matches for "{query}"{filter_text}'
+            return f'No filtered matches for "{query}"{filter_text}', 0
 
         if offset >= total_filtered:
             return (
                 f'Found {total_filtered} filtered matches for "{query}"{filter_text}, '
                 f"but offset {offset} exceeds total results."
-            )
+            ), total_filtered
 
         paginated_results = filtered_results[offset : offset + limit]
 
@@ -1879,7 +1925,7 @@ class ZimOperations:
         else:
             result_text += "**End of results**\n"
 
-        return result_text
+        return result_text, total_filtered
 
     def get_search_suggestions(
         self, zim_file_path: str, partial_query: str, limit: int = 10

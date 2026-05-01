@@ -178,20 +178,35 @@ class TestZimOperations:
     def test_search_zim_file_caching(
         self, zim_operations: ZimOperations, temp_dir: Path
     ):
-        """Test that search results are cached."""
+        """Test that successful search results are cached.
+
+        Note: zero-result responses are intentionally not cached (see
+        ``tests/test_cache_control.py``); this test exercises a non-empty
+        result set to verify the caching path.
+        """
         # Create a test ZIM file
         zim_file = temp_dir / "test.zim"
         zim_file.write_text("test content")
 
         with patch("openzim_mcp.zim_operations.Archive") as mock_archive:
-            # Mock successful search
+            # Mock successful search with at least one result so the response
+            # is cacheable.
             mock_archive_instance = MagicMock()
             mock_archive.return_value = mock_archive_instance
 
             mock_searcher = MagicMock()
             mock_search = MagicMock()
-            mock_search.getEstimatedMatches.return_value = 0
+            mock_search.getEstimatedMatches.return_value = 1
+            mock_search.getResults.return_value = ["A/Hit"]
             mock_searcher.search.return_value = mock_search
+
+            mock_entry = MagicMock()
+            mock_entry.title = "Hit"
+            mock_item = MagicMock()
+            mock_item.mimetype = "text/html"
+            mock_item.content = b"<html><body>hello</body></html>"
+            mock_entry.get_item.return_value = mock_item
+            mock_archive_instance.get_entry_by_path.return_value = mock_entry
 
             with (
                 patch(
@@ -747,8 +762,9 @@ class TestZimOperations:
             patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher),
             patch("openzim_mcp.zim_operations.Query"),
         ):
-            result = zim_operations._perform_search(mock_archive, "test", 10, 0)
+            result, total = zim_operations._perform_search(mock_archive, "test", 10, 0)
             assert "No search results found" in result
+            assert total == 0
 
     def test_get_entry_content_with_redirect(
         self, zim_operations: ZimOperations, tmp_path: Path
@@ -769,10 +785,11 @@ class TestZimOperations:
 
         mock_archive.get_entry_by_path.return_value = mock_entry
 
-        result = zim_operations._get_entry_content(
+        result, content_ok = zim_operations._get_entry_content(
             mock_archive, "A/Test", 1000, tmp_path / "test.zim"
         )
         assert "Test Article" in result
+        assert content_ok is True
 
     def test_get_metadata_with_missing_entries(
         self, zim_operations: ZimOperations, temp_dir: Path
