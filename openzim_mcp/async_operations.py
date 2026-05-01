@@ -8,7 +8,7 @@ the event loop during I/O-bound operations.
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Dict, List, Optional
 
 from .zim_operations import ZimOperations
 
@@ -99,6 +99,26 @@ class AsyncZimOperations:
             entry_path,
             max_content_length,
             content_offset,
+        )
+
+    async def get_entries(
+        self,
+        entries: List[Dict[str, str]],
+        max_content_length: Optional[int] = None,
+    ) -> str:
+        """Fetch multiple ZIM entries in one call (async).
+
+        Args:
+            entries: list of ``{"zim_file_path", "entry_path"}`` dicts.
+            max_content_length: per-entry max content length.
+
+        Returns:
+            JSON string with results, succeeded, failed counts.
+        """
+        return await asyncio.to_thread(
+            self._ops.get_entries,
+            entries,
+            max_content_length,
         )
 
     async def get_zim_metadata(self, zim_file_path: str) -> str:

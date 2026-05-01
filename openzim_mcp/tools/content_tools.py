@@ -1,7 +1,7 @@
 """Content retrieval tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..constants import (
     INPUT_LIMIT_ENTRY_PATH,
@@ -91,6 +91,55 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
                 operation="get ZIM entry",
                 error=e,
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
+            )
+
+    @server.mcp.tool()
+    async def get_zim_entries(
+        entries: List[Dict[str, Any]],
+        max_content_length: Optional[int] = None,
+    ) -> str:
+        """Fetch multiple ZIM entries in one call.
+
+        Pairs naturally with HTTP transport, where round-trip cost matters.
+        Up to 50 entries per batch. Each entry resolves independently —
+        per-entry failures do not abort the batch. Different ``zim_file_path``
+        values within one batch are allowed (multi-archive workflow).
+
+        Args:
+            entries: list of ``{"zim_file_path": "...", "entry_path": "..."}``
+                dicts. Limit: 50 per batch.
+            max_content_length: per-entry max content length.
+
+        Returns:
+            JSON string ``{"results": [...], "succeeded": N, "failed": N}``.
+            Each result includes ``index``, ``success``, and either ``content``
+            or ``error``.
+
+        Notes:
+            Rate limit is charged per entry, not per batch (anti-bypass).
+        """
+        try:
+            # Charge rate-limit per entry to prevent batch bypass.
+            try:
+                for _ in entries or []:
+                    server.rate_limiter.check_rate_limit("get_zim_entries")
+            except OpenZimMcpRateLimitError as e:
+                return server._create_enhanced_error_message(
+                    operation="batch get entries",
+                    error=e,
+                    context=f"Batch size: {len(entries) if entries else 0}",
+                )
+
+            return await server.async_zim_operations.get_entries(
+                entries, max_content_length
+            )
+
+        except Exception as e:
+            logger.error(f"Error in get_zim_entries: {e}")
+            return server._create_enhanced_error_message(
+                operation="batch get entries",
+                error=e,
+                context=f"Batch size: {len(entries) if entries else 0}",
             )
 
     @server.mcp.tool()
