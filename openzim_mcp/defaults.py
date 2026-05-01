@@ -29,6 +29,11 @@ class ContentDefaults:
     SEARCH_LIMIT: int = 10
     MAX_BINARY_SIZE: int = 10_000_000  # 10MB
     MAIN_PAGE_TRUNCATION: int = 5000  # Characters for main page display
+    # Maximum redirect chain length before bailing out. Real ZIM redirects
+    # rarely chain more than once or twice; ten is well above any legitimate
+    # depth and guards against pathological data or cycles libzim itself
+    # does not detect.
+    MAX_REDIRECT_DEPTH: int = 10
 
 
 @dataclass(frozen=True)

@@ -23,6 +23,7 @@ from .constants import (
     NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER,
 )
 from .content_processor import ContentProcessor
+from .defaults import CONTENT
 from .exceptions import (
     ArchiveOpenTimeoutError,
     OpenZimMcpArchiveError,
@@ -34,10 +35,9 @@ from .timeout_utils import run_with_timeout
 # Timeout for opening ZIM archives (seconds)
 ARCHIVE_OPEN_TIMEOUT = 30.0
 
-# Maximum redirect chain length before bailing out. Real ZIM redirects rarely
-# chain more than once or twice; ten is well above any legitimate depth and
-# guards against pathological data or cycles libzim itself does not detect.
-MAX_REDIRECT_DEPTH = 10
+# Maximum redirect chain length before bailing out. See
+# ``ContentDefaults.MAX_REDIRECT_DEPTH`` in ``defaults.py``.
+MAX_REDIRECT_DEPTH = CONTENT.MAX_REDIRECT_DEPTH
 
 
 class PaginationCursor:
@@ -615,13 +615,14 @@ class ZimOperations:
                 f"Using cached path mapping: {entry_path} -> {cached_actual_path}"
             )
             try:
-                return self._get_entry_content_direct(
+                result, content_ok, _resolved = self._get_entry_content_direct(
                     archive,
                     cached_actual_path,
                     entry_path,
                     max_content_length,
                     content_offset,
                 )
+                return result, content_ok
             except Exception as e:
                 logger.warning(f"Cached path mapping failed: {e}")
                 # Clear invalid cache entry and continue with smart retrieval
@@ -630,13 +631,14 @@ class ZimOperations:
         # Try direct access first
         try:
             logger.debug(f"Attempting direct entry access: {entry_path}")
-            result, content_ok = self._get_entry_content_direct(
+            result, content_ok, resolved_path = self._get_entry_content_direct(
                 archive, entry_path, entry_path, max_content_length, content_offset
             )
-            # Cache successful direct access (path mapping is valid even if
-            # content extraction hit a transient MIME error — the path
-            # resolved, only the body raised).
-            self.cache.set(cache_key, entry_path)
+            # Cache the *resolved* path so a follow-up request for the same
+            # redirect entry skips the redirect chain entirely. Path mapping
+            # is valid even if content extraction hit a transient MIME error
+            # — the path resolved, only the body raised.
+            self.cache.set(cache_key, resolved_path)
             return result, content_ok
         except OpenZimMcpArchiveError:
             # Structural failures we raised ourselves (redirect cycles,
@@ -652,17 +654,18 @@ class ZimOperations:
                 logger.info(f"Falling back to search-based retrieval for: {entry_path}")
                 actual_path = self._find_entry_by_search(archive, entry_path)
                 if actual_path:
-                    result, content_ok = self._get_entry_content_direct(
+                    result, content_ok, resolved_path = self._get_entry_content_direct(
                         archive,
                         actual_path,
                         entry_path,
                         max_content_length,
                         content_offset,
                     )
-                    # Cache successful path mapping
-                    self.cache.set(cache_key, actual_path)
+                    # Cache the resolved path (which may differ from
+                    # ``actual_path`` if the search hit a redirect stub).
+                    self.cache.set(cache_key, resolved_path)
                     logger.info(
-                        f"Smart retrieval successful: {entry_path} -> {actual_path}"
+                        f"Smart retrieval successful: {entry_path} -> {resolved_path}"
                     )
                     return result, content_ok
                 else:
@@ -697,7 +700,7 @@ class ZimOperations:
         requested_path: str,
         max_content_length: int,
         content_offset: int = 0,
-    ) -> Tuple[str, bool]:
+    ) -> Tuple[str, bool, str]:
         """Get entry content using the actual path from the ZIM file.
 
         Args:
@@ -708,9 +711,12 @@ class ZimOperations:
             content_offset: Character offset to start reading from
 
         Returns:
-            (result_text, content_ok) — ``content_ok`` is False when MIME
-            processing raised and the body holds the
-            ``(Error retrieving content: ...)`` sentinel.
+            ``(result_text, content_ok, resolved_path)`` where
+            ``content_ok`` is False when MIME processing raised and the
+            body holds the ``(Error retrieving content: ...)`` sentinel,
+            and ``resolved_path`` is the path of the resolved target after
+            following any redirect chain (equal to ``actual_path`` when
+            ``actual_path`` itself was not a redirect).
         """
         entry = archive.get_entry_by_path(actual_path)
 
@@ -721,7 +727,7 @@ class ZimOperations:
         # a cycle.
         seen_paths: set[str] = set()
         depth = 0
-        while getattr(entry, "is_redirect", False):
+        while entry.is_redirect:
             if depth >= MAX_REDIRECT_DEPTH:
                 raise OpenZimMcpArchiveError(
                     f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
@@ -786,7 +792,7 @@ class ZimOperations:
         result_text += "## Content\n\n"
         result_text += content or "(No content)"
 
-        return result_text, content_ok
+        return result_text, content_ok, actual_path
 
     def _find_entry_by_search(self, archive: Archive, entry_path: str) -> Optional[str]:
         """Find the actual entry path by searching for the entry.

@@ -905,8 +905,52 @@ class TestZimOperations:
                 mock_archive, "A/r0", 1000, tmp_path / "test.zim"
             )
 
-        msg = str(exc_info.value).lower()
-        assert "redirect" in msg
+        # Tighten: must hit the depth-limit branch, not the cycle-detection
+        # branch. The depth-limit message reads "Redirect chain too deep".
+        msg = str(exc_info.value)
+        assert "too deep" in msg
+
+    def test_redirect_resolved_path_is_cached(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
+        """The path-mapping cache must store the *resolved* target path.
+
+        For a redirect ``A/USA -> A/United_States``, looking up ``A/USA`` once
+        should populate the cache slot with ``"A/United_States"`` so the next
+        request for ``A/USA`` skips the redirect chain entirely.
+        """
+        from unittest.mock import MagicMock
+
+        mock_archive = MagicMock()
+
+        # Resolved target.
+        target_entry = MagicMock()
+        target_entry.is_redirect = False
+        target_entry.path = "A/United_States"
+        target_entry.title = "United States"
+        target_item = MagicMock()
+        target_item.content = b"<html>Target content</html>"
+        target_item.mimetype = "text/html"
+        target_entry.get_item.return_value = target_item
+
+        # Redirect stub.
+        redirect_entry = MagicMock()
+        redirect_entry.is_redirect = True
+        redirect_entry.path = "A/USA"
+        redirect_entry.title = "USA"
+        redirect_entry.get_redirect_entry.return_value = target_entry
+
+        mock_archive.get_entry_by_path.return_value = redirect_entry
+
+        zim_file = tmp_path / "test.zim"
+        zim_operations._get_entry_content(mock_archive, "A/USA", 1000, zim_file)
+
+        cache_key = f"path_mapping:{zim_file}:A/USA"
+        cached = zim_operations.cache.get(cache_key)
+        assert cached == "A/United_States", (
+            "Cache must store the resolved path so subsequent "
+            "lookups skip the redirect chain."
+        )
 
     def test_get_metadata_with_missing_entries(
         self, zim_operations: ZimOperations, temp_dir: Path
