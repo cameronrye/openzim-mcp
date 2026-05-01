@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0](https://github.com/cameronrye/openzim-mcp/compare/v0.9.0...v1.0.0) (2026-05-01)
+
+### Features
+
+* **http:** streamable HTTP transport with bearer-token auth, CORS allow-list, and `/healthz`/`/readyz` endpoints
+* **http:** safe-default startup check refuses to bind a non-localhost host without an auth token
+* **docker:** multi-stage, multi-arch (`linux/amd64`, `linux/arm64`) image published to `ghcr.io/cameronrye/openzim-mcp`, runs as non-root with a built-in health check
+* **content:** `get_zim_entries` batch tool — fetch up to 50 entries in one call, with per-entry success/error reporting
+* **resources:** per-entry `zim://{name}/entry/{path}` resource serves entries with their native MIME type (clients must URL-encode `/` as `%2F` in the path segment)
+* **subscriptions:** clients can subscribe to `zim://files` and `zim://{name}`; mtime-polling watcher emits `notifications/resources/updated` when allowed directories or `.zim` files change
+* **search:** opaque `cursor` parameter on `search_zim_file` for resumable pagination
+* **simple:** intent pattern routes batch retrieval queries to `get_zim_entries`
+
+### Bug Fixes
+
+* **content:** sanitize per-entry paths in `get_zim_entries` and expand test coverage
+* **resources:** per-entry `zim://` returns libzim's native MIME type
+* **http:** start subscription watcher via wrapped lifespan
+* **instance:** relax conflict logic for HTTP transport so multiple HTTP server instances can coexist
+
+## [0.9.0](https://github.com/cameronrye/openzim-mcp/compare/v0.8.3...v0.9.0) (2026-04-30)
+
+### Features
+
+* **search:** `search_all` queries every ZIM file in allowed directories at once and merges results
+* **search:** `find_entry_by_title` resolves a title (or partial title) to entry paths, case-insensitive, optionally cross-file
+* **prompts:** MCP prompts (`/research`, `/summarize`, `/explore`) for multi-step ZIM workflows
+* **resources:** MCP resources `zim://files` (index of all ZIM files) and `zim://{name}` (per-archive overview)
+* **navigation:** `walk_namespace` for deterministic cursor-paginated namespace iteration (vs. `browse_namespace` which samples)
+* **content:** `get_random_entry` to sample a random article
+* **content:** `get_related_articles` returns link-graph nearest neighbours (outbound, inbound, or both)
+* **server:** `warm_cache`, `cache_stats`, and `cache_clear` for inspecting and managing the in-memory cache
+
+### Bug Fixes
+
+* namespace listing deterministically surfaces minority namespaces (M, W, X, I) that random sampling could miss
+* search filtering uses streaming scan instead of a hard 1000-hit cap, so rare-mime-type filters return matches that were previously hidden
+* error messages route by failure mode first (no more "check disk space" for "entry not found")
+* phantom server-instance conflicts are no longer reported (TOCTOU re-check before raising)
+
 ## [0.8.3](https://github.com/cameronrye/openzim-mcp/compare/v0.8.2...v0.8.3) (2026-01-30)
 
 ### Bug Fixes
