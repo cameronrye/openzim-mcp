@@ -147,6 +147,16 @@ class IntentParser:
             0.8,
             6,
         ),
+        # Get multiple entries (batch) - explicit plural cue, beats singular.
+        # Singular `(article|entry|page)\b` won't match plural `articles` /
+        # `entries` because of the word-boundary, so this pattern lights up
+        # only on plural cues.
+        (
+            r"\b(get|fetch|retrieve|read)\s+(articles|entries|multiple)\b",
+            "get_zim_entries",
+            0.9,
+            8,
+        ),
         # Get article - common words
         (
             r"\b(get|show|read|display|fetch)\s+(article|entry|page)\b",

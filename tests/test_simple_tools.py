@@ -415,3 +415,28 @@ class TestNewIntentPatterns:
 
         intent, _params, _ = IntentParser.parse_intent("clear cache")
         assert intent == "cache_clear"
+
+
+class TestIntentParserBatchEntries:
+    """Test intent patterns for the get_zim_entries (batch) tool."""
+
+    def test_fetch_articles_routes_to_get_zim_entries(self):
+        """Plural 'articles' cue with fetch verb routes to batch tool."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, _params, _ = IntentParser.parse_intent("fetch articles A/Foo and A/Bar")
+        assert intent == "get_zim_entries"
+
+    def test_get_entries_routes_to_get_zim_entries(self):
+        """Explicit 'entries' cue routes to batch tool."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, _params, _ = IntentParser.parse_intent("get entries A/Foo, A/Bar")
+        assert intent == "get_zim_entries"
+
+    def test_singular_get_article_still_routes_to_get_article(self):
+        """The new plural pattern must NOT shadow the existing singular intent."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, _params, _ = IntentParser.parse_intent("get article A/Foo")
+        assert intent == "get_article"
