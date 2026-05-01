@@ -75,3 +75,75 @@ async def test_concurrent_subscribe_unsubscribe():
     await asyncio.gather(*tasks)
     sessions = await reg.sessions_for("zim://files")
     assert len(sessions) == 50
+
+
+@pytest.mark.asyncio
+async def test_watcher_detects_new_zim_file(tmp_path):
+    """Polling watcher fires zim://files when a .zim is added."""
+    from openzim_mcp.subscriptions import MtimeWatcher
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=0.05, on_change=emit)
+    await watcher.start()
+    try:
+        await asyncio.sleep(0.15)  # initial scan, no files
+        (tmp_path / "test.zim").write_bytes(b"")
+        # Up to ~0.5s for the watcher's next pass to notice.
+        for _ in range(20):
+            await asyncio.sleep(0.05)
+            if any(uri == "zim://files" for uri, _ in events):
+                break
+        assert any(uri == "zim://files" for uri, _ in events)
+    finally:
+        await watcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_watcher_detects_file_replacement(tmp_path):
+    """Replacing a .zim atomically fires zim://{name}."""
+    import os
+    import time
+
+    from openzim_mcp.subscriptions import MtimeWatcher
+
+    target = tmp_path / "archive.zim"
+    target.write_bytes(b"v1")
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=0.05, on_change=emit)
+    await watcher.start()
+    try:
+        await asyncio.sleep(0.1)
+        target.write_bytes(b"v2")
+        # Force a clearly-different mtime even on filesystems with coarse
+        # mtime resolution.
+        os.utime(target, (time.time(), time.time() + 1))
+        for _ in range(20):
+            await asyncio.sleep(0.05)
+            if any(uri == "zim://archive" for uri, _ in events):
+                break
+        assert any(uri == "zim://archive" for uri, _ in events)
+    finally:
+        await watcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_watcher_stop_is_idempotent(tmp_path):
+    """Calling stop() twice doesn't blow up."""
+    from openzim_mcp.subscriptions import MtimeWatcher
+
+    async def emit(uri: str, change_type: str) -> None:
+        pass
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=0.05, on_change=emit)
+    await watcher.start()
+    await watcher.stop()
+    await watcher.stop()  # second call is fine

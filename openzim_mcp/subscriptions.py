@@ -23,8 +23,11 @@ Stable surfaces this module depends on:
 """
 
 import asyncio
+import contextlib
 import logging
-from typing import Any, Hashable, List
+import os
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Hashable, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -83,3 +86,97 @@ class SubscriberRegistry:
                     empty_uris.append(uri)
             for uri in empty_uris:
                 self._by_uri.pop(uri, None)
+
+
+OnChange = Callable[[str, str], Awaitable[None]]
+
+
+class MtimeWatcher:
+    """Polls allowed dirs and fires events when ``.zim`` files change.
+
+    Events emitted:
+      * ``zim://files`` — directory contents changed (file added/removed).
+      * ``zim://{name}`` — a specific file's mtime changed (replacement).
+        ``{name}`` is the bare basename without the ``.zim`` extension.
+
+    The watcher runs as a single asyncio task. Calling ``stop()`` cancels
+    the task and waits for it to unwind. ``stop()`` is idempotent.
+
+    Args:
+        dirs: list of allowed directories to watch.
+        interval: polling interval in seconds.
+        on_change: async callback ``(uri, change_type) -> None``.
+    """
+
+    def __init__(
+        self,
+        dirs: Iterable[str],
+        interval: float,
+        on_change: OnChange,
+    ) -> None:
+        """Capture the watch list, interval, and dispatch callback."""
+        self._dirs = [str(d) for d in dirs]
+        self._interval = interval
+        self._on_change = on_change
+        self._snapshot: dict[str, float] = {}
+        self._task: Optional[asyncio.Task[None]] = None
+        self._stop_event = asyncio.Event()
+
+    async def start(self) -> None:
+        """Take an initial snapshot and begin polling."""
+        if self._task is not None:
+            return  # already running
+        self._snapshot = self._scan()
+        self._stop_event.clear()
+        self._task = asyncio.create_task(self._loop())
+
+    async def stop(self) -> None:
+        """Cancel the polling task. Idempotent."""
+        if self._task is None:
+            return
+        self._stop_event.set()
+        self._task.cancel()
+        # Cancellation always raises CancelledError on the awaited task; any
+        # other late exception during teardown is swallowed deliberately.
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await self._task
+        self._task = None
+
+    def _scan(self) -> dict[str, float]:
+        """Snapshot ``{path: mtime}`` for all ``.zim`` files in allowed dirs."""
+        snap: dict[str, float] = {}
+        for d in self._dirs:
+            try:
+                for entry in os.scandir(d):
+                    if entry.is_file() and entry.name.endswith(".zim"):
+                        with contextlib.suppress(OSError):
+                            snap[entry.path] = entry.stat().st_mtime
+            except OSError:
+                continue
+        return snap
+
+    async def _loop(self) -> None:
+        """Run the polling loop: diff against snapshot, dispatch, repeat."""
+        try:
+            while not self._stop_event.is_set():
+                await asyncio.sleep(self._interval)
+                if self._stop_event.is_set():
+                    return
+                new_snap = self._scan()
+                added = set(new_snap) - set(self._snapshot)
+                removed = set(self._snapshot) - set(new_snap)
+                changed = {
+                    p
+                    for p in (set(new_snap) & set(self._snapshot))
+                    if new_snap[p] != self._snapshot[p]
+                }
+                # Directory listing changes → zim://files
+                if added or removed:
+                    await self._on_change("zim://files", "list_changed")
+                # Per-file mtime changes → zim://{name}
+                for path in changed:
+                    name = Path(path).stem
+                    await self._on_change(f"zim://{name}", "replaced")
+                self._snapshot = new_snap
+        except asyncio.CancelledError:
+            return
