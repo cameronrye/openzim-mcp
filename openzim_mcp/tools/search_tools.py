@@ -24,7 +24,7 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def search_zim_file(
         zim_file_path: str,
-        query: str,
+        query: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
         cursor: Optional[str] = None,
@@ -33,12 +33,14 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file
-            query: Search query term
+            query: Search query term. Required unless ``cursor`` is provided,
+                in which case the query encoded in the cursor is reused.
             limit: Maximum number of results to return (default from config)
             offset: Result starting offset (for pagination)
             cursor: Opaque pagination token from a previous result's
                 ``next_cursor`` field. When provided, overrides ``offset`` and
-                ``limit`` with the values encoded in the token.
+                ``limit`` with the values encoded in the token, and supplies
+                ``query`` if it was not given explicitly.
 
         Returns:
             Search result text
@@ -54,12 +56,13 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                     context=f"Query: '{query}'",
                 )
 
-            # Sanitize inputs
+            # Sanitize file path eagerly; query is sanitized once resolved.
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
-            query = sanitize_input(query, INPUT_LIMIT_QUERY)
 
             # Resolve cursor before validating offset/limit so cursor-supplied
-            # values are subject to the same bounds checks.
+            # values are subject to the same bounds checks. The cursor also
+            # carries the original query, which is used when the caller did
+            # not pass `query` explicitly.
             if cursor:
                 from ..zim_operations import PaginationCursor
 
@@ -75,6 +78,29 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                     )
                 offset = decoded["o"]
                 limit = decoded["l"]
+                cursor_query = decoded.get("q")
+                if query is None:
+                    query = cursor_query
+                elif cursor_query and cursor_query != query:
+                    logger.warning(
+                        "search_zim_file cursor encodes query %r but caller "
+                        "passed query %r; honoring the explicit query. The "
+                        "cursor was likely paired with the wrong request.",
+                        cursor_query,
+                        query,
+                    )
+
+            if not query:
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    "**Issue**: `query` is required when `cursor` is not "
+                    "provided.\n\n"
+                    "**Troubleshooting**: Pass a search term as `query`, or "
+                    "pass a `cursor` from a prior search response to resume "
+                    "pagination."
+                )
+
+            query = sanitize_input(query, INPUT_LIMIT_QUERY)
 
             # Validate parameters
             if limit is not None and (limit < 1 or limit > 100):

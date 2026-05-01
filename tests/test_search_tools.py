@@ -196,6 +196,57 @@ class TestSearchCursor:
         # The operations layer should not have been called.
         server.async_zim_operations.search_zim_file.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_cursor_alone_supplies_query(self, server: OpenZimMcpServer):
+        """A cursor alone is sufficient — the encoded query is reused."""
+        token = PaginationCursor.create_next_cursor(
+            current_offset=0, limit=2, total=100, query="diabetes"
+        )
+
+        fn = _get_tool_fn(server, "search_zim_file")
+        await fn(zim_file_path="/path/to/file.zim", cursor=token)
+
+        call = server.async_zim_operations.search_zim_file.await_args
+        # signature: (zim_file_path, query, limit, offset)
+        assert call.args[1] == "diabetes"
+        assert call.args[2] == 2
+        assert call.args[3] == 2
+
+    @pytest.mark.asyncio
+    async def test_missing_query_without_cursor_is_validation_error(
+        self, server: OpenZimMcpServer
+    ):
+        """Without a cursor, an explicit query is still required."""
+        fn = _get_tool_fn(server, "search_zim_file")
+        result = await fn(zim_file_path="/path/to/file.zim")
+        assert "Parameter Validation Error" in result
+        assert "query" in result.lower()
+        server.async_zim_operations.search_zim_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_explicit_query_wins_when_cursor_disagrees(
+        self, server: OpenZimMcpServer, caplog: pytest.LogCaptureFixture
+    ):
+        """Explicit query overrides the cursor's encoded query, with a warning."""
+        token = PaginationCursor.create_next_cursor(
+            current_offset=0, limit=5, total=100, query="cursor-query"
+        )
+
+        fn = _get_tool_fn(server, "search_zim_file")
+        with caplog.at_level("WARNING"):
+            await fn(
+                zim_file_path="/path/to/file.zim",
+                query="explicit-query",
+                cursor=token,
+            )
+
+        call = server.async_zim_operations.search_zim_file.await_args
+        assert call.args[1] == "explicit-query"
+        assert any(
+            "cursor" in rec.message.lower() and "query" in rec.message.lower()
+            for rec in caplog.records
+        )
+
 
 class TestSearchAllLimitAlias:
     """`limit` is accepted as an alias of `limit_per_file` on search_all."""
