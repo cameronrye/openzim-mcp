@@ -51,3 +51,72 @@ def test_readyz_returns_503_when_dirs_unreadable(mock_server):
     resp = client.get("/readyz")
     assert resp.status_code == 503
     assert resp.json()["status"] == "not_ready"
+
+
+def test_run_http_dispatches_to_serve_helper(monkeypatch, tmp_path):
+    """server.run(streamable-http) routes through http_app.serve_streamable_http."""
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.instance_tracker import InstanceTracker
+    from openzim_mcp.server import OpenZimMcpServer
+
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        transport="http",
+        host="127.0.0.1",
+        port=8001,
+    )
+    # Keep tracker registry inside tmp_path; never touch real home dir.
+    monkeypatch.setattr(
+        InstanceTracker,
+        "__init__",
+        lambda self: setattr(self, "instances_dir", tmp_path / "instances")
+        or (tmp_path / "instances").mkdir(exist_ok=True)
+        or setattr(self, "current_instance", None),
+    )
+    server = OpenZimMcpServer(cfg, InstanceTracker())
+
+    called = []
+    monkeypatch.setattr(
+        "openzim_mcp.http_app.serve_streamable_http",
+        lambda s: called.append(s),
+    )
+    server.run(transport="streamable-http")
+    assert called == [server]
+
+
+def test_serve_streamable_http_runs_safe_check_and_serves(monkeypatch, tmp_path):
+    """serve_streamable_http calls check_safe_startup, builds app, runs uvicorn."""
+    from openzim_mcp.http_app import serve_streamable_http
+
+    server = MagicMock()
+    server.config.host = "127.0.0.1"
+    server.config.port = 8001
+    server.config.transport = "http"
+    server.config.auth_token = None
+    server.config.cors_origins = []
+    # Stub the FastMCP-like surface
+    server.mcp._custom_starlette_routes = []
+    fake_app = MagicMock()
+    server.mcp.streamable_http_app.return_value = fake_app
+    server.mcp.settings = MagicMock()
+
+    safe_calls = []
+    runner_calls = []
+    monkeypatch.setattr(
+        "openzim_mcp.http_app.check_safe_startup",
+        lambda c: safe_calls.append(c),
+    )
+
+    def fake_runner(app, host, port):
+        runner_calls.append((app, host, port))
+
+    serve_streamable_http(server, runner=fake_runner)
+    assert safe_calls == [server.config]
+    assert len(runner_calls) == 1
+    assert runner_calls[0][1:] == ("127.0.0.1", 8001)
+    # Health routes were appended to the FastMCP custom routes list
+    assert len(server.mcp._custom_starlette_routes) == 2
+    paths = {r.path for r in server.mcp._custom_starlette_routes}
+    assert paths == {"/healthz", "/readyz"}
+    # Auth + CORS middleware get added (auth always; CORS only if origins set)
+    assert fake_app.add_middleware.called

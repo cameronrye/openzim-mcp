@@ -158,3 +158,50 @@ def build_starlette_app(server: "OpenZimMcpServer") -> Starlette:
             Route("/readyz", _make_readyz(server)),
         ]
     )
+
+
+def _default_uvicorn_runner(app: Starlette, host: str, port: int) -> None:
+    """Run the given Starlette app under uvicorn (blocking)."""
+    import uvicorn
+
+    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    uvicorn.Server(config).run()
+
+
+def serve_streamable_http(
+    server: "OpenZimMcpServer",
+    runner: Callable[[Starlette, str, int], None] = _default_uvicorn_runner,
+) -> None:
+    """Serve OpenZIM MCP over streamable-HTTP transport.
+
+    Validates the safe-startup matrix, registers /healthz and /readyz on the
+    underlying FastMCP Starlette app, applies bearer-token auth and CORS,
+    then runs uvicorn.
+
+    Args:
+        server: the OpenZIM MCP server to serve.
+        runner: callable that takes (app, host, port) and runs the server.
+            Defaults to a uvicorn runner; tests inject a fake.
+    """
+    check_safe_startup(server.config)
+
+    # Register health routes on the FastMCP-built app via its public-ish
+    # custom-routes list (looked at SDK source — this is the documented hook).
+    server.mcp._custom_starlette_routes.extend(
+        [
+            Route("/healthz", healthz),
+            Route("/readyz", _make_readyz(server)),
+        ]
+    )
+
+    # Tell FastMCP what host/port to advertise (settings are read by the SDK
+    # in run_streamable_http_async; we still set them for consistency even
+    # though we run uvicorn ourselves below).
+    server.mcp.settings.host = server.config.host
+    server.mcp.settings.port = server.config.port
+
+    app = server.mcp.streamable_http_app()
+    app.add_middleware(BearerTokenAuthMiddleware, config=server.config)
+    apply_cors_middleware(app, server.config)
+
+    runner(app, server.config.host, server.config.port)

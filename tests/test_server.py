@@ -856,10 +856,15 @@ class TestOpenZimMcpServerRun:
         # Verify the MCP server was called
         server.mcp.run.assert_called_once_with(transport="stdio")
 
-    def test_run_different_transports(self, server: OpenZimMcpServer):
-        """Test server run with different transport types."""
-        # Mock the MCP server run method
+    def test_run_different_transports(self, server: OpenZimMcpServer, monkeypatch):
+        """stdio/sse use mcp.run; streamable-http dispatches to http_app helper."""
         server.mcp.run = MagicMock()
+
+        served = []
+        monkeypatch.setattr(
+            "openzim_mcp.http_app.serve_streamable_http",
+            lambda s: served.append(s),
+        )
 
         # Test stdio transport
         server.run(transport="stdio")
@@ -870,10 +875,11 @@ class TestOpenZimMcpServerRun:
         server.run(transport="sse")
         server.mcp.run.assert_called_with(transport="sse")
 
-        # Test streamable-http transport
+        # Test streamable-http: bypasses mcp.run, goes through http_app helper.
         server.mcp.run.reset_mock()
         server.run(transport="streamable-http")
-        server.mcp.run.assert_called_with(transport="streamable-http")
+        server.mcp.run.assert_not_called()
+        assert served == [server]
 
 
 class TestOpenZimMcpServerNewTools:

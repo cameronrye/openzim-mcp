@@ -343,7 +343,12 @@ class OpenZimMcpServer:
 
         logger.info(f"Starting OpenZIM MCP server with transport: {transport}")
         try:
-            self.mcp.run(transport=transport)
+            if transport == "streamable-http":
+                from . import http_app
+
+                http_app.serve_streamable_http(self)
+            else:
+                self.mcp.run(transport=transport)
         except KeyboardInterrupt:
             logger.info("Server shutdown requested")
         except Exception as e:
