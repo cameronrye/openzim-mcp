@@ -1,5 +1,6 @@
 """Server health and diagnostics tools for OpenZIM MCP server."""
 
+import asyncio
 import json
 import logging
 import os
@@ -8,7 +9,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, cast
 
-from ..constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
+from ..constants import (
+    CACHE_HIGH_HIT_RATE_THRESHOLD,
+    CACHE_LOW_HIT_RATE_THRESHOLD,
+    INPUT_LIMIT_FILE_PATH,
+)
+from ..exceptions import OpenZimMcpRateLimitError
+from ..security import sanitize_input
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -33,6 +40,9 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
         Returns:
             JSON string containing detailed server health information
         """
+        return await asyncio.to_thread(_get_server_health_sync)
+
+    def _get_server_health_sync() -> str:
         try:
             cache_stats = server.cache.stats()
             recommendations: List[str] = []
@@ -72,8 +82,23 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             # Instance tracking health
             if server.instance_tracker:
                 try:
+                    # Count stale instance files BEFORE get_active_instances(),
+                    # since that call cleans them up as a side effect — once
+                    # it runs, the stale count is always 0.
+                    try:
+                        all_instances = server.instance_tracker.get_all_instances()
+                        stale_count = sum(
+                            1
+                            for inst in all_instances
+                            if not server.instance_tracker._is_process_running(inst.pid)
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to get instance stats: {e}")
+                        stale_count = 0
+
                     active_instances = server.instance_tracker.get_active_instances()
                     instance_tracking["active_instances"] = len(active_instances)
+                    instance_tracking["stale_instances"] = stale_count
 
                     conflicts = server.instance_tracker.detect_conflicts(
                         server.config.get_config_hash()
@@ -90,28 +115,14 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                             "instance conflicts"
                         )
 
-                    # Check for stale instances
-                    try:
-                        stale_count = len(
-                            [
-                                inst
-                                for inst in active_instances
-                                if not server.instance_tracker._is_process_running(
-                                    inst.pid
-                                )
-                            ]
+                    if stale_count > 0:
+                        warnings.append(
+                            f"Stale instance files detected ({stale_count})"
                         )
-                        instance_tracking["stale_instances"] = stale_count
-                        if stale_count > 0:
-                            warnings.append(
-                                f"Stale instance files detected ({stale_count})"
-                            )
-                            recommendations.append(
-                                "Use 'resolve_server_conflicts()' to clean "
-                                "up stale instances"
-                            )
-                    except Exception as e:
-                        logger.debug(f"Failed to get instance stats: {e}")
+                        recommendations.append(
+                            "Use 'resolve_server_conflicts()' to clean "
+                            "up stale instances"
+                        )
 
                 except Exception as e:
                     warnings.append(f"Instance tracking check failed: {e}")
@@ -211,6 +222,9 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             Server configuration information including conflict detection,
             validation results, and recommendations
         """
+        return await asyncio.to_thread(_get_server_configuration_sync)
+
+    def _get_server_configuration_sync() -> str:
         try:
             # Basic configuration info
             config_info = {
@@ -296,6 +310,9 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
         Returns:
             JSON string containing diagnostic results and recommendations
         """
+        return await asyncio.to_thread(_diagnose_server_state_sync)
+
+    def _diagnose_server_state_sync() -> str:
         try:
             conflicts_list: List[Dict[str, Any]] = []
             issues_list: List[str] = []
@@ -492,8 +509,10 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
 
                 environment_checks[directory] = dir_check
 
-            # Set overall status based on issues
-            if issues_list:
+            # Set overall status based on issues — only escalate, never
+            # downgrade. A previously-set "error" from per-directory checks
+            # must not be overwritten by a softer global classification.
+            if issues_list and diagnostics["status"] != "error":
                 diagnostics["status"] = (
                     "error"
                     if any(
@@ -530,6 +549,9 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
         Returns:
             JSON string containing conflict resolution results and actions taken
         """
+        return await asyncio.to_thread(_resolve_server_conflicts_sync)
+
+    def _resolve_server_conflicts_sync() -> str:
         try:
             conflicts_found_list: List[Dict[str, Any]] = []
             actions_taken_list: List[str] = []
@@ -633,4 +655,93 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                 operation="resolve server conflicts",
                 error=e,
                 context="Attempting to identify and resolve server instance conflicts",
+            )
+
+    @server.mcp.tool()
+    async def warm_cache(zim_file_path: str) -> str:
+        """Pre-populate the cache for a ZIM file with frequently-needed lookups.
+
+        Calls list_zim_files, get_zim_metadata, list_namespaces, and
+        get_main_page so the next series of queries against this ZIM file
+        hits cache instead of re-opening the archive each time. Useful
+        before a long session that will repeatedly read from the same ZIM.
+
+        Args:
+            zim_file_path: Path to the ZIM file to warm
+
+        Returns:
+            JSON listing which lookups succeeded, which failed, and the
+            resulting cache size
+        """
+        try:
+            try:
+                server.rate_limiter.check_rate_limit("warm_cache")
+            except OpenZimMcpRateLimitError as e:
+                return server._create_enhanced_error_message(
+                    operation="warm cache",
+                    error=e,
+                    context=f"File: {zim_file_path}",
+                )
+
+            zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+
+            return await server.async_zim_operations.warm_cache(zim_file_path)
+
+        except Exception as e:
+            logger.error(f"Error in warm_cache: {e}")
+            return server._create_enhanced_error_message(
+                operation="warm cache",
+                error=e,
+                context=f"File: {zim_file_path}",
+            )
+
+    @server.mcp.tool()
+    async def cache_stats() -> str:
+        """Return current cache state.
+
+        Useful for sizing decisions — checking hit_rate before deciding
+        whether to call warm_cache, or confirming cache_clear took effect.
+
+        Returns:
+            JSON with size, max_size, hits, misses, and hit_rate (0-1)
+        """
+        try:
+            stats = server.cache.stats()
+            return json.dumps(stats, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Error in cache_stats: {e}")
+            return server._create_enhanced_error_message(
+                operation="cache stats",
+                error=e,
+                context="No additional context",
+            )
+
+    @server.mcp.tool()
+    async def cache_clear() -> str:
+        """Clear all cached entries.
+
+        Use when ZIM files have been modified on disk and stale cache
+        entries are returning outdated content.
+
+        Returns:
+            JSON with prior_size and confirmation message
+        """
+        try:
+            prior = server.cache.stats().get("size", 0)
+            server.cache.clear()
+            return json.dumps(
+                {
+                    "cleared": True,
+                    "prior_size": prior,
+                    "current_size": server.cache.stats().get("size", 0),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        except Exception as e:
+            logger.error(f"Error in cache_clear: {e}")
+            return server._create_enhanced_error_message(
+                operation="cache clear",
+                error=e,
+                context="No additional context",
             )

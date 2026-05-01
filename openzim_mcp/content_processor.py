@@ -185,9 +185,11 @@ class ContentProcessor:
         else:
             snippet_text = content
 
-        # Truncate if too long
+        # Truncate if too long. Reserve 3 chars for the trailing "..." so the
+        # final string respects snippet_length rather than overshooting it.
         if len(snippet_text) > self.snippet_length:
-            snippet_text = snippet_text[: self.snippet_length].strip() + "..."
+            cap = max(self.snippet_length - 3, 0)
+            snippet_text = snippet_text[:cap].rstrip() + "..."
 
         return snippet_text
 
@@ -316,21 +318,24 @@ class ContentProcessor:
                 for element in soup.select(selector):
                     element.decompose()
 
-            # Extract headings (h1-h6)
+            # Extract headings (h1-h6) in document order. Iterating level-first
+            # would group all h1s before any h2 even when they appear later in
+            # the document, breaking the position contract and the implicit
+            # alignment with the sections list built below (which DOES walk the
+            # tree in document order).
             headings: List[Dict[str, Any]] = []
-            for level in range(1, 7):
-                for heading in soup.find_all(f"h{level}"):
-                    if isinstance(heading, Tag):
-                        text = heading.get_text().strip()
-                        if text:
-                            headings.append(
-                                {
-                                    "level": level,
-                                    "text": text,
-                                    "id": heading.get("id", ""),
-                                    "position": len(headings),
-                                }
-                            )
+            for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+                if isinstance(heading, Tag) and heading.name:
+                    text = heading.get_text().strip()
+                    if text:
+                        headings.append(
+                            {
+                                "level": int(heading.name[1]),
+                                "text": text,
+                                "id": heading.get("id", ""),
+                                "position": len(headings),
+                            }
+                        )
 
             structure["headings"] = headings
 
@@ -355,21 +360,18 @@ class ContentProcessor:
                             "word_count": 0,
                         }
                     elif current_section and element.name in ["p", "div"]:
-                        # Add content to current section
+                        # Add content to current section, capped at 300 chars.
                         text = element.get_text().strip()
-                        content_preview = cast(str, current_section["content_preview"])
-                        if text and len(content_preview) < 300:
-                            if content_preview:
-                                current_section["content_preview"] = (
-                                    cast(str, current_section["content_preview"]) + " "
-                                )
-                            current_section["content_preview"] = (
-                                cast(str, current_section["content_preview"])
-                                + text[: 300 - len(content_preview)]
-                            )
-                        current_section["word_count"] = cast(
-                            int, current_section["word_count"]
-                        ) + len(text.split())
+                        if text:
+                            preview = cast(str, current_section["content_preview"])
+                            if len(preview) < 300:
+                                if preview:
+                                    preview += " "
+                                preview += text[: 300 - len(preview)]
+                                current_section["content_preview"] = preview
+                            current_section["word_count"] = cast(
+                                int, current_section["word_count"]
+                            ) + len(text.split())
 
             # Add the last section
             if current_section:

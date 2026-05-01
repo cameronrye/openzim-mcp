@@ -101,7 +101,7 @@
             "availability": "https://schema.org/InStock"
         },
         "featureList": [
-            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (18 specialized tools)",
+            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (26 specialized tools)",
             "Article Summaries: Extract concise summaries from opening paragraphs for quick content preview",
             "Table of Contents: Build hierarchical TOC from article headings for navigation",
             "Pagination Cursors: Token-based pagination for seamless result navigation",
@@ -305,7 +305,7 @@
     <div class="new-feature-banner">
         <div class="container">
             <span class="new-badge"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</span>
-            <span class="new-text"><strong>Article Summaries & Table of Contents!</strong> Extract concise summaries and hierarchical TOC for quick content overview. <a href="#content-tools" class="new-link">Learn more →</a></span>
+            <span class="new-text"><strong>Multi-Archive Search & Prompts in v0.9.0!</strong> Search every ZIM file at once with <code>search_all</code>, invoke <code>/research</code> and <code>/summarize</code> workflows, and resolve titles to paths with <code>find_entry_by_title</code>. <a href="#features" class="new-link">Learn more →</a></span>
         </div>
     </div>
 
@@ -337,7 +337,7 @@
                 </div>
                 <div class="hero-stats">
                     <div class="stat">
-                        <div class="stat-number" id="version-display">v0.8.2</div>
+                        <div class="stat-number" id="version-display">v0.9.0</div>
                         <div class="stat-label">Latest Release</div>
                     </div>
                     <div class="stat">
@@ -396,11 +396,37 @@
                     <h3 class="feature-title">Dual Mode Support</h3>
                     <p class="feature-description">
                         Choose Simple mode (1 intelligent natural language tool, default) or Advanced mode
-                        (18 specialized tools) to match your LLM's capabilities.
+                        (26 specialized tools) to match your LLM's capabilities.
                     </p>
                 </div>
-                <div class="feature-card feature-new" id="content-tools">
+                <div class="feature-card feature-new" id="multi-archive-search">
                     <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span></div>
+                    <h3 class="feature-title">Multi-Archive Search</h3>
+                    <p class="feature-description">
+                        <code>search_all</code> queries every ZIM file at once and merges per-file results.
+                        No need to know which archive holds the answer.
+                    </p>
+                </div>
+                <div class="feature-card feature-new" id="mcp-prompts">
+                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" x2="20" y1="19" y2="19"></line></svg></span></div>
+                    <h3 class="feature-title">MCP Prompts</h3>
+                    <p class="feature-description">
+                        Pre-built workflow slash commands: <code>/research</code>, <code>/summarize</code>,
+                        and <code>/explore</code> orchestrate multi-step ZIM operations.
+                    </p>
+                </div>
+                <div class="feature-card feature-new" id="find-by-title">
+                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span></div>
+                    <h3 class="feature-title">Find Entries by Title</h3>
+                    <p class="feature-description">
+                        <code>find_entry_by_title</code> resolves titles (or partial titles) to entry paths
+                        instantly. Case-insensitive, optionally cross-file.
+                    </p>
+                </div>
+                <div class="feature-card" id="content-tools">
                     <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 9H8"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></span></div>
                     <h3 class="feature-title">Article Summaries</h3>
                     <p class="feature-description">
@@ -408,8 +434,7 @@
                         Quick content overview without loading full articles.
                     </p>
                 </div>
-                <div class="feature-card feature-new">
-                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
+                <div class="feature-card">
                     <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><line x1="8" x2="21" y1="6" y2="6"></line><line x1="8" x2="21" y1="12" y2="12"></line><line x1="8" x2="21" y1="18" y2="18"></line><line x1="3" x2="3.01" y1="6" y2="6"></line><line x1="3" x2="3.01" y1="12" y2="12"></line><line x1="3" x2="3.01" y1="18" y2="18"></line></svg></span></div>
                     <h3 class="feature-title">Table of Contents</h3>
                     <p class="feature-description">
@@ -417,8 +442,7 @@
                         Navigate directly to specific sections with anchor links.
                     </p>
                 </div>
-                <div class="feature-card feature-new" id="binary-retrieval">
-                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
+                <div class="feature-card" id="binary-retrieval">
                     <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="m7.5 4.27 9 5.15"></path><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></span></div>
                     <h3 class="feature-title">Binary Content Retrieval</h3>
                     <p class="feature-description">
@@ -1002,7 +1026,7 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
 }</code></pre>
                             </div>
                             <div class="example-result">
-                                <h5>Advanced Mode (18 specialized tools):</h5>
+                                <h5>Advanced Mode (26 specialized tools):</h5>
                                 <pre><code>{
   "mcpServers": {
     "openzim-mcp-advanced": {

@@ -91,3 +91,94 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                 error=e,
                 context=f"File: {zim_file_path}, Query: '{query}'",
             )
+
+    @server.mcp.tool()
+    async def search_all(
+        query: str,
+        limit_per_file: int = 5,
+    ) -> str:
+        """Search across every ZIM file in the allowed directories.
+
+        Returns merged per-file results so the caller doesn't need to know
+        which file holds the information they want. Files that can't be
+        searched (corrupt, no full-text index) are skipped without aborting
+        the rest.
+
+        Args:
+            query: Search query term (required)
+            limit_per_file: Max hits per ZIM file (1-50, default: 5)
+
+        Returns:
+            JSON containing per-file result groups and counts of files
+            searched / with-results / failed
+        """
+        try:
+            try:
+                server.rate_limiter.check_rate_limit("search")
+            except OpenZimMcpRateLimitError as e:
+                return server._create_enhanced_error_message(
+                    operation="search across ZIM files",
+                    error=e,
+                    context=f"Query: '{query}'",
+                )
+
+            query = sanitize_input(query, INPUT_LIMIT_QUERY)
+
+            return await server.async_zim_operations.search_all(query, limit_per_file)
+
+        except Exception as e:
+            logger.error(f"Error in search_all: {e}")
+            return server._create_enhanced_error_message(
+                operation="search across ZIM files",
+                error=e,
+                context=f"Query: '{query}'",
+            )
+
+    @server.mcp.tool()
+    async def find_entry_by_title(
+        zim_file_path: str,
+        title: str,
+        cross_file: bool = False,
+        limit: int = 10,
+    ) -> str:
+        """Resolve a title to one or more entry paths.
+
+        Cheaper than full-text search when the caller knows the article title.
+        Tries an exact normalized C/<Title> match first (fast path), then
+        falls back to libzim's title-indexed suggestion search. Set
+        cross_file=True to query every ZIM file in allowed directories.
+
+        Args:
+            zim_file_path: Path to the ZIM file (used unless cross_file=True)
+            title: Title or partial title to resolve (case-insensitive)
+            cross_file: If True, search across all allowed ZIM files
+            limit: Max results to return (1-50, default: 10)
+
+        Returns:
+            JSON with query, ranked results, fast_path_hit flag, files_searched
+        """
+        try:
+            try:
+                server.rate_limiter.check_rate_limit("find_entry_by_title")
+            except OpenZimMcpRateLimitError as e:
+                return server._create_enhanced_error_message(
+                    operation="find entry by title",
+                    error=e,
+                    context=f"Title: '{title}'",
+                )
+
+            title = sanitize_input(title, INPUT_LIMIT_QUERY)
+            if not cross_file:
+                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+
+            return await server.async_zim_operations.find_entry_by_title(
+                zim_file_path, title, cross_file, limit
+            )
+
+        except Exception as e:
+            logger.error(f"Error in find_entry_by_title: {e}")
+            return server._create_enhanced_error_message(
+                operation="find entry by title",
+                error=e,
+                context=f"File: {zim_file_path}, Title: '{title}'",
+            )

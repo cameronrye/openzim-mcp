@@ -9,19 +9,7 @@ from typing import List, Literal
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .constants import (
-    DEFAULT_CACHE_PERSISTENCE_ENABLED,
-    DEFAULT_CACHE_PERSISTENCE_PATH,
-    DEFAULT_CACHE_SIZE,
-    DEFAULT_CACHE_TTL,
-    DEFAULT_MAX_CONTENT_LENGTH,
-    DEFAULT_RATE_LIMIT_BURST,
-    DEFAULT_RATE_LIMIT_ENABLED,
-    DEFAULT_RATE_LIMIT_RPS,
-    DEFAULT_SEARCH_LIMIT,
-    DEFAULT_SNIPPET_LENGTH,
-    VALID_TOOL_MODES,
-)
+from .defaults import CACHE, CONTENT, RATE_LIMIT, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
 
 
@@ -29,26 +17,26 @@ class CacheConfig(BaseModel):
     """Cache configuration settings."""
 
     enabled: bool = True
-    max_size: int = Field(default=DEFAULT_CACHE_SIZE, ge=1, le=10000)
-    ttl_seconds: int = Field(default=DEFAULT_CACHE_TTL, ge=60, le=86400)
-    persistence_enabled: bool = Field(default=DEFAULT_CACHE_PERSISTENCE_ENABLED)
-    persistence_path: str = Field(default=DEFAULT_CACHE_PERSISTENCE_PATH)
+    max_size: int = Field(default=CACHE.MAX_SIZE, ge=1, le=10000)
+    ttl_seconds: int = Field(default=CACHE.TTL_SECONDS, ge=60, le=86400)
+    persistence_enabled: bool = Field(default=CACHE.PERSISTENCE_ENABLED)
+    persistence_path: str = Field(default=CACHE.PERSISTENCE_PATH)
 
 
 class RateLimitConfig(BaseModel):
     """Rate limiting configuration settings."""
 
-    enabled: bool = Field(default=DEFAULT_RATE_LIMIT_ENABLED)
-    requests_per_second: float = Field(default=DEFAULT_RATE_LIMIT_RPS, gt=0)
-    burst_size: int = Field(default=DEFAULT_RATE_LIMIT_BURST, ge=1, le=1000)
+    enabled: bool = Field(default=RATE_LIMIT.ENABLED)
+    requests_per_second: float = Field(default=RATE_LIMIT.REQUESTS_PER_SECOND, gt=0)
+    burst_size: int = Field(default=RATE_LIMIT.BURST_SIZE, ge=1, le=1000)
 
 
 class ContentConfig(BaseModel):
     """Content processing configuration."""
 
-    max_content_length: int = Field(default=DEFAULT_MAX_CONTENT_LENGTH, ge=1000)
-    snippet_length: int = Field(default=DEFAULT_SNIPPET_LENGTH, ge=100)
-    default_search_limit: int = Field(default=DEFAULT_SEARCH_LIMIT, ge=1, le=100)
+    max_content_length: int = Field(default=CONTENT.MAX_CONTENT_LENGTH, ge=100)
+    snippet_length: int = Field(default=CONTENT.SNIPPET_LENGTH, ge=100)
+    default_search_limit: int = Field(default=CONTENT.SEARCH_LIMIT, ge=1, le=100)
 
 
 class LoggingConfig(BaseModel):

@@ -184,16 +184,16 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
 
         async def mock_get_zim_entry(max_content_length: int):
             # This mimics the validation in the actual tool
-            if max_content_length is not None and max_content_length < 1000:
-                return "Error: max_content_length must be at least 1000"
+            if max_content_length is not None and max_content_length < 100:
+                return "Error: max_content_length must be at least 100"
             return "success"
 
         # Test invalid max_content_length
-        result = asyncio.run(mock_get_zim_entry(500))
-        assert "Error: max_content_length must be at least 1000" in result
+        result = asyncio.run(mock_get_zim_entry(50))
+        assert "Error: max_content_length must be at least 100" in result
 
         # Test valid parameters
-        result = asyncio.run(mock_get_zim_entry(5000))
+        result = asyncio.run(mock_get_zim_entry(500))
         assert result == "success"
 
     def test_mcp_tools_registration_and_access(self, server: OpenZimMcpServer):
@@ -321,13 +321,13 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 {
                     "zim_file_path": "test.zim",
                     "entry_path": "A/Test",
-                    "max_content_length": 500,  # Invalid: should be >= 1000
+                    "max_content_length": 50,  # Invalid: should be >= 100
                 },
             )
         )
         assert "**Parameter Validation Error**" in str(
             result
-        ) and "max_content_length must be at least 1000" in str(result)
+        ) and "max_content_length must be at least 100" in str(result)
 
         # Test get_search_suggestions validation - invalid limit
         result = asyncio.run(
@@ -448,14 +448,14 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
 
         # Test max_content_length validation (from get_zim_entry)
         def validate_max_content_length(max_content_length):
-            if max_content_length is not None and max_content_length < 1000:
-                return "Error: max_content_length must be at least 1000"
+            if max_content_length is not None and max_content_length < 100:
+                return "Error: max_content_length must be at least 100"
             return "valid"
 
-        assert "Error: max_content_length must be at least 1000" in (
-            validate_max_content_length(500)
+        assert "Error: max_content_length must be at least 100" in (
+            validate_max_content_length(50)
         )
-        assert validate_max_content_length(2000) == "valid"
+        assert validate_max_content_length(500) == "valid"
 
     def test_additional_server_edge_cases(self, server: OpenZimMcpServer):
         """Test additional server edge cases to improve coverage."""
@@ -1220,26 +1220,26 @@ class TestOpenZimMcpServerParameterValidation:
 
         # Create a mock tool function that mimics the validation logic
         async def mock_get_zim_entry():
-            max_content_length = 500  # Too small, triggers validation error
+            max_content_length = 50  # Too small, triggers validation error
             return (
                 "**Parameter Validation Error**\n\n"
-                f"**Issue**: max_content_length must be at least 1000 characters "
+                f"**Issue**: max_content_length must be at least 100 characters "
                 f"(provided: {max_content_length})\n\n"
                 "**Troubleshooting**: Increase the max_content_length parameter "
                 "or omit it to use the default.\n"
-                "**Example**: Use `max_content_length=5000` for longer content "
-                "or omit the parameter for default length."
+                "**Example**: Use `max_content_length=500` for a short preview, "
+                "`5000` for longer content, or omit for default."
             )
 
         result = asyncio.run(mock_get_zim_entry())
 
         assert "**Parameter Validation Error**" in result
         assert (
-            "max_content_length must be at least 1000 characters (provided: 500)"
+            "max_content_length must be at least 100 characters (provided: 50)"
             in result
         )
         assert "Increase the max_content_length parameter" in result
-        assert "Use `max_content_length=5000`" in result
+        assert "max_content_length=500" in result
 
     def test_get_zim_entry_max_content_length_validation_valid(
         self, server: OpenZimMcpServer

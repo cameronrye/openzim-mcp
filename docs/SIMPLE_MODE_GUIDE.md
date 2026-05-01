@@ -5,7 +5,7 @@
 OpenZIM MCP supports two distinct modes to accommodate different LLM capabilities:
 
 1. **Simple Mode** (default): Provides just 1 primary intelligent tool that accepts natural language queries
-2. **Advanced Mode**: Exposes all 18 specialized MCP tools for maximum control and flexibility
+2. **Advanced Mode**: Exposes all 26 specialized MCP tools for maximum control and flexibility
 
 ## Why Simple Mode?
 
@@ -312,7 +312,7 @@ The `zim_query` tool uses intelligent intent parsing to understand your query:
 
 | Aspect | Advanced Mode | Simple Mode |
 |--------|-----------|-------------|
-| Number of Tools | 18 specialized tools | 1 primary tool |
+| Number of Tools | 26 specialized tools | 1 primary tool |
 | Interface | Explicit tool selection | Natural language queries |
 | Context Usage | Higher (all tool definitions) | Lower (minimal tool definitions) |
 | Flexibility | Maximum control | Simplified interface |
@@ -321,7 +321,7 @@ The `zim_query` tool uses intelligent intent parsing to understand your query:
 
 ## Advanced Mode Tools (for reference)
 
-When in advanced mode, these 18 tools are available:
+When in advanced mode, these 26 tools are available:
 
 1. `list_zim_files` - List all ZIM files
 2. `search_zim_file` - Search within ZIM file

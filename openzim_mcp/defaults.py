@@ -50,7 +50,6 @@ class InputLimitDefaults:
     NAMESPACE: int = 100
     CONTENT_TYPE: int = 100
     PARTIAL_QUERY: int = 200
-    NAMESPACE_MAX_LENGTH: int = 50  # Max length for namespace names (new ZIM format)
 
 
 @dataclass(frozen=True)

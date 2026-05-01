@@ -302,23 +302,23 @@ class TestZimOperations:
                 return random.choice(mock_entries)
 
             mock_archive_instance.get_random_entry = mock_get_random_entry
-            mock_archive_instance.get_entry_by_id.side_effect = mock_entries
+            mock_archive_instance._get_entry_by_id.side_effect = lambda i: mock_entries[
+                i
+            ]
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             result = zim_operations.list_namespaces(str(zim_file))
 
             assert "namespaces" in result
-            # Due to random sampling, we can't guarantee all namespaces will be found
-            # but we should find at least some namespaces
+            # entry_count=3 triggers full iteration; counts are exact.
             import json
 
             result_data = json.loads(result)
             assert "namespaces" in result_data
-            assert len(result_data["namespaces"]) > 0
-            # Check that at least one of our expected namespaces is found
+            assert result_data["is_total_authoritative"] is True
+            assert result_data["discovery_method"] == "full_iteration"
             found_namespaces = set(result_data["namespaces"].keys())
-            expected_namespaces = {"C", "M", "W"}
-            assert len(found_namespaces.intersection(expected_namespaces)) > 0
+            assert found_namespaces == {"C", "M", "W"}
 
     def test_browse_namespace(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test namespace browsing."""
@@ -750,7 +750,9 @@ class TestZimOperations:
             result = zim_operations._perform_search(mock_archive, "test", 10, 0)
             assert "No search results found" in result
 
-    def test_get_entry_content_with_redirect(self, zim_operations: ZimOperations):
+    def test_get_entry_content_with_redirect(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
         """Test _get_entry_content with redirect entry."""
         from unittest.mock import MagicMock
 
@@ -767,7 +769,9 @@ class TestZimOperations:
 
         mock_archive.get_entry_by_path.return_value = mock_entry
 
-        result = zim_operations._get_entry_content(mock_archive, "A/Test", 1000)
+        result = zim_operations._get_entry_content(
+            mock_archive, "A/Test", 1000, tmp_path / "test.zim"
+        )
         assert "Test Article" in result
 
     def test_get_metadata_with_missing_entries(
@@ -934,7 +938,7 @@ class TestZimOperations:
         validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
 
         # Test get_zim_entry cache hit (lines 283-284)
-        cache_key = f"entry:{validated_path}:A/Test:1000"
+        cache_key = f"entry:{validated_path}:A/Test:1000:0"
         zim_operations.cache.set(cache_key, "cached entry content")
 
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
@@ -1239,8 +1243,8 @@ class TestZimOperations:
             assert "Path: A/Test_Article" in result
             assert "Test content" in result
 
-            # Verify path mapping was cached
-            cache_key = "path_mapping:A/Test_Article"
+            # Verify path mapping was cached (key includes resolved archive path)
+            cache_key = f"path_mapping:{zim_file.resolve()}:A/Test_Article"
             cached_path = zim_operations.cache.get(cache_key)
             assert cached_path == "A/Test_Article"
 
@@ -1285,8 +1289,8 @@ class TestZimOperations:
                 assert "Actual Path: A/Test_Article" in result
                 assert "Test content" in result
 
-                # Verify path mapping was cached
-                cache_key = "path_mapping:A/Test Article"
+                # Verify path mapping was cached (key includes resolved archive path)
+                cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
                 cached_path = zim_operations.cache.get(cache_key)
                 assert cached_path == "A/Test_Article"
 
@@ -1300,7 +1304,7 @@ class TestZimOperations:
         zim_file.touch()
 
         # Pre-populate cache with path mapping
-        cache_key = "path_mapping:A/Test Article"
+        cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
         zim_operations.cache.set(cache_key, "A/Test_Article")
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
@@ -1338,7 +1342,7 @@ class TestZimOperations:
         zim_file.touch()
 
         # Pre-populate cache with invalid path mapping
-        cache_key = "path_mapping:A/Test Article"
+        cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
         zim_operations.cache.set(cache_key, "A/Invalid_Path")
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
@@ -1619,13 +1623,13 @@ class TestZimOperations:
 
             mock_archive_instance.get_entry_by_path = mock_get_entry_by_path
 
-            # Mock get_entry_by_id to return proper entries
+            # Mock _get_entry_by_id to return proper entries
             def mock_get_entry_by_id(entry_id):
                 if entry_id < len(mock_entries):
                     return mock_entries[entry_id]
                 raise Exception("Entry not found")
 
-            mock_archive_instance.get_entry_by_id.side_effect = mock_get_entry_by_id
+            mock_archive_instance._get_entry_by_id.side_effect = mock_get_entry_by_id
 
             mock_archive_instance.__iter__.return_value = iter(mock_entries)
 
@@ -2028,6 +2032,7 @@ class TestGetBinaryEntry:
         # Create a small binary content
         binary_content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
         mock_item.content = binary_content
+        mock_item.size = len(binary_content)
         mock_entry.get_item.return_value = mock_item
         mock_archive_instance.get_entry_by_path.return_value = mock_entry
         mock_archive.return_value.__enter__.return_value = mock_archive_instance
@@ -2062,6 +2067,7 @@ class TestGetBinaryEntry:
         mock_item = MagicMock()
         mock_item.mimetype = "application/pdf"
         mock_item.content = b"%PDF-1.4 test content"
+        mock_item.size = len(b"%PDF-1.4 test content")
         mock_entry.get_item.return_value = mock_item
         mock_archive_instance.get_entry_by_path.return_value = mock_entry
         mock_archive.return_value.__enter__.return_value = mock_archive_instance
@@ -2094,6 +2100,7 @@ class TestGetBinaryEntry:
         mock_item.mimetype = "video/mp4"
         # Create content larger than the limit we'll set
         mock_item.content = b"x" * 1000
+        mock_item.size = 1000
         mock_entry.get_item.return_value = mock_item
         mock_archive_instance.get_entry_by_path.return_value = mock_entry
         mock_archive.return_value.__enter__.return_value = mock_archive_instance
@@ -2148,3 +2155,53 @@ class TestGetBinaryEntry:
         """Test _format_size helper with gigabytes."""
         assert zim_operations._format_size(1024 * 1024 * 1024) == "1.00 GB"
         assert zim_operations._format_size(2 * 1024 * 1024 * 1024) == "2.00 GB"
+
+
+class TestGetEntrySummaryMaxWords:
+    """Tests that get_entry_summary honors the documented max_words range.
+
+    The tool layer enforces a [1, 1000] contract; the operation layer must
+    not silently floor low values.
+    """
+
+    @pytest.fixture
+    def zim_operations(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator: PathValidator,
+        openzim_mcp_cache: OpenZimMcpCache,
+        content_processor: ContentProcessor,
+    ) -> ZimOperations:
+        """Provide a ZimOperations instance for max_words tests."""
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    @patch("openzim_mcp.zim_operations.zim_archive")
+    def test_get_entry_summary_max_words_one_returns_one_word(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """max_words=1 must return exactly 1 word, not silently bumped to 10."""
+        import json as _json
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.write_bytes(b"")
+
+        mock_archive_instance = MagicMock()
+        mock_entry = MagicMock()
+        mock_entry.title = "Plain"
+        mock_item = MagicMock()
+        mock_item.mimetype = "text/plain"
+        body = b"alpha beta gamma delta epsilon zeta eta theta iota kappa lambda"
+        mock_item.content = body
+        mock_item.size = len(body)
+        mock_entry.get_item.return_value = mock_item
+        mock_archive_instance.get_entry_by_path.return_value = mock_entry
+        mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+        result = zim_operations.get_entry_summary(str(zim_file), "A/Plain", max_words=1)
+        data = _json.loads(result)
+
+        assert data["word_count"] == 1
+        assert data["summary"] == "alpha..."
+        assert data["is_truncated"] is True

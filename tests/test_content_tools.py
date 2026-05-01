@@ -64,16 +64,15 @@ class TestGetZimEntryTool:
         )
 
     def test_max_content_length_validation(self, server: OpenZimMcpServer):
-        """Test that max_content_length < 1000 returns validation error."""
-        # This tests the validation logic that would be in the actual tool
-        max_content_length = 500
-        if max_content_length is not None and max_content_length < 1000:
+        """Test that max_content_length < 100 returns validation error."""
+        max_content_length = 50
+        if max_content_length is not None and max_content_length < 100:
             error_message = (
                 "**Parameter Validation Error**\n\n"
-                f"**Issue**: max_content_length must be at least 1000 characters "
+                f"**Issue**: max_content_length must be at least 100 characters "
                 f"(provided: {max_content_length})\n\n"
             )
-            assert "must be at least 1000" in error_message
+            assert "must be at least 100" in error_message
 
     @pytest.mark.asyncio
     async def test_get_zim_entry_rate_limit_error(self, server: OpenZimMcpServer):

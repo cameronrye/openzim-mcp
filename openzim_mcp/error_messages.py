@@ -184,7 +184,11 @@ def format_generic_error(
 def get_error_config(error: Exception) -> ErrorConfig | None:
     """Get the error configuration for an exception type.
 
-    Also checks for common error patterns in the message content.
+    Message-pattern checks run first so a specific failure mode (entry not
+    found, permission denied) gets a focused template even when the
+    exception type is a broad category like OpenZimMcpArchiveError. That
+    avoids advising the caller to "check disk space" when the real issue
+    is a missing entry path.
 
     Args:
         error: The exception to get configuration for
@@ -192,20 +196,24 @@ def get_error_config(error: Exception) -> ErrorConfig | None:
     Returns:
         ErrorConfig if found, None otherwise
     """
-    # Check for exact type match first
+    message = str(error).lower()
+
+    # Specific failure modes detectable from the message take priority.
+    if "entry not found" in message or "does not exist" in message:
+        return NOT_FOUND_ERROR_CONFIG
+    if "permission" in message or "access denied" in message:
+        return PERMISSION_ERROR_CONFIG
+
+    # Fall back to exception-type mapping for the broad categories.
     # Note: type(error) returns type[Exception] but ERROR_CONFIGS keys are
-    # type[OpenZimMcpError] - this is safe since .get() returns None for non-matching
+    # type[OpenZimMcpError] - this is safe since .get() returns None for
+    # non-matching keys.
     config = ERROR_CONFIGS.get(type(error))  # type: ignore[arg-type]
     if config:
         return config
 
-    # Check for common error patterns in message
-    message = str(error).lower()
-
-    if "permission" in message or "access" in message:
-        return PERMISSION_ERROR_CONFIG
-
-    if "not found" in message or "does not exist" in message:
+    # Last resort: a generic "not found" hint if the message looks that way.
+    if "not found" in message:
         return NOT_FOUND_ERROR_CONFIG
 
     return None

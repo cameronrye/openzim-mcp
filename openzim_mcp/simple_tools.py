@@ -5,14 +5,15 @@ away the complexity of multiple specialized tools. Designed for LLMs with
 limited tool-calling capabilities or context windows.
 """
 
+import json
 import logging
 import re
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 from .constants import REGEX_TIMEOUT_SECONDS
 from .exceptions import RegexTimeoutError
-from .timeout_utils import regex_timeout, run_with_timeout
+from .security import sanitize_context_for_error
+from .timeout_utils import run_with_timeout
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
@@ -26,8 +27,9 @@ def safe_regex_search(
 ) -> Optional[re.Match[str]]:
     """Perform a regex search with cross-platform timeout protection.
 
-    This function provides ReDoS protection on all platforms by wrapping
-    the regex operation with appropriate timeout mechanisms.
+    Always uses a threading-based timeout so it works on every platform and
+    on any thread (asyncio executors, worker threads, etc.). Signal-based
+    timeouts are not safe outside the main thread.
 
     Args:
         pattern: Regular expression pattern
@@ -41,18 +43,39 @@ def safe_regex_search(
     Raises:
         RegexTimeoutError: If the operation exceeds the time limit
     """
-    if sys.platform == "win32":
-        # Use threading-based timeout on Windows
-        return run_with_timeout(
-            lambda: re.search(pattern, text, flags),
-            timeout_seconds,
-            f"Regex operation timed out after {timeout_seconds} seconds",
-            RegexTimeoutError,
-        )
-    else:
-        # Use signal-based timeout on Unix
-        with regex_timeout(timeout_seconds):
-            return re.search(pattern, text, flags)
+    return run_with_timeout(
+        lambda: re.search(pattern, text, flags),
+        timeout_seconds,
+        f"Regex operation timed out after {timeout_seconds} seconds",
+        RegexTimeoutError,
+    )
+
+
+# Character class covering ASCII and common Unicode "smart" quotes that LLMs
+# and copy-pasted text frequently use. Used wherever we extract a quoted token
+# from a user query.
+_QUOTE_CHARS = "'\"‘’“”"
+_QUOTE_OPEN = f"[{_QUOTE_CHARS}]"
+_QUOTE_NOT = f"[^{_QUOTE_CHARS}]"
+
+
+def safe_regex_findall(
+    pattern: str,
+    text: str,
+    flags: int = 0,
+    timeout_seconds: float = REGEX_TIMEOUT_SECONDS,
+) -> List[Any]:
+    """Find all regex matches with timeout protection.
+
+    Same protections as safe_regex_search; returns the list of capture groups
+    (re.findall semantics).
+    """
+    return run_with_timeout(
+        lambda: re.findall(pattern, text, flags),
+        timeout_seconds,
+        f"Regex operation timed out after {timeout_seconds} seconds",
+        RegexTimeoutError,
+    )
 
 
 class IntentParser:
@@ -131,6 +154,48 @@ class IntentParser:
             0.75,
             5,
         ),
+        # search_all - very specific
+        (
+            r"\bsearch\s+(all|every(thing|where)?|across)\s+(files?|zims?)?\b",
+            "search_all",
+            0.95,
+            10,
+        ),
+        # walk_namespace - very specific
+        (
+            r"\b(walk|iterate|dump|enumerate)\s+namespace\b",
+            "walk_namespace",
+            0.95,
+            10,
+        ),
+        # warm_cache - very specific
+        (
+            r"\b(warm|preload|prefetch|prime)\s+(the\s+)?cache\b",
+            "warm_cache",
+            0.95,
+            10,
+        ),
+        # find_by_title - moderately specific
+        (
+            r"\b(find|locate|resolve)\s+(article|entry|page)?"
+            r"\s*(titled|named|called)\b",
+            "find_by_title",
+            0.9,
+            8,
+        ),
+        (r"\bwhat'?s\s+the\s+path\s+for\b", "find_by_title", 0.9, 8),
+        # random_entry - specific
+        (r"\brandom\s+(article|entry|page)\b", "random_entry", 0.95, 9),
+        # related - moderately specific
+        (
+            r"\b(related\s+to|articles?\s+linking\s+to|what\s+links\s+(to|from))\b",
+            "related",
+            0.9,
+            8,
+        ),
+        # cache stats / clear - specific
+        (r"\bcache\s+(stats?|statistics|status)\b", "cache_stats", 0.95, 10),
+        (r"\b(clear|empty|flush|reset)\s+(the\s+)?cache\b", "cache_clear", 0.95, 10),
         # Search - general fallback
         (r"\b(search|find|look\s+for|query)\b", "search", 0.7, 3),
     ]
@@ -251,8 +316,8 @@ class IntentParser:
                 # Extract search query and filters
                 # Try to extract the search term
                 search_match = safe_regex_search(
-                    r"(?:search|find|look)\s+(?:for\s+)?['\"]?"
-                    r"([^'\"]+?)['\"]?\s+(?:in|within)",
+                    rf"(?:search|find|look)\s+(?:for\s+)?{_QUOTE_OPEN}?"
+                    rf"({_QUOTE_NOT}+?){_QUOTE_OPEN}?\s+(?:in|within)",
                     query,
                     re.IGNORECASE,
                 )
@@ -261,7 +326,7 @@ class IntentParser:
 
                 # Extract namespace filter
                 namespace_match = safe_regex_search(
-                    r"namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?",
+                    rf"namespace\s+{_QUOTE_OPEN}?([A-Za-z0-9_.-]+){_QUOTE_OPEN}?",
                     query,
                     re.IGNORECASE,
                 )
@@ -270,7 +335,9 @@ class IntentParser:
 
                 # Extract content type filter
                 type_match = safe_regex_search(
-                    r"type\s+['\"]?([A-Za-z0-9_/.-]+)['\"]?", query, re.IGNORECASE
+                    rf"type\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?",
+                    query,
+                    re.IGNORECASE,
                 )
                 if type_match:
                     params["content_type"] = type_match.group(1)
@@ -278,32 +345,38 @@ class IntentParser:
             elif intent in ["get_article", "structure", "links", "toc", "summary"]:
                 # Extract article/entry path
                 # Try to find quoted strings first
-                quoted_match = safe_regex_search(r"['\"]([^'\"]+)['\"]", query)
+                quoted_match = safe_regex_search(
+                    rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}", query
+                )
                 if quoted_match:
                     params["entry_path"] = quoted_match.group(1)
                 else:
-                    # Try to extract after keywords
-                    # For links: "links in Biology", "references from Evolution"
-                    # For structure: "structure of Biology"
-                    # For toc: "table of contents for Biology"
-                    # For summary: "summary of Biology"
-                    # For get_article: "get article Biology"
+                    # Try to extract after keywords. The keyword set intentionally
+                    # excludes "contents" — for "table of contents for Biology"
+                    # we don't want "of contents" to capture "contents".
+                    #
+                    # We use the LAST match rather than the first: queries like
+                    # "table of contents for Biology" have multiple keyword hits
+                    # ("of <stop-word>", "for <real-target>") and the trailing
+                    # match is the actual target the user named.
                     path_pattern = (
-                        r"(?:article|entry|page|of|for|in|from|to|contents)"
+                        r"(?:article|entry|page|of|for|in|from|to)"
                         r"\s+([A-Za-z0-9_/.-]+)"
                     )
-                    path_match = safe_regex_search(
+                    path_matches = safe_regex_findall(
                         path_pattern,
                         query,
                         re.IGNORECASE,
                     )
-                    if path_match:
-                        params["entry_path"] = path_match.group(1)
+                    if path_matches:
+                        params["entry_path"] = path_matches[-1]
 
             elif intent == "binary":
                 # Extract entry path for binary content retrieval
                 # Try to find quoted strings first
-                quoted_match = safe_regex_search(r"['\"]([^'\"]+)['\"]", query)
+                quoted_match = safe_regex_search(
+                    rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}", query
+                )
                 if quoted_match:
                     params["entry_path"] = quoted_match.group(1)
                 else:
@@ -314,7 +387,7 @@ class IntentParser:
                     binary_pattern = (
                         r"(?:content|data|entry|from|of|for|"
                         r"pdf|image|video|audio|media)"
-                        r"\s+['\"]?([A-Za-z0-9_/.-]+)['\"]?"
+                        rf"\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?"
                     )
                     path_match = safe_regex_search(
                         binary_pattern,
@@ -335,7 +408,7 @@ class IntentParser:
                 # Extract partial query
                 suggest_pattern = (
                     r"(?:suggestions?|autocomplete|complete|hints?)"
-                    r"\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?"
+                    rf"\s+(?:for\s+)?{_QUOTE_OPEN}?({_QUOTE_NOT}+){_QUOTE_OPEN}?"
                 )
                 suggest_match = safe_regex_search(
                     suggest_pattern,
@@ -348,7 +421,8 @@ class IntentParser:
             elif intent == "search":
                 # For general search, use the whole query or extract search term
                 search_match = safe_regex_search(
-                    r"(?:search|find|look)\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?",
+                    rf"(?:search|find|look)\s+(?:for\s+)?"
+                    rf"{_QUOTE_OPEN}?({_QUOTE_NOT}+){_QUOTE_OPEN}?",
                     query,
                     re.IGNORECASE,
                 )
@@ -356,6 +430,36 @@ class IntentParser:
                     params["query"] = search_match.group(1).strip()
                 else:
                     params["query"] = query
+
+            elif intent == "search_all":
+                # Strip the "search all files for" prefix to get the query.
+                params["query"] = re.sub(
+                    r"^.*?(search\s+(all|every(thing|where)?|across)"
+                    r"\s+(files?|zims?)?\s*for\s*)",
+                    "",
+                    query,
+                    flags=re.IGNORECASE,
+                ).strip()
+            elif intent == "walk_namespace":
+                m = safe_regex_search(r"namespace\s+([A-Za-z])\b", query, re.IGNORECASE)
+                if m:
+                    params["namespace"] = m.group(1).upper()
+            elif intent == "find_by_title":
+                m = safe_regex_search(
+                    r"(?:titled|named|called|path\s+for)\s+(.+?)$",
+                    query,
+                    re.IGNORECASE,
+                )
+                if m:
+                    params["title"] = m.group(1).strip().rstrip("?.")
+            elif intent == "related":
+                m = safe_regex_search(
+                    r"(?:related\s+to|linking\s+to|links\s+(?:to|from))\s+(.+?)$",
+                    query,
+                    re.IGNORECASE,
+                )
+                if m:
+                    params["entry_path"] = m.group(1).strip().rstrip("?.")
 
         except RegexTimeoutError:
             logger.warning(
@@ -594,6 +698,63 @@ class SimpleToolsHandler:
                 )
                 return result + low_confidence_note
 
+            elif intent == "search_all":
+                return self.zim_operations.search_all(
+                    params.get("query", query), limit_per_file=5
+                )
+            elif intent == "walk_namespace":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.walk_namespace(
+                    zim_path, params.get("namespace", "C"), cursor=0, limit=200
+                )
+            elif intent == "warm_cache":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.warm_cache(zim_path)
+            elif intent == "find_by_title":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.find_entry_by_title(
+                    zim_path, params.get("title", query), cross_file=False, limit=10
+                )
+            elif intent == "random_entry":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.get_random_entry(zim_path, "C")
+            elif intent == "related":
+                zim_path = self._auto_select_zim_file()
+                if not zim_path:
+                    return "No ZIM file available; please specify zim_file_path."
+                return self.zim_operations.get_related_articles(
+                    zim_path,
+                    params.get("entry_path", ""),
+                    limit=10,
+                    direction="outbound",
+                )
+            elif intent == "cache_stats":
+                return json.dumps(
+                    self.zim_operations.cache.stats(), indent=2, ensure_ascii=False
+                )
+            elif intent == "cache_clear":
+                prior = self.zim_operations.cache.stats().get("size", 0)
+                self.zim_operations.cache.clear()
+                return json.dumps(
+                    {
+                        "cleared": True,
+                        "prior_size": prior,
+                        "current_size": self.zim_operations.cache.stats().get(
+                            "size", 0
+                        ),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
             else:
                 # Fallback to search
                 result = self.zim_operations.search_zim_file(
@@ -603,10 +764,14 @@ class SimpleToolsHandler:
 
         except Exception as e:
             logger.error(f"Error handling zim_query: {e}")
+            # Sanitize both the query and error text to avoid leaking
+            # absolute filesystem paths back to the MCP client.
+            safe_query = sanitize_context_for_error(query)
+            safe_error = sanitize_context_for_error(str(e))
             return (
                 f"**Error Processing Query**\n\n"
-                f"**Query**: {query}\n"
-                f"**Error**: {str(e)}\n\n"
+                f"**Query**: {safe_query}\n"
+                f"**Error**: {safe_error}\n\n"
                 f"**Troubleshooting**:\n"
                 f"1. Check that the ZIM file path is correct\n"
                 f"2. Verify the query format\n"

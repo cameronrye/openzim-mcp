@@ -44,12 +44,14 @@ class CacheEntry:
             False
         """
         self.value = value
-        self.created_at = time.time()
+        # Use monotonic clock for in-memory expiry/LRU so wall-clock
+        # adjustments (NTP, DST, manual changes) can't break expiry.
+        self.created_at = time.monotonic()
         self.ttl_seconds = ttl_seconds
 
     def is_expired(self) -> bool:
         """Check if cache entry has expired."""
-        return time.time() - self.created_at > self.ttl_seconds
+        return time.monotonic() - self.created_at > self.ttl_seconds
 
 
 class OpenZimMcpCache:
@@ -94,10 +96,17 @@ class OpenZimMcpCache:
         """
         self.config = config
         self._cache: Dict[str, CacheEntry] = {}
-        self._access_order: Dict[str, float] = {}
-        # Heap for O(log n) LRU eviction: (access_time, key)
+        # Monotonic counter for LRU access ordering. A counter is used in
+        # preference to a wall-clock or monotonic timestamp because clock
+        # resolution varies by platform (Windows ticks at ~15.6ms by default),
+        # which would let multiple operations land on the same timestamp and
+        # break LRU ordering when (timestamp, key) tuples fall back to
+        # lexicographic key comparison.
+        self._access_counter: int = 0
+        self._access_order: Dict[str, int] = {}
+        # Heap for O(log n) LRU eviction: (access_counter, key)
         # Uses lazy deletion - entries may be stale if key was updated or removed
-        self._lru_heap: List[Tuple[float, str]] = []
+        self._lru_heap: List[Tuple[int, str]] = []
         self._hits: int = 0
         self._misses: int = 0
         self._lock = threading.RLock()  # Reentrant lock for thread safety
@@ -117,14 +126,17 @@ class OpenZimMcpCache:
         if config.enabled and self._persistence_enabled:
             self._load_from_disk()
 
-        if config.enabled and enable_background_cleanup:
-            self._start_cleanup_thread()
-            # Register shutdown handler to stop cleanup thread gracefully
-            atexit.register(self._stop_cleanup_thread)
-
-        # Register persistence handler on shutdown
+        # atexit handlers fire in LIFO order, so register persistence FIRST
+        # and the cleanup-thread stop SECOND. That way at shutdown the cleanup
+        # thread is signalled to stop *before* _save_to_disk runs, so the save
+        # snapshot doesn't race with concurrent expirations from the cleanup
+        # loop.
         if config.enabled and self._persistence_enabled:
             atexit.register(self._save_to_disk)
+
+        if config.enabled and enable_background_cleanup:
+            self._start_cleanup_thread()
+            atexit.register(self._stop_cleanup_thread)
 
         logger.info(
             f"Cache initialized: enabled={config.enabled}, "
@@ -208,11 +220,12 @@ class OpenZimMcpCache:
                 logger.debug(f"Cache entry expired: {key}")
                 return None
 
-            # Update access time for LRU
-            access_time = time.time()
-            self._access_order[key] = access_time
+            # Update access counter for LRU
+            self._access_counter += 1
+            access_counter = self._access_counter
+            self._access_order[key] = access_counter
             # Push to heap - old entries skipped during eviction (lazy cleanup)
-            heapq.heappush(self._lru_heap, (access_time, key))
+            heapq.heappush(self._lru_heap, (access_counter, key))
             self._hits += 1
             logger.debug(f"Cache hit: {key}")
             return entry.value
@@ -235,10 +248,11 @@ class OpenZimMcpCache:
 
             # Add/update entry
             self._cache[key] = CacheEntry(value, self.config.ttl_seconds)
-            access_time = time.time()
-            self._access_order[key] = access_time
+            self._access_counter += 1
+            access_counter = self._access_counter
+            self._access_order[key] = access_counter
             # Push to heap for O(log n) LRU eviction
-            heapq.heappush(self._lru_heap, (access_time, key))
+            heapq.heappush(self._lru_heap, (access_counter, key))
             logger.debug(f"Cache set: {key}")
 
     def delete(self, key: str) -> None:
@@ -262,7 +276,13 @@ class OpenZimMcpCache:
         self._access_order.pop(key, None)
 
     def _cleanup_expired(self) -> None:
-        """Remove all expired entries (thread-safe)."""
+        """Remove all expired entries (thread-safe).
+
+        Also compacts the LRU heap when stale entries dominate. get()/set()
+        push a new (access_counter, key) on every access for lazy LRU;
+        without compaction the heap grows unboundedly with total operations
+        rather than with cache size.
+        """
         with self._lock:
             expired_keys = [
                 key for key, entry in self._cache.items() if entry.is_expired()
@@ -274,6 +294,14 @@ class OpenZimMcpCache:
             if expired_keys:
                 logger.debug(f"Cleaned up {len(expired_keys)} expired cache entries")
 
+            # Compact the heap when it grew well past the live cache size.
+            # 4x is a cheap heuristic — small enough to keep memory bounded,
+            # large enough that we don't rebuild the heap on every cleanup.
+            if len(self._lru_heap) > 4 * max(len(self._access_order), 1):
+                self._lru_heap = [(t, k) for k, t in self._access_order.items()]
+                heapq.heapify(self._lru_heap)
+                logger.debug(f"Compacted LRU heap to {len(self._lru_heap)} entries")
+
     def _evict_lru(self) -> None:
         """Evict least recently used entry using heap (must be called with lock held).
 
@@ -282,13 +310,13 @@ class OpenZimMcpCache:
         """
         while self._lru_heap:
             # Pop the oldest entry from heap
-            access_time, key = heapq.heappop(self._lru_heap)
+            access_counter, key = heapq.heappop(self._lru_heap)
 
             # Check if this entry is still valid (not stale)
             # An entry is valid if:
             # 1. The key still exists in cache
-            # 2. The access time matches (not updated since)
-            if key in self._access_order and self._access_order[key] == access_time:
+            # 2. The access counter matches (not updated since)
+            if key in self._access_order and self._access_order[key] == access_counter:
                 self._remove(key)
                 logger.debug(f"Evicted LRU cache entry: {key}")
                 return
@@ -313,13 +341,6 @@ class OpenZimMcpCache:
             self._hits = 0
             self._misses = 0
         logger.info("Cache cleared")
-
-    def reset_stats(self) -> None:
-        """Reset hit/miss statistics without clearing cache entries (thread-safe)."""
-        with self._lock:
-            self._hits = 0
-            self._misses = 0
-        logger.debug("Cache statistics reset")
 
     def stats(self) -> Dict[str, Any]:
         """Get cache statistics including hit/miss rates (thread-safe)."""
@@ -371,46 +392,53 @@ class OpenZimMcpCache:
             return
 
         try:
+            # Hold the lock for the whole snapshot+write so concurrent set/
+            # delete calls can't be silently dropped between the snapshot and
+            # the rename, and so the empty-cache file deletion doesn't race
+            # with a concurrent set().
             with self._lock:
-                # Collect non-expired entries
+                # Collect non-expired entries. created_at is monotonic
+                # in memory; convert to wall-clock for persistence so the
+                # data is meaningful across process restarts.
                 entries_to_save: Dict[str, Dict[str, Any]] = {}
+                now_monotonic = time.monotonic()
+                now_wall = time.time()
                 for key, entry in self._cache.items():
-                    if not entry.is_expired():
+                    age = now_monotonic - entry.created_at
+                    if age <= entry.ttl_seconds:
                         entries_to_save[key] = {
                             "value": entry.value,
-                            "created_at": entry.created_at,
+                            "created_at": now_wall - age,
                             "ttl_seconds": entry.ttl_seconds,
                         }
 
-            if not entries_to_save:
-                # Remove persistence file if cache is empty
                 persistence_file = self._get_persistence_file()
-                if persistence_file.exists():
-                    persistence_file.unlink()
-                    logger.debug("Removed empty cache persistence file")
-                return
 
-            # Ensure parent directory exists
-            persistence_file = self._get_persistence_file()
-            persistence_file.parent.mkdir(parents=True, exist_ok=True)
+                if not entries_to_save:
+                    if persistence_file.exists():
+                        persistence_file.unlink()
+                        logger.debug("Removed empty cache persistence file")
+                    return
 
-            # Write to temp file first, then rename for atomicity
-            temp_file = persistence_file.with_suffix(".tmp")
-            with open(temp_file, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "version": 1,
-                        "saved_at": time.time(),
-                        "entries": entries_to_save,
-                    },
-                    f,
-                    indent=2,
-                    default=str,  # Handle non-serializable values
-                )
+                persistence_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # Atomic rename
-            temp_file.replace(persistence_file)
-            logger.debug(f"Saved {len(entries_to_save)} cache entries to disk")
+                # Write to temp file first, then rename for atomicity
+                temp_file = persistence_file.with_suffix(".tmp")
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "version": 1,
+                            "saved_at": now_wall,
+                            "entries": entries_to_save,
+                        },
+                        f,
+                        indent=2,
+                        default=str,  # Handle non-serializable values
+                    )
+
+                # Atomic rename
+                temp_file.replace(persistence_file)
+                logger.debug(f"Saved {len(entries_to_save)} cache entries to disk")
 
         except Exception as e:
             logger.warning(f"Failed to save cache to disk: {e}")
@@ -440,25 +468,33 @@ class OpenZimMcpCache:
 
             entries = data.get("entries", {})
             loaded_count = 0
-            current_time = time.time()
+            now_wall = time.time()
+            now_monotonic = time.monotonic()
 
             with self._lock:
                 for key, entry_data in entries.items():
                     created_at = entry_data.get("created_at", 0)
                     ttl_seconds = entry_data.get("ttl_seconds", self.config.ttl_seconds)
 
-                    # Skip expired entries
-                    if current_time - created_at > ttl_seconds:
+                    # Skip expired entries (compare wall-clock-to-wall-clock)
+                    age = now_wall - created_at
+                    if age > ttl_seconds:
                         continue
 
-                    # Restore entry
+                    # Restore entry. CacheEntry.__init__ stamps a monotonic
+                    # created_at; rewind it by the entry's age so remaining
+                    # TTL is preserved across the restart.
                     entry = CacheEntry(entry_data["value"], ttl_seconds)
-                    entry.created_at = created_at
+                    entry.created_at = now_monotonic - age
                     self._cache[key] = entry
 
-                    # Restore access order (use created_at as initial access time)
-                    self._access_order[key] = created_at
-                    heapq.heappush(self._lru_heap, (created_at, key))
+                    # Assign a fresh access_counter value to preserve LRU
+                    # ordering across restart. Loaded entries get successively
+                    # higher counters in iteration order; live operations
+                    # after restart will continue from a higher counter.
+                    self._access_counter += 1
+                    self._access_order[key] = self._access_counter
+                    heapq.heappush(self._lru_heap, (self._access_counter, key))
                     loaded_count += 1
 
             logger.info(f"Loaded {loaded_count} cache entries from disk")
@@ -467,20 +503,3 @@ class OpenZimMcpCache:
             logger.warning(f"Failed to parse cache persistence file: {e}")
         except Exception as e:
             logger.warning(f"Failed to load cache from disk: {e}")
-
-    def persist(self) -> bool:
-        """Manually trigger cache persistence.
-
-        Returns:
-            True if persistence succeeded, False otherwise
-        """
-        if not self._persistence_enabled:
-            logger.debug("Cache persistence is not enabled")
-            return False
-
-        try:
-            self._save_to_disk()
-            return True
-        except Exception as e:
-            logger.error(f"Manual cache persistence failed: {e}")
-            return False

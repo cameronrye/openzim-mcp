@@ -52,7 +52,10 @@ class TestContentConfig:
     def test_content_config_validation(self):
         """Test content config validation."""
         with pytest.raises(ValueError):
-            ContentConfig(max_content_length=500)  # Should be >= 1000
+            ContentConfig(max_content_length=50)  # Should be >= 100
+
+        # 100 is now the floor (lowered from 1000 to enable short previews).
+        ContentConfig(max_content_length=100)
 
         with pytest.raises(ValueError):
             ContentConfig(snippet_length=50)  # Should be >= 100

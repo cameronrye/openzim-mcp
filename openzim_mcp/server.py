@@ -1,5 +1,6 @@
 """Main OpenZIM MCP server implementation."""
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
@@ -204,6 +205,16 @@ class OpenZimMcpServer:
             - Filtered search: "search evolution in namespace C"
             - Get article: "get article Biology", "show Evolution"
             - General search: "search for biology", "find evolution"
+            - Cross-file search: "search all files for python" → search_all
+            - Namespace walk: "walk namespace M" → walk_namespace
+            - Cache warming: "warm cache" → warm_cache
+            - Title lookup: "find article titled Photosynthesis"
+              → find_entry_by_title
+            - Random article: "random article" → get_random_entry
+            - Related articles: "articles related to Climate_Change"
+              → get_related_articles
+            - Cache stats: "cache stats" → cache_stats
+            - Cache clear: "clear cache" → cache_clear
 
             Args:
                 query: Natural language query (REQUIRED)
@@ -221,6 +232,14 @@ class OpenZimMcpServer:
                 - "get article Evolution"
                 - "show structure of Biology"
                 - "browse namespace C with limit 10"
+                - "search all files for python"
+                - "walk namespace M"
+                - "warm cache"
+                - "find article titled Photosynthesis"
+                - "random article"
+                - "articles related to Climate_Change"
+                - "cache stats"
+                - "clear cache"
             """
             try:
                 # Build options dict from parameters
@@ -232,10 +251,13 @@ class OpenZimMcpServer:
                 if max_content_length is not None:
                     options["max_content_length"] = max_content_length
 
-                # Use simple tools handler
+                # Use simple tools handler. handle_zim_query is synchronous and
+                # performs blocking ZIM I/O, so dispatch it to a worker thread
+                # rather than blocking the asyncio event loop.
                 if self.simple_tools_handler:
-                    return self.simple_tools_handler.handle_zim_query(
-                        query, zim_file_path, options
+                    handler = self.simple_tools_handler
+                    return await asyncio.to_thread(
+                        handler.handle_zim_query, query, zim_file_path, options
                     )
                 else:
                     return "Error: Simple tools handler not initialized"

@@ -59,7 +59,7 @@ class TestOpenZimMcpCache:
         cache.set("key", "value")
         # Manually expire the entry by setting its created_at to the past
         if "key" in cache._cache:
-            cache._cache["key"].created_at = time.time() - 61  # 61 seconds ago
+            cache._cache["key"].created_at = time.monotonic() - 61  # 61 seconds ago
 
         result = cache.get("key")
         assert result is None
@@ -129,7 +129,9 @@ class TestOpenZimMcpCache:
 
         # Manually expire the entries by setting their created_at to the past
         for key in cache._cache:
-            cache._cache[key].created_at = time.time() - 61  # 61 seconds ago (past TTL)
+            cache._cache[key].created_at = (
+                time.monotonic() - 61
+            )  # 61 seconds ago (past TTL)
 
         # Verify entries are expired
         assert cache._cache["key1"].is_expired()
@@ -168,8 +170,8 @@ class TestOpenZimMcpCache:
         cache.set("valid", "value3")
 
         # Manually expire some entries
-        cache._cache["expired1"].created_at = time.time() - 61  # Expired
-        cache._cache["expired2"].created_at = time.time() - 61  # Expired
+        cache._cache["expired1"].created_at = time.monotonic() - 61  # Expired
+        cache._cache["expired2"].created_at = time.monotonic() - 61  # Expired
         # "valid" entry remains with current timestamp (not expired)
 
         # Call _cleanup_expired to trigger the missing lines
@@ -252,29 +254,6 @@ class TestCacheStatistics:
         assert stats["hits"] == 0
         assert stats["misses"] == 0
         assert stats["hit_rate"] == pytest.approx(0.0)
-
-    def test_reset_stats(self):
-        """Test resetting cache statistics."""
-        config = CacheConfig(enabled=True, max_size=10, ttl_seconds=60)
-        cache = OpenZimMcpCache(config)
-
-        # Generate some stats
-        cache.set("key", "value")
-        cache.get("key")  # Hit
-        cache.get("missing")  # Miss
-
-        assert cache.stats()["hits"] == 1
-        assert cache.stats()["misses"] == 1
-
-        # Reset stats
-        cache.reset_stats()
-
-        assert cache.stats()["hits"] == 0
-        assert cache.stats()["misses"] == 0
-        # Cache entries should still exist
-        assert cache.get("key") == "value"
-        # But this hit counts toward new stats
-        assert cache.stats()["hits"] == 1
 
 
 class TestCacheBackgroundCleanup:
@@ -415,14 +394,6 @@ class TestCachePersistence:
 
         stats = cache.stats()
         assert stats["persistence_enabled"] is False
-
-    def test_persist_returns_false_when_disabled(self):
-        """Test that persist() returns False when persistence is disabled."""
-        config = CacheConfig(enabled=True, max_size=10, ttl_seconds=60)
-        cache = OpenZimMcpCache(config, enable_background_cleanup=False)
-
-        result = cache.persist()
-        assert result is False
 
     def test_get_persistence_file_with_suffix(self, temp_dir):
         """Test _get_persistence_file returns correct path."""
@@ -608,26 +579,6 @@ class TestCachePersistence:
         # Load cache - should handle error gracefully
         cache = OpenZimMcpCache(config, enable_background_cleanup=False)
         assert cache.stats()["size"] == 0
-
-    def test_manual_persist_success(self, temp_dir):
-        """Test manual persist() method."""
-        from openzim_mcp.config import CacheConfig
-
-        cache_path = str(temp_dir / "test_cache")
-        config = CacheConfig(
-            enabled=True,
-            max_size=10,
-            ttl_seconds=60,
-            persistence_enabled=True,
-            persistence_path=cache_path,
-        )
-
-        cache = OpenZimMcpCache(config, enable_background_cleanup=False)
-        cache.set("key", "value")
-
-        result = cache.persist()
-        assert result is True
-        assert (temp_dir / "test_cache.json").exists()
 
 
 class TestCacheEdgeCases:

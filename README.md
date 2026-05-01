@@ -38,9 +38,9 @@
 
 ---
 
-> 🆕 **NEW: Article Summaries & Table of Contents!** Extract concise article summaries and hierarchical table of contents for quick content overview. Plus pagination cursors for seamless navigation! [Learn more →](#get_entry_summary---get-a-concise-article-summary)
+> 🆕 **NEW in v0.9.0: Multi-Archive Search & Prompts!** Search across every ZIM file at once with `search_all`, invoke pre-built workflows with `/research` and `/summarize`, and resolve titles to paths instantly with `find_entry_by_title`. [Learn more →](#whats-new-in-v090)
 
-> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (18 specialized tools) to match your LLM's capabilities.
+> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (26 specialized tools, plus 3 MCP prompts and 2 MCP resources) to match your LLM's capabilities.
 
 ## Built for LLM Intelligence
 
@@ -62,8 +62,11 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 
 ## Features
 
-- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (18 specialized tools)
-- **Binary Content Retrieval**: 🆕 Extract PDFs, images, videos, and other embedded media for multi-agent workflows
+- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (26 specialized tools)
+- **Multi-Archive Search**: 🆕 Search every ZIM file at once with `search_all` — no need to know which archive holds the answer
+- **MCP Prompts**: 🆕 Pre-built workflow slash commands (`/research`, `/summarize`, `/explore`) that orchestrate multi-step ZIM operations
+- **Find Entries by Title**: 🆕 Resolve titles to entry paths instantly with `find_entry_by_title` — case-insensitive, optionally cross-file
+- **Binary Content Retrieval**: Extract PDFs, images, videos, and other embedded media for multi-agent workflows
 - **Security First**: Comprehensive input validation and path traversal protection
 - **High Performance**: Intelligent caching and optimized ZIM file operations
 - **Smart Retrieval**: Automatic fallback from direct access to search-based retrieval for reliable entry access
@@ -72,6 +75,46 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 - **Type Safe**: Full type annotations throughout the codebase
 - **Configurable**: Flexible configuration with validation
 - **Observable**: Structured logging and health monitoring
+
+## What's new in v0.9.0
+
+### Multi-archive search
+
+`search_all` queries every ZIM file in your allowed directories at once and merges the results — no need to know which archive holds the answer.
+
+### MCP Prompts
+
+Three pre-built workflows you can invoke as slash commands in MCP-aware clients:
+
+- `/research <topic>` — search across all archives, then drill into top hits
+- `/summarize <zim_file_path> <entry_path>` — TOC + summary + key links
+- `/explore <zim_file_path>` — high-level briefing of a ZIM's contents
+
+### Find entries by title
+
+`find_entry_by_title` resolves a title (or partial title) to one or more entry paths, with case-insensitive matching. Cheaper than full-text search when you already know the article name.
+
+### Power-user tools
+
+- `walk_namespace` — deterministic cursor-paginated namespace iteration (vs. `browse_namespace` which samples)
+- `warm_cache` — pre-populate cache for a ZIM file before a long session
+- `get_random_entry` — sample one random article (great with `/explore`)
+- `get_related_articles` — link-graph nearest neighbours (outbound, inbound, or both)
+- `cache_stats` / `cache_clear` — inspect and manage the in-memory cache
+
+### MCP Resources
+
+First use of the MCP **resources** primitive — your client's resource browser and `@`-mention picker now see ZIM files directly:
+
+- `zim://files` — index of all available ZIM files
+- `zim://{name}` — overview of one ZIM (metadata, namespaces, main page preview)
+
+### Reliability fixes
+
+- Namespace listing now deterministically surfaces minority namespaces (M, W, X, I) that random sampling could miss
+- Search filtering uses streaming scan instead of a hard 1000-hit cap (rare-mime-type filters now return matches that were previously hidden)
+- Error messages route by failure mode first (no more "check disk space" for "entry not found")
+- Phantom server-instance conflicts no longer reported (TOCTOU re-check before raising)
 
 ## Quick Start
 
@@ -114,7 +157,7 @@ mkdir ~/zim-files
 openzim-mcp /path/to/zim/files
 python -m openzim_mcp /path/to/zim/files
 
-# Advanced mode - all 18 specialized tools
+# Advanced mode - all 26 specialized tools
 openzim-mcp --mode advanced /path/to/zim/files
 python -m openzim_mcp --mode advanced /path/to/zim/files
 
@@ -131,7 +174,7 @@ make run ZIM_DIR=/path/to/zim/files
 OpenZIM MCP supports two modes:
 
 - **Simple Mode** (default): Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
-- **Advanced Mode**: Exposes all 18 specialized MCP tools for maximum control
+- **Advanced Mode**: Exposes all 26 specialized MCP tools for maximum control
 
 See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
 

@@ -122,7 +122,7 @@ def atomic_write_json(file_path: Path, data: Dict[str, Any]) -> None:
         raise write_error
 
 
-def safe_log(log_func: Any, message: str) -> None:
+def _safe_log(log_func: Any, message: str) -> None:
     """Safely log a message, handling cases where logging is shut down.
 
     This is particularly important for atexit handlers that may run after
@@ -179,15 +179,21 @@ class ServerInstance:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ServerInstance":
-        """Create instance from dictionary."""
+        """Create instance from dictionary.
+
+        Coerces numeric fields so a corrupt or hand-edited instance file
+        with the wrong type (e.g. ``"pid": "1234"``) raises ValueError —
+        which is in get_all_instances()'s except tuple — instead of
+        leaking a TypeError out of os.kill() much later.
+        """
         instance = cls(
-            pid=data["pid"],
+            pid=int(data["pid"]),
             config_hash=data["config_hash"],
             allowed_directories=data["allowed_directories"],
-            start_time=data["start_time"],
+            start_time=float(data["start_time"]),
             server_name=data.get("server_name", "openzim-mcp"),
         )
-        instance.last_heartbeat = data.get("last_heartbeat", data["start_time"])
+        instance.last_heartbeat = float(data.get("last_heartbeat", data["start_time"]))
         return instance
 
     def is_alive(self) -> bool:
@@ -242,12 +248,12 @@ class InstanceTracker:
                 json.dump(instance.to_dict(), f, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
-            safe_log(
+            _safe_log(
                 logger.info,
                 f"Registered server instance: PID {pid}, config hash {config_hash[:8]}",
             )
         except (OSError, ValueError) as e:
-            safe_log(logger.warning, f"Failed to register instance: {e}")
+            _safe_log(logger.warning, f"Failed to register instance: {e}")
 
         self.current_instance = instance
         return instance
@@ -264,10 +270,10 @@ class InstanceTracker:
             if instance_file.exists():
                 instance_file.unlink()
                 if not silent:
-                    safe_log(logger.info, f"Unregistered server instance: PID {pid}")
+                    _safe_log(logger.info, f"Unregistered server instance: PID {pid}")
         except OSError as e:
             if not silent:
-                safe_log(logger.warning, f"Failed to unregister instance: {e}")
+                _safe_log(logger.warning, f"Failed to unregister instance: {e}")
 
         if self.current_instance and self.current_instance.pid == pid:
             self.current_instance = None
@@ -308,13 +314,30 @@ class InstanceTracker:
         return active_instances
 
     def detect_conflicts(self, current_config_hash: str) -> List[Dict[str, Any]]:
-        """Detect potential conflicts with other server instances."""
+        """Detect potential conflicts with other server instances.
+
+        Re-verifies each candidate's liveness right before reporting it.
+        Catches the TOCTOU window where a process died between
+        get_active_instances() and now (zombies, just-killed processes,
+        PID-file-without-process). Phantoms get auto-unregistered.
+        """
         active_instances = self.get_active_instances()
         conflicts = []
+        phantoms_cleaned = 0
 
         for instance in active_instances:
             if instance.pid == os.getpid():
                 continue  # Skip current instance
+
+            # Defensive re-check — if the process is gone now, drop the file
+            # and don't surface a stale "conflict".
+            if not self._is_process_running(instance.pid):
+                self.unregister_instance(instance.pid, silent=True)
+                phantoms_cleaned += 1
+                logger.debug(
+                    f"Auto-cleaned phantom instance file for PID {instance.pid}"
+                )
+                continue
 
             conflict_info = {
                 "type": "multiple_instances",
@@ -329,6 +352,12 @@ class InstanceTracker:
                 conflict_info["details"] = "Different server configurations detected"
 
             conflicts.append(conflict_info)
+
+        if phantoms_cleaned:
+            logger.info(
+                f"Auto-cleaned {phantoms_cleaned} phantom instance files during "
+                f"conflict detection"
+            )
 
         return conflicts
 
@@ -357,22 +386,6 @@ class InstanceTracker:
                     logger.debug(f"Cleaned up corrupted instance file: {instance_file}")
 
         return cleaned_count
-
-    def update_heartbeat(self) -> None:
-        """Update heartbeat for current instance with file locking."""
-        if self.current_instance:
-            self.current_instance.update_heartbeat()
-            # Update the instance file with file locking
-            instance_file = (
-                self.instances_dir / f"server_{self.current_instance.pid}.json"
-            )
-            try:
-                with open(instance_file, "w") as f, file_lock(f, exclusive=True):
-                    json.dump(self.current_instance.to_dict(), f, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
-            except OSError as e:
-                logger.warning(f"Failed to update heartbeat: {e}")
 
     def _is_process_running(self, pid: int) -> bool:
         """Check if a process is running by PID."""
