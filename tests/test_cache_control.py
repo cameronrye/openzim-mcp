@@ -160,3 +160,110 @@ def test_filtered_search_does_not_cache_zero_result_response(
     assert (
         zim_operations.cache.get(cache_key) is None
     ), "filtered zero-result response should not be cached"
+
+
+def test_get_search_suggestions_does_not_cache_on_error(
+    zim_operations: ZimOperations, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If suggestion generation raises, the error must not land in the cache.
+
+    Drives a real failure through the production code path: stubs the
+    inner search-based suggestions helper to raise so the error propagates
+    through ``_generate_search_suggestions`` to the public method.
+    """
+    zim_file = _zim_path(temp_dir)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated libzim suggestion-iterator failure")
+
+    monkeypatch.setattr(zim_operations, "_get_suggestions_from_search", boom)
+
+    with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+        mock_archive_instance = MagicMock()
+        mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+        with pytest.raises(OpenZimMcpArchiveError):
+            zim_operations.get_search_suggestions(str(zim_file), "warmup", limit=10)
+
+    validated_path = zim_operations.path_validator.validate_path(str(zim_file))
+    validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
+    cache_key = f"suggestions:{validated_path}:warmup:10"
+    assert (
+        zim_operations.cache.get(cache_key) is None
+    ), "errored suggestion response should not be cached"
+
+
+def test_get_entry_summary_does_not_cache_on_html_extract_error(
+    zim_operations: ZimOperations, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If HTML summary extraction raises, the error must not land in the cache.
+
+    Stubs ``BeautifulSoup`` (used inside ``_extract_html_summary``) to raise
+    so the failure propagates through the real code path.
+    """
+    zim_file = _zim_path(temp_dir)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated BeautifulSoup parse failure")
+
+    monkeypatch.setattr("bs4.BeautifulSoup", boom)
+
+    with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+        mock_archive_instance = MagicMock()
+        mock_entry = MagicMock()
+        mock_entry.title = "Foo"
+        mock_entry.path = "C/Foo"
+        mock_item = MagicMock()
+        mock_item.mimetype = "text/html"
+        mock_item.content = b"<html><body><p>broken</p></body></html>"
+        mock_entry.get_item.return_value = mock_item
+        mock_archive_instance.get_entry_by_path.return_value = mock_entry
+        mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+        with pytest.raises(OpenZimMcpArchiveError):
+            zim_operations.get_entry_summary(str(zim_file), "C/Foo", max_words=50)
+
+    validated_path = zim_operations.path_validator.validate_path(str(zim_file))
+    validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
+    cache_key = f"summary:{validated_path}:C/Foo:50"
+    assert (
+        zim_operations.cache.get(cache_key) is None
+    ), "errored summary response should not be cached"
+
+
+def test_get_table_of_contents_does_not_cache_on_toc_build_error(
+    zim_operations: ZimOperations, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If TOC building raises, the error must not land in the cache.
+
+    Stubs ``BeautifulSoup`` (used inside ``_build_hierarchical_toc``) to
+    raise so the failure propagates through the real code path.
+    """
+    zim_file = _zim_path(temp_dir)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated BeautifulSoup parse failure")
+
+    monkeypatch.setattr("bs4.BeautifulSoup", boom)
+
+    with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+        mock_archive_instance = MagicMock()
+        mock_entry = MagicMock()
+        mock_entry.title = "Foo"
+        mock_entry.path = "C/Foo"
+        mock_item = MagicMock()
+        mock_item.mimetype = "text/html"
+        mock_item.content = b"<html><body><h1>Foo</h1></body></html>"
+        mock_entry.get_item.return_value = mock_item
+        mock_archive_instance.get_entry_by_path.return_value = mock_entry
+        mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+        with pytest.raises(OpenZimMcpArchiveError):
+            zim_operations.get_table_of_contents(str(zim_file), "C/Foo")
+
+    validated_path = zim_operations.path_validator.validate_path(str(zim_file))
+    validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
+    cache_key = f"toc:{validated_path}:C/Foo"
+    assert (
+        zim_operations.cache.get(cache_key) is None
+    ), "errored TOC response should not be cached"

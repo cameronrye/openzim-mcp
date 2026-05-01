@@ -1989,7 +1989,14 @@ class ZimOperations:
     def _generate_search_suggestions(
         self, archive: Archive, partial_query: str, limit: int
     ) -> str:
-        """Generate search suggestions based on partial query."""
+        """Generate search suggestions based on partial query.
+
+        Errors during iteration of individual entries are logged and skipped
+        (per-entry isolation). Errors that escape the per-entry try/except
+        propagate so callers can avoid caching a sentinel response — a
+        transient libzim failure in this path was previously locked into the
+        suggestions cache for the full TTL.
+        """
         logger.info(
             f"Starting suggestion generation for query: '{partial_query}', "
             f"limit: {limit}"
@@ -1997,132 +2004,118 @@ class ZimOperations:
         suggestions = []
         partial_lower = partial_query.lower().strip()
 
-        try:
-            # Strategy 1: Use search functionality as fallback since direct entry
-            # iteration
-            # may not work reliably with all ZIM file structures
-            suggestions = self._get_suggestions_from_search(
-                archive, partial_query, limit
-            )
+        # Strategy 1: Use search functionality as fallback since direct entry
+        # iteration may not work reliably with all ZIM file structures.
+        suggestions = self._get_suggestions_from_search(archive, partial_query, limit)
 
-            if suggestions:
-                logger.info(
-                    f"Found {len(suggestions)} suggestions using search fallback"
-                )
-                result = {
-                    "partial_query": partial_query,
-                    "suggestions": suggestions,
-                    "count": len(suggestions),
-                }
-                return json.dumps(result, indent=2, ensure_ascii=False)
+        if suggestions:
+            logger.info(f"Found {len(suggestions)} suggestions using search fallback")
+            result = {
+                "partial_query": partial_query,
+                "suggestions": suggestions,
+                "count": len(suggestions),
+            }
+            return json.dumps(result, indent=2, ensure_ascii=False)
 
-            # Strategy 2: Try direct entry iteration (original approach but improved)
-            title_matches: List[Dict[str, Any]] = []
+        # Strategy 2: Try direct entry iteration (original approach but improved)
+        title_matches: List[Dict[str, Any]] = []
 
-            # Sample a subset of entries to avoid performance issues
-            sample_size = min(archive.entry_count, 5000)
-            step = max(1, archive.entry_count // sample_size)
+        # Sample a subset of entries to avoid performance issues
+        sample_size = min(archive.entry_count, 5000)
+        step = max(1, archive.entry_count // sample_size)
 
-            logger.info(
-                f"Archive info: entry_count={archive.entry_count}, "
-                f"sample_size={sample_size}, step={step}"
-            )
+        logger.info(
+            f"Archive info: entry_count={archive.entry_count}, "
+            f"sample_size={sample_size}, step={step}"
+        )
 
-            entries_processed = 0
-            entries_with_content = 0
+        entries_processed = 0
+        entries_with_content = 0
 
-            for entry_id in range(0, archive.entry_count, step):
-                try:
-                    entry = archive._get_entry_by_id(entry_id)
-                    title = entry.title or ""
-                    path = entry.path or ""
+        for entry_id in range(0, archive.entry_count, step):
+            try:
+                entry = archive._get_entry_by_id(entry_id)
+                title = entry.title or ""
+                path = entry.path or ""
 
-                    entries_processed += 1
+                entries_processed += 1
 
-                    # Log first few entries for debugging
-                    if entries_processed <= 5:
-                        logger.debug(
-                            f"Entry {entry_id}: title='{title}', path='{path}'"
-                        )
+                # Log first few entries for debugging
+                if entries_processed <= 5:
+                    logger.debug(f"Entry {entry_id}: title='{title}', path='{path}'")
 
-                    # Skip entries without meaningful titles
-                    if not title.strip() or len(title.strip()) < 2:
-                        continue
-
-                    # Skip system/metadata entries (common patterns)
-                    if (
-                        path.startswith("M/")
-                        or path.startswith("X/")
-                        or path.startswith("-/")
-                        or title.startswith("File:")
-                        or title.startswith("Category:")
-                        or title.startswith("Template:")
-                    ):
-                        continue
-
-                    entries_with_content += 1
-
-                    title_lower = title.lower()
-
-                    # Prioritize titles that start with the query
-                    if title_lower.startswith(partial_lower):
-                        title_matches.append(
-                            {
-                                "suggestion": title,
-                                "path": path,
-                                "type": "title_start_match",
-                                "score": 100,
-                            }
-                        )
-                        logger.debug(f"Found start match: '{title}'")
-                    # Then titles that contain the query
-                    elif partial_lower in title_lower:
-                        title_matches.append(
-                            {
-                                "suggestion": title,
-                                "path": path,
-                                "type": "title_contains_match",
-                                "score": 50,
-                            }
-                        )
-                        logger.debug(f"Found contains match: '{title}'")
-
-                    # Stop if we have enough matches
-                    if len(title_matches) >= limit * 2:
-                        logger.info(
-                            f"Found enough matches ({len(title_matches)}), "
-                            "stopping search"
-                        )
-                        break
-
-                except Exception as e:
-                    logger.warning(
-                        f"Error processing entry {entry_id} for suggestions: {e}"
-                    )
+                # Skip entries without meaningful titles
+                if not title.strip() or len(title.strip()) < 2:
                     continue
 
-            logger.info(
-                f"Processing complete: processed={entries_processed}, "
-                f"with_content={entries_with_content}, matches={len(title_matches)}"
-            )
+                # Skip system/metadata entries (common patterns)
+                if (
+                    path.startswith("M/")
+                    or path.startswith("X/")
+                    or path.startswith("-/")
+                    or title.startswith("File:")
+                    or title.startswith("Category:")
+                    or title.startswith("Template:")
+                ):
+                    continue
 
-            # Sort by score and title length (prefer shorter, more relevant titles)
-            title_matches.sort(key=lambda x: (-x["score"], len(x["suggestion"])))
+                entries_with_content += 1
 
-            # Take the best matches
-            for match in title_matches[:limit]:
-                suggestions.append(
-                    {
-                        "text": match["suggestion"],
-                        "path": match["path"],
-                        "type": match["type"],
-                    }
+                title_lower = title.lower()
+
+                # Prioritize titles that start with the query
+                if title_lower.startswith(partial_lower):
+                    title_matches.append(
+                        {
+                            "suggestion": title,
+                            "path": path,
+                            "type": "title_start_match",
+                            "score": 100,
+                        }
+                    )
+                    logger.debug(f"Found start match: '{title}'")
+                # Then titles that contain the query
+                elif partial_lower in title_lower:
+                    title_matches.append(
+                        {
+                            "suggestion": title,
+                            "path": path,
+                            "type": "title_contains_match",
+                            "score": 50,
+                        }
+                    )
+                    logger.debug(f"Found contains match: '{title}'")
+
+                # Stop if we have enough matches
+                if len(title_matches) >= limit * 2:
+                    logger.info(
+                        f"Found enough matches ({len(title_matches)}), "
+                        "stopping search"
+                    )
+                    break
+
+            except Exception as e:
+                logger.warning(
+                    f"Error processing entry {entry_id} for suggestions: {e}"
                 )
+                continue
 
-        except Exception as e:
-            logger.error(f"Error generating suggestions: {e}")
-            return json.dumps(
-                {"suggestions": [], "error": f"Error generating suggestions: {e}"}
+        logger.info(
+            f"Processing complete: processed={entries_processed}, "
+            f"with_content={entries_with_content}, matches={len(title_matches)}"
+        )
+
+        # Sort by score and title length (prefer shorter, more relevant titles)
+        title_matches.sort(key=lambda x: (-x["score"], len(x["suggestion"])))
+
+        # Take the best matches
+        for match in title_matches[:limit]:
+            suggestions.append(
+                {
+                    "text": match["suggestion"],
+                    "path": match["path"],
+                    "type": match["type"],
+                }
             )
 
         result = {
@@ -2678,6 +2671,11 @@ class ZimOperations:
            that always sit above the title).
         2. Content of any <p> tags as fallback (with chrome stripped).
         3. Any text content as final fallback.
+
+        Errors propagate to the caller so a transient parse failure is not
+        cached as a permanent ``"(Error extracting summary)"`` sentinel for
+        the full TTL. ``get_entry_summary`` translates the exception into a
+        user-facing ``Summary extraction failed`` error response.
         """
         from bs4 import BeautifulSoup, Tag
 
@@ -2687,96 +2685,90 @@ class ZimOperations:
             "is_truncated": False,
         }
 
-        try:
-            soup = BeautifulSoup(html_content, "html.parser")
+        soup = BeautifulSoup(html_content, "html.parser")
 
-            # Remove navigation, sidebars, infoboxes, banners, etc.
-            unwanted_selectors = [
-                "nav",
-                "header",
-                "footer",
-                "aside",
-                "script",
-                "style",
-                "noscript",
-                "form",
-                # Wikipedia / MediaWiki chrome
-                ".infobox",
-                ".navbox",
-                ".sidebar",
-                ".toc",
-                ".mw-editsection",
-                ".reference",
-                ".reflist",
-                "#coordinates",
-                ".hatnote",
-                ".mbox",
-                ".ambox",
-                ".metadata",
-                # USWDS / federal-site banners (MedlinePlus, NIH, NIST...)
-                ".usa-banner",
-                ".usa-overlay",
-                ".usa-skipnav",
-                "#skipnav",
-                "#skipNav",
-                "[role='banner']",
-                "[role='navigation']",
+        # Remove navigation, sidebars, infoboxes, banners, etc.
+        unwanted_selectors = [
+            "nav",
+            "header",
+            "footer",
+            "aside",
+            "script",
+            "style",
+            "noscript",
+            "form",
+            # Wikipedia / MediaWiki chrome
+            ".infobox",
+            ".navbox",
+            ".sidebar",
+            ".toc",
+            ".mw-editsection",
+            ".reference",
+            ".reflist",
+            "#coordinates",
+            ".hatnote",
+            ".mbox",
+            ".ambox",
+            ".metadata",
+            # USWDS / federal-site banners (MedlinePlus, NIH, NIST...)
+            ".usa-banner",
+            ".usa-overlay",
+            ".usa-skipnav",
+            "#skipnav",
+            "#skipNav",
+            "[role='banner']",
+            "[role='navigation']",
+        ]
+        for selector in unwanted_selectors:
+            for element in soup.select(selector):
+                element.decompose()
+
+        # Prefer paragraphs that come AFTER the first H1 — site banners,
+        # cookie notices, and "skip to content" blocks always sit above
+        # the document title and pollute summaries when collected naively.
+        first_h1 = soup.find("h1")
+        paragraph_iter: List[Tag] = []
+        if isinstance(first_h1, Tag):
+            paragraph_iter = [
+                p for p in first_h1.find_all_next("p") if isinstance(p, Tag)
             ]
-            for selector in unwanted_selectors:
-                for element in soup.select(selector):
-                    element.decompose()
+        if not paragraph_iter:
+            paragraph_iter = [p for p in soup.find_all("p") if isinstance(p, Tag)]
 
-            # Prefer paragraphs that come AFTER the first H1 — site banners,
-            # cookie notices, and "skip to content" blocks always sit above
-            # the document title and pollute summaries when collected naively.
-            first_h1 = soup.find("h1")
-            paragraph_iter: List[Tag] = []
-            if isinstance(first_h1, Tag):
-                paragraph_iter = [
-                    p for p in first_h1.find_all_next("p") if isinstance(p, Tag)
-                ]
-            if not paragraph_iter:
-                paragraph_iter = [p for p in soup.find_all("p") if isinstance(p, Tag)]
+        paragraphs = []
+        for p in paragraph_iter:
+            text = p.get_text().strip()
+            # Skip very short paragraphs (likely captions or labels)
+            if len(text) > 50:
+                paragraphs.append(text)
+                total_words = sum(len(para.split()) for para in paragraphs)
+                if total_words >= max_words:
+                    break
 
-            paragraphs = []
-            for p in paragraph_iter:
-                text = p.get_text().strip()
-                # Skip very short paragraphs (likely captions or labels)
-                if len(text) > 50:
-                    paragraphs.append(text)
-                    total_words = sum(len(para.split()) for para in paragraphs)
-                    if total_words >= max_words:
-                        break
+        if paragraphs:
+            # Combine paragraphs and truncate to max_words
+            combined = " ".join(paragraphs)
+            words = combined.split()
 
-            if paragraphs:
-                # Combine paragraphs and truncate to max_words
-                combined = " ".join(paragraphs)
-                words = combined.split()
-
-                if len(words) > max_words:
-                    result["summary"] = " ".join(words[:max_words]) + "..."
-                    result["is_truncated"] = True
-                    result["word_count"] = max_words
-                else:
-                    result["summary"] = combined
-                    result["word_count"] = len(words)
+            if len(words) > max_words:
+                result["summary"] = " ".join(words[:max_words]) + "..."
+                result["is_truncated"] = True
+                result["word_count"] = max_words
             else:
-                # Fallback: use html2text to get any text
-                plain_text = self.content_processor.html_to_plain_text(html_content)
-                words = plain_text.split()
+                result["summary"] = combined
+                result["word_count"] = len(words)
+        else:
+            # Fallback: use html2text to get any text
+            plain_text = self.content_processor.html_to_plain_text(html_content)
+            words = plain_text.split()
 
-                if len(words) > max_words:
-                    result["summary"] = " ".join(words[:max_words]) + "..."
-                    result["is_truncated"] = True
-                    result["word_count"] = max_words
-                else:
-                    result["summary"] = plain_text
-                    result["word_count"] = len(words)
-
-        except Exception as e:
-            logger.warning(f"Error extracting HTML summary: {e}")
-            result["summary"] = "(Error extracting summary)"
-            result["error"] = str(e)
+            if len(words) > max_words:
+                result["summary"] = " ".join(words[:max_words]) + "..."
+                result["is_truncated"] = True
+                result["word_count"] = max_words
+            else:
+                result["summary"] = plain_text
+                result["word_count"] = len(words)
 
         return result
 
@@ -2866,6 +2858,11 @@ class ZimOperations:
         - text: heading text
         - id: heading id attribute (for anchor links)
         - children: nested headings
+
+        Errors propagate to the caller so a transient parse failure is not
+        cached as a permanent ``{"error": "..."}`` blob for the full TTL.
+        ``get_table_of_contents`` translates the exception into a user-facing
+        ``TOC extraction failed`` error response.
         """
         from bs4 import BeautifulSoup, Tag
 
@@ -2875,48 +2872,43 @@ class ZimOperations:
             "max_depth": 0,
         }
 
-        try:
-            soup = BeautifulSoup(html_content, "html.parser")
+        soup = BeautifulSoup(html_content, "html.parser")
 
-            # Remove unwanted elements
-            for selector in ["script", "style", "nav", ".mw-editsection"]:
-                for element in soup.select(selector):
-                    element.decompose()
+        # Remove unwanted elements
+        for selector in ["script", "style", "nav", ".mw-editsection"]:
+            for element in soup.select(selector):
+                element.decompose()
 
-            # Find all headings in order
-            headings: List[Dict[str, Any]] = []
-            from .content_processor import resolve_heading_id
+        # Find all headings in order
+        headings: List[Dict[str, Any]] = []
+        from .content_processor import resolve_heading_id
 
-            for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
-                if isinstance(heading, Tag):
-                    level = int(heading.name[1])
-                    text = heading.get_text().strip()
-                    anchor_id, id_source = resolve_heading_id(heading)
+        for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            if isinstance(heading, Tag):
+                level = int(heading.name[1])
+                text = heading.get_text().strip()
+                anchor_id, id_source = resolve_heading_id(heading)
 
-                    if text:  # Skip empty headings
-                        headings.append(
-                            {
-                                "level": level,
-                                "text": text,
-                                "id": anchor_id,
-                                "id_source": id_source,
-                                "children": [],
-                            }
-                        )
+                if text:  # Skip empty headings
+                    headings.append(
+                        {
+                            "level": level,
+                            "text": text,
+                            "id": anchor_id,
+                            "id_source": id_source,
+                            "children": [],
+                        }
+                    )
 
-            if not headings:
-                result["message"] = "No headings found in article"
-                return result
+        if not headings:
+            result["message"] = "No headings found in article"
+            return result
 
-            result["heading_count"] = len(headings)
-            result["max_depth"] = max(h["level"] for h in headings)
+        result["heading_count"] = len(headings)
+        result["max_depth"] = max(h["level"] for h in headings)
 
-            # Build hierarchical tree
-            result["toc"] = self._headings_to_tree(headings)
-
-        except Exception as e:
-            logger.warning(f"Error building hierarchical TOC: {e}")
-            result["error"] = str(e)
+        # Build hierarchical tree
+        result["toc"] = self._headings_to_tree(headings)
 
         return result
 
