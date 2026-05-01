@@ -163,7 +163,7 @@ class TestSearchCursor:
     async def test_cursor_overrides_offset_and_limit(self, server: OpenZimMcpServer):
         """`cursor` overrides explicit offset/limit when both are present."""
         token = PaginationCursor.create_next_cursor(
-            current_offset=10, limit=7, total=100, query="ignored-here"
+            current_offset=10, limit=7, total=100, query="diabetes"
         )
 
         fn = _get_tool_fn(server, "search_zim_file")
@@ -224,28 +224,56 @@ class TestSearchCursor:
         server.async_zim_operations.search_zim_file.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_explicit_query_wins_when_cursor_disagrees(
-        self, server: OpenZimMcpServer, caplog: pytest.LogCaptureFixture
+    async def test_matching_cursor_query_proceeds(self, server: OpenZimMcpServer):
+        """When `query` matches the cursor's encoded query, the call proceeds.
+
+        The mismatch rejection must not fire on equal queries — pagination
+        with an explicit (matching) `query` is a normal pattern.
+        """
+        token = PaginationCursor.create_next_cursor(
+            current_offset=0, limit=5, total=100, query="diabetes"
+        )
+
+        fn = _get_tool_fn(server, "search_zim_file")
+        await fn(
+            zim_file_path="/path/to/file.zim",
+            query="diabetes",
+            cursor=token,
+        )
+
+        call = server.async_zim_operations.search_zim_file.await_args
+        # signature: (zim_file_path, query, limit, offset)
+        assert call.args[1] == "diabetes"
+        assert call.args[2] == 5
+        assert call.args[3] == 5
+
+    @pytest.mark.asyncio
+    async def test_mismatched_cursor_query_returns_validation_error(
+        self, server: OpenZimMcpServer
     ):
-        """Explicit query overrides the cursor's encoded query, with a warning."""
+        """Reject when the cursor's embedded query differs from `query`.
+
+        Cursors encode the query they were paired with; mixing them with a
+        different ``query`` argument is almost always an LLM cycling cursors
+        across turns, and would otherwise return the wrong page of the wrong
+        query — silent data corruption. Reject loudly instead.
+        """
         token = PaginationCursor.create_next_cursor(
             current_offset=0, limit=5, total=100, query="cursor-query"
         )
 
         fn = _get_tool_fn(server, "search_zim_file")
-        with caplog.at_level("WARNING"):
-            await fn(
-                zim_file_path="/path/to/file.zim",
-                query="explicit-query",
-                cursor=token,
-            )
-
-        call = server.async_zim_operations.search_zim_file.await_args
-        assert call.args[1] == "explicit-query"
-        assert any(
-            "cursor" in rec.message.lower() and "query" in rec.message.lower()
-            for rec in caplog.records
+        result = await fn(
+            zim_file_path="/path/to/file.zim",
+            query="explicit-query",
+            cursor=token,
         )
+
+        assert "Parameter Validation Error" in result
+        assert "cursor" in result.lower()
+        assert "query" in result.lower()
+        # The operations layer must not be called when the inputs conflict.
+        server.async_zim_operations.search_zim_file.assert_not_awaited()
 
 
 class TestSearchAllLimitAlias:

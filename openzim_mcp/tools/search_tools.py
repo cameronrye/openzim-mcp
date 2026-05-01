@@ -82,12 +82,19 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                 if query is None:
                     query = cursor_query
                 elif cursor_query and cursor_query != query:
-                    logger.warning(
-                        "search_zim_file cursor encodes query %r but caller "
-                        "passed query %r; honoring the explicit query. The "
-                        "cursor was likely paired with the wrong request.",
-                        cursor_query,
-                        query,
+                    # Cursors encode the query they were paired with;
+                    # honoring a different `query` would silently return the
+                    # wrong page of the wrong query. Reject instead.
+                    return (
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: `cursor` was issued for query "
+                        f"{cursor_query!r} but the request supplied "
+                        f"query {query!r}. Cursors are only valid for "
+                        "the query they were issued for.\n\n"
+                        "**Troubleshooting**: Either drop `cursor` and "
+                        "start a fresh search with the new `query`, or "
+                        "omit `query` so the cursor's embedded query is "
+                        "reused."
                     )
 
             if not query:
