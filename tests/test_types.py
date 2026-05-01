@@ -14,16 +14,10 @@ from openzim_mcp.types import (
     ArticleStructure,
     BinaryEntryResponse,
     CacheStats,
-    CleanupResults,
     ConfigurationInfo,
-    ConflictInfo,
-    ConflictResolutionResponse,
-    DiagnosticsResponse,
-    EnvironmentCheck,
     HeadingInfo,
     HealthCheckResponse,
     HealthChecksInfo,
-    InstanceTrackingInfo,
     LinkInfo,
     LinksData,
     NamespaceEntry,
@@ -32,7 +26,6 @@ from openzim_mcp.types import (
     SearchResponse,
     SearchResultEntry,
     SectionInfo,
-    ServerInstanceInfo,
     SummaryData,
     TOCData,
     TOCEntry,
@@ -182,71 +175,6 @@ class TestNamespaceTypes:
         assert entry["description"] == "Article content"
 
 
-class TestInstanceTrackingTypes:
-    """Test instance tracking and conflict TypedDicts."""
-
-    def test_create_server_instance_info(self):
-        """Test creating a valid ServerInstanceInfo."""
-        info: ServerInstanceInfo = {
-            "pid": 12345,
-            "start_time": "2024-01-15T10:00:00",
-            "config_hash": "abc123def456",
-            "server_name": "openzim-mcp",
-            "allowed_directories": ["/data/zim"],
-        }
-
-        assert info["pid"] == 12345
-        assert info["config_hash"] == "abc123def456"
-        assert len(info["allowed_directories"]) == 1
-
-    def test_create_conflict_info(self):
-        """Test creating a valid ConflictInfo."""
-        conflict: ConflictInfo = {
-            "type": "configuration_mismatch",
-            "instance": {
-                "pid": 67890,
-                "start_time": "2024-01-15T09:00:00",
-                "config_hash": "xyz789",
-                "server_name": "openzim-mcp",
-                "allowed_directories": ["/other/path"],
-            },
-            "severity": "high",
-        }
-
-        assert conflict["type"] == "configuration_mismatch"
-        assert conflict["severity"] == "high"
-        assert conflict["instance"]["pid"] == 67890
-
-    def test_conflict_info_with_details(self):
-        """Test ConflictInfo with optional details."""
-        conflict: ConflictInfo = {
-            "type": "multiple_instances",
-            "instance": {
-                "pid": 111,
-                "start_time": "2024-01-15T09:00:00",
-                "config_hash": "hash",
-                "server_name": "test",
-                "allowed_directories": [],
-            },
-            "severity": "warning",
-            "details": "Additional info about the conflict",
-        }
-        assert conflict["details"] == "Additional info about the conflict"
-
-    def test_create_instance_tracking_info(self):
-        """Test creating a valid InstanceTrackingInfo."""
-        info: InstanceTrackingInfo = {
-            "enabled": True,
-            "active_instances": 2,
-            "conflicts_detected": 1,
-            "stale_instances": 0,
-        }
-
-        assert info["enabled"] is True
-        assert info["active_instances"] == 2
-        assert info["conflicts_detected"] == 1
-
-
 class TestHealthCheckTypes:
     """Test health check-related TypedDicts."""
 
@@ -314,12 +242,6 @@ class TestHealthCheckTypes:
                 "size": 30,
                 "max_size": 100,
                 "hit_rate": 0.83,
-            },
-            "instance_tracking": {
-                "enabled": True,
-                "active_instances": 1,
-                "conflicts_detected": 0,
-                "stale_instances": 0,
             },
             "health_checks": {
                 "directories_accessible": 2,
@@ -558,82 +480,6 @@ class TestTOCTypes:
         assert "not available" in data["message"]
 
 
-class TestDiagnosticsTypes:
-    """Test diagnostics TypedDicts."""
-
-    def test_create_environment_check(self):
-        """Test creating a valid EnvironmentCheck."""
-        check: EnvironmentCheck = {
-            "name": "Python version",
-            "status": "ok",
-            "message": "Python 3.12 detected",
-        }
-
-        assert check["name"] == "Python version"
-        assert check["status"] == "ok"
-
-    def test_environment_check_statuses(self):
-        """Test different EnvironmentCheck statuses."""
-        for status in ["ok", "warning", "error"]:
-            check: EnvironmentCheck = {
-                "name": "Test check",
-                "status": status,
-                "message": f"Status is {status}",
-            }
-            assert check["status"] == status
-
-    def test_create_diagnostics_response(self):
-        """Test creating a valid DiagnosticsResponse."""
-        response: DiagnosticsResponse = {
-            "timestamp": "2024-01-15T10:30:00Z",
-            "server_info": {"version": "0.8.0", "name": "openzim-mcp"},
-            "conflicts": [],
-            "environment_checks": [
-                {"name": "Check 1", "status": "ok", "message": "All good"}
-            ],
-            "recommendations": ["Consider increasing cache size"],
-        }
-
-        assert response["timestamp"] == "2024-01-15T10:30:00Z"
-        assert len(response["conflicts"]) == 0
-        assert len(response["recommendations"]) == 1
-
-
-class TestConflictResolutionTypes:
-    """Test conflict resolution TypedDicts."""
-
-    def test_create_cleanup_results(self):
-        """Test creating a valid CleanupResults."""
-        results: CleanupResults = {
-            "stale_instances_cleaned": 2,
-            "active_instances_remaining": 1,
-            "current_instance_registered": True,
-        }
-
-        assert results["stale_instances_cleaned"] == 2
-        assert results["active_instances_remaining"] == 1
-        assert results["current_instance_registered"] is True
-
-    def test_create_conflict_resolution_response(self):
-        """Test creating a valid ConflictResolutionResponse."""
-        response: ConflictResolutionResponse = {
-            "timestamp": "2024-01-15T10:30:00Z",
-            "action": "cleanup",
-            "conflicts_found": [],
-            "cleanup_results": {
-                "stale_instances_cleaned": 1,
-                "active_instances_remaining": 1,
-                "current_instance_registered": True,
-            },
-            "status": "resolved",
-            "recommendations": [],
-        }
-
-        assert response["action"] == "cleanup"
-        assert response["status"] == "resolved"
-        assert response["cleanup_results"]["stale_instances_cleaned"] == 1
-
-
 class TestTypeImports:
     """Test that all types can be imported from the module."""
 
@@ -647,9 +493,6 @@ class TestTypeImports:
         assert NamespaceEntry is not None
         assert NamespaceInfo is not None
         assert NamespaceListEntry is not None
-        assert ServerInstanceInfo is not None
-        assert ConflictInfo is not None
-        assert InstanceTrackingInfo is not None
         assert UptimeInfo is not None
         assert ConfigurationInfo is not None
         assert HealthChecksInfo is not None
@@ -665,7 +508,3 @@ class TestTypeImports:
         assert SummaryData is not None
         assert TOCEntry is not None
         assert TOCData is not None
-        assert EnvironmentCheck is not None
-        assert DiagnosticsResponse is not None
-        assert CleanupResults is not None
-        assert ConflictResolutionResponse is not None
