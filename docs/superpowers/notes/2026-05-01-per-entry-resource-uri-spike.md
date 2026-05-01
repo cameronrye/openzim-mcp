@@ -19,7 +19,8 @@ for per-entry ZIM resources, where the captured segment must contain `/`?
 |------|------------|------------------------------------------------|
 | 1. `{+path}` | **No** | n/a — registration fails |
 | 2. `{path}`  | Yes    | **No** for literal `/`; **Yes** if client URL-encodes the slash as `%2F` |
-| 3. `?path=`  | Base registers, but request fails | **No** — manager has no query-string parsing |
+| 3a. `?path=` (handler with `path` param) | **No** | n/a — registration fails (URI template lacks `path` placeholder) |
+| 3b. `?path=` (handler without `path` param, client appends `?path=...`) | Yes (base) | **No** — `ResourceManager.get_resource` performs exact-string + template-regex matching, ignoring query strings |
 
 **Conclusion:** None of the three forms route a literal `/` inside a captured
 URI segment in `mcp` 1.26.0. Form 2 is usable if the client URL-encodes `/`
@@ -36,9 +37,35 @@ make the encoding requirement explicit so clients know to encode `/` as `%2F`
 `resources/read`.
 
 This is not a punt to 1.1, but it is a constraint worth calling out in the
-1.0.0 release notes (Task 17 should document the encoding requirement in the
-resource description, the README, and the resource template's `description`
-field).
+1.0.0 release notes.
+
+## Task 17 must do
+
+A consolidated checklist (the constraints below are derived from the findings;
+do not skip any):
+
+1. **Decorator URI:** register the resource with template
+   `zim://{name}/entry/{path}` (Form 2).
+2. **Handler decoding:** call `urllib.parse.unquote(path)` on the captured
+   `path` before looking up the entry. Both `%2F` and `%2f` round-trip
+   correctly through FastMCP's regex; treat them as `/` after decoding.
+3. **Resource template `description` field:** state explicitly that clients
+   must URL-encode `/` (and other reserved characters per RFC 3986) in the
+   path segment before issuing `resources/read`. This is the
+   client-facing surface.
+4. **README:** document the encoding requirement in the per-entry resource
+   section, with at least one worked example showing both the encoded request
+   URI and the decoded entry path.
+5. **CHANGELOG / 1.0.0 release notes:** call out the encoding constraint as a
+   known quirk so users don't hit it without warning.
+6. **Tests:** at minimum, exercise:
+   - A path with no `/` (e.g. `zim://wikipedia_en/entry/Article`).
+   - A path with one `/` encoded as `%2F` (e.g. `zim://wikipedia_en/entry/A%2FArticle`).
+   - A path with multiple `/` encoded (e.g. `zim://wikipedia_en/entry/A%2FFoo%2FBar`).
+   - The lowercase variant (`%2f`) since it also rounds-trips.
+   - A literal-`/` request that should fail (`zim://wikipedia_en/entry/A/Article`)
+     to lock in the negative case so a future SDK upgrade doesn't silently
+     change behavior without a test catching it.
 
 ## Evidence
 
