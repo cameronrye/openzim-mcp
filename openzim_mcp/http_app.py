@@ -10,7 +10,8 @@ HTTP-specific behavior is grouped here.
 import hmac
 import logging
 import os
-from typing import TYPE_CHECKING, Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
 
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -206,6 +207,12 @@ def serve_streamable_http(
 
     # Wire the resource-subscription watcher when both the registry exists
     # (subscriptions enabled) and we have allowed dirs to watch.
+    #
+    # Why we wrap lifespan_context instead of using add_event_handler:
+    # FastMCP's streamable_http_app() supplies a custom Starlette lifespan
+    # (session_manager.run()), so Starlette's _DefaultLifespan — the only
+    # path that iterates on_startup/on_shutdown — is never installed and
+    # add_event_handler('startup', ...) silently does nothing.
     registry = server.subscriber_registry
     if registry is not None and server.config.allowed_directories:
         from . import subscriptions as _subs
@@ -219,13 +226,17 @@ def serve_streamable_http(
             on_change=_on_change,
         )
 
-        async def _start() -> None:
+        inner_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def lifespan_with_watcher(scoped_app: ASGIApp) -> AsyncIterator[None]:
             await watcher.start()
+            try:
+                async with inner_lifespan(scoped_app) as state:
+                    yield state
+            finally:
+                await watcher.stop()
 
-        async def _stop() -> None:
-            await watcher.stop()
-
-        app.add_event_handler("startup", _start)
-        app.add_event_handler("shutdown", _stop)
+        app.router.lifespan_context = lifespan_with_watcher
 
     runner(app, server.config.host, server.config.port)
