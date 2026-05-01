@@ -358,6 +358,54 @@ class InstanceTracker:
         """Return live server instances (alias for get_active_instances)."""
         return self.get_active_instances()
 
+    def find_conflicts(
+        self,
+        config_hash: str,
+        transport: str = "stdio",
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return live instances that would conflict with a new registration.
+
+        Conflict semantics (transport-aware):
+
+        * stdio↔stdio same config: conflict (only one stdio session per config).
+        * stdio↔http: not a conflict (different protocols, no resource race).
+        * http↔anything: not a conflict (different ports = different servers;
+          OS port binding handles port collisions natively).
+
+        Args:
+            config_hash: hash of the new instance's config.
+            transport: ``"stdio"`` (default) or ``"http"``.
+            host: HTTP bind host (only meaningful for ``"http"``).
+            port: HTTP bind port (only meaningful for ``"http"``).
+
+        Returns:
+            List of conflict-info dicts, one per conflicting instance.
+        """
+        # HTTP starters never conflict in tracker logic.
+        if transport == "http":
+            del host, port  # accepted for API symmetry; not used here
+            return []
+
+        conflicts: List[Dict[str, Any]] = []
+        for instance in self.list_running_instances():
+            if instance.pid == os.getpid():
+                continue
+            existing_transport = getattr(instance, "transport", "stdio")
+            # stdio-side: conflict only against other stdio instances.
+            if existing_transport != "stdio":
+                continue
+            if instance.config_hash == config_hash:
+                conflicts.append(
+                    {
+                        "type": "multiple_instances",
+                        "instance": instance.to_dict(),
+                        "severity": "warning",
+                    }
+                )
+        return conflicts
+
     def detect_conflicts(self, current_config_hash: str) -> List[Dict[str, Any]]:
         """Detect potential conflicts with other server instances.
 
