@@ -8,17 +8,20 @@ URI scheme:
 - ``zim://files`` — directory of all available ZIM files
 - ``zim://{name}`` — overview of one ZIM file (metadata + namespace summary +
   main page preview). ``{name}`` is the bare basename without ``.zim``.
-
-Per-entry resources (e.g. ``zim://{name}/entry/A/Article``) are intentionally
-not exposed: FastMCP URI templates don't handle the literal ``/`` inside
-entry paths cleanly, and the existing ``get_zim_entry`` tool already covers
-that use case.
+- ``zim://{name}/entry/{path}`` — single entry served with native MIME type.
+  Clients MUST URL-encode ``/`` as ``%2F`` in the ``{path}`` segment because
+  FastMCP's URI template engine treats ``/`` as a segment separator. See
+  ``docs/superpowers/notes/2026-05-01-per-entry-resource-uri-spike.md`` for
+  the full SDK-behaviour analysis.
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Union
+from urllib.parse import unquote
+
+from ..zim_operations import zim_archive
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -122,3 +125,52 @@ def register_resources(server: "OpenZimMcpServer") -> None:
         except Exception as e:
             logger.warning(f"Resource zim://{name} failed: {e}")
             return json.dumps({"error": str(e)})
+
+    @server.mcp.resource(
+        "zim://{name}/entry/{path}",
+        name="zim_entry",
+        title="ZIM entry (raw, native MIME)",
+        description=(
+            "Raw content of a single ZIM entry, served with its native MIME "
+            "type. HTML/text entries return text/html (or text/plain) with "
+            "the unprocessed body; binary entries (images, PDFs, etc.) "
+            "return the appropriate MIME with base64-encoded body. "
+            "IMPORTANT: clients MUST URL-encode '/' as '%2F' in {path} "
+            "(other RFC 3986 reserved characters too). Example: "
+            "zim://wikipedia_en/entry/A%2FClimate_change. "
+            "Use the get_zim_entry tool for processed/truncated text output."
+        ),
+    )
+    def zim_entry_resource(name: str, path: str) -> Union[str, bytes]:
+        # Decode the URL-encoded entry path. FastMCP captures `%2F` as
+        # literal `%2F`; we restore it to `/` here. See URI spike note.
+        decoded_path = unquote(path)
+
+        files = server.zim_operations.list_zim_files_data()
+        target_path = None
+        for f in files:
+            stem = Path(f["path"]).stem
+            if stem == name or f["name"] == name:
+                target_path = f["path"]
+                break
+        if not target_path:
+            raise ValueError(f"ZIM file '{name}' not found")
+
+        # Path validation defends against traversal via {name}; the entry
+        # path is consumed inside libzim and doesn't escape the archive.
+        validated = server.path_validator.validate_path(target_path)
+        validated = server.path_validator.validate_zim_file(validated)
+
+        with zim_archive(validated) as archive:
+            entry = archive.get_entry_by_path(decoded_path)
+            item = entry.get_item()
+            mime = _detect_mime_type(item)
+            raw = bytes(item.content)
+
+        if mime.startswith(("text/", "application/json")) or mime in (
+            "application/xml",
+            "application/javascript",
+        ):
+            return raw.decode("utf-8", errors="replace")
+        # Binary — FastMCP base64-wraps when content is bytes.
+        return raw
