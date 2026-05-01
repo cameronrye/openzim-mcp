@@ -68,3 +68,116 @@ class TestZimFileOverviewResource:
 
         assert "metadata_error" in overview
         assert "namespaces" in overview
+
+
+class TestZimFilesResourceHandler:
+    """Exercise the zim://files handler through the FastMCP resource manager."""
+
+    @pytest.fixture
+    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
+        """Create a server instance with all resources registered."""
+        return OpenZimMcpServer(test_config)
+
+    @pytest.mark.asyncio
+    async def test_zim_files_returns_index(self, server):
+        """Happy path: list_zim_files_data is rendered as JSON."""
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[
+                {"path": "/zim/a.zim", "name": "a.zim", "size": 10, "modified": "now"}
+            ]
+        )
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://files")
+        body = await resource.read()
+        data = json.loads(body)
+        assert data[0]["path"] == "/zim/a.zim"
+
+    @pytest.mark.asyncio
+    async def test_zim_files_returns_error_on_failure(self, server):
+        """If list_zim_files_data raises, the resource returns a JSON error envelope."""
+        server.zim_operations.list_zim_files_data = MagicMock(
+            side_effect=RuntimeError("boom")
+        )
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://files")
+        body = await resource.read()
+        data = json.loads(body)
+        assert "error" in data
+        assert "boom" in data["error"]
+
+
+class TestZimFileOverviewHandler:
+    """Exercise the zim://{name} handler via the FastMCP resource manager."""
+
+    @pytest.fixture
+    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
+        """Create a server instance with all resources registered."""
+        return OpenZimMcpServer(test_config)
+
+    @pytest.mark.asyncio
+    async def test_overview_unknown_name_returns_error_envelope(self, server):
+        """Unknown name → error JSON listing available names."""
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://nonexistent")
+        body = await resource.read()
+        data = json.loads(body)
+        assert "error" in data
+        assert "wiki" in data["error"]  # available names listed
+
+    @pytest.mark.asyncio
+    async def test_overview_collects_partial_failures(self, server):
+        """Each section is best-effort — failures surface as *_error fields."""
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        server.zim_operations.get_zim_metadata = MagicMock(
+            side_effect=RuntimeError("metadata broke")
+        )
+        server.zim_operations.list_namespaces = MagicMock(
+            return_value='{"namespaces": ["A"]}'
+        )
+        server.zim_operations.get_main_page = MagicMock(
+            side_effect=RuntimeError("main page broke")
+        )
+
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://wiki")
+        body = await resource.read()
+        data = json.loads(body)
+        assert data["name"] == "wiki"
+        assert data["metadata_error"] == "metadata broke"
+        assert data["namespaces"] == {"namespaces": ["A"]}
+        assert data["main_page_error"] == "main page broke"
+
+    @pytest.mark.asyncio
+    async def test_overview_truncates_long_main_page(self, server):
+        """Main page preview is trimmed to 2000 chars + truncation marker."""
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        server.zim_operations.get_zim_metadata = MagicMock(return_value="{}")
+        server.zim_operations.list_namespaces = MagicMock(return_value="{}")
+        server.zim_operations.get_main_page = MagicMock(return_value="x" * 5000)
+
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://wiki")
+        body = await resource.read()
+        data = json.loads(body)
+        assert len(data["main_page_preview"]) < 5000
+        assert "truncated" in data["main_page_preview"]
+
+    @pytest.mark.asyncio
+    async def test_overview_outer_exception_wraps_in_error(self, server):
+        """An exception in list_zim_files_data hits the outer try/except."""
+        server.zim_operations.list_zim_files_data = MagicMock(
+            side_effect=RuntimeError("listing exploded")
+        )
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://anything")
+        body = await resource.read()
+        data = json.loads(body)
+        assert "error" in data
+        assert "listing exploded" in data["error"]

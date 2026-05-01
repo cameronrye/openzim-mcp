@@ -118,6 +118,7 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
         Notes:
             Rate limit is charged per entry, not per batch (anti-bypass).
         """
+        batch_size = len(entries) if entries else 0
         try:
             # Charge rate-limit per entry to prevent batch bypass.
             try:
@@ -127,11 +128,31 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
                 return server._create_enhanced_error_message(
                     operation="batch get entries",
                     error=e,
-                    context=f"Batch size: {len(entries) if entries else 0}",
+                    context=f"Batch size: {batch_size}",
+                )
+
+            # Sanitize per-entry inputs before delegating. Each entry's paths
+            # go through the same input-limit checks as the singular tool.
+            sanitized: List[Dict[str, Any]] = []
+            for entry in entries or []:
+                if not isinstance(entry, dict):
+                    sanitized.append({"zim_file_path": "", "entry_path": ""})
+                    continue
+                sanitized.append(
+                    {
+                        "zim_file_path": sanitize_input(
+                            str(entry.get("zim_file_path", "")),
+                            INPUT_LIMIT_FILE_PATH,
+                        ),
+                        "entry_path": sanitize_input(
+                            str(entry.get("entry_path", "")),
+                            INPUT_LIMIT_ENTRY_PATH,
+                        ),
+                    }
                 )
 
             return await server.async_zim_operations.get_entries(
-                entries, max_content_length
+                sanitized, max_content_length
             )
 
         except Exception as e:
@@ -139,7 +160,7 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
             return server._create_enhanced_error_message(
                 operation="batch get entries",
                 error=e,
-                context=f"Batch size: {len(entries) if entries else 0}",
+                context=f"Batch size: {batch_size}",
             )
 
     @server.mcp.tool()

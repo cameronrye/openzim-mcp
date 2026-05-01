@@ -59,3 +59,102 @@ async def test_get_zim_entries_tool_passes_through(
     )
     assert json.loads(result)["succeeded"] == 0
     server.async_zim_operations.get_entries.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_zim_entries_tool_sanitizes_inputs(
+    test_config: OpenZimMcpConfig,
+):
+    """Per-entry paths go through sanitize_input before delegation."""
+    server = OpenZimMcpServer(test_config)
+    server.async_zim_operations.get_entries = AsyncMock(
+        return_value='{"results": [], "succeeded": 0, "failed": 0}'
+    )
+    server.rate_limiter.check_rate_limit = MagicMock()
+
+    tool = server.mcp._tool_manager._tools["get_zim_entries"]
+    fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
+
+    bad_path = "  /zim/wiki.zim  "
+    bad_entry = "  A/Article\x00\n"
+    await fn(
+        entries=[{"zim_file_path": bad_path, "entry_path": bad_entry}],
+    )
+    # The args passed to the async op are the *sanitized* values.
+    call = server.async_zim_operations.get_entries.await_args
+    sent_entries = call.args[0]
+    assert sent_entries[0]["zim_file_path"].strip() == "/zim/wiki.zim"
+    assert "\x00" not in sent_entries[0]["entry_path"]
+    assert sent_entries[0]["entry_path"].strip() == "A/Article"
+
+
+@pytest.mark.asyncio
+async def test_get_zim_entries_tool_rate_limit_error(
+    test_config: OpenZimMcpConfig,
+):
+    """Rate-limit errors are converted to enhanced error messages."""
+    from openzim_mcp.exceptions import OpenZimMcpRateLimitError
+
+    server = OpenZimMcpServer(test_config)
+    server.rate_limiter.check_rate_limit = MagicMock(
+        side_effect=OpenZimMcpRateLimitError("rate limit hit")
+    )
+    server.async_zim_operations.get_entries = AsyncMock()
+
+    tool = server.mcp._tool_manager._tools["get_zim_entries"]
+    fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
+
+    result = await fn(entries=[{"zim_file_path": "/x", "entry_path": "y"}])
+    # Rate-limit error → never delegates to async op
+    server.async_zim_operations.get_entries.assert_not_awaited()
+    # Rendered message mentions batch size context
+    assert "Batch size: 1" in result
+
+
+@pytest.mark.asyncio
+async def test_get_zim_entries_tool_exception_returns_error_message(
+    test_config: OpenZimMcpConfig,
+):
+    """Generic exceptions in the async op are wrapped in an error message."""
+    server = OpenZimMcpServer(test_config)
+    server.rate_limiter.check_rate_limit = MagicMock()
+    server.async_zim_operations.get_entries = AsyncMock(
+        side_effect=RuntimeError("unexpected failure")
+    )
+
+    tool = server.mcp._tool_manager._tools["get_zim_entries"]
+    fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
+
+    result = await fn(entries=[{"zim_file_path": "/x", "entry_path": "y"}])
+    assert "Batch size: 1" in result
+    # The error message surfaces the underlying message somewhere.
+    assert "unexpected failure" in result or "RuntimeError" in result
+
+
+@pytest.mark.asyncio
+async def test_get_zim_entries_tool_handles_non_dict_entries(
+    test_config: OpenZimMcpConfig,
+):
+    """Non-dict entries are coerced to empty pairs rather than crashing."""
+    server = OpenZimMcpServer(test_config)
+    server.rate_limiter.check_rate_limit = MagicMock()
+    server.async_zim_operations.get_entries = AsyncMock(
+        return_value='{"results": [], "succeeded": 0, "failed": 0}'
+    )
+
+    tool = server.mcp._tool_manager._tools["get_zim_entries"]
+    fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
+
+    # Mixed valid + invalid entries: a string isn't a dict.
+    await fn(
+        entries=[
+            "not a dict",  # type: ignore[list-item]
+            {"zim_file_path": "/ok", "entry_path": "ok"},
+        ],
+    )
+    call = server.async_zim_operations.get_entries.await_args
+    sent_entries = call.args[0]
+    assert len(sent_entries) == 2
+    # Bad entry sanitized to empty pair, good entry preserved.
+    assert sent_entries[0] == {"zim_file_path": "", "entry_path": ""}
+    assert sent_entries[1]["zim_file_path"] == "/ok"
