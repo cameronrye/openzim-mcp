@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -131,6 +132,19 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
             client_host,
             request.url.path,
         )
+
+
+def apply_cors_middleware(app: Starlette, config: object) -> None:
+    """Attach CORS middleware to the app if any origins are configured."""
+    origins = getattr(config, "cors_origins", None) or []
+    if not origins:
+        return
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(origins),
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
 
 def build_starlette_app(server: "OpenZimMcpServer") -> Starlette:
