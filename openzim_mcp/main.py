@@ -107,6 +107,9 @@ Environment Variables:
                 config_hash=config.get_config_hash(),
                 allowed_directories=config.allowed_directories,
                 server_name=config.server_name,
+                transport=config.transport,
+                host=config.host if config.transport == "http" else None,
+                port=config.port if config.transport == "http" else None,
             )
         except Exception as e:
             print(

@@ -151,6 +151,9 @@ class ServerInstance:
         allowed_directories: List[str],
         start_time: float,
         server_name: str = "openzim-mcp",
+        transport: str = "stdio",
+        host: Optional[str] = None,
+        port: Optional[int] = None,
     ) -> None:
         """Initialize a server instance with the given parameters."""
         self.pid = pid
@@ -158,6 +161,9 @@ class ServerInstance:
         self.allowed_directories = allowed_directories
         self.start_time = start_time
         self.server_name = server_name
+        self.transport = transport
+        self.host = host
+        self.port = port
         self.last_heartbeat = time.time()
 
     def to_dict(self) -> Dict[str, Any]:
@@ -168,6 +174,9 @@ class ServerInstance:
             "allowed_directories": self.allowed_directories,
             "start_time": self.start_time,
             "server_name": self.server_name,
+            "transport": self.transport,
+            "host": self.host,
+            "port": self.port,
             "last_heartbeat": self.last_heartbeat,
             "start_time_iso": datetime.fromtimestamp(
                 self.start_time, tz=timezone.utc
@@ -185,13 +194,20 @@ class ServerInstance:
         with the wrong type (e.g. ``"pid": "1234"``) raises ValueError —
         which is in get_all_instances()'s except tuple — instead of
         leaking a TypeError out of os.kill() much later.
+
+        Records written before transport/host/port were tracked default to
+        ``transport="stdio"``, ``host=None``, ``port=None``.
         """
+        port_raw = data.get("port")
         instance = cls(
             pid=int(data["pid"]),
             config_hash=data["config_hash"],
             allowed_directories=data["allowed_directories"],
             start_time=float(data["start_time"]),
             server_name=data.get("server_name", "openzim-mcp"),
+            transport=data.get("transport", "stdio"),
+            host=data.get("host"),
+            port=int(port_raw) if port_raw is not None else None,
         )
         instance.last_heartbeat = float(data.get("last_heartbeat", data["start_time"]))
         return instance
@@ -214,9 +230,19 @@ class ServerInstance:
 class InstanceTracker:
     """Manages OpenZIM MCP server instance tracking using file-based storage."""
 
-    def __init__(self) -> None:
-        """Initialize the instance tracker with the default directory."""
-        self.instances_dir = Path.home() / ".openzim_mcp_instances"
+    def __init__(self, registry_dir: Optional[Path] = None) -> None:
+        """Initialize the tracker.
+
+        Args:
+            registry_dir: directory where per-instance JSON files live. Defaults
+                to ``~/.openzim_mcp_instances``. Tests pass a tmp_path here so
+                the user's real home is never touched.
+        """
+        self.instances_dir = (
+            Path(registry_dir)
+            if registry_dir is not None
+            else Path.home() / ".openzim_mcp_instances"
+        )
         self.instances_dir.mkdir(exist_ok=True)
         self.current_instance: Optional[ServerInstance] = None
 
@@ -225,8 +251,20 @@ class InstanceTracker:
         config_hash: str,
         allowed_directories: List[str],
         server_name: str = "openzim-mcp",
+        transport: str = "stdio",
+        host: Optional[str] = None,
+        port: Optional[int] = None,
     ) -> ServerInstance:
-        """Register a new server instance with file locking."""
+        """Register a new server instance with file locking.
+
+        Args:
+            config_hash: SHA-256 of the running config.
+            allowed_directories: dirs the instance serves.
+            server_name: server identifier.
+            transport: "stdio" (default) or "http".
+            host: HTTP bind host (None for stdio).
+            port: HTTP bind port (None for stdio).
+        """
         pid = os.getpid()
         start_time = time.time()
 
@@ -236,6 +274,9 @@ class InstanceTracker:
             allowed_directories=allowed_directories,
             start_time=start_time,
             server_name=server_name,
+            transport=transport,
+            host=host,
+            port=port,
         )
 
         # Save instance file with file locking to prevent race conditions
@@ -312,6 +353,10 @@ class InstanceTracker:
                 self.unregister_instance(instance.pid)
 
         return active_instances
+
+    def list_running_instances(self) -> List[ServerInstance]:
+        """Return live server instances (alias for get_active_instances)."""
+        return self.get_active_instances()
 
     def detect_conflicts(self, current_config_hash: str) -> List[Dict[str, Any]]:
         """Detect potential conflicts with other server instances.
