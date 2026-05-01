@@ -2205,3 +2205,108 @@ class TestGetEntrySummaryMaxWords:
         assert data["word_count"] == 1
         assert data["summary"] == "alpha..."
         assert data["is_truncated"] is True
+
+
+class TestZimOperationsGetEntries:
+    """Tests for ZimOperations.get_entries (batch retrieval)."""
+
+    @pytest.fixture
+    def zim_operations(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator: PathValidator,
+        openzim_mcp_cache: OpenZimMcpCache,
+        content_processor: ContentProcessor,
+    ) -> ZimOperations:
+        """Create ZimOperations instance for testing."""
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def test_get_entries_empty_list_raises(self, zim_operations: ZimOperations):
+        """Empty entries list is rejected at the boundary."""
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.get_entries([])
+
+    def test_get_entries_over_limit_raises(self, zim_operations: ZimOperations):
+        """Batches above MAX_BATCH_SIZE are rejected at the boundary."""
+        too_many = [{"zim_file_path": "/x", "entry_path": "y"} for _ in range(51)]
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.get_entries(too_many)
+
+    @patch("openzim_mcp.zim_operations.Archive")
+    def test_get_entries_happy_path(
+        self,
+        mock_archive,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+    ):
+        """Two entries succeed; results preserve input order via index."""
+        import json
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.write_text("test content")
+
+        mock_archive_instance = MagicMock()
+        mock_archive.return_value = mock_archive_instance
+        entry = MagicMock()
+        entry.title = "Article"
+        item = MagicMock()
+        item.mimetype = "text/html"
+        item.content = b"<html><body><p>hello</p></body></html>"
+        entry.get_item.return_value = item
+        mock_archive_instance.get_entry_by_path.return_value = entry
+
+        result = zim_operations.get_entries(
+            [
+                {"zim_file_path": str(zim_file), "entry_path": "A/One"},
+                {"zim_file_path": str(zim_file), "entry_path": "A/Two"},
+            ]
+        )
+        data = json.loads(result)
+
+        assert len(data["results"]) == 2
+        assert [r["index"] for r in data["results"]] == [0, 1]
+        assert data["succeeded"] + data["failed"] == 2
+
+    @patch("openzim_mcp.zim_operations.Archive")
+    def test_get_entries_partial_success(
+        self,
+        mock_archive,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+    ):
+        """A failing entry doesn't abort the batch — it's reported as failed."""
+        import json
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.write_text("test content")
+
+        # First call returns a real entry, second raises.
+        good = MagicMock()
+        good.title = "ok"
+        good_item = MagicMock()
+        good_item.mimetype = "text/html"
+        good_item.content = b"<html><body><p>x</p></body></html>"
+        good.get_item.return_value = good_item
+
+        archive_instance = MagicMock()
+        archive_instance.get_entry_by_path.side_effect = [
+            good,
+            Exception("not found"),
+        ]
+        mock_archive.return_value = archive_instance
+
+        result = zim_operations.get_entries(
+            [
+                {"zim_file_path": str(zim_file), "entry_path": "A/Good"},
+                {"zim_file_path": str(zim_file), "entry_path": "A/Missing"},
+            ]
+        )
+        data = json.loads(result)
+        assert len(data["results"]) == 2
+        assert data["succeeded"] == 1
+        assert data["failed"] == 1
+        # Failure is recorded with success=False and an error string
+        bad = next(r for r in data["results"] if not r["success"])
+        assert "error" in bad

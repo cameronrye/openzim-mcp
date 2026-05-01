@@ -453,6 +453,74 @@ class ZimOperations:
                 f"Try using search_zim_file() to verify the file is accessible."
             ) from e
 
+    def get_entries(
+        self,
+        entries: List[Dict[str, str]],
+        max_content_length: Optional[int] = None,
+    ) -> str:
+        """Fetch multiple ZIM entries in one call.
+
+        Per-entry partial success: one failure does not abort the batch.
+        Each result carries the input ``index`` so callers can correlate
+        responses with their original request order.
+
+        Args:
+            entries: list of ``{"zim_file_path", "entry_path"}`` dicts.
+            max_content_length: per-entry max content length.
+
+        Returns:
+            JSON string ``{"results": [...], "succeeded": N, "failed": N}``.
+
+        Raises:
+            OpenZimMcpValidationError: empty list or > MAX_BATCH_SIZE.
+        """
+        from .constants import MAX_BATCH_SIZE
+
+        if not entries:
+            raise OpenZimMcpValidationError("entries list cannot be empty")
+        if len(entries) > MAX_BATCH_SIZE:
+            raise OpenZimMcpValidationError(
+                f"batch size {len(entries)} exceeds limit {MAX_BATCH_SIZE}; "
+                "split into multiple batches"
+            )
+
+        results: List[Dict[str, Any]] = []
+        succeeded = 0
+        failed = 0
+        for index, entry in enumerate(entries):
+            zim_file_path = entry.get("zim_file_path", "")
+            entry_path = entry.get("entry_path", "")
+            try:
+                content = self.get_zim_entry(
+                    zim_file_path, entry_path, max_content_length, 0
+                )
+                results.append(
+                    {
+                        "index": index,
+                        "zim_file_path": zim_file_path,
+                        "entry_path": entry_path,
+                        "success": True,
+                        "content": content,
+                    }
+                )
+                succeeded += 1
+            except Exception as e:  # noqa: BLE001 - per-entry isolation by design
+                results.append(
+                    {
+                        "index": index,
+                        "zim_file_path": zim_file_path,
+                        "entry_path": entry_path,
+                        "success": False,
+                        "error": str(e),
+                    }
+                )
+                failed += 1
+
+        return json.dumps(
+            {"results": results, "succeeded": succeeded, "failed": failed},
+            ensure_ascii=False,
+        )
+
     def _get_entry_content(
         self,
         archive: Archive,

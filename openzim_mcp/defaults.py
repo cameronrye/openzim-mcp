@@ -87,6 +87,13 @@ class ServerDefaults:
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
+@dataclass(frozen=True)
+class BatchDefaults:
+    """Default values for batch operations."""
+
+    MAX_SIZE: int = 50  # max entries per get_zim_entries call
+
+
 # Instantiate defaults for easy access
 CACHE = CacheDefaults()
 CONTENT = ContentDefaults()
@@ -96,6 +103,7 @@ TIMEOUTS = TimeoutDefaults()
 SERVER = ServerDefaults()
 CACHE_PERFORMANCE = CachePerformanceThresholds()
 NAMESPACE_SAMPLING = NamespaceSamplingDefaults()
+BATCH = BatchDefaults()
 
 # Tool mode constants
 TOOL_MODE_ADVANCED = "advanced"

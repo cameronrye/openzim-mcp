@@ -9,6 +9,7 @@ defaults classes.
 # Import from centralized defaults for backward compatibility
 # These are re-exported for external consumers
 from .defaults import (  # noqa: F401
+    BATCH,
     CACHE,
     CACHE_PERFORMANCE,
     CONTENT,
@@ -37,6 +38,9 @@ DEFAULT_CACHE_TTL = CACHE.TTL_SECONDS
 
 # Binary content retrieval constants
 DEFAULT_MAX_BINARY_SIZE = CONTENT.MAX_BINARY_SIZE
+
+# Batch operation limits
+MAX_BATCH_SIZE = BATCH.MAX_SIZE
 
 # Input validation limits
 INPUT_LIMIT_FILE_PATH = INPUT_LIMITS.FILE_PATH
