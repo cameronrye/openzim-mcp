@@ -323,34 +323,21 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-        direction: str = "outbound",
-        inbound_scan_cap: int = 1000,
-        inbound_cursor: int = 0,
     ) -> str:
-        """Find articles related to entry_path via link graph.
+        """Find articles related to entry_path via outbound links.
 
-        direction='outbound': cheap — composes extract_article_links and
-            deduplicates internal links, returning up to `limit`.
-
-        direction='inbound': bounded scan of C/ namespace up to
-            `inbound_scan_cap` entries (default 1000). **Expensive** — each
-            scanned candidate triggers a full article parse via
-            `extract_article_links` to test whether it links back to
-            entry_path. For interactive use prefer the default cap or lower;
-            for completeness paginate via `inbound_next_cursor`.
-
-        direction='both': run outbound (full), then inbound (bounded).
+        Composes extract_article_links and deduplicates internal links,
+        returning up to `limit` outbound targets. (Inbound discovery was
+        removed — it required a bounded full-archive scan that was too
+        expensive for interactive use; reach for full-text search instead.)
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Source entry, e.g. 'C/Some_Article'
-            limit: Max results per direction (1-100, default: 10)
-            direction: 'outbound' | 'inbound' | 'both'
-            inbound_scan_cap: Max entries to scan for inbound (default: 1000)
-            inbound_cursor: Resume scan from this entry ID (default: 0)
+            limit: Max results (1-100, default: 10)
 
         Returns:
-            JSON with outbound_results / inbound_results, scanned, cursor, done
+            JSON with outbound_results
         """
         try:
             try:
@@ -369,9 +356,6 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                 zim_file_path,
                 entry_path,
                 limit,
-                direction,
-                inbound_scan_cap,
-                inbound_cursor,
             )
 
         except Exception as e:

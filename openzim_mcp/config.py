@@ -72,23 +72,26 @@ class OpenZimMcpConfig(BaseSettings):
     tool_mode: Literal["advanced", "simple"] = Field(
         default="simple",
         description=(
-            "Tool mode: 'advanced' for all 18 tools, "
+            "Tool mode: 'advanced' for all 21 tools, "
             "'simple' for 1 intelligent tool plus underlying tools"
         ),
     )
-    transport: Literal["stdio", "http"] = Field(
+    transport: Literal["stdio", "http", "sse"] = Field(
         default="stdio",
-        description="Transport protocol: 'stdio' (default) or 'http' (streamable HTTP)",
+        description=(
+            "Transport protocol: 'stdio' (default), 'http' (streamable HTTP), "
+            "or 'sse' (legacy SSE — no auth middleware, intended for local use)"
+        ),
     )
     host: str = Field(
         default="127.0.0.1",
-        description="HTTP bind host (only used when transport='http')",
+        description="HTTP bind host (only used when transport='http' or 'sse')",
     )
     port: int = Field(
         default=8000,
         ge=1,
         le=65535,
-        description="HTTP bind port (only used when transport='http')",
+        description="HTTP bind port (only used when transport='http' or 'sse')",
     )
     auth_token: Optional[SecretStr] = Field(
         default=None,

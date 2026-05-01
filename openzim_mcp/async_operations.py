@@ -338,10 +338,6 @@ class AsyncZimOperations:
             include_data,
         )
 
-    async def warm_cache(self, zim_file_path: str) -> str:
-        """Warm the cache for a ZIM file (async)."""
-        return await asyncio.to_thread(self._ops.warm_cache, zim_file_path)
-
     async def walk_namespace(
         self,
         zim_file_path: str,
@@ -374,28 +370,16 @@ class AsyncZimOperations:
             limit,
         )
 
-    async def get_random_entry(self, zim_file_path: str, namespace: str = "C") -> str:
-        """Get random entry (async)."""
-        return await asyncio.to_thread(
-            self._ops.get_random_entry, zim_file_path, namespace
-        )
-
     async def get_related_articles(
         self,
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-        direction: str = "outbound",
-        inbound_scan_cap: int = 1000,
-        inbound_cursor: int = 0,
     ) -> str:
-        """Get related articles via link graph (async)."""
+        """Get related articles via outbound link graph (async)."""
         return await asyncio.to_thread(
             self._ops.get_related_articles,
             zim_file_path,
             entry_path,
             limit,
-            direction,
-            inbound_scan_cap,
-            inbound_cursor,
         )

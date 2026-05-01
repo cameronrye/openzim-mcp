@@ -5,7 +5,6 @@ away the complexity of multiple specialized tools. Designed for LLMs with
 limited tool-calling capabilities or context windows.
 """
 
-import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -178,13 +177,6 @@ class IntentParser:
             0.95,
             10,
         ),
-        # warm_cache - very specific
-        (
-            r"\b(warm|preload|prefetch|prime)\s+(the\s+)?cache\b",
-            "warm_cache",
-            0.95,
-            10,
-        ),
         # find_by_title - moderately specific
         (
             r"\b(find|locate|resolve)\s+(article|entry|page)?"
@@ -194,8 +186,6 @@ class IntentParser:
             8,
         ),
         (r"\bwhat'?s\s+the\s+path\s+for\b", "find_by_title", 0.9, 8),
-        # random_entry - specific
-        (r"\brandom\s+(article|entry|page)\b", "random_entry", 0.95, 9),
         # related - moderately specific
         (
             r"\b(related\s+to|articles?\s+linking\s+to|what\s+links\s+(to|from))\b",
@@ -203,9 +193,6 @@ class IntentParser:
             0.9,
             8,
         ),
-        # cache stats / clear - specific
-        (r"\bcache\s+(stats?|statistics|status)\b", "cache_stats", 0.95, 10),
-        (r"\b(clear|empty|flush|reset)\s+(the\s+)?cache\b", "cache_clear", 0.95, 10),
         # Search - general fallback
         (r"\b(search|find|look\s+for|query)\b", "search", 0.7, 3),
     ]
@@ -719,11 +706,6 @@ class SimpleToolsHandler:
                 return self.zim_operations.walk_namespace(
                     zim_path, params.get("namespace", "C"), cursor=0, limit=200
                 )
-            elif intent == "warm_cache":
-                zim_path = self._auto_select_zim_file()
-                if not zim_path:
-                    return "No ZIM file available; please specify zim_file_path."
-                return self.zim_operations.warm_cache(zim_path)
             elif intent == "find_by_title":
                 zim_path = self._auto_select_zim_file()
                 if not zim_path:
@@ -731,11 +713,6 @@ class SimpleToolsHandler:
                 return self.zim_operations.find_entry_by_title(
                     zim_path, params.get("title", query), cross_file=False, limit=10
                 )
-            elif intent == "random_entry":
-                zim_path = self._auto_select_zim_file()
-                if not zim_path:
-                    return "No ZIM file available; please specify zim_file_path."
-                return self.zim_operations.get_random_entry(zim_path, "C")
             elif intent == "related":
                 zim_path = self._auto_select_zim_file()
                 if not zim_path:
@@ -744,25 +721,6 @@ class SimpleToolsHandler:
                     zim_path,
                     params.get("entry_path", ""),
                     limit=10,
-                    direction="outbound",
-                )
-            elif intent == "cache_stats":
-                return json.dumps(
-                    self.zim_operations.cache.stats(), indent=2, ensure_ascii=False
-                )
-            elif intent == "cache_clear":
-                prior = self.zim_operations.cache.stats().get("size", 0)
-                self.zim_operations.cache.clear()
-                return json.dumps(
-                    {
-                        "cleared": True,
-                        "prior_size": prior,
-                        "current_size": self.zim_operations.cache.stats().get(
-                            "size", 0
-                        ),
-                    },
-                    indent=2,
-                    ensure_ascii=False,
                 )
 
             else:

@@ -352,7 +352,7 @@ class TestSimpleToolsHandler:
 
 
 class TestNewIntentPatterns:
-    """v0.9.0 intent patterns: search_all, walk_namespace, warm_cache, etc."""
+    """v0.9.0 intent patterns: search_all, walk_namespace, etc."""
 
     def test_search_all_intent(self):
         """Test that 'search all files for X' routes to search_all."""
@@ -369,13 +369,6 @@ class TestNewIntentPatterns:
         intent, _params, _ = IntentParser.parse_intent("walk namespace M")
         assert intent == "walk_namespace"
 
-    def test_warm_cache_intent(self):
-        """Test that 'warm cache' routes to warm_cache."""
-        from openzim_mcp.simple_tools import IntentParser
-
-        intent, _params, _ = IntentParser.parse_intent("warm cache")
-        assert intent == "warm_cache"
-
     def test_find_by_title_intent(self):
         """Test that 'find article titled X' routes to find_by_title."""
         from openzim_mcp.simple_tools import IntentParser
@@ -386,13 +379,6 @@ class TestNewIntentPatterns:
         assert intent == "find_by_title"
         assert "Photosynthesis" in str(params.get("title", ""))
 
-    def test_random_entry_intent(self):
-        """Test that 'random article' routes to random_entry."""
-        from openzim_mcp.simple_tools import IntentParser
-
-        intent, _params, _ = IntentParser.parse_intent("random article")
-        assert intent == "random_entry"
-
     def test_related_intent(self):
         """Test that 'articles related to X' routes to related."""
         from openzim_mcp.simple_tools import IntentParser
@@ -401,20 +387,6 @@ class TestNewIntentPatterns:
             "articles related to Climate_Change"
         )
         assert intent == "related"
-
-    def test_cache_stats_intent(self):
-        """Test that 'cache stats' routes to cache_stats."""
-        from openzim_mcp.simple_tools import IntentParser
-
-        intent, _params, _ = IntentParser.parse_intent("cache stats")
-        assert intent == "cache_stats"
-
-    def test_clear_cache_intent(self):
-        """Test that 'clear cache' routes to cache_clear."""
-        from openzim_mcp.simple_tools import IntentParser
-
-        intent, _params, _ = IntentParser.parse_intent("clear cache")
-        assert intent == "cache_clear"
 
 
 class TestIntentParserBatchEntries:

@@ -18,7 +18,6 @@ from .error_messages import (
     get_error_config,
 )
 from .exceptions import OpenZimMcpConfigurationError
-from .instance_tracker import InstanceTracker
 from .rate_limiter import RateLimitConfig, RateLimiter
 from .security import PathValidator, sanitize_context_for_error
 from .simple_tools import SimpleToolsHandler
@@ -31,19 +30,13 @@ logger = logging.getLogger(__name__)
 class OpenZimMcpServer:
     """Main OpenZIM MCP server class with dependency injection."""
 
-    def __init__(
-        self,
-        config: OpenZimMcpConfig,
-        instance_tracker: Optional[InstanceTracker] = None,
-    ):
+    def __init__(self, config: OpenZimMcpConfig):
         """Initialize OpenZIM MCP server.
 
         Args:
             config: Server configuration
-            instance_tracker: Optional instance tracker for multi-server management
         """
         self.config = config
-        self.instance_tracker = instance_tracker
 
         # Setup logging
         config.setup_logging()
@@ -78,11 +71,12 @@ class OpenZimMcpServer:
         self.mcp._mcp_server.version = __version__
         self._register_tools()
 
-        # Subscription support (HTTP-only at runtime, but the registry +
-        # handlers are wired regardless so stdio sessions can still subscribe
-        # — clients that respect server-advertised capabilities decide).
+        # Subscription support is HTTP-only: the MtimeWatcher that emits
+        # update notifications only runs under the HTTP lifespan (see
+        # http_app.serve_streamable_http). Wiring handlers in stdio mode
+        # would advertise a capability we silently can't honor.
         self.subscriber_registry = None
-        if config.subscriptions_enabled:
+        if config.subscriptions_enabled and config.transport == "http":
             from .subscriptions import (
                 SubscriberRegistry,
                 patch_capabilities_to_advertise_subscribe,
@@ -111,8 +105,7 @@ class OpenZimMcpServer:
             )
         else:
             logger.debug(
-                "Use get_server_configuration() or diagnose_server_state() MCP tools "
-                "for detailed configuration and diagnostics"
+                "Use get_server_configuration() MCP tool " "for detailed configuration"
             )
 
     def _create_enhanced_error_message(
@@ -179,14 +172,10 @@ class OpenZimMcpServer:
             - General search: "search for biology", "find evolution"
             - Cross-file search: "search all files for python" → search_all
             - Namespace walk: "walk namespace M" → walk_namespace
-            - Cache warming: "warm cache" → warm_cache
             - Title lookup: "find article titled Photosynthesis"
               → find_entry_by_title
-            - Random article: "random article" → get_random_entry
             - Related articles: "articles related to Climate_Change"
               → get_related_articles
-            - Cache stats: "cache stats" → cache_stats
-            - Cache clear: "clear cache" → cache_clear
 
             Args:
                 query: Natural language query (REQUIRED)
@@ -206,12 +195,8 @@ class OpenZimMcpServer:
                 - "browse namespace C with limit 10"
                 - "search all files for python"
                 - "walk namespace M"
-                - "warm cache"
                 - "find article titled Photosynthesis"
-                - "random article"
                 - "articles related to Climate_Change"
-                - "cache stats"
-                - "clear cache"
             """
             try:
                 # Build options dict from parameters
@@ -261,14 +246,13 @@ class OpenZimMcpServer:
         self._register_advanced_tools()
 
     def _register_advanced_tools(self) -> None:
-        """Register advanced mode tools (all 18 tools).
+        """Register advanced mode tools.
 
         Tools are organized into logical groups in separate modules:
         - File tools: list_zim_files
         - Search tools: search_zim_file
         - Content tools: get_zim_entry
-        - Server tools: get_server_health, get_server_configuration,
-                       diagnose_server_state, resolve_server_conflicts
+        - Server tools: get_server_health, get_server_configuration
         - Metadata tools: get_zim_metadata, get_main_page, list_namespaces
         - Navigation tools: browse_namespace, search_with_filters,
                            get_search_suggestions
@@ -320,6 +304,14 @@ class OpenZimMcpServer:
 
                 http_app.serve_streamable_http(self)
             else:
+                if transport == "sse":
+                    from . import http_app
+
+                    http_app.check_safe_startup(self.config)
+                    # FastMCP's SSE path reads host/port from settings; mirror
+                    # them from config so --host/--port take effect.
+                    self.mcp.settings.host = self.config.host
+                    self.mcp.settings.port = self.config.port
                 self.mcp.run(transport=transport)
         except KeyboardInterrupt:
             logger.info("Server shutdown requested")

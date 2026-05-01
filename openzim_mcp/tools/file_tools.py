@@ -29,9 +29,7 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
                 listings (e.g. "wikipedia", "nginx"). Empty string lists all.
 
         Returns:
-            JSON string containing the list of ZIM files. Use
-            ``diagnose_server_state()`` for instance-conflict information —
-            data tools no longer inline diagnostic preambles.
+            JSON string containing the list of ZIM files.
         """
         try:
             try:

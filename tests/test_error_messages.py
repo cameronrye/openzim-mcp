@@ -193,7 +193,7 @@ class TestFormatGenericError:
         )
 
         assert "Troubleshooting" in result
-        assert "diagnose_server_state" in result
+        assert "get_server_health" in result
 
 
 class TestGetErrorConfig:

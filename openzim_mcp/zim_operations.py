@@ -21,7 +21,6 @@ from .constants import (
     NAMESPACE_MAX_ENTRIES,
     NAMESPACE_MAX_SAMPLE_SIZE,
     NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER,
-    RANDOM_ENTRY_MAX_RETRIES,
 )
 from .content_processor import ContentProcessor
 from .exceptions import (
@@ -2915,49 +2914,8 @@ class ZimOperations:
         return root
 
     # ------------------------------------------------------------------
-    # Convenience tools: warm_cache, walk_namespace, search_all
+    # Convenience tools: walk_namespace, search_all
     # ------------------------------------------------------------------
-
-    def warm_cache(self, zim_file_path: str) -> str:
-        """Pre-populate the cache with frequently-needed lookups for a ZIM file.
-
-        Calls list_zim_files, get_zim_metadata, list_namespaces, and
-        get_main_page so subsequent queries hit cache. Each step is
-        best-effort — a failure on one (e.g. main page missing) doesn't
-        block the others.
-
-        Args:
-            zim_file_path: Path to the ZIM file
-
-        Returns:
-            JSON summary of which lookups succeeded and which were skipped
-        """
-        validated = self.path_validator.validate_path(zim_file_path)
-        validated = self.path_validator.validate_zim_file(validated)
-
-        results: Dict[str, Any] = {
-            "zim_file_path": str(validated),
-            "warmed": [],
-            "failed": [],
-        }
-
-        steps: List[Tuple[str, Any]] = [
-            ("list_zim_files", self.list_zim_files),
-            ("get_zim_metadata", lambda: self.get_zim_metadata(str(validated))),
-            ("list_namespaces", lambda: self.list_namespaces(str(validated))),
-            ("get_main_page", lambda: self.get_main_page(str(validated))),
-        ]
-
-        for name, fn in steps:
-            try:
-                fn()
-                results["warmed"].append(name)
-            except Exception as e:
-                logger.debug(f"warm_cache: {name} failed: {e}")
-                results["failed"].append({"step": name, "reason": str(e)})
-
-        results["cache_size"] = self.cache.stats().get("size", 0)
-        return json.dumps(results, indent=2, ensure_ascii=False)
 
     def walk_namespace(
         self,
@@ -3228,220 +3186,42 @@ class ZimOperations:
             ensure_ascii=False,
         )
 
-    def get_random_entry(self, zim_file_path: str, namespace: str = "C") -> str:
-        """Return one random entry from the ZIM, optionally namespace-constrained.
-
-        Wraps libzim archive.get_random_entry(). When namespace is set,
-        retries up to RANDOM_ENTRY_MAX_RETRIES times to land in that
-        namespace before giving up.
-
-        Special case: pass ``namespace=""`` to accept any namespace. When the
-        archive uses the new domain-style namespace scheme, the literal
-        legacy default ``"C"`` will never match — in that case we silently
-        relax the constraint after the first miss rather than burning all
-        retries. Callers who genuinely want a strict 'C' filter on a
-        new-scheme archive can pass ``namespace="C"`` explicitly *and*
-        accept the eventual error.
-        """
-        validated = self.path_validator.validate_path(zim_file_path)
-        validated = self.path_validator.validate_zim_file(validated)
-
-        with zim_archive(validated) as archive:
-            has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
-            # Auto-relax: legacy 'C' default doesn't make sense on archives
-            # that use the new domain-namespace scheme. Treat it as "any" so
-            # default callers get useful results without needing to know the
-            # archive's namespace conventions.
-            effective_ns = namespace
-            if has_new_scheme and namespace == "C":
-                effective_ns = ""
-
-            for _ in range(RANDOM_ENTRY_MAX_RETRIES):
-                try:
-                    entry = archive.get_random_entry()
-                except Exception as e:
-                    raise OpenZimMcpArchiveError(f"get_random_entry failed: {e}") from e
-
-                entry_namespace = self._extract_namespace_from_path(
-                    entry.path, has_new_scheme
-                )
-                if not effective_ns or entry_namespace == effective_ns:
-                    preview = ""
-                    try:
-                        item = entry.get_item()
-                        mime = (item.mimetype or "").lower()
-                        # Normalize xhtml so process_mime_content strips tags.
-                        proc_mime = (
-                            "text/html" if mime == "application/xhtml+xml" else mime
-                        )
-                        if mime.startswith("text/") or mime == "application/xhtml+xml":
-                            text = self.content_processor.process_mime_content(
-                                bytes(item.content), proc_mime
-                            )
-                            preview = self.content_processor.create_snippet(
-                                text, max_paragraphs=1
-                            )
-                        else:
-                            preview = f"[binary: {mime or 'unknown'}]"
-                    except Exception as e:
-                        logger.debug(f"get_random_entry preview failed: {e}")
-                    return json.dumps(
-                        {
-                            "path": entry.path,
-                            "title": entry.title or entry.path,
-                            "namespace": entry_namespace,
-                            "preview": preview,
-                        },
-                        indent=2,
-                        ensure_ascii=False,
-                    )
-
-            return json.dumps(
-                {
-                    "error": (
-                        f"Could not find a random entry in namespace '{namespace}' "
-                        f"after {RANDOM_ENTRY_MAX_RETRIES} attempts. The namespace "
-                        f"may be very sparse in this archive — try list_namespaces "
-                        f"to verify presence, or pass namespace='' to accept any "
-                        f"namespace."
-                    )
-                },
-                indent=2,
-            )
-
     def get_related_articles(
         self,
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-        direction: str = "outbound",
-        inbound_scan_cap: int = 1000,
-        inbound_cursor: int = 0,
     ) -> str:
-        """Find articles related to entry_path via link graph."""
-        if direction not in ("outbound", "inbound", "both"):
-            return (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: direction must be one of 'outbound', 'inbound', "
-                f"'both' (provided: '{direction}')"
-            )
+        """Find articles related to entry_path via outbound links."""
         if limit < 1 or limit > 100:
             return (
                 "**Parameter Validation Error**\n\n"
                 f"**Issue**: limit must be between 1 and 100 (provided: {limit})"
             )
 
-        result: Dict[str, Any] = {
-            "entry_path": entry_path,
-            "direction": direction,
-        }
+        result: Dict[str, Any] = {"entry_path": entry_path}
 
-        # Outbound: compose extract_article_links and dedupe.
-        if direction in ("outbound", "both"):
-            try:
-                links_json = self.extract_article_links(zim_file_path, entry_path)
-                links_data = json.loads(links_json)
-                seen: set[str] = set()
-                outbound: List[Dict[str, Any]] = []
-                for link in links_data.get("internal_links", []):
-                    target = self._resolve_link_to_entry_path(
-                        link.get("url", ""), entry_path
-                    )
-                    if not target or target in seen or target == entry_path:
-                        continue
-                    seen.add(target)
-                    title = link.get("text") or link.get("title") or target
-                    outbound.append({"path": target, "title": title})
-                    if len(outbound) >= limit:
-                        break
-                result["outbound_results"] = outbound
-            except Exception as e:
-                logger.debug(f"get_related_articles outbound failed: {e}")
-                result["outbound_results"] = []
-                result["outbound_error"] = str(e)
-
-        # Inbound: bounded scan of C/.
-        if direction in ("inbound", "both"):
-            validated = self.path_validator.validate_path(zim_file_path)
-            validated = self.path_validator.validate_zim_file(validated)
-            inbound: List[Dict[str, Any]] = []
-            scanned = 0
-            try:
-                with zim_archive(validated) as archive:
-                    total = archive.entry_count
-                    has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
-                    entry_id = max(0, inbound_cursor)
-                    while (
-                        entry_id < total
-                        and scanned < inbound_scan_cap
-                        and len(inbound) < limit
-                    ):
-                        try:
-                            candidate = archive._get_entry_by_id(entry_id)
-                            candidate_path = candidate.path
-                            candidate_ns = self._extract_namespace_from_path(
-                                candidate_path, has_new_scheme
-                            )
-                            # Inbound only walks the content namespace. For
-                            # legacy archives that's "C"; for new-scheme
-                            # archives the content namespace is whatever holds
-                            # the bulk of entries (which we approximate as
-                            # "anything that isn't the M/X/W/-/I metadata
-                            # buckets"). This avoids the prior bug where
-                            # new-scheme archives never produced inbound
-                            # results because nothing matches "C".
-                            metadata_namespaces = {"M", "X", "W", "-", "I"}
-                            is_content = (
-                                candidate_ns == "C"
-                                if not has_new_scheme
-                                else candidate_ns not in metadata_namespaces
-                            )
-                            if is_content and candidate_path != entry_path:
-                                try:
-                                    links_json = self.extract_article_links(
-                                        zim_file_path, candidate_path
-                                    )
-                                    links = json.loads(links_json).get(
-                                        "internal_links", []
-                                    )
-                                    if any(
-                                        self._resolve_link_to_entry_path(
-                                            link.get("url", ""), candidate_path
-                                        )
-                                        == entry_path
-                                        for link in links
-                                    ):
-                                        inbound.append(
-                                            {
-                                                "path": candidate_path,
-                                                "title": candidate.title
-                                                or candidate_path,
-                                            }
-                                        )
-                                except Exception as e:
-                                    logger.debug(
-                                        f"inbound link scan failed for "
-                                        f"{candidate_path}: {e}"
-                                    )
-                        except Exception as e:
-                            logger.debug(f"inbound scan: skipped entry {entry_id}: {e}")
-                        entry_id += 1
-                        scanned += 1
-
-                    # done means: scanned to end of archive, not just hit the
-                    # limit/cap. Limit-hit and cap-hit must both stay resumable
-                    # so callers can paginate past the initial limit.
-                    done = entry_id >= total
-                    next_cursor = None if done else entry_id
-                    result["inbound_results"] = inbound
-                    result["inbound_scanned"] = scanned
-                    result["inbound_next_cursor"] = next_cursor
-                    result["inbound_done"] = done
-            except Exception as e:
-                logger.debug(f"get_related_articles inbound scan failed: {e}")
-                result["inbound_results"] = []
-                result["inbound_error"] = str(e)
-                result["inbound_done"] = True
+        try:
+            links_json = self.extract_article_links(zim_file_path, entry_path)
+            links_data = json.loads(links_json)
+            seen: set[str] = set()
+            outbound: List[Dict[str, Any]] = []
+            for link in links_data.get("internal_links", []):
+                target = self._resolve_link_to_entry_path(
+                    link.get("url", ""), entry_path
+                )
+                if not target or target in seen or target == entry_path:
+                    continue
+                seen.add(target)
+                title = link.get("text") or link.get("title") or target
+                outbound.append({"path": target, "title": title})
+                if len(outbound) >= limit:
+                    break
+            result["outbound_results"] = outbound
+        except Exception as e:
+            logger.debug(f"get_related_articles outbound failed: {e}")
+            result["outbound_results"] = []
+            result["outbound_error"] = str(e)
 
         return json.dumps(result, indent=2, ensure_ascii=False)
 
