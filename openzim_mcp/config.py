@@ -4,9 +4,9 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .defaults import CACHE, CONTENT, RATE_LIMIT, VALID_TOOL_MODES
@@ -90,6 +90,34 @@ class OpenZimMcpConfig(BaseSettings):
         le=65535,
         description="HTTP bind port (only used when transport='http')",
     )
+    auth_token: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "Bearer token for HTTP transport. Loaded from env var "
+            "OPENZIM_MCP_AUTH_TOKEN. Never set this in a config file."
+        ),
+    )
+    cors_origins: List[str] = Field(
+        default_factory=list,
+        description=(
+            "CORS allow-list. Wildcard '*' is rejected. Default is empty "
+            "(no CORS headers emitted)."
+        ),
+    )
+    watch_interval_seconds: int = Field(
+        default=5,
+        ge=1,
+        le=60,
+        description="Polling interval for resource subscriptions (seconds).",
+    )
+    subscriptions_enabled: bool = Field(
+        default=True,
+        description=(
+            "Master switch for resource subscriptions. When False, the "
+            "polling task is not started and subscribe calls succeed but "
+            "never fire updates."
+        ),
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="OPENZIM_MCP_",
@@ -124,6 +152,17 @@ class OpenZimMcpConfig(BaseSettings):
         if v not in VALID_TOOL_MODES:
             raise OpenZimMcpConfigurationError(
                 f"Invalid tool mode: {v}. Must be one of {VALID_TOOL_MODES}"
+            )
+        return v
+
+    @field_validator("cors_origins")
+    @classmethod
+    def reject_cors_wildcard(cls, v: List[str]) -> List[str]:
+        """Reject wildcard '*' in CORS origins (footgun prevention)."""
+        if "*" in v:
+            raise OpenZimMcpConfigurationError(
+                "CORS wildcard '*' is not allowed. List origins explicitly "
+                "(e.g. ['http://localhost:5173'])."
             )
         return v
 
@@ -162,6 +201,9 @@ class OpenZimMcpConfig(BaseSettings):
             "transport": self.transport,
             "host": self.host,
             "port": self.port,
+            "cors_origins": sorted(self.cors_origins),
+            "watch_interval_seconds": self.watch_interval_seconds,
+            "subscriptions_enabled": self.subscriptions_enabled,
             "rate_limit_enabled": self.rate_limit.enabled,
             "rate_limit_rps": self.rate_limit.requests_per_second,
             "rate_limit_burst": self.rate_limit.burst_size,

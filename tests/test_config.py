@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from openzim_mcp.config import (
     CacheConfig,
@@ -183,3 +184,63 @@ def test_config_rejects_port_out_of_range():
         OpenZimMcpConfig(allowed_directories=["/tmp"], port=70000)
     with pytest.raises(ValueError):
         OpenZimMcpConfig(allowed_directories=["/tmp"], port=0)
+
+
+def test_config_default_auth_token_is_none():
+    """Default auth_token is None."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
+    assert cfg.auth_token is None
+
+
+def test_config_auth_token_is_secret():
+    """auth_token must use SecretStr to avoid leaking in repr/logs."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], auth_token="abc123")
+    assert isinstance(cfg.auth_token, SecretStr)
+    assert "abc123" not in repr(cfg)
+    assert cfg.auth_token.get_secret_value() == "abc123"
+
+
+def test_config_default_cors_origins_empty():
+    """Default cors_origins is an empty list."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
+    assert cfg.cors_origins == []
+
+
+def test_config_rejects_wildcard_cors():
+    """Wildcard '*' rejected at startup as a footgun."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(OpenZimMcpConfigurationError):
+        OpenZimMcpConfig(allowed_directories=["/tmp"], cors_origins=["*"])
+
+
+def test_config_default_watch_interval():
+    """Default watch_interval_seconds is 5."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
+    assert cfg.watch_interval_seconds == 5
+
+
+def test_config_rejects_watch_interval_out_of_range():
+    """watch_interval_seconds must be in [1, 60]."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=["/tmp"], watch_interval_seconds=0)
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=["/tmp"], watch_interval_seconds=120)
+
+
+def test_config_default_subscriptions_enabled():
+    """Default subscriptions_enabled is True."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
+    assert cfg.subscriptions_enabled is True
