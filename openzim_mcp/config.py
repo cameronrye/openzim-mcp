@@ -76,6 +76,20 @@ class OpenZimMcpConfig(BaseSettings):
             "'simple' for 1 intelligent tool plus underlying tools"
         ),
     )
+    transport: Literal["stdio", "http"] = Field(
+        default="stdio",
+        description="Transport protocol: 'stdio' (default) or 'http' (streamable HTTP)",
+    )
+    host: str = Field(
+        default="127.0.0.1",
+        description="HTTP bind host (only used when transport='http')",
+    )
+    port: int = Field(
+        default=8000,
+        ge=1,
+        le=65535,
+        description="HTTP bind port (only used when transport='http')",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="OPENZIM_MCP_",

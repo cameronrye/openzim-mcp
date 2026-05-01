@@ -140,3 +140,46 @@ class TestOpenZimMcpConfig:
         assert config.cache.enabled is True
         assert config.content.max_content_length == 100000
         assert config.logging.level == "INFO"
+
+
+def test_config_defaults_to_stdio_transport():
+    """Default transport is stdio when not specified."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
+    assert cfg.transport == "stdio"
+
+
+def test_config_accepts_http_transport():
+    """Transport accepts 'http' value."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], transport="http")
+    assert cfg.transport == "http"
+
+
+def test_config_rejects_invalid_transport():
+    """Transport rejects values outside the Literal."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=["/tmp"], transport="websocket")
+
+
+def test_config_default_host_and_port():
+    """Default host is loopback and default port is 8000."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
+    assert cfg.host == "127.0.0.1"
+    assert cfg.port == 8000
+
+
+def test_config_rejects_port_out_of_range():
+    """Port must be within 1..65535."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=["/tmp"], port=70000)
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=["/tmp"], port=0)
