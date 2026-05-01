@@ -56,7 +56,6 @@ def test_readyz_returns_503_when_dirs_unreadable(mock_server):
 def test_run_http_dispatches_to_serve_helper(monkeypatch, tmp_path):
     """server.run(streamable-http) routes through http_app.serve_streamable_http."""
     from openzim_mcp.config import OpenZimMcpConfig
-    from openzim_mcp.instance_tracker import InstanceTracker
     from openzim_mcp.server import OpenZimMcpServer
 
     cfg = OpenZimMcpConfig(
@@ -65,15 +64,7 @@ def test_run_http_dispatches_to_serve_helper(monkeypatch, tmp_path):
         host="127.0.0.1",
         port=8001,
     )
-    # Keep tracker registry inside tmp_path; never touch real home dir.
-    monkeypatch.setattr(
-        InstanceTracker,
-        "__init__",
-        lambda self: setattr(self, "instances_dir", tmp_path / "instances")
-        or (tmp_path / "instances").mkdir(exist_ok=True)
-        or setattr(self, "current_instance", None),
-    )
-    server = OpenZimMcpServer(cfg, InstanceTracker())
+    server = OpenZimMcpServer(cfg)
 
     called = []
     monkeypatch.setattr(

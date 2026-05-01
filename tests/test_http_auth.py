@@ -117,3 +117,34 @@ def test_safe_default_check_skipped_for_stdio():
     config.host = "0.0.0.0"  # would refuse for HTTP
     config.auth_token = None
     check_safe_startup(config)  # no raise
+
+
+@pytest.mark.parametrize(
+    "host, should_start",
+    [
+        ("127.0.0.1", True),
+        ("::1", True),
+        ("localhost", True),
+        ("0.0.0.0", False),
+        ("192.168.1.5", False),
+    ],
+)
+def test_safe_default_startup_check_sse(host, should_start):
+    """SSE has no auth middleware — non-localhost is refused regardless of token."""
+    from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+    from openzim_mcp.http_app import check_safe_startup
+
+    config = MagicMock()
+    config.transport = "sse"
+    config.host = host
+    # Token presence should not change the SSE outcome — there is no middleware
+    # to enforce it on the SSE path.
+    config.auth_token = SecretStr("any-token")
+
+    if should_start:
+        check_safe_startup(config)
+    else:
+        with pytest.raises(OpenZimMcpConfigurationError) as exc:
+            check_safe_startup(config)
+        assert "SSE transport" in str(exc.value)
+        assert "127.0.0.1" in str(exc.value)

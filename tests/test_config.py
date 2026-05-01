@@ -159,6 +159,14 @@ def test_config_accepts_http_transport():
     assert cfg.transport == "http"
 
 
+def test_config_accepts_sse_transport():
+    """Transport accepts 'sse' value."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], transport="sse")
+    assert cfg.transport == "sse"
+
+
 def test_config_rejects_invalid_transport():
     """Transport rejects values outside the Literal."""
     from openzim_mcp.config import OpenZimMcpConfig

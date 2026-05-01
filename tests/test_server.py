@@ -881,6 +881,36 @@ class TestOpenZimMcpServerRun:
         server.mcp.run.assert_not_called()
         assert served == [server]
 
+    def test_run_sse_mirrors_host_port_to_fastmcp_settings(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """SSE path copies config.host/port into FastMCP settings."""
+        test_config.transport = "sse"
+        test_config.host = "127.0.0.1"
+        test_config.port = 9123
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+
+        server.run(transport="sse")
+
+        assert server.mcp.settings.host == "127.0.0.1"
+        assert server.mcp.settings.port == 9123
+        server.mcp.run.assert_called_once_with(transport="sse")
+
+    def test_run_sse_refuses_non_localhost_host(self, test_config: OpenZimMcpConfig):
+        """SSE bound to a non-localhost host is refused at startup."""
+        from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+
+        test_config.transport = "sse"
+        test_config.host = "0.0.0.0"
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+
+        with pytest.raises(OpenZimMcpConfigurationError) as exc:
+            server.run(transport="sse")
+        assert "SSE transport" in str(exc.value)
+        server.mcp.run.assert_not_called()
+
 
 class TestOpenZimMcpServerNewTools:
     """Test new MCP tools in OpenZimMcpServer."""
@@ -1100,7 +1130,7 @@ class TestOpenZimMcpServerErrorFormatting:
         assert "**Operation**: get_entry" in result
         assert "**Context**: test.zim/A/Article" in result
         assert "Verify the ZIM file is not corrupted" in result
-        assert "Use `diagnose_server_state()` to check for server conflicts" in result
+        assert "Use `get_server_health()` to check overall server status" in result
         assert "**Technical Details**: Archive corrupted" in result
 
     def test_format_error_message_security_error(self, server: OpenZimMcpServer):
@@ -1204,7 +1234,7 @@ class TestOpenZimMcpServerErrorFormatting:
         assert "**Error Type**: RuntimeError" in result
         assert "**Context**: some context" in result
         assert "Try the operation again (temporary issues may resolve)" in result
-        assert "Use `diagnose_server_state()` to check for server issues" in result
+        assert "Use `get_server_health()` to check for server issues" in result
         assert "**Technical Details**: Unexpected runtime error" in result
         assert "**Need Help?** Use `get_server_configuration()`" in result
 

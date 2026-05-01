@@ -34,21 +34,39 @@ AUTH_EXEMPT_PATHS = {"/healthz", "/readyz"}
 
 
 def check_safe_startup(config: object) -> None:
-    """Refuse to start if HTTP transport is exposed without a token.
+    """Refuse to start if a network transport is exposed unsafely.
 
-    Applied only when transport='http'. The four cases:
+    Applied to network transports ('http' and 'sse'). Behavior differs:
+
+    For transport='http' (streamable-HTTP, has bearer-auth + CORS middleware):
       * host=127.0.0.1, token unset    → OK (localhost-only, no auth)
       * host=127.0.0.1, token set      → OK
       * host=any other,  token unset   → REFUSE
       * host=any other,  token set     → OK
 
+    For transport='sse' (no auth middleware):
+      * host=127.0.0.1                 → OK
+      * host=any other                 → REFUSE (no token escape — there
+                                                 is no middleware to enforce
+                                                 a token on the SSE path)
+
     Raises:
-        OpenZimMcpConfigurationError: when binding non-localhost without auth.
+        OpenZimMcpConfigurationError: when binding unsafely.
     """
-    if getattr(config, "transport", None) != "http":
+    transport = getattr(config, "transport", None)
+    if transport not in ("http", "sse"):
         return
     host = getattr(config, "host", None)
     is_localhost = host in ("127.0.0.1", "::1", "localhost")
+    if transport == "sse":
+        if not is_localhost:
+            raise OpenZimMcpConfigurationError(
+                f"SSE transport bound to {host} is not allowed. SSE has no "
+                "auth middleware in this server, so it must bind 127.0.0.1. "
+                "For exposed deployments use --transport http (streamable "
+                "HTTP) with OPENZIM_MCP_AUTH_TOKEN."
+            )
+        return
     has_token = getattr(config, "auth_token", None) is not None
     if not is_localhost and not has_token:
         raise OpenZimMcpConfigurationError(
