@@ -7,6 +7,15 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpRateLimitError
 from openzim_mcp.server import OpenZimMcpServer
+from openzim_mcp.zim_operations import PaginationCursor
+
+
+def _get_tool_fn(server: OpenZimMcpServer, name: str):
+    """Resolve the registered FastMCP tool's callable across SDK versions."""
+    tool = server.mcp._tool_manager._tools[name]
+    fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
+    assert fn is not None, f"could not find callable on tool object: {tool!r}"
+    return fn
 
 
 class TestRegisterSearchTools:
@@ -114,6 +123,118 @@ class TestSearchZimFileTool:
                 "/path/to/file.zim", "query", None, 0
             )
         assert "Search error" in str(exc_info.value)
+
+
+class TestSearchCursor:
+    """The opaque cursor token round-trips through search_zim_file."""
+
+    @pytest.fixture
+    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
+        """Create a server with search_zim_file stubbed to a passthrough."""
+        srv = OpenZimMcpServer(test_config)
+        srv.async_zim_operations.search_zim_file = AsyncMock(return_value="ok")
+        srv.rate_limiter.check_rate_limit = MagicMock()
+        return srv
+
+    def test_pagination_cursor_round_trip(self):
+        """Encode -> decode preserves offset, limit, and query."""
+        token = PaginationCursor.create_next_cursor(
+            current_offset=0, limit=5, total=100, query="diabetes"
+        )
+        assert token is not None
+        decoded = PaginationCursor.decode(token)
+        assert decoded == {"o": 5, "l": 5, "q": "diabetes"}
+
+    def test_pagination_cursor_decode_rejects_garbage(self):
+        """Malformed base64 surfaces as ValueError."""
+        with pytest.raises(ValueError):
+            PaginationCursor.decode("not-base64-!!!")
+
+    def test_pagination_cursor_decode_rejects_missing_fields(self):
+        """A token decoding to a dict without offset/limit is rejected."""
+        import base64
+        import json
+
+        bad = base64.urlsafe_b64encode(json.dumps({"only": 1}).encode()).decode()
+        with pytest.raises(ValueError, match="missing required fields"):
+            PaginationCursor.decode(bad)
+
+    @pytest.mark.asyncio
+    async def test_cursor_overrides_offset_and_limit(self, server: OpenZimMcpServer):
+        """`cursor` overrides explicit offset/limit when both are present."""
+        token = PaginationCursor.create_next_cursor(
+            current_offset=10, limit=7, total=100, query="ignored-here"
+        )
+
+        fn = _get_tool_fn(server, "search_zim_file")
+        await fn(
+            zim_file_path="/path/to/file.zim",
+            query="diabetes",
+            limit=999,  # would fail validation if cursor didn't override
+            offset=999,
+            cursor=token,
+        )
+
+        call = server.async_zim_operations.search_zim_file.await_args
+        # signature: (zim_file_path, query, limit, offset)
+        assert call.args[2] == 7  # limit from cursor
+        assert call.args[3] == 17  # next-page offset from cursor
+
+    @pytest.mark.asyncio
+    async def test_invalid_cursor_returns_validation_error(
+        self, server: OpenZimMcpServer
+    ):
+        """Malformed cursor surfaces as a parameter-validation message."""
+        fn = _get_tool_fn(server, "search_zim_file")
+        result = await fn(
+            zim_file_path="/path/to/file.zim",
+            query="diabetes",
+            cursor="!!!not-a-cursor!!!",
+        )
+        assert "Parameter Validation Error" in result
+        assert "cursor" in result.lower()
+        # The operations layer should not have been called.
+        server.async_zim_operations.search_zim_file.assert_not_awaited()
+
+
+class TestSearchAllLimitAlias:
+    """`limit` is accepted as an alias of `limit_per_file` on search_all."""
+
+    @pytest.fixture
+    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
+        """Create a server with search_all stubbed to a passthrough."""
+        srv = OpenZimMcpServer(test_config)
+        srv.async_zim_operations.search_all = AsyncMock(return_value="ok")
+        srv.rate_limiter.check_rate_limit = MagicMock()
+        return srv
+
+    @pytest.mark.asyncio
+    async def test_limit_alias_used_when_limit_per_file_missing(
+        self, server: OpenZimMcpServer
+    ):
+        """`limit` flows through when `limit_per_file` is unset."""
+        fn = _get_tool_fn(server, "search_all")
+        await fn(query="x", limit=8)
+        call = server.async_zim_operations.search_all.await_args
+        assert call.args[1] == 8
+
+    @pytest.mark.asyncio
+    async def test_limit_per_file_takes_precedence_over_limit(
+        self, server: OpenZimMcpServer
+    ):
+        """`limit_per_file` wins when both names are provided."""
+        fn = _get_tool_fn(server, "search_all")
+        await fn(query="x", limit_per_file=3, limit=99)
+        call = server.async_zim_operations.search_all.await_args
+        assert call.args[1] == 3
+
+    @pytest.mark.asyncio
+    async def test_default_when_neither_provided(self, server: OpenZimMcpServer):
+        """Default of 5 still applies when neither limit nor limit_per_file is set."""
+        fn = _get_tool_fn(server, "search_all")
+        await fn(query="x")
+        call = server.async_zim_operations.search_all.await_args
+        assert call.args[1] == 5
 
 
 class TestConflictWarningAppend:

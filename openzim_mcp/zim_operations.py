@@ -69,6 +69,35 @@ class PaginationCursor:
             return None
         return PaginationCursor._encode(next_offset, limit, query)
 
+    @staticmethod
+    def decode(token: str) -> Dict[str, Any]:
+        """Decode a base64 cursor token back to its pagination state.
+
+        Args:
+            token: A cursor previously emitted by ``create_next_cursor``.
+
+        Returns:
+            Dict with keys ``o`` (offset, int), ``l`` (limit, int), and
+            optionally ``q`` (query, str).
+
+        Raises:
+            ValueError: If the token isn't valid base64 or doesn't decode to
+                the expected JSON shape. Callers should treat this as a
+                client error (malformed cursor).
+        """
+        try:
+            # Accept urlsafe and standard base64 since some clients normalise.
+            padded = token + "=" * (-len(token) % 4)
+            raw = base64.urlsafe_b64decode(padded.encode()).decode()
+            data = json.loads(raw)
+        except Exception as e:
+            raise ValueError(f"Invalid pagination cursor: {e}") from e
+        if not isinstance(data, dict) or "o" not in data or "l" not in data:
+            raise ValueError("Cursor missing required fields ('o', 'l')")
+        if not isinstance(data["o"], int) or not isinstance(data["l"], int):
+            raise ValueError("Cursor offset and limit must be integers")
+        return data
+
 
 logger = logging.getLogger(__name__)
 
@@ -349,7 +378,8 @@ class ZimOperations:
             )
             result_text += f"**Next cursor**: `{next_cursor}`\n"
             result_text += (
-                f"**Hint**: Use offset={offset + limit} to get the next page\n"
+                f"**Hint**: pass `cursor={next_cursor}` "
+                f"or `offset={offset + limit}` to get the next page\n"
             )
         else:
             result_text += "**End of results**\n"
