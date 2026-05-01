@@ -13,13 +13,23 @@ URI scheme:
   FastMCP's URI template engine treats ``/`` as a segment separator. See
   ``docs/superpowers/notes/2026-05-01-per-entry-resource-uri-spike.md`` for
   the full SDK-behaviour analysis.
+
+The per-entry resource detects each entry's MIME type from the libzim Item
+at read time and reports it back in the response. FastMCP's standard
+``@mcp.resource`` decorator can't express that — it freezes ``mime_type`` at
+registration time — so we register a custom ``ResourceTemplate`` /
+``Resource`` pair directly on the resource manager.
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 from urllib.parse import unquote
+
+from mcp.server.fastmcp.resources.base import Resource
+from mcp.server.fastmcp.resources.templates import ResourceTemplate
+from pydantic import AnyUrl, ConfigDict, Field
 
 from ..zim_operations import zim_archive
 
@@ -41,6 +51,93 @@ def _detect_mime_type(item: Any) -> str:
     if not raw or not isinstance(raw, str):
         return "application/octet-stream"
     return raw.split(";", 1)[0].strip().lower() or "application/octet-stream"
+
+
+class ZimEntryResource(Resource):
+    """Resource that reads one ZIM entry and reports its native MIME type.
+
+    The MIME type is detected from the libzim ``Item.mimetype`` and assigned
+    to ``self.mime_type`` during ``read()`` so that FastMCP's ``read_resource``
+    handler — which fetches ``resource.mime_type`` *after* ``read()`` — sees
+    the detected value, not the placeholder set at construction time.
+    """
+
+    model_config = ConfigDict(validate_default=True, arbitrary_types_allowed=True)
+
+    archive_path: str = Field(description="Resolved path to the ZIM file")
+    entry_path: str = Field(description="Decoded entry path inside the archive")
+    path_validator: Any = Field(default=None, exclude=True, repr=False)
+
+    async def read(self) -> Union[str, bytes]:
+        """Read the entry, set ``self.mime_type`` to the libzim native MIME."""
+        validated = self.path_validator.validate_path(self.archive_path)
+        validated = self.path_validator.validate_zim_file(validated)
+
+        with zim_archive(validated) as archive:
+            entry = archive.get_entry_by_path(self.entry_path)
+            item = entry.get_item()
+            mime = _detect_mime_type(item)
+            raw = bytes(item.content)
+
+        # Mutate so FastMCP's read_resource picks up the detected MIME.
+        # Resource has no validate_assignment, so this is a plain attribute set.
+        self.mime_type = mime
+
+        if mime.startswith(("text/", "application/json")) or mime in (
+            "application/xml",
+            "application/javascript",
+        ):
+            return raw.decode("utf-8", errors="replace")
+        # Binary — FastMCP base64-wraps when content is bytes.
+        return raw
+
+
+class ZimEntryTemplate(ResourceTemplate):
+    """Template that materialises a ``ZimEntryResource`` for each request.
+
+    Bypasses ``ResourceTemplate.from_function`` because we don't want to wrap
+    the result in a ``FunctionResource`` (which would freeze ``mime_type`` at
+    template-registration time). Instead we construct our own ``Resource``
+    subclass and let it mutate its own MIME during ``read()``.
+    """
+
+    server_ref: Any = Field(default=None, exclude=True, repr=False)
+
+    async def create_resource(
+        self,
+        uri: str,
+        params: dict,
+        context: Any = None,
+    ) -> Resource:
+        """Resolve {name} → archive_path and build a ZimEntryResource."""
+        name = params["name"]
+        files = self.server_ref.zim_operations.list_zim_files_data()
+        target_path: Optional[str] = None
+        for f in files:
+            stem = Path(f["path"]).stem
+            if stem == name or f["name"] == name:
+                target_path = f["path"]
+                break
+        if not target_path:
+            raise ValueError(f"ZIM file '{name}' not found")
+
+        # FastMCP captures `%2F` literally; restore to `/` for libzim.
+        decoded_path = unquote(params["path"])
+        return ZimEntryResource(
+            uri=AnyUrl(uri),
+            name=self.name,
+            title=self.title,
+            description=self.description,
+            # Placeholder; ZimEntryResource.read() mutates this to the
+            # detected MIME before FastMCP reads it back.
+            mime_type="application/octet-stream",
+            archive_path=target_path,
+            entry_path=decoded_path,
+            path_validator=self.server_ref.path_validator,
+        )
+
+
+_ZIM_ENTRY_URI_TEMPLATE = "zim://{name}/entry/{path}"
 
 
 def register_resources(server: "OpenZimMcpServer") -> None:
@@ -126,8 +223,10 @@ def register_resources(server: "OpenZimMcpServer") -> None:
             logger.warning(f"Resource zim://{name} failed: {e}")
             return json.dumps({"error": str(e)})
 
-    @server.mcp.resource(
-        "zim://{name}/entry/{path}",
+    # Register the per-entry template directly on the resource manager so
+    # ZimEntryResource controls its own MIME type at read time.
+    template = ZimEntryTemplate(
+        uri_template=_ZIM_ENTRY_URI_TEMPLATE,
         name="zim_entry",
         title="ZIM entry (raw, native MIME)",
         description=(
@@ -140,37 +239,20 @@ def register_resources(server: "OpenZimMcpServer") -> None:
             "zim://wikipedia_en/entry/A%2FClimate_change. "
             "Use the get_zim_entry tool for processed/truncated text output."
         ),
+        # Placeholder; the per-call MIME is set on each ZimEntryResource.
+        mime_type="application/octet-stream",
+        # ResourceTemplate requires `fn` and `parameters`; we never call fn
+        # because we override create_resource(), but the fields are required.
+        fn=lambda name, path: None,  # noqa: ARG005 — sentinel
+        parameters={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "path": {"type": "string"},
+            },
+            "required": ["name", "path"],
+        },
+        context_kwarg=None,
+        server_ref=server,
     )
-    def zim_entry_resource(name: str, path: str) -> Union[str, bytes]:
-        # Decode the URL-encoded entry path. FastMCP captures `%2F` as
-        # literal `%2F`; we restore it to `/` here. See URI spike note.
-        decoded_path = unquote(path)
-
-        files = server.zim_operations.list_zim_files_data()
-        target_path = None
-        for f in files:
-            stem = Path(f["path"]).stem
-            if stem == name or f["name"] == name:
-                target_path = f["path"]
-                break
-        if not target_path:
-            raise ValueError(f"ZIM file '{name}' not found")
-
-        # Path validation defends against traversal via {name}; the entry
-        # path is consumed inside libzim and doesn't escape the archive.
-        validated = server.path_validator.validate_path(target_path)
-        validated = server.path_validator.validate_zim_file(validated)
-
-        with zim_archive(validated) as archive:
-            entry = archive.get_entry_by_path(decoded_path)
-            item = entry.get_item()
-            mime = _detect_mime_type(item)
-            raw = bytes(item.content)
-
-        if mime.startswith(("text/", "application/json")) or mime in (
-            "application/xml",
-            "application/javascript",
-        ):
-            return raw.decode("utf-8", errors="replace")
-        # Binary — FastMCP base64-wraps when content is bytes.
-        return raw
+    server.mcp._resource_manager._templates[_ZIM_ENTRY_URI_TEMPLATE] = template

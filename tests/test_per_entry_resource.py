@@ -156,6 +156,84 @@ class TestPerEntryResource:
             await rm.get_resource("zim://wiki/entry/A/Article")
 
     @pytest.mark.asyncio
+    async def test_mime_type_reflects_native_item_mime(self, server, monkeypatch):
+        """The Resource's mime_type after read() matches the libzim Item mime.
+
+        Pinning this prevents regression of the v1.0.0 bug where FastMCP
+        froze the template's default ``text/plain`` mime in the response
+        regardless of the actual content type.
+        """
+        from openzim_mcp.tools import resource_tools
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        server.path_validator.validate_path = MagicMock(return_value="/zim/wiki.zim")
+        server.path_validator.validate_zim_file = MagicMock(
+            return_value="/zim/wiki.zim"
+        )
+
+        archive = MagicMock()
+        item = MagicMock()
+        item.mimetype = "text/html; charset=utf-8"
+        item.content = b"<html></html>"
+        entry = MagicMock()
+        entry.get_item.return_value = item
+        archive.get_entry_by_path.return_value = entry
+
+        class FakeCtx:
+            def __enter__(self_inner):
+                return archive
+
+            def __exit__(self_inner, *exc):
+                return False
+
+        monkeypatch.setattr(resource_tools, "zim_archive", lambda *a, **k: FakeCtx())
+
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://wiki/entry/A%2FArticle")
+        # Before read(): placeholder mime from create_resource()
+        assert resource.mime_type == "application/octet-stream"
+        await resource.read()
+        # After read(): mutated to the libzim native MIME (charset stripped)
+        assert resource.mime_type == "text/html"
+
+    @pytest.mark.asyncio
+    async def test_mime_type_reflects_binary_item_mime(self, server, monkeypatch):
+        """Binary entries report their native MIME (e.g. image/png), not text/plain."""
+        from openzim_mcp.tools import resource_tools
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        server.path_validator.validate_path = MagicMock(return_value="/zim/wiki.zim")
+        server.path_validator.validate_zim_file = MagicMock(
+            return_value="/zim/wiki.zim"
+        )
+
+        archive = MagicMock()
+        item = MagicMock()
+        item.mimetype = "image/png"
+        item.content = b"\x89PNG\r\n\x1a\n"
+        entry = MagicMock()
+        entry.get_item.return_value = item
+        archive.get_entry_by_path.return_value = entry
+
+        class FakeCtx:
+            def __enter__(self_inner):
+                return archive
+
+            def __exit__(self_inner, *exc):
+                return False
+
+        monkeypatch.setattr(resource_tools, "zim_archive", lambda *a, **k: FakeCtx())
+
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://wiki/entry/I%2Flogo.png")
+        await resource.read()
+        assert resource.mime_type == "image/png"
+
+    @pytest.mark.asyncio
     async def test_lowercase_encoding_also_works(self, server, monkeypatch):
         """`%2f` (lowercase) also rounds-trips through unquote."""
         from openzim_mcp.tools import resource_tools
