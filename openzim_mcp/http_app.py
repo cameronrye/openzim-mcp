@@ -206,11 +206,12 @@ def serve_streamable_http(
 
     # Wire the resource-subscription watcher when both the registry exists
     # (subscriptions enabled) and we have allowed dirs to watch.
-    if server.subscriber_registry is not None and server.config.allowed_directories:
+    registry = server.subscriber_registry
+    if registry is not None and server.config.allowed_directories:
         from . import subscriptions as _subs
 
         async def _on_change(uri: str, change_type: str) -> None:
-            await _subs.broadcast_resource_updated(server.subscriber_registry, uri)
+            await _subs.broadcast_resource_updated(registry, uri)
 
         watcher = _subs.MtimeWatcher(
             server.config.allowed_directories,

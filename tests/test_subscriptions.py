@@ -1,6 +1,7 @@
 """Tests for SubscriberRegistry and the polling watcher."""
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -227,7 +228,7 @@ async def test_broadcast_drops_failed_sessions():
 
 
 def test_capability_patch_flips_subscribe_to_true():
-    """patch_capabilities_to_advertise_subscribe makes get_capabilities() advertise subscribe=True."""
+    """The capability patch makes get_capabilities() advertise subscribe=True."""
     from mcp.server.fastmcp import FastMCP
 
     from openzim_mcp.subscriptions import patch_capabilities_to_advertise_subscribe
