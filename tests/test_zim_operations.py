@@ -750,7 +750,9 @@ class TestZimOperations:
             result = zim_operations._perform_search(mock_archive, "test", 10, 0)
             assert "No search results found" in result
 
-    def test_get_entry_content_with_redirect(self, zim_operations: ZimOperations):
+    def test_get_entry_content_with_redirect(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
         """Test _get_entry_content with redirect entry."""
         from unittest.mock import MagicMock
 
@@ -768,7 +770,7 @@ class TestZimOperations:
         mock_archive.get_entry_by_path.return_value = mock_entry
 
         result = zim_operations._get_entry_content(
-            mock_archive, "A/Test", 1000, Path("/tmp/test.zim")
+            mock_archive, "A/Test", 1000, tmp_path / "test.zim"
         )
         assert "Test Article" in result
 

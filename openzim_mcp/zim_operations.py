@@ -2801,7 +2801,7 @@ class ZimOperations:
         }
 
         steps: List[Tuple[str, Any]] = [
-            ("list_zim_files", lambda: self.list_zim_files()),
+            ("list_zim_files", self.list_zim_files),
             ("get_zim_metadata", lambda: self.get_zim_metadata(str(validated))),
             ("list_namespaces", lambda: self.list_namespaces(str(validated))),
             ("get_main_page", lambda: self.get_main_page(str(validated))),
