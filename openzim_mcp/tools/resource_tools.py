@@ -18,12 +18,26 @@ that use case.
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_mime_type(item: Any) -> str:
+    """Return a clean MIME type for a libzim Item.
+
+    libzim ``Item.mimetype`` may include a charset parameter (e.g.
+    ``'text/html; charset=utf-8'``) or be empty for unknown types. We strip
+    the parameters and fall back to ``application/octet-stream`` for missing
+    or empty values.
+    """
+    raw = getattr(item, "mimetype", None) or ""
+    if not raw or not isinstance(raw, str):
+        return "application/octet-stream"
+    return raw.split(";", 1)[0].strip().lower() or "application/octet-stream"
 
 
 def register_resources(server: "OpenZimMcpServer") -> None:
