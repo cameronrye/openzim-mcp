@@ -101,14 +101,14 @@
             "availability": "https://schema.org/InStock"
         },
         "featureList": [
-            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (26 specialized tools)",
+            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (21 specialized tools)",
             "Article Summaries: Extract concise summaries from opening paragraphs for quick content preview",
             "Table of Contents: Build hierarchical TOC from article headings for navigation",
             "Pagination Cursors: Token-based pagination for seamless result navigation",
             "Binary Content Retrieval: Extract PDFs, images, videos, and other embedded media for multi-agent workflows",
             "Security First: Comprehensive input validation and path traversal protection",
             "Smart Retrieval System: Intelligent content extraction with configurable strategies",
-            "Multi-Instance Management: Handle multiple ZIM files simultaneously",
+            "Multi-Archive Search: Query across many ZIM files in one call via search_all",
             "Performance Optimized: Intelligent caching and pagination",
             "Full-Text Search: Fast search across ZIM archives",
             "Metadata Access: Rich metadata and article information",
@@ -396,7 +396,7 @@
                     <h3 class="feature-title">Dual Mode Support</h3>
                     <p class="feature-description">
                         Choose Simple mode (1 intelligent natural language tool, default) or Advanced mode
-                        (27 specialized tools) to match your LLM's capabilities.
+                        (21 specialized tools) to match your LLM's capabilities.
                     </p>
                 </div>
                 <div class="feature-card feature-new" id="streamable-http">
@@ -652,23 +652,10 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
             <div class="section-header">
                 <h2 class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span> Advanced Enterprise Features</h2>
                 <p class="section-description">
-                    Production-ready capabilities for enterprise deployments, monitoring, and multi-instance environments.
+                    Production-ready capabilities for enterprise deployments, monitoring, and observability.
                 </p>
             </div>
             <div class="advanced-grid">
-                <div class="advanced-feature">
-                    <div class="advanced-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg></span></div>
-                    <h3 class="advanced-title">Multi-Instance Management</h3>
-                    <p class="advanced-description">
-                        Automatic instance tracking and conflict detection ensures reliable operation when multiple server instances are running.
-                    </p>
-                    <ul class="advanced-list">
-                        <li>Automatic instance registration with unique process IDs</li>
-                        <li>Configuration hash validation for compatibility</li>
-                        <li>Stale instance cleanup and orphaned file detection</li>
-                        <li>Real-time conflict detection and resolution</li>
-                    </ul>
-                </div>
                 <div class="advanced-feature">
                     <div class="advanced-icon"><span class="icon"><svg viewBox="0 0 24 24"><line x1="18" x2="18" y1="20" y2="10"></line><line x1="12" x2="12" y1="20" y2="4"></line><line x1="6" x2="6" y1="20" y2="14"></line></svg></span></div>
                     <h3 class="advanced-title">Health Monitoring & Diagnostics</h3>
@@ -678,7 +665,6 @@ get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
                     <ul class="advanced-list">
                         <li>Built-in health check endpoints</li>
                         <li>Cache performance metrics and statistics</li>
-                        <li>Instance tracking status and recommendations</li>
                         <li>Configuration validation and diagnostics</li>
                     </ul>
                 </div>
@@ -1026,7 +1012,7 @@ Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
 }</code></pre>
                             </div>
                             <div class="example-result">
-                                <h5>Advanced Mode (26 specialized tools):</h5>
+                                <h5>Advanced Mode (21 specialized tools):</h5>
                                 <pre><code>{
   "mcpServers": {
     "openzim-mcp-advanced": {

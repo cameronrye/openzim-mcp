@@ -6,7 +6,7 @@
 
 OpenZIM MCP is a Model Context Protocol (MCP) server that enables AI models to access and search ZIM format knowledge bases offline. It provides intelligent, structured access patterns that LLMs need to effectively navigate vast knowledge repositories like Wikipedia, Wiktionary, and other offline content archives.
 
-**Version**: 0.8.2
+**Version**: 1.0.0
 **License**: MIT
 **Python**: 3.12+
 **Repository**: https://github.com/cameronrye/openzim-mcp
@@ -14,11 +14,12 @@ OpenZIM MCP is a Model Context Protocol (MCP) server that enables AI models to a
 
 ## Key Features
 
-- **Dual Mode Support**: Simple mode (1 intelligent natural language tool) or Advanced mode (18 specialized tools)
+- **Dual Mode Support**: Simple mode (1 intelligent natural language tool) or Advanced mode (21 specialized tools, plus 3 MCP prompts and 3 MCP resources)
 - **Smart Navigation**: Browse by namespace (articles, metadata, media) with intelligent path resolution
-- **Context-Aware Discovery**: Get article structure, relationships, and metadata
+- **Context-Aware Discovery**: Get article structure, link graph, and metadata
 - **Intelligent Search**: Advanced filtering, auto-complete suggestions, relevance-ranked results
-- **Performance Optimized**: Intelligent caching and pagination for massive archives
+- **Performance Optimized**: LRU cache with TTL and cursor-based pagination for massive archives
+- **Streamable HTTP transport** with bearer-token auth and CORS, in addition to stdio
 - **Security First**: Comprehensive input validation and path traversal protection
 - **Well Tested**: 80%+ test coverage with comprehensive test suite
 
@@ -38,11 +39,11 @@ uv pip install openzim-mcp
 # Simple mode (default) - 1 intelligent natural language tool
 openzim-mcp /path/to/zim/files
 
-# Advanced mode - 18 specialized tools
+# Advanced mode - 21 specialized tools
 openzim-mcp --mode advanced /path/to/zim/files
 
-# With configuration file
-openzim-mcp --config config.json /path/to/zim/files
+# Streamable HTTP transport
+openzim-mcp --transport http --host 127.0.0.1 --port 8000 /path/to/zim/files
 ```
 
 ## MCP Configuration
@@ -82,61 +83,83 @@ Automatic fallback from direct access to search-based retrieval:
 ## Available Tools
 
 ### Simple Mode (Default)
-- `query_zim`: Natural language interface for all ZIM operations
+- `zim_query`: Natural language interface that routes to underlying tools
 
 ### Advanced Mode
+
+**File & metadata**
 - `list_zim_files`: List available ZIM archives
 - `get_zim_metadata`: Get archive metadata
-- `get_zim_entry`: Retrieve specific entry by path
-- `search_zim_entries`: Search entries by title/path
-- `list_zim_entries`: Browse entries with pagination
 - `get_main_page`: Get archive main page
-- `get_entry_by_title`: Find entry by exact title
-- `suggest_entries`: Auto-complete suggestions
-- `get_random_entry`: Get random article
-- `count_entries`: Count entries by namespace
-- `get_entry_metadata`: Get entry metadata only
-- `extract_links`: Extract internal/external links
-- `get_namespace_info`: Get namespace statistics
-- `check_entry_exists`: Check if entry exists
-- `get_mime_types`: List MIME types in archive
+- `list_namespaces`: Enumerate namespaces with entry counts
+
+**Search**
+- `search_zim_file`: Full-text search within a ZIM file
+- `search_with_filters`: Search with namespace/content-type filters
+- `search_all`: Cross-archive full-text search
+- `get_search_suggestions`: Title-based auto-complete
+
+**Content retrieval**
+- `get_zim_entry`: Retrieve a single entry by path
+- `get_zim_entries`: Batch entry retrieval
+- `get_binary_entry`: Retrieve binary content (PDFs, images, media)
+
+**Navigation**
+- `browse_namespace`: Sample entries in a namespace
+- `walk_namespace`: Cursor-paginated deterministic namespace iteration
+- `find_entry_by_title`: Resolve a title to entry path(s)
+
+**Structure & relationships**
+- `get_article_structure`: Headings tree
+- `get_table_of_contents`: Hierarchical TOC
+- `get_entry_summary`: Opening-paragraph summary
+- `extract_article_links`: Internal and external links
+- `get_related_articles`: Outbound link-graph neighbours
+
+**Server diagnostics**
+- `get_server_health`: Cache, directory, and ZIM-file health checks
+- `get_server_configuration`: Active configuration and validation
+
+### MCP Prompts
+- `/research <topic>`: Search across all archives, then drill into top hits
+- `/summarize <zim_file_path> <entry_path>`: TOC + summary + key links
+- `/explore <zim_file_path>`: High-level briefing of a ZIM's contents
+
+### MCP Resources
+- `zim://files`: Index of all available ZIM files
+- `zim://{name}`: Overview of one ZIM (metadata, namespaces, main page preview)
+- `zim://{name}/entry/{path}`: Single entry served with native MIME type
 
 ## Common Use Cases
 
 ### Research Assistant
 ```python
 # Search for articles on a topic
-search_zim_entries(query="quantum physics", limit=10)
+search_zim_file(zim_file_path="wikipedia_en.zim", query="quantum physics", limit=10)
 
-# Get article content with metadata
-get_zim_entry(path="A/Quantum_mechanics")
+# Get article content
+get_zim_entry(zim_file_path="wikipedia_en.zim", entry_path="A/Quantum_mechanics")
 
-# Extract related articles via links
-extract_links(path="A/Quantum_mechanics")
+# Discover related articles
+get_related_articles(zim_file_path="wikipedia_en.zim", entry_path="A/Quantum_mechanics")
 ```
 
 ### Knowledge Chatbot
 ```python
 # Get main page for context
-get_main_page(zim_file="wikipedia_en.zim")
+get_main_page(zim_file_path="wikipedia_en.zim")
 
-# Search with auto-complete
-suggest_entries(prefix="artif", limit=5)
-
-# Get random articles for exploration
-get_random_entry(namespace="A")
+# Auto-complete on partial titles
+get_search_suggestions(zim_file_path="wikipedia_en.zim", query="artif")
 ```
 
 ### Content Analysis
 ```python
-# Get namespace statistics
-get_namespace_info(zim_file="wikipedia_en.zim")
+# List namespaces with counts
+list_namespaces(zim_file_path="wikipedia_en.zim")
 
-# Count articles
-count_entries(namespace="A")
-
-# List MIME types
-get_mime_types(zim_file="wikipedia_en.zim")
+# Walk a namespace deterministically
+walk_namespace(zim_file_path="wikipedia_en.zim", namespace="C", limit=200)
 ```
 
 ## Important Notes
@@ -157,17 +180,17 @@ get_mime_types(zim_file="wikipedia_en.zim")
 - Pagination recommended for large result sets
 - Use specific tools in advanced mode for best performance
 
-## Configuration Options
+## Configuration
 
-```json
-{
-  "mode": "simple",
-  "cache_enabled": true,
-  "cache_ttl": 3600,
-  "max_cache_size": 1000,
-  "log_level": "INFO",
-  "max_search_results": 100
-}
+Configuration is via environment variables with the `OPENZIM_MCP_` prefix:
+
+```bash
+export OPENZIM_MCP_TOOL_MODE=simple
+export OPENZIM_MCP_CACHE__ENABLED=true
+export OPENZIM_MCP_CACHE__MAX_SIZE=200
+export OPENZIM_MCP_CACHE__TTL_SECONDS=7200
+export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000
+export OPENZIM_MCP_LOGGING__LEVEL=INFO
 ```
 
 ## Resources

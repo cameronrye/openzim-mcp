@@ -40,7 +40,7 @@
 
 > 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a deployment guide. Plus: batch entry retrieval (`get_zim_entries`) and per-entry MCP resources for direct browser rendering. [Learn more →](#whats-new-in-v100)
 
-> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (27 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
+> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
 
 ## Built for LLM Intelligence
 
@@ -62,7 +62,7 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 
 ## Features
 
-- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (27 specialized tools)
+- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools)
 - **Streamable HTTP Transport**: 🆕 Run as a long-running service over HTTP — bearer-token auth, CORS, health endpoints, multi-arch Docker image, and resource subscriptions. See [`docs/HTTP_DEPLOYMENT_GUIDE.md`](docs/HTTP_DEPLOYMENT_GUIDE.md).
 - **Batch Entry Retrieval**: 🆕 Fetch up to 50 entries per call with `get_zim_entries` — pairs naturally with HTTP, where round-trip cost matters
 - **Per-Entry MCP Resources**: 🆕 Stream individual entries via `zim://{name}/entry/{path}` with native MIME types — browse HTML, PDFs, and images directly
@@ -92,6 +92,8 @@ Run OpenZIM MCP as a long-running service. Pass `--transport http` (or set `OPEN
 - **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.0.0`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
 
 See [`docs/HTTP_DEPLOYMENT_GUIDE.md`](docs/HTTP_DEPLOYMENT_GUIDE.md) for Docker, Caddy, nginx, systemd, and Tailscale recipes.
+
+Legacy SSE transport is also available via `--transport sse` (or `OPENZIM_MCP_TRANSPORT=sse`) for clients that haven't migrated to streamable-HTTP. SSE does **not** apply the bearer-token / CORS / health-endpoint middleware, so the server *refuses* to start with `--transport sse` bound to anything other than `127.0.0.1`/`::1`/`localhost`. For exposed deployments use `--transport http`.
 
 ### Batch entry retrieval
 
@@ -131,10 +133,7 @@ Three pre-built workflows you can invoke as slash commands in MCP-aware clients:
 ### Power-user tools
 
 - `walk_namespace` — deterministic cursor-paginated namespace iteration (vs. `browse_namespace` which samples)
-- `warm_cache` — pre-populate cache for a ZIM file before a long session
-- `get_random_entry` — sample one random article (great with `/explore`)
-- `get_related_articles` — link-graph nearest neighbours (outbound, inbound, or both)
-- `cache_stats` / `cache_clear` — inspect and manage the in-memory cache
+- `get_related_articles` — outbound link-graph neighbours of a given entry
 
 ### MCP Resources
 
@@ -149,7 +148,6 @@ First use of the MCP **resources** primitive — your client's resource browser 
 - Namespace listing now deterministically surfaces minority namespaces (M, W, X, I) that random sampling could miss
 - Search filtering uses streaming scan instead of a hard 1000-hit cap (rare-mime-type filters now return matches that were previously hidden)
 - Error messages route by failure mode first (no more "check disk space" for "entry not found")
-- Phantom server-instance conflicts no longer reported (TOCTOU re-check before raising)
 
 ## Quick Start
 
@@ -192,7 +190,7 @@ mkdir ~/zim-files
 openzim-mcp /path/to/zim/files
 python -m openzim_mcp /path/to/zim/files
 
-# Advanced mode - all 26 specialized tools
+# Advanced mode - all 21 specialized tools
 openzim-mcp --mode advanced /path/to/zim/files
 python -m openzim_mcp --mode advanced /path/to/zim/files
 
@@ -209,7 +207,7 @@ make run ZIM_DIR=/path/to/zim/files
 OpenZIM MCP supports two modes:
 
 - **Simple Mode** (default): Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
-- **Advanced Mode**: Exposes all 26 specialized MCP tools for maximum control
+- **Advanced Mode**: Exposes all 21 specialized MCP tools for maximum control
 
 See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
 
@@ -732,10 +730,6 @@ No parameters required.
     "size": 1,
     "max_size": 100,
     "ttl_seconds": 3600
-  },
-  "instance_tracking": {
-    "active_instances": 1,
-    "conflicts_detected": 0
   }
 }
 ```
@@ -745,7 +739,7 @@ No parameters required.
 No parameters required.
 
 **Returns:**
-Comprehensive server configuration including diagnostics, validation results, and conflict detection.
+Comprehensive server configuration including diagnostics and validation results.
 
 **Example Response:**
 
@@ -764,54 +758,6 @@ Comprehensive server configuration including diagnostics, validation results, an
     "warnings": [],
     "recommendations": []
   }
-}
-```
-
-### diagnose_server_state - Comprehensive server diagnostics
-
-No parameters required.
-
-**Returns:**
-Detailed diagnostic information including instance conflicts, configuration validation, file accessibility checks, and actionable recommendations.
-
-**Example Response:**
-
-```json
-{
-  "status": "healthy",
-  "server_info": {
-    "pid": 12345,
-    "server_name": "openzim-mcp",
-    "config_hash": "abc123..."
-  },
-  "conflicts": [],
-  "issues": [],
-  "recommendations": ["Server appears to be running normally"],
-  "environment_checks": {
-    "directories_accessible": true,
-    "cache_functional": true
-  }
-}
-```
-
-### resolve_server_conflicts - Identify and resolve server conflicts
-
-No parameters required.
-
-**Returns:**
-Results of conflict resolution including cleanup actions and recommendations.
-
-**Example Response:**
-
-```json
-{
-  "status": "success",
-  "cleanup_results": {
-    "stale_instances_removed": 2
-  },
-  "conflicts_found": [],
-  "actions_taken": ["Removed 2 stale instance files"],
-  "recommendations": ["No active conflicts detected"]
 }
 ```
 
@@ -1129,63 +1075,7 @@ Response:
     "size": 15,
     "max_size": 100,
     "hit_rate": 0.85
-  },
-  "instance_tracking": {
-    "active_instances": 1,
-    "conflicts_detected": 0
   }
-}
-```
-
-**Diagnosing server state:**
-
-```json
-{
-  "name": "diagnose_server_state"
-}
-```
-
-Response:
-
-```json
-{
-  "status": "healthy",
-  "server_info": {
-    "pid": 12345,
-    "server_name": "openzim-mcp",
-    "config_hash": "abc123def456..."
-  },
-  "conflicts": [],
-  "issues": [],
-  "recommendations": ["Server appears to be running normally. No issues detected."],
-  "environment_checks": {
-    "directories_accessible": true,
-    "cache_functional": true,
-    "zim_files_found": 5
-  }
-}
-```
-
-**Resolving server conflicts:**
-
-```json
-{
-  "name": "resolve_server_conflicts"
-}
-```
-
-Response:
-
-```json
-{
-  "status": "success",
-  "cleanup_results": {
-    "stale_instances_removed": 2,
-    "files_cleaned": ["/home/user/.openzim_mcp_instances/server_99999.json"]
-  },
-  "conflicts_found": [],
-  "actions_taken": ["Removed 2 stale instance files"],
-  "recommendations": ["No active conflicts detected after cleanup"]
 }
 ```
 
@@ -1261,42 +1151,6 @@ or browse_namespace() to explore the file structure.
 - Currently supports ZIM files (Zeno IMproved format)
 - Tested with Wikipedia ZIM files (e.g., `wikipedia_en_100_2025-08.zim`)
 - File paths must be properly escaped in JSON (use `\\` for Windows paths)
-
----
-
-## Multi-Server Instance Management
-
-OpenZIM MCP includes advanced multi-server instance tracking and conflict detection to ensure reliable operation when multiple server instances are running.
-
-### Instance Tracking Features
-
-- **Automatic Instance Registration**: Each server instance is automatically registered with a unique process ID and configuration hash
-- **Conflict Detection**: Detects when multiple servers with different configurations are accessing the same directories
-- **Stale Instance Cleanup**: Automatically identifies and cleans up orphaned instance files from terminated processes
-- **Configuration Validation**: Ensures all server instances use compatible configurations
-
-### Conflict Types
-
-1. **Configuration Mismatch**: Multiple servers with different settings accessing the same directories
-2. **Multiple Instances**: Multiple servers running simultaneously (may cause confusion)
-3. **Stale Instances**: Orphaned instance files from terminated processes
-
-### Automatic Conflict Warnings
-
-OpenZIM MCP automatically includes conflict warnings in search results and file listings when issues are detected:
-
-```plain
- **Server Conflict Detected**
- Configuration mismatch with server PID 12345. Search results may be inconsistent.
- Use 'resolve_server_conflicts()' to fix these issues.
-```
-
-### Best Practices
-
-- Use `diagnose_server_state()` regularly to check for conflicts
-- Run `resolve_server_conflicts()` to clean up stale instances
-- Ensure all server instances use the same configuration when accessing shared directories
-- Monitor server health with `get_server_health()` for instance tracking information
 
 ---
 
