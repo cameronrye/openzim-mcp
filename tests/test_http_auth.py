@@ -78,3 +78,42 @@ def test_failure_logs_exclude_token(app_with_auth, caplog):
     # The attempted token must NEVER appear in any log message.
     for record in caplog.records:
         assert "leakedsecret" not in record.getMessage()
+
+
+@pytest.mark.parametrize(
+    "host,token,should_start",
+    [
+        ("127.0.0.1", None, True),  # localhost + no token → safe
+        ("127.0.0.1", "abc", True),  # localhost + token → safe
+        ("0.0.0.0", None, False),  # exposed + no token → REFUSE
+        ("0.0.0.0", "abc", True),  # exposed + token → safe
+        ("192.168.1.5", None, False),  # exposed + no token → REFUSE
+    ],
+)
+def test_safe_default_startup_check(host, token, should_start):
+    """The host/auth_token safety matrix from spec section 4.2."""
+    from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+    from openzim_mcp.http_app import check_safe_startup
+
+    config = MagicMock()
+    config.transport = "http"
+    config.host = host
+    config.auth_token = SecretStr(token) if token else None
+
+    if should_start:
+        check_safe_startup(config)  # should not raise
+    else:
+        with pytest.raises(OpenZimMcpConfigurationError) as exc:
+            check_safe_startup(config)
+        assert "OPENZIM_MCP_AUTH_TOKEN" in str(exc.value)
+
+
+def test_safe_default_check_skipped_for_stdio():
+    """The check is HTTP-only; stdio doesn't apply."""
+    from openzim_mcp.http_app import check_safe_startup
+
+    config = MagicMock()
+    config.transport = "stdio"
+    config.host = "0.0.0.0"  # would refuse for HTTP
+    config.auth_token = None
+    check_safe_startup(config)  # no raise

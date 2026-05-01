@@ -19,6 +19,8 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp
 
+from .exceptions import OpenZimMcpConfigurationError
+
 if TYPE_CHECKING:
     from .server import OpenZimMcpServer
 
@@ -27,6 +29,31 @@ logger = logging.getLogger(__name__)
 
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {"/healthz", "/readyz"}
+
+
+def check_safe_startup(config: object) -> None:
+    """Refuse to start if HTTP transport is exposed without a token.
+
+    Applied only when transport='http'. The four cases:
+      * host=127.0.0.1, token unset    → OK (localhost-only, no auth)
+      * host=127.0.0.1, token set      → OK
+      * host=any other,  token unset   → REFUSE
+      * host=any other,  token set     → OK
+
+    Raises:
+        OpenZimMcpConfigurationError: when binding non-localhost without auth.
+    """
+    if getattr(config, "transport", None) != "http":
+        return
+    host = getattr(config, "host", None)
+    is_localhost = host in ("127.0.0.1", "::1", "localhost")
+    has_token = getattr(config, "auth_token", None) is not None
+    if not is_localhost and not has_token:
+        raise OpenZimMcpConfigurationError(
+            f"HTTP transport bound to {host} requires authentication. "
+            "Set OPENZIM_MCP_AUTH_TOKEN, or bind to 127.0.0.1 for "
+            "localhost-only access. (Use a reverse proxy for TLS termination.)"
+        )
 
 
 async def healthz(request: Request) -> JSONResponse:
