@@ -305,7 +305,7 @@
     <div class="new-feature-banner">
         <div class="container">
             <span class="new-badge"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</span>
-            <span class="new-text"><strong>Multi-Archive Search & Prompts in v0.9.0!</strong> Search every ZIM file at once with <code>search_all</code>, invoke <code>/research</code> and <code>/summarize</code> workflows, and resolve titles to paths with <code>find_entry_by_title</code>. <a href="#features" class="new-link">Learn more →</a></span>
+            <span class="new-text"><strong>Streamable HTTP Transport in v1.0.0!</strong> Run OpenZIM MCP as a long-running service over HTTP — bearer-token auth, multi-arch Docker images, resource subscriptions, and a deployment guide. Plus batch entry retrieval and per-entry MCP resources. <a href="#features" class="new-link">Learn more →</a></span>
         </div>
     </div>
 
@@ -337,7 +337,7 @@
                 </div>
                 <div class="hero-stats">
                     <div class="stat">
-                        <div class="stat-number" id="version-display">v0.9.0</div>
+                        <div class="stat-number" id="version-display">v1.0.0</div>
                         <div class="stat-label">Latest Release</div>
                     </div>
                     <div class="stat">
@@ -396,34 +396,34 @@
                     <h3 class="feature-title">Dual Mode Support</h3>
                     <p class="feature-description">
                         Choose Simple mode (1 intelligent natural language tool, default) or Advanced mode
-                        (26 specialized tools) to match your LLM's capabilities.
+                        (27 specialized tools) to match your LLM's capabilities.
                     </p>
                 </div>
-                <div class="feature-card feature-new" id="multi-archive-search">
+                <div class="feature-card feature-new" id="streamable-http">
                     <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span></div>
-                    <h3 class="feature-title">Multi-Archive Search</h3>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path><circle cx="12" cy="12" r="10"></circle></svg></span></div>
+                    <h3 class="feature-title">Streamable HTTP Transport</h3>
                     <p class="feature-description">
-                        <code>search_all</code> queries every ZIM file at once and merges per-file results.
-                        No need to know which archive holds the answer.
+                        Run OpenZIM MCP as a long-running service. Bearer-token auth,
+                        multi-arch Docker, Tailscale-ready. Resource subscriptions included.
                     </p>
                 </div>
-                <div class="feature-card feature-new" id="mcp-prompts">
+                <div class="feature-card feature-new" id="batch-entries">
                     <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" x2="20" y1="19" y2="19"></line></svg></span></div>
-                    <h3 class="feature-title">MCP Prompts</h3>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"></rect><rect width="7" height="7" x="14" y="3" rx="1"></rect><rect width="7" height="7" x="14" y="14" rx="1"></rect><rect width="7" height="7" x="3" y="14" rx="1"></rect></svg></span></div>
+                    <h3 class="feature-title">Batch Entry Retrieval</h3>
                     <p class="feature-description">
-                        Pre-built workflow slash commands: <code>/research</code>, <code>/summarize</code>,
-                        and <code>/explore</code> orchestrate multi-step ZIM operations.
+                        Fetch up to 50 entries per call with <code>get_zim_entries</code>.
+                        Multi-archive, partial-success, rate-limit-aware.
                     </p>
                 </div>
-                <div class="feature-card feature-new" id="find-by-title">
+                <div class="feature-card feature-new" id="per-entry-resources">
                     <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span></div>
-                    <h3 class="feature-title">Find Entries by Title</h3>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg></span></div>
+                    <h3 class="feature-title">Per-Entry MCP Resources</h3>
                     <p class="feature-description">
-                        <code>find_entry_by_title</code> resolves titles (or partial titles) to entry paths
-                        instantly. Case-insensitive, optionally cross-file.
+                        Browse ZIM articles via <code>zim://archive/entry/Path</code>
+                        with native MIME types — HTML, PDFs, images.
                     </p>
                 </div>
                 <div class="feature-card" id="content-tools">

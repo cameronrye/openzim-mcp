@@ -38,9 +38,9 @@
 
 ---
 
-> 🆕 **NEW in v0.9.0: Multi-Archive Search & Prompts!** Search across every ZIM file at once with `search_all`, invoke pre-built workflows with `/research` and `/summarize`, and resolve titles to paths instantly with `find_entry_by_title`. [Learn more →](#whats-new-in-v090)
+> 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a deployment guide. Plus: batch entry retrieval (`get_zim_entries`) and per-entry MCP resources for direct browser rendering. [Learn more →](#whats-new-in-v100)
 
-> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (26 specialized tools, plus 3 MCP prompts and 2 MCP resources) to match your LLM's capabilities.
+> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (27 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
 
 ## Built for LLM Intelligence
 
@@ -62,10 +62,13 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 
 ## Features
 
-- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (26 specialized tools)
-- **Multi-Archive Search**: 🆕 Search every ZIM file at once with `search_all` — no need to know which archive holds the answer
-- **MCP Prompts**: 🆕 Pre-built workflow slash commands (`/research`, `/summarize`, `/explore`) that orchestrate multi-step ZIM operations
-- **Find Entries by Title**: 🆕 Resolve titles to entry paths instantly with `find_entry_by_title` — case-insensitive, optionally cross-file
+- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (27 specialized tools)
+- **Streamable HTTP Transport**: 🆕 Run as a long-running service over HTTP — bearer-token auth, CORS, health endpoints, multi-arch Docker image, and resource subscriptions. See [`docs/HTTP_DEPLOYMENT_GUIDE.md`](docs/HTTP_DEPLOYMENT_GUIDE.md).
+- **Batch Entry Retrieval**: 🆕 Fetch up to 50 entries per call with `get_zim_entries` — pairs naturally with HTTP, where round-trip cost matters
+- **Per-Entry MCP Resources**: 🆕 Stream individual entries via `zim://{name}/entry/{path}` with native MIME types — browse HTML, PDFs, and images directly
+- **Multi-Archive Search**: Search every ZIM file at once with `search_all` — no need to know which archive holds the answer
+- **MCP Prompts**: Pre-built workflow slash commands (`/research`, `/summarize`, `/explore`) that orchestrate multi-step ZIM operations
+- **Find Entries by Title**: Resolve titles to entry paths instantly with `find_entry_by_title` — case-insensitive, optionally cross-file
 - **Binary Content Retrieval**: Extract PDFs, images, videos, and other embedded media for multi-agent workflows
 - **Security First**: Comprehensive input validation and path traversal protection
 - **High Performance**: Intelligent caching and optimized ZIM file operations
@@ -75,6 +78,37 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 - **Type Safe**: Full type annotations throughout the codebase
 - **Configurable**: Flexible configuration with validation
 - **Observable**: Structured logging and health monitoring
+
+## What's new in v1.0.0
+
+### Streamable HTTP transport
+
+Run OpenZIM MCP as a long-running service. Pass `--transport http` (or set `OPENZIM_MCP_TRANSPORT=http`) and the server boots a Starlette app on `127.0.0.1:8000` by default with:
+
+- **Bearer-token auth** — set `OPENZIM_MCP_AUTH_TOKEN`; comparison is timing-safe and the attempted token is never logged.
+- **Safe-default startup check** — the server *refuses* to bind a non-localhost host without a token. (Bind `127.0.0.1` for local-only access; put a reverse proxy in front for TLS.)
+- **CORS allow-list** — explicit origins via `OPENZIM_MCP_CORS_ORIGINS`; wildcard `*` is rejected at startup.
+- **Health endpoints** — `/healthz` (liveness) and `/readyz` (at least one allowed dir is readable). Both exempt from auth so probes work cleanly.
+- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.0.0`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
+
+See [`docs/HTTP_DEPLOYMENT_GUIDE.md`](docs/HTTP_DEPLOYMENT_GUIDE.md) for Docker, Caddy, nginx, systemd, and Tailscale recipes.
+
+### Batch entry retrieval
+
+`get_zim_entries` fetches up to 50 entries in one call. Per-entry failures don't abort the batch — each result includes its `index` from the input order plus either `content` (success) or `error` (failure). Different `zim_file_path` values are allowed in one batch, so a multi-archive workflow can fan out from a single search.
+
+### Per-entry MCP resources
+
+`zim://{name}/entry/{path}` exposes individual entries with their native MIME type:
+
+- HTML and text entries return text bodies (`text/html`, `text/plain`, `application/json`, ...).
+- Binary entries (images, PDFs) return raw bytes (FastMCP base64-wraps them).
+
+**Encoding requirement:** clients MUST URL-encode `/` as `%2F` in the `{path}` segment. FastMCP's URI template engine treats `/` as a segment separator, so a literal slash won't route. Example: `zim://wikipedia_en/entry/A%2FClimate_change`. (This is a constraint of the current `mcp[cli]` SDK — see `docs/superpowers/notes/2026-05-01-per-entry-resource-uri-spike.md` for the spike that pinned the behaviour.)
+
+### Resource subscriptions
+
+Subscribe to `zim://files` or `zim://{name}` and the server emits `notifications/resources/updated` whenever the directory contents change or a `.zim` file is replaced. Polling interval is configurable (`OPENZIM_MCP_WATCH_INTERVAL_SECONDS`, default 5 s) and the feature can be disabled with `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false`. Implementation note: this depends on a private FastMCP attribute (`_mcp_server`) for handler registration; see `docs/superpowers/notes/2026-05-01-subscription-api-spike.md`.
 
 ## What's new in v0.9.0
 
@@ -108,6 +142,7 @@ First use of the MCP **resources** primitive — your client's resource browser 
 
 - `zim://files` — index of all available ZIM files
 - `zim://{name}` — overview of one ZIM (metadata, namespaces, main page preview)
+- `zim://{name}/entry/{path}` *(new in 1.0.0)* — single entry served with native MIME type (clients must URL-encode `/` as `%2F` in the path segment)
 
 ### Reliability fixes
 
