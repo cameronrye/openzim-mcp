@@ -147,3 +147,120 @@ async def test_watcher_stop_is_idempotent(tmp_path):
     await watcher.start()
     await watcher.stop()
     await watcher.stop()  # second call is fine
+
+
+@pytest.mark.asyncio
+async def test_broadcast_calls_send_for_each_subscriber():
+    """broadcast_resource_updated emits one notification per subscriber."""
+    from openzim_mcp.subscriptions import (
+        SubscriberRegistry,
+        broadcast_resource_updated,
+    )
+
+    sent: list[tuple[Any, str]] = []
+
+    class FakeSession:
+        def __init__(self, label: str):
+            self.label = label
+
+        async def send_resource_updated(self, uri):
+            sent.append((self.label, str(uri)))
+
+        def __hash__(self):
+            return hash(self.label)
+
+        def __eq__(self, other):
+            return isinstance(other, FakeSession) and self.label == other.label
+
+    reg = SubscriberRegistry()
+    s1, s2 = FakeSession("s1"), FakeSession("s2")
+    await reg.subscribe("zim://files", s1)
+    await reg.subscribe("zim://files", s2)
+
+    await broadcast_resource_updated(reg, "zim://files")
+    assert sorted(sent) == [("s1", "zim://files"), ("s2", "zim://files")]
+
+
+@pytest.mark.asyncio
+async def test_broadcast_drops_failed_sessions():
+    """A session whose send_resource_updated raises is evicted from the registry."""
+    from openzim_mcp.subscriptions import (
+        SubscriberRegistry,
+        broadcast_resource_updated,
+    )
+
+    class DeadSession:
+        async def send_resource_updated(self, uri):
+            raise RuntimeError("session closed")
+
+        def __hash__(self):
+            return id(self)
+
+        def __eq__(self, other):
+            return self is other
+
+    class LiveSession:
+        def __init__(self):
+            self.calls = []
+
+        async def send_resource_updated(self, uri):
+            self.calls.append(str(uri))
+
+        def __hash__(self):
+            return id(self)
+
+        def __eq__(self, other):
+            return self is other
+
+    reg = SubscriberRegistry()
+    dead = DeadSession()
+    live = LiveSession()
+    await reg.subscribe("zim://files", dead)
+    await reg.subscribe("zim://files", live)
+
+    await broadcast_resource_updated(reg, "zim://files")
+
+    remaining = await reg.sessions_for("zim://files")
+    assert dead not in remaining
+    assert live in remaining
+    assert live.calls == ["zim://files"]
+
+
+def test_capability_patch_flips_subscribe_to_true():
+    """patch_capabilities_to_advertise_subscribe makes get_capabilities() advertise subscribe=True."""
+    from mcp.server.fastmcp import FastMCP
+
+    from openzim_mcp.subscriptions import patch_capabilities_to_advertise_subscribe
+
+    mcp = FastMCP("test")
+    # Sanity: before patch, the SDK hardcodes False (this is the spike's
+    # pinned assumption — if it ever flips upstream, this test catches it).
+    init = mcp._mcp_server.create_initialization_options()
+    assert init.capabilities.resources is None or (
+        init.capabilities.resources.subscribe is False
+    )
+
+    patch_capabilities_to_advertise_subscribe(mcp)
+
+    init = mcp._mcp_server.create_initialization_options()
+    assert init.capabilities.resources is not None
+    assert init.capabilities.resources.subscribe is True
+
+
+def test_register_subscription_handlers_installs_entries():
+    """register_subscription_handlers adds Subscribe/Unsubscribe to request_handlers."""
+    import mcp.types as t
+    from mcp.server.fastmcp import FastMCP
+
+    from openzim_mcp.subscriptions import (
+        SubscriberRegistry,
+        register_subscription_handlers,
+    )
+
+    mcp = FastMCP("test")
+    reg = SubscriberRegistry()
+    register_subscription_handlers(mcp, reg)
+
+    handlers = mcp._mcp_server.request_handlers
+    assert t.SubscribeRequest in handlers
+    assert t.UnsubscribeRequest in handlers

@@ -204,4 +204,27 @@ def serve_streamable_http(
     app.add_middleware(BearerTokenAuthMiddleware, config=server.config)
     apply_cors_middleware(app, server.config)
 
+    # Wire the resource-subscription watcher when both the registry exists
+    # (subscriptions enabled) and we have allowed dirs to watch.
+    if server.subscriber_registry is not None and server.config.allowed_directories:
+        from . import subscriptions as _subs
+
+        async def _on_change(uri: str, change_type: str) -> None:
+            await _subs.broadcast_resource_updated(server.subscriber_registry, uri)
+
+        watcher = _subs.MtimeWatcher(
+            server.config.allowed_directories,
+            server.config.watch_interval_seconds,
+            on_change=_on_change,
+        )
+
+        async def _start() -> None:
+            await watcher.start()
+
+        async def _stop() -> None:
+            await watcher.stop()
+
+        app.add_event_handler("startup", _start)
+        app.add_event_handler("shutdown", _stop)
+
     runner(app, server.config.host, server.config.port)

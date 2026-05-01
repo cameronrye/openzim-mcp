@@ -73,6 +73,21 @@ class OpenZimMcpServer:
         self.mcp = FastMCP(config.server_name)
         self._register_tools()
 
+        # Subscription support (HTTP-only at runtime, but the registry +
+        # handlers are wired regardless so stdio sessions can still subscribe
+        # — clients that respect server-advertised capabilities decide).
+        self.subscriber_registry = None
+        if config.subscriptions_enabled:
+            from .subscriptions import (
+                SubscriberRegistry,
+                patch_capabilities_to_advertise_subscribe,
+                register_subscription_handlers,
+            )
+
+            self.subscriber_registry = SubscriberRegistry()
+            register_subscription_handlers(self.mcp, self.subscriber_registry)
+            patch_capabilities_to_advertise_subscribe(self.mcp)
+
         logger.info(
             f"OpenZIM MCP server initialized successfully in {config.tool_mode} mode"
         )

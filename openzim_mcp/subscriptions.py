@@ -24,10 +24,23 @@ Stable surfaces this module depends on:
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Hashable, Iterable, List, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Hashable,
+    Iterable,
+    List,
+    Optional,
+)
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
@@ -180,3 +193,82 @@ class MtimeWatcher:
                 self._snapshot = new_snap
         except asyncio.CancelledError:
             return
+
+
+async def broadcast_resource_updated(
+    registry: "SubscriberRegistry",
+    uri: str,
+) -> None:
+    """Notify every subscriber of ``uri`` via ``send_resource_updated``.
+
+    Sessions whose ``send_resource_updated`` raises (typically because the
+    session has been torn down) are dropped from the registry — that's the
+    only signal we have for "this session is gone" since FastMCP doesn't
+    expose a session-shutdown callback.
+    """
+    sessions = await registry.sessions_for(uri)
+    for session in sessions:
+        try:
+            await session.send_resource_updated(uri)
+        except Exception as e:  # noqa: BLE001 - drop on any send failure
+            logger.warning("send_resource_updated failed; dropping session: %s", e)
+            await registry.clear_session(session)
+
+
+def register_subscription_handlers(
+    mcp: "FastMCP",
+    registry: "SubscriberRegistry",
+) -> None:
+    """Install subscribe/unsubscribe handlers on the lowlevel ``Server``.
+
+    Reaches through ``mcp._mcp_server`` (a stable single-underscore attribute,
+    documented in the spike note as the only access path in mcp 1.26).
+
+    Subscribe handlers run inside an active request context, so we use
+    ``mcp._mcp_server.request_context.session`` to capture the calling
+    ``ServerSession`` and store it in the registry, keyed by URI.
+    """
+    low = mcp._mcp_server
+
+    @low.subscribe_resource()
+    async def _on_subscribe(uri: Any) -> None:  # type: ignore[misc]
+        session = low.request_context.session
+        await registry.subscribe(str(uri), session)
+
+    @low.unsubscribe_resource()
+    async def _on_unsubscribe(uri: Any) -> None:  # type: ignore[misc]
+        session = low.request_context.session
+        await registry.unsubscribe(str(uri), session)
+
+
+def patch_capabilities_to_advertise_subscribe(mcp: "FastMCP") -> None:
+    """Make ``get_capabilities()`` advertise ``resources.subscribe = True``.
+
+    The lowlevel ``Server.get_capabilities`` hardcodes ``subscribe=False``
+    even when subscribe handlers are registered. Without this patch, well-
+    behaved clients won't issue ``resources/subscribe`` and our handlers
+    are never reached. We monkey-patch ``create_initialization_options`` to
+    flip the flag post-construction; ``ResourcesCapability`` allows extra
+    attributes (``model_config = ConfigDict(extra="allow")``), so this is
+    well-defined pydantic, not a hack.
+    """
+    low = mcp._mcp_server
+    original = low.create_initialization_options
+
+    @functools.wraps(original)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        init = original(*args, **kwargs)
+        if init.capabilities.resources is not None:
+            init.capabilities.resources.subscribe = True
+        else:
+            # Resources capability can be None when no list-resources handler
+            # is registered; in that case we have nothing to subscribe to,
+            # but we still flip the flag for completeness.
+            from mcp.types import ResourcesCapability
+
+            init.capabilities.resources = ResourcesCapability(
+                subscribe=True, listChanged=False
+            )
+        return init
+
+    low.create_initialization_options = wrapped  # type: ignore[assignment]
