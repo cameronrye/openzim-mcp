@@ -313,11 +313,19 @@ class TestInstanceTracker:
             assert 12345 in pids
             assert 67890 in pids
 
-    def test_detect_conflicts_configuration_mismatch(self, instance_tracker):
-        """Test detecting configuration conflicts."""
-        # Mock process running check to return True for test PIDs
+    def test_detect_conflicts_different_config_is_not_a_conflict(
+        self, instance_tracker
+    ):
+        """Different stdio configs aren't conflicts — they're parallel sessions.
+
+        Pre-v1.0 the tracker reported every running instance with a
+        different config_hash as a "configuration_mismatch" warning. That
+        produced false positives for users who legitimately ran multiple
+        ZIM workspaces side-by-side. v1.0 narrows the conflict definition
+        to "stdio↔stdio same config", so this test now asserts the
+        non-conflict.
+        """
         with patch.object(instance_tracker, "_is_process_running", return_value=True):
-            # Register instance with different config
             with patch("os.getpid", return_value=12345):
                 instance_tracker.register_instance(
                     config_hash="different_hash",
@@ -325,12 +333,9 @@ class TestInstanceTracker:
                     server_name="different_server",
                 )
 
-            # Check for conflicts with current config
             conflicts = instance_tracker.detect_conflicts("current_hash")
 
-            assert len(conflicts) == 1
-            assert conflicts[0]["type"] == "configuration_mismatch"
-        assert conflicts[0]["instance"]["pid"] == 12345
+            assert conflicts == []
 
     def test_detect_conflicts_multiple_instances(self, instance_tracker):
         """Test detecting multiple instances with same config."""

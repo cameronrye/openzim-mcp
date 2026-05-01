@@ -105,10 +105,7 @@ async def test_watcher_detects_new_zim_file(tmp_path):
 
 @pytest.mark.asyncio
 async def test_watcher_detects_file_replacement(tmp_path):
-    """Replacing a .zim atomically fires zim://{name}."""
-    import os
-    import time
-
+    """Replacing a .zim with different size fires zim://{name}."""
     from openzim_mcp.subscriptions import MtimeWatcher
 
     target = tmp_path / "archive.zim"
@@ -123,15 +120,48 @@ async def test_watcher_detects_file_replacement(tmp_path):
     await watcher.start()
     try:
         await asyncio.sleep(0.1)
-        target.write_bytes(b"v2")
-        # Force a clearly-different mtime even on filesystems with coarse
-        # mtime resolution.
-        os.utime(target, (time.time(), time.time() + 1))
+        # Write content of a different length — real ZIM replacements always
+        # change size (variable-length headers/clusters). The watcher
+        # deliberately ignores mtime-only bumps to avoid `touch`-style
+        # spurious notifications.
+        target.write_bytes(b"v2-with-different-length")
         for _ in range(20):
             await asyncio.sleep(0.05)
             if any(uri == "zim://archive" for uri, _ in events):
                 break
         assert any(uri == "zim://archive" for uri, _ in events)
+    finally:
+        await watcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_watcher_ignores_mtime_only_touches(tmp_path):
+    """A `touch`-style bump (mtime change, same size) is silently ignored."""
+    import os
+    import time
+
+    from openzim_mcp.subscriptions import MtimeWatcher
+
+    target = tmp_path / "archive.zim"
+    target.write_bytes(b"some-content-that-stays-the-same")
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=0.05, on_change=emit)
+    await watcher.start()
+    try:
+        await asyncio.sleep(0.1)
+        # Bump mtime without altering the byte content — backup tools,
+        # lint scripts, and `touch` all do this and must NOT trigger
+        # subscribers.
+        future = time.time() + 5
+        os.utime(target, (future, future))
+        for _ in range(10):
+            await asyncio.sleep(0.05)
+        assert all(uri != "zim://archive" for uri, _ in events)
     finally:
         await watcher.stop()
 

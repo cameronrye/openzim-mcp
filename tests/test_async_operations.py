@@ -72,6 +72,26 @@ class TestAsyncZimOperations:
         mock_zim_operations.list_zim_files_data.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_list_zim_files_passes_name_filter(
+        self, async_ops: AsyncZimOperations, mock_zim_operations: MagicMock
+    ):
+        """name_filter is forwarded to the underlying sync op."""
+        await async_ops.list_zim_files(name_filter="nginx")
+
+        mock_zim_operations.list_zim_files.assert_called_once_with(name_filter="nginx")
+
+    @pytest.mark.asyncio
+    async def test_list_zim_files_data_passes_name_filter(
+        self, async_ops: AsyncZimOperations, mock_zim_operations: MagicMock
+    ):
+        """name_filter is forwarded to the underlying sync op."""
+        await async_ops.list_zim_files_data(name_filter="nginx")
+
+        mock_zim_operations.list_zim_files_data.assert_called_once_with(
+            name_filter="nginx"
+        )
+
+    @pytest.mark.asyncio
     async def test_search_zim_file(
         self, async_ops: AsyncZimOperations, mock_zim_operations: MagicMock
     ):

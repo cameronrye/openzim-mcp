@@ -132,10 +132,10 @@ async def test_get_zim_entries_tool_exception_returns_error_message(
 
 
 @pytest.mark.asyncio
-async def test_get_zim_entries_tool_handles_non_dict_entries(
+async def test_get_zim_entries_tool_accepts_string_paths_with_default_archive(
     test_config: OpenZimMcpConfig,
 ):
-    """Non-dict entries are coerced to empty pairs rather than crashing."""
+    """Bare strings are valid entry paths, paired with the kwarg-level archive."""
     server = OpenZimMcpServer(test_config)
     server.rate_limiter.check_rate_limit = MagicMock()
     server.async_zim_operations.get_entries = AsyncMock(
@@ -145,16 +145,45 @@ async def test_get_zim_entries_tool_handles_non_dict_entries(
     tool = server.mcp._tool_manager._tools["get_zim_entries"]
     fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
 
-    # Mixed valid + invalid entries: a string isn't a dict.
+    # Mix a bare-string entry path with a fully-qualified dict.
     await fn(
         entries=[
-            "not a dict",  # type: ignore[list-item]
+            "A/Foo",  # paired with default zim_file_path
+            {"zim_file_path": "/ok", "entry_path": "ok"},
+        ],
+        zim_file_path="/default.zim",
+    )
+    call = server.async_zim_operations.get_entries.await_args
+    sent_entries = call.args[0]
+    assert len(sent_entries) == 2
+    assert sent_entries[0] == {"zim_file_path": "/default.zim", "entry_path": "A/Foo"}
+    assert sent_entries[1]["zim_file_path"] == "/ok"
+
+
+@pytest.mark.asyncio
+async def test_get_zim_entries_tool_coerces_non_string_non_dict_entries(
+    test_config: OpenZimMcpConfig,
+):
+    """Non-string non-dict entries (None, int, etc.) become empty pairs."""
+    server = OpenZimMcpServer(test_config)
+    server.rate_limiter.check_rate_limit = MagicMock()
+    server.async_zim_operations.get_entries = AsyncMock(
+        return_value='{"results": [], "succeeded": 0, "failed": 0}'
+    )
+
+    tool = server.mcp._tool_manager._tools["get_zim_entries"]
+    fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
+
+    await fn(
+        entries=[
+            None,  # type: ignore[list-item]
+            42,  # type: ignore[list-item]
             {"zim_file_path": "/ok", "entry_path": "ok"},
         ],
     )
     call = server.async_zim_operations.get_entries.await_args
     sent_entries = call.args[0]
-    assert len(sent_entries) == 2
-    # Bad entry sanitized to empty pair, good entry preserved.
+    assert len(sent_entries) == 3
     assert sent_entries[0] == {"zim_file_path": "", "entry_path": ""}
-    assert sent_entries[1]["zim_file_path"] == "/ok"
+    assert sent_entries[1] == {"zim_file_path": "", "entry_path": ""}
+    assert sent_entries[2]["zim_file_path"] == "/ok"

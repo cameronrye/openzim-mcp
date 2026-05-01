@@ -51,8 +51,8 @@ def test_stdio_stdio_same_config_still_conflicts(tmp_path):
                 server_name="s",
                 transport="stdio",
             )
-        # find_conflicts runs from a different PID (the test process).
-        conflicts = tracker.find_conflicts(config_hash="same", transport="stdio")
+        # detect_conflicts runs from a different PID (the test process).
+        conflicts = tracker.detect_conflicts("same", transport="stdio")
     assert len(conflicts) == 1
 
 
@@ -69,12 +69,7 @@ def test_http_http_same_config_does_not_conflict(tmp_path):
                 host="127.0.0.1",
                 port=8000,
             )
-        conflicts = tracker.find_conflicts(
-            config_hash="same",
-            transport="http",
-            host="127.0.0.1",
-            port=8001,
-        )
+        conflicts = tracker.detect_conflicts("same", transport="http")
     assert len(conflicts) == 0
 
 
@@ -89,10 +84,5 @@ def test_stdio_and_http_coexist_same_config(tmp_path):
                 server_name="s",
                 transport="stdio",
             )
-        conflicts = tracker.find_conflicts(
-            config_hash="same",
-            transport="http",
-            host="127.0.0.1",
-            port=8000,
-        )
+        conflicts = tracker.detect_conflicts("same", transport="http")
     assert len(conflicts) == 0

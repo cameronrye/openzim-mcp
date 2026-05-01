@@ -216,12 +216,9 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
                 )
 
             # Perform the filtered search using async operations
-            search_result = await server.async_zim_operations.search_with_filters(
+            return await server.async_zim_operations.search_with_filters(
                 zim_file_path, query, namespace, content_type, limit, offset
             )
-
-            # Add proactive conflict detection for filtered search operations
-            return server._check_and_append_conflict_warnings(search_result)
 
         except Exception as e:
             logger.error(f"Error in filtered search: {e}")

@@ -101,7 +101,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                     instance_tracking["stale_instances"] = stale_count
 
                     conflicts = server.instance_tracker.detect_conflicts(
-                        server.config.get_config_hash()
+                        server.config.get_config_hash(),
+                        transport=server.config.transport,
                     )
                     instance_tracking["conflicts_detected"] = len(conflicts)
 
@@ -255,7 +256,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             if server.instance_tracker:
                 try:
                     conflicts = server.instance_tracker.detect_conflicts(
-                        server.config.get_config_hash()
+                        server.config.get_config_hash(),
+                        transport=server.config.transport,
                     )
                     if conflicts:
                         conflicts_detected_list.extend(conflicts)
@@ -341,7 +343,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             if server.instance_tracker:
                 try:
                     conflicts = server.instance_tracker.detect_conflicts(
-                        server.config.get_config_hash()
+                        server.config.get_config_hash(),
+                        transport=server.config.transport,
                     )
                     conflicts_list.extend(conflicts)
 
@@ -593,7 +596,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             # Step 2: Detect current conflicts
             try:
                 conflicts = server.instance_tracker.detect_conflicts(
-                    server.config.get_config_hash()
+                    server.config.get_config_hash(),
+                    transport=server.config.transport,
                 )
                 conflicts_found_list.extend(conflicts)
 

@@ -95,19 +95,29 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
 
     @server.mcp.tool()
     async def get_zim_entries(
-        entries: List[Dict[str, Any]],
+        entries: List[Any],
+        zim_file_path: Optional[str] = None,
         max_content_length: Optional[int] = None,
     ) -> str:
         """Fetch multiple ZIM entries in one call.
 
         Pairs naturally with HTTP transport, where round-trip cost matters.
         Up to 50 entries per batch. Each entry resolves independently —
-        per-entry failures do not abort the batch. Different ``zim_file_path``
-        values within one batch are allowed (multi-archive workflow).
+        per-entry failures do not abort the batch.
+
+        Two accepted shapes for ``entries``:
+
+        1. **List of strings** — entry paths in ``zim_file_path`` (required).
+           Example: ``entries=["A/Foo", "A/Bar"], zim_file_path="/path/x.zim"``
+        2. **List of dicts** — ``{"zim_file_path": "...", "entry_path": "..."}``
+           per entry. Use this when batching across archives. ``zim_file_path``
+           kwarg becomes the default for any dict that omits its own.
 
         Args:
-            entries: list of ``{"zim_file_path": "...", "entry_path": "..."}``
-                dicts. Limit: 50 per batch.
+            entries: list of entry paths (strings) or
+                ``{zim_file_path, entry_path}`` dicts. Limit: 50 per batch.
+            zim_file_path: default archive path; required if ``entries`` are
+                bare strings, optional when each dict carries its own.
             max_content_length: per-entry max content length.
 
         Returns:
@@ -131,22 +141,29 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
                     context=f"Batch size: {batch_size}",
                 )
 
-            # Sanitize per-entry inputs before delegating. Each entry's paths
-            # go through the same input-limit checks as the singular tool.
+            # Normalise each entry into a {zim_file_path, entry_path} dict,
+            # accepting either bare strings or dicts. The kwarg-level
+            # `zim_file_path` is the default for string entries and dicts that
+            # omit `zim_file_path`. Empty/invalid entries pass through as
+            # blank pairs so per-entry failures don't abort the batch — the
+            # underlying op records them as failures with a useful error.
+            default_zfp = (zim_file_path or "").strip()
             sanitized: List[Dict[str, Any]] = []
             for entry in entries or []:
-                if not isinstance(entry, dict):
-                    sanitized.append({"zim_file_path": "", "entry_path": ""})
-                    continue
+                if isinstance(entry, str):
+                    raw_zfp, raw_path = default_zfp, entry
+                elif isinstance(entry, dict):
+                    raw_zfp = str(entry.get("zim_file_path") or default_zfp)
+                    raw_path = str(entry.get("entry_path") or "")
+                else:
+                    raw_zfp, raw_path = "", ""
                 sanitized.append(
                     {
                         "zim_file_path": sanitize_input(
-                            str(entry.get("zim_file_path", "")),
-                            INPUT_LIMIT_FILE_PATH,
+                            raw_zfp, INPUT_LIMIT_FILE_PATH, allow_empty=True
                         ),
                         "entry_path": sanitize_input(
-                            str(entry.get("entry_path", "")),
-                            INPUT_LIMIT_ENTRY_PATH,
+                            raw_path, INPUT_LIMIT_ENTRY_PATH, allow_empty=True
                         ),
                     }
                 )
@@ -189,7 +206,13 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
-            namespace = sanitize_input(namespace, INPUT_LIMIT_NAMESPACE)
+            # Empty namespace is the documented "any namespace" sentinel and
+            # must be passed through untouched; only sanitise when a real
+            # namespace string was provided.
+            if namespace and namespace.strip():
+                namespace = sanitize_input(namespace, INPUT_LIMIT_NAMESPACE)
+            else:
+                namespace = ""
 
             return await server.async_zim_operations.get_random_entry(
                 zim_file_path, namespace

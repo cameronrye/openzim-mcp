@@ -37,21 +37,31 @@ class AsyncZimOperations:
         """Access the underlying synchronous operations."""
         return self._ops
 
-    async def list_zim_files(self) -> str:
+    async def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories (async).
+
+        Args:
+            name_filter: Optional case-insensitive substring filter on filename.
 
         Returns:
             JSON string containing the list of ZIM files
         """
-        return await asyncio.to_thread(self._ops.list_zim_files)
+        return await asyncio.to_thread(
+            self._ops.list_zim_files, name_filter=name_filter
+        )
 
-    async def list_zim_files_data(self) -> list:
+    async def list_zim_files_data(self, name_filter: Optional[str] = None) -> list:
         """List all ZIM files as structured data (async).
+
+        Args:
+            name_filter: Optional case-insensitive substring filter on filename.
 
         Returns:
             List of dictionaries containing ZIM file information
         """
-        return await asyncio.to_thread(self._ops.list_zim_files_data)
+        return await asyncio.to_thread(
+            self._ops.list_zim_files_data, name_filter=name_filter
+        )
 
     async def search_zim_file(
         self,

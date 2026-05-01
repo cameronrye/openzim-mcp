@@ -305,7 +305,8 @@ def sanitize_context_for_error(context: str) -> str:
     # URL-decode the context to catch encoded paths (%2F = /, etc.)
     try:
         decoded_context = unquote(context)
-    except Exception:  # nosec B110 - gracefully handle any decoding errors
+    except Exception:
+        # Decoding may fail on malformed input; fall back to the original.
         decoded_context = context
 
     # Common patterns indicating file paths
@@ -316,7 +317,7 @@ def sanitize_context_for_error(context: str) -> str:
         "/home/",
         "/Users/",
         "/var/",
-        "/tmp/",  # nosec B108 - string pattern for detection, not temp file usage
+        "/tmp/",  # nosec B108 (pattern only)  # noqa: S108
         "C:\\",
         "D:\\",
     ]

@@ -75,8 +75,15 @@ class TestFindEntryByTitle:
         mock_suggest = MagicMock()
         mock_suggest.getEstimatedMatches.return_value = 0
         mock_suggest.getResults.return_value = []
-        mock_archive.suggest.return_value = mock_suggest
-        mock_archive.suggestions_count = 0
+
+        # SuggestionSearcher(archive).suggest(title) is the real call path;
+        # patch the constructor so the test stays at the API-shape level.
+        mock_searcher = MagicMock()
+        mock_searcher.suggest.return_value = mock_suggest
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.SuggestionSearcher",
+            lambda archive: mock_searcher,
+        )
 
         monkeypatch.setattr(
             "openzim_mcp.zim_operations.zim_archive",

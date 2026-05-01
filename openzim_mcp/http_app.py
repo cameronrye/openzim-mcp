@@ -11,7 +11,7 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Mapping
 
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -100,6 +100,13 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         """Validate the Bearer token; pass through on success, 401 otherwise."""
         if request.url.path in AUTH_EXEMPT_PATHS:
+            return await call_next(request)
+
+        # CORS preflight: browsers omit the Authorization header on OPTIONS,
+        # so the auth check must let it pass and let the CORS layer (or the
+        # route's own OPTIONS handler) respond. Auth still gates the actual
+        # POST/GET/DELETE that follows.
+        if request.method == "OPTIONS":
             return await call_next(request)
 
         # If no token configured, allow (the safe-default check ensures this
@@ -229,7 +236,9 @@ def serve_streamable_http(
         inner_lifespan = app.router.lifespan_context
 
         @asynccontextmanager
-        async def lifespan_with_watcher(scoped_app: ASGIApp) -> AsyncIterator[None]:
+        async def lifespan_with_watcher(
+            scoped_app: ASGIApp,
+        ) -> AsyncIterator[Mapping[str, Any] | None]:
             await watcher.start()
             try:
                 async with inner_lifespan(scoped_app) as state:
@@ -237,6 +246,12 @@ def serve_streamable_http(
             finally:
                 await watcher.stop()
 
-        app.router.lifespan_context = lifespan_with_watcher
+        # mypy can't reconcile the @asynccontextmanager-produced
+        # _AsyncGeneratorContextManager with the union type Starlette
+        # declares for lifespan_context (Callable returning either of two
+        # AbstractAsyncContextManager parameterizations). The runtime
+        # types are compatible — _AsyncGeneratorContextManager subclasses
+        # AbstractAsyncContextManager — so suppress here.
+        app.router.lifespan_context = lifespan_with_watcher  # type: ignore[assignment]
 
     runner(app, server.config.host, server.config.port)

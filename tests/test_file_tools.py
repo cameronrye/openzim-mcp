@@ -7,6 +7,59 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpRateLimitError
 from openzim_mcp.server import OpenZimMcpServer
+from openzim_mcp.tools.file_tools import register_file_tools
+
+
+def _capture_registered_tool(register_fn, server_mock):
+    """Run a tool registrar with a mock and return the registered handler."""
+    captured = {}
+
+    def tool_decorator(*args, **kwargs):
+        def wrap(fn):
+            captured["fn"] = fn
+            return fn
+
+        return wrap
+
+    server_mock.mcp.tool = tool_decorator
+    register_fn(server_mock)
+    return captured["fn"]
+
+
+class TestListZimFilesToolNameFilter:
+    """Verify the registered list_zim_files tool forwards name_filter."""
+
+    def _build_mock_server(self):
+        server = MagicMock()
+        server.mcp = MagicMock()
+        server.async_zim_operations.list_zim_files = AsyncMock(return_value="[]")
+        server.rate_limiter.check_rate_limit = MagicMock()
+        server.instance_tracker = None
+        return server
+
+    @pytest.mark.asyncio
+    async def test_forwards_name_filter(self):
+        """The tool forwards an explicit name_filter to the async op."""
+        server = self._build_mock_server()
+        tool_fn = _capture_registered_tool(register_file_tools, server)
+
+        await tool_fn(name_filter="nginx")
+
+        server.async_zim_operations.list_zim_files.assert_called_once_with(
+            name_filter="nginx"
+        )
+
+    @pytest.mark.asyncio
+    async def test_default_forwards_empty_filter(self):
+        """Calling with no arg forwards the documented empty-string default."""
+        server = self._build_mock_server()
+        tool_fn = _capture_registered_tool(register_file_tools, server)
+
+        await tool_fn()
+
+        server.async_zim_operations.list_zim_files.assert_called_once_with(
+            name_filter=""
+        )
 
 
 class TestRegisterFileTools:

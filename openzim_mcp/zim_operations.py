@@ -10,6 +10,9 @@ from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 from libzim.search import Query, Searcher  # type: ignore[import-untyped]
+from libzim.suggestion import (  # type: ignore[import-untyped]
+    SuggestionSearcher,
+)
 
 from .cache import OpenZimMcpCache
 from .config import OpenZimMcpConfig
@@ -169,19 +172,8 @@ class ZimOperations:
         self.content_processor = content_processor
         logger.info("ZimOperations initialized")
 
-    def list_zim_files_data(self) -> List[Dict[str, Any]]:
-        """List all ZIM files in allowed directories as structured data.
-
-        Returns:
-            List of dictionaries containing ZIM file information.
-            Each dict has: name, path, directory, size, size_bytes, modified
-        """
-        cache_key = "zim_files_list_data"
-        cached_result = self.cache.get(cache_key)
-        if cached_result:
-            logger.debug("Returning cached ZIM files list data")
-            return cached_result  # type: ignore[no-any-return]
-
+    def _scan_zim_files(self) -> List[Dict[str, Any]]:
+        """Scan all allowed directories for ZIM files (uncached)."""
         logger.info(
             f"Searching for ZIM files in {len(self.config.allowed_directories)} "
             "directories:"
@@ -190,7 +182,6 @@ class ZimOperations:
             logger.info(f"  - {dir_path}")
 
         all_zim_files: List[Dict[str, Any]] = []
-
         for directory_str in self.config.allowed_directories:
             directory = Path(directory_str)
             logger.debug(f"Scanning directory: {directory}")
@@ -199,62 +190,88 @@ class ZimOperations:
                 logger.debug(f"Found {len(zim_files_in_dir)} ZIM files in {directory}")
 
                 for file_path in zim_files_in_dir:
-                    if file_path.is_file():
-                        try:
-                            stats = file_path.stat()
-                            all_zim_files.append(
-                                {
-                                    "name": file_path.name,
-                                    "path": str(file_path),
-                                    "directory": str(directory),
-                                    "size": f"{stats.st_size / (1024 * 1024):.2f} MB",
-                                    "size_bytes": stats.st_size,
-                                    "modified": datetime.fromtimestamp(
-                                        stats.st_mtime
-                                    ).isoformat(),
-                                }
-                            )
-                        except OSError as e:
-                            logger.warning(
-                                f"Error reading file stats for {file_path}: {e}"
-                            )
-
+                    if not file_path.is_file():
+                        continue
+                    try:
+                        stats = file_path.stat()
+                        all_zim_files.append(
+                            {
+                                "name": file_path.name,
+                                "path": str(file_path),
+                                "directory": str(directory),
+                                "size": f"{stats.st_size / (1024 * 1024):.2f} MB",
+                                "size_bytes": stats.st_size,
+                                "modified": datetime.fromtimestamp(
+                                    stats.st_mtime
+                                ).isoformat(),
+                            }
+                        )
+                    except OSError as e:
+                        logger.warning(f"Error reading file stats for {file_path}: {e}")
             except Exception as e:
                 logger.error(f"Error processing directory {directory}: {e}")
 
-        # Cache the result
-        self.cache.set(cache_key, all_zim_files)
-        logger.info(f"Listed {len(all_zim_files)} ZIM files")
         return all_zim_files
 
-    def list_zim_files(self) -> str:
+    def list_zim_files_data(
+        self, name_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List all ZIM files in allowed directories as structured data.
+
+        The directory scan is cached once. Filtering is applied in-memory
+        against the cached list, so distinct filters share a single cache slot.
+
+        Args:
+            name_filter: Optional case-insensitive substring; only files whose
+                filename contains it are returned. Surrounding whitespace is
+                ignored. Empty/None disables filtering.
+
+        Returns:
+            List of dictionaries containing ZIM file information.
+            Each dict has: name, path, directory, size, size_bytes, modified
+        """
+        cache_key = "zim_files_list_data"
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.debug("Returning cached ZIM files list data")
+            all_zim_files: List[Dict[str, Any]] = cached_result
+        else:
+            all_zim_files = self._scan_zim_files()
+            self.cache.set(cache_key, all_zim_files)
+            logger.info(f"Listed {len(all_zim_files)} ZIM files")
+
+        needle = (name_filter or "").strip().lower()
+        if not needle:
+            return all_zim_files
+        return [f for f in all_zim_files if needle in f["name"].lower()]
+
+    def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories.
+
+        Args:
+            name_filter: Optional case-insensitive substring; only files whose
+                filename contains it are listed. Surrounding whitespace is
+                ignored. Empty/None disables filtering.
 
         Returns:
             JSON string containing the list of ZIM files
         """
-        cache_key = "zim_files_list"
-        cached_result = self.cache.get(cache_key)
-        if cached_result:
-            logger.debug("Returning cached ZIM files list")
-            return cached_result  # type: ignore[no-any-return]
-
-        # Get structured data
-        all_zim_files = self.list_zim_files_data()
+        all_zim_files = self.list_zim_files_data(name_filter=name_filter)
 
         if not all_zim_files:
-            result = "No ZIM files found in allowed directories"
-        else:
-            result_text = (
-                f"Found {len(all_zim_files)} ZIM files in "
-                f"{len(self.config.allowed_directories)} directories:\n\n"
-            )
-            result_text += json.dumps(all_zim_files, indent=2, ensure_ascii=False)
-            result = result_text
+            if (name_filter or "").strip():
+                return (
+                    "No ZIM files found in allowed directories matching filter "
+                    f"{name_filter!r}"
+                )
+            return "No ZIM files found in allowed directories"
 
-        # Cache the result
-        self.cache.set(cache_key, result)
-        return result
+        result_text = (
+            f"Found {len(all_zim_files)} ZIM files in "
+            f"{len(self.config.allowed_directories)} directories:\n\n"
+        )
+        result_text += json.dumps(all_zim_files, indent=2, ensure_ascii=False)
+        return result_text
 
     def search_zim_file(
         self,
@@ -2612,11 +2629,12 @@ class ZimOperations:
         """Extract summary from HTML content.
 
         Prioritizes:
-        1. First paragraph after the title/infobox
-        2. Content of the first <p> tags
-        3. Any text content as fallback
+        1. Paragraphs AFTER the first H1 (skips skip-nav and site banners
+           that always sit above the title).
+        2. Content of any <p> tags as fallback (with chrome stripped).
+        3. Any text content as final fallback.
         """
-        from bs4 import BeautifulSoup
+        from bs4 import BeautifulSoup, Tag
 
         result: Dict[str, Any] = {
             "summary": "",
@@ -2627,7 +2645,7 @@ class ZimOperations:
         try:
             soup = BeautifulSoup(html_content, "html.parser")
 
-            # Remove navigation, sidebars, infoboxes, etc.
+            # Remove navigation, sidebars, infoboxes, banners, etc.
             unwanted_selectors = [
                 "nav",
                 "header",
@@ -2635,6 +2653,9 @@ class ZimOperations:
                 "aside",
                 "script",
                 "style",
+                "noscript",
+                "form",
+                # Wikipedia / MediaWiki chrome
                 ".infobox",
                 ".navbox",
                 ".sidebar",
@@ -2647,19 +2668,37 @@ class ZimOperations:
                 ".mbox",
                 ".ambox",
                 ".metadata",
+                # USWDS / federal-site banners (MedlinePlus, NIH, NIST...)
+                ".usa-banner",
+                ".usa-overlay",
+                ".usa-skipnav",
+                "#skipnav",
+                "#skipNav",
+                "[role='banner']",
+                "[role='navigation']",
             ]
             for selector in unwanted_selectors:
                 for element in soup.select(selector):
                     element.decompose()
 
-            # Try to find the first meaningful paragraphs
+            # Prefer paragraphs that come AFTER the first H1 — site banners,
+            # cookie notices, and "skip to content" blocks always sit above
+            # the document title and pollute summaries when collected naively.
+            first_h1 = soup.find("h1")
+            paragraph_iter: List[Tag] = []
+            if isinstance(first_h1, Tag):
+                paragraph_iter = [
+                    p for p in first_h1.find_all_next("p") if isinstance(p, Tag)
+                ]
+            if not paragraph_iter:
+                paragraph_iter = [p for p in soup.find_all("p") if isinstance(p, Tag)]
+
             paragraphs = []
-            for p in soup.find_all("p"):
+            for p in paragraph_iter:
                 text = p.get_text().strip()
                 # Skip very short paragraphs (likely captions or labels)
                 if len(text) > 50:
                     paragraphs.append(text)
-                    # Collect enough paragraphs to reach max_words
                     total_words = sum(len(para.split()) for para in paragraphs)
                     if total_words >= max_words:
                         break
@@ -2801,18 +2840,21 @@ class ZimOperations:
 
             # Find all headings in order
             headings: List[Dict[str, Any]] = []
+            from .content_processor import resolve_heading_id
+
             for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
                 if isinstance(heading, Tag):
                     level = int(heading.name[1])
                     text = heading.get_text().strip()
-                    heading_id = heading.get("id", "")
+                    anchor_id, id_source = resolve_heading_id(heading)
 
                     if text:  # Skip empty headings
                         headings.append(
                             {
                                 "level": level,
                                 "text": text,
-                                "id": heading_id if heading_id else "",
+                                "id": anchor_id,
+                                "id_source": id_source,
                                 "children": [],
                             }
                         )
@@ -2852,6 +2894,7 @@ class ZimOperations:
                 "level": level,
                 "text": heading["text"],
                 "id": heading["id"],
+                "id_source": heading.get("id_source", "none"),
                 "children": [],
             }
 
@@ -3140,8 +3183,10 @@ class ZimOperations:
                             )
 
                     # Fallback: libzim suggestion search (title-indexed).
+                    # Note: ``Archive.suggest()`` does not exist; the public
+                    # API is ``SuggestionSearcher(archive).suggest(text)``.
                     try:
-                        suggestion_search = archive.suggest(title)
+                        suggestion_search = SuggestionSearcher(archive).suggest(title)
                         total = suggestion_search.getEstimatedMatches()
                         if total > 0:
                             for path in suggestion_search.getResults(0, limit):
@@ -3189,12 +3234,28 @@ class ZimOperations:
         Wraps libzim archive.get_random_entry(). When namespace is set,
         retries up to RANDOM_ENTRY_MAX_RETRIES times to land in that
         namespace before giving up.
+
+        Special case: pass ``namespace=""`` to accept any namespace. When the
+        archive uses the new domain-style namespace scheme, the literal
+        legacy default ``"C"`` will never match — in that case we silently
+        relax the constraint after the first miss rather than burning all
+        retries. Callers who genuinely want a strict 'C' filter on a
+        new-scheme archive can pass ``namespace="C"`` explicitly *and*
+        accept the eventual error.
         """
         validated = self.path_validator.validate_path(zim_file_path)
         validated = self.path_validator.validate_zim_file(validated)
 
         with zim_archive(validated) as archive:
             has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
+            # Auto-relax: legacy 'C' default doesn't make sense on archives
+            # that use the new domain-namespace scheme. Treat it as "any" so
+            # default callers get useful results without needing to know the
+            # archive's namespace conventions.
+            effective_ns = namespace
+            if has_new_scheme and namespace == "C":
+                effective_ns = ""
+
             for _ in range(RANDOM_ENTRY_MAX_RETRIES):
                 try:
                     entry = archive.get_random_entry()
@@ -3204,7 +3265,7 @@ class ZimOperations:
                 entry_namespace = self._extract_namespace_from_path(
                     entry.path, has_new_scheme
                 )
-                if not namespace or entry_namespace == namespace:
+                if not effective_ns or entry_namespace == effective_ns:
                     preview = ""
                     try:
                         item = entry.get_item()
@@ -3283,11 +3344,14 @@ class ZimOperations:
                 seen: set[str] = set()
                 outbound: List[Dict[str, Any]] = []
                 for link in links_data.get("internal_links", []):
-                    path = link.get("path")
-                    if not path or path in seen:
+                    target = self._resolve_link_to_entry_path(
+                        link.get("url", ""), entry_path
+                    )
+                    if not target or target in seen or target == entry_path:
                         continue
-                    seen.add(path)
-                    outbound.append({"path": path, "title": link.get("title") or path})
+                    seen.add(target)
+                    title = link.get("text") or link.get("title") or target
+                    outbound.append({"path": target, "title": title})
                     if len(outbound) >= limit:
                         break
                 result["outbound_results"] = outbound
@@ -3318,7 +3382,21 @@ class ZimOperations:
                             candidate_ns = self._extract_namespace_from_path(
                                 candidate_path, has_new_scheme
                             )
-                            if candidate_ns == "C" and candidate_path != entry_path:
+                            # Inbound only walks the content namespace. For
+                            # legacy archives that's "C"; for new-scheme
+                            # archives the content namespace is whatever holds
+                            # the bulk of entries (which we approximate as
+                            # "anything that isn't the M/X/W/-/I metadata
+                            # buckets"). This avoids the prior bug where
+                            # new-scheme archives never produced inbound
+                            # results because nothing matches "C".
+                            metadata_namespaces = {"M", "X", "W", "-", "I"}
+                            is_content = (
+                                candidate_ns == "C"
+                                if not has_new_scheme
+                                else candidate_ns not in metadata_namespaces
+                            )
+                            if is_content and candidate_path != entry_path:
                                 try:
                                     links_json = self.extract_article_links(
                                         zim_file_path, candidate_path
@@ -3327,7 +3405,11 @@ class ZimOperations:
                                         "internal_links", []
                                     )
                                     if any(
-                                        link.get("path") == entry_path for link in links
+                                        self._resolve_link_to_entry_path(
+                                            link.get("url", ""), candidate_path
+                                        )
+                                        == entry_path
+                                        for link in links
                                     ):
                                         inbound.append(
                                             {
@@ -3362,3 +3444,43 @@ class ZimOperations:
                 result["inbound_done"] = True
 
         return json.dumps(result, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def _resolve_link_to_entry_path(url: str, source_entry_path: str) -> Optional[str]:
+        """Resolve an extracted href to an absolute ZIM entry path.
+
+        Skips anchors, external links, and unsupported schemes. Relative
+        paths are resolved against ``source_entry_path``'s directory using
+        posixpath semantics, then the leading "./" is stripped.
+
+        Returns ``None`` for non-resolvable inputs (anchors, externals,
+        empty, query-only).
+        """
+        from posixpath import dirname, normpath
+
+        if not url:
+            return None
+        url = url.strip()
+        if not url or url.startswith("#"):
+            return None
+        # External / non-navigable schemes — extract_article_links already
+        # filters most, but be defensive in case callers pass raw HTML refs.
+        if "://" in url or url.startswith("//"):
+            return None
+        # Strip query string and fragment; ZIM entries don't carry them.
+        for sep in ("#", "?"):
+            if sep in url:
+                url = url.split(sep, 1)[0]
+        if not url:
+            return None
+        base_dir = dirname(source_entry_path)
+        if base_dir:
+            joined = f"{base_dir}/{url}"
+        else:
+            joined = url
+        # normpath collapses "..", "./", and double slashes.
+        resolved = normpath(joined).lstrip("/")
+        # Drop any leading "./" or empty segments.
+        if resolved in (".", ""):
+            return None
+        return resolved

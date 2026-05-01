@@ -90,19 +90,25 @@ class TestListZimFilesConflictDetection:
         return server
 
     @pytest.mark.asyncio
-    async def test_list_zim_files_with_configuration_mismatch_conflict(
+    async def test_list_zim_files_does_not_inline_conflict_warnings(
         self, server_with_tracker
     ):
-        """Test list_zim_files with configuration mismatch conflict."""
+        """Data tools no longer inline conflict warnings.
+
+        Pre-v1.0 ``list_zim_files`` prepended a ``SERVER DIAGNOSTICS:``
+        block whenever the instance tracker reported any conflicts. That
+        polluted every result the LLM saw, even when no genuine conflict
+        existed (different stdio configs, http+stdio side-by-side). v1.0
+        moves all conflict reporting to the dedicated diagnostic tools
+        (``diagnose_server_state``, ``resolve_server_conflicts``); data
+        tools must return clean payloads.
+        """
         server_with_tracker.async_zim_operations.list_zim_files = AsyncMock(
             return_value='[{"path": "/test/file.zim"}]'
         )
         server_with_tracker.instance_tracker.detect_conflicts = MagicMock(
             return_value=[
-                {
-                    "type": "configuration_mismatch",
-                    "instance": {"pid": 12345},
-                }
+                {"type": "multiple_instances", "instance": {"pid": 67890}},
             ]
         )
 
@@ -110,102 +116,8 @@ class TestListZimFilesConflictDetection:
         if "list_zim_files" in tools:
             tool_handler = tools["list_zim_files"].fn
             result = await tool_handler()
-            # Should contain both warning and file listing
-            assert "SERVER DIAGNOSTICS:" in result
-            assert "WARNING: Configuration mismatch" in result
-            assert "12345" in result
-            assert "ZIM FILES:" in result
-            assert "file.zim" in result
-
-    @pytest.mark.asyncio
-    async def test_list_zim_files_with_multiple_instances_conflict(
-        self, server_with_tracker
-    ):
-        """Test list_zim_files with multiple instances conflict."""
-        server_with_tracker.async_zim_operations.list_zim_files = AsyncMock(
-            return_value='[{"path": "/test/file.zim"}]'
-        )
-        server_with_tracker.instance_tracker.detect_conflicts = MagicMock(
-            return_value=[
-                {
-                    "type": "multiple_instances",
-                    "instance": {"pid": 67890},
-                }
-            ]
-        )
-
-        tools = server_with_tracker.mcp._tool_manager._tools
-        if "list_zim_files" in tools:
-            tool_handler = tools["list_zim_files"].fn
-            result = await tool_handler()
-            # Should contain both warning and file listing
-            assert "SERVER DIAGNOSTICS:" in result
-            assert "WARNING: Multiple server instances" in result
-            assert "67890" in result
-            assert "ZIM FILES:" in result
-
-    @pytest.mark.asyncio
-    async def test_list_zim_files_with_both_conflict_types(self, server_with_tracker):
-        """Test list_zim_files with both conflict types."""
-        server_with_tracker.async_zim_operations.list_zim_files = AsyncMock(
-            return_value='[{"path": "/test/file.zim"}]'
-        )
-        server_with_tracker.instance_tracker.detect_conflicts = MagicMock(
-            return_value=[
-                {
-                    "type": "configuration_mismatch",
-                    "instance": {"pid": 12345},
-                },
-                {
-                    "type": "multiple_instances",
-                    "instance": {"pid": 67890},
-                },
-            ]
-        )
-
-        tools = server_with_tracker.mcp._tool_manager._tools
-        if "list_zim_files" in tools:
-            tool_handler = tools["list_zim_files"].fn
-            result = await tool_handler()
-            # Should contain both warnings
-            assert "Configuration mismatch" in result
-            assert "Multiple server instances" in result
-
-    @pytest.mark.asyncio
-    async def test_list_zim_files_conflict_detection_error(self, server_with_tracker):
-        """Test list_zim_files when conflict detection raises an exception."""
-        server_with_tracker.async_zim_operations.list_zim_files = AsyncMock(
-            return_value='[{"path": "/test/file.zim"}]'
-        )
-        server_with_tracker.instance_tracker.detect_conflicts = MagicMock(
-            side_effect=RuntimeError("Failed to detect conflicts")
-        )
-
-        tools = server_with_tracker.mcp._tool_manager._tools
-        if "list_zim_files" in tools:
-            tool_handler = tools["list_zim_files"].fn
-            result = await tool_handler()
-            # Should contain diagnostic error warning
-            assert "SERVER DIAGNOSTICS:" in result
-            assert "Could not check for server conflicts" in result
-            assert "ZIM FILES:" in result
-
-    @pytest.mark.asyncio
-    async def test_list_zim_files_no_conflicts(self, server_with_tracker):
-        """Test list_zim_files when no conflicts are detected."""
-        server_with_tracker.async_zim_operations.list_zim_files = AsyncMock(
-            return_value='[{"path": "/test/file.zim"}]'
-        )
-        server_with_tracker.instance_tracker.detect_conflicts = MagicMock(
-            return_value=[]
-        )
-
-        tools = server_with_tracker.mcp._tool_manager._tools
-        if "list_zim_files" in tools:
-            tool_handler = tools["list_zim_files"].fn
-            result = await tool_handler()
-            # Should NOT contain warnings
             assert "SERVER DIAGNOSTICS:" not in result
+            assert "WARNING:" not in result
             assert "file.zim" in result
 
 

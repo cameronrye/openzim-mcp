@@ -222,20 +222,23 @@ class TestDiagnosticTools:
         assert "diagnose_server_state()" in message
 
     @pytest.mark.asyncio
-    async def test_proactive_conflict_detection_in_search(
+    async def test_search_does_not_inline_conflict_warnings(
         self, server, mock_instance_tracker
     ):
-        """Test proactive conflict detection in search tools."""
-        # Mock conflict detection
+        """Search results no longer carry inline conflict warnings.
+
+        Pre-v1.0 every search response had a ``**Server Conflict Detected**``
+        footer appended whenever any other instance was alive. v1.0 keeps
+        data-tool output clean and routes conflict reporting through the
+        dedicated diagnostic tools instead.
+        """
         mock_instance_tracker.detect_conflicts.return_value = [
             {
-                "type": "configuration_mismatch",
+                "type": "multiple_instances",
                 "instance": {"pid": 12345},
-                "description": "Configuration mismatch",
             }
         ]
 
-        # Mock search operation
         with patch.object(
             server.zim_operations, "search_zim_file", return_value="Search results"
         ):
@@ -244,9 +247,9 @@ class TestDiagnosticTools:
             )
 
             content = result[0][0].text
-            assert "Search results" in content
-            assert "**Server Conflict Detected**" in content
-            assert "resolve_server_conflicts()" in content
+            assert content.strip() == "Search results"
+            assert "Server Conflict Detected" not in content
+            assert "resolve_server_conflicts" not in content
 
     def test_environment_validation_comprehensive(self, server, temp_dir):
         """Test comprehensive environment validation."""

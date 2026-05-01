@@ -2,7 +2,8 @@
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Union, cast
+import unicodedata
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import html2text
@@ -11,6 +12,78 @@ from bs4 import BeautifulSoup, Tag
 from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
 
 logger = logging.getLogger(__name__)
+
+# Link schemes that are not navigable as ZIM-internal links and should be
+# excluded from extracted-link results. Keeps results actionable for an LLM.
+NON_NAVIGABLE_LINK_SCHEMES = (
+    "javascript:",
+    "mailto:",
+    "tel:",
+    "data:",
+    "blob:",
+    "vbscript:",
+)
+
+
+def _slugify_heading(text: str) -> str:
+    """Generate a stable, URL-safe slug from heading text.
+
+    MediaWiki/MDN-style: NFKD-normalised, lowercased, non-alphanumeric runs
+    collapsed to single hyphens, leading/trailing hyphens stripped. Returns
+    "" for empty/whitespace input so callers can decide how to handle.
+    """
+    if not text:
+        return ""
+    normalised = unicodedata.normalize("NFKD", text)
+    ascii_text = normalised.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_text).strip("-").lower()
+    return slug
+
+
+def resolve_heading_id(heading: Tag) -> Tuple[str, str]:
+    """Return (id, source) for a heading, falling back to anchors and slugs.
+
+    Resolution order:
+      1. ``id`` attribute on the heading itself.
+      2. ``id``/``name`` attribute of any descendant ``<a>`` (e.g. MediaWiki
+         puts ``<span class="mw-headline" id="...">`` inside the heading).
+      3. ``id``/``name`` of the immediately-preceding ``<a>`` sibling
+         (older MediaWiki and many gov.* pages put ``<a name="">`` right
+         before the heading).
+      4. Slugified heading text — best-effort synthetic anchor.
+
+    The second value is one of ``id``, ``descendant_anchor``,
+    ``preceding_anchor``, or ``slug`` so consumers know the provenance and
+    can decide whether the anchor is real (referenced in the HTML) or
+    synthetic.
+    """
+    direct = heading.get("id")
+    if direct and isinstance(direct, str) and direct.strip():
+        return direct.strip(), "id"
+
+    # Descendant anchors — typical MediaWiki ``mw-headline`` pattern.
+    for anchor in heading.find_all(["a", "span"]):
+        if not isinstance(anchor, Tag):
+            continue
+        candidate = anchor.get("id") or anchor.get("name")
+        if candidate and isinstance(candidate, str) and candidate.strip():
+            return candidate.strip(), "descendant_anchor"
+
+    # Preceding anchor — common in older HTML and government health pages
+    # where the named anchor sits *just* before the heading.
+    prev = heading.find_previous_sibling()
+    if isinstance(prev, Tag) and prev.name == "a":
+        candidate = prev.get("id") or prev.get("name")
+        if candidate and isinstance(candidate, str) and candidate.strip():
+            return candidate.strip(), "preceding_anchor"
+
+    # Synthetic slug — guarantees consumers always get a usable identifier
+    # even when the source HTML is anchor-free.
+    text = heading.get_text().strip()
+    slug = _slugify_heading(text)
+    if slug:
+        return slug, "slug"
+    return "", "none"
 
 
 class ParsedHTML:
@@ -328,11 +401,13 @@ class ContentProcessor:
                 if isinstance(heading, Tag) and heading.name:
                     text = heading.get_text().strip()
                     if text:
+                        anchor_id, id_source = resolve_heading_id(heading)
                         headings.append(
                             {
                                 "level": int(heading.name[1]),
                                 "text": text,
-                                "id": heading.get("id", ""),
+                                "id": anchor_id,
+                                "id_source": id_source,
                                 "position": len(headings),
                             }
                         )
@@ -452,6 +527,13 @@ class ContentProcessor:
                         title = str(title_attr) if title_attr else ""
 
                         if not href:
+                            continue
+
+                        # Filter non-navigable schemes (javascript:, mailto:,
+                        # tel:, data:, blob:) — they pollute results without
+                        # being useful as ZIM-internal navigation targets.
+                        href_lower = href.lower()
+                        if href_lower.startswith(NON_NAVIGABLE_LINK_SCHEMES):
                             continue
 
                         link_info = {"url": href, "text": text, "title": title}

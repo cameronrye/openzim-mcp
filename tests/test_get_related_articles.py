@@ -18,16 +18,22 @@ class TestGetRelatedArticles:
         return OpenZimMcpServer(test_config)
 
     def test_outbound_uses_extract_article_links(self, server: OpenZimMcpServer):
-        """Outbound delegates to extract_article_links and dedupes."""
-        # extract_article_links returns a JSON string like:
-        #   {"internal_links": [{"path": "C/A", "title": "A"}, ...]}
+        """Outbound delegates to extract_article_links, resolves URLs, dedupes.
+
+        ``extract_article_links`` returns links with ``url`` keys carrying
+        href values relative to the source entry. ``get_related_articles``
+        resolves each href against the source path and dedupes the result.
+        """
         server.zim_operations.extract_article_links = MagicMock(
             return_value=json.dumps(
                 {
                     "internal_links": [
-                        {"path": "C/Linked_A", "title": "Linked A"},
-                        {"path": "C/Linked_B", "title": "Linked B"},
-                        {"path": "C/Linked_A", "title": "Linked A"},  # dup
+                        # Bare relative href — resolves to "C/Linked_A".
+                        {"url": "Linked_A", "text": "Linked A"},
+                        {"url": "Linked_B", "text": "Linked B"},
+                        {"url": "Linked_A", "text": "Linked A"},  # dup
+                        # Anchor-only — should be ignored.
+                        {"url": "#section", "text": "anchor"},
                     ]
                 }
             )
@@ -38,7 +44,7 @@ class TestGetRelatedArticles:
         )
         result = json.loads(result_json)
         assert result["direction"] == "outbound"
-        assert len(result["outbound_results"]) == 2  # deduped
+        assert len(result["outbound_results"]) == 2  # deduped, anchor dropped
         assert {r["path"] for r in result["outbound_results"]} == {
             "C/Linked_A",
             "C/Linked_B",
@@ -68,11 +74,12 @@ class TestGetRelatedArticles:
 
         mock_archive._get_entry_by_id.side_effect = get_entry_by_id
 
-        # extract_article_links returns C/Source as one of the links from
-        # every article — so every scanned entry counts as inbound.
+        # extract_article_links returns "Source" as one of the links from
+        # every C/Article_N. From "C/Article_N" the bare "Source" href
+        # resolves to "C/Source" — so every scanned entry counts as inbound.
         server.zim_operations.extract_article_links = MagicMock(
             return_value=json.dumps(
-                {"internal_links": [{"path": "C/Source", "title": "Source"}]}
+                {"internal_links": [{"url": "Source", "text": "Source"}]}
             )
         )
 
@@ -107,9 +114,7 @@ class TestGetRelatedArticles:
     ):
         """direction='both' returns both outbound_results and inbound_results."""
         server.zim_operations.extract_article_links = MagicMock(
-            return_value=json.dumps(
-                {"internal_links": [{"path": "C/Out", "title": "Out"}]}
-            )
+            return_value=json.dumps({"internal_links": [{"url": "Out", "text": "Out"}]})
         )
         mock_archive = MagicMock()
         mock_archive.entry_count = 0  # no inbound to scan
@@ -153,7 +158,7 @@ class TestGetRelatedArticles:
 
         server.zim_operations.extract_article_links = MagicMock(
             return_value=json.dumps(
-                {"internal_links": [{"path": "C/Source", "title": "Source"}]}
+                {"internal_links": [{"url": "Source", "text": "Source"}]}
             )
         )
 

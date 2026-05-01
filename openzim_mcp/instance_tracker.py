@@ -341,81 +341,58 @@ class InstanceTracker:
         return instances
 
     def get_active_instances(self) -> List[ServerInstance]:
-        """Get only active (running) server instances."""
-        all_instances = self.get_all_instances()
-        active_instances = []
+        """Get only active (running) server instances.
 
-        for instance in all_instances:
-            if self._is_process_running(instance.pid):
-                active_instances.append(instance)
-            else:
-                # Clean up stale instance files
-                self.unregister_instance(instance.pid)
-
-        return active_instances
+        Pure read — does NOT delete stale instance files. Use
+        ``cleanup_stale_instances`` for that. Keeping this side-effect-free
+        avoids the surprise where two consecutive callers disagree on the
+        stale count because the first one silently consumed them.
+        """
+        return [
+            inst
+            for inst in self.get_all_instances()
+            if self._is_process_running(inst.pid)
+        ]
 
     def list_running_instances(self) -> List[ServerInstance]:
         """Return live server instances (alias for get_active_instances)."""
         return self.get_active_instances()
 
-    def find_conflicts(
+    def detect_conflicts(
         self,
-        config_hash: str,
+        current_config_hash: str,
         transport: str = "stdio",
-        host: Optional[str] = None,
-        port: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """Return live instances that would conflict with a new registration.
+        """Return live instances that genuinely conflict with this server.
 
         Conflict semantics (transport-aware):
 
-        * stdio↔stdio same config: conflict (only one stdio session per config).
-        * stdio↔http: not a conflict (different protocols, no resource race).
-        * http↔anything: not a conflict (different ports = different servers;
-          OS port binding handles port collisions natively).
+        * **stdio↔stdio, same config**: conflict (``multiple_instances``) —
+          two stdio sessions for the same config compete for the same MCP
+          client wiring.
+        * **stdio↔stdio, different config**: not a conflict — they're parallel
+          sessions over different working sets and don't interfere.
+        * **stdio↔http** or **http↔anything**: not a conflict — different
+          protocols / different ports, no resource race.
+
+        Re-verifies each candidate's liveness right before reporting it,
+        auto-unregistering phantom instance files (PID gone between
+        ``get_active_instances()`` and now).
 
         Args:
-            config_hash: hash of the new instance's config.
+            current_config_hash: hash of the calling server's config.
             transport: ``"stdio"`` (default) or ``"http"``.
-            host: HTTP bind host (only meaningful for ``"http"``).
-            port: HTTP bind port (only meaningful for ``"http"``).
 
         Returns:
-            List of conflict-info dicts, one per conflicting instance.
+            List of conflict-info dicts, one per genuine conflict.
         """
-        # HTTP starters never conflict in tracker logic.
+        # HTTP starters never conflict in tracker logic; the OS handles port
+        # collisions and the protocols don't share state.
         if transport == "http":
-            del host, port  # accepted for API symmetry; not used here
             return []
 
-        conflicts: List[Dict[str, Any]] = []
-        for instance in self.list_running_instances():
-            if instance.pid == os.getpid():
-                continue
-            existing_transport = getattr(instance, "transport", "stdio")
-            # stdio-side: conflict only against other stdio instances.
-            if existing_transport != "stdio":
-                continue
-            if instance.config_hash == config_hash:
-                conflicts.append(
-                    {
-                        "type": "multiple_instances",
-                        "instance": instance.to_dict(),
-                        "severity": "warning",
-                    }
-                )
-        return conflicts
-
-    def detect_conflicts(self, current_config_hash: str) -> List[Dict[str, Any]]:
-        """Detect potential conflicts with other server instances.
-
-        Re-verifies each candidate's liveness right before reporting it.
-        Catches the TOCTOU window where a process died between
-        get_active_instances() and now (zombies, just-killed processes,
-        PID-file-without-process). Phantoms get auto-unregistered.
-        """
         active_instances = self.get_active_instances()
-        conflicts = []
+        conflicts: List[Dict[str, Any]] = []
         phantoms_cleaned = 0
 
         for instance in active_instances:
@@ -432,19 +409,20 @@ class InstanceTracker:
                 )
                 continue
 
-            conflict_info = {
-                "type": "multiple_instances",
-                "instance": instance.to_dict(),
-                "severity": "warning",
-            }
-
-            # Check for configuration conflicts
+            existing_transport = getattr(instance, "transport", "stdio")
+            # stdio-side: only flag genuine same-protocol same-config overlaps.
+            if existing_transport != "stdio":
+                continue
             if instance.config_hash != current_config_hash:
-                conflict_info["type"] = "configuration_mismatch"
-                conflict_info["severity"] = "high"
-                conflict_info["details"] = "Different server configurations detected"
+                continue
 
-            conflicts.append(conflict_info)
+            conflicts.append(
+                {
+                    "type": "multiple_instances",
+                    "instance": instance.to_dict(),
+                    "severity": "warning",
+                }
+            )
 
         if phantoms_cleaned:
             logger.info(

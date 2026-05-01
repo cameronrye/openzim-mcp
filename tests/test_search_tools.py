@@ -288,26 +288,6 @@ class TestSearchAllLimitAlias:
         assert call.args[1] == 5
 
 
-class TestConflictWarningAppend:
-    """Test conflict warning appending functionality."""
-
-    @pytest.fixture
-    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a test server instance."""
-        return OpenZimMcpServer(test_config)
-
-    def test_check_and_append_conflict_warnings(self, server: OpenZimMcpServer):
-        """Test that conflict warnings are appended correctly."""
-        # This tests the _check_and_append_conflict_warnings method
-        original_result = '{"results": []}'
-
-        # When no instance tracker or no conflicts, result should be unchanged
-        result = server._check_and_append_conflict_warnings(original_result)
-
-        # Result should contain the original content
-        assert "results" in result
-
-
 class TestInputSanitizationSearch:
     """Test input sanitization in search tools."""
 

@@ -4,8 +4,102 @@ from pathlib import Path
 
 import pytest
 
+from openzim_mcp.cache import OpenZimMcpCache
 from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.content_processor import ContentProcessor
+from openzim_mcp.security import PathValidator
 from openzim_mcp.server import OpenZimMcpServer
+from openzim_mcp.zim_operations import ZimOperations
+
+
+class TestListZimFilesNameFilter:
+    """name_filter narrows the listing without depending on the MCP server."""
+
+    @pytest.fixture
+    def zim_ops(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator: PathValidator,
+        openzim_mcp_cache: OpenZimMcpCache,
+        content_processor: ContentProcessor,
+    ) -> ZimOperations:
+        """Build a ZimOperations bound to the test config + cache."""
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def test_filter_is_case_insensitive_substring(
+        self, zim_ops: ZimOperations, temp_dir: Path
+    ):
+        """name_filter matches as a case-insensitive substring of the filename."""
+        (temp_dir / "wikipedia_en.zim").write_text("a")
+        (temp_dir / "nginx_docs.zim").write_text("b")
+        (temp_dir / "Nginx_Tutorial.zim").write_text("c")
+
+        result = zim_ops.list_zim_files(name_filter="NGINX")
+
+        assert "Found 2 ZIM files" in result
+        assert "nginx_docs.zim" in result
+        assert "Nginx_Tutorial.zim" in result
+        assert "wikipedia_en.zim" not in result
+
+    def test_filter_with_no_matches(self, zim_ops: ZimOperations, temp_dir: Path):
+        """A filter with no hits returns the empty-listing message."""
+        (temp_dir / "wikipedia_en.zim").write_text("a")
+
+        result = zim_ops.list_zim_files(name_filter="nginx")
+
+        assert "No ZIM files" in result
+
+    def test_empty_filter_behaves_like_no_filter(
+        self, zim_ops: ZimOperations, temp_dir: Path
+    ):
+        """Empty string is documented as 'no filter' and must match the default."""
+        (temp_dir / "a.zim").write_text("a")
+        (temp_dir / "b.zim").write_text("b")
+
+        assert zim_ops.list_zim_files() == zim_ops.list_zim_files(name_filter="")
+
+    def test_filter_matches_filename_not_directory(
+        self, zim_ops: ZimOperations, temp_dir: Path
+    ):
+        """The filter is applied to the file's own name, not its parent directory."""
+        nginx_dir = temp_dir / "nginx_archive"
+        nginx_dir.mkdir()
+        (nginx_dir / "wikipedia.zim").write_text("a")
+
+        result = zim_ops.list_zim_files(name_filter="nginx")
+
+        assert "No ZIM files" in result
+
+    def test_filter_strips_surrounding_whitespace(
+        self, zim_ops: ZimOperations, temp_dir: Path
+    ):
+        """Padding whitespace is trimmed before matching."""
+        (temp_dir / "nginx.zim").write_text("a")
+
+        result = zim_ops.list_zim_files(name_filter="  nginx  ")
+
+        assert "Found 1 ZIM files" in result
+        assert "nginx.zim" in result
+
+    def test_repeated_filtered_calls_share_one_cache_entry(
+        self,
+        zim_ops: ZimOperations,
+        temp_dir: Path,
+        openzim_mcp_cache: OpenZimMcpCache,
+    ):
+        """Filtered queries reuse one cached scan instead of one entry per filter."""
+        (temp_dir / "wikipedia_en.zim").write_text("a")
+        (temp_dir / "nginx.zim").write_text("b")
+        (temp_dir / "kiwix.zim").write_text("c")
+
+        zim_ops.list_zim_files_data(name_filter="nginx")
+        zim_ops.list_zim_files_data(name_filter="kiwix")
+        zim_ops.list_zim_files_data(name_filter="wikipedia")
+        zim_ops.list_zim_files_data()
+
+        assert openzim_mcp_cache.stats()["size"] == 1
 
 
 class TestOpenZimMcpServerIntegration:

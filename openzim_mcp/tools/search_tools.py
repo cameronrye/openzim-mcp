@@ -125,12 +125,9 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                 )
 
             # Perform the search using async operations
-            search_result = await server.async_zim_operations.search_zim_file(
+            return await server.async_zim_operations.search_zim_file(
                 zim_file_path, query, limit, offset
             )
-
-            # Add proactive conflict detection for search operations
-            return server._check_and_append_conflict_warnings(search_result)
 
         except Exception as e:
             logger.error(f"Error searching ZIM file: {e}")

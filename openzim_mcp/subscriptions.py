@@ -131,7 +131,10 @@ class MtimeWatcher:
         self._dirs = [str(d) for d in dirs]
         self._interval = interval
         self._on_change = on_change
-        self._snapshot: dict[str, float] = {}
+        # Snapshot maps path → (mtime, size). Using a tuple avoids firing
+        # spurious "replaced" notifications for `touch`-style mtime bumps
+        # that don't change file content (backup tools, lint scripts, etc).
+        self._snapshot: dict[str, tuple[float, int]] = {}
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event = asyncio.Event()
 
@@ -155,15 +158,16 @@ class MtimeWatcher:
             await self._task
         self._task = None
 
-    def _scan(self) -> dict[str, float]:
-        """Snapshot ``{path: mtime}`` for all ``.zim`` files in allowed dirs."""
-        snap: dict[str, float] = {}
+    def _scan(self) -> dict[str, tuple[float, int]]:
+        """Snapshot ``{path: (mtime, size)}`` for ``.zim`` files in allowed dirs."""
+        snap: dict[str, tuple[float, int]] = {}
         for d in self._dirs:
             try:
                 for entry in os.scandir(d):
                     if entry.is_file() and entry.name.endswith(".zim"):
                         with contextlib.suppress(OSError):
-                            snap[entry.path] = entry.stat().st_mtime
+                            stat = entry.stat()
+                            snap[entry.path] = (stat.st_mtime, stat.st_size)
             except OSError:
                 continue
         return snap
@@ -178,15 +182,20 @@ class MtimeWatcher:
                 new_snap = self._scan()
                 added = set(new_snap) - set(self._snapshot)
                 removed = set(self._snapshot) - set(new_snap)
+                # Only consider a file "replaced" when its size changed —
+                # mtime alone bumps from `touch`, backup tools, and many
+                # filesystem operations that don't actually rewrite content.
+                # ZIM-file replacement always changes size (the format has
+                # variable-length headers and clusters).
                 changed = {
                     p
                     for p in (set(new_snap) & set(self._snapshot))
-                    if new_snap[p] != self._snapshot[p]
+                    if new_snap[p][1] != self._snapshot[p][1]
                 }
                 # Directory listing changes → zim://files
                 if added or removed:
                     await self._on_change("zim://files", "list_changed")
-                # Per-file mtime changes → zim://{name}
+                # Real content replacements → zim://{name}
                 for path in changed:
                     name = Path(path).stem
                     await self._on_change(f"zim://{name}", "replaced")

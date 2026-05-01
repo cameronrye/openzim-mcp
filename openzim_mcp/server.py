@@ -2,10 +2,11 @@
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Literal, Optional
+from typing import Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from . import __version__
 from .async_operations import AsyncZimOperations
 from .cache import OpenZimMcpCache
 from .config import OpenZimMcpConfig
@@ -46,7 +47,7 @@ class OpenZimMcpServer:
 
         # Setup logging
         config.setup_logging()
-        logger.info(f"Initializing OpenZIM MCP server v{config.server_name}")
+        logger.info(f"Initializing OpenZIM MCP server v{__version__}")
 
         # Initialize components
         self.path_validator = PathValidator(config.allowed_directories)
@@ -69,8 +70,12 @@ class OpenZimMcpServer:
         if config.tool_mode == TOOL_MODE_SIMPLE:
             self.simple_tools_handler = SimpleToolsHandler(self.zim_operations)
 
-        # Initialize MCP server
+        # Initialize MCP server. FastMCP itself doesn't accept a version
+        # kwarg, but the underlying lowlevel Server does — set it after
+        # construction so MCP `serverInfo.version` advertises openzim-mcp's
+        # version rather than the SDK's default.
         self.mcp = FastMCP(config.server_name)
+        self.mcp._mcp_server.version = __version__
         self._register_tools()
 
         # Subscription support (HTTP-only at runtime, but the registry +
@@ -143,54 +148,6 @@ class OpenZimMcpServer:
             context=sanitized_context,
             details=base_message,
         )
-
-    def _format_conflict_warnings(self, conflicts: List[Dict[str, Any]]) -> str:
-        """Format conflict detection warnings for appending to results."""
-        if not conflicts:
-            return ""
-
-        warning = "\n\n**Server Conflict Detected**\n"
-        for conflict in conflicts:
-            if conflict["type"] == "configuration_mismatch":
-                warning += (
-                    f"WARNING: Configuration mismatch with server "
-                    f"PID {conflict['instance']['pid']}. "
-                    f"Results may be inconsistent.\n"
-                )
-            elif conflict["type"] == "multiple_instances":
-                warning += (
-                    f"WARNING: Multiple servers detected "
-                    f"(PID {conflict['instance']['pid']}). "
-                    f"Results may come from different server instances.\n"
-                )
-        warning += "\nTIP: Use 'resolve_server_conflicts()' to fix these issues.\n"
-        return warning
-
-    def _check_and_append_conflict_warnings(self, result: str) -> str:
-        """Check for conflicts and append warnings to result if found.
-
-        This helper method reduces code duplication by encapsulating the common
-        pattern of checking for instance conflicts and appending warnings to
-        operation results.
-
-        Args:
-            result: The operation result string to potentially append warnings to
-
-        Returns:
-            The result string, with conflict warnings appended if any were detected
-        """
-        if not self.instance_tracker:
-            return result
-        try:
-            conflicts = self.instance_tracker.detect_conflicts(
-                self.config.get_config_hash()
-            )
-            conflict_warning = self._format_conflict_warnings(conflicts)
-            if conflict_warning:
-                return result + conflict_warning
-        except Exception as e:
-            logger.debug(f"Failed to check for conflicts: {e}")
-        return result
 
     def _register_simple_tools(self) -> None:
         """Register simple mode tools with underlying tools for routing."""
