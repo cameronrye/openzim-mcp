@@ -1968,6 +1968,82 @@ class TestZimOperations:
         # Note: max_content_length validation happens in server.py,
         # not zim_operations.py
 
+    def test_filtered_search_does_not_materialize_offset_window(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Skip-counter pagination must not materialise the offset window.
+
+        With ``offset=900, limit=10`` and 1000 raw matches all in a single
+        namespace, the old "accumulate then slice" code calls
+        ``get_entry_by_path`` for ~910 entries (offset + limit). The
+        skip-counter implementation should only need to materialize entries
+        for the collected page (about ~limit entries when no filter is
+        applied), giving a generous upper bound well below 910.
+        """
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            mock_searcher = MagicMock()
+            mock_search_result = MagicMock()
+            mock_search_result.getEstimatedMatches.return_value = 1000
+
+            def mock_get_results(start, count):
+                # libzim returns paths as strings; namespace is derivable
+                # from the leading prefix without needing an Entry.
+                return [f"A/Entry_{i}" for i in range(start, start + count)]
+
+            mock_search_result.getResults = mock_get_results
+            mock_searcher.search.return_value = mock_search_result
+
+            # Track every get_entry_by_path call so we can assert no
+            # over-fetch for skipped entries.
+            calls: list[str] = []
+
+            def make_entry(path: str):
+                e = MagicMock()
+                e.path = path
+                e.title = f"Title for {path}"
+                item = MagicMock()
+                item.mimetype = "text/html"
+                item.content = b"<p>x</p>"
+                e.get_item.return_value = item
+                return e
+
+            def tracked_get(path):
+                calls.append(path)
+                return make_entry(path)
+
+            mock_archive_instance.get_entry_by_path.side_effect = tracked_get
+
+            with (
+                patch(
+                    "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+                ),
+                patch("openzim_mcp.zim_operations.Query"),
+            ):
+                zim_operations.search_with_filters(
+                    str(zim_file),
+                    "test",
+                    namespace=None,
+                    content_type=None,
+                    limit=10,
+                    offset=900,
+                )
+
+            # Old materialise-then-slice would call get_entry_by_path ~910
+            # times (offset + limit). Skip-counter should keep this much
+            # lower — generous slack for snippet rendering, MIME re-reads,
+            # etc.
+            assert len(calls) < 200, (
+                f"get_entry_by_path called {len(calls)} times; "
+                "expected skip-counter to skip the offset window without "
+                "materialising entries"
+            )
+
     def test_extract_article_links(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test article link extraction."""
         zim_file = temp_dir / "test.zim"
@@ -2523,3 +2599,106 @@ class TestZimOperationsGetEntries:
         # Failure is recorded with success=False and an error string
         bad = next(r for r in data["results"] if not r["success"])
         assert "error" in bad
+
+    def test_get_entries_opens_archive_once_per_file(
+        self,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+        monkeypatch,
+    ):
+        """N entries from a single ZIM file open the archive exactly once.
+
+        Performance-driven invariant: ``get_entries`` must group requests by
+        ``zim_file_path`` and open each archive once for the whole group,
+        rather than re-opening per entry through ``get_zim_entry``.
+        """
+        from contextlib import contextmanager
+
+        import openzim_mcp.zim_operations as zo_mod
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.write_text("test content")
+
+        opens: list[Path] = []
+        original = zo_mod.zim_archive
+
+        @contextmanager
+        def tracking(path, *args, **kwargs):
+            opens.append(path)
+            archive_instance = MagicMock()
+            entry = MagicMock()
+            entry.is_redirect = False
+            entry.path = "A/Entry"
+            entry.title = "Entry"
+            item = MagicMock()
+            item.mimetype = "text/html"
+            item.content = b"<html><body><p>x</p></body></html>"
+            entry.get_item.return_value = item
+            archive_instance.get_entry_by_path.return_value = entry
+            yield archive_instance
+
+        monkeypatch.setattr(zo_mod, "zim_archive", tracking)
+
+        # Four entries from the same ZIM file
+        entries = [
+            {"zim_file_path": str(zim_file), "entry_path": f"A/E{i}"} for i in range(4)
+        ]
+        zim_operations.get_entries(entries)
+
+        assert (
+            len(opens) == 1
+        ), f"opened archive {len(opens)} times for one file, expected 1"
+        # Sanity: original is unchanged so other tests still work
+        assert zo_mod.zim_archive is tracking
+        # Avoid lint warning about unused
+        _ = original
+
+    def test_get_entries_groups_by_zim_file(
+        self,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+        monkeypatch,
+    ):
+        """Two ZIM files in the input should each be opened exactly once."""
+        from contextlib import contextmanager
+
+        import openzim_mcp.zim_operations as zo_mod
+
+        zim_a = temp_dir / "a.zim"
+        zim_a.write_text("aaa")
+        zim_b = temp_dir / "b.zim"
+        zim_b.write_text("bbb")
+
+        opens: list[Path] = []
+
+        @contextmanager
+        def tracking(path, *args, **kwargs):
+            opens.append(path)
+            archive_instance = MagicMock()
+            entry = MagicMock()
+            entry.is_redirect = False
+            entry.path = "A/Entry"
+            entry.title = "Entry"
+            item = MagicMock()
+            item.mimetype = "text/html"
+            item.content = b"<p>x</p>"
+            entry.get_item.return_value = item
+            archive_instance.get_entry_by_path.return_value = entry
+            yield archive_instance
+
+        monkeypatch.setattr(zo_mod, "zim_archive", tracking)
+
+        # 3 entries in a.zim, 2 in b.zim — interleaved input order to verify
+        # grouping doesn't depend on adjacency.
+        entries = [
+            {"zim_file_path": str(zim_a), "entry_path": "A/1"},
+            {"zim_file_path": str(zim_b), "entry_path": "A/1"},
+            {"zim_file_path": str(zim_a), "entry_path": "A/2"},
+            {"zim_file_path": str(zim_b), "entry_path": "A/2"},
+            {"zim_file_path": str(zim_a), "entry_path": "A/3"},
+        ]
+        zim_operations.get_entries(entries)
+
+        assert (
+            len(opens) == 2
+        ), f"expected one open per file (2), got {len(opens)}: {opens}"

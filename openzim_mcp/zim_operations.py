@@ -478,7 +478,8 @@ class ZimOperations:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
+        # Cheap response cache check: a hit avoids opening the archive
+        # entirely, which is the whole point of caching here.
         cache_key = (
             f"entry:{validated_path}:{entry_path}:"
             f"{max_content_length}:{content_offset}"
@@ -490,22 +491,13 @@ class ZimOperations:
 
         try:
             with zim_archive(validated_path) as archive:
-                result, content_ok = self._get_entry_content(
+                return self._get_zim_entry_from_archive(
                     archive,
+                    validated_path,
                     entry_path,
                     max_content_length,
-                    validated_path,
                     content_offset,
                 )
-
-            # Only cache successful content retrieval. If process_mime_content
-            # raised and we returned an error sentinel, recompute on the next
-            # request rather than locking the failure in for the TTL.
-            if content_ok:
-                self.cache.set(cache_key, result)
-            logger.info(f"Retrieved entry: {entry_path}")
-            return result
-
         except OpenZimMcpArchiveError:
             # Re-raise OpenZimMcpArchiveError with enhanced guidance messages
             raise
@@ -516,6 +508,54 @@ class ZimOperations:
                 f"This may be due to file access issues or ZIM file corruption. "
                 f"Try using search_zim_file() to verify the file is accessible."
             ) from e
+
+    def _get_zim_entry_from_archive(
+        self,
+        archive: Archive,
+        validated_path: Path,
+        entry_path: str,
+        max_content_length: int,
+        content_offset: int = 0,
+    ) -> str:
+        """Retrieve and format a single entry against an already-open archive.
+
+        Splits the open-archive concern out of ``get_zim_entry`` so batch
+        callers (``get_entries``) can reuse one open archive across many
+        entries from the same ZIM file.
+
+        Honours the same response cache as ``get_zim_entry``: a cache hit
+        returns the formatted text without touching the archive; misses are
+        populated on success.
+        """
+        # Response cache: also checked here so batch callers benefit from
+        # already-cached entries without re-rendering. ``get_zim_entry``
+        # checks before opening the archive; this check covers the case
+        # where the archive is already open (batch call) and a different
+        # entry within the same ZIM file was previously cached.
+        cache_key = (
+            f"entry:{validated_path}:{entry_path}:"
+            f"{max_content_length}:{content_offset}"
+        )
+        cached_result = self.cache.get(cache_key)
+        if cached_result:
+            logger.debug(f"Returning cached entry: {entry_path}")
+            return cached_result  # type: ignore[no-any-return]
+
+        result, content_ok = self._get_entry_content(
+            archive,
+            entry_path,
+            max_content_length,
+            validated_path,
+            content_offset,
+        )
+
+        # Only cache successful content retrieval. If process_mime_content
+        # raised and we returned an error sentinel, recompute on the next
+        # request rather than locking the failure in for the TTL.
+        if content_ok:
+            self.cache.set(cache_key, result)
+        logger.info(f"Retrieved entry: {entry_path}")
+        return result
 
     def get_entries(
         self,
@@ -548,37 +588,110 @@ class ZimOperations:
                 "split into multiple batches"
             )
 
-        results: List[Dict[str, Any]] = []
-        succeeded = 0
-        failed = 0
+        # Resolve the per-entry max length once — the same default applies to
+        # every entry in the batch, so honour it here rather than re-resolving
+        # inside _get_zim_entry_from_archive.
+        if max_content_length is None:
+            max_content_length = self.config.content.max_content_length
+
+        # Group input entries by zim_file_path so we open each archive once
+        # for the whole group. Preserve the original input index on every
+        # entry so we can emit results in input order even after grouping.
+        groups: Dict[str, List[Tuple[int, str, str]]] = {}
         for index, entry in enumerate(entries):
             zim_file_path = entry.get("zim_file_path", "")
             entry_path = entry.get("entry_path", "")
+            groups.setdefault(zim_file_path, []).append(
+                (index, zim_file_path, entry_path)
+            )
+
+        results: List[Dict[str, Any]] = []
+        succeeded = 0
+        failed = 0
+
+        for zim_file_path, group in groups.items():
+            # Validate the path once per file. If validation itself fails,
+            # every entry in this group fails with the same error rather
+            # than spending an archive open per entry.
             try:
-                content = self.get_zim_entry(
-                    zim_file_path, entry_path, max_content_length, 0
-                )
-                results.append(
-                    {
-                        "index": index,
-                        "zim_file_path": zim_file_path,
-                        "entry_path": entry_path,
-                        "success": True,
-                        "content": content,
-                    }
-                )
-                succeeded += 1
-            except Exception as e:  # noqa: BLE001 - per-entry isolation by design
-                results.append(
-                    {
-                        "index": index,
-                        "zim_file_path": zim_file_path,
-                        "entry_path": entry_path,
-                        "success": False,
-                        "error": str(e),
-                    }
-                )
-                failed += 1
+                validated_path = self.path_validator.validate_path(zim_file_path)
+                validated_path = self.path_validator.validate_zim_file(validated_path)
+            except Exception as e:  # noqa: BLE001 - per-group isolation
+                for index, zfp, entry_path in group:
+                    results.append(
+                        {
+                            "index": index,
+                            "zim_file_path": zfp,
+                            "entry_path": entry_path,
+                            "success": False,
+                            "error": str(e),
+                        }
+                    )
+                    failed += 1
+                continue
+
+            # Open the archive once for the whole group. If even opening
+            # fails, mark every entry in this group as failed without trying
+            # again — the failure is per-file, not per-entry.
+            try:
+                archive_cm = zim_archive(validated_path)
+                archive = archive_cm.__enter__()
+            except Exception as e:  # noqa: BLE001 - per-group isolation
+                for index, zfp, entry_path in group:
+                    results.append(
+                        {
+                            "index": index,
+                            "zim_file_path": zfp,
+                            "entry_path": entry_path,
+                            "success": False,
+                            "error": str(e),
+                        }
+                    )
+                    failed += 1
+                continue
+
+            try:
+                for index, zfp, entry_path in group:
+                    try:
+                        content = self._get_zim_entry_from_archive(
+                            archive,
+                            validated_path,
+                            entry_path,
+                            max_content_length,
+                            0,
+                        )
+                        results.append(
+                            {
+                                "index": index,
+                                "zim_file_path": zfp,
+                                "entry_path": entry_path,
+                                "success": True,
+                                "content": content,
+                            }
+                        )
+                        succeeded += 1
+                    except (
+                        Exception
+                    ) as e:  # noqa: BLE001 - per-entry isolation by design
+                        results.append(
+                            {
+                                "index": index,
+                                "zim_file_path": zfp,
+                                "entry_path": entry_path,
+                                "success": False,
+                                "error": str(e),
+                            }
+                        )
+                        failed += 1
+            finally:
+                # Match contextmanager exit semantics: pass None tuple on
+                # clean exit so the underlying generator runs its `finally`.
+                with suppress(Exception):
+                    archive_cm.__exit__(None, None, None)
+
+        # Sort back into input order so callers see results in the order
+        # they submitted entries (grouping is a transparent optimisation).
+        results.sort(key=lambda r: r["index"])
 
         return json.dumps(
             {"results": results, "succeeded": succeeded, "failed": failed},
@@ -1815,19 +1928,33 @@ class ZimOperations:
         if total_results == 0:
             return f'No search results found for "{query}"', 0
 
-        # Stream raw results in batches and filter as we go, stopping once
-        # we have enough filtered matches to satisfy offset+limit or we
-        # exceed a generous scan cap. This avoids the previous "first 1000
-        # hits" cliff where a rare filter (e.g. image/png on an HTML corpus)
-        # returned 0 even when matches existed deeper in the result list.
+        # Stream raw results in batches and filter as we go, applying a
+        # **skip counter** so the offset window is never materialised. The
+        # old implementation accumulated ``offset + limit`` Entry objects in
+        # memory and called ``get_entry_by_path`` for every candidate in
+        # that window before slicing — pathological for high offsets
+        # (e.g. ``offset=9900, limit=100`` materialised ~10k entries to
+        # return 100). The new pattern only materialises entries we will
+        # actually emit (the ``limit``-sized page after ``offset``).
         BATCH_SIZE = 500
         MAX_SCAN = 10000  # bound memory and CPU for pathological queries
-        target_filtered = offset + limit
-        filtered_results: List[Tuple[str, Any, str, str]] = []
+
+        # Running count of entries that pass all filters. Used both to skip
+        # the offset window and as the response's reported ``total_filtered``
+        # — equivalent to the old ``len(filtered_results)``.
+        filtered_count = 0
+        # Page entries we will format and return. Capped at ``limit``.
+        page: List[Tuple[str, Any, str, str]] = []
         scanned = 0
         scan_cap_hit = False
 
-        while scanned < total_results and len(filtered_results) < target_filtered:
+        # When namespace-only filtering is active (no content_type), we can
+        # derive the entry namespace from the search-result path string
+        # itself without paying for ``get_entry_by_path``. That eliminates
+        # archive lookups for skipped entries entirely.
+        need_entry_for_filter = bool(content_type)
+
+        while scanned < total_results and len(page) < limit:
             if scanned >= MAX_SCAN:
                 scan_cap_hit = True
                 break
@@ -1838,15 +1965,44 @@ class ZimOperations:
                 break
 
             for entry_id in batch:
+                # Cheap namespace filter from the path string. ``entry_id``
+                # is the path libzim returned; resolved entry.path may
+                # differ across redirects, but namespace agreement holds in
+                # practice (redirects within the same namespace are the
+                # common case; for cross-namespace redirects we accept the
+                # resolved entry's namespace below when we materialise).
+                if "/" in entry_id:
+                    cheap_namespace = entry_id.split("/", 1)[0]
+                elif entry_id:
+                    cheap_namespace = entry_id[0]
+                else:
+                    cheap_namespace = ""
+
+                if namespace and cheap_namespace != namespace:
+                    continue
+
+                # If the only filter was namespace and we haven't reached
+                # the offset yet, count without materialising the entry.
+                if not need_entry_for_filter and filtered_count < offset:
+                    filtered_count += 1
+                    continue
+
+                # Materialise the entry — needed either for the
+                # content_type filter or because we're in the page window.
                 try:
                     entry = archive.get_entry_by_path(entry_id)
 
+                    # Use the resolved ``entry.path`` for the response so
+                    # the namespace shown matches what libzim actually
+                    # surfaces (handles cross-namespace redirects).
                     entry_namespace = ""
                     if "/" in entry.path:
                         entry_namespace = entry.path.split("/", 1)[0]
                     elif entry.path:
                         entry_namespace = entry.path[0]
 
+                    # Re-check namespace after redirect resolution — a
+                    # redirect may have crossed namespaces.
                     if namespace and entry_namespace != namespace:
                         continue
 
@@ -1859,19 +2015,27 @@ class ZimOperations:
                         except Exception:  # nosec B112 - intentional filter skip
                             continue
 
-                    filtered_results.append(
-                        (entry_id, entry, entry_namespace, content_mime)
-                    )
-
                 except Exception as e:
                     logger.warning(f"Error filtering search result {entry_id}: {e}")
                     continue
+
+                # This entry passes all filters — count it and decide
+                # whether to keep it on the response page.
+                filtered_count += 1
+                if filtered_count > offset and len(page) < limit:
+                    page.append((entry_id, entry, entry_namespace, content_mime))
+                    if len(page) >= limit:
+                        # Got the full page; stop scanning.
+                        break
 
         # Preserve the legacy "results_capped" semantics for the message —
         # true if there are more raw results we haven't scanned.
         results_capped = scan_cap_hit or scanned < total_results
         raw_fetch_limit = scanned  # what we actually scanned
-        total_filtered = len(filtered_results)
+        # ``total_filtered`` mirrors the old ``len(filtered_results)`` —
+        # the count of filter-passing entries we observed. Callers cache
+        # the response only when this is non-zero.
+        total_filtered = filtered_count
 
         filters_applied = []
         if namespace:
@@ -1891,13 +2055,9 @@ class ZimOperations:
                 f"but offset {offset} exceeds total results."
             ), total_filtered
 
-        paginated_results = filtered_results[offset : offset + limit]
-
         # Collect detailed results, reusing the entries already fetched above.
         results = []
-        for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(
-            paginated_results
-        ):
+        for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
             try:
                 title = entry.title or "Untitled"
                 snippet = self._get_entry_snippet(entry)
