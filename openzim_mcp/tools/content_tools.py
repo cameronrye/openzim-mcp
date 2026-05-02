@@ -129,6 +129,21 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
         """
         batch_size = len(entries) if entries else 0
         try:
+            # Validate batch size BEFORE charging the per-entry rate limit:
+            # otherwise a 50_000-entry oversized batch would burn 50_000
+            # rate-limit slots before being rejected, effectively flooding
+            # the rate counter for the rejecting client.
+            from ..constants import MAX_BATCH_SIZE
+            from ..exceptions import OpenZimMcpValidationError
+
+            if batch_size == 0:
+                raise OpenZimMcpValidationError("entries list cannot be empty")
+            if batch_size > MAX_BATCH_SIZE:
+                raise OpenZimMcpValidationError(
+                    f"batch size {batch_size} exceeds limit {MAX_BATCH_SIZE}; "
+                    "split into multiple batches"
+                )
+
             # Charge rate-limit per entry to prevent batch bypass.
             try:
                 for _ in entries or []:

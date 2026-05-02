@@ -28,16 +28,21 @@ NON_NAVIGABLE_LINK_SCHEMES = (
 def _slugify_heading(text: str) -> str:
     """Generate a stable, URL-safe slug from heading text.
 
-    MediaWiki/MDN-style: NFKD-normalised, lowercased, non-alphanumeric runs
-    collapsed to single hyphens, leading/trailing hyphens stripped. Returns
-    "" for empty/whitespace input so callers can decide how to handle.
+    MediaWiki/MDN-style: NFKC-normalised, lowercased, whitespace collapsed
+    to hyphens, characters that aren't word characters or hyphens stripped,
+    leading/trailing hyphens removed. Unicode word characters (Arabic,
+    Chinese, Cyrillic, Japanese, etc.) are preserved — the previous
+    NFKD + ASCII-encode approach silently dropped non-Latin scripts and
+    broke TOC anchors for the majority of Wikipedia ZIM files by language.
+    Returns "" for empty/whitespace input so callers can decide how to
+    handle.
     """
     if not text:
         return ""
-    normalised = unicodedata.normalize("NFKD", text)
-    ascii_text = normalised.encode("ascii", "ignore").decode("ascii")
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_text).strip("-").lower()
-    return slug
+    text = unicodedata.normalize("NFKC", text).strip().lower()
+    text = re.sub(r"\s+", "-", text)
+    text = re.sub(r"[^\w\-]", "", text, flags=re.UNICODE)
+    return text.strip("-")
 
 
 def resolve_heading_id(heading: Tag) -> Tuple[str, str]:
@@ -414,12 +419,25 @@ class ContentProcessor:
             # the document, breaking the position contract and the implicit
             # alignment with the sections list built below (which DOES walk the
             # tree in document order).
+            #
+            # Collision disambiguation: when two headings share the same
+            # synthetic slug (e.g. three "Intro" h1s), MediaWiki appends
+            # ``_2``, ``_3`` to keep anchors unique. Mirror that. Explicit
+            # author-provided ids (``id_source != "slug"``) pass through
+            # untouched — disambiguating real anchors would silently break
+            # cross-page links.
             headings: List[Dict[str, Any]] = []
+            slug_counts: Dict[str, int] = {}
             for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
                 if isinstance(heading, Tag) and heading.name:
                     text = heading.get_text().strip()
                     if text:
                         anchor_id, id_source = resolve_heading_id(heading)
+                        if anchor_id and id_source == "slug":
+                            count = slug_counts.get(anchor_id, 0) + 1
+                            slug_counts[anchor_id] = count
+                            if count > 1:
+                                anchor_id = f"{anchor_id}_{count}"
                         headings.append(
                             {
                                 "level": int(heading.name[1]),

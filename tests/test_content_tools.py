@@ -100,6 +100,94 @@ class TestGetZimEntryTool:
         assert "Test error" in str(exc_info.value)
 
 
+class TestGetZimEntriesBatchValidation:
+    """Batch-size validation must run before per-entry rate-limit charging."""
+
+    @pytest.fixture
+    def advanced_server(self, temp_dir):
+        """Create a server in advanced mode with batch tool registered."""
+        from openzim_mcp.config import CacheConfig, OpenZimMcpConfig
+
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        return OpenZimMcpServer(config)
+
+    @pytest.mark.asyncio
+    async def test_oversized_batch_does_not_charge_rate_limit(
+        self, advanced_server, temp_dir
+    ):
+        """An oversized batch must be rejected without per-entry rate charges.
+
+        Previously, the per-entry rate-limit loop ran first; an N-entry batch
+        ate N rate-limit slots before the size check rejected it. The size
+        check must run first so a single oversized batch costs at most one
+        validation, not N.
+        """
+        from openzim_mcp.constants import MAX_BATCH_SIZE
+
+        rl_calls = []
+
+        def record_rl(*args, **kwargs):
+            rl_calls.append(args)
+
+        advanced_server.rate_limiter.check_rate_limit = MagicMock(side_effect=record_rl)
+        # Backend should not be called at all.
+        advanced_server.async_zim_operations.get_entries = AsyncMock(
+            side_effect=AssertionError("backend should not be reached")
+        )
+
+        oversized = [
+            {"zim_file_path": str(temp_dir / "x.zim"), "entry_path": f"A/E{i}"}
+            for i in range(MAX_BATCH_SIZE + 100)
+        ]
+
+        tools = advanced_server.mcp._tool_manager._tools
+        assert "get_zim_entries" in tools
+        tool_handler = tools["get_zim_entries"].fn
+        result = await tool_handler(entries=oversized)
+
+        # Validation/error message returned to caller.
+        assert "exceeds" in result.lower() or "batch size" in result.lower()
+        # No rate-limit charges incurred.
+        assert len(rl_calls) == 0, (
+            f"expected 0 rate-limit calls before size validation, "
+            f"got {len(rl_calls)}"
+        )
+        # Backend not invoked.
+        advanced_server.async_zim_operations.get_entries.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_batch_still_charges_per_entry_rate_limit(
+        self, advanced_server, temp_dir
+    ):
+        """A correctly-sized batch must still charge per-entry (anti-bypass)."""
+        rl_calls = []
+
+        def record_rl(*args, **kwargs):
+            rl_calls.append(args)
+
+        advanced_server.rate_limiter.check_rate_limit = MagicMock(side_effect=record_rl)
+        advanced_server.async_zim_operations.get_entries = AsyncMock(
+            return_value='{"results": [], "succeeded": 0, "failed": 0}'
+        )
+
+        entries = [
+            {"zim_file_path": str(temp_dir / "x.zim"), "entry_path": f"A/E{i}"}
+            for i in range(3)
+        ]
+
+        tools = advanced_server.mcp._tool_manager._tools
+        assert "get_zim_entries" in tools
+        tool_handler = tools["get_zim_entries"].fn
+        await tool_handler(entries=entries)
+
+        # One charge per entry.
+        assert len(rl_calls) == 3
+
+
 class TestInputSanitization:
     """Test input sanitization in content tools."""
 

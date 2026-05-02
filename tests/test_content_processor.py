@@ -364,3 +364,87 @@ async def test_html_to_plain_text_is_thread_safe(
         assert f"Body {i}" in out, f"output {i} corrupted: {out!r}"
         assert f"code-block-{i}" in out, f"output {i} corrupted: {out!r}"
         assert f"Trailer {i}" in out, f"output {i} corrupted: {out!r}"
+
+
+class TestSlugifyHeading:
+    """Test heading slug generation, including non-Latin scripts."""
+
+    @pytest.mark.parametrize(
+        "heading,expected_substring",
+        [
+            ("简介", "简介"),
+            ("Введение", "введение"),
+            ("مقدمة", "مقدمة"),
+            ("はじめに", "はじめに"),
+            ("Hello World!", "hello-world"),
+            ("Étude française", "étude-française"),
+        ],
+    )
+    def test_slugify_heading_preserves_unicode(
+        self, heading: str, expected_substring: str
+    ):
+        """Non-Latin scripts must produce non-empty slugs containing the text.
+
+        The previous NFKD + ASCII-encode approach silently dropped Arabic,
+        Chinese, Cyrillic, Japanese, etc. — yielding empty slugs and broken
+        TOC anchors for the majority of Wikipedia ZIM files by language.
+        """
+        from openzim_mcp.content_processor import _slugify_heading
+
+        slug = _slugify_heading(heading)
+        assert slug, f"empty slug for {heading!r}"
+        assert expected_substring in slug, (
+            f"expected {expected_substring!r} in slug {slug!r} "
+            f"for heading {heading!r}"
+        )
+
+    def test_slugify_heading_empty_input(self):
+        """Empty/whitespace input returns empty string for caller fallback."""
+        from openzim_mcp.content_processor import _slugify_heading
+
+        assert _slugify_heading("") == ""
+        assert _slugify_heading("   ") == ""
+
+    def test_slugify_heading_strips_punctuation(self):
+        """Punctuation collapses to hyphens; leading/trailing hyphens stripped."""
+        from openzim_mcp.content_processor import _slugify_heading
+
+        assert _slugify_heading("Hello, World!") == "hello-world"
+        assert _slugify_heading("  Spaces  Around  ") == "spaces-around"
+
+    def test_slugify_heading_deterministic(self):
+        """Same input must always produce the same output."""
+        from openzim_mcp.content_processor import _slugify_heading
+
+        text = "Some Heading Title 测试"
+        assert _slugify_heading(text) == _slugify_heading(text)
+
+    def test_extract_structure_disambiguates_duplicate_heading_slugs(
+        self, content_processor: ContentProcessor
+    ):
+        """Identical headings get _2, _3 disambiguation suffixes (MediaWiki-style)."""
+        html = (
+            "<html><body>"
+            "<h1>Intro</h1>"
+            "<h1>Intro</h1>"
+            "<h1>Intro</h1>"
+            "</body></html>"
+        )
+        structure = content_processor.extract_html_structure(html)
+        ids = [h["id"] for h in structure["headings"]]
+        assert ids == ["intro", "intro_2", "intro_3"]
+
+    def test_extract_structure_does_not_disambiguate_explicit_ids(
+        self, content_processor: ContentProcessor
+    ):
+        """Explicit heading ids should pass through unchanged (no _2 suffix)."""
+        html = (
+            "<html><body>"
+            '<h1 id="real-anchor">Intro</h1>'
+            "<h1>Other</h1>"
+            "</body></html>"
+        )
+        structure = content_processor.extract_html_structure(html)
+        ids = [h["id"] for h in structure["headings"]]
+        assert ids[0] == "real-anchor"
+        assert ids[1] == "other"

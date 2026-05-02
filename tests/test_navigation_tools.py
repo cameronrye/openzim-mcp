@@ -516,3 +516,104 @@ class TestNavigationToolsDirectInvocation:
                 partial_query="test",
             )
             assert "Error" in result or "error" in result.lower()
+
+
+class TestWalkNamespaceLimitValidation:
+    """walk_namespace must enforce its documented 1-500 limit bound."""
+
+    @pytest.fixture
+    def advanced_server(self, temp_dir):
+        """Create a server in advanced mode."""
+        from openzim_mcp.config import CacheConfig, OpenZimMcpConfig
+
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        return OpenZimMcpServer(config)
+
+    @pytest.mark.asyncio
+    async def test_walk_namespace_rejects_limit_too_high(
+        self, advanced_server, temp_dir
+    ):
+        """Reject limit > 500 with a validation error before backend access."""
+        # Backend should never be reached; raise loudly if it is.
+        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+            side_effect=AssertionError("backend should not be called for invalid limit")
+        )
+
+        tools = advanced_server.mcp._tool_manager._tools
+        assert "walk_namespace" in tools
+        tool_handler = tools["walk_namespace"].fn
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            namespace="C",
+            cursor=0,
+            limit=100000,
+        )
+        assert "must be between 1 and 500" in result
+        advanced_server.async_zim_operations.walk_namespace.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_walk_namespace_rejects_limit_too_low(
+        self, advanced_server, temp_dir
+    ):
+        """Reject limit < 1 with a validation error."""
+        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+            side_effect=AssertionError("backend should not be called for invalid limit")
+        )
+
+        tools = advanced_server.mcp._tool_manager._tools
+        assert "walk_namespace" in tools
+        tool_handler = tools["walk_namespace"].fn
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            namespace="C",
+            cursor=0,
+            limit=0,
+        )
+        assert "must be between 1 and 500" in result
+        advanced_server.async_zim_operations.walk_namespace.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_walk_namespace_rejects_negative_cursor(
+        self, advanced_server, temp_dir
+    ):
+        """Negative cursor must produce a validation error."""
+        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+            side_effect=AssertionError(
+                "backend should not be called for invalid cursor"
+            )
+        )
+
+        tools = advanced_server.mcp._tool_manager._tools
+        assert "walk_namespace" in tools
+        tool_handler = tools["walk_namespace"].fn
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            namespace="C",
+            cursor=-1,
+            limit=200,
+        )
+        assert "must be non-negative" in result
+        advanced_server.async_zim_operations.walk_namespace.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_walk_namespace_accepts_valid_bounds(self, advanced_server, temp_dir):
+        """Valid limit/cursor must reach the backend."""
+        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+            return_value='{"entries": [], "next_cursor": 200, "done": false}'
+        )
+
+        tools = advanced_server.mcp._tool_manager._tools
+        assert "walk_namespace" in tools
+        tool_handler = tools["walk_namespace"].fn
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            namespace="C",
+            cursor=0,
+            limit=200,
+        )
+        assert "entries" in result
+        advanced_server.async_zim_operations.walk_namespace.assert_called_once()
