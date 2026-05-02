@@ -125,6 +125,19 @@ class ParsedHTML:
 class ContentProcessor:
     """Handles HTML to text conversion and content processing."""
 
+    # Configuration for the per-call ``html2text.HTML2Text`` converter.
+    # ``HTML2Text`` keeps mutable parser state on ``self`` (``out``,
+    # ``outtextlist``, ``style``, ``pre``, ...), so a single shared instance
+    # is not safe to reuse across ``asyncio.to_thread`` calls — concurrent
+    # ``handle()`` invocations corrupt each other's output. We instead build
+    # a fresh converter per call (constructor is pure-Python and cheap) and
+    # apply these settings to it.
+    _HTML_IGNORE_LINKS = False
+    _HTML_IGNORE_IMAGES = True
+    _HTML_IGNORE_TABLES = False
+    _HTML_UNICODE_SNOB = True  # Use Unicode instead of ASCII
+    _HTML_BODY_WIDTH = 0  # No line wrapping
+
     def __init__(self, snippet_length: int = DEFAULT_SNIPPET_LENGTH):
         """
         Initialize content processor.
@@ -133,19 +146,22 @@ class ContentProcessor:
             snippet_length: Maximum length for content snippets
         """
         self.snippet_length = snippet_length
-        self._html_converter = self._create_html_converter()
         logger.debug(
             f"ContentProcessor initialized with snippet_length={snippet_length}"
         )
 
     def _create_html_converter(self) -> html2text.HTML2Text:
-        """Create and configure HTML to text converter."""
+        """Create and configure a fresh HTML to text converter.
+
+        A new instance is returned on every call so concurrent callers do
+        not share the converter's mutable parser state.
+        """
         converter = html2text.HTML2Text()
-        converter.ignore_links = False
-        converter.ignore_images = True
-        converter.ignore_tables = False
-        converter.unicode_snob = True  # Use Unicode instead of ASCII
-        converter.body_width = 0  # No line wrapping
+        converter.ignore_links = self._HTML_IGNORE_LINKS
+        converter.ignore_images = self._HTML_IGNORE_IMAGES
+        converter.ignore_tables = self._HTML_IGNORE_TABLES
+        converter.unicode_snob = self._HTML_UNICODE_SNOB
+        converter.body_width = self._HTML_BODY_WIDTH
         return converter
 
     def parse_html(self, html_content: str) -> ParsedHTML:
@@ -188,8 +204,9 @@ class ContentProcessor:
                 for element in soup.select(selector):
                     element.decompose()
 
-            # Convert to text using html2text
-            text = self._html_converter.handle(str(soup))
+            # Convert to text using a per-call ``HTML2Text`` so concurrent
+            # callers cannot corrupt each other's parser state.
+            text = self._create_html_converter().handle(str(soup))
 
             # Clean up excess empty lines
             text = re.sub(r"\n{3,}", "\n\n", text)
@@ -223,8 +240,9 @@ class ContentProcessor:
                 for element in soup.select(selector):
                     element.decompose()
 
-            # Convert to text using html2text
-            text = self._html_converter.handle(str(soup))
+            # Convert to text using a per-call ``HTML2Text`` so concurrent
+            # callers cannot corrupt each other's parser state.
+            text = self._create_html_converter().handle(str(soup))
 
             # Clean up excess empty lines
             text = re.sub(r"\n{3,}", "\n\n", text)

@@ -1,5 +1,10 @@
 """Tests for content processor module."""
 
+import asyncio
+import sys
+
+import pytest
+
 from openzim_mcp.content_processor import ContentProcessor
 
 
@@ -313,3 +318,49 @@ class TestContentProcessor:
         assert len(links_data["internal_links"]) == 0
         assert len(links_data["external_links"]) == 0
         assert len(links_data["media_links"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_html_to_plain_text_is_thread_safe(
+    content_processor: ContentProcessor,
+) -> None:
+    """Concurrent conversions must not interleave their state.
+
+    ``html2text.HTML2Text`` accumulates parser state on ``self`` (``out``,
+    ``outtextlist``, ``style``, ``pre``, etc.). Sharing one instance across
+    threads lets one thread's state bleed into another's output. This test
+    runs many concurrent conversions over moderately complex HTML and
+    tightens the GIL switch interval so the interleaving window is wide
+    enough to catch leakage in CI.
+    """
+    # Each document carries a unique marker plus enough structural variety
+    # (lists, links, code blocks) to keep html2text inside its handle()
+    # state machine across multiple GIL release points.
+    distinctive_html = [
+        (
+            f"<html><body>"
+            f"<h1>Article {i}</h1>"
+            f"<p>Body {i} with <a href='/p/{i}'>link {i}</a>.</p>"
+            f"<ul><li>item-{i}-a</li><li>item-{i}-b</li></ul>"
+            f"<pre><code>code-block-{i}</code></pre>"
+            f"<p>Trailer {i}.</p>"
+            f"</body></html>"
+        )
+        for i in range(2000)
+    ]
+
+    async def convert(html: str) -> str:
+        return await asyncio.to_thread(content_processor.html_to_plain_text, html)
+
+    original_interval = sys.getswitchinterval()
+    sys.setswitchinterval(0.0001)
+    try:
+        outs = await asyncio.gather(*(convert(h) for h in distinctive_html))
+    finally:
+        sys.setswitchinterval(original_interval)
+
+    for i, out in enumerate(outs):
+        assert f"Article {i}" in out, f"output {i} corrupted: {out!r}"
+        assert f"Body {i}" in out, f"output {i} corrupted: {out!r}"
+        assert f"code-block-{i}" in out, f"output {i} corrupted: {out!r}"
+        assert f"Trailer {i}" in out, f"output {i} corrupted: {out!r}"
