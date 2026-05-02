@@ -185,7 +185,10 @@ class MtimeWatcher:
         Extracted from the polling loop so tests can drive a single pass
         deterministically without depending on sleep/scheduler timing.
         """
-        new_snap = self._scan()
+        # ``_scan`` runs ``os.scandir`` + ``stat`` syscalls that block on
+        # network-mounted filesystems and under inode pressure. Offload
+        # to a thread so the event loop keeps making progress.
+        new_snap = await asyncio.to_thread(self._scan)
         added = set(new_snap) - set(self._snapshot)
         removed = set(self._snapshot) - set(new_snap)
         # Trigger on size OR mtime change. The earlier policy of size-only
@@ -230,6 +233,22 @@ class MtimeWatcher:
 SEND_TIMEOUT_SECONDS: float = TIMEOUTS.SUBSCRIPTION_SEND_SECONDS
 
 
+async def _safe_clear_session(registry: "SubscriberRegistry", session: Any) -> None:
+    """Drop ``session`` from the registry, logging (but swallowing) failures.
+
+    ``gather(..., return_exceptions=True)`` discards exceptions from
+    ``_send_one``, so a raise in ``clear_session`` would silently leave a
+    dead session in the registry — every subsequent broadcast would burn
+    ``SEND_TIMEOUT_SECONDS`` on it. Catching here keeps the registry in
+    sync even if the inner ``asyncio.Lock`` acquisition raises (e.g. lock
+    contention during shutdown).
+    """
+    try:
+        await registry.clear_session(session)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("clear_session failed during fan-out cleanup: %s", e)
+
+
 async def _send_one(
     registry: "SubscriberRegistry",
     session: Any,
@@ -246,10 +265,10 @@ async def _send_one(
             "send_resource_updated timed out after %ss; dropping session",
             SEND_TIMEOUT_SECONDS,
         )
-        await registry.clear_session(session)
+        await _safe_clear_session(registry, session)
     except Exception as e:  # noqa: BLE001 - drop on any send failure
         logger.warning("send_resource_updated failed; dropping session: %s", e)
-        await registry.clear_session(session)
+        await _safe_clear_session(registry, session)
 
 
 async def broadcast_resource_updated(
