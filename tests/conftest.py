@@ -239,6 +239,12 @@ def pytest_configure(config):
     )
     config.addinivalue_line("markers", "integration: mark test as integration test")
     config.addinivalue_line("markers", "slow: mark test as slow running")
+    config.addinivalue_line(
+        "markers",
+        "live: mark test as spawning a real openzim-mcp subprocess "
+        "(binds loopback ports; deselected unless explicitly requested via "
+        "`-m live` or `make test-live`)",
+    )
 
 
 def pytest_collection_modifyitems(config, items):

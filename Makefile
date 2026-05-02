@@ -1,6 +1,6 @@
 # OpenZIM MCP Development Makefile
 
-.PHONY: help install install-dev install-hooks setup-dev check-tools test test-cov test-with-zim-data test-integration test-requires-zim-data benchmark lint format type-check security download-test-data download-test-data-all list-test-data clean clean-test-data build publish publish-test run check ci
+.PHONY: help install install-dev install-hooks setup-dev check-tools test test-cov test-with-zim-data test-integration test-requires-zim-data test-live benchmark lint format type-check security download-test-data download-test-data-all list-test-data clean clean-test-data build publish publish-test run check ci
 
 help:  ## Show this help message
 	@uv run python scripts/generate_help.py
@@ -36,6 +36,9 @@ test-integration:  ## Run integration tests only
 
 test-requires-zim-data:  ## Run tests that require ZIM test data
 	@uv run python scripts/run_with_env.py ZIM_TEST_DATA_DIR=test_data/zim-testing-suite uv run pytest -m "requires_zim_data"
+
+test-live:  ## Run live-server tests (spawn real subprocesses; binds loopback ports)
+	uv run pytest -m live tests/live/ --no-cov
 
 benchmark:  ## Run performance benchmarks
 	@echo "Running performance benchmarks..."
