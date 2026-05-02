@@ -23,6 +23,13 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
 def _sanitize_for_prompt(value: str, max_length: int = 200) -> str:
     """Strip control characters and cap length before embedding in prompt text.
 
+    Quote characters (``'``, ``"``) are *preserved* — they appear in real
+    ZIM entry paths (e.g. ``C/Schrödinger's_cat``) and stripping them would
+    cause the LLM to call tools with the wrong path. Backticks ARE stripped
+    because the prompt templates wrap interpolated values in backticks (a
+    delimiter that never appears in legitimate ZIM URLs/paths) so that
+    quote-injection at the template boundary is impossible.
+
     Args:
         value: Raw user-supplied string.
         max_length: Maximum length to retain. Longer values are truncated and
@@ -33,7 +40,10 @@ def _sanitize_for_prompt(value: str, max_length: int = 200) -> str:
     """
     if not value:
         return value
-    cleaned = _CONTROL_CHARS_RE.sub(" ", value).strip()
+    cleaned = _CONTROL_CHARS_RE.sub(" ", value)
+    # Strip backticks only — apostrophes and double quotes appear in
+    # real entry paths and must survive.
+    cleaned = cleaned.replace("`", "").strip()
     if len(cleaned) > max_length:
         cleaned = cleaned[:max_length].rstrip() + "..."
     return cleaned
@@ -89,7 +99,7 @@ def _research_body(topic: str) -> List[Dict[str, Any]]:
             (
                 f"Research the topic: {safe_topic}\n\n"
                 "Workflow:\n"
-                f"1. Call search_all with query='{safe_topic}' to find which "
+                f"1. Call search_all with query=`{safe_topic}` to find which "
                 "ZIM files have relevant content.\n"
                 "2. For the top 3 hits across files, call get_entry_summary "
                 "to get a concise overview.\n"
@@ -122,12 +132,12 @@ def _summarize_body(zim_file_path: str, entry_path: str) -> List[Dict[str, Any]]
             (
                 f"Summarize the article: {safe_entry} in {safe_zim}\n\n"
                 "Workflow:\n"
-                f"1. Call get_table_of_contents('{safe_zim}', "
-                f"'{safe_entry}') for a structural overview.\n"
-                f"2. Call get_entry_summary('{safe_zim}', "
-                f"'{safe_entry}') for the lead-paragraph summary.\n"
-                f"3. Call extract_article_links('{safe_zim}', "
-                f"'{safe_entry}') for the most-mentioned related entries.\n\n"
+                f"1. Call get_table_of_contents(`{safe_zim}`, "
+                f"`{safe_entry}`) for a structural overview.\n"
+                f"2. Call get_entry_summary(`{safe_zim}`, "
+                f"`{safe_entry}`) for the lead-paragraph summary.\n"
+                f"3. Call extract_article_links(`{safe_zim}`, "
+                f"`{safe_entry}`) for the most-mentioned related entries.\n\n"
                 "Combine into: (a) one-paragraph TL;DR, (b) section list, "
                 "(c) 5–10 most relevant outbound links."
             ),
@@ -148,14 +158,14 @@ def _explore_body(zim_file_path: str) -> List[Dict[str, Any]]:
             (
                 f"Explore the ZIM file: {safe_zim}\n\n"
                 "Workflow:\n"
-                f"1. Call get_zim_metadata('{safe_zim}') for title, "
+                f"1. Call get_zim_metadata(`{safe_zim}`) for title, "
                 "language, creator, and flavour.\n"
-                f"2. Call list_namespaces('{safe_zim}') for namespace "
+                f"2. Call list_namespaces(`{safe_zim}`) for namespace "
                 "breakdown — note any minority namespaces (M, W, X) that "
                 "might be worth examining separately.\n"
-                f"3. Call get_main_page('{safe_zim}') for the entry "
+                f"3. Call get_main_page(`{safe_zim}`) for the entry "
                 "point.\n"
-                f"4. Call walk_namespace('{safe_zim}', 'C', limit=5) "
+                f"4. Call walk_namespace(`{safe_zim}`, `C`, limit=5) "
                 "to sample article content.\n\n"
                 "Then: present a compact briefing — what is this archive, "
                 "what does it cover, and what does typical content look "
