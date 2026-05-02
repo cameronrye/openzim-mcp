@@ -1,5 +1,8 @@
 """Tests for the per-entry zim:// resource."""
 
+import asyncio
+import contextlib
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -314,3 +317,64 @@ class TestPerEntryResource:
         ), f"NUL byte leaked through to libzim: {called_path!r}"
         # The non-control portion survives.
         assert called_path == "A/Foobar"
+
+    @pytest.mark.asyncio
+    async def test_resource_template_does_not_block_event_loop(
+        self, server, monkeypatch
+    ):
+        """create_resource must offload list_zim_files_data via to_thread.
+
+        H17: under HTTP/SSE with concurrent clients, a sync directory scan in
+        an async handler starves all other clients. Wrap in asyncio.to_thread
+        so the loop stays responsive while the directory scan runs.
+
+        We assert by counting heartbeats that fire *during* the blocking call.
+        If the loop is blocked, the heartbeat task can't tick at all until
+        create_resource returns, so we'd see <= 1 tick during a 0.5s call.
+        """
+        from openzim_mcp.tools.resource_tools import ZimEntryTemplate
+
+        # Force list_zim_files_data to take 0.5s synchronously so we can
+        # detect whether the event loop is blocked during the call.
+        def slow():
+            time.sleep(0.5)
+            return [{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+
+        monkeypatch.setattr(server.zim_operations, "list_zim_files_data", slow)
+
+        # Reuse the registered template instance (carries server_ref).
+        rm = server.mcp._resource_manager
+        template = rm._templates["zim://{name}/entry/{path}"]
+        assert isinstance(template, ZimEntryTemplate)
+
+        # Heartbeat ticks every 50ms. Records ticks observed by the time
+        # create_resource returns. If the loop is blocked the whole 0.5s,
+        # ticks will be ~0; if offloaded, ticks should be ~10.
+        ticks_during_call = 0
+
+        async def heartbeat() -> None:
+            nonlocal ticks_during_call
+            while True:
+                await asyncio.sleep(0.05)
+                ticks_during_call += 1
+
+        hb = asyncio.create_task(heartbeat())
+        # Yield once so the heartbeat task starts before we begin blocking.
+        await asyncio.sleep(0)
+        # We're testing event-loop responsiveness, not the success path,
+        # so swallow any error from create_resource.
+        with contextlib.suppress(Exception):
+            await template.create_resource(
+                "zim://wiki/entry/A%2FFoo",
+                {"name": "wiki", "path": "A%2FFoo"},
+            )
+        # Snapshot ticks before cancelling the heartbeat task.
+        observed = ticks_during_call
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+        # 0.5s blocking call / 50ms tick = ~10 ticks if non-blocking.
+        # Allow scheduling jitter; require at least 8/10.
+        assert (
+            observed >= 8
+        ), f"event loop was blocked: {observed} heartbeats fired during call"

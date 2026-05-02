@@ -21,6 +21,7 @@ registration time — so we register a custom ``ResourceTemplate`` /
 ``Resource`` pair directly on the resource manager.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -113,7 +114,12 @@ class ZimEntryTemplate(ResourceTemplate):
     ) -> Resource:
         """Resolve {name} → archive_path and build a ZimEntryResource."""
         name = params["name"]
-        files = self.server_ref.zim_operations.list_zim_files_data()
+        # list_zim_files_data does sync filesystem I/O (Path.glob + stat).
+        # Offload to a thread so concurrent HTTP/SSE clients don't block on
+        # one another while a directory scan runs.
+        files = await asyncio.to_thread(
+            self.server_ref.zim_operations.list_zim_files_data
+        )
         target_path: Optional[str] = None
         for f in files:
             stem = Path(f["path"]).stem
