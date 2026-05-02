@@ -55,3 +55,77 @@ class TestGetRelatedArticles:
             "/zim/test.zim", "C/Source", limit=0
         )
         assert "Parameter Validation Error" in result
+
+
+class TestResolveLinkToEntryPath:
+    """Test ``_resolve_link_to_entry_path`` static helper.
+
+    Trailing-slash handling matters: in domain-scheme ZIMs, "directory"
+    entries are stored with a trailing slash (e.g. ``iep.utm.edu/a/``),
+    so URL resolution must preserve it for paths to remain fetchable.
+    """
+
+    def test_relative_dir_href_preserves_trailing_slash(self):
+        """``../a/`` against ``iep.utm.edu/aristotle/`` → ``iep.utm.edu/a/``."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../a/", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu/a/"
+
+    def test_relative_file_href_no_trailing_slash(self):
+        """``../a`` (no slash) against same source stays without slash."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../a", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu/a"
+
+    def test_dir_href_with_fragment_preserves_slash(self):
+        """``../a/#section`` resolves to ``iep.utm.edu/a/`` (slash kept)."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../a/#section", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu/a/"
+
+    def test_dir_href_with_query_preserves_slash(self):
+        """``../a/?ref=foo`` resolves to ``iep.utm.edu/a/`` (slash kept)."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../a/?ref=foo", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu/a/"
+
+    def test_anchor_only_returns_none(self):
+        """Anchor-only refs (``#section``) are non-navigable."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        assert (
+            _StructureMixin._resolve_link_to_entry_path(
+                "#section", "iep.utm.edu/aristotle/"
+            )
+            is None
+        )
+
+    def test_external_url_returns_none(self):
+        """Schemes like ``http://`` are external."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        assert (
+            _StructureMixin._resolve_link_to_entry_path(
+                "https://example.com/", "iep.utm.edu/aristotle/"
+            )
+            is None
+        )
+
+    def test_legacy_namespace_no_trailing_slash(self):
+        """``Linked_A`` against ``C/Source`` → ``C/Linked_A`` (no slash)."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path("Linked_A", "C/Source")
+        assert resolved == "C/Linked_A"

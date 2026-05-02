@@ -459,6 +459,10 @@ class _StructureMixin:
                 url = url.split(sep, 1)[0]
         if not url:
             return None
+        # Domain-scheme ZIMs store directory entries with a trailing slash
+        # (e.g. ``iep.utm.edu/a/``). normpath strips trailing slashes, so
+        # remember the URL's slash-ness and restore it after normalization.
+        had_trailing_slash = url.endswith("/")
         base_dir = dirname(source_entry_path)
         if base_dir:
             joined = f"{base_dir}/{url}"
@@ -469,4 +473,6 @@ class _StructureMixin:
         # Drop any leading "./" or empty segments.
         if resolved in (".", ""):
             return None
+        if had_trailing_slash and not resolved.endswith("/"):
+            resolved += "/"
         return resolved
