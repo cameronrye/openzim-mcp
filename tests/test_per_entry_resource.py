@@ -378,3 +378,56 @@ class TestPerEntryResource:
         assert (
             observed >= 8
         ), f"event loop was blocked: {observed} heartbeats fired during call"
+
+
+class TestResolveZimName:
+    """Tests for the shared _resolve_zim_name helper.
+
+    The helper consolidates the previously-duplicated stem/full-name match
+    logic from create_resource (per-entry) and zim_file_overview (zim://name).
+    Both call sites must accept either the bare basename ('wikipedia') or
+    the full filename ('wikipedia.zim') and resolve to the same path.
+    """
+
+    @pytest.fixture
+    def server(self, test_config):
+        """Build a server instance bound to the test config."""
+        from openzim_mcp.server import OpenZimMcpServer
+
+        return OpenZimMcpServer(test_config)
+
+    def test_resolve_by_stem(self, server):
+        """Bare basename ('wikipedia') resolves to the matching archive path."""
+        from openzim_mcp.tools.resource_tools import _resolve_zim_name
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wikipedia.zim", "name": "wikipedia.zim"}]
+        )
+        assert _resolve_zim_name(server, "wikipedia") == "/zim/wikipedia.zim"
+
+    def test_resolve_by_full_name(self, server):
+        """Full filename ('wikipedia.zim') resolves to the matching archive path."""
+        from openzim_mcp.tools.resource_tools import _resolve_zim_name
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wikipedia.zim", "name": "wikipedia.zim"}]
+        )
+        assert _resolve_zim_name(server, "wikipedia.zim") == "/zim/wikipedia.zim"
+
+    def test_resolve_stem_and_full_name_agree(self, server):
+        """The two name forms must resolve to the same path."""
+        from openzim_mcp.tools.resource_tools import _resolve_zim_name
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wikipedia.zim", "name": "wikipedia.zim"}]
+        )
+        assert _resolve_zim_name(server, "wikipedia") == _resolve_zim_name(
+            server, "wikipedia.zim"
+        )
+
+    def test_resolve_unknown_returns_none(self, server):
+        """Unknown name returns None — caller surfaces the error envelope."""
+        from openzim_mcp.tools.resource_tools import _resolve_zim_name
+
+        server.zim_operations.list_zim_files_data = MagicMock(return_value=[])
+        assert _resolve_zim_name(server, "nonexistent") is None

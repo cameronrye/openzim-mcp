@@ -206,6 +206,41 @@ class TestIntentParser:
         assert intent == "binary"
         assert params.get("include_data") is False
 
+    def test_param_boost_is_small_increment(self):
+        """Param boost on a low-base intent must be small (+0.05, not +0.1).
+
+        Regression guard for M17: a low-priority intent (like generic
+        ``search`` at base 0.7) gets a small confidence boost when params
+        extract cleanly. The increment must stay small (cap at 0.85) so a
+        low-priority intent can't masquerade as a high-priority one.
+        """
+        # 'search Biology' matches only the generic search intent (base 0.7).
+        # With params extracted, confidence boosts to 0.75 (was 0.8 pre-fix).
+        intent, params, conf = IntentParser.parse_intent("search Biology")
+        assert intent == "search"
+        assert params.get("query")
+        # Pre-fix: conf == 0.8 (base 0.7 + 0.1). Post-fix: 0.75 (base + 0.05).
+        assert conf == pytest.approx(0.75), (
+            f"boost increment too large: confidence={conf}; expected 0.75 "
+            "(base 0.7 + 0.05). Pre-fix value was 0.8 which is the M17 bug."
+        )
+
+    def test_param_boost_skipped_when_base_already_high(self):
+        """When base_confidence >= 0.8, no boost is applied.
+
+        High-base intents are already authoritative; boosting them risks
+        pushing identical-spec competitors past each other based purely on
+        whether params extract. Tests on a high-base param-extracting intent
+        (toc, base 0.95) — confidence must stay at the base, not jump to 1.0.
+        """
+        intent, params, conf = IntentParser.parse_intent("table of contents of Biology")
+        assert intent == "toc"
+        assert params.get("entry_path") == "Biology"
+        # toc has base 0.95 — no boost should apply because base >= 0.8.
+        assert (
+            conf == 0.95
+        ), f"high-base intent received an unwanted boost: confidence={conf}"
+
 
 class TestSimpleToolsHandler:
     """Test simple tools handler."""

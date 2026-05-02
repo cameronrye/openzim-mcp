@@ -42,6 +42,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _resolve_zim_name(server: "OpenZimMcpServer", name: str) -> Optional[str]:
+    """Resolve a ZIM ``name`` (bare stem or full filename) to its archive path.
+
+    Accepts either ``wikipedia`` (basename without extension) or
+    ``wikipedia.zim`` (full filename) and returns the absolute file path of
+    the matching archive, or ``None`` if no match is found.
+
+    This helper is sync — it performs an in-memory scan over the result of
+    ``list_zim_files_data``. Async callers (e.g. resource templates serving
+    HTTP/SSE clients) should wrap the underlying ``list_zim_files_data`` call
+    in ``asyncio.to_thread`` themselves; this helper is fast enough to run
+    inline once that data is already in memory.
+    """
+    files = server.zim_operations.list_zim_files_data()
+    for f in files:
+        if Path(f["path"]).stem == name or f["name"] == name:
+            return str(f["path"])
+    return None
+
+
 def _detect_mime_type(item: Any) -> str:
     """Return a clean MIME type for a libzim Item.
 
@@ -114,18 +134,11 @@ class ZimEntryTemplate(ResourceTemplate):
     ) -> Resource:
         """Resolve {name} → archive_path and build a ZimEntryResource."""
         name = params["name"]
-        # list_zim_files_data does sync filesystem I/O (Path.glob + stat).
-        # Offload to a thread so concurrent HTTP/SSE clients don't block on
-        # one another while a directory scan runs.
-        files = await asyncio.to_thread(
-            self.server_ref.zim_operations.list_zim_files_data
-        )
-        target_path: Optional[str] = None
-        for f in files:
-            stem = Path(f["path"]).stem
-            if stem == name or f["name"] == name:
-                target_path = f["path"]
-                break
+        # _resolve_zim_name calls list_zim_files_data (sync filesystem I/O —
+        # Path.glob + stat). Offload the whole helper to a thread so
+        # concurrent HTTP/SSE clients don't block on one another while a
+        # directory scan runs.
+        target_path = await asyncio.to_thread(_resolve_zim_name, self.server_ref, name)
         if not target_path:
             raise ValueError(f"ZIM file '{name}' not found")
 
@@ -185,15 +198,14 @@ def register_resources(server: "OpenZimMcpServer") -> None:
     )
     def zim_file_overview(name: str) -> str:
         try:
-            files = server.zim_operations.list_zim_files_data()
-            target_path = None
-            for f in files:
-                stem = Path(f["path"]).stem
-                if stem == name or f["name"] == name:
-                    target_path = f["path"]
-                    break
+            target_path = _resolve_zim_name(server, name)
 
             if not target_path:
+                # Re-fetch the file list for the error message's "available"
+                # listing. _resolve_zim_name returns None without exposing
+                # the list, but the cost (one glob+stat) is fine on the
+                # error path.
+                files = server.zim_operations.list_zim_files_data()
                 return json.dumps(
                     {
                         "error": (

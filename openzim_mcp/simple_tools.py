@@ -221,10 +221,19 @@ class IntentParser:
                 match = safe_regex_search(pattern, query_lower, re.IGNORECASE)
                 if match:
                     params = cls._extract_params(query, intent)
-                    # Boost confidence if extracted params are valid
+                    # Boost confidence only when params extract AND base is
+                    # below 0.8 — the boost is a tie-breaker for ambiguous
+                    # low-priority matches, not a way to lift them above
+                    # high-priority param-less intents (M17). Cap at 0.85
+                    # to keep low-priority + boost strictly below high-base
+                    # intents (>= 0.9).
                     confidence = base_confidence
-                    if params and any(v for v in params.values() if v):
-                        confidence = min(1.0, confidence + 0.1)
+                    if (
+                        base_confidence < 0.8
+                        and params
+                        and any(v for v in params.values() if v)
+                    ):
+                        confidence = min(base_confidence + 0.05, 0.85)
                     matches.append((intent, params, confidence, specificity))
             except RegexTimeoutError:
                 logger.warning(f"Regex timeout for pattern: {pattern[:30]}...")
