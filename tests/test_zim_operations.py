@@ -2702,3 +2702,196 @@ class TestZimOperationsGetEntries:
         assert (
             len(opens) == 2
         ), f"expected one open per file (2), got {len(opens)}: {opens}"
+
+
+class TestZimOperationsPerfFixes:
+    """Performance hardening tests for v1.0 review tasks 7.4, 7.5, 7.6."""
+
+    @pytest.fixture
+    def zim_operations(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator: PathValidator,
+        openzim_mcp_cache: OpenZimMcpCache,
+        content_processor: ContentProcessor,
+    ) -> ZimOperations:
+        """Create ZimOperations instance for testing."""
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    # ----- Task 7.4: namespace listing cached once per (file, namespace) ----
+
+    def test_browse_namespace_caches_full_listing_once_per_archive_namespace(
+        self,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+        monkeypatch,
+    ):
+        """Different (limit, offset) pages must not re-scan the namespace."""
+        from contextlib import contextmanager
+
+        import openzim_mcp.zim_operations as zo_mod
+
+        zim_file = temp_dir / "ns.zim"
+        zim_file.write_text("z")
+
+        archive_instance = MagicMock()
+        archive_instance.has_new_namespace_scheme = False
+
+        # Build a deterministic entry-path → entry mapping. Pagination must
+        # all be served from the same scan.
+        paths = [f"A/Article_{i}" for i in range(30)]
+
+        def make_entry(path: str):
+            entry = MagicMock()
+            entry.path = path
+            entry.title = path.split("/", 1)[1]
+            item = MagicMock()
+            item.mimetype = "text/html"
+            item.content = b"<p>x</p>"
+            entry.get_item.return_value = item
+            return entry
+
+        def get_by_path(p):
+            return make_entry(p)
+
+        archive_instance.get_entry_by_path.side_effect = get_by_path
+
+        @contextmanager
+        def fake_zim_archive(path, *args, **kwargs):
+            yield archive_instance
+
+        monkeypatch.setattr(zo_mod, "zim_archive", fake_zim_archive)
+
+        # Force _find_entries_in_namespace to return the deterministic list
+        # and count invocations.
+        scan_calls = {"count": 0}
+
+        def fake_find(archive, namespace, has_new_scheme):
+            scan_calls["count"] += 1
+            return list(paths), True
+
+        monkeypatch.setattr(zim_operations, "_find_entries_in_namespace", fake_find)
+
+        zim_operations.browse_namespace(str(zim_file), "A", limit=10, offset=0)
+        zim_operations.browse_namespace(str(zim_file), "A", limit=10, offset=10)
+        zim_operations.browse_namespace(str(zim_file), "A", limit=10, offset=20)
+
+        # The expensive namespace scan should run exactly once even though we
+        # paginated three different windows.
+        assert (
+            scan_calls["count"] == 1
+        ), f"expected one full namespace scan, got {scan_calls['count']}"
+
+    # ----- Task 7.5: Searcher reused across path-fallback search terms -----
+
+    def test_find_entry_by_search_reuses_searcher_across_terms(
+        self,
+        zim_operations: ZimOperations,
+        monkeypatch,
+    ):
+        """Searcher() construction must be hoisted out of the per-term loop."""
+        construct_count = {"count": 0}
+
+        class CountingSearcher:
+            """Plain stand-in for libzim.Searcher.
+
+            libzim.Searcher binds via C++ and refuses non-Archive arguments,
+            so we replace it wholesale rather than subclassing it.
+            """
+
+            def __init__(self, archive):
+                construct_count["count"] += 1
+                self._archive = archive
+
+            def search(self, query):
+                fake_search = MagicMock()
+                # Return zero matches so every fallback term is tried,
+                # exercising the loop fully.
+                fake_search.getEstimatedMatches.return_value = 0
+                fake_search.getResults.return_value = []
+                return fake_search
+
+        # Patch both the libzim.search module (the source of the
+        # function-local ``from libzim.search import Searcher`` rebinding)
+        # and the libzim package re-export.
+        monkeypatch.setattr("libzim.search.Searcher", CountingSearcher)
+
+        archive = MagicMock()
+        # A path that yields multiple search-term variants — the loop will
+        # iterate every one. Searcher must still only be built once.
+        zim_operations._find_entry_by_search(archive, "A/Some_Test_Path")
+
+        assert (
+            construct_count["count"] == 1
+        ), f"expected Searcher to be built once, got {construct_count['count']}"
+
+    # ----- Task 7.6: SuggestionSearcher replaces strided ID scan ------------
+
+    def test_generate_search_suggestions_uses_suggestion_searcher(
+        self,
+        zim_operations: ZimOperations,
+        monkeypatch,
+    ):
+        """Strategy 2 must use SuggestionSearcher, not stride over entry IDs."""
+        suggest_called = {"count": 0}
+        get_entry_by_id_calls = {"count": 0}
+
+        class CountingSS:
+            """Plain stand-in for libzim.SuggestionSearcher.
+
+            libzim.SuggestionSearcher binds via C++ and refuses non-Archive
+            arguments, so we substitute the whole class.
+            """
+
+            def __init__(self, archive):
+                suggest_called["count"] += 1
+                self._archive = archive
+
+            def suggest(self, text):
+                fake = MagicMock()
+                fake.getEstimatedMatches.return_value = 0
+                fake.getResults.return_value = []
+                return fake
+
+        # The module under test imports SuggestionSearcher at module level,
+        # so patch the rebound symbol there as well.
+        monkeypatch.setattr("libzim.suggestion.SuggestionSearcher", CountingSS)
+        monkeypatch.setattr("openzim_mcp.zim_operations.SuggestionSearcher", CountingSS)
+
+        # Force Strategy 1 to return zero suggestions so Strategy 2 fires.
+        monkeypatch.setattr(
+            zim_operations,
+            "_get_suggestions_from_search",
+            lambda *a, **kw: [],
+        )
+
+        archive = MagicMock()
+        archive.entry_count = 100_000
+
+        # Track strided ID scan as a regression sentinel — the previous
+        # implementation called _get_entry_by_id once per stride.
+        def boom(*_a, **_kw):
+            get_entry_by_id_calls["count"] += 1
+            raise AssertionError(
+                "Strategy 2 must not call archive._get_entry_by_id; "
+                "use SuggestionSearcher instead"
+            )
+
+        archive._get_entry_by_id.side_effect = boom
+
+        result = zim_operations._generate_search_suggestions(archive, "bio", limit=10)
+
+        assert (
+            suggest_called["count"] >= 1
+        ), "expected SuggestionSearcher to be used in Strategy 2"
+        assert (
+            get_entry_by_id_calls["count"] == 0
+        ), "Strategy 2 must not stride-scan via _get_entry_by_id"
+        # Result still has to be valid JSON describing zero matches.
+        import json as _json
+
+        parsed = _json.loads(result)
+        assert parsed["partial_query"] == "bio"
+        assert "suggestions" in parsed

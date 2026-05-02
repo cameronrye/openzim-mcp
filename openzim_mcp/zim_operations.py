@@ -925,6 +925,15 @@ class ZimOperations:
         # Extract potential search terms from the path
         search_terms = self._extract_search_terms_from_path(entry_path)
 
+        # Hoist Searcher construction out of the loop. Each ``Searcher(archive)``
+        # opens the archive's Xapian DB; building a fresh one per fallback term
+        # multiplied that cost by up to 5x.
+        try:
+            searcher = Searcher(archive)
+        except Exception as e:
+            logger.debug(f"Searcher initialization failed: {e}")
+            return None
+
         for search_term in search_terms:
             if len(search_term) < 2:  # Skip very short terms
                 continue
@@ -932,7 +941,6 @@ class ZimOperations:
             try:
                 logger.debug(f"Searching for entry with term: '{search_term}'")
                 query_obj = Query().set_query(search_term)
-                searcher = Searcher(archive)
                 search = searcher.search(query_obj)
 
                 total_results = search.getEstimatedMatches()
@@ -1571,7 +1579,11 @@ class ZimOperations:
         try:
             with zim_archive(validated_path) as archive:
                 result = self._browse_namespace_entries(
-                    archive, namespace, limit, offset
+                    archive,
+                    namespace,
+                    limit,
+                    offset,
+                    archive_path=str(validated_path),
                 )
 
             # Cache the result
@@ -1586,18 +1598,42 @@ class ZimOperations:
             raise OpenZimMcpArchiveError(f"Namespace browsing failed: {e}") from e
 
     def _browse_namespace_entries(
-        self, archive: Archive, namespace: str, limit: int, offset: int
+        self,
+        archive: Archive,
+        namespace: str,
+        limit: int,
+        offset: int,
+        archive_path: Optional[str] = None,
     ) -> str:
-        """Browse entries in a specific namespace using sampling and search."""
+        """Browse entries in a specific namespace using sampling and search.
+
+        ``archive_path`` enables caching the full namespace listing per
+        ``(archive_path, namespace)`` so successive page requests do not
+        re-scan the archive. When omitted (legacy callers / tests), the
+        listing is recomputed every call.
+        """
         entries: List[Dict[str, Any]] = []
 
         # Check if archive uses new namespace scheme
         has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
 
-        # Discover entries in the namespace.
-        namespace_entries, full_iteration = self._find_entries_in_namespace(
-            archive, namespace, has_new_scheme
-        )
+        # Discover entries in the namespace. The full listing is cached
+        # separately from the per-page JSON (cache_key in browse_namespace),
+        # so different (limit, offset) pages share one scan.
+        listing_key: Optional[str] = None
+        cached_listing: Optional[Tuple[List[str], bool]] = None
+        if archive_path is not None:
+            listing_key = f"ns_entries:{archive_path}:{namespace}"
+            cached_listing = self.cache.get(listing_key)
+
+        if cached_listing is not None:
+            namespace_entries, full_iteration = cached_listing
+        else:
+            namespace_entries, full_iteration = self._find_entries_in_namespace(
+                archive, namespace, has_new_scheme
+            )
+            if listing_key is not None:
+                self.cache.set(listing_key, (namespace_entries, full_iteration))
 
         # Apply pagination
         total_in_namespace = len(namespace_entries)
@@ -2223,32 +2259,37 @@ class ZimOperations:
             }
             return json.dumps(result, indent=2, ensure_ascii=False)
 
-        # Strategy 2: Try direct entry iteration (original approach but improved)
+        # Strategy 2: Use the libzim title-index suggestion API. Replaces the
+        # previous strided ``_get_entry_by_id`` scan, which only inspected
+        # ~entry_count/step entries and missed almost everything on large
+        # archives. ``SuggestionSearcher`` works against the title/redirect
+        # index and is independent of the full-text index used by Strategy 1,
+        # so it remains a legitimate fallback when full-text returns zero.
         title_matches: List[Dict[str, Any]] = []
 
-        # Sample a subset of entries to avoid performance issues
-        sample_size = min(archive.entry_count, 5000)
-        step = max(1, archive.entry_count // sample_size)
+        try:
+            suggestion_search = SuggestionSearcher(archive).suggest(partial_query)
+            total = suggestion_search.getEstimatedMatches()
+            logger.info(
+                f"SuggestionSearcher matched {total} candidates for "
+                f"'{partial_query}'"
+            )
+            # Pull a few extra so we can re-rank by start vs contains.
+            max_results = min(total, max(limit * 5, 25)) if total else 0
+            result_paths = (
+                list(suggestion_search.getResults(0, max_results))
+                if max_results
+                else []
+            )
+        except Exception as e:
+            logger.debug(f"SuggestionSearcher failed for '{partial_query}': {e}")
+            result_paths = []
 
-        logger.info(
-            f"Archive info: entry_count={archive.entry_count}, "
-            f"sample_size={sample_size}, step={step}"
-        )
-
-        entries_processed = 0
-        entries_with_content = 0
-
-        for entry_id in range(0, archive.entry_count, step):
+        for result_path in result_paths:
             try:
-                entry = archive._get_entry_by_id(entry_id)
+                entry = archive.get_entry_by_path(str(result_path))
                 title = entry.title or ""
-                path = entry.path or ""
-
-                entries_processed += 1
-
-                # Log first few entries for debugging
-                if entries_processed <= 5:
-                    logger.debug(f"Entry {entry_id}: title='{title}', path='{path}'")
+                path = entry.path or str(result_path)
 
                 # Skip entries without meaningful titles
                 if not title.strip() or len(title.strip()) < 2:
@@ -2265,8 +2306,6 @@ class ZimOperations:
                 ):
                     continue
 
-                entries_with_content += 1
-
                 title_lower = title.lower()
 
                 # Prioritize titles that start with the query
@@ -2279,7 +2318,6 @@ class ZimOperations:
                             "score": 100,
                         }
                     )
-                    logger.debug(f"Found start match: '{title}'")
                 # Then titles that contain the query
                 elif partial_lower in title_lower:
                     title_matches.append(
@@ -2290,25 +2328,29 @@ class ZimOperations:
                             "score": 50,
                         }
                     )
-                    logger.debug(f"Found contains match: '{title}'")
+                else:
+                    # Suggestion API may return fuzzy matches that don't
+                    # textually contain the query — keep them but rank lower.
+                    title_matches.append(
+                        {
+                            "suggestion": title,
+                            "path": path,
+                            "type": "title_suggest_match",
+                            "score": 25,
+                        }
+                    )
 
                 # Stop if we have enough matches
                 if len(title_matches) >= limit * 2:
-                    logger.info(
-                        f"Found enough matches ({len(title_matches)}), "
-                        "stopping search"
-                    )
                     break
 
             except Exception as e:
-                logger.warning(
-                    f"Error processing entry {entry_id} for suggestions: {e}"
-                )
+                logger.warning(f"Error processing suggestion result {result_path}: {e}")
                 continue
 
         logger.info(
-            f"Processing complete: processed={entries_processed}, "
-            f"with_content={entries_with_content}, matches={len(title_matches)}"
+            f"Suggestion processing complete: "
+            f"candidates={len(result_paths)}, matches={len(title_matches)}"
         )
 
         # Sort by score and title length (prefer shorter, more relevant titles)
