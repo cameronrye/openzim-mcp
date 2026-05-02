@@ -413,6 +413,101 @@ class TestIntentParserBatchEntries:
         intent, _params, _ = IntentParser.parse_intent("get article A/Foo")
         assert intent == "get_article"
 
+    def test_get_zim_entries_extracts_path_list(self):
+        """parse_intent must extract namespace/path tokens into params['entries']."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent(
+            "fetch entries A/Foo and A/Bar from wikipedia.zim"
+        )
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "A/Bar"]
+
+    def test_get_zim_entries_extracts_multiple_namespaces(self):
+        """Path extraction handles realistic comma-and-and joined lists."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent(
+            "fetch articles A/Foo, A/Bar, and M/Image.png"
+        )
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "A/Bar", "M/Image.png"]
+
+
+class TestGetZimEntriesDispatch:
+    """H15 regression: get_zim_entries intent must dispatch to batch fetch."""
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        """Mock ZimOperations with single-file auto-select and a get_entries spy."""
+        mock = Mock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/test/wikipedia.zim", "name": "wikipedia.zim"}
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/test/wikipedia.zim", "name": "wikipedia.zim"}]'
+        )
+        mock.search_zim_file.return_value = "search-results-should-not-be-used"
+        mock.get_entries.return_value = '{"results": [], "succeeded": 0, "failed": 0}'
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        """Build a SimpleToolsHandler wired to the mock backend."""
+        return SimpleToolsHandler(mock_zim_operations)
+
+    def test_get_zim_entries_intent_dispatches_to_batch_fetch(
+        self, handler, mock_zim_operations
+    ):
+        """A 'fetch entries X and Y' query must dispatch to get_entries."""
+        handler.handle_zim_query(
+            "fetch entries A/Foo and A/Bar from wikipedia.zim",
+            zim_file_path="/test/wikipedia.zim",
+        )
+
+        assert (
+            mock_zim_operations.get_entries.called
+        ), "get_entries was not called; intent fell through to default"
+        assert (
+            not mock_zim_operations.search_zim_file.called
+        ), "search_zim_file was called; intent fell through instead of dispatching"
+
+        call_args = mock_zim_operations.get_entries.call_args
+        # get_entries(entries=[{zim_file_path, entry_path}, ...])
+        entries_arg = (
+            call_args.args[0] if call_args.args else call_args.kwargs.get("entries")
+        )
+        assert isinstance(entries_arg, list) and len(entries_arg) == 2
+        assert all(isinstance(e, dict) for e in entries_arg)
+        assert [e["entry_path"] for e in entries_arg] == ["A/Foo", "A/Bar"]
+        assert all(e["zim_file_path"] == "/test/wikipedia.zim" for e in entries_arg)
+
+    def test_get_zim_entries_intent_with_no_paths_returns_help(
+        self, handler, mock_zim_operations
+    ):
+        """If paths can't be extracted, return help, not search results."""
+        # Query matches the get_zim_entries pattern but has no namespace/path
+        # tokens — the dispatch must surface a help message rather than fall
+        # through to search.
+        result = handler.handle_zim_query(
+            "fetch articles please",
+            zim_file_path="/test/wikipedia.zim",
+        )
+
+        assert (
+            not mock_zim_operations.get_entries.called
+        ), "get_entries should not be invoked when no paths were extracted"
+        assert (
+            not mock_zim_operations.search_zim_file.called
+        ), "intent should not fall through to generic search"
+        # Help message should mention namespace/path syntax
+        lowered = result.lower()
+        assert (
+            "namespace/path" in lowered
+            or "extract entry paths" in lowered
+            or "missing entry paths" in lowered
+        ), f"unexpected help response: {result!r}"
+
 
 class TestExplicitZimPathHonored:
     """Regression: H14 - explicit zim_file_path must not be overwritten."""

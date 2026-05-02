@@ -457,6 +457,13 @@ class IntentParser:
                 )
                 if m:
                     params["entry_path"] = m.group(1).strip().rstrip("?.")
+            elif intent == "get_zim_entries":
+                # Extract namespace/path tokens like "A/Foo", "M/Image.png".
+                # Uppercase namespace letter is required, which excludes file
+                # paths like "wikipedia.zim" but matches ZIM entry paths.
+                entries = safe_regex_findall(r"[A-Z]/[\w\-./%]+", query)
+                if entries:
+                    params["entries"] = entries
 
         except RegexTimeoutError:
             logger.warning(
@@ -721,6 +728,25 @@ class SimpleToolsHandler:
                     params.get("entry_path", ""),
                     limit=10,
                 )
+            elif intent == "get_zim_entries":
+                # Batch fetch: route to ZimOperations.get_entries with the
+                # extracted path list. If no paths were extracted, return a
+                # help response rather than silently falling through to search.
+                entry_paths = params.get("entries") or []
+                if not entry_paths:
+                    return (
+                        "**Missing Entry Paths**\n\n"
+                        "I couldn't extract entry paths from your query. "
+                        "Use namespace/path syntax, e.g., "
+                        "'fetch entries A/Photosynthesis A/Cell_biology'."
+                    ) + low_confidence_note
+                entries = [
+                    {"zim_file_path": zim_file_path, "entry_path": p}
+                    for p in entry_paths
+                ]
+                max_content_length = options.get("max_content_length")
+                result = self.zim_operations.get_entries(entries, max_content_length)
+                return result + low_confidence_note
 
             else:
                 # Fallback to search
