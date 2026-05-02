@@ -371,22 +371,53 @@ make check
 
 ```text
 openzim-mcp/
-├── openzim_mcp/             # Main package
-│   ├── __init__.py        # Package initialization
-│   ├── __main__.py        # Module entry point
-│   ├── main.py            # Main entry point
-│   ├── server.py          # MCP server implementation
-│   ├── config.py          # Configuration management
-│   ├── security.py        # Security and validation
-│   ├── cache.py           # Caching functionality
-│   ├── content_processor.py # Content processing
-│   ├── zim_operations.py  # ZIM file operations
-│   ├── exceptions.py      # Custom exceptions
-│   └── constants.py       # Application constants
-├── tests/                 # Test suite
-├── pyproject.toml        # Project configuration
-├── Makefile              # Development commands
-└── README.md             # This file
+├── openzim_mcp/                # Main package
+│   ├── __init__.py             # Package init, exports __version__ via importlib.metadata
+│   ├── __main__.py             # Module entry point (`python -m openzim_mcp`)
+│   ├── main.py                 # CLI entry point and arg parsing
+│   ├── server.py               # MCP server setup, transport selection
+│   ├── http_app.py             # Streamable HTTP / SSE transport, auth, CORS, health
+│   ├── config.py               # Pydantic config + env var bindings
+│   ├── defaults.py             # Default values and tunables
+│   ├── security.py             # Path validation, traversal protection, sanitization
+│   ├── error_messages.py       # User-facing error message catalog
+│   ├── exceptions.py           # Custom exception hierarchy
+│   ├── cache.py                # LRU cache with TTL
+│   ├── rate_limiter.py         # Per-client + global token-bucket rate limiting
+│   ├── content_processor.py    # HTML→text, heading-id, link extraction
+│   ├── async_operations.py     # asyncio helpers and timeouts
+│   ├── timeout_utils.py        # Timeout primitives
+│   ├── subscriptions.py        # MtimeWatcher and SubscriberRegistry
+│   ├── simple_tools.py         # Simple-mode `zim_query` tool
+│   ├── intent_parser.py        # Natural-language intent parsing
+│   ├── types.py                # Shared TypedDicts
+│   ├── constants.py            # Shared constants
+│   ├── zim_operations.py       # Backward-compat shim re-exporting from zim/ package
+│   ├── zim/                    # ZIM access (split from monolithic zim_operations.py)
+│   │   ├── __init__.py         # ZimOperations facade composed of mixins
+│   │   ├── archive.py          # Archive open/close, file listing, name resolution
+│   │   ├── content.py          # Entry retrieval, summaries, batch get
+│   │   ├── namespace.py        # Namespace listing, browse, walk
+│   │   ├── search.py           # Full-text + suggestion search; cursor pagination
+│   │   └── structure.py        # Article structure, links, related articles
+│   └── tools/                  # MCP tool registrations
+│       ├── __init__.py
+│       ├── file_tools.py       # list_zim_files
+│       ├── content_tools.py    # get_zim_entry, get_zim_entries
+│       ├── search_tools.py     # search_zim_file, search_all, find_entry_by_title
+│       ├── navigation_tools.py # browse_namespace, walk_namespace, search_with_filters, get_search_suggestions
+│       ├── structure_tools.py  # get_article_structure, extract_article_links, get_entry_summary, get_table_of_contents, get_binary_entry
+│       ├── metadata_tools.py   # get_zim_metadata, get_main_page, list_namespaces
+│       ├── server_tools.py     # get_server_health, get_server_configuration
+│       ├── resource_tools.py   # MCP resources (zim://files, zim://{name}/...)
+│       └── prompts.py          # MCP prompts (/research, /summarize, /explore)
+├── tests/                      # Test suite (pytest)
+├── docs/                       # Spec/plan notes (docs/superpowers/)
+├── website/                    # GitHub Pages site source
+├── pyproject.toml              # Project configuration
+├── Makefile                    # Development commands
+├── Dockerfile                  # Multi-stage container build
+└── README.md                   # This file
 ```
 
 ---
