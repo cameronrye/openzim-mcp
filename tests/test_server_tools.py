@@ -1,10 +1,11 @@
 """Tests for server_tools module."""
 
+import json
 import os
 
 import pytest
 
-from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.config import CacheConfig, OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
 
 
@@ -92,3 +93,102 @@ class TestGetServerConfigurationTool:
         }
 
         assert diagnostics["validation_status"] in ["ok", "warning", "error"]
+
+
+class TestDiagnosticToolPathRedaction:
+    """Diagnostic tool responses must not leak filesystem paths or PIDs."""
+
+    @pytest.mark.asyncio
+    async def test_get_server_configuration_redacts_allowed_directories(self, temp_dir):
+        """Allowed directory paths must not appear verbatim in the response."""
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        server = OpenZimMcpServer(config)
+
+        tools = server.mcp._tool_manager._tools
+        assert "get_server_configuration" in tools
+        tool_handler = tools["get_server_configuration"].fn
+        result = await tool_handler()
+
+        # The full directory path must not be present.
+        assert str(temp_dir) not in result, "allowed_directories path leaked"
+        # But the section identifier should still be present.
+        assert "allowed_directories" in result.lower()
+
+        parsed = json.loads(result)
+        # PID must not be exposed.
+        assert parsed["configuration"]["server_pid"] != os.getpid()
+        # A non-sensitive count should still be available for diagnostics.
+        assert parsed["configuration"].get("allowed_directories_count") == len(
+            config.allowed_directories
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_server_health_redacts_paths(self, temp_dir):
+        """get_server_health must not leak any allowed directory paths."""
+        # Create a missing/invalid subdirectory so warning paths are also exercised.
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        server = OpenZimMcpServer(config)
+
+        tools = server.mcp._tool_manager._tools
+        assert "get_server_health" in tools
+        tool_handler = tools["get_server_health"].fn
+        result = await tool_handler()
+
+        for d in server.config.allowed_directories:
+            assert str(d) not in result, f"path leaked in health response: {d}"
+
+        parsed = json.loads(result)
+        # PID must not be exposed.
+        assert parsed["uptime_info"]["process_id"] != os.getpid()
+
+    @pytest.mark.asyncio
+    async def test_get_server_health_warning_paths_redacted(self, temp_dir):
+        """Warning messages about inaccessible directories must redact paths."""
+        # Build a config that points at a real dir so validation passes,
+        # then mutate the in-memory list to include a nonexistent path so
+        # the warning code path runs and we can verify path redaction.
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        server = OpenZimMcpServer(config)
+        bogus = str(temp_dir / "definitely-not-here-xyz")
+        # Bypass validation; we only want the runtime warning text.
+        server.config.allowed_directories = list(server.config.allowed_directories) + [
+            bogus
+        ]
+
+        tools = server.mcp._tool_manager._tools
+        tool_handler = tools["get_server_health"].fn
+        result = await tool_handler()
+
+        assert bogus not in result, "bogus path leaked into warning text"
+
+    @pytest.mark.asyncio
+    async def test_get_server_configuration_invalid_dirs_redacted(self, temp_dir):
+        """Invalid-directory warnings in get_server_configuration must redact paths."""
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        server = OpenZimMcpServer(config)
+        bogus = str(temp_dir / "missing-subdir-zzz")
+        server.config.allowed_directories = list(server.config.allowed_directories) + [
+            bogus
+        ]
+
+        tools = server.mcp._tool_manager._tools
+        tool_handler = tools["get_server_configuration"].fn
+        result = await tool_handler()
+
+        assert bogus not in result, "bogus path leaked into config diagnostics"

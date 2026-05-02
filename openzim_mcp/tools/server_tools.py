@@ -3,12 +3,12 @@
 import asyncio
 import json
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from ..constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
+from ..security import redact_paths_in_message, sanitize_path_for_error
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -49,7 +49,8 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                 "status": "healthy",
                 "server_name": server.config.server_name,
                 "uptime_info": {
-                    "process_id": os.getpid(),
+                    # Redact PID — diagnostic output may end up in bug reports.
+                    "process_id": "[REDACTED]",
                     "started_at": getattr(server, "_start_time", "unknown"),
                 },
                 "configuration": {
@@ -68,6 +69,11 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             total_zim_files = 0
 
             for directory in server.config.allowed_directories:
+                # Sanitize the path before it ever lands in user-visible
+                # warning/recommendation strings — diagnostic output is
+                # frequently copy-pasted into bug reports and must not
+                # leak host topology.
+                redacted = sanitize_path_for_error(str(directory))
                 try:
                     dir_path = Path(directory)
                     if dir_path.exists() and dir_path.is_dir():
@@ -76,20 +82,23 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                         zim_files = list(dir_path.glob("**/*.zim"))
                         total_zim_files += len(zim_files)
                     else:
-                        warnings.append(f"Directory not accessible: {directory}")
+                        warnings.append(f"Directory not accessible: {redacted}")
                         recommendations.append(
-                            f"Check directory path and permissions: {directory}"
+                            f"Check directory path and permissions: {redacted}"
                         )
                         if health_info["status"] == "healthy":
                             health_info["status"] = "warning"
                 except PermissionError:
-                    warnings.append(f"Permission denied: {directory}")
-                    recommendations.append(f"Check file permissions for: {directory}")
+                    warnings.append(f"Permission denied: {redacted}")
+                    recommendations.append(f"Check file permissions for: {redacted}")
                     health_checks["permissions_ok"] = False
                     if health_info["status"] == "healthy":
                         health_info["status"] = "warning"
                 except Exception as e:
-                    warnings.append(f"Error accessing {directory}: {e}")
+                    warnings.append(
+                        f"Error accessing {redacted}: "
+                        f"{redact_paths_in_message(str(e))}"
+                    )
                     if health_info["status"] == "healthy":
                         health_info["status"] = "warning"
 
@@ -147,9 +156,18 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
 
     def _get_server_configuration_sync() -> str:
         try:
+            # Always redact paths and PID — even on stdio, diagnostic
+            # output frequently ends up in bug reports / logs / issue
+            # trackers, so leaking host topology is an info-disclosure
+            # risk regardless of transport. The unredacted values remain
+            # available to operators in server logs.
             config_info = {
                 "server_name": server.config.server_name,
-                "allowed_directories": server.config.allowed_directories,
+                "allowed_directories": [
+                    sanitize_path_for_error(str(p))
+                    for p in server.config.allowed_directories
+                ],
+                "allowed_directories_count": len(server.config.allowed_directories),
                 "cache_enabled": server.config.cache.enabled,
                 "cache_max_size": server.config.cache.max_size,
                 "cache_ttl_seconds": server.config.cache.ttl_seconds,
@@ -157,7 +175,7 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
                 "content_snippet_length": server.config.content.snippet_length,
                 "search_default_limit": server.config.content.default_search_limit,
                 "config_hash": server.config.get_config_hash(),
-                "server_pid": os.getpid(),
+                "server_pid": "[REDACTED]",
             }
 
             warnings_list: List[str] = []
@@ -172,7 +190,7 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
             for directory in server.config.allowed_directories:
                 dir_path = Path(directory)
                 if not dir_path.exists():
-                    invalid_dirs.append(directory)
+                    invalid_dirs.append(sanitize_path_for_error(str(directory)))
 
             if invalid_dirs:
                 diagnostics["validation_status"] = "error"
