@@ -448,3 +448,145 @@ class TestSlugifyHeading:
         ids = [h["id"] for h in structure["headings"]]
         assert ids[0] == "real-anchor"
         assert ids[1] == "other"
+
+
+class TestExtractHtmlLinksFiltering:
+    """Test ``extract_html_links`` drops non-navigable URI schemes.
+
+    LLM agents shouldn't be told to follow ``javascript:``, ``mailto:``,
+    ``tel:``, ``data:``, ``blob:``, or ``vbscript:`` URLs — they aren't
+    fetchable as ZIM entries and ``javascript:``/``vbscript:``/``data:``
+    are exfiltration risks if surfaced into a downstream tool call.
+    """
+
+    @pytest.mark.parametrize(
+        "scheme",
+        ["javascript:", "mailto:", "tel:", "data:", "blob:", "vbscript:"],
+    )
+    def test_non_navigable_scheme_dropped(
+        self, content_processor: ContentProcessor, scheme: str
+    ):
+        """Each NON_NAVIGABLE scheme must be stripped from results."""
+        evil = f"{scheme}payload"
+        html = (
+            f'<html><body><a href="{evil}">click</a>'
+            '<a href="real.html">good</a></body></html>'
+        )
+        links = content_processor.extract_html_links(html)
+        all_urls = [
+            link["url"]
+            for bucket in ("internal_links", "external_links")
+            for link in links.get(bucket, [])
+        ]
+        assert evil not in all_urls, f"non-navigable {scheme!r} link leaked"
+        assert "real.html" in all_urls, "navigable link should still be present"
+
+    @pytest.mark.parametrize(
+        "scheme_upper",
+        ["JavaScript:alert(1)", "MAILTO:foo@bar", "Tel:+15551234"],
+    )
+    def test_non_navigable_scheme_case_insensitive(
+        self, content_processor: ContentProcessor, scheme_upper: str
+    ):
+        """Filter must be case-insensitive — Java**S**cript: still blocked."""
+        html = f'<html><body><a href="{scheme_upper}">x</a></body></html>'
+        links = content_processor.extract_html_links(html)
+        all_urls = [
+            link["url"]
+            for bucket in ("internal_links", "external_links")
+            for link in links.get(bucket, [])
+        ]
+        assert scheme_upper not in all_urls
+
+
+class TestResolveHeadingId:
+    """Test the four-step heading-id resolution chain.
+
+    Order: direct ``id`` → descendant anchor (mw-headline) → preceding
+    anchor → slugified text. The ``id_source`` return value lets callers
+    distinguish synthetic slugs from real anchors that the source HTML
+    actually references.
+    """
+
+    def test_direct_id_attribute_wins(self):
+        """A direct ``id`` on the heading is the highest-priority source."""
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import resolve_heading_id
+
+        soup = BeautifulSoup('<h2 id="real">Section</h2>', "html.parser")
+        h = soup.find("h2")
+        assert h is not None
+        anchor_id, source = resolve_heading_id(h)
+        assert (anchor_id, source) == ("real", "id")
+
+    def test_mw_headline_descendant_anchor(self):
+        """Wikipedia ``<span class="mw-headline" id="X">`` inside <h2>."""
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import resolve_heading_id
+
+        soup = BeautifulSoup(
+            '<h2><span class="mw-headline" id="My_Section">Section</span></h2>',
+            "html.parser",
+        )
+        h = soup.find("h2")
+        assert h is not None
+        anchor_id, source = resolve_heading_id(h)
+        assert (anchor_id, source) == ("My_Section", "descendant_anchor")
+
+    def test_preceding_named_anchor(self):
+        """Older HTML: ``<a name="X"></a>`` immediately before the heading."""
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import resolve_heading_id
+
+        soup = BeautifulSoup(
+            '<div><a name="anchor1"></a><h2>Section</h2></div>', "html.parser"
+        )
+        h = soup.find("h2")
+        assert h is not None
+        anchor_id, source = resolve_heading_id(h)
+        assert (anchor_id, source) == ("anchor1", "preceding_anchor")
+
+    def test_synthetic_slug_fallback(self):
+        """No anchor anywhere → synthetic slug with source ``slug``."""
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import resolve_heading_id
+
+        soup = BeautifulSoup("<h2>Plain Heading</h2>", "html.parser")
+        h = soup.find("h2")
+        assert h is not None
+        anchor_id, source = resolve_heading_id(h)
+        assert (anchor_id, source) == ("plain-heading", "slug")
+
+    def test_priority_id_beats_descendant(self):
+        """Direct ``id`` wins over any descendant anchor."""
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import resolve_heading_id
+
+        soup = BeautifulSoup(
+            '<h2 id="direct"><span id="descendant">x</span></h2>',
+            "html.parser",
+        )
+        h = soup.find("h2")
+        assert h is not None
+        anchor_id, _ = resolve_heading_id(h)
+        assert anchor_id == "direct"
+
+    def test_priority_descendant_beats_preceding(self):
+        """Descendant anchor wins over preceding-sibling anchor."""
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.content_processor import resolve_heading_id
+
+        soup = BeautifulSoup(
+            '<div><a name="prev"></a>' '<h2><span id="inside">x</span></h2></div>',
+            "html.parser",
+        )
+        h = soup.find("h2")
+        assert h is not None
+        _, source = resolve_heading_id(h)
+        assert source == "descendant_anchor"
