@@ -252,18 +252,25 @@ class SimpleToolsHandler:
                 return result + low_confidence_note
 
             elif intent == "search_all":
+                # Honour caller-supplied ``limit`` (mapped to ``limit_per_file``
+                # for symmetry with other tools) and fall back to 5 — matching
+                # ``search_zim_file``'s explicit ``limit_per_file=5`` default.
                 result = self.zim_operations.search_all(
-                    params.get("query", query), limit_per_file=5
+                    params.get("query", query),
+                    limit_per_file=options.get("limit", 5),
                 )
                 return result + low_confidence_note
             elif intent == "walk_namespace":
                 # zim_file_path was already populated by the function-level
                 # auto-select guard above; honor whatever the caller supplied.
+                # ``offset`` semantically maps to ``cursor`` here — a resume
+                # token, not pagination skip — but it's the only general-purpose
+                # passthrough channel so we honour it.
                 result = self.zim_operations.walk_namespace(
                     zim_file_path,
                     params.get("namespace", "C"),
-                    cursor=0,
-                    limit=200,
+                    cursor=options.get("offset", 0),
+                    limit=options.get("limit", 200),
                 )
                 return result + low_confidence_note
             elif intent == "find_by_title":
@@ -271,14 +278,14 @@ class SimpleToolsHandler:
                     zim_file_path,
                     params.get("title", query),
                     cross_file=False,
-                    limit=10,
+                    limit=options.get("limit", 10),
                 )
                 return result + low_confidence_note
             elif intent == "related":
                 result = self.zim_operations.get_related_articles(
                     zim_file_path,
                     params.get("entry_path", ""),
-                    limit=10,
+                    limit=options.get("limit", 10),
                 )
                 return result + low_confidence_note
             elif intent == "get_zim_entries":

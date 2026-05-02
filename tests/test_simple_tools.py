@@ -474,6 +474,85 @@ class TestNewIntentPatterns:
         assert params["query"]
 
 
+class TestSimpleToolsOptionsPassthrough:
+    """The dispatch handler must forward caller-supplied limits to backends.
+
+    Each branch was previously hardcoding its limit (``limit_per_file=5``,
+    ``limit=200``, ``limit=10``, etc.), silently ignoring the ``limit``
+    parameter the caller passed to ``zim_query``. These tests pin the
+    passthrough so future refactors don't reintroduce the regression.
+    """
+
+    def test_search_all_forwards_options_limit_to_limit_per_file(self):
+        """search_all must use options['limit'] (not hardcoded 5)."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.search_all.return_value = '{"hits": []}'
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        handler.handle_zim_query("search all files for python", options={"limit": 25})
+        # Backend must receive the caller's limit, not the hardcoded default.
+        _args, kwargs = zim_ops.search_all.call_args
+        assert kwargs.get("limit_per_file") == 25
+
+    def test_walk_namespace_forwards_options_limit_and_offset(self):
+        """walk_namespace must use options['offset'] as cursor and options['limit']."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.walk_namespace.return_value = '{"entries": []}'
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        handler.handle_zim_query(
+            "walk namespace M",
+            options={"limit": 50, "offset": 1234},
+        )
+        _args, kwargs = zim_ops.walk_namespace.call_args
+        assert kwargs.get("cursor") == 1234
+        assert kwargs.get("limit") == 50
+
+    def test_find_by_title_forwards_options_limit(self):
+        """find_by_title must use options['limit'] (not hardcoded 10)."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.find_entry_by_title.return_value = '{"results": []}'
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        handler.handle_zim_query(
+            "find article titled Photosynthesis", options={"limit": 30}
+        )
+        _args, kwargs = zim_ops.find_entry_by_title.call_args
+        assert kwargs.get("limit") == 30
+
+    def test_related_forwards_options_limit(self):
+        """The related intent must use options['limit'] (not hardcoded 10)."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.get_related_articles.return_value = '{"outbound_results": []}'
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        handler.handle_zim_query(
+            "articles related to Climate_Change", options={"limit": 42}
+        )
+        _args, kwargs = zim_ops.get_related_articles.call_args
+        assert kwargs.get("limit") == 42
+
+
 class TestIntentParserBatchEntries:
     """Test intent patterns for the get_zim_entries (batch) tool."""
 
