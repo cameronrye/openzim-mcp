@@ -153,8 +153,55 @@ async def test_watcher_detects_file_replacement(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_watcher_ignores_mtime_only_touches(tmp_path):
-    """A `touch`-style bump (mtime change, same size) is silently ignored."""
+async def test_watcher_detects_same_size_replacement(tmp_path):
+    """Same-size replacement with different mtime must trigger notification.
+
+    Real ZIM replacements can have identical size (small stub fixtures,
+    test fixtures, atomic-rename swaps that happen to match byte-for-byte
+    in length). Missing such a replacement is the worse error mode for
+    a watcher: a stale subscriber gets stale data forever. A `touch`-style
+    bump that triggers an extra refresh is the cheaper trade-off.
+    """
+    import time
+
+    from openzim_mcp.subscriptions import MtimeWatcher
+
+    target = tmp_path / "archive.zim"
+    target.write_bytes(b"a" * 1024)
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=0.05, on_change=emit)
+    # Establish baseline snapshot, then drive one polling tick directly
+    # so the assertion doesn't depend on sleep/scheduler timing.
+    watcher._snapshot = watcher._scan()
+
+    # Replace with same-length but different content; sleep to ensure the
+    # mtime delta exceeds filesystem granularity (most FSes give us at
+    # least ms resolution; 50ms is comfortably above that).
+    time.sleep(0.05)
+    target.write_bytes(b"b" * 1024)
+
+    await watcher._tick()
+    assert any(
+        uri == "zim://archive" and change_type == "replaced"
+        for uri, change_type in events
+    ), f"expected replaced notification for same-size rewrite; got {events!r}"
+
+
+@pytest.mark.asyncio
+async def test_watcher_triggers_on_mtime_only_change(tmp_path):
+    """An mtime-only bump now triggers (false positive accepted by design).
+
+    Previously the watcher ignored mtime-only changes to suppress
+    `touch`-style spurious notifications. That suppression also silently
+    dropped real same-size replacements. We accept the false-positive
+    trade-off because eliminating false negatives is the priority for a
+    watcher whose job is to alert on changes.
+    """
     import os
     import time
 
@@ -169,19 +216,15 @@ async def test_watcher_ignores_mtime_only_touches(tmp_path):
         events.append((uri, change_type))
 
     watcher = MtimeWatcher([str(tmp_path)], interval=0.05, on_change=emit)
-    await watcher.start()
-    try:
-        await asyncio.sleep(0.1)
-        # Bump mtime without altering the byte content — backup tools,
-        # lint scripts, and `touch` all do this and must NOT trigger
-        # subscribers.
-        future = time.time() + 5
-        os.utime(target, (future, future))
-        for _ in range(10):
-            await asyncio.sleep(0.05)
-        assert all(uri != "zim://archive" for uri, _ in events)
-    finally:
-        await watcher.stop()
+    watcher._snapshot = watcher._scan()
+
+    # Bump mtime without altering byte content. `touch` and backup tools
+    # cause this; the new policy treats it as a change.
+    future = time.time() + 5
+    os.utime(target, (future, future))
+
+    await watcher._tick()
+    assert any(uri == "zim://archive" for uri, _ in events)
 
 
 @pytest.mark.asyncio

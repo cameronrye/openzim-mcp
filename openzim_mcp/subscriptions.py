@@ -136,9 +136,11 @@ class MtimeWatcher:
         self._dirs = [str(d) for d in dirs]
         self._interval = interval
         self._on_change = on_change
-        # Snapshot maps path → (mtime, size). Using a tuple avoids firing
-        # spurious "replaced" notifications for `touch`-style mtime bumps
-        # that don't change file content (backup tools, lint scripts, etc).
+        # Snapshot maps path → (mtime, size). Both fields are compared on
+        # each tick so that same-size replacements (different mtime) and
+        # in-place rewrites (different size) are both detected. See the
+        # change-detection comment in ``_tick`` for the false-positive vs.
+        # false-negative trade-off.
         self._snapshot: dict[str, tuple[float, int]] = {}
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event = asyncio.Event()
@@ -177,6 +179,39 @@ class MtimeWatcher:
                 continue
         return snap
 
+    async def _tick(self) -> None:
+        """Diff a fresh scan against the snapshot and dispatch any changes.
+
+        Extracted from the polling loop so tests can drive a single pass
+        deterministically without depending on sleep/scheduler timing.
+        """
+        new_snap = self._scan()
+        added = set(new_snap) - set(self._snapshot)
+        removed = set(self._snapshot) - set(new_snap)
+        # Trigger on size OR mtime change. The earlier policy of size-only
+        # detection suppressed `touch`-style false positives but also missed
+        # real same-size replacements (small stub fixtures, atomic-rename
+        # swaps where the new payload happens to match the old length).
+        # For a watcher whose job is to alert subscribers to changes, a
+        # false negative — a stale subscriber stuck on stale data forever —
+        # is strictly worse than a false positive (one redundant refresh).
+        changed = {
+            p
+            for p in (set(new_snap) & set(self._snapshot))
+            if (
+                new_snap[p][0] != self._snapshot[p][0]  # mtime
+                or new_snap[p][1] != self._snapshot[p][1]  # size
+            )
+        }
+        # Directory listing changes → zim://files
+        if added or removed:
+            await self._on_change("zim://files", "list_changed")
+        # Per-file content replacements (or mtime bumps) → zim://{name}
+        for path in changed:
+            name = Path(path).stem
+            await self._on_change(f"zim://{name}", "replaced")
+        self._snapshot = new_snap
+
     async def _loop(self) -> None:
         """Run the polling loop: diff against snapshot, dispatch, repeat."""
         try:
@@ -184,27 +219,7 @@ class MtimeWatcher:
                 await asyncio.sleep(self._interval)
                 if self._stop_event.is_set():
                     return
-                new_snap = self._scan()
-                added = set(new_snap) - set(self._snapshot)
-                removed = set(self._snapshot) - set(new_snap)
-                # Only consider a file "replaced" when its size changed —
-                # mtime alone bumps from `touch`, backup tools, and many
-                # filesystem operations that don't actually rewrite content.
-                # ZIM-file replacement always changes size (the format has
-                # variable-length headers and clusters).
-                changed = {
-                    p
-                    for p in (set(new_snap) & set(self._snapshot))
-                    if new_snap[p][1] != self._snapshot[p][1]
-                }
-                # Directory listing changes → zim://files
-                if added or removed:
-                    await self._on_change("zim://files", "list_changed")
-                # Real content replacements → zim://{name}
-                for path in changed:
-                    name = Path(path).stem
-                    await self._on_change(f"zim://{name}", "replaced")
-                self._snapshot = new_snap
+                await self._tick()
         except asyncio.CancelledError:
             return
 
