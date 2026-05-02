@@ -63,7 +63,7 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 ## Features
 
 - **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools)
-- **Streamable HTTP Transport**: 🆕 Run as a long-running service over HTTP — bearer-token auth, CORS, health endpoints, multi-arch Docker image, and resource subscriptions. See [`docs/HTTP_DEPLOYMENT_GUIDE.md`](docs/HTTP_DEPLOYMENT_GUIDE.md).
+- **Streamable HTTP Transport**: 🆕 Run as a long-running service over HTTP — bearer-token auth, CORS, health endpoints, multi-arch Docker image, and resource subscriptions
 - **Batch Entry Retrieval**: 🆕 Fetch up to 50 entries per call with `get_zim_entries` — pairs naturally with HTTP, where round-trip cost matters
 - **Per-Entry MCP Resources**: 🆕 Stream individual entries via `zim://{name}/entry/{path}` with native MIME types — browse HTML, PDFs, and images directly
 - **Resource Subscriptions**: 🆕 Clients subscribe to `zim://files` and `zim://{name}` and receive `notifications/resources/updated` when archives change
@@ -91,8 +91,6 @@ Run OpenZIM MCP as a long-running service. Pass `--transport http` (or set `OPEN
 - **CORS allow-list** — explicit origins via `OPENZIM_MCP_CORS_ORIGINS`; wildcard `*` is rejected at startup.
 - **Health endpoints** — `/healthz` (liveness) and `/readyz` (at least one allowed dir is readable). Both exempt from auth so probes work cleanly.
 - **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.0.0`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
-
-See [`docs/HTTP_DEPLOYMENT_GUIDE.md`](docs/HTTP_DEPLOYMENT_GUIDE.md) for Docker, Caddy, nginx, systemd, and Tailscale recipes.
 
 Legacy SSE transport is also available via `--transport sse` (or `OPENZIM_MCP_TRANSPORT=sse`) for clients that haven't migrated to streamable-HTTP. SSE does **not** apply the bearer-token / CORS / health-endpoint middleware, so the server *refuses* to start with `--transport sse` bound to anything other than `127.0.0.1`/`::1`/`localhost`. For exposed deployments use `--transport http`.
 
@@ -239,8 +237,6 @@ OpenZIM MCP supports two modes:
 
 - **Simple Mode** (default): Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
 - **Advanced Mode**: Exposes all 21 specialized MCP tools for maximum control
-
-See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
 
 ### MCP Configuration
 
