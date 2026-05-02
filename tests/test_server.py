@@ -1173,7 +1173,10 @@ class TestOpenZimMcpServerErrorFormatting:
 
         assert "**Permission Error**" in result
         assert "**Operation**: list_files" in result
-        assert "**Context**: /restricted/path" in result
+        # Absolute paths in the context are redacted to prevent leaking
+        # the host's filesystem layout; only the basename survives.
+        assert "/restricted/path" not in result
+        assert "**Context**: ...path" in result
         assert "Check file and directory permissions" in result
         assert "Ensure the server process has read access" in result
         assert "**Technical Details**: Permission denied: access to file" in result
@@ -1188,7 +1191,10 @@ class TestOpenZimMcpServerErrorFormatting:
 
         assert "**Permission Error**" in result
         assert "**Operation**: read_file" in result
-        assert "**Context**: /some/file.zim" in result
+        # Absolute paths in the context are redacted to prevent leaking
+        # the host's filesystem layout; only the basename survives.
+        assert "/some/file.zim" not in result
+        assert "**Context**: ...file.zim" in result
         assert "Check file and directory permissions" in result
         assert "**Technical Details**: Access denied to resource" in result
 

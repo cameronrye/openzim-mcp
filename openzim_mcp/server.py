@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import re
 from typing import Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -22,66 +21,14 @@ from .exceptions import OpenZimMcpConfigurationError
 from .rate_limiter import RateLimitConfig, RateLimiter
 from .security import (
     PathValidator,
+    redact_paths_in_message,
     sanitize_context_for_error,
-    sanitize_path_for_error,
 )
 from .simple_tools import SimpleToolsHandler
 from .tools import register_all_tools
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
-
-
-# Match absolute filesystem paths so we can redact them from error
-# messages before they cross the MCP boundary. Covers POSIX paths
-# (``/foo/bar``) and Windows drive-letter paths (``C:\foo\bar``,
-# ``D:\...``). Stops at whitespace; sanitize_path_for_error will keep
-# the trailing filename and replace the directory portion.
-_ABS_PATH_RE = re.compile(r"(?:[A-Za-z]:\\[^\s]+|/[^\s]+)")
-
-
-def _sanitize_matched_path(path: str) -> str:
-    r"""Reduce a matched absolute path to its sanitized form.
-
-    :func:`sanitize_path_for_error` uses :class:`pathlib.Path`, which on
-    POSIX hosts treats backslashes as ordinary characters and therefore
-    fails to extract the basename from a Windows-style path. Split on
-    both separators ourselves so a leaked ``C:\foo\bar\name.zim`` still
-    collapses to ``...name.zim`` regardless of host OS.
-    """
-    # Trim trailing punctuation that often abuts a path token in prose
-    # (e.g. ``... directories: /opt/foo.zim.``) so it does not become
-    # part of the "filename" we keep.
-    stripped = path.rstrip(".,;:)]")
-    trailing = path[len(stripped) :]
-    basename = re.split(r"[\\/]", stripped)[-1]
-    if not basename:
-        return sanitize_path_for_error(stripped) + trailing
-    return f"...{basename}{trailing}"
-
-
-def _redact_paths_in_message(raw_message: str) -> str:
-    """Redact absolute filesystem paths from an error message.
-
-    OpenZimMcpSecurityError (and a few other errors) embed the resolved
-    canonical path in their message — returning that verbatim leaks the
-    host's allowed-dirs layout exactly when a traversal attempt is
-    rejected. Route every absolute-path token through a sanitizer so the
-    directory portion is hidden while the filename is preserved for
-    debugging.
-
-    Args:
-        raw_message: The raw exception message, possibly containing one
-            or more absolute paths.
-
-    Returns:
-        The same message with each absolute path replaced by its
-        sanitized form (e.g. ``...wikipedia.zim``).
-    """
-    return _ABS_PATH_RE.sub(
-        lambda m: _sanitize_matched_path(m.group(0)),
-        raw_message,
-    )
 
 
 class OpenZimMcpServer:
@@ -185,7 +132,7 @@ class OpenZimMcpServer:
         # in OpenZimMcpSecurityError) before the message reaches the
         # client. Without this the host's allowed-dirs layout leaks via
         # the **Technical Details** field on every rejected traversal.
-        base_message = _redact_paths_in_message(str(error))
+        base_message = redact_paths_in_message(str(error))
         sanitized_context = sanitize_context_for_error(context)
 
         # Check for known error types using externalized config

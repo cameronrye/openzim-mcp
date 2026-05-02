@@ -251,3 +251,39 @@ class TestErrorMessageRedaction:
         assert "C:\\Secret\\Data" not in msg, msg
         assert "Secret\\Data" not in msg, msg
         assert "wikipedia.zim" in msg or "[REDACTED" in msg, msg
+
+
+@pytest.mark.parametrize(
+    "leaked",
+    [
+        "/opt/zims/wikipedia.zim",
+        "/mnt/storage/foo.zim",
+        "/srv/data/file.zim",
+        "/media/usb/data.zim",
+        "E:\\zims\\foo.zim",
+        "Z:\\share\\bar.zim",
+    ],
+)
+def test_sanitize_context_for_error_redacts_unusual_paths(leaked):
+    """sanitize_context_for_error must redact paths in unusual mount points."""
+    from openzim_mcp.security import sanitize_context_for_error
+
+    out = sanitize_context_for_error(leaked)
+    assert leaked not in out, out
+
+
+@pytest.mark.parametrize(
+    "win_path",
+    [
+        "C:\\Secret\\Data\\wikipedia.zim",
+        "Z:\\share\\foo.zim",
+    ],
+)
+def test_sanitize_path_for_error_handles_windows_paths_on_posix(win_path):
+    """sanitize_path_for_error must split on backslash regardless of host OS."""
+    from openzim_mcp.security import sanitize_path_for_error
+
+    out = sanitize_path_for_error(win_path)
+    # Directory should not appear; basename can survive
+    assert "Secret\\Data" not in out, out
+    assert "share\\" not in out, out
