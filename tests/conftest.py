@@ -245,6 +245,11 @@ def pytest_configure(config):
         "(binds loopback ports; deselected unless explicitly requested via "
         "`-m live` or `make test-live`)",
     )
+    config.addinivalue_line(
+        "markers",
+        "docker: mark test as additionally requiring the docker CLI and a "
+        "reachable daemon (auto-skipped otherwise)",
+    )
 
 
 def pytest_collection_modifyitems(config, items):

@@ -8,13 +8,19 @@ cache persistence across restarts.
 ## How to run
 
 ```bash
-make test-live                # the targeted way
-uv run pytest -m live         # equivalent
-uv run pytest -m live tests/live/test_live_http.py    # one file
+make test-live                       # all live tests (incl. docker if daemon up)
+make test-live-docker                # docker tests only (auto-skips w/o daemon)
+uv run pytest -m live                # equivalent of make test-live
+uv run pytest -m "live and not docker"  # skip the slow docker build
+uv run pytest -m live tests/live/test_live_http.py  # one file
 ```
 
 These tests are **excluded from the default `make test` run** via
 `addopts = -m 'not live'` in `pyproject.toml`. Opt in with `-m live`.
+
+The `docker` marker is layered on top of `live` for tests that
+additionally need the docker CLI and a reachable daemon — they
+auto-skip otherwise, so you don't need to remember to filter.
 
 ## Requirements
 
@@ -36,6 +42,7 @@ These tests are **excluded from the default `make test` run** via
 | `test_live_prompts.py` | MCP prompts (`/research`, `/summarize`, `/explore`) including v1.0 sanitization (control-char strip, length cap, ask-for-input fallback) |
 | `test_live_subscriptions.py` | `MtimeWatcher` + `notifications/resources/updated` over streamable-HTTP |
 | `test_live_cache_persistence.py` | Cache `persistence_path` survives a graceful shutdown / restart |
+| `test_live_docker.py` | `docker build` + `docker run` smoke: image boots, runs as `appuser` (uid 10001), `/healthz`+`/readyz` work, bearer auth on `/mcp`, `HEALTHCHECK` directive present. Auto-skips when docker daemon unavailable. First build may take ~10 min; subsequent runs reuse layer cache (~20s). |
 
 ## Intentionally not live-tested
 
@@ -53,10 +60,9 @@ client IDs and asserts:
 2. After 10k+ distinct client IDs, LRU eviction kicks in (the cap
    defined in `RateLimitConfig`).
 
-**Docker image.** Build/healthcheck verification needs `docker` on the
-test runner. Out of scope for the pytest harness — covered by CI
-`docker build` + `docker run --rm <image> --help` smoke at release
-time.
+_(Docker image build/run is now covered by `test_live_docker.py`; it
+auto-skips when the daemon isn't reachable, so it costs nothing on
+machines without docker.)_
 
 ## Adding a new live test
 
