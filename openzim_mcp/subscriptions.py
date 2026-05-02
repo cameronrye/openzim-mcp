@@ -39,6 +39,8 @@ from typing import (
     Optional,
 )
 
+from .defaults import TIMEOUTS
+
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
@@ -204,12 +206,10 @@ class MtimeWatcher:
             return
 
 
-# Per-subscriber timeout for ``send_resource_updated`` during broadcast.
-# A subscriber that doesn't respond within this window is treated as dead
-# and evicted from the registry. The fan-out is concurrent (``asyncio.gather``),
-# so one hung subscriber never delays the others — this timeout only bounds
-# how long an individual hung send blocks its own task before being cancelled.
-SEND_TIMEOUT_SECONDS: float = 5.0
+# Per-subscriber timeout for ``send_resource_updated`` during broadcast. See
+# ``TimeoutDefaults.SUBSCRIPTION_SEND_SECONDS`` in ``defaults.py``. The
+# module-level alias is preserved so tests can monkeypatch this value.
+SEND_TIMEOUT_SECONDS: float = TIMEOUTS.SUBSCRIPTION_SEND_SECONDS
 
 
 async def _send_one(

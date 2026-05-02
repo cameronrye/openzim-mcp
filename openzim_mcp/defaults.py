@@ -80,6 +80,13 @@ class TimeoutDefaults:
 
     REGEX_SECONDS: float = 1.0
     ARCHIVE_OPEN_SECONDS: float = 30.0
+    # Per-subscriber timeout for ``send_resource_updated`` during broadcast.
+    # A subscriber that doesn't respond within this window is treated as dead
+    # and evicted from the registry. The fan-out is concurrent
+    # (``asyncio.gather``), so one hung subscriber never delays the others —
+    # this timeout only bounds how long an individual hung send blocks its
+    # own task before being cancelled.
+    SUBSCRIPTION_SEND_SECONDS: float = 5.0
 
 
 @dataclass(frozen=True)
