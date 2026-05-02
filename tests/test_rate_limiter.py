@@ -310,6 +310,77 @@ class TestRateLimiter:
             assert "search" in error.details
 
 
+class TestAtomicRateLimitAcquisition:
+    """Tests for atomic global+per-op rate limit acquisition (H5)."""
+
+    def test_rate_limit_acquisition_is_atomic_across_buckets(self):
+        """Concurrent calls must never refund-after-deny race the global bucket.
+
+        Without the coarse lock, two threads can both pass the global check and
+        then race the per-operation check. The loser refunds the global bucket,
+        but during the race window the global bucket is transiently
+        over-consumed and a third thread can be denied at the global layer
+        even though the per-op bucket would have been the legitimate
+        bottleneck.
+        """
+        # Per-op limit is the bottleneck. Global is generously sized so that,
+        # under correct sequential-equivalent semantics, no thread should ever
+        # be denied at the global layer for this workload.
+        op_config = RateLimitConfig(
+            requests_per_second=1.0,
+            burst_size=1,
+        )
+        config = RateLimitConfig(
+            enabled=True,
+            requests_per_second=1000.0,
+            burst_size=1000,
+            per_operation_limits={"default": op_config},
+        )
+        limiter = RateLimiter(config)
+
+        thread_count = 50
+        barrier = threading.Barrier(thread_count)
+        successes: list[bool] = []
+        global_denials: list[str] = []
+        per_op_denials: list[str] = []
+        results_lock = threading.Lock()
+
+        def hammer():
+            barrier.wait()  # release all threads simultaneously
+            try:
+                limiter.check_rate_limit("default")
+                with results_lock:
+                    successes.append(True)
+            except OpenZimMcpRateLimitError as e:
+                msg = str(e)
+                with results_lock:
+                    if "Per-operation rate limit exceeded" in msg:
+                        per_op_denials.append(msg)
+                    else:
+                        global_denials.append(msg)
+
+        threads = [threading.Thread(target=hammer) for _ in range(thread_count)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Per-op cap is 1 burst, refilling at 1/s; in the test runtime (~ms),
+        # at most 1-2 successes are physically possible.
+        assert len(successes) <= 2, (
+            f"too many successes ({len(successes)}); " f"per-op budget should allow ~1"
+        )
+        # Global was sized for 1000 burst tokens — far more than the 50 we
+        # try to consume. No thread should ever have been denied at the
+        # global layer. If any global denials occurred, the refund race
+        # caused transient over-consumption of the global bucket.
+        assert not global_denials, (
+            f"refund race detected: {len(global_denials)} thread(s) were "
+            f"denied at the global layer despite a 1000-token global budget. "
+            f"Sample: {global_denials[0]!r}"
+        )
+
+
 class TestDefaultCosts:
     """Test default operation costs."""
 

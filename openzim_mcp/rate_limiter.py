@@ -142,6 +142,12 @@ class RateLimiter:
         self.config = config or RateLimitConfig()
         self._buckets: Dict[str, TokenBucket] = {}
         self._lock = threading.Lock()
+        # Coarse lock held across the global+per-op acquire pair so the
+        # composite check is atomic. Without it, two threads can both
+        # consume the global bucket, then one is refunded after losing
+        # the per-op race — but during the gap a third caller can be
+        # spuriously denied at the global layer (H5).
+        self._coarse_lock = threading.Lock()
 
         # Create global bucket
         self._global_bucket = TokenBucket(
@@ -198,24 +204,15 @@ class RateLimiter:
 
         cost = self.DEFAULT_COSTS.get(operation, self.DEFAULT_COSTS["default"])
 
-        # Check global limit first
-        if not self._global_bucket.acquire(cost):
-            wait_time = self._global_bucket.get_wait_time(cost)
-            raise OpenZimMcpRateLimitError(
-                f"Rate limit exceeded for operation '{operation}'. "
-                f"Please wait {wait_time:.2f} seconds before retrying.",
-                details=(
-                    f"operation={operation}, cost={cost}, wait_time={wait_time:.2f}s"
-                ),
-            )
-
-        # Check operation-specific limit if configured
-        if operation in self.config.per_operation_limits:
-            bucket = self._get_bucket(operation)
-            if not bucket.acquire(cost):
-                wait_time = bucket.get_wait_time(cost)
-                # Refund global tokens since we're rejecting
-                self._global_bucket.refund(cost)
+        # Hold the coarse lock so the global + per-op acquire pair is one
+        # atomic critical section. The per-bucket _lock inside
+        # TokenBucket.acquire/refund still guards individual bucket state,
+        # but only this outer lock prevents the refund-after-deny race
+        # where two threads transiently over-consume the global bucket.
+        with self._coarse_lock:
+            # Check global limit first
+            if not self._global_bucket.acquire(cost):
+                wait_time = self._global_bucket.get_wait_time(cost)
                 raise OpenZimMcpRateLimitError(
                     f"Rate limit exceeded for operation '{operation}'. "
                     f"Please wait {wait_time:.2f} seconds before retrying.",
@@ -224,6 +221,23 @@ class RateLimiter:
                         f"wait_time={wait_time:.2f}s"
                     ),
                 )
+
+            # Check operation-specific limit if configured
+            if operation in self.config.per_operation_limits:
+                bucket = self._get_bucket(operation)
+                if not bucket.acquire(cost):
+                    wait_time = bucket.get_wait_time(cost)
+                    # Refund global tokens since we're rejecting
+                    self._global_bucket.refund(cost)
+                    raise OpenZimMcpRateLimitError(
+                        f"Per-operation rate limit exceeded for "
+                        f"'{operation}'. Please wait {wait_time:.2f} "
+                        f"seconds before retrying.",
+                        details=(
+                            f"operation={operation}, cost={cost}, "
+                            f"wait_time={wait_time:.2f}s"
+                        ),
+                    )
 
         logger.debug(f"Rate limit check passed: operation={operation}, cost={cost}")
 
