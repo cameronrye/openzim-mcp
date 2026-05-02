@@ -250,21 +250,29 @@ class _NamespaceMixin:
             # If no slash, treat the first character as namespace (old scheme)
             namespace = path[0] if path else "Unknown"
 
-        # Handle common namespace variations
+        return self._canonicalise_namespace(namespace)
+
+    @staticmethod
+    def _canonicalise_namespace(namespace: str) -> str:
+        """Map a raw namespace token to its canonical short form.
+
+        Handles single-char prefixes (case-insensitive — ZIM archives
+        canonically use uppercase but tooling and user input may pass
+        lowercase) and the long-form aliases ("content", "metadata", etc.)
+        used by some new-scheme archives.
+        """
         if len(namespace) == 1 and namespace.isalpha():
             # Single character namespace (typical for both old and new schemes)
             return namespace.upper()
-        elif namespace in ["content", "Content"]:
+        if namespace in ["content", "Content"]:
             return "C"
-        elif namespace in ["metadata", "Metadata"]:
+        if namespace in ["metadata", "Metadata"]:
             return "M"
-        elif namespace in ["wellknown", "well-known", "Wellknown"]:
+        if namespace in ["wellknown", "well-known", "Wellknown"]:
             return "W"
-        elif namespace in ["search", "Search", "index", "Index"]:
+        if namespace in ["search", "Search", "index", "Index"]:
             return "X"
-        else:
-            # Return as-is for other namespaces
-            return namespace
+        return namespace
 
     @staticmethod
     def _get_known_namespace_probes() -> List[str]:
@@ -323,6 +331,12 @@ class _NamespaceMixin:
             raise OpenZimMcpValidationError("Offset must be non-negative")
         if not namespace or len(namespace.strip()) == 0:
             raise OpenZimMcpValidationError("Namespace must be a non-empty string")
+
+        # Canonicalise user input (e.g. "c" -> "C", "content" -> "C") so
+        # the comparison against ``_extract_namespace_from_path`` (which
+        # always returns the canonical form) does not silently miss every
+        # entry when callers pass lowercase or long-form names.
+        namespace = self._canonicalise_namespace(namespace.strip())
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
@@ -658,6 +672,12 @@ class _NamespaceMixin:
             )
         if cursor < 0:
             cursor = 0
+
+        # Canonicalise user input (e.g. "c" -> "C") so the comparison
+        # against ``_extract_namespace_from_path`` (canonical form) does
+        # not silently iterate to completion with zero matches.
+        if namespace:
+            namespace = self._canonicalise_namespace(namespace.strip())
 
         validated = self.path_validator.validate_path(zim_file_path)
         validated = self.path_validator.validate_zim_file(validated)

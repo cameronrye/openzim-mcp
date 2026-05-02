@@ -547,9 +547,12 @@ class _SearchMixin:
                     archive, partial_query, limit
                 )
 
-            # Cache the result
-            self.cache.set(cache_key, result)
-            # Parse result to get actual count for accurate logging
+            # Parse result to get actual count for accurate logging and to
+            # decide whether the response is worth caching. A cold-cache
+            # request that hits before the libzim title index has warmed up
+            # can return zero suggestions for a query that will produce
+            # results moments later — caching that empty payload locks the
+            # query into "no suggestions" for the full TTL.
             try:
                 result_data = json.loads(result)
                 actual_count = result_data.get(
@@ -557,6 +560,10 @@ class _SearchMixin:
                 )
             except (json.JSONDecodeError, TypeError):
                 actual_count = "unknown"
+
+            count_for_gate = actual_count if isinstance(actual_count, int) else 0
+            if count_for_gate > 0:
+                self.cache.set(cache_key, result)
             logger.info(f"Generated {actual_count} suggestions for: {partial_query}")
             return result
 
