@@ -35,6 +35,41 @@ def test_no_auth_header_returns_401(app_with_auth):
     assert resp.headers["www-authenticate"] == "Bearer"
 
 
+def test_options_request_requires_auth(app_with_auth):
+    """OPTIONS to a protected path must NOT bypass bearer-token auth.
+
+    The previous implementation let every OPTIONS request through to
+    facilitate CORS preflight, which let non-browser callers probe
+    auth-protected paths (notably the MCP endpoint) without a token.
+    """
+    client = TestClient(app_with_auth)
+    resp = client.options("/protected")
+    assert resp.status_code == 401
+    assert resp.headers["www-authenticate"] == "Bearer"
+
+
+def test_options_request_to_health_path_still_allowed(app_with_auth):
+    """OPTIONS to an AUTH_EXEMPT_PATHS entry must still pass without a token."""
+    from openzim_mcp.http_app import AUTH_EXEMPT_PATHS, BearerTokenAuthMiddleware
+
+    # /healthz is in AUTH_EXEMPT_PATHS; build a tiny app that has it.
+    assert "/healthz" in AUTH_EXEMPT_PATHS
+    config = MagicMock()
+    config.auth_token = SecretStr("topsecret")
+
+    async def healthz(request: Request) -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    app = Starlette(routes=[Route("/healthz", healthz)])
+    app.add_middleware(BearerTokenAuthMiddleware, config=config)
+    client = TestClient(app)
+    # OPTIONS on the exempt path should not be challenged for auth.
+    resp = client.options("/healthz")
+    # Starlette's default OPTIONS responder returns 405 for plain Routes;
+    # the important assertion is that we did NOT 401 on the exempt path.
+    assert resp.status_code != 401
+
+
 def test_wrong_scheme_returns_401(app_with_auth):
     """Non-Bearer Authorization scheme → 401."""
     client = TestClient(app_with_auth)

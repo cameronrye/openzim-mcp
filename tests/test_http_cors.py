@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 
+from pydantic import SecretStr
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
@@ -60,3 +61,36 @@ def test_cors_preflight_options():
     )
     assert resp.status_code == 200
     assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_unauthorized_response_includes_cors_headers():
+    """A 401 from auth middleware must still carry CORS headers.
+
+    CORS must wrap auth so browser JavaScript clients can read the 401
+    response. If auth is the outer layer (CORS inner), the browser sees
+    an opaque network error and cannot tell that the token was wrong.
+    """
+    from openzim_mcp.http_app import BearerTokenAuthMiddleware, apply_cors_middleware
+
+    config = MagicMock()
+    config.auth_token = SecretStr("topsecret")
+    config.cors_origins = ["https://allowed.example.com"]
+
+    async def protected(request: Request) -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    app = Starlette(routes=[Route("/protected", protected)])
+    # Wire in the same order that serve_streamable_http uses so this test
+    # exercises the production ordering.
+    app.add_middleware(BearerTokenAuthMiddleware, config=config)
+    apply_cors_middleware(app, config)
+
+    client = TestClient(app)
+    resp = client.get(
+        "/protected",
+        headers={"Origin": "https://allowed.example.com"},
+    )
+    assert resp.status_code == 401
+    assert (
+        resp.headers.get("access-control-allow-origin") == "https://allowed.example.com"
+    )

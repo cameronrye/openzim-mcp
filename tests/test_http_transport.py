@@ -75,6 +75,56 @@ def test_run_http_dispatches_to_serve_helper(monkeypatch, tmp_path):
     assert called == [server]
 
 
+def test_check_safe_startup_warns_when_localhost_resolves_to_public(monkeypatch):
+    """When /etc/hosts maps 'localhost' to a public IP, treat as public.
+
+    `localhost` is conventionally loopback, but a misconfigured /etc/hosts
+    can map it elsewhere. Resolve it and only accept 127.0.0.1/::1; emit a
+    UserWarning and require a token otherwise.
+    """
+    import socket
+    import warnings
+
+    from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+    from openzim_mcp.http_app import check_safe_startup
+
+    monkeypatch.setattr(
+        socket,
+        "gethostbyname",
+        lambda host: "203.0.113.5" if host == "localhost" else host,
+    )
+
+    config = MagicMock()
+    config.transport = "http"
+    config.host = "localhost"
+    config.auth_token = None  # no token → must REFUSE because not loopback
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(OpenZimMcpConfigurationError):
+            check_safe_startup(config)
+
+    assert any(
+        "localhost" in str(w.message) and "loopback" in str(w.message).lower()
+        for w in caught
+    ), f"Expected a UserWarning about localhost not being loopback; got {caught!r}"
+
+
+def test_check_safe_startup_localhost_resolving_to_loopback_is_safe(monkeypatch):
+    """When 'localhost' resolves to 127.0.0.1, it remains safe with no token."""
+    import socket
+
+    from openzim_mcp.http_app import check_safe_startup
+
+    monkeypatch.setattr(socket, "gethostbyname", lambda host: "127.0.0.1")
+    config = MagicMock()
+    config.transport = "http"
+    config.host = "localhost"
+    config.auth_token = None
+    # Should not raise.
+    check_safe_startup(config)
+
+
 def test_serve_streamable_http_runs_safe_check_and_serves(monkeypatch, tmp_path):
     """serve_streamable_http calls check_safe_startup, builds app, runs uvicorn."""
     from openzim_mcp.http_app import serve_streamable_http

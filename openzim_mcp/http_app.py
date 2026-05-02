@@ -10,6 +10,8 @@ HTTP-specific behavior is grouped here.
 import hmac
 import logging
 import os
+import socket
+import warnings
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Mapping
 
@@ -31,6 +33,27 @@ logger = logging.getLogger(__name__)
 
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {"/healthz", "/readyz"}
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return True iff `host` is a loopback address on this machine.
+
+    Accepts the literal IPv4/IPv6 loopback addresses directly. For the
+    string "localhost", performs name resolution via socket.gethostbyname
+    and only returns True if it resolves to 127.0.0.1 — this guards
+    against /etc/hosts mapping "localhost" to a non-loopback address.
+
+    On resolution failure, returns False (treated as not-loopback).
+    """
+    if host in ("127.0.0.1", "::1"):
+        return True
+    if host == "localhost":
+        try:
+            resolved = socket.gethostbyname(host)
+        except OSError:
+            return False
+        return resolved == "127.0.0.1"
+    return False
 
 
 def check_safe_startup(config: object) -> None:
@@ -57,7 +80,21 @@ def check_safe_startup(config: object) -> None:
     if transport not in ("http", "sse"):
         return
     host = getattr(config, "host", None)
-    is_localhost = host in ("127.0.0.1", "::1", "localhost")
+    is_localhost = isinstance(host, str) and _is_loopback_host(host)
+    # Distinguish "user typed 'localhost'" from "user typed an actual IP" so
+    # we can emit a targeted warning when /etc/hosts maps localhost away
+    # from loopback. Without this, a misconfigured host would silently fall
+    # through to the public-host branch and the operator wouldn't know why
+    # the safe-default check fired.
+    if host == "localhost" and not is_localhost:
+        warnings.warn(
+            "Host 'localhost' does not resolve to loopback (127.0.0.1) on "
+            "this machine; treating as a public host. Set the host "
+            "explicitly to 127.0.0.1 (or fix /etc/hosts) if loopback was "
+            "intended.",
+            UserWarning,
+            stacklevel=2,
+        )
     if transport == "sse":
         if not is_localhost:
             raise OpenZimMcpConfigurationError(
@@ -118,14 +155,17 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         """Validate the Bearer token; pass through on success, 401 otherwise."""
         if request.url.path in AUTH_EXEMPT_PATHS:
+            # Health endpoints are public; OPTIONS preflight against them is
+            # also fine (no secret to leak via the preflight response).
             return await call_next(request)
 
-        # CORS preflight: browsers omit the Authorization header on OPTIONS,
-        # so the auth check must let it pass and let the CORS layer (or the
-        # route's own OPTIONS handler) respond. Auth still gates the actual
-        # POST/GET/DELETE that follows.
-        if request.method == "OPTIONS":
-            return await call_next(request)
+        # NOTE: We deliberately do NOT carve out a generic "OPTIONS bypasses
+        # auth" path here. A blanket OPTIONS exemption lets non-browser
+        # callers probe the MCP endpoint without a token, with no upside
+        # (CORS preflight is still answered correctly by the outer CORS
+        # middleware before this handler ever runs for legitimate browser
+        # flows; for non-CORS-configured deployments there is no preflight
+        # to worry about).
 
         # If no token configured, allow (the safe-default check ensures this
         # only happens for localhost binding).
@@ -227,6 +267,11 @@ def serve_streamable_http(
     server.mcp.settings.port = server.config.port
 
     app = server.mcp.streamable_http_app()
+    # Order matters. Starlette's add_middleware is LIFO: the LAST-added
+    # middleware becomes the OUTERMOST layer. We want CORS as the outer
+    # layer so 401 responses from the inner auth middleware still carry
+    # Access-Control-Allow-Origin headers (otherwise browser JS clients
+    # see an opaque CORS error instead of "401 unauthorized").
     app.add_middleware(BearerTokenAuthMiddleware, config=server.config)
     apply_cors_middleware(app, server.config)
 
