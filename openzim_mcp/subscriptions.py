@@ -204,24 +204,59 @@ class MtimeWatcher:
             return
 
 
+# Per-subscriber timeout for ``send_resource_updated`` during broadcast.
+# A subscriber that doesn't respond within this window is treated as dead
+# and evicted from the registry. The fan-out is concurrent (``asyncio.gather``),
+# so one hung subscriber never delays the others — this timeout only bounds
+# how long an individual hung send blocks its own task before being cancelled.
+SEND_TIMEOUT_SECONDS: float = 5.0
+
+
+async def _send_one(
+    registry: "SubscriberRegistry",
+    session: Any,
+    uri: str,
+) -> None:
+    """Deliver one notification, dropping the session on failure or timeout."""
+    try:
+        await asyncio.wait_for(
+            session.send_resource_updated(uri),
+            timeout=SEND_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "send_resource_updated timed out after %ss; dropping session",
+            SEND_TIMEOUT_SECONDS,
+        )
+        await registry.clear_session(session)
+    except Exception as e:  # noqa: BLE001 - drop on any send failure
+        logger.warning("send_resource_updated failed; dropping session: %s", e)
+        await registry.clear_session(session)
+
+
 async def broadcast_resource_updated(
     registry: "SubscriberRegistry",
     uri: str,
 ) -> None:
     """Notify every subscriber of ``uri`` via ``send_resource_updated``.
 
-    Sessions whose ``send_resource_updated`` raises (typically because the
-    session has been torn down) are dropped from the registry — that's the
-    only signal we have for "this session is gone" since FastMCP doesn't
-    expose a session-shutdown callback.
+    Sends are fanned out concurrently with ``asyncio.gather`` and bounded
+    per-subscriber by ``SEND_TIMEOUT_SECONDS`` so that one slow or hung
+    session never stalls the watcher loop or delays delivery to other
+    subscribers.
+
+    Sessions whose ``send_resource_updated`` raises or times out (typically
+    because the session has been torn down) are dropped from the registry —
+    that's the only signal we have for "this session is gone" since FastMCP
+    doesn't expose a session-shutdown callback.
     """
     sessions = await registry.sessions_for(uri)
-    for session in sessions:
-        try:
-            await session.send_resource_updated(uri)
-        except Exception as e:  # noqa: BLE001 - drop on any send failure
-            logger.warning("send_resource_updated failed; dropping session: %s", e)
-            await registry.clear_session(session)
+    if not sessions:
+        return
+    await asyncio.gather(
+        *(_send_one(registry, session, uri) for session in sessions),
+        return_exceptions=True,
+    )
 
 
 def register_subscription_handlers(

@@ -257,6 +257,134 @@ async def test_broadcast_drops_failed_sessions():
     assert live.calls == ["zim://files"]
 
 
+@pytest.mark.asyncio
+async def test_broadcast_does_not_serialize_on_slow_subscriber():
+    """Slow subscribers must not delay other subscribers — fan-out is concurrent."""
+    import time
+
+    from openzim_mcp.subscriptions import (
+        SubscriberRegistry,
+        broadcast_resource_updated,
+    )
+
+    fast_calls: list[str] = []
+    slow_calls: list[str] = []
+
+    class Slow:
+        async def send_resource_updated(self, uri):
+            await asyncio.sleep(0.5)
+            slow_calls.append(str(uri))
+
+        def __hash__(self):
+            return id(self)
+
+        def __eq__(self, other):
+            return self is other
+
+    class Fast:
+        async def send_resource_updated(self, uri):
+            fast_calls.append(str(uri))
+
+        def __hash__(self):
+            return id(self)
+
+        def __eq__(self, other):
+            return self is other
+
+    reg = SubscriberRegistry()
+    fast, slow = Fast(), Slow()
+    await reg.subscribe("zim://x", fast)
+    await reg.subscribe("zim://x", slow)
+
+    start = time.monotonic()
+    await broadcast_resource_updated(reg, "zim://x")
+    elapsed = time.monotonic() - start
+
+    # Both subscribers received the notification; total wall time is bounded
+    # by the single slow sleep (~0.5s) regardless of order. The stronger
+    # concurrency proof lives in the next test (N slow subscribers).
+    assert fast_calls == ["zim://x"]
+    assert slow_calls == ["zim://x"]
+    assert elapsed < 0.9, f"broadcast took unexpectedly long: {elapsed:.3f}s"
+
+
+@pytest.mark.asyncio
+async def test_broadcast_fans_out_concurrently_many_slow_subscribers():
+    """Multiple slow subscribers complete in ~one sleep, not N sleeps."""
+    import time
+
+    from openzim_mcp.subscriptions import (
+        SubscriberRegistry,
+        broadcast_resource_updated,
+    )
+
+    SLEEP = 0.3
+    N = 5
+
+    class Slow:
+        def __init__(self):
+            self.called = False
+
+        async def send_resource_updated(self, uri):
+            await asyncio.sleep(SLEEP)
+            self.called = True
+
+        def __hash__(self):
+            return id(self)
+
+        def __eq__(self, other):
+            return self is other
+
+    reg = SubscriberRegistry()
+    subs = [Slow() for _ in range(N)]
+    for s in subs:
+        await reg.subscribe("zim://x", s)
+
+    start = time.monotonic()
+    await broadcast_resource_updated(reg, "zim://x")
+    elapsed = time.monotonic() - start
+
+    # Serial: N * SLEEP = 1.5s. Concurrent: ~SLEEP = 0.3s.
+    # Allow generous slack for CI scheduler jitter.
+    assert elapsed < (SLEEP * N) / 2, (
+        f"broadcast was serial (or near-serial): {elapsed:.3f}s for "
+        f"{N} subscribers @ {SLEEP}s each"
+    )
+    assert all(s.called for s in subs)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_drops_session_after_timeout(monkeypatch):
+    """A session whose send_resource_updated hangs is dropped after the timeout."""
+    from openzim_mcp import subscriptions as subs_mod
+    from openzim_mcp.subscriptions import (
+        SubscriberRegistry,
+        broadcast_resource_updated,
+    )
+
+    # Shrink the per-send timeout so the test runs quickly.
+    monkeypatch.setattr(subs_mod, "SEND_TIMEOUT_SECONDS", 0.1)
+
+    class Hanging:
+        async def send_resource_updated(self, uri):
+            await asyncio.sleep(60)  # never returns within test
+
+        def __hash__(self):
+            return id(self)
+
+        def __eq__(self, other):
+            return self is other
+
+    reg = SubscriberRegistry()
+    hung = Hanging()
+    await reg.subscribe("zim://x", hung)
+
+    await broadcast_resource_updated(reg, "zim://x")
+
+    remaining = await reg.sessions_for("zim://x")
+    assert hung not in remaining
+
+
 def test_capability_patch_flips_subscribe_to_true():
     """The capability patch makes get_capabilities() advertise subscribe=True."""
     from mcp.server.fastmcp import FastMCP
