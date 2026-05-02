@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpSecurityError, OpenZimMcpValidationError
 from openzim_mcp.security import PathValidator, sanitize_input
+from openzim_mcp.server import OpenZimMcpServer
 
 
 class TestPathValidator:
@@ -198,3 +200,54 @@ class TestSanitizeInput:
         """Test that sanitization preserves newlines and tabs."""
         result = sanitize_input("Hello\nWorld\tTest")
         assert result == "Hello\nWorld\tTest"
+
+
+class TestErrorMessageRedaction:
+    """Tests for path redaction in error messages returned to MCP clients."""
+
+    def test_security_error_message_does_not_leak_resolved_path(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """Verify the canonical path embedded in OpenZimMcpSecurityError is redacted.
+
+        Returning the full path verbatim leaks the host's allowed-dirs
+        layout exactly when a traversal attempt is rejected, so the
+        directory portion must be redacted before reaching the client.
+        """
+        server = OpenZimMcpServer(test_config)
+        err = OpenZimMcpSecurityError(
+            "Access denied - Path is outside allowed directories: "
+            "/opt/secret/data/wikipedia.zim"
+        )
+
+        msg = server._create_enhanced_error_message(
+            "get_zim_entry", err, "../etc/passwd"
+        )
+
+        # Directory portion must not leak
+        assert "/opt/secret/data" not in msg, msg
+        assert "/opt/secret" not in msg, msg
+        # But filename can be retained (sanitize_path_for_error keeps the
+        # filename so the operator still has a debugging signal)
+        assert "wikipedia.zim" in msg or "[REDACTED" in msg, msg
+
+    def test_windows_absolute_path_is_redacted(self, test_config: OpenZimMcpConfig):
+        r"""Verify Windows-style absolute paths are redacted from error messages.
+
+        ``C:\foo\bar`` style paths embedded in an exception message must
+        also be redacted before being returned to the client, even when
+        the host OS is POSIX.
+        """
+        server = OpenZimMcpServer(test_config)
+        err = OpenZimMcpSecurityError(
+            "Access denied - Path is outside allowed directories: "
+            "C:\\Secret\\Data\\wikipedia.zim"
+        )
+
+        msg = server._create_enhanced_error_message(
+            "get_zim_entry", err, "..\\etc\\passwd"
+        )
+
+        assert "C:\\Secret\\Data" not in msg, msg
+        assert "Secret\\Data" not in msg, msg
+        assert "wikipedia.zim" in msg or "[REDACTED" in msg, msg
