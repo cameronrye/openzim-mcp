@@ -381,6 +381,48 @@ class TestAtomicRateLimitAcquisition:
         )
 
 
+class TestPerClientRateLimit:
+    """Tests for per-client rate limit isolation (H4)."""
+
+    def test_per_client_rate_limit_does_not_starve_other_clients(self):
+        """Client A exhausting its bucket should not affect Client B."""
+        cfg = RateLimitConfig(
+            enabled=True,
+            requests_per_second=1.0,
+            burst_size=2,
+            per_operation_limits={},
+        )
+        limiter = RateLimiter(cfg)
+
+        # Client A exhausts its bucket
+        limiter.check_rate_limit("search", cost=1, client_id="A")
+        limiter.check_rate_limit("search", cost=1, client_id="A")
+        with pytest.raises(OpenZimMcpRateLimitError):
+            limiter.check_rate_limit("search", cost=1, client_id="A")
+
+        # Client B should still have its full burst available
+        limiter.check_rate_limit("search", cost=1, client_id="B")
+        limiter.check_rate_limit("search", cost=1, client_id="B")
+
+    def test_per_client_rate_limit_evicts_oldest_client_at_cap(self):
+        """LRU eviction should drop the oldest client when max_clients is hit."""
+        cfg = RateLimitConfig(enabled=True, requests_per_second=1.0, burst_size=1)
+        limiter = RateLimiter(cfg, max_clients=3)
+
+        for cid in ["A", "B", "C"]:
+            limiter.check_rate_limit("search", cost=1, client_id=cid)
+
+        # Exhaust A's bucket
+        with pytest.raises(OpenZimMcpRateLimitError):
+            limiter.check_rate_limit("search", cost=1, client_id="A")
+
+        # Adding D should evict A (LRU). A's bucket is gone, so A gets a fresh
+        # burst on its next call.
+        limiter.check_rate_limit("search", cost=1, client_id="D")
+        # A re-creates its bucket; first call should succeed (fresh burst).
+        limiter.check_rate_limit("search", cost=1, client_id="A")
+
+
 class TestDefaultCosts:
     """Test default operation costs."""
 
