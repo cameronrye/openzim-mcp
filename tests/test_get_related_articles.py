@@ -129,3 +129,43 @@ class TestResolveLinkToEntryPath:
 
         resolved = _StructureMixin._resolve_link_to_entry_path("Linked_A", "C/Source")
         assert resolved == "C/Linked_A"
+
+    @pytest.mark.parametrize("url", [".", "./", "/", "//"])
+    def test_self_referential_navigation_returns_none(self, url: str):
+        """Refs that resolve to "stay here" return None.
+
+        ``.``, ``./``, ``/`` and ``//`` don't point at navigable targets:
+        - ``./`` from ``"C/Source"`` would otherwise produce ``"C/"``,
+          which is a namespace prefix, not a fetchable entry.
+        - ``/`` is an absolute web path with no meaningful ZIM analogue.
+        - ``//`` is protocol-relative.
+        """
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        for source in ("C/Source", "C/Sub/Article", "iep.utm.edu/aristotle/"):
+            resolved = _StructureMixin._resolve_link_to_entry_path(url, source)
+            assert resolved is None, (
+                f"expected None for url={url!r} source={source!r}, " f"got {resolved!r}"
+            )
+
+    def test_parent_dir_to_archive_root_is_kept(self):
+        """``../`` from ``iep.utm.edu/aristotle/`` resolves to the archive index.
+
+        This is the legitimate "parent directory" case in domain-scheme
+        archives where ``iep.utm.edu/`` IS a real entry (the index page).
+        Unlike pure-navigation tokens, ``..``/``../`` from a path with
+        depth resolves to a different (parent) location and may map to
+        a real entry.
+        """
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        # Two-level descent — parent is the domain root, a real entry.
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu/"
+        # Without trailing slash too.
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "..", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu"
