@@ -79,6 +79,24 @@ async def test_concurrent_subscribe_unsubscribe():
 
 
 @pytest.mark.asyncio
+async def test_registry_uses_set_backed_storage_for_o1_membership():
+    """Backing store must be a set so subscribe/unsubscribe are O(1)."""
+    from openzim_mcp.subscriptions import SubscriberRegistry
+
+    registry = SubscriberRegistry()
+    sessions = [f"session-{i}" for i in range(10000)]
+    for s in sessions:
+        await registry.subscribe("zim://x", s)
+    # Re-subscribe all — must remain idempotent and not double-count.
+    for s in sessions:
+        await registry.subscribe("zim://x", s)
+
+    backing = registry._by_uri["zim://x"]
+    assert isinstance(backing, set), f"expected set, got {type(backing).__name__}"
+    assert len(backing) == 10000
+
+
+@pytest.mark.asyncio
 async def test_watcher_detects_new_zim_file(tmp_path):
     """Polling watcher fires zim://files when a .zim is added."""
     from openzim_mcp.subscriptions import MtimeWatcher

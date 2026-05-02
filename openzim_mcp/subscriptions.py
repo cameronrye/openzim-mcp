@@ -59,15 +59,18 @@ class SubscriberRegistry:
 
     def __init__(self) -> None:
         """Create an empty registry."""
-        self._by_uri: dict[str, list[Hashable]] = {}
+        # Set-backed storage so subscribe/unsubscribe/clear_session are all
+        # O(1) per (uri, session) pair. The previous list-based backing made
+        # subscribe O(n) (linear `not in` scan for idempotency), unsubscribe
+        # O(n) (linear search + shift), and clear_session O(URIs * sessions).
+        self._by_uri: dict[str, set[Hashable]] = {}
         self._lock = asyncio.Lock()
 
     async def subscribe(self, uri: str, session: Hashable) -> None:
         """Register interest. Idempotent for the same (uri, session) pair."""
         async with self._lock:
-            sessions = self._by_uri.setdefault(uri, [])
-            if session not in sessions:
-                sessions.append(session)
+            # ``set.add`` is inherently idempotent — no membership pre-check needed.
+            self._by_uri.setdefault(uri, set()).add(session)
             logger.debug("subscribe uri=%s session=%r", uri, session)
 
     async def unsubscribe(self, uri: str, session: Hashable) -> None:
@@ -76,27 +79,27 @@ class SubscriberRegistry:
             sessions = self._by_uri.get(uri)
             if not sessions:
                 return
-            try:
-                sessions.remove(session)
-            except ValueError:
-                return
+            sessions.discard(session)  # silent on missing
             if not sessions:
                 self._by_uri.pop(uri, None)
 
     async def sessions_for(self, uri: str) -> List[Any]:
-        """Return a snapshot of sessions subscribed to ``uri`` (in insertion order)."""
+        """Return a snapshot of sessions subscribed to ``uri``.
+
+        Order is not guaranteed (set iteration order); callers (the broadcast
+        fan-out in particular) don't rely on ordering.
+        """
         async with self._lock:
-            return list(self._by_uri.get(uri, []))
+            return list(self._by_uri.get(uri, ()))
 
     async def clear_session(self, session: Hashable) -> None:
         """Drop ``session`` from every URI (called on session teardown)."""
         async with self._lock:
             empty_uris = []
             for uri, sessions in self._by_uri.items():
-                try:
-                    sessions.remove(session)
-                except ValueError:
-                    continue
+                # ``discard`` is O(1) and silent on missing membership, so
+                # this loop is O(URIs) rather than O(URIs * sessions_per_uri).
+                sessions.discard(session)
                 if not sessions:
                     empty_uris.append(uri)
             for uri in empty_uris:
