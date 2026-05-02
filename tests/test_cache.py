@@ -588,6 +588,59 @@ class TestCachePersistence:
         cache = OpenZimMcpCache(config, enable_background_cleanup=False)
         assert cache.stats()["size"] == 0
 
+    def test_load_skips_individual_malformed_entries(self, temp_dir):
+        """A single malformed entry must not abort loading the rest.
+
+        Older cache files (or hand-edited / partially-written ones) may
+        contain entries missing required fields. Per-entry isolation
+        means the loader logs and skips the bad record instead of
+        bailing out before valid entries that follow it.
+        """
+        import json as _json
+
+        from openzim_mcp.config import CacheConfig
+
+        cache_path = temp_dir / "test_cache.json"
+        config = CacheConfig(
+            enabled=True,
+            max_size=10,
+            ttl_seconds=60,
+            persistence_enabled=True,
+            persistence_path=str(cache_path),
+        )
+
+        now = time.time()
+        payload = {
+            "version": 1,
+            "saved_at": now,
+            "entries": {
+                "good_before": {
+                    "value": "v1",
+                    "created_at": now,
+                    "ttl_seconds": 60,
+                },
+                "missing_value": {  # bad: no "value" key
+                    "created_at": now,
+                    "ttl_seconds": 60,
+                },
+                "wrong_shape": "not-a-dict",  # bad: not an object
+                "good_after": {
+                    "value": "v2",
+                    "created_at": now,
+                    "ttl_seconds": 60,
+                },
+            },
+        }
+        with open(cache_path, "w") as f:
+            _json.dump(payload, f)
+
+        cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+        # Both good entries survive; malformed records are skipped.
+        assert cache.get("good_before") == "v1"
+        assert cache.get("good_after") == "v2"
+        assert cache.get("missing_value") is None
+        assert cache.get("wrong_shape") is None
+
 
 class TestCacheEdgeCases:
     """Test edge cases and error conditions."""
