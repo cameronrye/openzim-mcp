@@ -279,6 +279,7 @@
             <div class="nav-menu" id="nav-menu">
                 <a href="#home" class="nav-link">Home</a>
                 <a href="#features" class="nav-link">Features</a>
+                <a href="#whats-new" class="nav-link">What's New</a>
                 <a href="#smart-retrieval" class="nav-link">Smart Retrieval</a>
                 <a href="#security" class="nav-link">Security</a>
                 <a href="#installation" class="nav-link">Installation</a>
@@ -305,7 +306,7 @@
     <div class="new-feature-banner">
         <div class="container">
             <span class="new-badge"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</span>
-            <span class="new-text"><strong>Streamable HTTP Transport in v1.0.0!</strong> Run OpenZIM MCP as a long-running service over HTTP — bearer-token auth, multi-arch Docker images, resource subscriptions, and a deployment guide. Plus batch entry retrieval and per-entry MCP resources. <a href="#features" class="new-link">Learn more →</a></span>
+            <span class="new-text"><strong>OpenZIM MCP v1.0.0 is here!</strong> Streamable HTTP transport (bearer-token auth, multi-arch Docker, resource subscriptions, a full deployment guide), batch entry retrieval, per-entry MCP resources for direct browser rendering, and dozens of polish fixes. <a href="#whats-new" class="new-link">Learn more →</a></span>
         </div>
     </div>
 
@@ -402,10 +403,11 @@
                 <div class="feature-card feature-new" id="streamable-http">
                     <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
                     <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path><circle cx="12" cy="12" r="10"></circle></svg></span></div>
-                    <h3 class="feature-title">Streamable HTTP Transport</h3>
+                    <h3 class="feature-title">HTTP &amp; SSE Transports</h3>
                     <p class="feature-description">
-                        Run OpenZIM MCP as a long-running service. Bearer-token auth,
-                        multi-arch Docker, Tailscale-ready. Resource subscriptions included.
+                        Run OpenZIM MCP as a long-running service. Streamable HTTP with
+                        bearer-token auth, CORS allow-list, health endpoints, multi-arch Docker.
+                        Legacy SSE (<code>--transport sse</code>) for older clients — localhost only.
                     </p>
                 </div>
                 <div class="feature-card feature-new" id="batch-entries">
@@ -424,6 +426,16 @@
                     <p class="feature-description">
                         Browse ZIM articles via <code>zim://archive/entry/Path</code>
                         with native MIME types — HTML, PDFs, images.
+                    </p>
+                </div>
+                <div class="feature-card feature-new" id="resource-subscriptions">
+                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
+                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg></span></div>
+                    <h3 class="feature-title">Resource Subscriptions</h3>
+                    <p class="feature-description">
+                        Subscribe to <code>zim://files</code> or <code>zim://{name}</code> and receive
+                        <code>notifications/resources/updated</code> when archives change. mtime-polling
+                        watcher with configurable interval.
                     </p>
                 </div>
                 <div class="feature-card" id="content-tools">
@@ -515,6 +527,84 @@
                     </p>
                 </div>
             </div>
+        </div>
+    </section>
+
+    <!-- What's New Section -->
+    <section id="whats-new" class="whats-new">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">What's New</h2>
+                <p class="section-description">Recent releases at a glance.</p>
+            </div>
+
+            <article class="release-block">
+                <h3 class="release-title">v1.0.0</h3>
+                <ul class="release-marquee">
+                    <li><strong>Streamable HTTP &amp; SSE transports</strong> — bearer-token auth, CORS allow-list, <code>/healthz</code>/<code>/readyz</code> endpoints, multi-arch Docker image at <code>ghcr.io/cameronrye/openzim-mcp:1.0.0</code>. Legacy SSE for unmigrated clients (localhost only).</li>
+                    <li><strong>Batch entry retrieval</strong> — <code>get_zim_entries</code> fetches up to 50 entries per call. Multi-archive batches; bare-string entries with a default <code>zim_file_path</code>; per-entry success/error reporting.</li>
+                    <li><strong>Per-entry MCP resource</strong> — <code>zim://{name}/entry/{path}</code> serves single entries with libzim's native MIME type. Clients URL-encode <code>/</code> as <code>%2F</code>.</li>
+                    <li><strong>Resource subscriptions</strong> — clients subscribe to <code>zim://files</code> and <code>zim://{name}</code>; mtime-polling watcher emits <code>notifications/resources/updated</code> when archives change.</li>
+                </ul>
+
+                <details open class="release-details">
+                    <summary><strong>Smarter archive handling</strong></summary>
+                    <ul>
+                        <li><code>get_related_articles</code> resolves relative hrefs against the source entry's directory and detects the content namespace correctly on domain-scheme archives.</li>
+                        <li>Suggestion fallback uses <code>SuggestionSearcher(archive).suggest(text)</code> (the prior <code>archive.suggest()</code> call didn't exist).</li>
+                        <li><code>list_zim_files</code> gains a case-insensitive <code>name_filter</code> substring argument.</li>
+                        <li><code>search_zim_file</code> accepts an opaque <code>cursor</code> parameter; passing the cursor alone resumes pagination.</li>
+                    </ul>
+                </details>
+
+                <details open class="release-details">
+                    <summary><strong>Cleaner content extraction</strong></summary>
+                    <ul>
+                        <li>Heading-id resolution falls through <code>id</code> → mw-headline anchor → preceding <code>&lt;a name=&quot;&quot;&gt;</code> → slug, returning <code>(id, source)</code>.</li>
+                        <li>Summary extraction skips USWDS banners and skip-nav blocks above the first <code>&lt;h1&gt;</code> (MedlinePlus / NIH / NIST style sites).</li>
+                        <li>Link extraction drops non-navigable schemes (<code>javascript:</code>, <code>mailto:</code>, <code>tel:</code>, <code>data:</code>, <code>blob:</code>, <code>vbscript:</code>).</li>
+                        <li>Per-entry paths sanitized in <code>get_zim_entries</code>.</li>
+                    </ul>
+                </details>
+
+                <details open class="release-details">
+                    <summary><strong>Server hygiene</strong></summary>
+                    <ul>
+                        <li><code>__version__</code> reads from <code>importlib.metadata</code>; <code>serverInfo.version</code> reports openzim-mcp's actual version.</li>
+                        <li>HTTP transport's subscription watcher starts via wrapped lifespan.</li>
+                        <li>Per-entry <code>zim://</code> returns libzim's native MIME type.</li>
+                    </ul>
+                </details>
+
+                <details open class="release-details">
+                    <summary><strong>Streamlined scope</strong></summary>
+                    <p>v1.0.0 reduces the advanced-mode tool surface from 27 to 21 by removing administrative/inspection helpers that didn't pull their weight: <code>warm_cache</code>, <code>cache_stats</code>, <code>cache_clear</code>, <code>get_random_entry</code>, <code>diagnose_server_state</code>, and <code>resolve_server_conflicts</code>. The cache itself remains; the explicit management tools were dropped. Multi-instance conflict tracking was removed entirely — <code>instance_tracker.py</code> is gone — which means HTTP server instances coexist freely without configuration warnings.</p>
+                </details>
+
+                <details open class="release-details">
+                    <summary><strong>Review pass</strong></summary>
+                    <p>End-to-end review pass before tagging: tightened path/PID redaction in error and diagnostics responses, locked <code>OPTIONS /mcp</code> behind auth, fixed cache poisoning on transient libzim errors, resolved redirects before rendering with cycle detection, preserved Unicode in heading slugs (Arabic, Chinese, Cyrillic, Japanese), made rate-limiting atomic, and split <code>zim_operations.py</code> into a <code>zim/</code> package via mixin classes.</p>
+                </details>
+            </article>
+
+            <article class="release-block">
+                <h3 class="release-title">v0.9.0</h3>
+                <ul class="release-marquee">
+                    <li><strong>Multi-archive search</strong> — <code>search_all</code> queries every ZIM file in your allowed directories at once.</li>
+                    <li><strong>MCP Prompts</strong> — <code>/research</code>, <code>/summarize</code>, <code>/explore</code> as ready-made workflows.</li>
+                    <li><strong>Find entries by title</strong> — <code>find_entry_by_title</code> resolves a title to entry paths, optionally cross-file.</li>
+                    <li><strong>MCP Resources</strong> — <code>zim://files</code> and <code>zim://{name}</code> show up in your client's resource browser and <code>@</code>-mention picker.</li>
+                    <li><strong>Power-user tools</strong> — <code>walk_namespace</code> for deterministic cursor-paginated namespace iteration; <code>get_related_articles</code> for outbound link-graph neighbours.</li>
+                </ul>
+                <details class="release-details">
+                    <summary><strong>Reliability fixes</strong></summary>
+                    <ul>
+                        <li>Namespace listing deterministically surfaces minority namespaces (M, W, X, I) that random sampling could miss.</li>
+                        <li>Search filtering uses streaming scan instead of a hard 1000-hit cap.</li>
+                        <li>Error messages route by failure mode first.</li>
+                    </ul>
+                </details>
+            </article>
         </div>
     </section>
 
