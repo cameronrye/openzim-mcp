@@ -5,11 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.1] - 2026-05-01
+## [1.0.0](https://github.com/cameronrye/openzim-mcp/compare/v0.9.0...v1.0.0) (2026-05-01)
 
-End-to-end review pass over the v1.0.0 surface. No breaking API changes; all of the
-behaviour changes below were silent bugs or hardening gaps. 38 commits, +131 tests
-(698 → 829), `zim_operations.py` split into a `zim/` package via mixin classes.
+Includes an end-to-end review pass: 38 follow-up commits added 131 tests (698 → 829) and split `zim_operations.py` into a `zim/` package via mixin classes.
+
+### Features
+
+* **http:** streamable HTTP transport with bearer-token auth, CORS allow-list, and `/healthz`/`/readyz` endpoints
+* **http:** safe-default startup check refuses to bind a non-localhost host without an auth token
+* **transport:** legacy SSE transport (`--transport sse`) for clients that haven't migrated to streamable-HTTP; bound to localhost only, no auth/CORS middleware
+* **docker:** multi-stage, multi-arch (`linux/amd64`, `linux/arm64`) image published to `ghcr.io/cameronrye/openzim-mcp`, runs as non-root with a built-in health check
+* **content:** `get_zim_entries` batch tool — fetch up to 50 entries in one call, with per-entry success/error reporting
+* **resources:** per-entry `zim://{name}/entry/{path}` resource serves entries with their native MIME type (clients must URL-encode `/` as `%2F` in the path segment)
+* **subscriptions:** clients can subscribe to `zim://files` and `zim://{name}`; mtime-polling watcher emits `notifications/resources/updated` when allowed directories or `.zim` files change
+* **search:** opaque `cursor` parameter on `search_zim_file` for resumable pagination
+* **simple:** intent pattern routes batch retrieval queries to `get_zim_entries`
+
+### Improvements
+
+* **content:** `get_related_articles` resolves relative hrefs against the source entry's directory and detects the content namespace correctly on domain-scheme archives (previously returned nothing)
+* **content:** suggestion fallback uses `SuggestionSearcher(archive).suggest(text)` (the prior `archive.suggest()` call did not exist)
+* **tools:** `list_zim_files` accepts a case-insensitive `name_filter` substring argument; one shared cache slot regardless of filter value
+* **content:** `get_zim_entries` accepts bare entry-path strings paired with a `zim_file_path` default (dicts still work for multi-archive batches)
+* **content:** heading-id resolution falls through `id` → mw-headline anchor → preceding `<a name="">` → slug, returning `(id, source)` so consumers can distinguish real anchors from synthetic slugs
+* **content:** summary extraction skips USWDS banners and skip-nav blocks above the first `<h1>` (MedlinePlus / NIH / NIST style sites)
+* **content:** link extraction drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`)
+* **server:** `__version__` reads from `importlib.metadata`; `serverInfo.version` reports openzim-mcp's actual version (no longer the FastMCP SDK default)
+
+### Removed
+
+* **tools:** advanced-mode tool surface drops 27 → 21. Removed: `warm_cache`, `cache_stats`, `cache_clear`, `get_random_entry`, `diagnose_server_state`, `resolve_server_conflicts`. The cache itself remains; the explicit management tools were dropped.
+* **instance:** multi-instance conflict tracking removed; `instance_tracker.py` deleted. HTTP server instances coexist freely.
+
+### Bug Fixes
+
+* **content:** sanitize per-entry paths in `get_zim_entries` and expand test coverage
+* **resources:** per-entry `zim://` returns libzim's native MIME type
+* **http:** start subscription watcher via wrapped lifespan
+* **instance:** relax conflict logic for HTTP transport so multiple HTTP server instances can coexist
 
 ### Security
 
@@ -66,45 +99,6 @@ behaviour changes below were silent bugs or hardening gaps. 38 commits, +131 tes
 * **exceptions:** drop `details` from `Exception.args` so it no longer leaks into `repr()` and tracebacks
 * **main:** route startup banner through the logger (now respects `OPENZIM_MCP_LOGGING__LEVEL`)
 * **simple-tools:** consistently append low-confidence note across all intents (was missing on `search_all`, `walk_namespace`, `find_by_title`, `related`)
-
-## [1.0.0](https://github.com/cameronrye/openzim-mcp/compare/v0.9.0...v1.0.0) (2026-05-01)
-
-### Features
-
-* **http:** streamable HTTP transport with bearer-token auth, CORS allow-list, and `/healthz`/`/readyz` endpoints
-* **http:** safe-default startup check refuses to bind a non-localhost host without an auth token
-* **transport:** legacy SSE transport (`--transport sse`) for clients that haven't migrated to streamable-HTTP; bound to localhost only, no auth/CORS middleware
-* **docker:** multi-stage, multi-arch (`linux/amd64`, `linux/arm64`) image published to `ghcr.io/cameronrye/openzim-mcp`, runs as non-root with a built-in health check
-* **content:** `get_zim_entries` batch tool — fetch up to 50 entries in one call, with per-entry success/error reporting
-* **resources:** per-entry `zim://{name}/entry/{path}` resource serves entries with their native MIME type (clients must URL-encode `/` as `%2F` in the path segment)
-* **subscriptions:** clients can subscribe to `zim://files` and `zim://{name}`; mtime-polling watcher emits `notifications/resources/updated` when allowed directories or `.zim` files change
-* **search:** opaque `cursor` parameter on `search_zim_file` for resumable pagination
-* **simple:** intent pattern routes batch retrieval queries to `get_zim_entries`
-
-### Improvements
-
-* **content:** `get_related_articles` resolves relative hrefs against the source entry's directory and detects the content namespace correctly on domain-scheme archives (previously returned nothing)
-* **content:** suggestion fallback uses `SuggestionSearcher(archive).suggest(text)` (the prior `archive.suggest()` call did not exist)
-* **tools:** `list_zim_files` accepts a case-insensitive `name_filter` substring argument; one shared cache slot regardless of filter value
-* **content:** `get_zim_entries` accepts bare entry-path strings paired with a `zim_file_path` default (dicts still work for multi-archive batches)
-* **content:** heading-id resolution falls through `id` → mw-headline anchor → preceding `<a name="">` → slug, returning `(id, source)` so consumers can distinguish real anchors from synthetic slugs
-* **content:** summary extraction skips USWDS banners and skip-nav blocks above the first `<h1>` (MedlinePlus / NIH / NIST style sites)
-* **content:** link extraction drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`)
-* **server:** `__version__` reads from `importlib.metadata`; `serverInfo.version` reports openzim-mcp's actual version (no longer the FastMCP SDK default)
-* **http:** CORS preflight requests bypass bearer-token auth (browsers omit `Authorization` on `OPTIONS`)
-* **subscriptions:** `MtimeWatcher` fires `replaced` only on size change, ignoring touch-style mtime bumps that don't rewrite content
-
-### Removed
-
-* **tools:** advanced-mode tool surface drops 27 → 21. Removed: `warm_cache`, `cache_stats`, `cache_clear`, `get_random_entry`, `diagnose_server_state`, `resolve_server_conflicts`. The cache itself remains; the explicit management tools were dropped.
-* **instance:** multi-instance conflict tracking removed; `instance_tracker.py` deleted. HTTP server instances coexist freely.
-
-### Bug Fixes
-
-* **content:** sanitize per-entry paths in `get_zim_entries` and expand test coverage
-* **resources:** per-entry `zim://` returns libzim's native MIME type
-* **http:** start subscription watcher via wrapped lifespan
-* **instance:** relax conflict logic for HTTP transport so multiple HTTP server instances can coexist
 
 ## [0.9.0](https://github.com/cameronrye/openzim-mcp/compare/v0.8.3...v0.9.0) (2026-04-30)
 
