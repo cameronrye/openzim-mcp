@@ -14,7 +14,7 @@ from openzim_mcp.rate_limiter import (
 
 
 class TestRateLimitConfig:
-    """Test RateLimitConfig dataclass."""
+    """Test RateLimitConfig pydantic model."""
 
     def test_default_config(self):
         """Test default configuration values."""

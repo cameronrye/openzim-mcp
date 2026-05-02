@@ -1,11 +1,14 @@
 """Tests for cache module."""
 
 import time
+from datetime import datetime
+from pathlib import Path
 
 import pytest
 
 from openzim_mcp.cache import CacheEntry, OpenZimMcpCache
 from openzim_mcp.config import CacheConfig
+from openzim_mcp.exceptions import OpenZimMcpValidationError
 
 
 class TestCacheEntry:
@@ -426,7 +429,12 @@ class TestCachePersistence:
         cache = OpenZimMcpCache(config, enable_background_cleanup=False)
 
         persistence_file = cache._get_persistence_file()
-        assert str(persistence_file) == str(temp_dir / "test_cache.json")
+        # CacheConfig.persistence_path is now normalized via .resolve() so the
+        # stored path is the canonical (symlink-resolved) form. Compare via
+        # Path.resolve() to handle the macOS /var -> /private/var symlink and
+        # any other canonicalization the validator applies.
+        assert persistence_file.resolve() == (temp_dir / "test_cache.json").resolve()
+        assert persistence_file.suffix == ".json"
 
     def test_save_and_load_from_disk(self, temp_dir):
         """Test saving cache to disk and loading it back."""
@@ -644,3 +652,70 @@ class TestCacheEdgeCases:
             t.join()
 
         assert len(errors) == 0, f"Thread safety errors: {errors}"
+
+
+class TestCacheJsonSerializableValidation:
+    """Validate cache values are JSON-serializable when persistence is enabled (M21)."""
+
+    def test_cache_set_rejects_non_json_serializable_when_persistence_enabled(
+        self, tmp_path
+    ):
+        """Non-JSON values must be rejected at write time, not silently coerced."""
+        cfg = CacheConfig(
+            enabled=True,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "cache"),
+        )
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        with pytest.raises(OpenZimMcpValidationError):
+            cache.set("k", object())
+
+    def test_cache_set_rejects_path_when_persistence_enabled(self, tmp_path):
+        """Path is not JSON-serializable; reject rather than str()-coerce."""
+        cfg = CacheConfig(
+            enabled=True,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "cache"),
+        )
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        with pytest.raises(OpenZimMcpValidationError):
+            cache.set("k", Path("/tmp/foo"))
+
+    def test_cache_set_rejects_datetime_when_persistence_enabled(self, tmp_path):
+        """Datetime is not JSON-serializable; reject rather than str()-coerce."""
+        cfg = CacheConfig(
+            enabled=True,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "cache"),
+        )
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        with pytest.raises(OpenZimMcpValidationError):
+            cache.set("k", datetime.now())
+
+    def test_cache_set_allows_non_json_when_persistence_disabled(self):
+        """In-memory caches still accept arbitrary Python objects."""
+        cfg = CacheConfig(enabled=True, persistence_enabled=False)
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        sentinel = object()
+        cache.set("k", sentinel)
+        assert cache.get("k") is sentinel
+
+    def test_cache_set_allows_json_compatible_values_when_persistence_enabled(
+        self, tmp_path
+    ):
+        """Strings, dicts, lists, numbers, None still accepted."""
+        cfg = CacheConfig(
+            enabled=True,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "cache"),
+        )
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        cache.set("s", "value")
+        cache.set("d", {"a": 1, "b": [1, 2, 3]})
+        cache.set("l", [1, 2, 3])
+        cache.set("n", 42)
+        cache.set("z", None)
+        assert cache.get("s") == "value"
+        assert cache.get("d") == {"a": 1, "b": [1, 2, 3]}
+        assert cache.get("l") == [1, 2, 3]
+        assert cache.get("n") == 42

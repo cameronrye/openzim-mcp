@@ -18,7 +18,7 @@ from .error_messages import (
     get_error_config,
 )
 from .exceptions import OpenZimMcpConfigurationError
-from .rate_limiter import RateLimitConfig, RateLimiter
+from .rate_limiter import RateLimiter
 from .security import (
     PathValidator,
     redact_paths_in_message,
@@ -50,13 +50,10 @@ class OpenZimMcpServer:
         self.path_validator = PathValidator(config.allowed_directories)
         self.cache = OpenZimMcpCache(config.cache)
         self.content_processor = ContentProcessor(config.content.snippet_length)
-        self.rate_limiter = RateLimiter(
-            RateLimitConfig(
-                enabled=config.rate_limit.enabled,
-                requests_per_second=config.rate_limit.requests_per_second,
-                burst_size=config.rate_limit.burst_size,
-            )
-        )
+        # ``RateLimitConfig`` is unified — ``OpenZimMcpConfig.rate_limit`` is
+        # the same model the limiter expects, including ``per_operation_limits``
+        # which would otherwise be unreachable from env-var/JSON config.
+        self.rate_limiter = RateLimiter(config.rate_limit)
         self.zim_operations = ZimOperations(
             config, self.path_validator, self.cache, self.content_processor
         )

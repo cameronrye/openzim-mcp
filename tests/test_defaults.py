@@ -34,11 +34,18 @@ class TestCacheDefaults:
 
     def test_cache_defaults_values(self):
         """Test cache default values."""
+        from pathlib import Path
+
         assert CacheDefaults.ENABLED is True
         assert CacheDefaults.MAX_SIZE == 100
         assert CacheDefaults.TTL_SECONDS == 3600
         assert CacheDefaults.PERSISTENCE_ENABLED is False
-        assert CacheDefaults.PERSISTENCE_PATH == ".openzim_mcp_cache"
+        # PERSISTENCE_PATH defaults to an absolute path under the user's
+        # cache directory (M3) — read it from the instance because it's
+        # a default_factory field (not a class-level constant).
+        expected = str((Path.home() / ".cache" / "openzim-mcp").resolve())
+        assert CACHE.PERSISTENCE_PATH == expected
+        assert Path(CACHE.PERSISTENCE_PATH).is_absolute()
 
     def test_cache_instance(self):
         """Test CACHE instance has correct values."""

@@ -5,8 +5,21 @@ This module consolidates all default configuration values in one place,
 making it easier to understand and modify the server's default behavior.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List
+
+
+def _default_persistence_path() -> str:
+    """Return the default cache persistence path as a resolved absolute path.
+
+    Uses ``~/.cache/openzim-mcp`` rather than a CWD-relative path so the
+    cache lands in a predictable location regardless of how the server is
+    invoked (containers, systemd units, etc. often run from ``/`` and a
+    relative default would silently land in the working directory or in a
+    world-writable surface).
+    """
+    return str((Path.home() / ".cache" / "openzim-mcp").resolve())
 
 
 @dataclass(frozen=True)
@@ -17,7 +30,7 @@ class CacheDefaults:
     MAX_SIZE: int = 100
     TTL_SECONDS: int = 3600  # 1 hour
     PERSISTENCE_ENABLED: bool = False
-    PERSISTENCE_PATH: str = ".openzim_mcp_cache"
+    PERSISTENCE_PATH: str = field(default_factory=_default_persistence_path)
 
 
 @dataclass(frozen=True)

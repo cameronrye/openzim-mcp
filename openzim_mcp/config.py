@@ -9,8 +9,17 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .defaults import CACHE, CONTENT, RATE_LIMIT, VALID_TOOL_MODES
+from .defaults import CACHE, CONTENT, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
+from .rate_limiter import RateLimitConfig
+
+__all__ = [
+    "CacheConfig",
+    "ContentConfig",
+    "LoggingConfig",
+    "OpenZimMcpConfig",
+    "RateLimitConfig",
+]
 
 
 class CacheConfig(BaseModel):
@@ -20,15 +29,18 @@ class CacheConfig(BaseModel):
     max_size: int = Field(default=CACHE.MAX_SIZE, ge=1, le=10000)
     ttl_seconds: int = Field(default=CACHE.TTL_SECONDS, ge=60, le=86400)
     persistence_enabled: bool = Field(default=CACHE.PERSISTENCE_ENABLED)
-    persistence_path: str = Field(default=CACHE.PERSISTENCE_PATH)
+    persistence_path: str = Field(default_factory=lambda: CACHE.PERSISTENCE_PATH)
 
+    @field_validator("persistence_path")
+    @classmethod
+    def normalize_persistence_path(cls, v: str) -> str:
+        """Normalize persistence_path to an absolute, tilde-expanded path.
 
-class RateLimitConfig(BaseModel):
-    """Rate limiting configuration settings."""
-
-    enabled: bool = Field(default=RATE_LIMIT.ENABLED)
-    requests_per_second: float = Field(default=RATE_LIMIT.REQUESTS_PER_SECOND, gt=0)
-    burst_size: int = Field(default=RATE_LIMIT.BURST_SIZE, ge=1, le=1000)
+        Without this, a CWD-relative default (or user-supplied relative
+        path) lands in unpredictable locations under containers/systemd
+        where the working directory is not the user's home.
+        """
+        return str(Path(v).expanduser().resolve())
 
 
 class ContentConfig(BaseModel):

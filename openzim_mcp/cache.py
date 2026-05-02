@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import CacheConfig
+from .exceptions import OpenZimMcpValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -237,9 +238,30 @@ class OpenZimMcpCache:
         Args:
             key: Cache key
             value: Value to cache
+
+        Raises:
+            OpenZimMcpValidationError: When persistence is enabled and the
+                value is not JSON-serializable. Surfacing the error at write
+                time prevents silent ``str()`` coercion on save (M21) — a
+                ``Path`` or ``datetime`` round-tripped through persistence
+                would otherwise come back as a plain string and lose its
+                type.
         """
         if not self.config.enabled:
             return
+
+        # Validate JSON-serializability at write time when persistence is
+        # enabled. Pure in-memory caches still accept arbitrary Python
+        # objects — only the persisted path needs JSON guarantees.
+        if self._persistence_enabled:
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError) as exc:
+                raise OpenZimMcpValidationError(
+                    f"Cache value for key {key!r} is not JSON-serializable; "
+                    f"persistence is enabled so the value must be JSON-safe.",
+                    details=str(exc),
+                ) from exc
 
         with self._lock:
             # Check if we need to evict entries
@@ -422,7 +444,13 @@ class OpenZimMcpCache:
 
                 persistence_file.parent.mkdir(parents=True, exist_ok=True)
 
-                # Write to temp file first, then rename for atomicity
+                # Write to temp file first, then rename for atomicity.
+                # We deliberately omit ``default=str``: ``cache.set`` already
+                # validates JSON-serializability when persistence is enabled
+                # (see :meth:`set`), so any non-JSON value reaching this
+                # point is a bug we want to surface rather than silently
+                # coerce to a ``str()`` repr that loses type information on
+                # reload.
                 temp_file = persistence_file.with_suffix(".tmp")
                 with open(temp_file, "w", encoding="utf-8") as f:
                     json.dump(
@@ -433,7 +461,6 @@ class OpenZimMcpCache:
                         },
                         f,
                         indent=2,
-                        default=str,  # Handle non-serializable values
                     )
 
                 # Atomic rename

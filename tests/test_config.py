@@ -39,6 +39,31 @@ class TestCacheConfig:
         with pytest.raises(ValueError):
             CacheConfig(ttl_seconds=30)  # Should be >= 60
 
+    def test_persistence_path_defaults_to_absolute_under_user_cache(self):
+        """Default persistence_path lives under ~/.cache so it's CWD-independent."""
+        config = CacheConfig()
+        path = Path(config.persistence_path)
+        assert path.is_absolute(), f"default persistence_path is not absolute: {path}"
+        # Default lives under the platform's user cache directory.
+        expected = (Path.home() / ".cache" / "openzim-mcp").resolve()
+        assert path == expected
+
+    def test_persistence_path_is_normalized_to_absolute(self, tmp_path, monkeypatch):
+        """User-supplied relative paths are resolved to an absolute path."""
+        monkeypatch.chdir(tmp_path)
+        config = CacheConfig(persistence_path="my_cache")
+        path = Path(config.persistence_path)
+        assert path.is_absolute()
+        assert path == (tmp_path / "my_cache").resolve()
+
+    def test_persistence_path_expands_tilde(self):
+        """Tilde in persistence_path is expanded."""
+        config = CacheConfig(persistence_path="~/some-cache")
+        path = Path(config.persistence_path)
+        assert path.is_absolute()
+        assert "~" not in str(path)
+        assert path == (Path.home() / "some-cache").resolve()
+
 
 class TestContentConfig:
     """Test ContentConfig class."""
@@ -252,3 +277,43 @@ def test_config_default_subscriptions_enabled():
 
     cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
     assert cfg.subscriptions_enabled is True
+
+
+def test_per_operation_limits_round_trip_through_env_vars(monkeypatch):
+    """per_operation_limits must be reachable from env-var/JSON config (M4)."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    monkeypatch.setenv("OPENZIM_MCP_ALLOWED_DIRECTORIES", '["/tmp"]')
+    monkeypatch.setenv(
+        "OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS",
+        '{"search": {"requests_per_second": 1.0, "burst_size": 1}}',
+    )
+    cfg = OpenZimMcpConfig()
+    assert "search" in cfg.rate_limit.per_operation_limits
+    op_cfg = cfg.rate_limit.per_operation_limits["search"]
+    assert op_cfg.requests_per_second == 1.0
+    assert op_cfg.burst_size == 1
+
+
+def test_rate_limit_config_is_single_class():
+    """Verify RateLimitConfig is a single class (M4).
+
+    The class exposed via openzim_mcp.config and openzim_mcp.rate_limiter
+    must be the same object so per_operation_limits is reachable from
+    env-var/JSON config.
+    """
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.config import RateLimitConfig as ConfigRateLimitConfig
+    from openzim_mcp.rate_limiter import RateLimitConfig as RLRateLimitConfig
+
+    assert ConfigRateLimitConfig is RLRateLimitConfig
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
+    assert isinstance(cfg.rate_limit, RLRateLimitConfig)
+
+
+def test_rate_limit_config_per_operation_limits_default_empty():
+    """Default per_operation_limits is an empty dict, not None."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
+    assert cfg.rate_limit.per_operation_limits == {}

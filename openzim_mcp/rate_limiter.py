@@ -9,37 +9,54 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
-from .defaults import RATE_LIMIT_COSTS
+from pydantic import BaseModel, Field, field_validator
+
+from .defaults import RATE_LIMIT, RATE_LIMIT_COSTS
 from .exceptions import OpenZimMcpRateLimitError
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class RateLimitConfig:
+class RateLimitConfig(BaseModel):
     """Configuration for rate limiting.
+
+    This is the single source of truth for rate-limit configuration. It
+    is referenced both by the rate limiter and by ``OpenZimMcpConfig``
+    (under the ``rate_limit`` field), so settings such as
+    ``per_operation_limits`` are reachable from env vars / JSON config
+    via pydantic-settings (M4).
 
     Attributes:
         enabled: Whether rate limiting is enabled
         requests_per_second: Maximum requests per second (token refill rate)
         burst_size: Maximum burst size (token bucket capacity)
-        per_operation_limits: Optional per-operation overrides
+        per_operation_limits: Optional per-operation overrides keyed by
+            operation name. Each value is itself a ``RateLimitConfig``
+            so an operation can have its own bucket parameters.
     """
 
-    enabled: bool = True
-    requests_per_second: float = 10.0
-    burst_size: int = 20
-    per_operation_limits: Dict[str, "RateLimitConfig"] = field(default_factory=dict)
+    enabled: bool = Field(default=RATE_LIMIT.ENABLED)
+    requests_per_second: float = Field(default=RATE_LIMIT.REQUESTS_PER_SECOND)
+    burst_size: int = Field(default=RATE_LIMIT.BURST_SIZE, le=1000)
+    per_operation_limits: Dict[str, "RateLimitConfig"] = Field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        """Validate configuration values."""
-        if self.requests_per_second <= 0:
+    @field_validator("requests_per_second")
+    @classmethod
+    def _validate_requests_per_second(cls, v: float) -> float:
+        """Reject non-positive refill rates."""
+        if v <= 0:
             raise ValueError("requests_per_second must be positive")
-        if self.burst_size <= 0:
+        return v
+
+    @field_validator("burst_size")
+    @classmethod
+    def _validate_burst_size(cls, v: int) -> int:
+        """Reject non-positive bucket capacities."""
+        if v <= 0:
             raise ValueError("burst_size must be positive")
+        return v
 
 
 class TokenBucket:
