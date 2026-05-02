@@ -388,6 +388,56 @@ class TestNewIntentPatterns:
         )
         assert intent == "related"
 
+    def test_search_all_extractor_has_redos_protection(self, monkeypatch):
+        """The search_all param extractor must time out under ReDoS.
+
+        Every other regex in ``simple_tools.py`` is wrapped via the
+        ``safe_regex_*`` helpers (which apply a threading timeout). The
+        ``search_all`` parameter extractor previously used a bare
+        ``re.sub`` with a backtracking-prone lazy quantifier; this test
+        ensures the wrapped variant aborts and falls back to the raw
+        query on timeout, rather than hanging the worker thread.
+
+        Strategy: monkeypatch ``re.sub`` (used inside the lambda) to
+        sleep longer than the regex timeout. The fixed code wraps the
+        call in ``run_with_timeout`` and catches ``RegexTimeoutError``,
+        so it should still return a valid params dict whose ``query``
+        falls back to the stripped input.
+        """
+        import re as _re
+        import time
+
+        from openzim_mcp import simple_tools
+
+        # Patch re.sub on the simple_tools module to simulate a hanging
+        # regex. The fix wraps the call in run_with_timeout, so this
+        # must time out (not hang the test) and fall back to the raw
+        # query.
+        def slow_sub(*args, **kwargs):
+            time.sleep(5)
+            return _re.sub(*args, **kwargs)
+
+        monkeypatch.setattr(simple_tools.re, "sub", slow_sub)
+
+        # Force the search_all extractor path. Use the IntentParser
+        # internal helper directly so we don't drag in slow classifier
+        # patterns.
+        start = time.monotonic()
+        params = simple_tools.IntentParser._extract_params(
+            "search all files for python", "search_all"
+        )
+        elapsed = time.monotonic() - start
+
+        # Must respect the configured regex timeout (1s default), with
+        # a small budget for thread setup / fallback path.
+        assert elapsed < 2.0, (
+            f"search_all extractor took {elapsed:.3f}s — timeout wrapping "
+            "is missing or broken"
+        )
+        # And it must still return a usable query (fallback path).
+        assert "query" in params
+        assert params["query"]
+
 
 class TestIntentParserBatchEntries:
     """Test intent patterns for the get_zim_entries (batch) tool."""

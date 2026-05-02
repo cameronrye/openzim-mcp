@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.exceptions import OpenZimMcpValidationError
 from openzim_mcp.server import OpenZimMcpServer
 
 
@@ -18,20 +19,31 @@ class TestWalkNamespace:
         return OpenZimMcpServer(test_config)
 
     def test_walk_namespace_limit_validation_low(self, server: OpenZimMcpServer):
-        """Test that limit < 1 returns parameter validation error."""
-        result = server.zim_operations.walk_namespace(
-            "/path/to/file.zim", "C", cursor=0, limit=0
-        )
-        assert "Parameter Validation Error" in result
-        assert "limit must be between 1 and 500" in result
+        """Test that limit < 1 raises OpenZimMcpValidationError."""
+        with pytest.raises(
+            OpenZimMcpValidationError, match="limit must be between 1 and 500"
+        ):
+            server.zim_operations.walk_namespace(
+                "/path/to/file.zim", "C", cursor=0, limit=0
+            )
 
     def test_walk_namespace_limit_validation_high(self, server: OpenZimMcpServer):
-        """Test that limit > 500 returns parameter validation error."""
-        result = server.zim_operations.walk_namespace(
-            "/path/to/file.zim", "C", cursor=0, limit=501
-        )
-        assert "Parameter Validation Error" in result
-        assert "limit must be between 1 and 500" in result
+        """Test that limit > 500 raises OpenZimMcpValidationError."""
+        with pytest.raises(
+            OpenZimMcpValidationError, match="limit must be between 1 and 500"
+        ):
+            server.zim_operations.walk_namespace(
+                "/path/to/file.zim", "C", cursor=0, limit=10000
+            )
+
+    def test_walk_namespace_raises_validation_error_for_bad_limit(
+        self, server: OpenZimMcpServer
+    ):
+        """Mirror the explicit acceptance test from the fix plan (Task 6.4)."""
+        with pytest.raises(OpenZimMcpValidationError):
+            server.zim_operations.walk_namespace(
+                "/path/to/file.zim", "A", cursor=0, limit=10000
+            )
 
     def test_walk_namespace_negative_cursor_clamped(
         self, server: OpenZimMcpServer, monkeypatch

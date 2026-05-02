@@ -408,13 +408,20 @@ class TestZimOperations:
             assert "total_in_namespace" in result
 
     def test_browse_namespace_invalid_params(self, zim_operations: ZimOperations):
-        """Test namespace browsing with invalid parameters."""
+        """Test namespace browsing with invalid parameters.
+
+        Parameter-validation failures raise ``OpenZimMcpValidationError``,
+        distinct from archive failures so the tool layer can surface a
+        targeted error message to callers.
+        """
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace("test.zim", "C", limit=0)
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Offset must be non-negative"):
+        with pytest.raises(
+            OpenZimMcpValidationError, match="Offset must be non-negative"
+        ):
             zim_operations.browse_namespace("test.zim", "C", offset=-1)
 
         with pytest.raises(
@@ -422,6 +429,20 @@ class TestZimOperations:
             match="Access denied - Path is outside allowed directories",
         ):
             zim_operations.browse_namespace("test.zim", "ABC", limit=10)
+
+    def test_browse_namespace_raises_validation_error_for_bad_limit(
+        self, zim_operations: ZimOperations
+    ):
+        """Parameter validation should raise OpenZimMcpValidationError, not Archive."""
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.browse_namespace("test.zim", "A", limit=0, offset=0)
+
+    def test_browse_namespace_raises_validation_error_for_bad_namespace(
+        self, zim_operations: ZimOperations
+    ):
+        """Empty namespace should raise OpenZimMcpValidationError."""
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.browse_namespace("test.zim", "", limit=10, offset=0)
 
     def test_search_with_filters(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test filtered search functionality."""
@@ -1901,27 +1922,31 @@ class TestZimOperations:
         ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=51)
 
-        # Test browse_namespace with invalid parameters
+        # Test browse_namespace with invalid parameters. Parameter-validation
+        # failures raise OpenZimMcpValidationError, which is distinct from
+        # OpenZimMcpArchiveError raised by archive-access failures.
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=0)
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=201)
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Offset must be non-negative"):
+        with pytest.raises(
+            OpenZimMcpValidationError, match="Offset must be non-negative"
+        ):
             zim_operations.browse_namespace(str(zim_file), "A", offset=-1)
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Namespace must be a non-empty string"
+            OpenZimMcpValidationError, match="Namespace must be a non-empty string"
         ):
             zim_operations.browse_namespace(str(zim_file), "")
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Namespace must be a non-empty string"
+            OpenZimMcpValidationError, match="Namespace must be a non-empty string"
         ):
             zim_operations.browse_namespace(str(zim_file), "   ")
 

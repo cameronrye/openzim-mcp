@@ -430,13 +430,34 @@ class IntentParser:
 
             elif intent == "search_all":
                 # Strip the "search all files for" prefix to get the query.
-                params["query"] = re.sub(
-                    r"^.*?(search\s+(all|every(thing|where)?|across)"
-                    r"\s+(files?|zims?)?\s*for\s*)",
-                    "",
-                    query,
-                    flags=re.IGNORECASE,
-                ).strip()
+                # The lazy ``^.*?`` is a known ReDoS vector on adversarial
+                # input, so wrap the substitution in the standard timeout
+                # helper used by every other regex in this file. On
+                # timeout, fall back to the stripped query — better to
+                # search a slightly noisy term than to hang the worker.
+                try:
+                    cleaned = run_with_timeout(
+                        lambda: re.sub(
+                            r"^.*?(search\s+(all|every(thing|where)?|across)"
+                            r"\s+(files?|zims?)?\s*for\s*)",
+                            "",
+                            query,
+                            flags=re.IGNORECASE,
+                        ),
+                        REGEX_TIMEOUT_SECONDS,
+                        (
+                            "Regex operation timed out after "
+                            f"{REGEX_TIMEOUT_SECONDS} seconds"
+                        ),
+                        RegexTimeoutError,
+                    ).strip()
+                    params["query"] = cleaned
+                except RegexTimeoutError:
+                    logger.warning(
+                        "Regex timeout while extracting search_all query "
+                        f"from: {query[:50]}..."
+                    )
+                    params["query"] = query.strip()
             elif intent == "walk_namespace":
                 m = safe_regex_search(r"namespace\s+([A-Za-z])\b", query, re.IGNORECASE)
                 if m:

@@ -1428,16 +1428,21 @@ class ZimOperations:
             JSON string containing namespace entries
 
         Raises:
+            OpenZimMcpValidationError: If parameter validation fails (limit,
+                offset, or namespace).
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If browsing fails
         """
-        # Validate parameters
+        # Validate parameters. These are caller-input errors, distinct from
+        # archive-access failures, so they surface as
+        # OpenZimMcpValidationError to let the tool layer render a targeted
+        # validation message.
         if limit < 1 or limit > 200:
-            raise OpenZimMcpArchiveError("Limit must be between 1 and 200")
+            raise OpenZimMcpValidationError("Limit must be between 1 and 200")
         if offset < 0:
-            raise OpenZimMcpArchiveError("Offset must be non-negative")
+            raise OpenZimMcpValidationError("Offset must be non-negative")
         if not namespace or len(namespace.strip()) == 0:
-            raise OpenZimMcpArchiveError("Namespace must be a non-empty string")
+            raise OpenZimMcpValidationError("Namespace must be a non-empty string")
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
@@ -3021,12 +3026,17 @@ class ZimOperations:
         Returns:
             JSON containing entries in the namespace, the next cursor, and
             ``done: true`` if iteration finished
+
+        Raises:
+            OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
         """
+        # Caller-input validation surfaces as OpenZimMcpValidationError so
+        # the tool layer can render a targeted validation message and so
+        # other call sites (e.g. simple_tools) can distinguish it from
+        # archive-access failures.
         if limit < 1 or limit > 500:
-            return (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: limit must be between 1 and 500 (provided: {limit})\n"
-                "**Example**: Use `limit=200` for a typical page."
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 500 (provided: {limit})"
             )
         if cursor < 0:
             cursor = 0
