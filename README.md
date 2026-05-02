@@ -141,7 +141,7 @@ v1.0.0 reduces the advanced-mode tool surface from 27 to 21 by removing administ
 
 **Review pass**
 
-End-to-end review pass: 38 follow-up commits added 131 tests (698 → 829), tightened path/PID redaction in error and diagnostics responses, locked `OPTIONS /mcp` behind auth, fixed cache poisoning on transient libzim errors, resolved redirects before rendering with cycle detection, preserved Unicode in heading slugs (Arabic, Chinese, Cyrillic, Japanese), made rate-limiting atomic, and split `zim_operations.py` into a `zim/` package via mixin classes.
+End-to-end review pass before tagging: tightened path/PID redaction in error and diagnostics responses, locked `OPTIONS /mcp` behind auth, fixed cache poisoning on transient libzim errors, resolved redirects before rendering with cycle detection, preserved Unicode in heading slugs (Arabic, Chinese, Cyrillic, Japanese), made rate-limiting atomic, and split `zim_operations.py` into a `zim/` package via mixin classes.
 
 ## What's new in v0.9.0
 

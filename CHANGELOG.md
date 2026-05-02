@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0](https://github.com/cameronrye/openzim-mcp/compare/v0.9.0...v1.0.0) (2026-05-01)
 
-Includes an end-to-end review pass: 38 follow-up commits added 131 tests (698 → 829) and split `zim_operations.py` into a `zim/` package via mixin classes.
+Includes an end-to-end review pass before tagging — security hardening, correctness fixes, performance work, and a refactor that splits `zim_operations.py` into a `zim/` package via mixin classes. See sections below.
 
 ### Features
 
