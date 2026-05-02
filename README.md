@@ -456,6 +456,25 @@ No parameters required.
 - **Enhanced Error Guidance**: Provides clear guidance when entries cannot be found, suggesting alternative approaches
 - **Transparent Operation**: Works seamlessly regardless of path encoding differences (spaces vs underscores, URL encoding, etc.)
 
+### get_zim_entries - Batch retrieve multiple ZIM entries in one call
+
+Pairs naturally with HTTP transport, where round-trip cost matters. Up to 50 entries per batch. Each entry resolves independently — per-entry failures do not abort the batch.
+
+**Required parameters:**
+
+- `entries` (list): Either a list of entry-path strings (paired with `zim_file_path` default) OR a list of `{zim_file_path, entry_path}` dicts (for multi-archive batches). Limit: 50 per batch.
+
+**Optional parameters:**
+
+- `zim_file_path` (string): Default archive path; required if `entries` are bare strings, optional when each dict carries its own.
+- `max_content_length` (integer): Per-entry max content length.
+
+**Returns:**
+JSON `{"results": [...], "succeeded": N, "failed": N}`. Each result includes `index` (input order), `success`, and either `content` or `error`.
+
+**Notes:**
+Rate limit is charged per entry, not per batch (anti-bypass).
+
 ### get_zim_metadata - Get ZIM file metadata from M namespace entries
 
 **Required parameters:**
@@ -498,6 +517,23 @@ JSON string containing namespace information with entry counts, descriptions, an
 **Returns:**
 JSON string containing namespace entries with titles, content previews, and pagination information.
 
+### walk_namespace - Deterministic cursor-paginated namespace iteration
+
+Unlike `browse_namespace` (which samples and may cap at 200 entries on large archives), `walk_namespace` scans the archive by entry ID from `cursor` onward. Pair the returned `next_cursor` with a follow-up call to walk the rest. `done: true` indicates iteration is complete. Use this for exhaustive enumeration — e.g. dumping every `M/*` metadata entry, or finding an entry whose path doesn't follow common patterns.
+
+**Required parameters:**
+
+- `zim_file_path` (string): Path to the ZIM file
+- `namespace` (string): Namespace to walk (C, M, W, X, A, I, etc.)
+
+**Optional parameters:**
+
+- `cursor` (integer, default: 0): Entry ID to resume from
+- `limit` (integer, default: 200, range: 1–500): Max entries per page
+
+**Returns:**
+JSON with `entries`, `next_cursor`, and `done` flag.
+
 ### search_with_filters - Search within ZIM file content with advanced filters
 
 **Required parameters:**
@@ -514,6 +550,39 @@ JSON string containing namespace entries with titles, content previews, and pagi
 
 **Returns:**
 Filtered search results with namespace and content type information.
+
+### search_all - Search across every ZIM file in the allowed directories
+
+Returns merged per-file results so the caller doesn't need to know which file holds the information. Files that can't be searched (corrupt, no full-text index) are skipped without aborting the rest.
+
+**Required parameters:**
+
+- `query` (string): Search query term
+
+**Optional parameters:**
+
+- `limit_per_file` (integer, default: 5, range: 1–50): Max hits per ZIM file
+- `limit` (integer): Alias for `limit_per_file`. If both are provided, `limit_per_file` wins.
+
+**Returns:**
+JSON containing per-file result groups and counts of files searched, files-with-results, and files that failed.
+
+### find_entry_by_title - Resolve a title to one or more entry paths
+
+Cheaper than full-text search when the caller knows the article title. Tries an exact normalized `C/<Title>` match first (fast path), then falls back to libzim's title-indexed suggestion search.
+
+**Required parameters:**
+
+- `zim_file_path` (string): Path to the ZIM file (used unless `cross_file=true`)
+- `title` (string): Title or partial title to resolve (case-insensitive)
+
+**Optional parameters:**
+
+- `cross_file` (boolean, default: false): If true, search across all allowed ZIM files
+- `limit` (integer, default: 10, range: 1–50): Max results to return
+
+**Returns:**
+JSON with `query`, ranked `results`, `fast_path_hit` flag, and `files_searched` count.
 
 ### get_search_suggestions - Get search suggestions and auto-complete
 
@@ -548,6 +617,22 @@ JSON string containing article structure including headings, sections, metadata,
 
 **Returns:**
 JSON string containing categorized links (internal, external, media) with titles and metadata.
+
+### get_related_articles - Find articles related to a given entry via outbound links
+
+Composes `extract_article_links` and deduplicates internal links, returning up to `limit` outbound targets. (Inbound discovery was removed — it required a bounded full-archive scan that was too expensive for interactive use; reach for full-text search instead.)
+
+**Required parameters:**
+
+- `zim_file_path` (string): Path to the ZIM file
+- `entry_path` (string): Source entry, e.g. 'C/Some_Article'
+
+**Optional parameters:**
+
+- `limit` (integer, default: 10, range: 1–100): Max results
+
+**Returns:**
+JSON with `outbound_results`.
 
 ### get_entry_summary - Get a concise article summary
 
