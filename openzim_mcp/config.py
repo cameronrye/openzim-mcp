@@ -173,8 +173,12 @@ class OpenZimMcpConfig(BaseSettings):
     @field_validator("cors_origins")
     @classmethod
     def reject_cors_wildcard(cls, v: List[str]) -> List[str]:
-        """Reject wildcard '*' in CORS origins (footgun prevention)."""
-        if "*" in v:
+        """Reject wildcard '*' in CORS origins (footgun prevention).
+
+        Strips each origin before comparing so whitespace-padded variants
+        like ``" * "`` cannot bypass the check.
+        """
+        if any(origin.strip() == "*" for origin in v):
             raise OpenZimMcpConfigurationError(
                 "CORS wildcard '*' is not allowed. List origins explicitly "
                 "(e.g. ['http://localhost:5173'])."

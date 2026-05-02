@@ -62,6 +62,39 @@ class TestZimOperations:
         assert "test1.zim" in result
         assert "test2.zim" in result
 
+    def test_list_zim_files_skips_symlinks_outside_allowed_root(
+        self, zim_operations: ZimOperations, temp_dir: Path, tmp_path_factory
+    ):
+        """A symlink inside the allowed dir pointing outside MUST be skipped.
+
+        Without this guard, ``Path.glob("**/*.zim")`` follows symlinks and
+        the resolved target — which can live anywhere on the filesystem —
+        gets included in the listing, defeating the allowed-directories
+        access boundary.
+        """
+        # Make a real ZIM file outside the allowed directory.
+        outside_dir = tmp_path_factory.mktemp("outside")
+        outside_zim = outside_dir / "secret.zim"
+        outside_zim.write_text("outside content")
+
+        # Plant a symlink inside the allowed dir pointing at the outside file.
+        link_inside = temp_dir / "evil.zim"
+        try:
+            link_inside.symlink_to(outside_zim)
+        except (OSError, NotImplementedError):
+            pytest.skip("filesystem does not support symlinks")
+
+        # Also drop a normal ZIM file inside so we know the scan worked.
+        legit = temp_dir / "ok.zim"
+        legit.write_text("inside content")
+
+        result = zim_operations.list_zim_files()
+        assert "ok.zim" in result, "scan must surface legitimate inside file"
+        assert "evil.zim" not in result, "symlink to outside path must be filtered out"
+        assert (
+            "secret.zim" not in result
+        ), "resolved target outside allowed root must not appear"
+
     def test_list_zim_files_caching(
         self, zim_operations: ZimOperations, temp_dir: Path
     ):

@@ -372,6 +372,10 @@ def redact_paths_in_message(raw_message: str) -> str:
     return _ABS_PATH_RE.sub(_replace, raw_message)
 
 
+_CONTEXT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
+_CONTEXT_MAX_LENGTH = 1024
+
+
 def sanitize_context_for_error(context: str) -> str:
     """Sanitize context strings for error messages.
 
@@ -379,6 +383,12 @@ def sanitize_context_for_error(context: str) -> str:
     and replaces each one with its sanitized form. URL-encoded paths
     are decoded first so encoded variants (``%2Fopt%2Fzims%2Ffoo.zim``)
     are caught alongside their bare counterparts.
+
+    Also strips ASCII control characters and caps overall length so that
+    raw user-supplied values (e.g. a query that reaches the rate-limit
+    error branch before ``sanitize_input`` has had a chance to clean it)
+    cannot embed control characters or oversized payloads in the response
+    or in any log line that captures the rendered message.
 
     Args:
         context: The context string to sanitize
@@ -398,4 +408,13 @@ def sanitize_context_for_error(context: str) -> str:
         # Decoding may fail on malformed input; fall back to the original.
         decoded_context = context
 
-    return redact_paths_in_message(decoded_context)
+    # Strip control characters before redaction so a bytes-rendered
+    # control char inside a path doesn't survive into the error message.
+    decoded_context = _CONTEXT_CONTROL_CHARS_RE.sub(" ", decoded_context)
+
+    redacted = redact_paths_in_message(decoded_context)
+
+    if len(redacted) > _CONTEXT_MAX_LENGTH:
+        redacted = redacted[:_CONTEXT_MAX_LENGTH].rstrip() + "..."
+
+    return redacted

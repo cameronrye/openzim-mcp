@@ -225,11 +225,33 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             directory = Path(directory_str)
             logger.debug(f"Scanning directory: {directory}")
             try:
+                # ``Path.glob`` follows symlinks by default, which would let a
+                # symlink inside an allowed directory point at a ZIM file
+                # outside the allowed tree. Resolve each candidate and check
+                # that it still lives under the directory we were told to
+                # scan; reject otherwise (without raising — a stray symlink
+                # in a watched directory is a misconfiguration, not a fatal
+                # error).
+                allowed_root = directory.resolve()
                 zim_files_in_dir = list(directory.glob("**/*.zim"))
                 logger.debug(f"Found {len(zim_files_in_dir)} ZIM files in {directory}")
 
                 for file_path in zim_files_in_dir:
+                    # ``is_file()`` follows symlinks, so a symlink to a real
+                    # file passes it — verify membership in the allowed
+                    # tree before accepting the entry.
                     if not file_path.is_file():
+                        continue
+                    try:
+                        resolved = file_path.resolve()
+                    except OSError as e:
+                        logger.warning(f"Could not resolve {file_path}: {e}; skipping")
+                        continue
+                    if not resolved.is_relative_to(allowed_root):
+                        logger.warning(
+                            f"Skipping {file_path}: resolved path "
+                            f"{resolved} is outside allowed root {allowed_root}"
+                        )
                         continue
                     try:
                         stats = file_path.stat()
