@@ -463,7 +463,9 @@ class IntentParser:
                 # paths like "wikipedia.zim" but matches ZIM entry paths.
                 entries = safe_regex_findall(r"[A-Z]/[\w\-./%]+", query)
                 if entries:
-                    params["entries"] = entries
+                    # Strip trailing sentence punctuation that the character
+                    # class greedily captures (e.g. "A/Bar." -> "A/Bar").
+                    params["entries"] = [e.rstrip(".?,;:!") for e in entries]
 
         except RegexTimeoutError:
             logger.warning(

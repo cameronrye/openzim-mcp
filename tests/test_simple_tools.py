@@ -433,6 +433,34 @@ class TestIntentParserBatchEntries:
         assert intent == "get_zim_entries"
         assert params.get("entries") == ["A/Foo", "A/Bar", "M/Image.png"]
 
+    def test_get_zim_entries_strips_trailing_sentence_punctuation(self):
+        """Trailing sentence punctuation must not glue onto the last path."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent("fetch entries A/Foo and A/Bar.")
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "A/Bar"]
+
+    def test_get_zim_entries_strips_various_trailing_punctuation(self):
+        """Other trailing punctuation (?, !, ,, ;, :) is also stripped."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent(
+            "fetch entries A/Foo? and A/Bar! and A/Baz;"
+        )
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "A/Bar", "A/Baz"]
+
+    def test_get_zim_entries_preserves_internal_dots(self):
+        """Stripping must not eat legitimate internal dots (e.g. file extensions)."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent(
+            "fetch entries A/Foo and M/Image.png."
+        )
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "M/Image.png"]
+
 
 class TestGetZimEntriesDispatch:
     """H15 regression: get_zim_entries intent must dispatch to batch fetch."""
