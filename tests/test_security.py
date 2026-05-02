@@ -287,3 +287,74 @@ def test_sanitize_path_for_error_handles_windows_paths_on_posix(win_path):
     # Directory should not appear; basename can survive
     assert "Secret\\Data" not in out, out
     assert "share\\" not in out, out
+
+
+@pytest.mark.parametrize(
+    "wrapped",
+    [
+        "(/opt/foo.zim)",
+        "[/opt/foo.zim]",
+        '"/opt/foo.zim"',
+        "'/opt/foo.zim'",
+        "<file>/opt/foo.zim</file>",
+        "file=/opt/foo.zim",
+    ],
+)
+def test_redact_handles_wrapped_absolute_paths(wrapped):
+    """redact_paths_in_message must catch paths wrapped by punctuation."""
+    from openzim_mcp.security import redact_paths_in_message
+
+    out = redact_paths_in_message(wrapped)
+    # Directory portion must not leak
+    assert "/opt/foo" not in out, out
+    # The basename ".zim" should still be visible
+    # (sanitize_path_for_error keeps the filename)
+    assert "foo.zim" in out, out
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        "%2Fopt%2Fzims%2Ffoo.zim",
+        "context=%2Fmnt%2Fdata%2Fbar.zim",
+    ],
+)
+def test_sanitize_context_redacts_url_encoded_paths(encoded):
+    """sanitize_context_for_error must decode + redact percent-encoded paths."""
+    from openzim_mcp.security import sanitize_context_for_error
+
+    out = sanitize_context_for_error(encoded)
+    assert "/opt/zims" not in out and "%2Fopt%2Fzims" not in out
+    assert "/mnt/data" not in out and "%2Fmnt%2Fdata" not in out
+
+
+def test_redact_handles_whitespace_prefixed_path():
+    """Whitespace-prefixed absolute paths must still be redacted (regression)."""
+    from openzim_mcp.security import redact_paths_in_message
+
+    out = redact_paths_in_message("hello world /tmp/x.zim")
+    assert "/tmp/x" not in out, out
+    assert "x.zim" in out, out
+
+
+def test_redact_handles_bol_path():
+    """Path at start of string (no preceding character) must be redacted."""
+    from openzim_mcp.security import redact_paths_in_message
+
+    out = redact_paths_in_message("/opt/data/baz.zim is missing")
+    assert "/opt/data" not in out, out
+    assert "baz.zim" in out, out
+
+
+def test_redact_does_not_match_relative_path_after_basename():
+    """``test.zim/A/Article`` must not have its ``/A/Article`` suffix redacted.
+
+    The ``/`` after ``test.zim`` is preceded by ``m`` (a path-continuation
+    character) and so the absolute-path regex must not fire here.
+    """
+    from openzim_mcp.security import redact_paths_in_message
+
+    text = "see test.zim/A/Article for details"
+    out = redact_paths_in_message(text)
+    # The mid-token "/A/Article" suffix must remain intact
+    assert "test.zim/A/Article" in out, out

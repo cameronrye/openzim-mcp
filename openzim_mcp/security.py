@@ -249,15 +249,24 @@ def sanitize_input(
 
 
 # Match either Windows drive-letter paths (``C:\foo\bar``) or POSIX
-# absolute paths (``/foo/bar``). Anchored at start-of-string or after
-# whitespace so a relative path embedded mid-token (``test.zim/A/B``)
-# does not have its ``/A/B`` suffix mistaken for an absolute path.
-# Stops at whitespace; trailing punctuation is stripped by
-# ``_strip_trailing_punct`` before being routed through
-# :func:`sanitize_path_for_error`. Used by both
-# :func:`sanitize_context_for_error` here and the redactor in
+# absolute paths (``/foo/bar``). The negative lookbehind guarantees the
+# path is not preceded by another path-continuation character, so a
+# relative path embedded mid-token (``test.zim/A/B``) does not have its
+# ``/A/B`` suffix mistaken for an absolute path -- yet a path wrapped by
+# punctuation (``(/opt/foo)``, ``"/opt/foo"``, ``file=/opt/foo``) still
+# matches because ``(``, ``"``, ``=`` are not path-continuation chars.
+# The body stops at whitespace **and** common wrapper delimiters (``'``,
+# ``"``, ``)``, ``]``, ``<``, ``>``) so wrapped paths collapse cleanly
+# without absorbing the surrounding wrapper characters. Trailing prose punctuation
+# (``.``, ``,``, ``;``, ``:``) is stripped by ``_strip_trailing_punct``
+# before being routed through :func:`sanitize_path_for_error`. Used by
+# both :func:`sanitize_context_for_error` here and the redactor in
 # ``server.py`` so we have a single source of truth.
-_ABS_PATH_RE = re.compile(r"(?:(?<=\s)|^)(?:[A-Za-z]:[\\/][^\s]+|/[^\s]+)")
+_ABS_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9._\-/\\])"  # not preceded by a path-continuation char
+    r"(?:[A-Za-z]:[\\/][^\s'\")\]<>]+"  # Windows drive path
+    r"|/[^\s'\")\]<>]+)"  # POSIX absolute path
+)
 
 # Both ``/`` and ``\`` may appear as a separator in a leaked path.
 # :class:`pathlib.Path` does not split on ``\`` on POSIX hosts, so we
