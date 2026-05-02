@@ -1,7 +1,7 @@
 """Tests for find_entry_by_title tool."""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -148,3 +148,45 @@ def _ctx(value):
             return False
 
     return _C()
+
+
+class TestFindEntryByTitleToolSanitization:
+    """Sanitization tests for the registered MCP tool wrapper."""
+
+    @pytest.fixture
+    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
+        """Create a test server instance."""
+        return OpenZimMcpServer(test_config)
+
+    @pytest.mark.asyncio
+    async def test_zim_file_path_sanitized_when_cross_file_true(
+        self, server: OpenZimMcpServer
+    ):
+        """zim_file_path is sanitized even when cross_file=True.
+
+        Previously the sanitize call was gated on ``not cross_file``, so a
+        NUL byte in the path would flow through to the backend untouched.
+        Pin the fix by asserting the registered tool strips control chars
+        in this branch.
+        """
+        server.async_zim_operations.find_entry_by_title = AsyncMock(return_value="{}")
+        server.rate_limiter.check_rate_limit = MagicMock()
+
+        tool = server.mcp._tool_manager._tools["find_entry_by_title"]
+        fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
+        assert fn is not None
+
+        bad_path = "any\x00name.zim"
+        await fn(
+            zim_file_path=bad_path,
+            title="Foo",
+            cross_file=True,
+            limit=5,
+        )
+
+        call = server.async_zim_operations.find_entry_by_title.await_args
+        sent_path = call.args[0]
+        assert (
+            "\x00" not in sent_path
+        ), f"NUL byte leaked through with cross_file=True: {sent_path!r}"
+        assert sent_path == "anyname.zim"

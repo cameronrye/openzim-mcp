@@ -228,8 +228,10 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                 )
 
             title = sanitize_input(title, INPUT_LIMIT_QUERY)
-            if not cross_file:
-                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+            # Always sanitize the path: even with cross_file=True the value
+            # is forwarded to backend operations and must not carry control
+            # characters (e.g. NUL bytes) into libzim.
+            zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
 
             return await server.async_zim_operations.find_entry_by_title(
                 zim_file_path, title, cross_file, limit

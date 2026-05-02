@@ -31,6 +31,8 @@ from mcp.server.fastmcp.resources.base import Resource
 from mcp.server.fastmcp.resources.templates import ResourceTemplate
 from pydantic import AnyUrl, ConfigDict, Field
 
+from ..constants import INPUT_LIMIT_ENTRY_PATH
+from ..security import sanitize_input
 from ..zim_operations import zim_archive
 
 if TYPE_CHECKING:
@@ -123,6 +125,9 @@ class ZimEntryTemplate(ResourceTemplate):
 
         # FastMCP captures `%2F` literally; restore to `/` for libzim.
         decoded_path = unquote(params["path"])
+        # Strip control characters (e.g. NUL bytes from %00) before they
+        # reach libzim, which has no defense against embedded NULs.
+        decoded_path = sanitize_input(decoded_path, INPUT_LIMIT_ENTRY_PATH)
         return ZimEntryResource(
             uri=AnyUrl(uri),
             name=self.name,
