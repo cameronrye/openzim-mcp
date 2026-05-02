@@ -54,6 +54,23 @@ class TestPathValidator:
         with pytest.raises(OpenZimMcpSecurityError, match="suspicious pattern"):
             path_validator.validate_path(str(temp_dir / "../../../etc/passwd"))
 
+    def test_validate_path_embedded_dotdot_caught_by_regex(
+        self, path_validator: PathValidator, temp_dir: Path
+    ):
+        r"""Embedded ``..`` (no surrounding slash) must trip the regex layer.
+
+        Regression for finding M1: the original ``suspicious_patterns``
+        list required ``..`` to be either at the start (``^\.\.``), at
+        the end (``\.\.$``), or followed by a path separator
+        (``\.\./`` / ``\.\.\\``). Strings like ``foo..bar`` —
+        ``..`` embedded between non-separator characters — slipped past
+        the regex layer entirely and only the ``is_relative_to`` final
+        gate prevented escape. We now reject any ``..`` substring.
+        """
+        attack = f"{temp_dir}/sub..foo/bar"
+        with pytest.raises(OpenZimMcpSecurityError, match="suspicious pattern"):
+            path_validator.validate_path(attack)
+
     def test_validate_zim_file_valid(
         self, path_validator: PathValidator, temp_dir: Path
     ):

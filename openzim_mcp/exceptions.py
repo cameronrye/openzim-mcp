@@ -18,7 +18,7 @@ class OpenZimMcpError(Exception):
 
     error_code: str = "OPENZIM_ERROR"
 
-    def __init__(self, message: str, details: Optional[str] = None):
+    def __init__(self, message: str, details: Optional[str] = None):  # noqa: B042
         """Initialize the exception.
 
         Args:
@@ -27,7 +27,14 @@ class OpenZimMcpError(Exception):
         """
         self.message = message
         self.details = details
-        super().__init__(message, details)
+        # Pass only ``message`` to ``Exception.__init__``: ``Exception.args``
+        # ends up as ``(message,)`` rather than ``(message, details)``, so
+        # ``repr(error)`` no longer leaks operational metadata (rate-limit
+        # cost breakdowns, request IDs, etc.) into tracebacks. ``details``
+        # remains accessible programmatically via ``self.details``. The B042
+        # exception (pickle/copy edge cases) is acceptable here because we
+        # do not pickle these errors across process boundaries.
+        super().__init__(message)
 
     def __str__(self) -> str:
         """Return the error message."""

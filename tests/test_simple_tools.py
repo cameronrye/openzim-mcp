@@ -1,6 +1,6 @@
 """Tests for simple tools functionality."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -646,3 +646,65 @@ class TestExplicitZimPathHonored:
         assert (
             actual_path == explicit
         ), f"{backend_attr}: expected {explicit}, got {actual_path}"
+
+
+class TestLowConfidenceNoteAppendedConsistently:
+    """Regression for finding 8.13: every intent branch appends the note.
+
+    The low-confidence note must be appended whenever confidence < 0.6.
+    Previously the ``search_all`` / ``walk_namespace`` / ``find_by_title``
+    / ``related`` branches in ``handle_zim_query`` returned the backend
+    response verbatim, so callers got no warning when the query
+    interpretation was uncertain. Every other intent branch already
+    appended the note; these four were drift.
+    """
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        """Build a mock backend whose intent methods return JSON sentinels."""
+        mock = Mock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/zims/test.zim", "name": "test.zim"}
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/zims/test.zim", "name": "test.zim"}]'
+        )
+        mock.search_all.return_value = '{"results": []}'
+        mock.walk_namespace.return_value = '{"entries": []}'
+        mock.find_entry_by_title.return_value = '{"matches": []}'
+        mock.get_related_articles.return_value = '{"related": []}'
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        """Wire a ``SimpleToolsHandler`` to the mock backend."""
+        return SimpleToolsHandler(mock_zim_operations)
+
+    @pytest.mark.parametrize(
+        "intent,params",
+        [
+            ("search_all", {"query": "anything"}),
+            ("walk_namespace", {"namespace": "C"}),
+            ("find_by_title", {"title": "Photosynthesis"}),
+            ("related", {"entry_path": "C/Photosynthesis"}),
+        ],
+    )
+    def test_low_confidence_note_appended_for_all_intents(
+        self, handler, intent, params
+    ):
+        """Force confidence below 0.6 and assert every branch appends the note."""
+        explicit = "/zims/test.zim"
+
+        # Pin intent + params and force confidence below the 0.6 threshold so
+        # the low-confidence branch fires deterministically.
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=(intent, params, 0.4),
+        ):
+            result = handler.handle_zim_query("anything", zim_file_path=explicit)
+
+        assert "moderate confidence" in result, (
+            f"intent {intent!r}: low-confidence note missing from response: "
+            f"{result!r}"
+        )

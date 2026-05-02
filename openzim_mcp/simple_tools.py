@@ -726,31 +726,35 @@ class SimpleToolsHandler:
                 return result + low_confidence_note
 
             elif intent == "search_all":
-                return self.zim_operations.search_all(
+                result = self.zim_operations.search_all(
                     params.get("query", query), limit_per_file=5
                 )
+                return result + low_confidence_note
             elif intent == "walk_namespace":
                 # zim_file_path was already populated by the function-level
                 # auto-select guard above; honor whatever the caller supplied.
-                return self.zim_operations.walk_namespace(
+                result = self.zim_operations.walk_namespace(
                     zim_file_path,
                     params.get("namespace", "C"),
                     cursor=0,
                     limit=200,
                 )
+                return result + low_confidence_note
             elif intent == "find_by_title":
-                return self.zim_operations.find_entry_by_title(
+                result = self.zim_operations.find_entry_by_title(
                     zim_file_path,
                     params.get("title", query),
                     cross_file=False,
                     limit=10,
                 )
+                return result + low_confidence_note
             elif intent == "related":
-                return self.zim_operations.get_related_articles(
+                result = self.zim_operations.get_related_articles(
                     zim_file_path,
                     params.get("entry_path", ""),
                     limit=10,
                 )
+                return result + low_confidence_note
             elif intent == "get_zim_entries":
                 # Batch fetch: route to ZimOperations.get_entries with the
                 # extracted path list. If no paths were extracted, return a

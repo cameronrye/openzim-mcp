@@ -269,3 +269,33 @@ def test_get_table_of_contents_does_not_cache_on_toc_build_error(
     assert (
         zim_operations.cache.get(cache_key) is None
     ), "errored TOC response should not be cached"
+
+
+def test_empty_cache_value_is_treated_as_hit(
+    zim_operations: ZimOperations,
+) -> None:
+    """Empty-string cache values must round-trip as hits, not be coerced to misses.
+
+    Regression for finding M5: zim_operations call sites previously used
+    ``if cached_result:`` (truthy check), which would treat a legitimate
+    empty-string cached value as a miss and silently re-run the operation,
+    locking in stale or duplicate work for the full TTL.
+    """
+    zim_operations.cache.set("k", "")
+    # Cache layer must preserve the empty string (not coerce it to None).
+    assert zim_operations.cache.get("k") == ""
+
+    # And every truthy-vs-None call site in zim_operations.py must be
+    # ``is not None`` so the empty-string branch is honored as a hit.
+    import re as _re
+    from pathlib import Path as _Path
+
+    src = (
+        _Path(__file__).resolve().parent.parent / "openzim_mcp" / "zim_operations.py"
+    ).read_text()
+    bare_truthy_sites = _re.findall(r"if cached_result\s*:", src)
+    assert not bare_truthy_sites, (
+        f"Found {len(bare_truthy_sites)} bare truthy 'if cached_result:' "
+        "checks in zim_operations.py — these must use 'is not None' so "
+        "empty-string cache values are not silently treated as misses."
+    )

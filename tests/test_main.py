@@ -1,5 +1,6 @@
 """Tests for main module and __main__ entry point."""
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -225,6 +226,44 @@ class TestMainModule:
         main()
 
         mock_server_class.return_value.run.assert_called_once_with(transport="stdio")
+
+    @patch("openzim_mcp.main.OpenZimMcpServer")
+    @patch("openzim_mcp.main.OpenZimMcpConfig")
+    @patch("sys.argv", ["openzim_mcp", "/test/dir"])
+    def test_startup_banner_routes_through_logger(
+        self,
+        mock_config_class,
+        mock_server_class,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """Startup banner must be emitted via ``logger.info``, not ``print``.
+
+        Regression for finding 8.8: previously ``print(..., file=sys.stderr)``
+        bypassed the logging configuration entirely, so banner text leaked
+        out even when the operator had configured a higher log level.
+        Routing through ``logger.info`` lets the standard logging level
+        machinery suppress the banner when desired.
+        """
+        from openzim_mcp.main import main
+
+        mock_config_class.return_value = MagicMock(transport="stdio")
+        mock_server_class.return_value = MagicMock()
+
+        with caplog.at_level(logging.INFO, logger="openzim_mcp.main"):
+            main()
+
+        banner_messages = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "openzim_mcp.main"
+        ]
+        joined = "\n".join(banner_messages)
+        assert (
+            "OpenZIM MCP server started" in joined
+        ), f"startup banner not found in log records: {banner_messages!r}"
+        assert (
+            "Allowed directories" in joined
+        ), f"allowed-directories line not found in log records: {banner_messages!r}"
 
 
 class TestMainEntryPoint:

@@ -1,6 +1,7 @@
 """Main entry point for OpenZIM MCP server."""
 
 import argparse
+import logging
 import sys
 from typing import Literal
 
@@ -8,6 +9,8 @@ from .config import OpenZimMcpConfig
 from .constants import TOOL_MODE_SIMPLE, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
 from .server import OpenZimMcpServer
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -95,14 +98,12 @@ Environment Variables:
             if config.tool_mode == TOOL_MODE_SIMPLE
             else "ADVANCED mode (21 specialized tools)"
         )
-        print(
-            f"OpenZIM MCP server started in {mode_desc}",
-            file=sys.stderr,
-        )
-        print(
-            f"Allowed directories: {', '.join(args.directories)}",
-            file=sys.stderr,
-        )
+        # Route the startup banner through the logger so log-level configuration
+        # (env: ``OPENZIM_MCP_LOGGING__LEVEL``) actually suppresses it. The
+        # original ``print(..., file=sys.stderr)`` calls bypassed logging and
+        # emitted regardless of operator-configured verbosity.
+        logger.info("OpenZIM MCP server started in %s", mode_desc)
+        logger.info("Allowed directories: %s", ", ".join(args.directories))
 
         # Map user-facing transport to FastMCP's wire value.
         # 'http' is our short name for FastMCP's 'streamable-http'.

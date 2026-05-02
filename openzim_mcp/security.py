@@ -88,6 +88,12 @@ class PathValidator:
 
         # Check for suspicious patterns in both original and decoded paths
         suspicious_patterns = [
+            r"\.\.",  # Any embedded ``..`` — superset of the four below.
+            #          Catches mid-path ``..`` between non-separator chars
+            #          (``foo..bar``) that would otherwise slip past the
+            #          slash-anchored variants and reach ``is_relative_to``
+            #          alone. Kept above the more specific patterns so the
+            #          first match terminates fastest.
             r"\.\./",  # Directory traversal (Unix)
             r"\.\.\\",  # Directory traversal (Windows)
             r"\.\.$",  # Trailing ..

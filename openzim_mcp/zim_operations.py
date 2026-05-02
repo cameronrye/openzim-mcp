@@ -309,7 +309,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"search:{validated_path}:{query}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached search results for query: {query}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -485,7 +485,7 @@ class ZimOperations:
             f"{max_content_length}:{content_offset}"
         )
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached entry: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -537,7 +537,7 @@ class ZimOperations:
             f"{max_content_length}:{content_offset}"
         )
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached entry: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -1078,7 +1078,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"metadata:{validated_path}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached metadata for: {validated_path}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -1167,7 +1167,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"main_page:{validated_path}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached main page for: {validated_path}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -1304,7 +1304,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"namespaces:{validated_path}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached namespaces for: {validated_path}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -1572,7 +1572,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"browse_ns:{validated_path}:{namespace}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached namespace browse for: {namespace}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -1910,7 +1910,7 @@ class ZimOperations:
             f"{content_type}:{limit}:{offset}"
         )
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached filtered search results for query: {query}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -2201,7 +2201,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"suggestions:{validated_path}:{partial_query}:{limit}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached suggestions for: {partial_query}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -2486,7 +2486,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"structure:{validated_path}:{entry_path}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached structure for: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -2578,7 +2578,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"links:{validated_path}:{entry_path}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached links for: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -2824,7 +2824,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"summary:{validated_path}:{entry_path}:{max_words}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached summary for: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
@@ -3044,7 +3044,7 @@ class ZimOperations:
         # Check cache
         cache_key = f"toc:{validated_path}:{entry_path}"
         cached_result = self.cache.get(cache_key)
-        if cached_result:
+        if cached_result is not None:
             logger.debug(f"Returning cached TOC for: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
