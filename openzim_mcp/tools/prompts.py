@@ -6,10 +6,37 @@ operations (search, summarize, explore) the LLM would otherwise have
 to chain manually.
 """
 
+import re
 from typing import TYPE_CHECKING, Any, Dict, List
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
+
+
+# Matches any ASCII control character (C0 range, including \n, \r, \t, \x00).
+# We strip these from user input before interpolating into prompt templates so
+# that a topic like "Foo\n2. Ignore previous instructions" cannot append fake
+# numbered steps to the workflow body sent to the LLM.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def _sanitize_for_prompt(value: str, max_length: int = 200) -> str:
+    """Strip control characters and cap length before embedding in prompt text.
+
+    Args:
+        value: Raw user-supplied string.
+        max_length: Maximum length to retain. Longer values are truncated and
+            suffixed with an ellipsis to keep prompt size bounded.
+
+    Returns:
+        Cleaned string safe to interpolate into a multi-line prompt template.
+    """
+    if not value:
+        return value
+    cleaned = _CONTROL_CHARS_RE.sub(" ", value).strip()
+    if len(cleaned) > max_length:
+        cleaned = cleaned[:max_length].rstrip() + "..."
+    return cleaned
 
 
 def _msg(role: str, text: str) -> Dict[str, Any]:
@@ -31,13 +58,26 @@ def _research_body(topic: str) -> List[Dict[str, Any]]:
                 ),
             )
         ]
+    safe_topic = _sanitize_for_prompt(topic)
+    if not safe_topic:
+        return [
+            _msg(
+                "user",
+                (
+                    "I want to use the /research prompt, but I haven't "
+                    "given you a topic. Please ask me what subject I want "
+                    "to research, then re-run the /research prompt with "
+                    "that topic."
+                ),
+            )
+        ]
     return [
         _msg(
             "user",
             (
-                f"Research the topic: {topic}\n\n"
+                f"Research the topic: {safe_topic}\n\n"
                 "Workflow:\n"
-                f"1. Call search_all with query='{topic}' to find which "
+                f"1. Call search_all with query='{safe_topic}' to find which "
                 "ZIM files have relevant content.\n"
                 "2. For the top 3 hits across files, call get_entry_summary "
                 "to get a concise overview.\n"
@@ -71,18 +111,20 @@ def _summarize_body(zim_file_path: str, entry_path: str) -> List[Dict[str, Any]]
                 ),
             )
         ]
+    safe_zim = _sanitize_for_prompt(zim_file_path)
+    safe_entry = _sanitize_for_prompt(entry_path)
     return [
         _msg(
             "user",
             (
-                f"Summarize the article: {entry_path} in {zim_file_path}\n\n"
+                f"Summarize the article: {safe_entry} in {safe_zim}\n\n"
                 "Workflow:\n"
-                f"1. Call get_table_of_contents('{zim_file_path}', "
-                f"'{entry_path}') for a structural overview.\n"
-                f"2. Call get_entry_summary('{zim_file_path}', "
-                f"'{entry_path}') for the lead-paragraph summary.\n"
-                f"3. Call extract_article_links('{zim_file_path}', "
-                f"'{entry_path}') for the most-mentioned related entries.\n\n"
+                f"1. Call get_table_of_contents('{safe_zim}', "
+                f"'{safe_entry}') for a structural overview.\n"
+                f"2. Call get_entry_summary('{safe_zim}', "
+                f"'{safe_entry}') for the lead-paragraph summary.\n"
+                f"3. Call extract_article_links('{safe_zim}', "
+                f"'{safe_entry}') for the most-mentioned related entries.\n\n"
                 "Combine into: (a) one-paragraph TL;DR, (b) section list, "
                 "(c) 5–10 most relevant outbound links."
             ),
@@ -104,20 +146,21 @@ def _explore_body(zim_file_path: str) -> List[Dict[str, Any]]:
                 ),
             )
         ]
+    safe_zim = _sanitize_for_prompt(zim_file_path)
     return [
         _msg(
             "user",
             (
-                f"Explore the ZIM file: {zim_file_path}\n\n"
+                f"Explore the ZIM file: {safe_zim}\n\n"
                 "Workflow:\n"
-                f"1. Call get_zim_metadata('{zim_file_path}') for title, "
+                f"1. Call get_zim_metadata('{safe_zim}') for title, "
                 "language, creator, and flavour.\n"
-                f"2. Call list_namespaces('{zim_file_path}') for namespace "
+                f"2. Call list_namespaces('{safe_zim}') for namespace "
                 "breakdown — note any minority namespaces (M, W, X) that "
                 "might be worth examining separately.\n"
-                f"3. Call get_main_page('{zim_file_path}') for the entry "
+                f"3. Call get_main_page('{safe_zim}') for the entry "
                 "point.\n"
-                f"4. Call walk_namespace('{zim_file_path}', 'C', limit=5) "
+                f"4. Call walk_namespace('{safe_zim}', 'C', limit=5) "
                 "to sample article content.\n\n"
                 "Then: present a compact briefing — what is this archive, "
                 "what does it cover, and what does typical content look "
