@@ -187,3 +187,46 @@ class TestPromptInputSanitization:
         # Final rendered prompt should be much smaller than naive interpolation.
         # The topic is interpolated twice; a 5000-char topic would produce ~10kb.
         assert len(body) < 2000
+
+    def test_summarize_body_returns_asking_message_when_inputs_collapse_to_empty(
+        self,
+    ):
+        """Inputs collapsing to empty after sanitization trigger asking-message.
+
+        Non-whitespace inputs (e.g. all control chars) pass the early
+        ``not value.strip()`` check but become empty after sanitization. The
+        builder must NOT render a workflow with empty quoted args in that case.
+        """
+        from openzim_mcp.tools.prompts import _summarize_body
+
+        messages = _summarize_body("\x00\x01\x02", "C/Article")
+        body = "\n".join(m["content"]["text"] for m in messages)
+        # Should match the asking-message early-return text
+        assert "summarize" in body.lower() or "path" in body.lower()
+        # Workflow body must NOT be rendered
+        assert "get_table_of_contents" not in body
+        assert "get_entry_summary" not in body
+        # Must NOT render a tool call with empty single-quoted args
+        assert "''" not in body
+
+    def test_summarize_entry_collapses_to_empty_returns_asking_message(self):
+        """Same check, but with the entry_path collapsing to empty."""
+        from openzim_mcp.tools.prompts import _summarize_body
+
+        messages = _summarize_body("/zim/file.zim", "\x00\x01\x02")
+        body = "\n".join(m["content"]["text"] for m in messages)
+        assert "summarize" in body.lower() or "path" in body.lower()
+        assert "get_table_of_contents" not in body
+        assert "''" not in body
+
+    def test_explore_body_returns_asking_message_when_input_collapses_to_empty(
+        self,
+    ):
+        """explore() input that's all control chars must trigger asking-message."""
+        from openzim_mcp.tools.prompts import _explore_body
+
+        messages = _explore_body("\x00\x01\x02")
+        body = "\n".join(m["content"]["text"] for m in messages)
+        assert "explore" in body.lower() or "path" in body.lower()
+        assert "get_zim_metadata" not in body
+        assert "''" not in body

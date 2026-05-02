@@ -44,33 +44,45 @@ def _msg(role: str, text: str) -> Dict[str, Any]:
     return {"role": role, "content": {"type": "text", "text": text}}
 
 
+# Asking-message texts emitted when a prompt is invoked without the required
+# args, or when the args collapse to empty after sanitization (e.g. a topic
+# that is purely control characters). Centralized to keep the pre- and
+# post-sanitization branches in sync.
+_ASK_MESSAGES: Dict[str, str] = {
+    "research": (
+        "I want to use the /research prompt, but I haven't "
+        "given you a topic. Please ask me what subject I want "
+        "to research, then re-run the /research prompt with "
+        "that topic."
+    ),
+    "summarize": (
+        "I want to use the /summarize prompt, but I haven't "
+        "given you the required arguments. Please ask me "
+        "which ZIM file path and which article path "
+        "(e.g. 'C/Photosynthesis'), then re-run the "
+        "/summarize prompt with both."
+    ),
+    "explore": (
+        "I want to use the /explore prompt, but I haven't "
+        "given you a ZIM file path. Please ask me which "
+        "ZIM file path, then re-run the /explore prompt "
+        "with that path."
+    ),
+}
+
+
+def _ask_for_args(prompt_name: str) -> List[Dict[str, Any]]:
+    """Return the asking-message body for a prompt missing required args."""
+    return [_msg("user", _ASK_MESSAGES[prompt_name])]
+
+
 def _research_body(topic: str) -> List[Dict[str, Any]]:
     """Body of the research prompt — the message list returned to the client."""
     if not topic or not topic.strip():
-        return [
-            _msg(
-                "user",
-                (
-                    "I want to use the /research prompt, but I haven't "
-                    "given you a topic. Please ask me what subject I want "
-                    "to research, then re-run the /research prompt with "
-                    "that topic."
-                ),
-            )
-        ]
+        return _ask_for_args("research")
     safe_topic = _sanitize_for_prompt(topic)
     if not safe_topic:
-        return [
-            _msg(
-                "user",
-                (
-                    "I want to use the /research prompt, but I haven't "
-                    "given you a topic. Please ask me what subject I want "
-                    "to research, then re-run the /research prompt with "
-                    "that topic."
-                ),
-            )
-        ]
+        return _ask_for_args("research")
     return [
         _msg(
             "user",
@@ -99,20 +111,11 @@ def _summarize_body(zim_file_path: str, entry_path: str) -> List[Dict[str, Any]]
         or not entry_path
         or not entry_path.strip()
     ):
-        return [
-            _msg(
-                "user",
-                (
-                    "I want to use the /summarize prompt, but I haven't "
-                    "given you the required arguments. Please ask me "
-                    "which ZIM file path and which article path "
-                    "(e.g. 'C/Photosynthesis'), then re-run the "
-                    "/summarize prompt with both."
-                ),
-            )
-        ]
+        return _ask_for_args("summarize")
     safe_zim = _sanitize_for_prompt(zim_file_path)
     safe_entry = _sanitize_for_prompt(entry_path)
+    if not safe_zim or not safe_entry:
+        return _ask_for_args("summarize")
     return [
         _msg(
             "user",
@@ -135,18 +138,10 @@ def _summarize_body(zim_file_path: str, entry_path: str) -> List[Dict[str, Any]]
 def _explore_body(zim_file_path: str) -> List[Dict[str, Any]]:
     """Body of the explore prompt."""
     if not zim_file_path or not zim_file_path.strip():
-        return [
-            _msg(
-                "user",
-                (
-                    "I want to use the /explore prompt, but I haven't "
-                    "given you a ZIM file path. Please ask me which "
-                    "ZIM file path, then re-run the /explore prompt "
-                    "with that path."
-                ),
-            )
-        ]
+        return _ask_for_args("explore")
     safe_zim = _sanitize_for_prompt(zim_file_path)
+    if not safe_zim:
+        return _ask_for_args("explore")
     return [
         _msg(
             "user",
