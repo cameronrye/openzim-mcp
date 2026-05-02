@@ -16,24 +16,36 @@ the default of ``~/Developer/zim``. The fixtures skip the test if no
 
 from __future__ import annotations
 
+import contextlib
 import os
+import secrets
 import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Any, Iterator, List, Optional
 
 import httpx
 import pytest
 
 
 def _find_free_loopback_port() -> int:
-    """Bind 127.0.0.1:0 to let the kernel pick an unused port, then close."""
+    """Bind 127.0.0.1:0 to let the kernel pick an unused port, then close.
+
+    There is a small TOCTOU window between the close here and the
+    server's bind; in practice the kernel doesn't recycle ports that
+    fast, but on a heavily-contended CI host it could spuriously fail.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return int(s.getsockname()[1])
+
+
+def fresh_token() -> str:
+    """Generate a fresh bearer token for one live-test invocation."""
+    return secrets.token_urlsafe(32)
 
 
 def _zim_dir() -> Path:
@@ -131,17 +143,28 @@ def _spawn(
 
     stderr_path = (tmp_path / f"server-{port}.stderr") if tmp_path else None
     if capture_stderr and stderr_path:
-        stderr_fp = stderr_path.open("wb")
+        # Open, hand to Popen (which dup2's the fd into the child), then
+        # close the parent's handle. Leaving it open leaks one fd per
+        # spawned server and triggers ResourceWarning on GC.
+        stderr_fp: Any = stderr_path.open("wb")
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL if transport != "stdio" else subprocess.PIPE,
+                stdout=subprocess.DEVNULL if transport != "stdio" else subprocess.PIPE,
+                stderr=stderr_fp,
+                env=env,
+            )
+        finally:
+            stderr_fp.close()
     else:
-        stderr_fp = subprocess.DEVNULL
-
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL if transport != "stdio" else subprocess.PIPE,
-        stdout=subprocess.DEVNULL if transport != "stdio" else subprocess.PIPE,
-        stderr=stderr_fp,
-        env=env,
-    )
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL if transport != "stdio" else subprocess.PIPE,
+            stdout=subprocess.DEVNULL if transport != "stdio" else subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
 
     server = LiveServer(
         process=proc,
@@ -198,7 +221,11 @@ def _spawn(
 
 
 def _terminate(server: LiveServer) -> None:
-    """Best-effort shutdown: SIGTERM, then SIGKILL after 3s."""
+    """Best-effort shutdown: SIGTERM, then SIGKILL after 3s.
+
+    Swallows the second-stage TimeoutExpired so a single hung server
+    can't prevent teardown of subsequent servers in the same fixture.
+    """
     proc = server.process
     if proc.poll() is not None:
         return
@@ -207,7 +234,10 @@ def _terminate(server: LiveServer) -> None:
         proc.wait(timeout=3)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=2)
+        # Kernel didn't reap in 2s after SIGKILL is extremely rare; leave
+        # the zombie and let pytest session teardown clean up.
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=2)
 
 
 @pytest.fixture

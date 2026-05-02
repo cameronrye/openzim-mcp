@@ -11,6 +11,7 @@ entries survive across the kill/respawn boundary.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -105,6 +106,37 @@ def _server_health(proc: subprocess.Popen, msg_id: int) -> Dict[str, Any]:
     return json.loads(inner) if isinstance(inner, str) else inner
 
 
+def _shutdown_stdio(proc: subprocess.Popen, *, graceful: bool) -> None:
+    """Tear down a stdio subprocess without leaking file handles.
+
+    ``graceful=True``: close stdin first so atexit handlers (e.g.
+    cache persistence flush) actually run. ``graceful=False``: SIGTERM
+    immediately. Either way, all pipe handles are closed before return
+    to silence ResourceWarning under ``-W error``.
+    """
+    try:
+        if graceful and proc.stdin is not None:
+            with contextlib.suppress(Exception):
+                proc.stdin.close()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+        else:
+            proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=2)
+    finally:
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    stream.close()
+
+
 def test_cache_persistence_survives_restart(zim_dir: Path, tmp_path: Path) -> None:
     """Cache entries persisted by run #1 must reload on run #2's startup."""
     # The cache appends .json to the configured path, so pass a basename
@@ -140,18 +172,8 @@ def test_cache_persistence_survives_restart(zim_dir: Path, tmp_path: Path) -> No
         assert cache1["size"] > 0, f"cache should have entries: {cache1!r}"
         size_before = cache1["size"]
     finally:
-        # Close stdin to trigger graceful shutdown so atexit-registered
-        # cache-persistence flush actually runs. SIGTERM bypasses atexit.
-        if proc1.stdin is not None:
-            proc1.stdin.close()
-        try:
-            proc1.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc1.terminate()
-            try:
-                proc1.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc1.kill()
+        # Graceful — atexit-registered cache flush runs only on stdin close.
+        _shutdown_stdio(proc1, graceful=True)
 
     # Persistence flush happens on graceful shutdown.
     assert persistence_file.exists(), (
@@ -178,8 +200,4 @@ def test_cache_persistence_survives_restart(zim_dir: Path, tmp_path: Path) -> No
             1, size_before // 2
         ), f"reload lost too many entries: had {size_before}, got {cache2['size']}"
     finally:
-        proc2.terminate()
-        try:
-            proc2.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc2.kill()
+        _shutdown_stdio(proc2, graceful=False)

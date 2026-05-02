@@ -7,6 +7,7 @@ empty-arg ask-for-input fallback).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -86,6 +87,13 @@ def stdio_session(zim_dir: Path) -> Iterator[subprocess.Popen]:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait(timeout=2)
+        # Close pipe handles explicitly — Popen leaves them open and the
+        # GC-time close raises ResourceWarning under -W error.
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    stream.close()
 
 
 def _get_prompt(

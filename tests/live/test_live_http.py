@@ -10,11 +10,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from tests.live.conftest import expect_failed_startup
+from tests.live.conftest import expect_failed_startup, fresh_token
 
 pytestmark = pytest.mark.live
 
-TOKEN = "secret-test-token-do-not-use-in-prod"
+TOKEN = fresh_token()
 
 
 def test_healthz_returns_ok(spawn_live_server) -> None:
@@ -84,13 +84,14 @@ def test_safe_default_refuses_public_bind_without_token(zim_dir, tmp_path) -> No
 
 
 def test_cors_preflight_allowed_origin(spawn_live_server) -> None:
-    """CORS preflight from listed origin returns Access-Control-Allow-Origin."""
+    """CORS preflight from a listed origin returns 200 with ACAO echo.
+
+    Run without a token so the OPTIONS preflight isn't intercepted by
+    auth before reaching the CORS middleware. This is what a browser
+    actually sees: the preflight is unauthenticated by spec.
+    """
     origin = "https://allowed.example"
-    srv = spawn_live_server(
-        transport="http",
-        token=TOKEN,
-        cors_origins=[origin],
-    )
+    srv = spawn_live_server(transport="http", cors_origins=[origin])
     resp = httpx.options(
         f"{srv.base_url}/mcp",
         headers={
@@ -100,19 +101,19 @@ def test_cors_preflight_allowed_origin(spawn_live_server) -> None:
         },
         timeout=5,
     )
-    # Preflight either returns 200 (OK) with CORS headers, or 401 (auth-first)
-    # — but if the response is 200/204, ACAO must echo the allowed origin.
-    if resp.status_code in (200, 204):
-        assert resp.headers.get("access-control-allow-origin") == origin
+    assert resp.status_code in (200, 204), (
+        f"preflight from allowed origin returned {resp.status_code}: "
+        f"{resp.text[:200]}"
+    )
+    assert resp.headers.get("access-control-allow-origin") == origin
+    # Must also echo the requested method back as allowed.
+    allow_methods = resp.headers.get("access-control-allow-methods", "")
+    assert "POST" in allow_methods, f"ACAM should include POST, got: {allow_methods!r}"
 
 
 def test_cors_preflight_disallowed_origin(spawn_live_server) -> None:
-    """CORS preflight from origin not on allow-list returns no ACAO."""
-    srv = spawn_live_server(
-        transport="http",
-        token=TOKEN,
-        cors_origins=["https://allowed.example"],
-    )
+    """CORS preflight from origin not on allow-list omits the ACAO header."""
+    srv = spawn_live_server(transport="http", cors_origins=["https://allowed.example"])
     resp = httpx.options(
         f"{srv.base_url}/mcp",
         headers={
@@ -121,10 +122,27 @@ def test_cors_preflight_disallowed_origin(spawn_live_server) -> None:
         },
         timeout=5,
     )
+    # Starlette's CORSMiddleware returns 400 for disallowed origins on
+    # preflight; either way, ACAO must not be present (or must not echo
+    # the disallowed origin).
+    acao = resp.headers.get("access-control-allow-origin")
     assert (
-        "access-control-allow-origin" not in {k.lower() for k in resp.headers.keys()}
-        or resp.headers.get("access-control-allow-origin") != "https://evil.example"
+        acao != "https://evil.example"
+    ), f"ACAO leaked the disallowed origin: {acao!r}"
+
+
+def test_cors_disabled_when_no_origins_configured(spawn_live_server) -> None:
+    """No cors_origins → no CORS middleware → no ACAO header on any response."""
+    srv = spawn_live_server(transport="http")  # no cors_origins
+    resp = httpx.options(
+        f"{srv.base_url}/healthz",
+        headers={
+            "Origin": "https://anything.example",
+            "Access-Control-Request-Method": "GET",
+        },
+        timeout=5,
     )
+    assert resp.headers.get("access-control-allow-origin") is None
 
 
 def test_two_http_instances_coexist(spawn_live_server) -> None:

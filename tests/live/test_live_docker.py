@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import secrets
 import shutil
-import socket
 import subprocess
 import time
 import uuid
@@ -29,6 +28,8 @@ from typing import Iterator
 
 import httpx
 import pytest
+
+from tests.live.conftest import _find_free_loopback_port
 
 pytestmark = [pytest.mark.live, pytest.mark.docker]
 
@@ -67,12 +68,6 @@ pytestmark.append(
 )
 
 
-def _free_loopback_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
 @pytest.fixture(scope="module")
 def built_image() -> str:
     """Build the openzim-mcp image once per test module; return the tag."""
@@ -96,7 +91,7 @@ def built_image() -> str:
 def running_container(built_image: str, zim_dir: Path) -> Iterator[dict]:
     """Run the image with HTTP transport + temp token; yield container info."""
     container_name = f"oz-mcp-livetest-{uuid.uuid4().hex[:8]}"
-    host_port = _free_loopback_port()
+    host_port = _find_free_loopback_port()
     token = secrets.token_urlsafe(32)
 
     cp = subprocess.run(
@@ -200,10 +195,13 @@ def test_container_mcp_endpoint_requires_auth(running_container: dict) -> None:
 def test_container_mcp_endpoint_accepts_valid_token(
     running_container: dict,
 ) -> None:
-    """``POST /mcp`` with the env-supplied token is not rejected for auth."""
-    # We're not running a full MCP handshake here — just confirming the
-    # bearer-auth middleware accepts the token and lets the request proceed
-    # past the 401 boundary. Any non-401 status is success for this test.
+    """``POST /mcp`` with the env-supplied token reaches the MCP handler.
+
+    A valid token must not 401, but we also require the container to NOT
+    return 5xx — that would mean the container crashed or misconfigured
+    rather than auth-passed. The MCP handshake itself isn't exercised
+    here; the streamable-HTTP MCP client tests do that.
+    """
     resp = httpx.post(
         f"{running_container['url']}/mcp",
         headers={
@@ -214,9 +212,13 @@ def test_container_mcp_endpoint_accepts_valid_token(
         json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
         timeout=10,
     )
-    assert resp.status_code != 401, (
-        f"valid bearer token was rejected by container: "
-        f"{resp.status_code} {resp.text[:200]}"
+    assert (
+        resp.status_code != 401
+    ), f"valid bearer token was rejected: {resp.status_code} {resp.text[:200]}"
+    assert resp.status_code < 500, (
+        f"container returned 5xx for an authenticated request — likely "
+        f"crashed or misconfigured rather than processing it: "
+        f"{resp.status_code} {resp.text[:300]}"
     )
 
 
