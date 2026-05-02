@@ -38,7 +38,7 @@
 
 ---
 
-> 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a deployment guide. Plus: batch entry retrieval (`get_zim_entries`) and per-entry MCP resources for direct browser rendering. [Learn more →](#whats-new-in-v100)
+> 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a deployment guide. Plus: batch entry retrieval (`get_zim_entries`) and per-entry MCP resources for direct browser rendering. Plus dozens of polish fixes — smarter archive handling, cleaner content extraction, server hygiene, and an end-to-end review pass. [Learn more →](#whats-new-in-v100)
 
 > **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
 
@@ -66,6 +66,7 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 - **Streamable HTTP Transport**: 🆕 Run as a long-running service over HTTP — bearer-token auth, CORS, health endpoints, multi-arch Docker image, and resource subscriptions. See [`docs/HTTP_DEPLOYMENT_GUIDE.md`](docs/HTTP_DEPLOYMENT_GUIDE.md).
 - **Batch Entry Retrieval**: 🆕 Fetch up to 50 entries per call with `get_zim_entries` — pairs naturally with HTTP, where round-trip cost matters
 - **Per-Entry MCP Resources**: 🆕 Stream individual entries via `zim://{name}/entry/{path}` with native MIME types — browse HTML, PDFs, and images directly
+- **Resource Subscriptions**: 🆕 Clients subscribe to `zim://files` and `zim://{name}` and receive `notifications/resources/updated` when archives change
 - **Multi-Archive Search**: Search every ZIM file at once with `search_all` — no need to know which archive holds the answer
 - **MCP Prompts**: Pre-built workflow slash commands (`/research`, `/summarize`, `/explore`) that orchestrate multi-step ZIM operations
 - **Find Entries by Title**: Resolve titles to entry paths instantly with `find_entry_by_title` — case-insensitive, optionally cross-file
@@ -97,7 +98,7 @@ Legacy SSE transport is also available via `--transport sse` (or `OPENZIM_MCP_TR
 
 ### Batch entry retrieval
 
-`get_zim_entries` fetches up to 50 entries in one call. Per-entry failures don't abort the batch — each result includes its `index` from the input order plus either `content` (success) or `error` (failure). Different `zim_file_path` values are allowed in one batch, so a multi-archive workflow can fan out from a single search.
+`get_zim_entries` fetches up to 50 entries in one call. Per-entry failures don't abort the batch — each result includes its `index` from the input order plus either `content` (success) or `error` (failure). Different `zim_file_path` values are allowed in one batch, so a multi-archive workflow can fan out from a single search. Single-archive batches can pass bare path strings paired with a top-level `zim_file_path` default, so the call site stays flat instead of dict-heavy.
 
 ### Per-entry MCP resources
 
@@ -111,6 +112,36 @@ Legacy SSE transport is also available via `--transport sse` (or `OPENZIM_MCP_TR
 ### Resource subscriptions
 
 Subscribe to `zim://files` or `zim://{name}` and the server emits `notifications/resources/updated` whenever the directory contents change or a `.zim` file is replaced. Polling interval is configurable (`OPENZIM_MCP_WATCH_INTERVAL_SECONDS`, default 5 s) and the feature can be disabled with `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false`. Implementation note: this depends on a private FastMCP attribute (`_mcp_server`) for handler registration; see `docs/superpowers/notes/2026-05-01-subscription-api-spike.md`.
+
+### Polish & fixes
+
+**Smarter archive handling**
+
+- `get_related_articles` resolves relative hrefs against the source entry's directory and identifies the content namespace correctly on domain-scheme archives (previously returned nothing).
+- Suggestion fallback uses `SuggestionSearcher(archive).suggest(text)` (the prior `archive.suggest()` call didn't exist).
+- `list_zim_files` gains a case-insensitive `name_filter` substring argument; one shared cache slot regardless of filter value.
+- `search_zim_file` accepts an opaque `cursor` parameter; passing the cursor alone resumes pagination without restating the query.
+
+**Cleaner content extraction**
+
+- Heading-id resolution falls through `id` → mw-headline anchor → preceding `<a name="">` → slug, returning `(id, source)` so consumers can distinguish real anchors from synthetic slugs.
+- Summary extraction skips USWDS banners and skip-nav blocks above the first `<h1>` (MedlinePlus / NIH / NIST style sites).
+- Link extraction drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`).
+- Per-entry paths sanitized in `get_zim_entries`.
+
+**Server hygiene**
+
+- `__version__` reads from `importlib.metadata`; `serverInfo.version` reports openzim-mcp's actual version (no longer the FastMCP SDK default).
+- HTTP transport's subscription watcher starts via wrapped lifespan.
+- Per-entry `zim://` returns libzim's native MIME (was returning a placeholder).
+
+**Streamlined scope**
+
+v1.0.0 reduces the advanced-mode tool surface from 27 to 21 by removing administrative/inspection helpers that didn't pull their weight: `warm_cache`, `cache_stats`, `cache_clear`, `get_random_entry`, `diagnose_server_state`, and `resolve_server_conflicts`. The cache itself remains; the explicit management tools were dropped. Multi-instance conflict tracking was removed entirely — `instance_tracker.py` is gone — which means HTTP server instances coexist freely without configuration warnings.
+
+**Review pass**
+
+End-to-end review pass: 38 follow-up commits added 131 tests (698 → 829), tightened path/PID redaction in error and diagnostics responses, locked `OPTIONS /mcp` behind auth, fixed cache poisoning on transient libzim errors, resolved redirects before rendering with cycle detection, preserved Unicode in heading slugs (Arabic, Chinese, Cyrillic, Japanese), made rate-limiting atomic, and split `zim_operations.py` into a `zim/` package via mixin classes.
 
 ## What's new in v0.9.0
 
