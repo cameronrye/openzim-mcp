@@ -378,6 +378,92 @@ class TestPerEntryResource:
         redirect.get_item.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_redirect_cycle_raises_archive_error(self, server, monkeypatch):
+        """A redirect cycle (A → A) raises OpenZimMcpArchiveError."""
+        from openzim_mcp.exceptions import OpenZimMcpArchiveError
+        from openzim_mcp.tools import resource_tools
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        server.path_validator.validate_path = MagicMock(return_value="/zim/wiki.zim")
+        server.path_validator.validate_zim_file = MagicMock(
+            return_value="/zim/wiki.zim"
+        )
+
+        # Self-referential redirect (entry redirects to itself).
+        cyclic = MagicMock()
+        cyclic.is_redirect = True
+        cyclic.path = "A/Loop"
+        cyclic.get_redirect_entry.return_value = cyclic
+
+        archive = MagicMock()
+        archive.get_entry_by_path.return_value = cyclic
+
+        class FakeCtx:
+            def __enter__(self_inner):
+                return archive
+
+            def __exit__(self_inner, *exc):
+                return False
+
+        monkeypatch.setattr(resource_tools, "zim_archive", lambda *a, **k: FakeCtx())
+
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://wiki/entry/A%2FLoop")
+        with pytest.raises(OpenZimMcpArchiveError, match="Redirect cycle"):
+            await resource.read()
+
+    @pytest.mark.asyncio
+    async def test_redirect_chain_too_deep_raises_archive_error(
+        self, server, monkeypatch
+    ):
+        """A redirect chain longer than MAX_REDIRECT_DEPTH raises."""
+        from openzim_mcp.exceptions import OpenZimMcpArchiveError
+        from openzim_mcp.tools import resource_tools
+        from openzim_mcp.zim_operations import MAX_REDIRECT_DEPTH
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        server.path_validator.validate_path = MagicMock(return_value="/zim/wiki.zim")
+        server.path_validator.validate_zim_file = MagicMock(
+            return_value="/zim/wiki.zim"
+        )
+
+        # Build MAX_REDIRECT_DEPTH+1 unique redirects so the chain exceeds the
+        # cap without triggering the cycle guard.
+        chain = []
+        for i in range(MAX_REDIRECT_DEPTH + 1):
+            link = MagicMock()
+            link.is_redirect = True
+            link.path = f"A/Hop{i}"
+            chain.append(link)
+        for prev, nxt in zip(chain, chain[1:]):
+            prev.get_redirect_entry.return_value = nxt
+        # The last hop continues to redirect (still is_redirect=True), keeping
+        # the chain "too deep" rather than terminating in a real entry.
+        chain[-1].get_redirect_entry.return_value = chain[-1]
+        chain[-1].path = "A/HopFinal"
+
+        archive = MagicMock()
+        archive.get_entry_by_path.return_value = chain[0]
+
+        class FakeCtx:
+            def __enter__(self_inner):
+                return archive
+
+            def __exit__(self_inner, *exc):
+                return False
+
+        monkeypatch.setattr(resource_tools, "zim_archive", lambda *a, **k: FakeCtx())
+
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://wiki/entry/A%2FHop0")
+        with pytest.raises(OpenZimMcpArchiveError, match="Redirect chain too deep"):
+            await resource.read()
+
+    @pytest.mark.asyncio
     async def test_resource_template_does_not_block_event_loop(
         self, server, monkeypatch
     ):

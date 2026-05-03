@@ -48,10 +48,17 @@ def _is_loopback_host(host: str) -> bool:
     if host in ("127.0.0.1", "::1"):
         return True
     if host == "localhost":
+        # gethostbyname has no per-call timeout; on a flaky resolver this
+        # would block startup indefinitely. Set a short default timeout for
+        # the duration of the call so a slow DNS doesn't hang the server.
+        prev_timeout = socket.getdefaulttimeout()
         try:
+            socket.setdefaulttimeout(1.0)
             resolved = socket.gethostbyname(host)
         except OSError:
             return False
+        finally:
+            socket.setdefaulttimeout(prev_timeout)
         return resolved == "127.0.0.1"
     return False
 

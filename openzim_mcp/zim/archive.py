@@ -504,14 +504,25 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             # RuntimeError if get_item() is called on a redirect entry, so
             # walk the chain (with cycle detection and the shared
             # MAX_REDIRECT_DEPTH cap) before any callers reach get_item().
+            # Raise OpenZimMcpArchiveError on cycle/depth-exceeded to match
+            # the rest of the codebase's redirect helpers and produce a
+            # targeted diagnostic instead of a libzim RuntimeError surfaced
+            # via get_item().
             seen: set[str] = set()
             for _ in range(MAX_REDIRECT_DEPTH):
                 if not getattr(entry, "is_redirect", False):
                     return entry
                 if entry.path in seen:
-                    return entry
+                    raise OpenZimMcpArchiveError(
+                        f"Redirect cycle detected at {entry.path}"
+                    )
                 seen.add(entry.path)
                 entry = entry.get_redirect_entry()
+            if getattr(entry, "is_redirect", False):
+                raise OpenZimMcpArchiveError(
+                    f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
+                    f"in main-page lookup"
+                )
             return entry
 
         try:

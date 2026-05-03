@@ -199,13 +199,19 @@ def register_resources(server: "OpenZimMcpServer") -> None:
         ),
         mime_type="application/json",
     )
-    def list_zim_files_resource() -> str:
-        try:
-            files = server.zim_operations.list_zim_files_data()
-            return json.dumps(files, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.warning(f"Resource zim://files failed: {e}")
-            return json.dumps({"error": str(e)})
+    async def list_zim_files_resource() -> str:
+        # ``list_zim_files_data`` does Path.glob + stat across every allowed
+        # directory; offload to a worker thread so concurrent HTTP/SSE
+        # clients aren't stalled while a directory scan runs.
+        def _build() -> str:
+            try:
+                files = server.zim_operations.list_zim_files_data()
+                return json.dumps(files, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logger.warning(f"Resource zim://files failed: {e}")
+                return json.dumps({"error": str(e)})
+
+        return await asyncio.to_thread(_build)
 
     @server.mcp.resource(
         "zim://{name}",
