@@ -145,9 +145,9 @@ class TestResolveLinkToEntryPath:
 
         for source in ("C/Source", "C/Sub/Article", "iep.utm.edu/aristotle/"):
             resolved = _StructureMixin._resolve_link_to_entry_path(url, source)
-            assert resolved is None, (
-                f"expected None for url={url!r} source={source!r}, " f"got {resolved!r}"
-            )
+            assert (
+                resolved is None
+            ), f"expected None for url={url!r} source={source!r}, got {resolved!r}"
 
     def test_parent_dir_to_archive_root_is_kept(self):
         """``../`` from ``iep.utm.edu/aristotle/`` resolves to the archive index.

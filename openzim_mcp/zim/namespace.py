@@ -112,7 +112,7 @@ class _NamespaceMixin:
             if path in seen_entries:
                 return
             seen_entries.add(path)
-            namespace = self._extract_namespace_from_path(path, has_new_scheme)
+            namespace = self._extract_namespace_from_path(path)
             ns_info = namespaces.setdefault(
                 namespace,
                 {
@@ -237,7 +237,7 @@ class _NamespaceMixin:
 
         return json.dumps(result, indent=2, ensure_ascii=False)
 
-    def _extract_namespace_from_path(self, path: str, has_new_scheme: bool) -> str:
+    def _extract_namespace_from_path(self, path: str) -> str:
         """Extract namespace from entry path based on ZIM format."""
         if not path:
             return "Unknown"
@@ -524,10 +524,7 @@ class _NamespaceMixin:
                     if path in seen_entries:
                         continue
                     seen_entries.add(path)
-                    if (
-                        self._extract_namespace_from_path(path, has_new_scheme)
-                        == namespace
-                    ):
+                    if self._extract_namespace_from_path(path) == namespace:
                         namespace_entries.append(path)
                 except Exception as e:
                     logger.debug(f"Error reading entry {entry_id}: {e}")
@@ -558,7 +555,7 @@ class _NamespaceMixin:
                     continue
                 seen_entries.add(path)
 
-                if self._extract_namespace_from_path(path, has_new_scheme) == namespace:
+                if self._extract_namespace_from_path(path) == namespace:
                     namespace_entries.append(path)
 
             except Exception as e:
@@ -575,8 +572,7 @@ class _NamespaceMixin:
                 if (
                     archive.has_entry_by_path(pattern)
                     and pattern not in seen_entries
-                    and self._extract_namespace_from_path(pattern, has_new_scheme)
-                    == namespace
+                    and self._extract_namespace_from_path(pattern) == namespace
                 ):
                     namespace_entries.append(pattern)
                     seen_entries.add(pattern)
@@ -690,17 +686,13 @@ class _NamespaceMixin:
         try:
             with _zim_ops_mod.zim_archive(validated) as archive:
                 total = archive.entry_count
-                has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
                 entries: List[Dict[str, Any]] = []
                 entry_id = cursor
                 while entry_id < total and len(entries) < limit:
                     try:
                         entry = archive._get_entry_by_id(entry_id)
                         path = entry.path
-                        if (
-                            self._extract_namespace_from_path(path, has_new_scheme)
-                            == namespace
-                        ):
+                        if self._extract_namespace_from_path(path) == namespace:
                             entries.append(
                                 {
                                     "path": path,

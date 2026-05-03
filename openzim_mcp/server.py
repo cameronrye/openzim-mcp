@@ -106,7 +106,7 @@ class OpenZimMcpServer:
             )
         else:
             logger.debug(
-                "Use get_server_configuration() MCP tool " "for detailed configuration"
+                "Use get_server_configuration() MCP tool for detailed configuration"
             )
 
     def _create_enhanced_error_message(

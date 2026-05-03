@@ -583,7 +583,7 @@ class TestResolveHeadingId:
         from openzim_mcp.content_processor import resolve_heading_id
 
         soup = BeautifulSoup(
-            '<div><a name="prev"></a>' '<h2><span id="inside">x</span></h2></div>',
+            '<div><a name="prev"></a><h2><span id="inside">x</span></h2></div>',
             "html.parser",
         )
         h = soup.find("h2")

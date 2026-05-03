@@ -48,9 +48,11 @@ def run_with_timeout(
         # Catch BaseException so KeyboardInterrupt / SystemExit raised inside
         # func() are propagated by the caller rather than masked as a
         # misleading timeout. We re-raise via exception[0] below.
+        # The captured exception is re-raised below via ``exception[0]`` so the
+        # caller sees the original failure, not a misleading timeout.
         try:
             result[0] = func()
-        except BaseException as e:  # noqa: B036
+        except BaseException as e:  # noqa: B036  # NOSONAR
             exception.append(e)
 
     thread = threading.Thread(target=worker, daemon=True)

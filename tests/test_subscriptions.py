@@ -231,7 +231,8 @@ async def test_watcher_stop_is_idempotent(tmp_path):
     from openzim_mcp.subscriptions import MtimeWatcher
 
     async def emit(uri: str, change_type: str) -> None:
-        pass
+        # No-op handler — this test only exercises stop() idempotency.
+        return
 
     watcher = MtimeWatcher([str(tmp_path)], interval=0.05, on_change=emit)
     await watcher.start()

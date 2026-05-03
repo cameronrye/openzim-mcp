@@ -367,9 +367,9 @@ class TestAtomicRateLimitAcquisition:
 
         # Per-op cap is 1 burst, refilling at 1/s; in the test runtime (~ms),
         # at most 1-2 successes are physically possible.
-        assert len(successes) <= 2, (
-            f"too many successes ({len(successes)}); " f"per-op budget should allow ~1"
-        )
+        assert (
+            len(successes) <= 2
+        ), f"too many successes ({len(successes)}); per-op budget should allow ~1"
         # Global was sized for 1000 burst tokens — far more than the 50 we
         # try to consume. No thread should ever have been denied at the
         # global layer. If any global denials occurred, the refund race
