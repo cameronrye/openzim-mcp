@@ -2,49 +2,49 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
         <loc>https://cameronrye.github.io/openzim-mcp/</loc>
-        <lastmod>2025-01-15</lastmod>
+        <lastmod>2026-05-02</lastmod>
         <changefreq>weekly</changefreq>
         <priority>1.0</priority>
     </url>
     <url>
-        <loc>https://cameronrye.github.io/openzim-mcp/#features</loc>
-        <lastmod>2025-01-15</lastmod>
+        <loc>https://cameronrye.github.io/openzim-mcp/#what</loc>
+        <lastmod>2026-05-02</lastmod>
         <changefreq>monthly</changefreq>
         <priority>0.8</priority>
     </url>
     <url>
-        <loc>https://cameronrye.github.io/openzim-mcp/#installation</loc>
-        <lastmod>2025-01-15</lastmod>
+        <loc>https://cameronrye.github.io/openzim-mcp/#v1</loc>
+        <lastmod>2026-05-02</lastmod>
         <changefreq>monthly</changefreq>
         <priority>0.9</priority>
     </url>
     <url>
-        <loc>https://cameronrye.github.io/openzim-mcp/#usage</loc>
-        <lastmod>2025-01-15</lastmod>
+        <loc>https://cameronrye.github.io/openzim-mcp/#try</loc>
+        <lastmod>2026-05-02</lastmod>
         <changefreq>monthly</changefreq>
-        <priority>0.8</priority>
+        <priority>0.9</priority>
     </url>
     <url>
-        <loc>https://cameronrye.github.io/openzim-mcp/#documentation</loc>
-        <lastmod>2025-01-15</lastmod>
+        <loc>https://cameronrye.github.io/openzim-mcp/#deeper</loc>
+        <lastmod>2026-05-02</lastmod>
         <changefreq>monthly</changefreq>
         <priority>0.7</priority>
     </url>
     <url>
         <loc>https://cameronrye.github.io/openzim-mcp/humans.txt</loc>
-        <lastmod>2025-01-15</lastmod>
+        <lastmod>2026-05-02</lastmod>
         <changefreq>yearly</changefreq>
         <priority>0.3</priority>
     </url>
     <url>
         <loc>https://cameronrye.github.io/openzim-mcp/.well-known/security.txt</loc>
-        <lastmod>2025-01-15</lastmod>
+        <lastmod>2026-05-02</lastmod>
         <changefreq>yearly</changefreq>
         <priority>0.5</priority>
     </url>
     <url>
         <loc>https://cameronrye.github.io/openzim-mcp/.well-known/dnt-policy.txt</loc>
-        <lastmod>2025-01-15</lastmod>
+        <lastmod>2026-05-02</lastmod>
         <changefreq>yearly</changefreq>
         <priority>0.3</priority>
     </url>

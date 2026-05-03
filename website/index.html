@@ -1,1302 +1,680 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenZIM MCP - Intelligent Knowledge Access for AI Models</title>
-    <meta name="description" content="OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns.">
-    <meta name="keywords" content="OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python, open source, semantic search">
-    <meta name="author" content="Cameron Rye">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenZIM MCP — Knowledge that works offline</title>
+  <meta name="description" content="OpenZIM MCP gives any AI model structured, secure access to ZIM archives — Wikipedia, MedlinePlus, the Stack Exchange dumps — without an internet connection.">
+  <meta name="keywords" content="OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python, open source">
+  <meta name="author" content="Cameron Rye">
 
-    <!-- SEO Meta Tags -->
-    <link rel="canonical" href="https://cameronrye.github.io/openzim-mcp/">
-    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-    <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-    <meta name="bingbot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-    <meta name="theme-color" content="#2563eb">
-    <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://cameronrye.github.io/openzim-mcp/">
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <meta name="bingbot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <meta name="theme-color" content="#0B0F1A">
+  <meta name="color-scheme" content="dark light">
 
-    <!-- Open Graph / Facebook -->
-    <meta property="og:type" content="website">
-    <meta property="og:site_name" content="OpenZIM MCP">
-    <meta property="og:url" content="https://cameronrye.github.io/openzim-mcp/">
-    <meta property="og:title" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
-    <meta property="og:description" content="Transform static ZIM archives into dynamic knowledge engines for Large Language Models with intelligent, structured access patterns.">
-    <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
-    <meta property="og:image:width" content="1200">
-    <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
-    <meta property="og:locale" content="en_US">
-    <meta property="article:author" content="Cameron Rye">
-    <meta property="article:modified_time" content="2026-01-29T00:00:00Z">
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="OpenZIM MCP">
+  <meta property="og:url" content="https://cameronrye.github.io/openzim-mcp/">
+  <meta property="og:title" content="OpenZIM MCP — Knowledge that works offline">
+  <meta property="og:description" content="MCP server for offline ZIM-archive access. Streamable HTTP, batch retrieval, per-entry resources, subscriptions. v1.0.0.">
+  <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OpenZIM MCP 1.0 — Knowledge that works offline">
+  <meta property="og:locale" content="en_US">
+  <meta property="article:author" content="Cameron Rye">
+  <meta property="article:modified_time" content="2026-05-02T00:00:00Z">
 
-    <!-- Twitter -->
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:site" content="@cameronrye">
-    <meta name="twitter:creator" content="@cameronrye">
-    <meta name="twitter:url" content="https://cameronrye.github.io/openzim-mcp/">
-    <meta name="twitter:title" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
-    <meta name="twitter:description" content="Transform static ZIM archives into dynamic knowledge engines for Large Language Models with intelligent, structured access patterns.">
-    <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
-    <meta name="twitter:image:alt" content="OpenZIM MCP - Intelligent Knowledge Access for AI Models">
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@cameronrye">
+  <meta name="twitter:creator" content="@cameronrye">
+  <meta name="twitter:url" content="https://cameronrye.github.io/openzim-mcp/">
+  <meta name="twitter:title" content="OpenZIM MCP — Knowledge that works offline">
+  <meta name="twitter:description" content="MCP server for offline ZIM-archive access. Streamable HTTP, batch retrieval, per-entry resources, subscriptions. v1.0.0.">
+  <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+  <meta name="twitter:image:alt" content="OpenZIM MCP 1.0 — Knowledge that works offline">
 
-    <!-- Favicon -->
-    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-    <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="author" type="text/plain" href="humans.txt">
 
-    <!-- Humans.txt -->
-    <link rel="author" type="text/plain" href="humans.txt">
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Fraunces:wght@600&display=swap" rel="stylesheet">
 
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/styles.css">
 
-    <!-- Styles -->
-    <link rel="stylesheet" href="assets/styles.css">
+  <!-- Legacy fragment redirect (runs before render to avoid scroll jump) -->
+  <script>
+    (function () {
+      var aliases = {
+        '#features': '#what', '#smart-retrieval': '#what', '#advanced-features': '#what',
+        '#developer-experience': '#what', '#security': '#what',
+        '#whats-new': '#v1', '#installation': '#try', '#usage': '#try',
+        '#documentation': '#deeper', '#home': '#hero'
+      };
+      if (aliases[location.hash]) {
+        history.replaceState(null, '', aliases[location.hash]);
+      }
+    })();
+  </script>
 
-    <!-- Structured Data - Software Application -->
-    <script type="application/ld+json">
-    {
-        "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "OpenZIM MCP",
-        "alternateName": "OpenZIM MCP Server",
-        "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
-        "url": "https://cameronrye.github.io/openzim-mcp/",
-        "softwareVersion": "0.8.2",
-        "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
-        "applicationCategory": "DeveloperApplication",
-        "applicationSubCategory": "AI Tools",
-        "operatingSystem": "Linux, macOS, Windows",
-        "programmingLanguage": {
-            "@type": "ComputerLanguage",
-            "name": "Python",
-            "version": "3.12+"
-        },
-        "license": "https://opensource.org/licenses/MIT",
-        "downloadUrl": "https://pypi.org/project/openzim-mcp/",
-        "installUrl": "https://pypi.org/project/openzim-mcp/",
-        "codeRepository": "https://github.com/cameronrye/openzim-mcp",
-        "softwareHelp": "https://github.com/cameronrye/openzim-mcp#readme",
-        "author": {
-            "@type": "Person",
-            "name": "Cameron Rye",
-            "url": "https://rye.dev"
-        },
-        "creator": {
-            "@type": "Person",
-            "name": "Cameron Rye",
-            "url": "https://rye.dev"
-        },
-        "maintainer": {
-            "@type": "Person",
-            "name": "Cameron Rye",
-            "url": "https://rye.dev"
-        },
-        "offers": {
-            "@type": "Offer",
-            "price": "0",
-            "priceCurrency": "USD",
-            "availability": "https://schema.org/InStock"
-        },
-        "featureList": [
-            "Dual Mode Support: Simple mode (1 intelligent natural language tool) or Advanced mode (21 specialized tools)",
-            "Article Summaries: Extract concise summaries from opening paragraphs for quick content preview",
-            "Table of Contents: Build hierarchical TOC from article headings for navigation",
-            "Pagination Cursors: Token-based pagination for seamless result navigation",
-            "Binary Content Retrieval: Extract PDFs, images, videos, and other embedded media for multi-agent workflows",
-            "Security First: Comprehensive input validation and path traversal protection",
-            "Smart Retrieval System: Intelligent content extraction with configurable strategies",
-            "Multi-Archive Search: Query across many ZIM files in one call via search_all",
-            "Performance Optimized: Intelligent caching and pagination",
-            "Full-Text Search: Fast search across ZIM archives",
-            "Metadata Access: Rich metadata and article information",
-            "Link Extraction: Internal and external link discovery"
-        ],
-        "keywords": "OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python, semantic search",
-        "screenshot": "https://cameronrye.github.io/openzim-mcp/assets/og-image.svg",
-        "aggregateRating": {
-            "@type": "AggregateRating",
-            "ratingValue": "5.0",
-            "ratingCount": "1",
-            "bestRating": "5",
-            "worstRating": "1"
-        }
-    }
-    </script>
-
-    <!-- Structured Data - Organization -->
-    <script type="application/ld+json">
-    {
-        "@context": "https://schema.org",
-        "@type": "Organization",
-        "name": "OpenZIM MCP",
-        "url": "https://cameronrye.github.io/openzim-mcp/",
-        "logo": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg",
-        "sameAs": [
-            "https://github.com/cameronrye/openzim-mcp",
-            "https://pypi.org/project/openzim-mcp/"
-        ],
-        "founder": {
-            "@type": "Person",
-            "name": "Cameron Rye",
-            "url": "https://rye.dev"
-        },
-        "contactPoint": {
-            "@type": "ContactPoint",
-            "contactType": "Technical Support",
-            "url": "https://github.com/cameronrye/openzim-mcp/issues"
-        }
-    }
-    </script>
-
-    <!-- Structured Data - WebSite -->
-    <script type="application/ld+json">
-    {
-        "@context": "https://schema.org",
-        "@type": "WebSite",
-        "name": "OpenZIM MCP",
-        "url": "https://cameronrye.github.io/openzim-mcp/",
-        "description": "Transform static ZIM archives into dynamic knowledge engines for Large Language Models",
-        "publisher": {
-            "@type": "Organization",
-            "name": "OpenZIM MCP",
-            "logo": {
-                "@type": "ImageObject",
-                "url": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg"
-            }
-        },
-        "inLanguage": "en-US"
-    }
-    </script>
-
-    <!-- Structured Data - BreadcrumbList -->
-    <script type="application/ld+json">
-    {
-        "@context": "https://schema.org",
-        "@type": "BreadcrumbList",
-        "itemListElement": [
-            {
-                "@type": "ListItem",
-                "position": 1,
-                "name": "Home",
-                "item": "https://cameronrye.github.io/openzim-mcp/"
-            },
-            {
-                "@type": "ListItem",
-                "position": 2,
-                "name": "Features",
-                "item": "https://cameronrye.github.io/openzim-mcp/#features"
-            },
-            {
-                "@type": "ListItem",
-                "position": 3,
-                "name": "Installation",
-                "item": "https://cameronrye.github.io/openzim-mcp/#installation"
-            },
-            {
-                "@type": "ListItem",
-                "position": 4,
-                "name": "Documentation",
-                "item": "https://cameronrye.github.io/openzim-mcp/#documentation"
-            }
-        ]
-    }
-    </script>
-
-    <!-- Structured Data - TechArticle for Documentation -->
-    <script type="application/ld+json">
-    {
-        "@context": "https://schema.org",
-        "@type": "TechArticle",
-        "headline": "OpenZIM MCP - Intelligent Knowledge Access for AI Models",
-        "description": "Comprehensive guide to OpenZIM MCP, a modern MCP server for AI models to access ZIM format knowledge bases offline",
-        "author": {
-            "@type": "Person",
-            "name": "Cameron Rye",
-            "url": "https://rye.dev"
-        },
-        "datePublished": "2024-01-01T00:00:00Z",
-        "dateModified": "2026-01-29T00:00:00Z",
-        "publisher": {
-            "@type": "Organization",
-            "name": "OpenZIM MCP",
-            "logo": {
-                "@type": "ImageObject",
-                "url": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg"
-            }
-        },
-        "mainEntityOfPage": {
-            "@type": "WebPage",
-            "@id": "https://cameronrye.github.io/openzim-mcp/"
-        },
-        "articleSection": "Technology",
-        "keywords": "OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python",
-        "inLanguage": "en-US"
-    }
-    </script>
-</head>
-<body>
-    <!-- Scroll Progress Indicator -->
-    <div class="scroll-progress" id="scroll-progress"></div>
-
-    <!-- Skip to main content for accessibility -->
-    <a href="#main-content" class="skip-link">Skip to main content</a>
-
-    <!-- Navigation -->
-    <nav class="navbar" id="navbar">
-        <div class="nav-container">
-            <div class="nav-logo">
-                <svg class="logo-icon" width="32" height="32" viewBox="0 0 32 32">
-                    <defs>
-                        <linearGradient id="navLogoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                            <stop offset="0%" style="stop-color:#2563eb"/>
-                            <stop offset="100%" style="stop-color:#10b981"/>
-                        </linearGradient>
-                    </defs>
-                    <circle cx="16" cy="16" r="15" fill="url(#navLogoGrad)"/>
-                    <g fill="white">
-                        <circle cx="16" cy="8" r="2.5"/>
-                        <circle cx="10" cy="14" r="2"/>
-                        <circle cx="22" cy="14" r="2"/>
-                        <circle cx="16" cy="16" r="2"/>
-                        <circle cx="12" cy="21" r="1.5"/>
-                        <circle cx="20" cy="21" r="1.5"/>
-                    </g>
-                    <g stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.8">
-                        <line x1="16" y1="8" x2="10" y2="14"/>
-                        <line x1="16" y1="8" x2="22" y2="14"/>
-                        <line x1="10" y1="14" x2="16" y2="16"/>
-                        <line x1="22" y1="14" x2="16" y2="16"/>
-                        <line x1="16" y1="16" x2="12" y2="21"/>
-                        <line x1="16" y1="16" x2="20" y2="21"/>
-                    </g>
-                    <rect x="8" y="25" width="16" height="2" rx="1" fill="white" opacity="0.7"/>
-                </svg>
-                <span class="logo-text">OpenZIM MCP</span>
-            </div>
-            <div class="nav-menu" id="nav-menu">
-                <a href="#home" class="nav-link">Home</a>
-                <a href="#features" class="nav-link">Features</a>
-                <a href="#whats-new" class="nav-link">What's New</a>
-                <a href="#smart-retrieval" class="nav-link">Smart Retrieval</a>
-                <a href="#security" class="nav-link">Security</a>
-                <a href="#installation" class="nav-link">Installation</a>
-                <a href="#usage" class="nav-link">Usage</a>
-                <a href="#documentation" class="nav-link">Documentation</a>
-                <a href="https://github.com/cameronrye/openzim-mcp" class="nav-link nav-link-github" target="_blank">
-                    <span class="github-icon"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg></span></span> GitHub
-                </a>
-                <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
-                    <span class="theme-icon" id="theme-icon"><span class="icon"><svg viewBox="0 0 24 24" id="theme-icon-svg"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg></span></span>
-                </button>
-            </div>
-            <div class="nav-toggle" id="nav-toggle">
-                <span class="bar"></span>
-                <span class="bar"></span>
-                <span class="bar"></span>
-            </div>
-        </div>
-    </nav>
-
-    <!-- Hero Section -->
-    <main id="main-content">
-    <!-- NEW Feature Banner -->
-    <div class="new-feature-banner">
-        <div class="container">
-            <span class="new-badge"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</span>
-            <span class="new-text"><strong>OpenZIM MCP v1.0.0 is here!</strong> Streamable HTTP transport (bearer-token auth, multi-arch Docker, resource subscriptions, a full deployment guide), batch entry retrieval, per-entry MCP resources for direct browser rendering, and dozens of polish fixes. <a href="#whats-new" class="new-link">Learn more →</a></span>
-        </div>
-    </div>
-
-    <section id="home" class="hero">
-        <div class="container">
-            <div class="hero-content">
-                <div class="hero-badge">
-                    <span class="badge-icon"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span></span>
-                    <span>Built for LLM Intelligence</span>
-                </div>
-                <h1 class="hero-title">
-                    Transform Static ZIM Archives into
-                    <span class="gradient-text">Dynamic Knowledge Engines</span>
-                </h1>
-                <p class="hero-description">
-                    OpenZIM MCP is a modern, secure MCP server that enables AI models to access and search
-                    ZIM format knowledge bases offline with intelligent, structured access patterns.
-                    Choose between Simple mode (default) or Advanced mode to match your needs.
-                </p>
-                <div class="hero-buttons">
-                    <a href="#installation" class="btn btn-primary">
-                        <span class="btn-icon">→</span>
-                        Get Started
-                    </a>
-                    <a href="https://github.com/cameronrye/openzim-mcp" class="btn btn-secondary" target="_blank">
-                        <span class="btn-icon">↗</span>
-                        View on GitHub
-                    </a>
-                </div>
-                <div class="hero-stats">
-                    <div class="stat">
-                        <div class="stat-number" id="version-display">v1.0.0</div>
-                        <div class="stat-label">Latest Release</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-number">80%+</div>
-                        <div class="stat-label">Test Coverage</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-number">0</div>
-                        <div class="stat-label">Known Vulnerabilities</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-number">2 Modes</div>
-                        <div class="stat-label">Simple & Advanced</div>
-                    </div>
-                </div>
-            </div>
-            <div class="hero-visual">
-                <div class="code-window">
-                    <div class="code-header">
-                        <div class="code-dots">
-                            <span class="dot red"></span>
-                            <span class="dot yellow"></span>
-                            <span class="dot green"></span>
-                        </div>
-                        <div class="code-title">MCP Configuration</div>
-                    </div>
-                    <div class="code-content">
-                        <pre><code>{
-  "openzim-mcp": {
-    "command": "uv",
-    "args": [
-      "run", "openzim-mcp",
-      "/path/to/zim/files"
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "OpenZIM MCP",
+    "alternateName": "OpenZIM MCP Server",
+    "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
+    "url": "https://cameronrye.github.io/openzim-mcp/",
+    "softwareVersion": "1.0.0",
+    "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
+    "applicationCategory": "DeveloperApplication",
+    "applicationSubCategory": "AI Tools",
+    "operatingSystem": "Linux, macOS, Windows",
+    "programmingLanguage": { "@type": "ComputerLanguage", "name": "Python", "version": "3.12+" },
+    "license": "https://opensource.org/licenses/MIT",
+    "downloadUrl": "https://pypi.org/project/openzim-mcp/",
+    "installUrl": "https://pypi.org/project/openzim-mcp/",
+    "codeRepository": "https://github.com/cameronrye/openzim-mcp",
+    "softwareHelp": "https://github.com/cameronrye/openzim-mcp#readme",
+    "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+    "creator": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+    "maintainer": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+  <script type="application/ld+json">
+  { "@context": "https://schema.org", "@type": "Organization", "name": "OpenZIM MCP",
+    "url": "https://cameronrye.github.io/openzim-mcp/",
+    "logo": "https://cameronrye.github.io/openzim-mcp/assets/logo.svg",
+    "founder": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" } }
+  </script>
+  <script type="application/ld+json">
+  { "@context": "https://schema.org", "@type": "WebSite", "name": "OpenZIM MCP",
+    "url": "https://cameronrye.github.io/openzim-mcp/",
+    "description": "Knowledge that works offline." }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://cameronrye.github.io/openzim-mcp/" },
+      { "@type": "ListItem", "position": 2, "name": "What is this", "item": "https://cameronrye.github.io/openzim-mcp/#what" },
+      { "@type": "ListItem", "position": 3, "name": "v1.0", "item": "https://cameronrye.github.io/openzim-mcp/#v1" },
+      { "@type": "ListItem", "position": 4, "name": "Try it", "item": "https://cameronrye.github.io/openzim-mcp/#try" },
+      { "@type": "ListItem", "position": 5, "name": "Deeper", "item": "https://cameronrye.github.io/openzim-mcp/#deeper" }
     ]
   }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "OpenZIM MCP — Knowledge that works offline",
+    "description": "MCP server for offline ZIM-archive access. Streamable HTTP transport, batch retrieval, per-entry resources, resource subscriptions.",
+    "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+    "datePublished": "2024-01-01T00:00:00Z",
+    "dateModified": "2026-05-02T00:00:00Z",
+    "publisher": {
+      "@type": "Organization",
+      "name": "OpenZIM MCP",
+      "logo": { "@type": "ImageObject", "url": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg" }
+    },
+    "mainEntityOfPage": { "@type": "WebPage", "@id": "https://cameronrye.github.io/openzim-mcp/" },
+    "articleSection": "Technology",
+    "keywords": "OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python",
+    "inLanguage": "en-US"
+  }
+  </script>
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <header class="nav" id="nav">
+    <div class="container nav__inner">
+      <a href="#hero" class="nav__brand" aria-label="OpenZIM MCP home">
+        <svg class="nav__logo" width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
+          <g transform="translate(4 4) rotate(90 12 12)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+            <path d="M9 13a4.5 4.5 0 0 0 3-4"/>
+            <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>
+            <path d="M3.477 10.896a4 4 0 0 1 .585-.396"/>
+            <path d="M6 18a4 4 0 0 1-1.967-.516"/>
+            <path d="M12 13h4"/>
+            <path d="M12 18h6a2 2 0 0 1 2 2v1"/>
+            <path d="M12 8h8"/>
+            <path d="M16 8V5a2 2 0 0 1 2-2"/>
+            <circle cx="16" cy="13" r=".7" fill="currentColor"/>
+            <circle cx="18" cy="3"  r=".7" fill="currentColor"/>
+            <circle cx="20" cy="21" r=".7" fill="currentColor"/>
+            <circle cx="20" cy="8"  r=".7" fill="currentColor"/>
+          </g>
+        </svg>
+        <span class="nav__wordmark">OpenZIM&nbsp;MCP</span>
+      </a>
+      <nav class="nav__menu" id="nav-menu" aria-label="Primary">
+        <a href="#what" class="nav__link">What is this</a>
+        <a href="#v1" class="nav__link">v1.0</a>
+        <a href="#try" class="nav__link">Try it</a>
+        <a href="#deeper" class="nav__link">Deeper</a>
+        <a href="https://github.com/cameronrye/openzim-mcp" class="nav__link" target="_blank" rel="noopener">GitHub ↗</a>
+        <button class="nav__theme" id="theme-toggle" aria-label="Toggle theme" type="button">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+        </button>
+      </nav>
+      <button class="nav__toggle" id="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="nav-menu" type="button">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <section id="hero" class="hero">
+      <div class="container hero__inner">
+        <div class="hero__content">
+          <span class="eyebrow">MCP&nbsp;SERVER · v1.0.0</span>
+          <h1 class="hero__title">Knowledge that works offline.</h1>
+          <p class="hero__lead">
+            OpenZIM MCP gives any AI model structured, secure access to ZIM archives —
+            Wikipedia, MedlinePlus, the Stack Exchange dumps — without an internet connection.
+          </p>
+          <div class="hero__ctas">
+            <a href="#try" class="btn btn--primary">Get started <span aria-hidden="true">→</span></a>
+            <a href="https://github.com/cameronrye/openzim-mcp" class="btn btn--secondary" target="_blank" rel="noopener">
+              View on GitHub <span aria-hidden="true">↗</span>
+            </a>
+          </div>
+          <div class="hero__install">
+            <code class="hero__install-cmd" id="hero-install">uv tool install openzim-mcp</code>
+            <button class="hero__install-copy copy-btn" data-copy-target="#hero-install" aria-label="Copy install command">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="8" y="2" width="8" height="4" rx="1"/>
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+              </svg>
+            </button>
+          </div>
+          <ul class="hero__stats">
+            <li><span class="hero__stat-num">v1.0.0</span><span class="hero__stat-label">Latest release</span></li>
+            <li><span class="hero__stat-num">21</span><span class="hero__stat-label">Tools available</span></li>
+            <li><span class="hero__stat-num">80%+</span><span class="hero__stat-label">Test coverage</span></li>
+            <li><span class="hero__stat-num">MIT</span><span class="hero__stat-label">License</span></li>
+          </ul>
+        </div>
+        <div class="hero__visual" aria-hidden="true">
+          <svg id="hero-constellation" class="constellation" viewBox="0 0 480 480" role="img" aria-label="Decorative brain-circuit illustration">
+            <defs>
+              <radialGradient id="hero-glow" cx="50%" cy="50%" r="55%">
+                <stop offset="0%" stop-color="#FFD24A" stop-opacity="0.20"/>
+                <stop offset="100%" stop-color="#FFD24A" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <rect width="480" height="480" fill="url(#hero-glow)"/>
+            <g transform="translate(72 72) scale(14) rotate(90 12 12)" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text);">
+              <path class="constellation__line" data-i="0" d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+              <path class="constellation__line" data-i="1" d="M9 13a4.5 4.5 0 0 0 3-4"/>
+              <path class="constellation__line" data-i="2" d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>
+              <path class="constellation__line" data-i="3" d="M3.477 10.896a4 4 0 0 1 .585-.396"/>
+              <path class="constellation__line" data-i="4" d="M6 18a4 4 0 0 1-1.967-.516"/>
+              <path class="constellation__line" data-i="5" d="M12 13h4"/>
+              <path class="constellation__line" data-i="6" d="M12 18h6a2 2 0 0 1 2 2v1"/>
+              <path class="constellation__line" data-i="7" d="M12 8h8"/>
+              <path class="constellation__line" data-i="8" d="M16 8V5a2 2 0 0 1 2-2"/>
+            </g>
+            <g transform="translate(72 72) scale(14) rotate(90 12 12)" stroke="none">
+              <circle class="constellation__dot" data-i="0" cx="16" cy="13" r=".9" fill="#FFD24A"/>
+              <circle class="constellation__dot" data-i="1" cx="20" cy="8"  r=".9" fill="#FFD24A"/>
+              <circle class="constellation__dot" data-i="2" cx="20" cy="21" r=".9" fill="#FFD24A"/>
+              <circle class="constellation__dot constellation__dot--bright" data-i="3" cx="18" cy="3" r="1.1" fill="#FFD24A"/>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <section id="what" class="section section--surface what" data-reveal>
+      <div class="container container--narrow">
+        <header class="section__header">
+          <span class="eyebrow">What is this</span>
+          <h2>An MCP server for offline knowledge.</h2>
+          <p>
+            ZIM archives package Wikipedia, Project Gutenberg, MedlinePlus, the Stack Exchange
+            network, and more into self-contained files you can carry on a USB stick. OpenZIM MCP
+            is the Model Context Protocol server that turns those static files into intelligent,
+            structured access for any LLM client — Claude Desktop, Cursor, Cline, or your own.
+          </p>
+        </header>
+
+        <figure class="what__diagram" aria-label="Architecture diagram: ZIM archive flows through openzim-mcp to your LLM">
+          <svg viewBox="0 0 720 220" role="img" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+                <path d="M0,0 L10,5 L0,10 z" fill="#FFD24A"/>
+              </marker>
+            </defs>
+            <g>
+              <rect x="20"  y="60" width="180" height="100" rx="10" fill="transparent" stroke="currentColor" stroke-opacity="0.2" stroke-width="1.5"/>
+              <text x="110" y="105" text-anchor="middle" fill="currentColor" font-family="Geist, system-ui, sans-serif" font-size="18" font-weight="600">ZIM archive</text>
+              <text x="110" y="130" text-anchor="middle" fill="currentColor" fill-opacity="0.6" font-family="JetBrains Mono, ui-monospace, monospace" font-size="13">Static</text>
+            </g>
+            <g>
+              <rect x="270" y="40" width="180" height="140" rx="10" fill="transparent" stroke="#FFD24A" stroke-width="2"/>
+              <g transform="translate(336 64) scale(2) rotate(90 12 12)" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+                <path d="M9 13a4.5 4.5 0 0 0 3-4"/>
+                <path d="M12 13h4"/>
+                <path d="M12 18h6a2 2 0 0 1 2 2v1"/>
+                <path d="M12 8h8"/>
+                <path d="M16 8V5a2 2 0 0 1 2-2"/>
+                <circle cx="16" cy="13" r=".7" fill="#FFD24A" stroke="none"/>
+                <circle cx="18" cy="3"  r=".7" fill="#FFD24A" stroke="none"/>
+                <circle cx="20" cy="8"  r=".7" fill="#FFD24A" stroke="none"/>
+                <circle cx="20" cy="21" r=".7" fill="#FFD24A" stroke="none"/>
+              </g>
+              <text x="360" y="148" text-anchor="middle" fill="currentColor" font-family="Geist, system-ui, sans-serif" font-size="16" font-weight="600">openzim-mcp</text>
+              <text x="360" y="168" text-anchor="middle" fill="#FFD24A" font-family="JetBrains Mono, ui-monospace, monospace" font-size="13">Intelligent</text>
+            </g>
+            <g>
+              <rect x="520" y="60" width="180" height="100" rx="10" fill="transparent" stroke="currentColor" stroke-opacity="0.2" stroke-width="1.5"/>
+              <text x="610" y="105" text-anchor="middle" fill="currentColor" font-family="Geist, system-ui, sans-serif" font-size="18" font-weight="600">Your LLM</text>
+              <text x="610" y="130" text-anchor="middle" fill="currentColor" fill-opacity="0.6" font-family="JetBrains Mono, ui-monospace, monospace" font-size="13">Conversational</text>
+            </g>
+            <line x1="200" y1="110" x2="265" y2="110" stroke="#FFD24A" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+            <line x1="450" y1="110" x2="515" y2="110" stroke="#FFD24A" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+          </svg>
+        </figure>
+
+        <ul class="what__triad">
+          <li>
+            <h3>Offline</h3>
+            <p>No network round-trips. The whole archive — every article, every link — sits on disk and stays accessible whether the network is up or down.</p>
+          </li>
+          <li>
+            <h3>Secure</h3>
+            <p>Path-traversal protection, sanitized error messages, bearer-token auth on HTTP, multi-arch container running as non-root.</p>
+          </li>
+          <li>
+            <h3>Structured</h3>
+            <p>Search, browse, summarize, traverse — 21 tools designed for how LLMs actually consume knowledge, not just raw file access.</p>
+          </li>
+        </ul>
+
+        <ul class="what__production">
+          <li><span class="what__production-num">0</span><span class="what__production-label">Known CVEs</span></li>
+          <li><span class="what__production-num">80%+</span><span class="what__production-label">Test coverage</span></li>
+          <li><span class="what__production-num">100%</span><span class="what__production-label">Type-annotated</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="v1" class="section v1" data-reveal>
+      <div class="container">
+        <span class="v1__watermark" aria-hidden="true">1.0</span>
+        <header class="section__header">
+          <span class="eyebrow">The 1.0 release</span>
+          <h2>Four headlines, dozens of fixes.</h2>
+          <p>v1.0.0 ships streamable HTTP, batch retrieval, per-entry resources, and resource subscriptions — plus an end-to-end review pass before tagging.</p>
+        </header>
+
+        <ul class="v1__cards">
+          <li class="v1__card">
+            <span class="v1__card-dot" aria-hidden="true"></span>
+            <h3>Streamable HTTP &amp; SSE transports</h3>
+            <p>Run as a long-running service. Bearer-token auth, CORS allow-list, <code>/healthz</code> &amp; <code>/readyz</code>, multi-arch Docker.</p>
+            <pre><code>docker run -p 8080:8080 \
+  ghcr.io/cameronrye/openzim-mcp:1.0.0 \
+  --transport streamable-http \
+  --auth-token "$TOKEN" /data</code></pre>
+          </li>
+
+          <li class="v1__card">
+            <span class="v1__card-dot" aria-hidden="true"></span>
+            <h3>Batch entry retrieval</h3>
+            <p><code>get_zim_entries</code> fetches up to 50 entries per call. Multi-archive batches, partial-success reporting, rate-limit-aware.</p>
+            <pre><code>{
+  "name": "get_zim_entries",
+  "arguments": {
+    "zim_file_path": "wiki.zim",
+    "entries": ["A/Evolution",
+                "A/Genetics",
+                "A/Mendel"]
+  }
 }</code></pre>
-                    </div>
-                </div>
+          </li>
+
+          <li class="v1__card">
+            <span class="v1__card-dot" aria-hidden="true"></span>
+            <h3>Per-entry MCP resources</h3>
+            <p>Each entry exposed as <code>zim://{name}/entry/{path}</code> with libzim's native MIME type — HTML, PDFs, images render in MCP-aware clients.</p>
+            <pre><code>zim://wikipedia_en/entry/A%2FEvolution
+# returns text/html
+
+zim://gutenberg/entry/I%2Fbook_cover.jpg
+# returns image/jpeg</code></pre>
+          </li>
+
+          <li class="v1__card">
+            <span class="v1__card-dot" aria-hidden="true"></span>
+            <h3>Resource subscriptions</h3>
+            <p>Subscribe to <code>zim://files</code> or <code>zim://{name}</code>. mtime-polling watcher emits <code>notifications/resources/updated</code> when archives change.</p>
+            <pre><code>// client subscribes
+{ "method": "resources/subscribe",
+  "params": { "uri": "zim://files" } }
+
+// server notifies on change
+{ "method": "notifications/resources/updated",
+  "params": { "uri": "zim://files" } }</code></pre>
+          </li>
+        </ul>
+
+        <details class="v1__also">
+          <summary><strong>Also in 1.0</strong> — polish, fixes, and scope cuts</summary>
+          <div class="v1__also-grid">
+            <div>
+              <h4>Smarter archive handling</h4>
+              <ul>
+                <li><code>get_related_articles</code> resolves relative hrefs against the source entry's directory and detects the content namespace correctly on domain-scheme archives.</li>
+                <li>Suggestion fallback uses <code>SuggestionSearcher(archive).suggest(text)</code> (the prior <code>archive.suggest()</code> call didn't exist).</li>
+                <li><code>list_zim_files</code> gains a case-insensitive <code>name_filter</code> substring argument.</li>
+                <li><code>search_zim_file</code> accepts an opaque <code>cursor</code> parameter; passing the cursor alone resumes pagination.</li>
+              </ul>
             </div>
-        </div>
+            <div>
+              <h4>Cleaner content extraction</h4>
+              <ul>
+                <li>Heading-id resolution falls through <code>id</code> → mw-headline anchor → <code>&lt;a name=""&gt;</code> → slug.</li>
+                <li>Summary extraction skips USWDS banners and skip-nav blocks above the first <code>&lt;h1&gt;</code>.</li>
+                <li>Link extraction drops non-navigable schemes (<code>javascript:</code>, <code>mailto:</code>, <code>tel:</code>, <code>data:</code>, <code>blob:</code>, <code>vbscript:</code>).</li>
+                <li>Per-entry paths sanitized in <code>get_zim_entries</code>.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>Server hygiene</h4>
+              <ul>
+                <li><code>__version__</code> reads from <code>importlib.metadata</code>; <code>serverInfo.version</code> reports openzim-mcp's actual version.</li>
+                <li>HTTP transport's subscription watcher starts via wrapped lifespan.</li>
+                <li>Per-entry <code>zim://</code> returns libzim's native MIME type.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>Streamlined scope</h4>
+              <p>Advanced-mode tool surface drops 27 → 21. Removed: <code>warm_cache</code>, <code>cache_stats</code>, <code>cache_clear</code>, <code>get_random_entry</code>, <code>diagnose_server_state</code>, <code>resolve_server_conflicts</code>. The cache itself remains. Multi-instance conflict tracking removed entirely.</p>
+            </div>
+          </div>
+        </details>
+
+        <article class="v1__prior">
+          <h3>v0.9.0 <span class="v1__prior-label">— previously</span></h3>
+          <ul>
+            <li><strong>Multi-archive search</strong> — <code>search_all</code> queries every ZIM file in your allowed directories at once.</li>
+            <li><strong>MCP Prompts</strong> — <code>/research</code>, <code>/summarize</code>, <code>/explore</code> as ready-made workflows.</li>
+            <li><strong>Find entries by title</strong> — <code>find_entry_by_title</code> resolves a title to entry paths, optionally cross-file.</li>
+            <li><strong>MCP Resources</strong> — <code>zim://files</code> and <code>zim://{name}</code> show up in your client's resource browser.</li>
+            <li><strong>Power-user tools</strong> — <code>walk_namespace</code> for cursor-paginated iteration; <code>get_related_articles</code> for outbound link-graph neighbours.</li>
+          </ul>
+        </article>
+      </div>
     </section>
 
-    <!-- Features Section -->
-    <section id="features" class="features">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">Why LLMs Love OpenZIM MCP</h2>
-                <p class="section-description">
-                    Unlike basic file readers, OpenZIM MCP provides intelligent, structured access
-                    that LLMs need to effectively navigate and understand vast knowledge repositories.
-                </p>
-            </div>
-            <div class="features-grid">
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></span></div>
-                    <h3 class="feature-title">Dual Mode Support</h3>
-                    <p class="feature-description">
-                        Choose Simple mode (1 intelligent natural language tool, default) or Advanced mode
-                        (21 specialized tools) to match your LLM's capabilities.
-                    </p>
-                </div>
-                <div class="feature-card feature-new" id="streamable-http">
-                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path><circle cx="12" cy="12" r="10"></circle></svg></span></div>
-                    <h3 class="feature-title">HTTP &amp; SSE Transports</h3>
-                    <p class="feature-description">
-                        Run OpenZIM MCP as a long-running service. Streamable HTTP with
-                        bearer-token auth, CORS allow-list, health endpoints, multi-arch Docker.
-                        Legacy SSE (<code>--transport sse</code>) for older clients — localhost only.
-                    </p>
-                </div>
-                <div class="feature-card feature-new" id="batch-entries">
-                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"></rect><rect width="7" height="7" x="14" y="3" rx="1"></rect><rect width="7" height="7" x="14" y="14" rx="1"></rect><rect width="7" height="7" x="3" y="14" rx="1"></rect></svg></span></div>
-                    <h3 class="feature-title">Batch Entry Retrieval</h3>
-                    <p class="feature-description">
-                        Fetch up to 50 entries per call with <code>get_zim_entries</code>.
-                        Multi-archive, partial-success, rate-limit-aware.
-                    </p>
-                </div>
-                <div class="feature-card feature-new" id="per-entry-resources">
-                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg></span></div>
-                    <h3 class="feature-title">Per-Entry MCP Resources</h3>
-                    <p class="feature-description">
-                        Browse ZIM articles via <code>zim://{name}/entry/{path}</code>
-                        with native MIME types — HTML, PDFs, images.
-                    </p>
-                </div>
-                <div class="feature-card feature-new" id="resource-subscriptions">
-                    <div class="feature-badge-new"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg></span> NEW</div>
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg></span></div>
-                    <h3 class="feature-title">Resource Subscriptions</h3>
-                    <p class="feature-description">
-                        Subscribe to <code>zim://files</code> or <code>zim://{name}</code> and receive
-                        <code>notifications/resources/updated</code> when archives change. mtime-polling
-                        watcher with configurable interval.
-                    </p>
-                </div>
-                <div class="feature-card" id="content-tools">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 9H8"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></span></div>
-                    <h3 class="feature-title">Article Summaries</h3>
-                    <p class="feature-description">
-                        Extract concise summaries from article opening paragraphs.
-                        Quick content overview without loading full articles.
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><line x1="8" x2="21" y1="6" y2="6"></line><line x1="8" x2="21" y1="12" y2="12"></line><line x1="8" x2="21" y1="18" y2="18"></line><line x1="3" x2="3.01" y1="6" y2="6"></line><line x1="3" x2="3.01" y1="12" y2="12"></line><line x1="3" x2="3.01" y1="18" y2="18"></line></svg></span></div>
-                    <h3 class="feature-title">Table of Contents</h3>
-                    <p class="feature-description">
-                        Build hierarchical TOC from article headings (h1-h6).
-                        Navigate directly to specific sections with anchor links.
-                    </p>
-                </div>
-                <div class="feature-card" id="binary-retrieval">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="m7.5 4.27 9 5.15"></path><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></span></div>
-                    <h3 class="feature-title">Binary Content Retrieval</h3>
-                    <p class="feature-description">
-                        Extract PDFs, images, videos, and other embedded media from ZIM archives.
-                        Perfect for multi-agent workflows with specialized processors.
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg></span></div>
-                    <h3 class="feature-title">Smart Navigation</h3>
-                    <p class="feature-description">
-                        Browse by namespace (articles, metadata, media) instead of blind searching.
-                        Get structured access to content organization.
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span></div>
-                    <h3 class="feature-title">Context-Aware Discovery</h3>
-                    <p class="feature-description">
-                        Get article structure, relationships, and metadata for deeper understanding.
-                        Extract links and content connections.
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></span></div>
-                    <h3 class="feature-title">Intelligent Search</h3>
-                    <p class="feature-description">
-                        Advanced filtering, auto-complete suggestions, and relevance-ranked results
-                        with namespace and content type filters.
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span></div>
-                    <h3 class="feature-title">High Performance</h3>
-                    <p class="feature-description">
-                        LRU cache with TTL, intelligent eviction policies, and optimized ZIM operations.
-                        80%+ test coverage ensures reliability at scale.
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span></div>
-                    <h3 class="feature-title">Relationship Mapping</h3>
-                    <p class="feature-description">
-                        Extract internal/external links to understand content connections.
-                        Build knowledge graphs from ZIM content.
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg></span></div>
-                    <h3 class="feature-title">Security First</h3>
-                    <p class="feature-description">
-                        Comprehensive input validation, path traversal protection, and secure
-                        resource management with type safety.
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path><line x1="22" x2="17" y1="10" y2="10"></line></svg></span></div>
-                    <h3 class="feature-title">Offline-First Architecture</h3>
-                    <p class="feature-description">
-                        Complete knowledge access without internet dependency. Perfect for
-                        air-gapped environments and privacy-sensitive deployments.
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></span></div>
-                    <h3 class="feature-title">Multi-Archive Intelligence</h3>
-                    <p class="feature-description">
-                        Query across multiple ZIM archives simultaneously. Combine Wikipedia,
-                        Wiktionary, and specialized encyclopedias into a unified knowledge layer.
-                    </p>
-                </div>
-            </div>
-        </div>
-    </section>
+    <section id="try" class="section section--surface try" data-reveal>
+      <div class="container">
+        <header class="section__header">
+          <span class="eyebrow">Try it</span>
+          <h2>Three steps to a knowledge engine.</h2>
+        </header>
 
-    <!-- What's New Section -->
-    <section id="whats-new" class="whats-new">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">What's New</h2>
-                <p class="section-description">Recent releases at a glance.</p>
-            </div>
-
-            <article class="release-block">
-                <h3 class="release-title">v1.0.0</h3>
-                <ul class="release-marquee">
-                    <li><strong>Streamable HTTP &amp; SSE transports</strong> — bearer-token auth, CORS allow-list, <code>/healthz</code>/<code>/readyz</code> endpoints, multi-arch Docker image at <code>ghcr.io/cameronrye/openzim-mcp:1.0.0</code>. Legacy SSE for unmigrated clients (localhost only).</li>
-                    <li><strong>Batch entry retrieval</strong> — <code>get_zim_entries</code> fetches up to 50 entries per call. Multi-archive batches; bare-string entries with a default <code>zim_file_path</code>; per-entry success/error reporting.</li>
-                    <li><strong>Per-entry MCP resource</strong> — <code>zim://{name}/entry/{path}</code> serves single entries with libzim's native MIME type. Clients URL-encode <code>/</code> as <code>%2F</code>.</li>
-                    <li><strong>Resource subscriptions</strong> — clients subscribe to <code>zim://files</code> and <code>zim://{name}</code>; mtime-polling watcher emits <code>notifications/resources/updated</code> when archives change.</li>
-                </ul>
-
-                <details open class="release-details">
-                    <summary><strong>Smarter archive handling</strong></summary>
-                    <ul>
-                        <li><code>get_related_articles</code> resolves relative hrefs against the source entry's directory and detects the content namespace correctly on domain-scheme archives.</li>
-                        <li>Suggestion fallback uses <code>SuggestionSearcher(archive).suggest(text)</code> (the prior <code>archive.suggest()</code> call didn't exist).</li>
-                        <li><code>list_zim_files</code> gains a case-insensitive <code>name_filter</code> substring argument.</li>
-                        <li><code>search_zim_file</code> accepts an opaque <code>cursor</code> parameter; passing the cursor alone resumes pagination.</li>
-                    </ul>
-                </details>
-
-                <details open class="release-details">
-                    <summary><strong>Cleaner content extraction</strong></summary>
-                    <ul>
-                        <li>Heading-id resolution falls through <code>id</code> → mw-headline anchor → preceding <code>&lt;a name=&quot;&quot;&gt;</code> → slug, returning <code>(id, source)</code>.</li>
-                        <li>Summary extraction skips USWDS banners and skip-nav blocks above the first <code>&lt;h1&gt;</code> (MedlinePlus / NIH / NIST style sites).</li>
-                        <li>Link extraction drops non-navigable schemes (<code>javascript:</code>, <code>mailto:</code>, <code>tel:</code>, <code>data:</code>, <code>blob:</code>, <code>vbscript:</code>).</li>
-                        <li>Per-entry paths sanitized in <code>get_zim_entries</code>.</li>
-                    </ul>
-                </details>
-
-                <details open class="release-details">
-                    <summary><strong>Server hygiene</strong></summary>
-                    <ul>
-                        <li><code>__version__</code> reads from <code>importlib.metadata</code>; <code>serverInfo.version</code> reports openzim-mcp's actual version.</li>
-                        <li>HTTP transport's subscription watcher starts via wrapped lifespan.</li>
-                        <li>Per-entry <code>zim://</code> returns libzim's native MIME type.</li>
-                    </ul>
-                </details>
-
-                <details open class="release-details">
-                    <summary><strong>Streamlined scope</strong></summary>
-                    <p>v1.0.0 reduces the advanced-mode tool surface from 27 to 21 by removing administrative/inspection helpers that didn't pull their weight: <code>warm_cache</code>, <code>cache_stats</code>, <code>cache_clear</code>, <code>get_random_entry</code>, <code>diagnose_server_state</code>, and <code>resolve_server_conflicts</code>. The cache itself remains; the explicit management tools were dropped. Multi-instance conflict tracking was removed entirely — <code>instance_tracker.py</code> is gone — which means HTTP server instances coexist freely without configuration warnings.</p>
-                </details>
-
-                <details open class="release-details">
-                    <summary><strong>Review pass</strong></summary>
-                    <p>End-to-end review pass before tagging: tightened path/PID redaction in error and diagnostics responses, locked <code>OPTIONS /mcp</code> behind auth, fixed cache poisoning on transient libzim errors, resolved redirects before rendering with cycle detection, preserved Unicode in heading slugs (Arabic, Chinese, Cyrillic, Japanese), made rate-limiting atomic, and split <code>zim_operations.py</code> into a <code>zim/</code> package via mixin classes.</p>
-                </details>
-            </article>
-
-            <article class="release-block">
-                <h3 class="release-title">v0.9.0</h3>
-                <ul class="release-marquee">
-                    <li><strong>Multi-archive search</strong> — <code>search_all</code> queries every ZIM file in your allowed directories at once.</li>
-                    <li><strong>MCP Prompts</strong> — <code>/research</code>, <code>/summarize</code>, <code>/explore</code> as ready-made workflows.</li>
-                    <li><strong>Find entries by title</strong> — <code>find_entry_by_title</code> resolves a title to entry paths, optionally cross-file.</li>
-                    <li><strong>MCP Resources</strong> — <code>zim://files</code> and <code>zim://{name}</code> show up in your client's resource browser and <code>@</code>-mention picker.</li>
-                    <li><strong>Power-user tools</strong> — <code>walk_namespace</code> for deterministic cursor-paginated namespace iteration; <code>get_related_articles</code> for outbound link-graph neighbours.</li>
-                </ul>
-                <details class="release-details">
-                    <summary><strong>Reliability fixes</strong></summary>
-                    <ul>
-                        <li>Namespace listing deterministically surfaces minority namespaces (M, W, X, I) that random sampling could miss.</li>
-                        <li>Search filtering uses streaming scan instead of a hard 1000-hit cap.</li>
-                        <li>Error messages route by failure mode first.</li>
-                    </ul>
-                </details>
-            </article>
-        </div>
-    </section>
-
-    <!-- Smart Retrieval System Section -->
-    <section id="smart-retrieval" class="smart-retrieval">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"></path><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"></path><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"></path><path d="M3.477 10.896a4 4 0 0 1 .585-.396"></path><path d="M19.938 10.5a4 4 0 0 1 .585.396"></path><path d="M6 18a4 4 0 0 1-1.967-.516"></path><path d="M19.967 17.484A4 4 0 0 1 18 18"></path></svg></span> Smart Retrieval System</h2>
-                <p class="section-description">
-                    Advanced intelligent entry retrieval with automatic fallback and path mapping for reliable access to ZIM content.
-                </p>
-            </div>
-            <div class="smart-retrieval-content">
-                <div class="retrieval-features">
-                    <div class="retrieval-feature">
-                        <div class="retrieval-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></span></div>
-                        <h3 class="retrieval-title">Direct Access First</h3>
-                        <p class="retrieval-description">
-                            Attempts to retrieve entries using the exact path provided, optimizing for speed and accuracy.
-                        </p>
-                    </div>
-                    <div class="retrieval-feature">
-                        <div class="retrieval-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg></span></div>
-                        <h3 class="retrieval-title">Automatic Fallback</h3>
-                        <p class="retrieval-description">
-                            When direct access fails, automatically searches using various search terms and path variations.
-                        </p>
-                    </div>
-                    <div class="retrieval-feature">
-                        <div class="retrieval-icon"><span class="icon"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5V19A9 3 0 0 0 21 19V5"></path><path d="M3 12A9 3 0 0 0 21 12"></path></svg></span></div>
-                        <h3 class="retrieval-title">Path Mapping Cache</h3>
-                        <p class="retrieval-description">
-                            Caches successful path mappings to improve performance for repeated access patterns.
-                        </p>
-                    </div>
-                    <div class="retrieval-feature">
-                        <div class="retrieval-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span></div>
-                        <h3 class="retrieval-title">Enhanced Error Guidance</h3>
-                        <p class="retrieval-description">
-                            Provides clear, actionable guidance when entries cannot be found, designed for LLM users.
-                        </p>
-                    </div>
-                </div>
-                <div class="retrieval-example">
-                    <h3 class="example-title">How It Works</h3>
-                    <div class="code-block">
-                        <pre><code># The system automatically handles path encoding differences:
-# <span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Direct access: "A/Machine_Learning"
-# <span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Fallback search: "Machine Learning", "machine learning"
-# <span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Cached mapping: Future requests use cached path
-
-# No more manual search-first methodology needed!
-get_zim_entry(zim_file, "A/Machine_Learning")</code></pre>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Security Features Section -->
-    <section id="security" class="security">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg></span> Enterprise-Grade Security</h2>
-                <p class="section-description">
-                    Comprehensive security measures designed to protect against vulnerabilities and ensure safe operation in production environments.
-                </p>
-            </div>
-            <div class="security-grid">
-                <div class="security-feature">
-                    <div class="security-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path></svg></span></div>
-                    <h3 class="security-title">Path Traversal Protection</h3>
-                    <p class="security-description">
-                        Advanced path validation prevents directory traversal attacks using secure path checking with Python 3.9+ features.
-                    </p>
-                    <div class="security-details">
-                        <span class="security-tag">CRITICAL</span>
-                        <span class="security-status"><span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Fixed in v0.2.0</span>
-                    </div>
-                </div>
-                <div class="security-feature">
-                    <div class="security-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span></div>
-                    <h3 class="security-title">Input Validation & Sanitization</h3>
-                    <p class="security-description">
-                        Comprehensive input validation with length limits, character filtering, and sanitization to prevent injection attacks.
-                    </p>
-                    <div class="security-details">
-                        <span class="security-tag">HIGH</span>
-                        <span class="security-status"><span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Implemented</span>
-                    </div>
-                </div>
-                <div class="security-feature">
-                    <div class="security-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z"></path><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"></circle></svg></span></div>
-                    <h3 class="security-title">Type Safety & Validation</h3>
-                    <p class="security-description">
-                        Full type annotations with Pydantic validation ensure data integrity and prevent type-related vulnerabilities.
-                    </p>
-                    <div class="security-details">
-                        <span class="security-tag">MEDIUM</span>
-                        <span class="security-status"><span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Complete</span>
-                    </div>
-                </div>
-                <div class="security-feature">
-                    <div class="security-icon"><span class="icon"><svg viewBox="0 0 24 24"><line x1="18" x2="18" y1="20" y2="10"></line><line x1="12" x2="12" y1="20" y2="4"></line><line x1="6" x2="6" y1="20" y2="14"></line></svg></span></div>
-                    <h3 class="security-title">Secure Error Handling</h3>
-                    <p class="security-description">
-                        Sanitized error messages prevent information disclosure while providing helpful guidance for legitimate users.
-                    </p>
-                    <div class="security-details">
-                        <span class="security-tag">MEDIUM</span>
-                        <span class="security-status"><span class="icon icon-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span> Enhanced</span>
-                    </div>
-                </div>
-            </div>
-            <div class="security-stats">
-                <div class="security-stat">
-                    <div class="stat-number">0</div>
-                    <div class="stat-label">Known Vulnerabilities</div>
-                </div>
-                <div class="security-stat">
-                    <div class="stat-number">80%+</div>
-                    <div class="stat-label">Test Coverage</div>
-                </div>
-                <div class="security-stat">
-                    <div class="stat-number">100%</div>
-                    <div class="stat-label">Type Annotated</div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Advanced Features Section -->
-    <section id="advanced-features" class="advanced-features">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span> Advanced Enterprise Features</h2>
-                <p class="section-description">
-                    Production-ready capabilities for enterprise deployments, monitoring, and observability.
-                </p>
-            </div>
-            <div class="advanced-grid">
-                <div class="advanced-feature">
-                    <div class="advanced-icon"><span class="icon"><svg viewBox="0 0 24 24"><line x1="18" x2="18" y1="20" y2="10"></line><line x1="12" x2="12" y1="20" y2="4"></line><line x1="6" x2="6" y1="20" y2="14"></line></svg></span></div>
-                    <h3 class="advanced-title">Health Monitoring & Diagnostics</h3>
-                    <p class="advanced-description">
-                        Comprehensive health checks and diagnostic tools provide deep insights into server performance and status.
-                    </p>
-                    <ul class="advanced-list">
-                        <li>Built-in health check endpoints</li>
-                        <li>Cache performance metrics and statistics</li>
-                        <li>Configuration validation and diagnostics</li>
-                    </ul>
-                </div>
-                <div class="advanced-feature">
-                    <div class="advanced-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"></path><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"></path><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"></path><path d="M3.477 10.896a4 4 0 0 1 .585-.396"></path><path d="M19.938 10.5a4 4 0 0 1 .585.396"></path><path d="M6 18a4 4 0 0 1-1.967-.516"></path><path d="M19.967 17.484A4 4 0 0 1 18 18"></path></svg></span></div>
-                    <h3 class="advanced-title">Intelligent Caching System</h3>
-                    <p class="advanced-description">
-                        Advanced LRU cache with TTL support and intelligent eviction policies optimizes performance for large-scale deployments.
-                    </p>
-                    <ul class="advanced-list">
-                        <li>LRU (Least Recently Used) eviction strategy</li>
-                        <li>Configurable TTL (Time To Live) for entries</li>
-                        <li>Automatic expired entry cleanup</li>
-                        <li>Path mapping cache for retrieval optimization</li>
-                    </ul>
-                </div>
-                <div class="advanced-feature">
-                    <div class="advanced-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></span></div>
-                    <h3 class="advanced-title">Modern Architecture</h3>
-                    <p class="advanced-description">
-                        Modular design with dependency injection, full type safety, and comprehensive configuration management.
-                    </p>
-                    <ul class="advanced-list">
-                        <li>Dependency injection for testability</li>
-                        <li>100% type annotations with mypy validation</li>
-                        <li>Pydantic-based configuration with validation</li>
-                        <li>Structured logging with configurable levels</li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Developer Experience Section -->
-    <section id="developer-experience" class="developer-experience">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span> Developer Experience</h2>
-                <p class="section-description">
-                    Modern development workflow with automated releases, comprehensive tooling, and enterprise-grade CI/CD.
-                </p>
-            </div>
-            <div class="dev-experience-grid">
-                <div class="dev-feature">
-                    <div class="dev-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path></svg></span></div>
-                    <h3 class="dev-title">Automated Release System</h3>
-                    <p class="dev-description">
-                        Release-please integration with semantic versioning, automated changelog generation, and PyPI deployment.
-                    </p>
-                    <div class="dev-tags">
-                        <span class="dev-tag">Release Please</span>
-                        <span class="dev-tag">Semantic Versioning</span>
-                        <span class="dev-tag">Auto PyPI</span>
-                    </div>
-                </div>
-                <div class="dev-feature">
-                    <div class="dev-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span></div>
-                    <h3 class="dev-title">Enhanced Makefile Workflow</h3>
-                    <p class="dev-description">
-                        Comprehensive development workflow with categorized help, security scanning, and cross-platform compatibility.
-                    </p>
-                    <div class="dev-tags">
-                        <span class="dev-tag">Make Targets</span>
-                        <span class="dev-tag">Security Scanning</span>
-                        <span class="dev-tag">Quality Checks</span>
-                    </div>
-                </div>
-                <div class="dev-feature">
-                    <div class="dev-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></svg></span></div>
-                    <h3 class="dev-title">Comprehensive Testing</h3>
-                    <p class="dev-description">
-                        80%+ test coverage with pytest, benchmarking, integration tests, and automated quality assurance.
-                    </p>
-                    <div class="dev-tags">
-                        <span class="dev-tag">80%+ Coverage</span>
-                        <span class="dev-tag">Benchmarks</span>
-                        <span class="dev-tag">Integration Tests</span>
-                    </div>
-                </div>
-                <div class="dev-feature">
-                    <div class="dev-icon"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span></div>
-                    <h3 class="dev-title">Code Quality Tools</h3>
-                    <p class="dev-description">
-                        Black formatting, flake8 linting, mypy type checking, bandit security scanning, and pre-commit hooks.
-                    </p>
-                    <div class="dev-tags">
-                        <span class="dev-tag">Black</span>
-                        <span class="dev-tag">MyPy</span>
-                        <span class="dev-tag">Bandit</span>
-                    </div>
-                </div>
-            </div>
-            <div class="dev-workflow">
-                <h3 class="workflow-title">Development Workflow</h3>
-                <div class="code-block">
-                    <pre><code># Complete development setup in one command
-make install
-
-# Run all quality checks
-make check
-
-# Run tests with coverage
-make test
-
-# Security scanning
-make security
-
-# Build and publish
-make build && make publish</code></pre>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Installation Section -->
-    <section id="installation" class="installation">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">Quick Installation</h2>
-                <p class="section-description">
-                    Get up and running with OpenZIM MCP in just a few minutes.
-                </p>
-            </div>
-            <div class="installation-steps">
-                <div class="step">
-                    <div class="step-number">1</div>
-                    <div class="step-content">
-                        <h3 class="step-title">Install with uv</h3>
-                        <div class="code-block">
-                            <button class="copy-btn" data-clipboard-target="#install-code">
-                                <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
-                            </button>
-                            <pre><code id="install-code"># Install OpenZIM MCP with uv (recommended)
-uv add openzim-mcp
-
-# Or install globally with uv
-uv tool install openzim-mcp</code></pre>
-                        </div>
-                    </div>
-                </div>
-                <div class="step">
-                    <div class="step-number">2</div>
-                    <div class="step-content">
-                        <h3 class="step-title">Prepare ZIM Files</h3>
-                        <div class="code-block">
-                            <button class="copy-btn" data-clipboard-target="#zim-code">
-                                <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
-                            </button>
-                            <pre><code id="zim-code"># Create directory for ZIM files
-mkdir ~/zim-files
-
-# Download ZIM files from Kiwix Library
-# https://browse.library.kiwix.org/</code></pre>
-                        </div>
-                    </div>
-                </div>
-                <div class="step">
-                    <div class="step-number">3</div>
-                    <div class="step-content">
-                        <h3 class="step-title">Run the Server</h3>
-                        <div class="code-block">
-                            <button class="copy-btn" data-clipboard-target="#run-code">
-                                <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
-                            </button>
-                            <pre><code id="run-code"># Start the MCP server
-uv run openzim-mcp /path/to/zim/files
-
-# Or if installed globally
-openzim-mcp /path/to/zim/files</code></pre>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Development Installation -->
-            <div class="dev-install">
-                <h3 class="dev-install-title">Development Installation</h3>
-                <p class="dev-install-description">
-                    For contributors and developers who want to work with the source code or need the latest features:
-                </p>
-                <div class="code-block">
-                    <button class="copy-btn" data-clipboard-target="#dev-install-code">
-                        <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
-                    </button>
-                    <pre><code id="dev-install-code"># Clone the repository
-git clone https://github.com/cameronrye/openzim-mcp.git
+        <ol class="try__steps">
+          <li class="try__step">
+            <span class="try__step-num">1</span>
+            <h3>Install</h3>
+            <div class="tabs" data-tabs="install">
+              <div class="tabs__buttons" role="tablist" aria-label="Install method">
+                <button class="tabs__btn is-active" role="tab" id="tab-install-uv"     data-tab="install-uv"     aria-selected="true"  aria-controls="install-uv">uv</button>
+                <button class="tabs__btn"           role="tab" id="tab-install-docker" data-tab="install-docker" aria-selected="false" aria-controls="install-docker">Docker</button>
+                <button class="tabs__btn"           role="tab" id="tab-install-source" data-tab="install-source" aria-selected="false" aria-controls="install-source">From source</button>
+              </div>
+              <div class="tabs__panel is-active" id="install-uv" role="tabpanel" aria-labelledby="tab-install-uv">
+                <pre><code>uv tool install openzim-mcp</code></pre>
+              </div>
+              <div class="tabs__panel" id="install-docker" role="tabpanel" aria-labelledby="tab-install-docker" hidden>
+                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:1.0.0</code></pre>
+              </div>
+              <div class="tabs__panel" id="install-source" role="tabpanel" aria-labelledby="tab-install-source" hidden>
+                <pre><code>git clone https://github.com/cameronrye/openzim-mcp.git
 cd openzim-mcp
-
-# Install dependencies
-uv sync
-
-# Run from source
-uv run python -m openzim_mcp /path/to/zim/files</code></pre>
-                </div>
+uv sync</code></pre>
+              </div>
             </div>
-            </div>
-        </div>
-    </section>
+          </li>
 
-    <!-- Usage Examples Section -->
-    <section id="usage" class="usage">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">Usage Examples</h2>
-                <p class="section-description">
-                    See OpenZIM MCP in action with real-world examples and API calls.
-                </p>
+          <li class="try__step">
+            <span class="try__step-num">2</span>
+            <h3>Get a ZIM</h3>
+            <p>Download an archive from <a href="https://browse.library.kiwix.org/" target="_blank" rel="noopener">the Kiwix library ↗</a>.</p>
+            <pre><code>mkdir ~/zim-files &amp;&amp; cd ~/zim-files
+# place .zim files here</code></pre>
+          </li>
+
+          <li class="try__step">
+            <span class="try__step-num">3</span>
+            <h3>Run it</h3>
+            <pre><code>uv run openzim-mcp ~/zim-files</code></pre>
+            <p class="try__callout">
+              Or as an HTTP service: <code>--transport streamable-http --auth-token $TOKEN</code>
+            </p>
+          </li>
+        </ol>
+
+        <div class="try__usage">
+          <h3 class="try__usage-title">See it in action</h3>
+          <div class="tabs" data-tabs="usage">
+            <div class="tabs__buttons" role="tablist" aria-label="Usage example">
+              <button class="tabs__btn is-active" role="tab" id="tab-use-search"    data-tab="use-search"    aria-selected="true"  aria-controls="use-search">Search</button>
+              <button class="tabs__btn"           role="tab" id="tab-use-browse"    data-tab="use-browse"    aria-selected="false" aria-controls="use-browse">Browse</button>
+              <button class="tabs__btn"           role="tab" id="tab-use-subscribe" data-tab="use-subscribe" aria-selected="false" aria-controls="use-subscribe">Subscribe</button>
             </div>
-            <div class="usage-tabs">
-                <div class="tab-buttons">
-                    <button class="tab-btn active" data-tab="search">Search Content</button>
-                    <button class="tab-btn" data-tab="browse">Browse Namespaces</button>
-                    <button class="tab-btn" data-tab="structure">Article Structure</button>
-                    <button class="tab-btn" data-tab="config">MCP Config</button>
-                </div>
-                <div class="tab-content">
-                    <div class="tab-pane active" id="search">
-                        <div class="example-block">
-                            <h4>Search ZIM Files</h4>
-                            <div class="code-block">
-                                <button class="copy-btn" data-clipboard-target="#search-example">
-                                    <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
-                                </button>
-                                <pre><code id="search-example">{
+            <div class="tabs__panel is-active" id="use-search" role="tabpanel" aria-labelledby="tab-use-search">
+              <div class="try__exchange">
+                <div>
+                  <h4>Request</h4>
+                  <pre><code>{
   "name": "search_zim_file",
   "arguments": {
-    "zim_file_path": "wikipedia_en_100_2025-08.zim",
+    "zim_file_path": "wikipedia_en.zim",
     "query": "artificial intelligence",
     "limit": 5
   }
 }</code></pre>
-                            </div>
-                            <div class="example-result">
-                                <h5>Response:</h5>
-                                <pre><code>Found 42 matches for "artificial intelligence", showing 1-5:
+                </div>
+                <div>
+                  <h4>Response</h4>
+                  <pre><code>Found 42 matches, showing 1-5:
 
 ## 1. Artificial Intelligence
-Path: Artificial_intelligence
-Snippet: Artificial intelligence (AI) is intelligence demonstrated by machines...
+Path: A/Artificial_intelligence
+Snippet: Artificial intelligence (AI) is
+intelligence demonstrated by machines...
 
 ## 2. Machine Learning
-Path: Machine_learning
-Snippet: Machine learning is a subset of artificial intelligence...</code></pre>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="tab-pane" id="browse">
-                        <div class="example-block">
-                            <h4>Browse Namespaces</h4>
-                            <div class="code-block">
-                                <button class="copy-btn" data-clipboard-target="#browse-example">
-                                    <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
-                                </button>
-                                <pre><code id="browse-example">{
+Path: A/Machine_learning
+Snippet: Machine learning is a subset of
+artificial intelligence...</code></pre>
+                </div>
+              </div>
+            </div>
+            <div class="tabs__panel" id="use-browse" role="tabpanel" aria-labelledby="tab-use-browse" hidden>
+              <div class="try__exchange">
+                <div>
+                  <h4>Request</h4>
+                  <pre><code>{
   "name": "browse_namespace",
   "arguments": {
-    "zim_file_path": "wikipedia_en_100_2025-08.zim",
+    "zim_file_path": "wikipedia_en.zim",
     "namespace": "C",
-    "limit": 10,
-    "offset": 0
+    "limit": 10
   }
 }</code></pre>
-                            </div>
-                            <div class="example-result">
-                                <h5>Response:</h5>
-                                <pre><code>{
+                </div>
+                <div>
+                  <h4>Response</h4>
+                  <pre><code>{
   "namespace": "C",
   "total_in_namespace": 80000,
-  "offset": 0,
-  "limit": 10,
   "returned_count": 10,
   "has_more": true,
   "entries": [
-    {
-      "path": "C/Biology",
+    { "path": "C/Biology",
       "title": "Biology",
-      "content_type": "text/html",
-      "preview": "Biology is the scientific study of life..."
-    }
+      "preview": "Biology is the scientific
+                  study of life..." }
   ]
 }</code></pre>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="tab-pane" id="structure">
-                        <div class="example-block">
-                            <h4>Get Article Structure</h4>
-                            <div class="code-block">
-                                <button class="copy-btn" data-clipboard-target="#structure-example">
-                                    <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
-                                </button>
-                                <pre><code id="structure-example">{
-  "name": "get_article_structure",
-  "arguments": {
-    "zim_file_path": "wikipedia_en_100_2025-08.zim",
-    "entry_path": "C/Evolution"
-  }
-}</code></pre>
-                            </div>
-                            <div class="example-result">
-                                <h5>Response:</h5>
-                                <pre><code>{
-  "title": "Evolution",
-  "path": "C/Evolution",
-  "content_type": "text/html",
-  "headings": [
-    {"level": 1, "text": "Evolution", "id": "evolution"},
-    {"level": 2, "text": "History", "id": "history"},
-    {"level": 2, "text": "Mechanisms", "id": "mechanisms"}
-  ],
-  "sections": [
-    {
-      "title": "Evolution",
-      "level": 1,
-      "content_preview": "Evolution is the change in heritable traits...",
-      "word_count": 150
-    }
-  ],
-  "word_count": 5000
-}</code></pre>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="tab-pane" id="config">
-                        <div class="example-block">
-                            <h4>MCP Client Configuration - Simple Mode (Default)</h4>
-                            <div class="code-block">
-                                <button class="copy-btn" data-clipboard-target="#config-example">
-                                    <span class="copy-icon"><span class="icon"><svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg></span></span>
-                                </button>
-                                <pre><code id="config-example">{
-  "mcpServers": {
-    "openzim-mcp": {
-      "command": "uv",
-      "args": [
-        "run",
-        "openzim-mcp",
-        "/path/to/zim/files"
-      ]
-    }
-  }
-}</code></pre>
-                            </div>
-                            <div class="example-result">
-                                <h5>Advanced Mode (21 specialized tools):</h5>
-                                <pre><code>{
-  "mcpServers": {
-    "openzim-mcp-advanced": {
-      "command": "openzim-mcp",
-      "args": [
-        "--mode", "advanced",
-        "/path/to/zim/files"
-      ]
-    }
-  }
-}</code></pre>
-                                <h5>Environment Variables (Optional):</h5>
-                                <pre><code># Tool mode (default: simple)
-export OPENZIM_MCP_TOOL_MODE=simple
-
-# Cache configuration
-export OPENZIM_MCP_CACHE__ENABLED=true
-export OPENZIM_MCP_CACHE__MAX_SIZE=200
-export OPENZIM_MCP_CACHE__TTL_SECONDS=7200
-
-# Content configuration
-export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000
-export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=2000
-
-# Logging configuration
-export OPENZIM_MCP_LOGGING__LEVEL=INFO</code></pre>
-                            </div>
-                        </div>
-                    </div>
                 </div>
+              </div>
             </div>
+            <div class="tabs__panel" id="use-subscribe" role="tabpanel" aria-labelledby="tab-use-subscribe" hidden>
+              <div class="try__exchange">
+                <div>
+                  <h4>Subscribe</h4>
+                  <pre><code>{
+  "method": "resources/subscribe",
+  "params": { "uri": "zim://files" }
+}</code></pre>
+                </div>
+                <div>
+                  <h4>Notification (when archive changes)</h4>
+                  <pre><code>{
+  "method": "notifications/resources/updated",
+  "params": { "uri": "zim://files" }
+}</code></pre>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
+      </div>
     </section>
 
-    <!-- Documentation Section -->
-    <section id="documentation" class="documentation">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">Documentation & Resources</h2>
-                <p class="section-description">
-                    Comprehensive guides, API references, and community resources to help you get the most out of OpenZIM MCP.
-                </p>
-            </div>
-            <div class="docs-grid">
-                <div class="doc-card">
-                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg></span></div>
-                    <h3 class="doc-title">API Reference</h3>
-                    <p class="doc-description">
-                        Complete documentation of all available MCP tools, parameters, and response formats.
-                    </p>
-                    <a href="https://github.com/cameronrye/openzim-mcp#api-reference" class="doc-link" target="_blank">
-                        View API Docs →
-                    </a>
-                </div>
-                <div class="doc-card">
-                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path></svg></span></div>
-                    <h3 class="doc-title">Quick Start Guide</h3>
-                    <p class="doc-description">
-                        Step-by-step tutorial to get OpenZIM MCP running in your environment quickly.
-                    </p>
-                    <a href="https://github.com/cameronrye/openzim-mcp/wiki/Quick-Start-Tutorial" class="doc-link" target="_blank">
-                        Start Tutorial →
-                    </a>
-                </div>
-                <div class="doc-card">
-                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></span></div>
-                    <h3 class="doc-title">Configuration Guide</h3>
-                    <p class="doc-description">
-                        Advanced configuration options, environment variables, and performance tuning.
-                    </p>
-                    <a href="https://github.com/cameronrye/openzim-mcp/wiki/Configuration-Guide" class="doc-link" target="_blank">
-                        Configure →
-                    </a>
-                </div>
-                <div class="doc-card">
-                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span></div>
-                    <h3 class="doc-title">Troubleshooting</h3>
-                    <p class="doc-description">
-                        Common issues, solutions, and debugging tips for OpenZIM MCP deployment.
-                    </p>
-                    <a href="https://github.com/cameronrye/openzim-mcp/wiki/Troubleshooting-Guide" class="doc-link" target="_blank">
-                        Get Help →
-                    </a>
-                </div>
-                <div class="doc-card">
-                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"></path><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"></path><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"></path><path d="M10 6h4"></path><path d="M10 10h4"></path><path d="M10 14h4"></path><path d="M10 18h4"></path></svg></span></div>
-                    <h3 class="doc-title">Architecture Overview</h3>
-                    <p class="doc-description">
-                        Deep dive into the system architecture, components, and design decisions.
-                    </p>
-                    <a href="https://github.com/cameronrye/openzim-mcp/wiki/Architecture-Overview" class="doc-link" target="_blank">
-                        Learn More →
-                    </a>
-                </div>
-                <div class="doc-card">
-                    <div class="doc-icon"><span class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></span></div>
-                    <h3 class="doc-title">Contributing</h3>
-                    <p class="doc-description">
-                        Guidelines for contributing code, reporting issues, and joining the community.
-                    </p>
-                    <a href="https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md" class="doc-link" target="_blank">
-                        Contribute →
-                    </a>
-                </div>
-            </div>
-        </div>
+    <section id="deeper" class="section deeper" data-reveal>
+      <div class="container">
+        <header class="section__header">
+          <span class="eyebrow">Deeper</span>
+          <h2>Documentation &amp; resources.</h2>
+        </header>
+        <ul class="deeper__grid">
+          <li>
+            <a href="https://github.com/cameronrye/openzim-mcp#api-reference" target="_blank" rel="noopener">
+              <h3>API Reference <span aria-hidden="true">↗</span></h3>
+              <p>Every MCP tool with parameters, response schema, and intent examples.</p>
+            </a>
+          </li>
+          <li>
+            <a href="https://github.com/cameronrye/openzim-mcp/wiki/Deployment-Guide" target="_blank" rel="noopener">
+              <h3>Deployment Guide <span aria-hidden="true">↗</span></h3>
+              <p>Streamable HTTP, Docker, reverse proxies, auth tokens, multi-arch images.</p>
+            </a>
+          </li>
+          <li>
+            <a href="https://github.com/cameronrye/openzim-mcp/wiki/Architecture-Overview" target="_blank" rel="noopener">
+              <h3>Architecture <span aria-hidden="true">↗</span></h3>
+              <p>Modules, mixins, the <code>zim/</code> package split, dependency injection.</p>
+            </a>
+          </li>
+          <li>
+            <a href="https://github.com/cameronrye/openzim-mcp/wiki/Configuration-Guide" target="_blank" rel="noopener">
+              <h3>Configuration <span aria-hidden="true">↗</span></h3>
+              <p>Environment variables, cache tuning, content limits, logging levels.</p>
+            </a>
+          </li>
+          <li>
+            <a href="https://github.com/cameronrye/openzim-mcp/wiki/Troubleshooting-Guide" target="_blank" rel="noopener">
+              <h3>Troubleshooting <span aria-hidden="true">↗</span></h3>
+              <p>Common failures, error-message decoder, performance hints.</p>
+            </a>
+          </li>
+          <li>
+            <a href="https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">
+              <h3>Contributing <span aria-hidden="true">↗</span></h3>
+              <p>Local setup, Makefile workflow, test structure, PR conventions.</p>
+            </a>
+          </li>
+        </ul>
+      </div>
     </section>
-    </main>
+  </main>
 
-    <!-- Footer -->
-    <footer class="footer">
-        <div class="container">
-            <div class="footer-content">
-                <div class="footer-section">
-                    <div class="footer-logo">
-                        <svg class="logo-icon" width="32" height="32" viewBox="0 0 32 32">
-                            <defs>
-                                <linearGradient id="footerLogoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" style="stop-color:#2563eb"/>
-                                    <stop offset="100%" style="stop-color:#10b981"/>
-                                </linearGradient>
-                            </defs>
-                            <circle cx="16" cy="16" r="15" fill="url(#footerLogoGrad)"/>
-                            <g fill="white">
-                                <circle cx="16" cy="8" r="2.5"/>
-                                <circle cx="10" cy="14" r="2"/>
-                                <circle cx="22" cy="14" r="2"/>
-                                <circle cx="16" cy="16" r="2"/>
-                                <circle cx="12" cy="21" r="1.5"/>
-                                <circle cx="20" cy="21" r="1.5"/>
-                            </g>
-                            <g stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.8">
-                                <line x1="16" y1="8" x2="10" y2="14"/>
-                                <line x1="16" y1="8" x2="22" y2="14"/>
-                                <line x1="10" y1="14" x2="16" y2="16"/>
-                                <line x1="22" y1="14" x2="16" y2="16"/>
-                                <line x1="16" y1="16" x2="12" y2="21"/>
-                                <line x1="16" y1="16" x2="20" y2="21"/>
-                            </g>
-                            <rect x="8" y="25" width="16" height="2" rx="1" fill="white" opacity="0.7"/>
-                        </svg>
-                        <span class="logo-text">OpenZIM MCP</span>
-                    </div>
-                    <p class="footer-description">
-                        Transform static ZIM archives into dynamic knowledge engines for AI models.
-                    </p>
-                </div>
-                <div class="footer-section">
-                    <h4 class="footer-title">Resources</h4>
-                    <ul class="footer-links">
-                        <li><a href="https://github.com/cameronrye/openzim-mcp">GitHub Repository</a></li>
-                        <li><a href="https://github.com/cameronrye/openzim-mcp/wiki">Documentation</a></li>
-                        <li><a href="https://github.com/cameronrye/openzim-mcp/issues">Issues</a></li>
-                        <li><a href="https://github.com/cameronrye/openzim-mcp/releases">Releases</a></li>
-                    </ul>
-                </div>
-                <div class="footer-section">
-                    <h4 class="footer-title">Community</h4>
-                    <ul class="footer-links">
-                        <li><a href="https://modelcontextprotocol.io/">Model Context Protocol</a></li>
-                        <li><a href="https://openzim.org/">OpenZIM Project</a></li>
-                        <li><a href="https://www.kiwix.org/">Kiwix</a></li>
-                        <li><a href="https://browse.library.kiwix.org/">ZIM Library</a></li>
-                    </ul>
-                </div>
-                <div class="footer-section">
-                    <h4 class="footer-title">License</h4>
-                    <p class="footer-license">
-                        Released under the <a href="https://opensource.org/licenses/MIT">MIT License</a>
-                    </p>
-                    <div class="footer-badges">
-                        <img src="https://img.shields.io/badge/python-3.12+-blue.svg" alt="Python 3.12+">
-                        <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
-                    </div>
-                </div>
-            </div>
-            <div class="footer-bottom">
-                <p>Made with <span class="beating-heart"><span class="icon icon-filled"><svg viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg></span></span> by <a href="https://rye.dev" target="_blank" rel="noopener noreferrer">Cameron Rye</a></p>
-            </div>
+  <footer class="footer" id="footer">
+    <div class="container">
+      <div class="footer__cols">
+        <div class="footer__brand">
+          <a href="#hero" class="nav__brand" aria-label="Back to top">
+            <svg class="nav__logo" width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
+              <g transform="translate(4 4) rotate(90 12 12)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+                <path d="M9 13a4.5 4.5 0 0 0 3-4"/>
+                <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>
+                <path d="M3.477 10.896a4 4 0 0 1 .585-.396"/>
+                <path d="M6 18a4 4 0 0 1-1.967-.516"/>
+                <path d="M12 13h4"/>
+                <path d="M12 18h6a2 2 0 0 1 2 2v1"/>
+                <path d="M12 8h8"/>
+                <path d="M16 8V5a2 2 0 0 1 2-2"/>
+                <circle cx="16" cy="13" r=".7" fill="currentColor"/>
+                <circle cx="18" cy="3"  r=".7" fill="currentColor"/>
+                <circle cx="20" cy="21" r=".7" fill="currentColor"/>
+                <circle cx="20" cy="8"  r=".7" fill="currentColor"/>
+              </g>
+            </svg>
+            <span class="nav__wordmark">OpenZIM&nbsp;MCP</span>
+          </a>
+          <p>Knowledge that works offline. Released under the <a href="https://opensource.org/licenses/MIT">MIT License</a>.</p>
+          <div class="footer__badges">
+            <img src="https://img.shields.io/badge/python-3.12+-blue.svg" alt="Python 3.12+" loading="lazy">
+            <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License" loading="lazy">
+          </div>
         </div>
-    </footer>
-
-    <!-- Back to Top Button -->
-    <button class="back-to-top" id="back-to-top" aria-label="Back to top">
-        <span class="icon"><svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"></path></svg></span>
-    </button>
-
-    <!-- Copy Toast Notification -->
-    <div class="copy-toast" id="copy-toast">
-        <span class="icon"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg></span>
-        <span>Copied to clipboard!</span>
+        <div>
+          <h4 class="footer__title">Resources</h4>
+          <ul class="footer__links">
+            <li><a href="https://github.com/cameronrye/openzim-mcp">GitHub</a></li>
+            <li><a href="https://github.com/cameronrye/openzim-mcp/releases">Releases</a></li>
+            <li><a href="https://github.com/cameronrye/openzim-mcp/issues">Issues</a></li>
+            <li><a href="https://github.com/cameronrye/openzim-mcp/wiki">Wiki</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="footer__title">Community</h4>
+          <ul class="footer__links">
+            <li><a href="https://modelcontextprotocol.io/">Model Context Protocol</a></li>
+            <li><a href="https://openzim.org/">OpenZIM</a></li>
+            <li><a href="https://www.kiwix.org/">Kiwix</a></li>
+            <li><a href="https://browse.library.kiwix.org/">ZIM Library</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer__bottom">
+        <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <g transform="rotate(90 12 12)">
+            <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+            <path d="M12 13h4"/>
+            <path d="M12 8h8"/>
+          </g>
+        </svg>
+        <span>Made with care by <a href="https://rye.dev" target="_blank" rel="noopener">Cameron Rye</a>.</span>
+      </div>
     </div>
+  </footer>
 
-    <!-- Scripts -->
-    <script src="assets/script.js"></script>
+  <script src="assets/script.js" defer></script>
 </body>
 </html>

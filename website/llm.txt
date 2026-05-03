@@ -1,6 +1,6 @@
 # OpenZIM MCP Server
 
-> Transform static ZIM archives into dynamic knowledge engines for Large Language Models
+> Knowledge that works offline. OpenZIM MCP gives any AI model structured, secure access to ZIM archives — Wikipedia, MedlinePlus, the Stack Exchange dumps — without an internet connection.
 
 ## Overview
 

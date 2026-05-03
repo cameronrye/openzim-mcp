@@ -30,8 +30,9 @@
     SVG Graphics
 
     ## Fonts
-    Inter (Google Fonts)
+    Geist (Google Fonts)
     JetBrains Mono (Google Fonts)
+    Fraunces (Google Fonts)
 
     ## Build & Deploy
     GitHub Actions
@@ -59,8 +60,8 @@
 
 # SITE
 
-    Last update: 2025-01-15
+    Last update: 2026-05-02
     Language: English
     Doctype: HTML5
     IDE: Various (VS Code, Vim, etc.)
-    Version: 0.6.0
+    Version: 1.0.0

@@ -56,12 +56,13 @@ def validate_html_structure(html_content):
         if schema not in html_content:
             issues.append(f"Missing structured data: {schema}")
 
-    # Check for required sections
+    # Check for required sections (v1.0 redesign IA)
     required_sections = [
-        'id="home"',
-        'id="features"',
-        'id="installation"',
-        'id="usage"',
+        'id="hero"',
+        'id="what"',
+        'id="v1"',
+        'id="try"',
+        'id="deeper"',
     ]
 
     for section in required_sections:
@@ -69,7 +70,7 @@ def validate_html_structure(html_content):
             issues.append(f"Missing section: {section}")
 
     # Check for navigation
-    if 'class="navbar"' not in html_content:
+    if 'class="nav"' not in html_content:
         issues.append("Missing navigation bar")
 
     # Check for footer
