@@ -1,6 +1,6 @@
 # OpenZIM MCP Development Makefile
 
-.PHONY: help install install-dev install-hooks setup-dev check-tools test test-cov test-with-zim-data test-integration test-live test-live-docker benchmark lint format type-check security download-test-data download-test-data-all list-test-data clean clean-test-data build publish publish-test run check ci
+.PHONY: help install install-dev install-hooks setup-dev check-tools test test-cov test-with-zim-data test-integration test-requires-zim-data test-live test-live-docker benchmark lint format type-check security download-test-data download-test-data-all list-test-data clean clean-test-data build publish publish-test run check ci
 
 help:  ## Show this help message
 	@uv run python scripts/generate_help.py
@@ -33,6 +33,13 @@ test-with-zim-data:  ## Run tests with ZIM test data
 
 test-integration:  ## Run integration tests only
 	uv run pytest -m "integration"
+
+# Transitional no-op kept so the pull_request_target workflow on main (which
+# still calls `make test-requires-zim-data` from the pre-v1.0 layout) does
+# not error against a HEAD where the marker has no consumers. Safe to delete
+# once the post-merge main no longer triggers pull_request_target.
+test-requires-zim-data:  ## (deprecated v1.0) marker has no consumers; no-op shim
+	@echo "test-requires-zim-data: requires_zim_data marker has no consumers as of v1.0; nothing to run."
 
 test-live:  ## Run live-server tests (spawn real subprocesses; binds loopback ports)
 	uv run pytest -m live tests/live/ --no-cov

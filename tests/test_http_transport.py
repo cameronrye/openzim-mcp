@@ -1,5 +1,6 @@
 """HTTP transport smoke + health endpoints."""
 
+import tempfile
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,7 +12,9 @@ def mock_server():
     """Build an OpenZimMcpServer-like mock with a tmp config."""
     from openzim_mcp.config import OpenZimMcpConfig
 
-    config = OpenZimMcpConfig(allowed_directories=["/tmp"], transport="http")
+    config = OpenZimMcpConfig(
+        allowed_directories=[tempfile.gettempdir()], transport="http"
+    )
     server = MagicMock()
     server.config = config
     return server
