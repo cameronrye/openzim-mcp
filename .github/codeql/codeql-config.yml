@@ -23,12 +23,15 @@ query-filters:
   # zim_archive")``) and have the patch reach the call site. The cycle is safe
   # because the imports are only ever dereferenced at call time, never at
   # module-import time.
+  #
+  # Note: query-filter clauses are AND-ed; specifying ``tags contain: <X>``
+  # alongside ``id:`` requires the rule to carry that tag. ``py/cyclic-import``
+  # has the ``maintainability`` tag, but ``py/unsafe-cyclic-import`` does
+  # not — so we filter by id alone here.
   - exclude:
       id: py/cyclic-import
-      tags contain: maintainability
   - exclude:
       id: py/unsafe-cyclic-import
-      tags contain: maintainability
 
   # ``ZimOperations`` mixes in four mixin classes. Several mixin methods are
   # forward-declared inside ``if TYPE_CHECKING:`` blocks on peer mixins so the

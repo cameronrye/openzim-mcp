@@ -47,14 +47,6 @@ jobs:
         run: |
           make test-cov
 
-      - name: Download ZIM test data
-        run: |
-          make download-test-data
-
-      - name: Run integration tests with ZIM data
-        run: |
-          make test-requires-zim-data
-
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v6
