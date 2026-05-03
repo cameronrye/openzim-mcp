@@ -10,9 +10,7 @@ URI scheme:
   main page preview). ``{name}`` is the bare basename without ``.zim``.
 - ``zim://{name}/entry/{path}`` — single entry served with native MIME type.
   Clients MUST URL-encode ``/`` as ``%2F`` in the ``{path}`` segment because
-  FastMCP's URI template engine treats ``/`` as a segment separator. See
-  ``docs/superpowers/notes/2026-05-01-per-entry-resource-uri-spike.md`` for
-  the full SDK-behaviour analysis.
+  FastMCP's URI template engine treats ``/`` as a segment separator.
 
 The per-entry resource detects each entry's MIME type from the libzim Item
 at read time and reports it back in the response. FastMCP's standard
@@ -259,7 +257,7 @@ def register_resources(server: "OpenZimMcpServer") -> None:
             "return the appropriate MIME with base64-encoded body. "
             "IMPORTANT: clients MUST URL-encode '/' as '%2F' in {path} "
             "(other RFC 3986 reserved characters too). Example: "
-            "zim://wikipedia_en/entry/A%2FClimate_change. "
+            "zim://wikipedia_en/entry/C%2FClimate_change. "
             "Use the get_zim_entry tool for processed/truncated text output."
         ),
         # Placeholder; the per-call MIME is set on each ZimEntryResource.

@@ -109,6 +109,10 @@ class _SearchMixin:
             logger.debug(f"Search completed: query='{query}', results found")
             return result
 
+        except OpenZimMcpArchiveError:
+            # Inner helper already raised a typed archive error with full
+            # context. Don't re-wrap and double the message prefix.
+            raise
         except Exception as e:
             logger.error(f"Search failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Search operation failed: {e}") from e
@@ -189,11 +193,22 @@ class _SearchMixin:
             next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
                 offset, limit, total_results, query
             )
-            result_text += f"**Next cursor**: `{next_cursor}`\n"
-            result_text += (
-                f"**Hint**: pass `cursor={next_cursor}` "
-                f"or `offset={offset + limit}` to get the next page\n"
-            )
+            # Partial-page case: has_more can be True (offset+len(results)
+            # < total_results) while offset+limit >= total_results, in which
+            # case create_next_cursor returns None. Don't render a literal
+            # "None" cursor — omit the line and fall back to the offset
+            # hint below.
+            if next_cursor is not None:
+                result_text += f"**Next cursor**: `{next_cursor}`\n"
+                result_text += (
+                    f"**Hint**: pass `cursor={next_cursor}` "
+                    f"or `offset={offset + limit}` to get the next page\n"
+                )
+            else:
+                result_text += (
+                    f"**Hint**: pass `offset={offset + len(results)}` "
+                    f"to get the next page\n"
+                )
         else:
             result_text += "**End of results**\n"
 
@@ -223,19 +238,23 @@ class _SearchMixin:
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpValidationError: If parameter validation fails
+                (limit out of range, negative offset, malformed namespace).
             OpenZimMcpArchiveError: If search operation fails
         """
         if limit is None:
             limit = self.config.content.default_search_limit
 
-        # Validate parameters
+        # Caller-input validation surfaces as OpenZimMcpValidationError so
+        # the tool layer can render a targeted "bad parameter" message
+        # instead of formatting it as an archive failure.
         if limit < 1 or limit > 100:
-            raise OpenZimMcpArchiveError("Limit must be between 1 and 100")
+            raise OpenZimMcpValidationError("Limit must be between 1 and 100")
         if offset < 0:
-            raise OpenZimMcpArchiveError("Offset must be non-negative")
+            raise OpenZimMcpValidationError("Offset must be non-negative")
         # Validate namespace - single chars (old) or longer names (new format)
         if namespace and (len(namespace) > 50 or not namespace.strip()):
-            raise OpenZimMcpArchiveError(
+            raise OpenZimMcpValidationError(
                 "Namespace must be a non-empty string (max 50 characters)"
             )
 
@@ -270,6 +289,16 @@ class _SearchMixin:
             )
             return result
 
+        except OpenZimMcpValidationError:
+            # Caller-input validation may also surface from inside the
+            # archive block (e.g. namespace canonicalisation in future
+            # paths). Surface it as-is so the tool layer can render a
+            # targeted "bad parameter" message.
+            raise
+        except OpenZimMcpArchiveError:
+            # Inner helper already raised a typed archive error with full
+            # context. Don't re-wrap and double the message prefix.
+            raise
         except Exception as e:
             logger.error(f"Filtered search failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(
@@ -414,14 +443,25 @@ class _SearchMixin:
                         # Got the full page; stop scanning.
                         break
 
-        # Preserve the legacy "results_capped" semantics for the message —
-        # true if there are more raw results we haven't scanned.
-        results_capped = scan_cap_hit or scanned < total_results
+        # Distinguish "stopped because we hit a hard scan cap" from
+        # "stopped because the page filled before we exhausted raw
+        # results". Both leave ``scanned < total_results``, but only the
+        # first should warn the user that the response is truncated by
+        # the cap; the second is a normal pagination pause where there
+        # are more matches available via ``offset += limit``.
+        page_filled_short_of_scan = (
+            len(page) >= limit and scanned < total_results and not scan_cap_hit
+        )
+        results_capped = scan_cap_hit
         raw_fetch_limit = scanned  # what we actually scanned
-        # ``total_filtered`` mirrors the old ``len(filtered_results)`` —
-        # the count of filter-passing entries we observed. Callers cache
-        # the response only when this is non-zero.
+        # ``total_filtered`` is the count of filter-passing entries we
+        # observed. When the page filled before we exhausted the raw
+        # search results, ``total_filtered`` is a lower bound — there
+        # may be additional matches we didn't get to. Callers cache the
+        # response only when this is non-zero.
         total_filtered = filtered_count
+        # Lower-bound indicator for the response text and pagination.
+        total_filtered_is_lower_bound = page_filled_short_of_scan
 
         filters_applied = []
         if namespace:
@@ -486,8 +526,16 @@ class _SearchMixin:
             if results_capped
             else ""
         )
+        # When ``total_filtered`` is a lower bound, surface that with a
+        # ``+`` suffix so callers don't mistake it for the final count.
+        total_filtered_text = (
+            f"{total_filtered}+"
+            if total_filtered_is_lower_bound
+            else str(total_filtered)
+        )
         result_text = (
-            f'Found {total_filtered} filtered matches for "{query}"{filter_text}, '
+            f'Found {total_filtered_text} filtered matches for "{query}"'
+            f"{filter_text}, "
             f"showing {offset + 1}-{offset + len(results)}{capped_note}:\n\n"
         )
 
@@ -499,18 +547,37 @@ class _SearchMixin:
             result_text += f"Snippet: {result['snippet']}\n\n"
 
         # Pagination footer — mirrors _perform_search so callers have a
-        # consistent way to detect and navigate additional pages.
-        has_more = (offset + len(results)) < total_filtered
+        # consistent way to detect and navigate additional pages. When
+        # the page filled before raw scanning completed we know there
+        # is at least the possibility of more matches, even if the
+        # observed ``total_filtered`` happens to equal ``offset+limit``.
+        has_more = (
+            total_filtered_is_lower_bound or (offset + len(results)) < total_filtered
+        )
         result_text += "---\n"
         result_text += (
             f"**Pagination**: Showing {offset + 1}-{offset + len(results)} "
-            f"of {total_filtered}\n"
+            f"of {total_filtered_text}\n"
         )
         if has_more:
-            next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
-                offset, limit, total_filtered, query
+            # When ``total_filtered`` is a lower bound we know there
+            # may be more matches but we don't know the true total —
+            # ``create_next_cursor`` would return ``None`` (since
+            # ``offset+limit >= total_filtered``) and we'd render
+            # ``Next cursor: None``. Pad the total so the cursor
+            # generator emits a valid token.
+            cursor_total = (
+                total_filtered + 1 if total_filtered_is_lower_bound else total_filtered
             )
-            result_text += f"**Next cursor**: `{next_cursor}`\n"
+            next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
+                offset, limit, cursor_total, query
+            )
+            # Edge case: the scan-cap path can leave offset+limit equal to
+            # the (true) total_filtered, so create_next_cursor returns
+            # None even though has_more was True for the lower-bound path.
+            # Don't render a literal "None" cursor — omit the line.
+            if next_cursor is not None:
+                result_text += f"**Next cursor**: `{next_cursor}`\n"
             result_text += (
                 f"**Hint**: Use offset={offset + limit} to get the next page\n"
             )
@@ -534,11 +601,12 @@ class _SearchMixin:
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpValidationError: If ``limit`` is outside ``1..50``.
             OpenZimMcpArchiveError: If suggestion generation fails
         """
         # Validate parameters
         if limit < 1 or limit > 50:
-            raise OpenZimMcpArchiveError("Limit must be between 1 and 50")
+            raise OpenZimMcpValidationError("Limit must be between 1 and 50")
         if not partial_query or len(partial_query.strip()) < 2:
             return json.dumps(
                 {"suggestions": [], "message": "Query too short for suggestions"}
@@ -581,6 +649,10 @@ class _SearchMixin:
             logger.info(f"Generated {actual_count} suggestions for: {partial_query}")
             return result
 
+        except OpenZimMcpArchiveError:
+            # Inner helper already raised a typed archive error with full
+            # context. Don't re-wrap and double the message prefix.
+            raise
         except Exception as e:
             logger.error(f"Suggestion generation failed for {partial_query}: {e}")
             raise OpenZimMcpArchiveError(f"Suggestion generation failed: {e}") from e

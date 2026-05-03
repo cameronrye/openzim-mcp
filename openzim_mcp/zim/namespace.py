@@ -259,18 +259,23 @@ class _NamespaceMixin:
         Handles single-char prefixes (case-insensitive — ZIM archives
         canonically use uppercase but tooling and user input may pass
         lowercase) and the long-form aliases ("content", "metadata", etc.)
-        used by some new-scheme archives.
+        used by some new-scheme archives. Long-form matching is also
+        case-insensitive so that callers passing ``CONTENT`` or
+        ``Metadata`` get the same result as ``content`` / ``metadata``.
         """
         if len(namespace) == 1 and namespace.isalpha():
             # Single character namespace (typical for both old and new schemes)
             return namespace.upper()
-        if namespace in ["content", "Content"]:
+        # Long-form aliases — match case-insensitively so callers don't
+        # get silent zero-result responses for ``CONTENT`` etc.
+        lower = namespace.lower()
+        if lower == "content":
             return "C"
-        if namespace in ["metadata", "Metadata"]:
+        if lower == "metadata":
             return "M"
-        if namespace in ["wellknown", "well-known", "Wellknown"]:
+        if lower in ("wellknown", "well-known"):
             return "W"
-        if namespace in ["search", "Search", "index", "Index"]:
+        if lower in ("search", "index"):
             return "X"
         return namespace
 

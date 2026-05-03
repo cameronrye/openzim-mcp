@@ -268,11 +268,14 @@ class _ContentMixin:
                     failed += 1
                 continue
 
-            # Open the archive once for the whole group. If even opening
-            # fails, mark every entry in this group as failed without trying
-            # again — the failure is per-file, not per-entry.
+            # Open the archive once for the whole group via the context
+            # manager. If even opening fails, mark every entry in this
+            # group as failed without trying again — the failure is
+            # per-file, not per-entry. The narrow try/except wraps only
+            # the open so per-entry exceptions stay scoped to the inner
+            # loop's handler and we don't double-count any entry.
+            archive_cm = _zim_ops_mod.zim_archive(validated_path)
             try:
-                archive_cm = _zim_ops_mod.zim_archive(validated_path)
                 archive = archive_cm.__enter__()
             except Exception as e:  # noqa: BLE001 - per-group isolation
                 for index, zfp, entry_path in group:
@@ -322,8 +325,10 @@ class _ContentMixin:
                         )
                         failed += 1
             finally:
-                # Match contextmanager exit semantics: pass None tuple on
-                # clean exit so the underlying generator runs its `finally`.
+                # Always run the context manager's __exit__ — including on
+                # BaseException (KeyboardInterrupt / SystemExit) that the
+                # inner per-entry handler doesn't catch — so the archive
+                # is never leaked.
                 with suppress(Exception):
                     archive_cm.__exit__(None, None, None)
 
@@ -617,13 +622,23 @@ class _ContentMixin:
                 # Resolve the redirect chain — libzim raises RuntimeError on
                 # get_item() of a redirect entry. Reflect the resolved path
                 # back into entry_path so the response identifies the entry
-                # actually served, matching _get_entry_content_direct.
+                # actually served, matching _get_entry_content_direct. Use the
+                # shared MAX_REDIRECT_DEPTH cap and a seen-set so a redirect
+                # cycle is caught immediately rather than spinning to the cap.
+                seen_paths: set[str] = set()
                 redirect_hops = 0
+                max_hops = _zim_ops_mod.MAX_REDIRECT_DEPTH
                 while entry.is_redirect:
-                    if redirect_hops >= 8:
+                    if redirect_hops >= max_hops:
                         raise OpenZimMcpArchiveError(
-                            f"Redirect chain exceeded 8 hops for: '{entry_path}'"
+                            f"Redirect chain too deep (>{max_hops}) "
+                            f"for: '{entry_path}'"
                         )
+                    if entry.path in seen_paths:
+                        raise OpenZimMcpArchiveError(
+                            f"Redirect cycle detected at {entry.path}"
+                        )
+                    seen_paths.add(entry.path)
                     entry = entry.get_redirect_entry()
                     entry_path = entry.path
                     redirect_hops += 1

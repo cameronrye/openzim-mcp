@@ -75,6 +75,10 @@ class _StructureMixin:
             logger.info(f"Extracted structure for: {entry_path}")
             return result
 
+        except OpenZimMcpArchiveError:
+            # Inner helper already raised a typed archive error with full
+            # context. Don't re-wrap and double the message prefix.
+            raise
         except Exception as e:
             logger.error(f"Structure extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Structure extraction failed: {e}") from e
@@ -167,6 +171,10 @@ class _StructureMixin:
             logger.info(f"Extracted links for: {entry_path}")
             return result
 
+        except OpenZimMcpArchiveError:
+            # Inner helper already raised a typed archive error with full
+            # context. Don't re-wrap and double the message prefix.
+            raise
         except Exception as e:
             logger.error(f"Link extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Link extraction failed: {e}") from e
@@ -250,6 +258,10 @@ class _StructureMixin:
             logger.info(f"Extracted TOC for: {entry_path}")
             return result
 
+        except OpenZimMcpArchiveError:
+            # Inner helper already raised a typed archive error with full
+            # context. Don't re-wrap and double the message prefix.
+            raise
         except Exception as e:
             logger.error(f"TOC extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"TOC extraction failed: {e}") from e

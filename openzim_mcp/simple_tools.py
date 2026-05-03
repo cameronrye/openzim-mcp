@@ -299,7 +299,7 @@ class SimpleToolsHandler:
                         "**Missing Entry Paths**\n\n"
                         "I couldn't extract entry paths from your query. "
                         "Use namespace/path syntax, e.g., "
-                        "'fetch entries A/Photosynthesis A/Cell_biology'."
+                        "'fetch entries C/Photosynthesis C/Cell_biology'."
                     ) + low_confidence_note
                 entries = [
                     {"zim_file_path": zim_file_path, "entry_path": p}

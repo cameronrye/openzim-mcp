@@ -278,8 +278,12 @@ class TestZimOperations:
             mock_archive_instance.article_count = 80
             mock_archive_instance.media_count = 20
 
-            # Mock metadata entry
+            # Mock metadata entry. ``is_redirect`` defaults to a truthy
+            # MagicMock; the metadata extractor now follows redirect chains
+            # so an unset value sends every metadata lookup down the
+            # redirect-resolution path and skips it as runaway.
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
             mock_item = MagicMock()
             mock_item.content = b"Test Title"
             mock_entry.get_item.return_value = mock_item
@@ -1195,13 +1199,13 @@ class TestZimOperations:
 
         # Test limit too low
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 50"
         ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=0)
 
         # Test limit too high
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 50"
         ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=51)
 
@@ -1396,6 +1400,7 @@ class TestZimOperations:
 
             # Mock entry with complex content scenarios
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
             mock_entry.title = "Test Article"
             mock_entry.path = "A/Test"
 
@@ -1403,9 +1408,14 @@ class TestZimOperations:
             mock_entry.get_item.side_effect = Exception("Item access error")
             mock_archive_instance.get_entry_by_path.return_value = mock_entry
 
-            # This should raise an exception since get_item() fails early
+            # The public method re-raises typed inner OpenZimMcpArchiveError
+            # without re-wrapping (so the message no longer carries the
+            # "Structure extraction failed:" outer prefix), but the inner
+            # helper still attaches its own "Failed to extract article
+            # structure: ..." prefix, which is what we match here.
             with pytest.raises(
-                OpenZimMcpArchiveError, match="Structure extraction failed"
+                OpenZimMcpArchiveError,
+                match="Failed to extract article structure",
             ):
                 zim_operations.get_article_structure(str(zim_file), "A/Test")
 
@@ -1993,12 +2003,12 @@ class TestZimOperations:
 
         # Test search suggestions with invalid limit
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 50"
         ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=0)
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 50"
         ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=51)
 
@@ -2030,18 +2040,22 @@ class TestZimOperations:
         ):
             zim_operations.browse_namespace(str(zim_file), "   ")
 
-        # Test search_with_filters with invalid parameters
+        # Test search_with_filters with invalid parameters. Parameter
+        # validation surfaces as OpenZimMcpValidationError so the tool
+        # layer can render targeted "bad parameter" messages.
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 100"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 100"
         ):
             zim_operations.search_with_filters(str(zim_file), "test", limit=0)
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 100"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 100"
         ):
             zim_operations.search_with_filters(str(zim_file), "test", limit=101)
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Offset must be non-negative"):
+        with pytest.raises(
+            OpenZimMcpValidationError, match="Offset must be non-negative"
+        ):
             zim_operations.search_with_filters(str(zim_file), "test", offset=-1)
 
         # Test parameter validation that exists in the actual methods
@@ -2561,6 +2575,12 @@ class TestGetEntrySummaryMaxWords:
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
         mock_entry.is_redirect = False
+        # _resolve_entry_with_fallback returns ``resolved.path`` so callers
+        # surface the post-redirect canonical path. Tests that mock the
+        # entry must set ``.path`` to a real string — leaving it as a
+        # MagicMock breaks json.dumps when the path is written into the
+        # response payload.
+        mock_entry.path = "A/Plain"
         mock_entry.title = "Plain"
         mock_item = MagicMock()
         mock_item.mimetype = "text/plain"

@@ -107,7 +107,7 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
         Two accepted shapes for ``entries``:
 
         1. **List of strings** — entry paths in ``zim_file_path`` (required).
-           Example: ``entries=["A/Foo", "A/Bar"], zim_file_path="/path/x.zim"``
+           Example: ``entries=["C/Foo", "C/Bar"], zim_file_path="/path/x.zim"``
         2. **List of dicts** — ``{"zim_file_path": "...", "entry_path": "..."}``
            per entry. Use this when batching across archives. ``zim_file_path``
            kwarg becomes the default for any dict that omits its own.

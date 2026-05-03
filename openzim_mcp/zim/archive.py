@@ -407,12 +407,25 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                 try:
                     entry = archive.get_entry_by_path(f"M/{meta_key}")
                     if entry:
-                        # libzim raises RuntimeError if get_item() is called on a
-                        # redirect entry. Resolve the redirect chain first so a
-                        # legitimate metadata redirect doesn't disappear from the
-                        # response simply because it points at the canonical key.
-                        if getattr(entry, "is_redirect", False):
+                        # libzim raises RuntimeError if get_item() is called
+                        # on a redirect entry. Resolve the full redirect chain
+                        # (with cycle + depth bounds) so a legitimate metadata
+                        # redirect doesn't disappear from the response simply
+                        # because it points at the canonical key. A bare
+                        # ``get_redirect_entry`` only resolves one hop, which
+                        # would still raise RuntimeError on a 2-hop chain.
+                        seen_meta: set[str] = set()
+                        hops = 0
+                        while getattr(entry, "is_redirect", False):
+                            if hops >= MAX_REDIRECT_DEPTH or entry.path in seen_meta:
+                                break
+                            seen_meta.add(entry.path)
                             entry = entry.get_redirect_entry()
+                            hops += 1
+                        if getattr(entry, "is_redirect", False):
+                            # Cycle or runaway chain — skip rather than raise,
+                            # metadata is best-effort.
+                            continue
                         item = entry.get_item()
                         content = (
                             bytes(item.content)
@@ -595,31 +608,52 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
 
         Returns (entry, resolved_path) with redirects already followed so the
         caller can call ``entry.get_item()`` directly — libzim raises
-        RuntimeError when get_item() is invoked on a redirect entry.
+        RuntimeError when get_item() is invoked on a redirect entry. The
+        returned ``resolved_path`` is the post-redirect ``entry.path`` so
+        callers that surface it in JSON responses (and downstream
+        relative-link resolution in ``get_related_articles``) reflect the
+        canonical target rather than the redirect stub.
 
         Raises OpenZimMcpArchiveError cleanly (without an implicit __context__
         chain to a transient direct-access error) if neither direct access
-        nor search yields a result.
+        nor search yields a result, and also when the redirect chain
+        contains a cycle or exceeds ``MAX_REDIRECT_DEPTH`` hops.
         """
 
         def _follow(entry: Any) -> Any:
-            # Bound the redirect chain to break pathological loops without
-            # burning CPU on a malformed archive.
-            for _ in range(8):
+            seen: set[str] = set()
+            for _ in range(MAX_REDIRECT_DEPTH):
                 if not getattr(entry, "is_redirect", False):
                     return entry
+                if entry.path in seen:
+                    raise OpenZimMcpArchiveError(
+                        f"Redirect cycle detected at {entry.path}"
+                    )
+                seen.add(entry.path)
                 entry = entry.get_redirect_entry()
+            if getattr(entry, "is_redirect", False):
+                raise OpenZimMcpArchiveError(
+                    f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
+                    f"starting at {entry_path}"
+                )
             return entry
 
-        # Suppress the transient direct-access error chain so callers see a
-        # clean "not found" message rather than a chained exception with the
-        # underlying archive error as context.
+        # Suppress only the transient direct-access lookup error so callers
+        # see a clean "not found" message rather than a chained exception
+        # with the underlying archive error as context. Redirect errors
+        # raised from _follow propagate — they are real failures, not
+        # "not found", and falling through to a search fallback would mask
+        # malformed-archive bugs.
+        entry = None
         with suppress(Exception):
             entry = archive.get_entry_by_path(entry_path)
-            return _follow(entry), entry_path
+        if entry is not None:
+            resolved = _follow(entry)
+            return resolved, resolved.path
         actual_path = self._find_entry_by_search(archive, entry_path)
         if actual_path:
-            return _follow(archive.get_entry_by_path(actual_path)), actual_path
+            resolved = _follow(archive.get_entry_by_path(actual_path))
+            return resolved, resolved.path
         raise OpenZimMcpArchiveError(
             f"Entry not found: '{entry_path}'. "
             f"Try using search_zim_file() to find available entries."

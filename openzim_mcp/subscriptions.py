@@ -6,9 +6,7 @@ can dispatch ``notifications/resources/updated`` to the right sessions.
 This module reaches into one private FastMCP attribute (``_mcp_server``) to
 register subscribe/unsubscribe handlers on the underlying lowlevel ``Server``
 and to capture the active ``ServerSession`` at subscribe time. FastMCP 1.26
-exposes no public surface for this; see
-``docs/superpowers/notes/2026-05-01-subscription-api-spike.md`` for the full
-SDK-behaviour analysis.
+exposes no public surface for this.
 
 Stable surfaces this module depends on:
 - ``mcp.server.fastmcp.FastMCP._mcp_server`` (private but widely used)
@@ -26,7 +24,6 @@ import asyncio
 import contextlib
 import functools
 import logging
-import os
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -149,7 +146,7 @@ class MtimeWatcher:
         """Take an initial snapshot and begin polling."""
         if self._task is not None:
             return  # already running
-        # _scan does os.scandir + stat syscalls that block on network-mounted
+        # _scan walks the tree + stat syscalls that block on network-mounted
         # filesystems. Offload to match _tick so startup doesn't stall the
         # event loop during the ASGI lifespan.
         self._snapshot = await asyncio.to_thread(self._scan)
@@ -169,15 +166,21 @@ class MtimeWatcher:
         self._task = None
 
     def _scan(self) -> dict[str, tuple[float, int]]:
-        """Snapshot ``{path: (mtime, size)}`` for ``.zim`` files in allowed dirs."""
+        """Snapshot ``{path: (mtime, size)}`` for ``.zim`` files in allowed dirs.
+
+        Walks subdirectories recursively to mirror ``_scan_zim_files`` in
+        ``zim/archive.py`` (``directory.glob("**/*.zim")``). Without this,
+        ``list_zim_files`` would surface ZIMs in subdirectories but the
+        watcher would never fire ``zim://files`` updates for them.
+        """
         snap: dict[str, tuple[float, int]] = {}
         for d in self._dirs:
             try:
-                for entry in os.scandir(d):
-                    if entry.is_file() and entry.name.endswith(".zim"):
-                        with contextlib.suppress(OSError):
-                            stat = entry.stat()
-                            snap[entry.path] = (stat.st_mtime, stat.st_size)
+                for path in Path(d).glob("**/*.zim"):
+                    with contextlib.suppress(OSError):
+                        if path.is_file():
+                            stat = path.stat()
+                            snap[str(path)] = (stat.st_mtime, stat.st_size)
             except OSError:
                 continue
         return snap
@@ -188,7 +191,7 @@ class MtimeWatcher:
         Extracted from the polling loop so tests can drive a single pass
         deterministically without depending on sleep/scheduler timing.
         """
-        # ``_scan`` runs ``os.scandir`` + ``stat`` syscalls that block on
+        # ``_scan`` walks the tree + ``stat`` syscalls that block on
         # network-mounted filesystems and under inode pressure. Offload
         # to a thread so the event loop keeps making progress.
         new_snap = await asyncio.to_thread(self._scan)
