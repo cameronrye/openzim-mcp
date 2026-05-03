@@ -30,11 +30,11 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
-from libzim.search import (  # type: ignore[import-untyped]  # noqa: F401
+from libzim.search import (  # type: ignore[import-untyped]
     Query,
     Searcher,
 )
-from libzim.suggestion import (  # type: ignore[import-untyped]  # noqa: F401
+from libzim.suggestion import (  # type: ignore[import-untyped]
     SuggestionSearcher,
 )
 
@@ -53,6 +53,19 @@ from openzim_mcp.zim.content import _ContentMixin
 from openzim_mcp.zim.namespace import _NamespaceMixin
 from openzim_mcp.zim.search import _SearchMixin
 from openzim_mcp.zim.structure import _StructureMixin
+
+__all__ = [
+    "ARCHIVE_OPEN_TIMEOUT",
+    "Archive",
+    "MAX_REDIRECT_DEPTH",
+    "PaginationCursor",
+    "Query",
+    "Searcher",
+    "SuggestionSearcher",
+    "ZimOperations",
+    "zim_archive",
+]
+
 
 # Timeout for opening ZIM archives (seconds)
 ARCHIVE_OPEN_TIMEOUT = 30.0

@@ -39,7 +39,8 @@ class _StructureMixin:
 
         def _resolve_entry_with_fallback(
             self, archive: Archive, entry_path: str
-        ) -> Tuple[Any, str]: ...
+        ) -> Tuple[Any, str]:
+            """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
     def get_article_structure(self, zim_file_path: str, entry_path: str) -> str:
         """Extract article structure including headings, sections, and key metadata.

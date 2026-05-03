@@ -48,11 +48,13 @@ class _ContentMixin:
         # Provided by other mixins / coordinator class.
         def _find_entry_by_search(
             self, archive: Archive, entry_path: str
-        ) -> Optional[str]: ...
+        ) -> Optional[str]:
+            """Resolve via ``_SearchMixin`` on the concrete coordinator."""
 
         def _resolve_entry_with_fallback(
             self, archive: Archive, entry_path: str
-        ) -> Tuple[Any, str]: ...
+        ) -> Tuple[Any, str]:
+            """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
     def _get_entry_snippet(self, entry: Any) -> str:
         """Get content snippet for search result."""

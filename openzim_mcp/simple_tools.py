@@ -13,11 +13,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-from .intent_parser import (  # noqa: F401  (re-exported for back-compat)
-    IntentParser,
-    safe_regex_findall,
-    safe_regex_search,
-)
+from .intent_parser import IntentParser
 from .security import sanitize_context_for_error
 from .zim_operations import ZimOperations
 

@@ -138,6 +138,8 @@ def running_container(built_image: str, zim_dir: Path) -> Iterator[dict]:
                 if resp.status_code == 200:
                     break
             except Exception:
+                # Container may not be listening yet; the outer loop's
+                # poll cadence handles the retry, just keep sleeping.
                 pass
             time.sleep(1.0)
         else:

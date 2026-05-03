@@ -51,13 +51,16 @@ class _SearchMixin:
 
         def list_zim_files_data(
             self, name_filter: Optional[str] = None
-        ) -> List[Dict[str, Any]]: ...
+        ) -> List[Dict[str, Any]]:
+            """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
-        # Provided by the content mixin; declared here for type checking.
-        def _get_entry_snippet(self, entry: Any) -> str: ...
+        # Resolve via the content mixin; declared here for type checking.
+        def _get_entry_snippet(self, entry: Any) -> str:
+            """Resolve via ``_ContentMixin`` on the concrete coordinator."""
 
-        # Provided by the namespace mixin; declared here for type checking.
-        def _canonicalise_namespace(self, namespace: str) -> str: ...
+        # Resolve via the namespace mixin; declared here for type checking.
+        def _canonicalise_namespace(self, namespace: str) -> str:
+            """Resolve via ``_NamespaceMixin`` on the concrete coordinator."""
 
     def search_zim_file(
         self,

@@ -56,6 +56,8 @@ async def test_subscription_fires_on_zim_mtime_bump(
                     received.append(str(uri))
                     notify_event.set()
         except Exception:
+            # Best-effort decode of the SSE payload — anything malformed
+            # gets skipped so the consumer loop keeps draining.
             pass
 
     # The new streamable_http_client takes a pre-configured httpx.AsyncClient

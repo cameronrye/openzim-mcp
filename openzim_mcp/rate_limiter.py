@@ -9,7 +9,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -177,7 +177,7 @@ class RateLimiter:
         self._max_clients = max_clients
         # Per-(client_id, operation) buckets, used only when an operation
         # has a per_operation_limits override.
-        self._buckets: "OrderedDict[Tuple[str, str], TokenBucket]" = OrderedDict()
+        self._buckets: "OrderedDict[tuple[str, str], TokenBucket]" = OrderedDict()
         # Per-client global buckets — replaces the previous single
         # process-wide global bucket so one client can't starve everyone.
         self._global_buckets: "OrderedDict[str, TokenBucket]" = OrderedDict()
