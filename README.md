@@ -38,7 +38,7 @@
 
 ---
 
-> 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a deployment guide. Plus: batch entry retrieval (`get_zim_entries`) and per-entry MCP resources for direct browser rendering. Plus dozens of polish fixes — smarter archive handling, cleaner content extraction, server hygiene, and an end-to-end review pass. [Learn more →](#whats-new-in-v100)
+> 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a [Deployment Guide](https://github.com/cameronrye/openzim-mcp/wiki/Deployment-Guide). Also new: batch entry retrieval (`get_zim_entries`), per-entry MCP resources for direct browser rendering, and an end-to-end review pass covering archive handling, content extraction, and server hygiene. [Learn more →](#whats-new-in-v100)
 
 > **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
 
@@ -46,7 +46,7 @@
 
 **OpenZIM MCP transforms static ZIM archives into dynamic knowledge engines for Large Language Models.** Unlike basic file readers, this tool provides *intelligent, structured access* that LLMs need to effectively navigate and understand vast knowledge repositories.
 
- **Why LLMs Love OpenZIM MCP:**
+**Why LLMs Love OpenZIM MCP:**
 
 - **Smart Navigation**: Browse by namespace (articles, metadata, media) instead of blind searching
 - **Context-Aware Discovery**: Get article structure, relationships, and metadata for deeper understanding
@@ -183,7 +183,10 @@ First use of the MCP **resources** primitive — your client's resource browser 
 ### Installation
 
 ```bash
-# Install from PyPI (recommended)
+# Install from PyPI as an isolated CLI tool (recommended)
+uv tool install openzim-mcp
+
+# Or install into your current environment with pip
 pip install openzim-mcp
 ```
 
@@ -205,7 +208,7 @@ uv sync --dev
 
 ### Prepare ZIM Files
 
-Download ZIM files (e.g., Wikipedia, Wiktionary, etc.) from the [Kiwix Library](https://browse.library.kiwix.org/) and place them in a directory:
+Download ZIM files (e.g., Wikipedia, Wiktionary, etc.) from the [Kiwix Library](https://library.kiwix.org/) and place them in a directory:
 
 ```bash
 mkdir ~/zim-files
@@ -1244,8 +1247,8 @@ Response:
   "status": "healthy",
   "server_name": "openzim-mcp",
   "uptime_info": {
-    "process_id": 12345,
-    "started_at": "2025-09-14T10:30:00"
+    "process_id": "[REDACTED]",
+    "started_at": "2026-05-03T10:30:00"
   },
   "cache_performance": {
     "enabled": true,
@@ -1358,6 +1361,11 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `OPENZIM_MCP_TOOL_MODE` | `simple` | Tool surface: `simple` (one `zim_query` tool) or `advanced` (21 specialized tools). Controlled by `--tool-mode` on the CLI as well. |
+| `OPENZIM_MCP_TRANSPORT` | `stdio` | Transport protocol: `stdio`, `http`, or `sse`. |
+| `OPENZIM_MCP_HOST` | `127.0.0.1` | HTTP/SSE bind host. Non-loopback hosts require `OPENZIM_MCP_AUTH_TOKEN`. |
+| `OPENZIM_MCP_PORT` | `8000` | HTTP/SSE bind port. |
+| `OPENZIM_MCP_AUTH_TOKEN` | *(unset)* | Bearer token required when binding HTTP/SSE to a non-loopback interface. |
 | `OPENZIM_MCP_CACHE__ENABLED` | `true` | Enable/disable caching |
 | `OPENZIM_MCP_CACHE__MAX_SIZE` | `100` | Maximum cache entries |
 | `OPENZIM_MCP_CACHE__TTL_SECONDS` | `3600` | Cache TTL in seconds |

@@ -104,7 +104,7 @@ Includes an end-to-end review pass before tagging — security hardening, correc
 
 Final bug-sweep passes after the main review work above. Categorised by area for easier scanning.
 
-* **content/structure:** `_resolve_entry_with_fallback` and `get_binary_entry` now follow the redirect chain (bounded to 8 hops) before calling `entry.get_item()`. Without this the structure, links, TOC, summary, and binary-entry tools all crashed with `RuntimeError` from libzim whenever the requested path was a redirect to the canonical article (the common case for Kiwix-generated ZIMs)
+* **content/structure:** `_resolve_entry_with_fallback` and `get_binary_entry` now follow the redirect chain (bounded by the shared `MAX_REDIRECT_DEPTH = 10` cap with cycle detection) before calling `entry.get_item()`. Without this the structure, links, TOC, summary, and binary-entry tools all crashed with `RuntimeError` from libzim whenever the requested path was a redirect to the canonical article (the common case for Kiwix-generated ZIMs)
 * **content:** `_get_main_page_content` resolves `archive.main_entry` and the fallback `main_page_paths` entries before calling `get_item()`. Most ZIMs point `W/mainPage` at the real article via a redirect; previously this raised on every such archive
 * **content:** `get_zim_metadata` resolves redirect entries before reading metadata content
 * **content:** `get_related_articles` preserves trailing slash in path resolution and resolves relative links against the post-redirect path
