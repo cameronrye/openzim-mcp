@@ -12,7 +12,6 @@ shim's symbols continue to work without changes.
 import base64
 import json
 import logging
-from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -269,14 +268,44 @@ class _ContentMixin:
                 continue
 
             # Open the archive once for the whole group via the context
-            # manager. If even opening fails, mark every entry in this
-            # group as failed without trying again — the failure is
-            # per-file, not per-entry. The narrow try/except wraps only
-            # the open so per-entry exceptions stay scoped to the inner
-            # loop's handler and we don't double-count any entry.
-            archive_cm = _zim_ops_mod.zim_archive(validated_path)
+            # manager. If opening fails, mark every entry in this group as
+            # failed without trying again — the failure is per-file, not
+            # per-entry. Per-entry exceptions are caught inside the inner
+            # loop so they stay scoped to the right index.
             try:
-                archive = archive_cm.__enter__()
+                with _zim_ops_mod.zim_archive(validated_path) as archive:
+                    for index, zfp, entry_path in group:
+                        try:
+                            content = self._get_zim_entry_from_archive(
+                                archive,
+                                validated_path,
+                                entry_path,
+                                max_content_length,
+                                0,
+                            )
+                            results.append(
+                                {
+                                    "index": index,
+                                    "zim_file_path": zfp,
+                                    "entry_path": entry_path,
+                                    "success": True,
+                                    "content": content,
+                                }
+                            )
+                            succeeded += 1
+                        except (
+                            Exception
+                        ) as e:  # noqa: BLE001 - per-entry isolation by design
+                            results.append(
+                                {
+                                    "index": index,
+                                    "zim_file_path": zfp,
+                                    "entry_path": entry_path,
+                                    "success": False,
+                                    "error": str(e),
+                                }
+                            )
+                            failed += 1
             except Exception as e:  # noqa: BLE001 - per-group isolation
                 for index, zfp, entry_path in group:
                     results.append(
@@ -290,47 +319,6 @@ class _ContentMixin:
                     )
                     failed += 1
                 continue
-
-            try:
-                for index, zfp, entry_path in group:
-                    try:
-                        content = self._get_zim_entry_from_archive(
-                            archive,
-                            validated_path,
-                            entry_path,
-                            max_content_length,
-                            0,
-                        )
-                        results.append(
-                            {
-                                "index": index,
-                                "zim_file_path": zfp,
-                                "entry_path": entry_path,
-                                "success": True,
-                                "content": content,
-                            }
-                        )
-                        succeeded += 1
-                    except (
-                        Exception
-                    ) as e:  # noqa: BLE001 - per-entry isolation by design
-                        results.append(
-                            {
-                                "index": index,
-                                "zim_file_path": zfp,
-                                "entry_path": entry_path,
-                                "success": False,
-                                "error": str(e),
-                            }
-                        )
-                        failed += 1
-            finally:
-                # Always run the context manager's __exit__ — including on
-                # BaseException (KeyboardInterrupt / SystemExit) that the
-                # inner per-entry handler doesn't catch — so the archive
-                # is never leaked.
-                with suppress(Exception):
-                    archive_cm.__exit__(None, None, None)
 
         # Sort back into input order so callers see results in the order
         # they submitted entries (grouping is a transparent optimisation).

@@ -914,9 +914,8 @@ class _SearchMixin:
                 "Input is empty or contains only whitespace/control characters"
             )
         if limit < 1 or limit > 50:
-            return (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: limit must be between 1 and 50 (provided: {limit})"
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 50 (provided: {limit})"
             )
 
         if cross_file:
@@ -1182,9 +1181,8 @@ class _SearchMixin:
                 "Input is empty or contains only whitespace/control characters"
             )
         if limit_per_file < 1 or limit_per_file > 50:
-            return (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: limit_per_file must be between 1 and 50 "
+            raise OpenZimMcpValidationError(
+                f"limit_per_file must be between 1 and 50 "
                 f"(provided: {limit_per_file})"
             )
 

@@ -280,21 +280,50 @@ class OpenZimMcpServer:
     #          _register_structure_tools (all moved to tools/ package)
 
     def run(
-        self, transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
+        self,
+        transport: Optional[Literal["stdio", "sse", "streamable-http"]] = None,
     ) -> None:
         """
         Run the OpenZIM MCP server.
 
         Args:
-            transport: Transport protocol to use ("stdio", "sse", or "streamable-http")
+            transport: Optional override for the transport protocol. When
+                ``None`` (default), the value is derived from
+                ``self.config.transport`` — which is the value the
+                ``__init__`` already used to decide whether to wire
+                subscriptions, so the two stay consistent. Passing an
+                explicit value that contradicts the configured transport
+                raises ``OpenZimMcpConfigurationError`` rather than
+                silently advertising capabilities the running transport
+                cannot honour.
 
         Raises:
-            OpenZimMcpConfigurationError: If transport type is invalid
+            OpenZimMcpConfigurationError: If transport type is invalid or
+                disagrees with ``self.config.transport``.
 
         Example:
-            >>> server = OpenZimMcpServer()
-            >>> server.run(transport="stdio")
+            >>> server = OpenZimMcpServer(config)
+            >>> server.run()  # uses config.transport
         """
+        # 'http' is our short name for FastMCP's 'streamable-http' wire value.
+        config_transport: Literal["stdio", "sse", "streamable-http"] = (
+            "streamable-http"
+            if self.config.transport == "http"
+            else self.config.transport
+        )
+
+        if transport is None:
+            transport = config_transport
+        elif transport != config_transport:
+            raise OpenZimMcpConfigurationError(
+                f"Transport mismatch: run(transport={transport!r}) but "
+                f"config.transport is {self.config.transport!r}. "
+                f"Subscriptions and other transport-specific features were "
+                f"wired against the configured transport during __init__; "
+                f"omit the run() argument to use it, or rebuild the server "
+                f"with a matching config.transport."
+            )
+
         # Validate transport type
         if transport not in VALID_TRANSPORT_TYPES:
             raise OpenZimMcpConfigurationError(

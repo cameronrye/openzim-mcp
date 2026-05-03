@@ -3,7 +3,6 @@
 import argparse
 import logging
 import sys
-from typing import Literal
 
 from pydantic import ValidationError as PydanticValidationError
 
@@ -127,14 +126,11 @@ Environment Variables:
         logger.info("OpenZIM MCP server started in %s", mode_desc)
         logger.info("Allowed directories: %s", ", ".join(args.directories))
 
-        # Map user-facing transport to FastMCP's wire value.
-        # 'http' is our short name for FastMCP's 'streamable-http'.
-        transport_map: dict[str, Literal["stdio", "sse", "streamable-http"]] = {
-            "stdio": "stdio",
-            "http": "streamable-http",
-            "sse": "sse",
-        }
-        server.run(transport=transport_map[config.transport])
+        # ``OpenZimMcpServer.run()`` derives the wire transport from
+        # ``config.transport`` directly (translating our short name 'http'
+        # to FastMCP's 'streamable-http'); calling without an argument keeps
+        # the configured transport and the runtime transport in sync.
+        server.run()
 
     except OpenZimMcpConfigurationError as e:
         print(f"Configuration error: {e}", file=sys.stderr)

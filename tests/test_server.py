@@ -856,10 +856,12 @@ class TestOpenZimMcpServerRun:
         # Verify the MCP server was called
         server.mcp.run.assert_called_once_with(transport="stdio")
 
-    def test_run_different_transports(self, server: OpenZimMcpServer, monkeypatch):
-        """stdio/sse use mcp.run; streamable-http dispatches to http_app helper."""
-        server.mcp.run = MagicMock()
+    def test_run_different_transports(self, test_config: OpenZimMcpConfig, monkeypatch):
+        """stdio/sse use mcp.run; streamable-http dispatches to http_app helper.
 
+        ``run()`` derives its transport from ``self.config.transport``, so each
+        variant gets its own server bound to a matching config.
+        """
         served = []
         monkeypatch.setattr(
             "openzim_mcp.http_app.serve_streamable_http",
@@ -867,19 +869,45 @@ class TestOpenZimMcpServerRun:
         )
 
         # Test stdio transport
-        server.run(transport="stdio")
+        test_config.transport = "stdio"
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+        server.run()
         server.mcp.run.assert_called_with(transport="stdio")
 
         # Test sse transport
-        server.mcp.run.reset_mock()
-        server.run(transport="sse")
+        test_config.transport = "sse"
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+        server.run()
         server.mcp.run.assert_called_with(transport="sse")
 
         # Test streamable-http: bypasses mcp.run, goes through http_app helper.
-        server.mcp.run.reset_mock()
-        server.run(transport="streamable-http")
+        # Our short config name is 'http'; run() translates to 'streamable-http'.
+        test_config.transport = "http"
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+        server.run()
         server.mcp.run.assert_not_called()
         assert served == [server]
+
+    def test_run_rejects_transport_argument_mismatch(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """Explicit ``run(transport=...)`` that disagrees with config raises.
+
+        Before this guard, a server constructed with ``config.transport='http'``
+        (which wires subscriptions for HTTP) would silently start in stdio if
+        called as ``run(transport='stdio')`` — capabilities advertised, never
+        delivered.
+        """
+        from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+
+        test_config.transport = "http"
+        server = OpenZimMcpServer(test_config)
+
+        with pytest.raises(OpenZimMcpConfigurationError, match="Transport mismatch"):
+            server.run(transport="stdio")
 
     def test_run_sse_mirrors_host_port_to_fastmcp_settings(
         self, test_config: OpenZimMcpConfig

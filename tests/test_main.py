@@ -27,10 +27,11 @@ class TestMainModule:
         # Call main
         main()
 
-        # Verify calls
+        # Verify calls — main() calls run() without arguments; the server
+        # derives the wire transport from config.transport itself.
         mock_config_class.assert_called_once_with(allowed_directories=["/test/dir"])
         mock_server_class.assert_called_once_with(mock_config)
-        mock_server.run.assert_called_once_with(transport="stdio")
+        mock_server.run.assert_called_once_with()
 
     @patch("openzim_mcp.main.OpenZimMcpServer")
     @patch("openzim_mcp.main.OpenZimMcpConfig")
@@ -125,7 +126,7 @@ class TestMainModule:
     @patch("openzim_mcp.main.OpenZimMcpConfig")
     @patch("sys.argv", ["openzim_mcp", "--transport", "http", "/test/dir"])
     def test_main_http_transport(self, mock_config_class, mock_server_class):
-        """--transport http maps to streamable-http at server.run()."""
+        """--transport http: main() defers wire mapping to server.run()."""
         from openzim_mcp.main import main
 
         mock_config = MagicMock()
@@ -136,7 +137,9 @@ class TestMainModule:
 
         main()
 
-        mock_server.run.assert_called_once_with(transport="streamable-http")
+        # main() always calls run() without arguments; OpenZimMcpServer.run()
+        # translates config.transport='http' to FastMCP's 'streamable-http'.
+        mock_server.run.assert_called_once_with()
 
     @patch("openzim_mcp.main.OpenZimMcpServer")
     @patch("openzim_mcp.main.OpenZimMcpConfig")
@@ -171,7 +174,7 @@ class TestMainModule:
     @patch("openzim_mcp.main.OpenZimMcpConfig")
     @patch("sys.argv", ["openzim_mcp", "--transport", "sse", "/test/dir"])
     def test_main_sse_transport(self, mock_config_class, mock_server_class):
-        """--transport sse passes 'sse' through to server.run()."""
+        """--transport sse: main() defers transport selection to server.run()."""
         from openzim_mcp.main import main
 
         mock_config = MagicMock()
@@ -182,7 +185,7 @@ class TestMainModule:
 
         main()
 
-        mock_server.run.assert_called_once_with(transport="sse")
+        mock_server.run.assert_called_once_with()
 
     @patch("openzim_mcp.main.OpenZimMcpServer")
     @patch("openzim_mcp.main.OpenZimMcpConfig")
@@ -225,7 +228,7 @@ class TestMainModule:
 
         main()
 
-        mock_server_class.return_value.run.assert_called_once_with(transport="stdio")
+        mock_server_class.return_value.run.assert_called_once_with()
 
     @patch("openzim_mcp.main.OpenZimMcpServer")
     @patch("openzim_mcp.main.OpenZimMcpConfig")

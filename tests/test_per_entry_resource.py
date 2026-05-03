@@ -79,6 +79,7 @@ class TestPerEntryResource:
         item.mimetype = "text/html; charset=utf-8"
         item.content = b"<html><body>hi</body></html>"
         entry = MagicMock()
+        entry.is_redirect = False
         entry.get_item.return_value = item
         archive.get_entry_by_path.return_value = entry
 
@@ -119,6 +120,7 @@ class TestPerEntryResource:
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
         item.content = png_bytes
         entry = MagicMock()
+        entry.is_redirect = False
         entry.get_item.return_value = item
         archive.get_entry_by_path.return_value = entry
 
@@ -181,6 +183,7 @@ class TestPerEntryResource:
         item.mimetype = "text/html; charset=utf-8"
         item.content = b"<html></html>"
         entry = MagicMock()
+        entry.is_redirect = False
         entry.get_item.return_value = item
         archive.get_entry_by_path.return_value = entry
 
@@ -219,6 +222,7 @@ class TestPerEntryResource:
         item.mimetype = "image/png"
         item.content = b"\x89PNG\r\n\x1a\n"
         entry = MagicMock()
+        entry.is_redirect = False
         entry.get_item.return_value = item
         archive.get_entry_by_path.return_value = entry
 
@@ -254,6 +258,7 @@ class TestPerEntryResource:
         item.mimetype = "text/plain"
         item.content = b"ok"
         entry = MagicMock()
+        entry.is_redirect = False
         entry.get_item.return_value = item
         archive.get_entry_by_path.return_value = entry
 
@@ -295,6 +300,7 @@ class TestPerEntryResource:
         item.mimetype = "text/plain"
         item.content = b"ok"
         entry = MagicMock()
+        entry.is_redirect = False
         entry.get_item.return_value = item
         archive.get_entry_by_path.return_value = entry
 
@@ -317,6 +323,59 @@ class TestPerEntryResource:
         ), f"NUL byte leaked through to libzim: {called_path!r}"
         # The non-control portion survives.
         assert called_path == "A/Foobar"
+
+    @pytest.mark.asyncio
+    async def test_redirect_entry_is_resolved_before_get_item(
+        self, server, monkeypatch
+    ):
+        """Redirect entries follow their chain before get_item() is called.
+
+        ``Entry.get_item()`` raises ``RuntimeError`` if called on a redirect
+        entry, so the resource must walk the redirect chain first.
+        """
+        from openzim_mcp.tools import resource_tools
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        server.path_validator.validate_path = MagicMock(return_value="/zim/wiki.zim")
+        server.path_validator.validate_zim_file = MagicMock(
+            return_value="/zim/wiki.zim"
+        )
+
+        item = MagicMock()
+        item.mimetype = "text/plain"
+        item.content = b"target"
+
+        target = MagicMock()
+        target.is_redirect = False
+        target.get_item.return_value = item
+
+        redirect = MagicMock()
+        redirect.is_redirect = True
+        redirect.path = "A/Stub"
+        redirect.get_redirect_entry.return_value = target
+        # Calling get_item() on a redirect entry would raise; assert we don't.
+        redirect.get_item.side_effect = RuntimeError("get_item on redirect entry")
+
+        archive = MagicMock()
+        archive.get_entry_by_path.return_value = redirect
+
+        class FakeCtx:
+            def __enter__(self_inner):
+                return archive
+
+            def __exit__(self_inner, *exc):
+                return False
+
+        monkeypatch.setattr(resource_tools, "zim_archive", lambda *a, **k: FakeCtx())
+
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://wiki/entry/A%2FStub")
+        body = await resource.read()
+        assert body == "target"
+        target.get_item.assert_called_once()
+        redirect.get_item.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_resource_template_does_not_block_event_loop(

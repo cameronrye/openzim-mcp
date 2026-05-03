@@ -26,15 +26,15 @@ class TestFindEntryByTitle:
             )
 
     def test_limit_bounds(self, server: OpenZimMcpServer):
-        """Limit < 1 or > 50 returns parameter validation error."""
-        result_low = server.zim_operations.find_entry_by_title(
-            "/zim/test.zim", "Python", cross_file=False, limit=0
-        )
-        assert "Parameter Validation Error" in result_low
-        result_high = server.zim_operations.find_entry_by_title(
-            "/zim/test.zim", "Python", cross_file=False, limit=51
-        )
-        assert "Parameter Validation Error" in result_high
+        """Limit < 1 or > 50 raises OpenZimMcpValidationError."""
+        with pytest.raises(OpenZimMcpValidationError, match="limit must be"):
+            server.zim_operations.find_entry_by_title(
+                "/zim/test.zim", "Python", cross_file=False, limit=0
+            )
+        with pytest.raises(OpenZimMcpValidationError, match="limit must be"):
+            server.zim_operations.find_entry_by_title(
+                "/zim/test.zim", "Python", cross_file=False, limit=51
+            )
 
     def test_fast_path_exact_match(self, server: OpenZimMcpServer, monkeypatch):
         """Direct C/<title> path match short-circuits the suggestion search."""

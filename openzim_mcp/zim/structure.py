@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
-from openzim_mcp.exceptions import OpenZimMcpArchiveError
+from openzim_mcp.exceptions import OpenZimMcpArchiveError, OpenZimMcpValidationError
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -412,9 +412,8 @@ class _StructureMixin:
     ) -> str:
         """Find articles related to entry_path via outbound links."""
         if limit < 1 or limit > 100:
-            return (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: limit must be between 1 and 100 (provided: {limit})"
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 100 (provided: {limit})"
             )
 
         result: Dict[str, Any] = {"entry_path": entry_path}

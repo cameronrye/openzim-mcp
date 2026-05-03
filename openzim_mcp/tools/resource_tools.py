@@ -31,8 +31,9 @@ from mcp.server.fastmcp.resources.templates import ResourceTemplate
 from pydantic import AnyUrl, ConfigDict, Field
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH
+from ..exceptions import OpenZimMcpArchiveError
 from ..security import sanitize_input
-from ..zim_operations import zim_archive
+from ..zim_operations import MAX_REDIRECT_DEPTH, zim_archive
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -91,14 +92,37 @@ class ZimEntryResource(Resource):
 
     async def read(self) -> Union[str, bytes]:
         """Read the entry, set ``self.mime_type`` to the libzim native MIME."""
-        validated = self.path_validator.validate_path(self.archive_path)
-        validated = self.path_validator.validate_zim_file(validated)
 
-        with zim_archive(validated) as archive:
-            entry = archive.get_entry_by_path(self.entry_path)
-            item = entry.get_item()
-            mime = _detect_mime_type(item)
-            raw = bytes(item.content)
+        def _sync_read() -> tuple[str, bytes]:
+            validated = self.path_validator.validate_path(self.archive_path)
+            validated = self.path_validator.validate_zim_file(validated)
+
+            with zim_archive(validated) as archive:
+                entry = archive.get_entry_by_path(self.entry_path)
+                # libzim raises RuntimeError if get_item() is called on a
+                # redirect entry, so walk the chain (bounded against cycles)
+                # before reading the body.
+                seen: set[str] = set()
+                for _ in range(MAX_REDIRECT_DEPTH):
+                    if not getattr(entry, "is_redirect", False):
+                        break
+                    if entry.path in seen:
+                        raise OpenZimMcpArchiveError(
+                            f"Redirect cycle detected at {entry.path}"
+                        )
+                    seen.add(entry.path)
+                    entry = entry.get_redirect_entry()
+                if getattr(entry, "is_redirect", False):
+                    raise OpenZimMcpArchiveError(
+                        f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
+                        f"starting at {self.entry_path}"
+                    )
+                item = entry.get_item()
+                return _detect_mime_type(item), bytes(item.content)
+
+        # libzim and PathValidator do filesystem I/O; offload so concurrent
+        # HTTP/SSE clients don't stall on each other.
+        mime, raw = await asyncio.to_thread(_sync_read)
 
         # Mutate so FastMCP's read_resource picks up the detected MIME.
         # Resource has no validate_assignment, so this is a plain attribute set.
@@ -194,55 +218,61 @@ def register_resources(server: "OpenZimMcpServer") -> None:
         ),
         mime_type="application/json",
     )
-    def zim_file_overview(name: str) -> str:
-        try:
-            target_path = _resolve_zim_name(server, name)
-
-            if not target_path:
-                # Re-fetch the file list for the error message's "available"
-                # listing. _resolve_zim_name returns None without exposing
-                # the list, but the cost (one glob+stat) is fine on the
-                # error path.
-                files = server.zim_operations.list_zim_files_data()
-                return json.dumps(
-                    {
-                        "error": (
-                            f"ZIM file '{name}' not found. Available: "
-                            + ", ".join(Path(f["path"]).stem for f in files)
-                        )
-                    }
-                )
-
-            overview: dict = {"name": name, "path": target_path}
-
-            # Best-effort: fetch each section, log and continue on failure.
+    async def zim_file_overview(name: str) -> str:
+        # Three blocking archive opens (metadata + namespaces + main page)
+        # add up — under HTTP/SSE we must not run them on the event loop.
+        # Offload the whole synchronous body to a worker thread.
+        def _build_overview() -> str:
             try:
-                overview["metadata"] = json.loads(
-                    server.zim_operations.get_zim_metadata(target_path)
-                )
-            except Exception as e:
-                overview["metadata_error"] = str(e)
+                target_path = _resolve_zim_name(server, name)
 
-            try:
-                overview["namespaces"] = json.loads(
-                    server.zim_operations.list_namespaces(target_path)
-                )
-            except Exception as e:
-                overview["namespaces_error"] = str(e)
+                if not target_path:
+                    # Re-fetch the file list for the error message's "available"
+                    # listing. _resolve_zim_name returns None without exposing
+                    # the list, but the cost (one glob+stat) is fine on the
+                    # error path.
+                    files = server.zim_operations.list_zim_files_data()
+                    return json.dumps(
+                        {
+                            "error": (
+                                f"ZIM file '{name}' not found. Available: "
+                                + ", ".join(Path(f["path"]).stem for f in files)
+                            )
+                        }
+                    )
 
-            try:
-                main_page_text = server.zim_operations.get_main_page(target_path)
-                # Trim to a preview — full body is too large for an overview.
-                if len(main_page_text) > 2000:
-                    main_page_text = main_page_text[:2000] + "\n\n... (truncated)"
-                overview["main_page_preview"] = main_page_text
-            except Exception as e:
-                overview["main_page_error"] = str(e)
+                overview: dict = {"name": name, "path": target_path}
 
-            return json.dumps(overview, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.warning(f"Resource zim://{name} failed: {e}")
-            return json.dumps({"error": str(e)})
+                # Best-effort: fetch each section, log and continue on failure.
+                try:
+                    overview["metadata"] = json.loads(
+                        server.zim_operations.get_zim_metadata(target_path)
+                    )
+                except Exception as e:
+                    overview["metadata_error"] = str(e)
+
+                try:
+                    overview["namespaces"] = json.loads(
+                        server.zim_operations.list_namespaces(target_path)
+                    )
+                except Exception as e:
+                    overview["namespaces_error"] = str(e)
+
+                try:
+                    main_page_text = server.zim_operations.get_main_page(target_path)
+                    # Trim to a preview — full body is too large for an overview.
+                    if len(main_page_text) > 2000:
+                        main_page_text = main_page_text[:2000] + "\n\n... (truncated)"
+                    overview["main_page_preview"] = main_page_text
+                except Exception as e:
+                    overview["main_page_error"] = str(e)
+
+                return json.dumps(overview, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logger.warning(f"Resource zim://{name} failed: {e}")
+                return json.dumps({"error": str(e)})
+
+        return await asyncio.to_thread(_build_overview)
 
     # Register the per-entry template directly on the resource manager so
     # ZimEntryResource controls its own MIME type at read time.

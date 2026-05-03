@@ -26,14 +26,14 @@ class TestSearchAll:
             server.zim_operations.search_all("   \t  ", limit_per_file=5)
 
     def test_limit_per_file_validation_low(self, server: OpenZimMcpServer):
-        """Test that limit_per_file < 1 returns parameter validation error."""
-        result = server.zim_operations.search_all("python", limit_per_file=0)
-        assert "Parameter Validation Error" in result
+        """Test that limit_per_file < 1 raises OpenZimMcpValidationError."""
+        with pytest.raises(OpenZimMcpValidationError, match="limit_per_file"):
+            server.zim_operations.search_all("python", limit_per_file=0)
 
     def test_limit_per_file_validation_high(self, server: OpenZimMcpServer):
-        """Test that limit_per_file > 50 returns parameter validation error."""
-        result = server.zim_operations.search_all("python", limit_per_file=51)
-        assert "Parameter Validation Error" in result
+        """Test that limit_per_file > 50 raises OpenZimMcpValidationError."""
+        with pytest.raises(OpenZimMcpValidationError, match="limit_per_file"):
+            server.zim_operations.search_all("python", limit_per_file=51)
 
     def test_per_file_aggregation_mixed(self, server: OpenZimMcpServer):
         """Test that files failing to search are skipped without aborting the rest."""

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.exceptions import OpenZimMcpValidationError
 from openzim_mcp.server import OpenZimMcpServer
 
 
@@ -49,12 +50,12 @@ class TestGetRelatedArticles:
             "C/Linked_B",
         }
 
-    def test_invalid_limit_returns_error(self, server: OpenZimMcpServer):
-        """An out-of-range limit returns a parameter validation error."""
-        result = server.zim_operations.get_related_articles(
-            "/zim/test.zim", "C/Source", limit=0
-        )
-        assert "Parameter Validation Error" in result
+    def test_invalid_limit_raises(self, server: OpenZimMcpServer):
+        """An out-of-range limit raises OpenZimMcpValidationError."""
+        with pytest.raises(OpenZimMcpValidationError, match="limit must be"):
+            server.zim_operations.get_related_articles(
+                "/zim/test.zim", "C/Source", limit=0
+            )
 
 
 class TestResolveLinkToEntryPath:
