@@ -82,38 +82,6 @@ class NamespaceListEntry(TypedDict):
 
 
 # =============================================================================
-# Instance Tracking and Conflict Types
-# =============================================================================
-
-
-class ServerInstanceInfo(TypedDict):
-    """Information about a server instance."""
-
-    pid: int
-    start_time: str
-    config_hash: str
-    server_name: str
-    allowed_directories: List[str]
-
-
-class ConflictInfo(TypedDict):
-    """Information about a detected server conflict."""
-
-    type: str  # "multiple_instances" or "configuration_mismatch"
-    instance: ServerInstanceInfo
-    severity: str  # "warning" or "high"
-    details: NotRequired[str]
-
-
-class InstanceTrackingInfo(TypedDict):
-    """Instance tracking statistics."""
-
-    enabled: bool
-    active_instances: int
-    conflicts_detected: int
-    stale_instances: int
-
-
 # =============================================================================
 # Health Check Types
 # =============================================================================
@@ -161,7 +129,6 @@ class HealthCheckResponse(TypedDict):
     uptime_info: UptimeInfo
     configuration: ConfigurationInfo
     cache_performance: CacheStats
-    instance_tracking: InstanceTrackingInfo
     health_checks: HealthChecksInfo
     recommendations: List[str]
     warnings: List[str]
@@ -291,50 +258,3 @@ class TOCData(TypedDict):
     heading_count: int
     max_depth: int
     message: NotRequired[str]
-
-
-# =============================================================================
-# Diagnostics Types
-# =============================================================================
-
-
-class EnvironmentCheck(TypedDict):
-    """Result of an environment check."""
-
-    name: str
-    status: str  # "ok", "warning", "error"
-    message: str
-
-
-class DiagnosticsResponse(TypedDict):
-    """Full diagnostics response."""
-
-    timestamp: str
-    server_info: dict
-    conflicts: List[ConflictInfo]
-    environment_checks: List[EnvironmentCheck]
-    recommendations: List[str]
-
-
-# =============================================================================
-# Conflict Resolution Types
-# =============================================================================
-
-
-class CleanupResults(TypedDict):
-    """Results of conflict cleanup operations."""
-
-    stale_instances_cleaned: int
-    active_instances_remaining: int
-    current_instance_registered: bool
-
-
-class ConflictResolutionResponse(TypedDict):
-    """Response from conflict resolution."""
-
-    timestamp: str
-    action: str
-    conflicts_found: List[ConflictInfo]
-    cleanup_results: CleanupResults
-    status: str
-    recommendations: List[str]

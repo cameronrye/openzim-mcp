@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpSecurityError, OpenZimMcpValidationError
 from openzim_mcp.security import PathValidator, sanitize_input
+from openzim_mcp.server import OpenZimMcpServer
 
 
 class TestPathValidator:
@@ -51,6 +53,23 @@ class TestPathValidator:
         """Test protection against path traversal attacks."""
         with pytest.raises(OpenZimMcpSecurityError, match="suspicious pattern"):
             path_validator.validate_path(str(temp_dir / "../../../etc/passwd"))
+
+    def test_validate_path_embedded_dotdot_caught_by_regex(
+        self, path_validator: PathValidator, temp_dir: Path
+    ):
+        r"""Embedded ``..`` (no surrounding slash) must trip the regex layer.
+
+        Regression for finding M1: the original ``suspicious_patterns``
+        list required ``..`` to be either at the start (``^\.\.``), at
+        the end (``\.\.$``), or followed by a path separator
+        (``\.\./`` / ``\.\.\\``). Strings like ``foo..bar`` —
+        ``..`` embedded between non-separator characters — slipped past
+        the regex layer entirely and only the ``is_relative_to`` final
+        gate prevented escape. We now reject any ``..`` substring.
+        """
+        attack = f"{temp_dir}/sub..foo/bar"
+        with pytest.raises(OpenZimMcpSecurityError, match="suspicious pattern"):
+            path_validator.validate_path(attack)
 
     def test_validate_zim_file_valid(
         self, path_validator: PathValidator, temp_dir: Path
@@ -198,3 +217,161 @@ class TestSanitizeInput:
         """Test that sanitization preserves newlines and tabs."""
         result = sanitize_input("Hello\nWorld\tTest")
         assert result == "Hello\nWorld\tTest"
+
+
+class TestErrorMessageRedaction:
+    """Tests for path redaction in error messages returned to MCP clients."""
+
+    def test_security_error_message_does_not_leak_resolved_path(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """Verify the canonical path embedded in OpenZimMcpSecurityError is redacted.
+
+        Returning the full path verbatim leaks the host's allowed-dirs
+        layout exactly when a traversal attempt is rejected, so the
+        directory portion must be redacted before reaching the client.
+        """
+        server = OpenZimMcpServer(test_config)
+        err = OpenZimMcpSecurityError(
+            "Access denied - Path is outside allowed directories: "
+            "/opt/secret/data/wikipedia.zim"
+        )
+
+        msg = server._create_enhanced_error_message(
+            "get_zim_entry", err, "../etc/passwd"
+        )
+
+        # Directory portion must not leak
+        assert "/opt/secret/data" not in msg, msg
+        assert "/opt/secret" not in msg, msg
+        # But filename can be retained (sanitize_path_for_error keeps the
+        # filename so the operator still has a debugging signal)
+        assert "wikipedia.zim" in msg or "[REDACTED" in msg, msg
+
+    def test_windows_absolute_path_is_redacted(self, test_config: OpenZimMcpConfig):
+        r"""Verify Windows-style absolute paths are redacted from error messages.
+
+        ``C:\foo\bar`` style paths embedded in an exception message must
+        also be redacted before being returned to the client, even when
+        the host OS is POSIX.
+        """
+        server = OpenZimMcpServer(test_config)
+        err = OpenZimMcpSecurityError(
+            "Access denied - Path is outside allowed directories: "
+            "C:\\Secret\\Data\\wikipedia.zim"
+        )
+
+        msg = server._create_enhanced_error_message(
+            "get_zim_entry", err, "..\\etc\\passwd"
+        )
+
+        assert "C:\\Secret\\Data" not in msg, msg
+        assert "Secret\\Data" not in msg, msg
+        assert "wikipedia.zim" in msg or "[REDACTED" in msg, msg
+
+
+@pytest.mark.parametrize(
+    "leaked",
+    [
+        "/opt/zims/wikipedia.zim",
+        "/mnt/storage/foo.zim",
+        "/srv/data/file.zim",
+        "/media/usb/data.zim",
+        "E:\\zims\\foo.zim",
+        "Z:\\share\\bar.zim",
+    ],
+)
+def test_sanitize_context_for_error_redacts_unusual_paths(leaked):
+    """sanitize_context_for_error must redact paths in unusual mount points."""
+    from openzim_mcp.security import sanitize_context_for_error
+
+    out = sanitize_context_for_error(leaked)
+    assert leaked not in out, out
+
+
+@pytest.mark.parametrize(
+    "win_path",
+    [
+        "C:\\Secret\\Data\\wikipedia.zim",
+        "Z:\\share\\foo.zim",
+    ],
+)
+def test_sanitize_path_for_error_handles_windows_paths_on_posix(win_path):
+    """sanitize_path_for_error must split on backslash regardless of host OS."""
+    from openzim_mcp.security import sanitize_path_for_error
+
+    out = sanitize_path_for_error(win_path)
+    # Directory should not appear; basename can survive
+    assert "Secret\\Data" not in out, out
+    assert "share\\" not in out, out
+
+
+@pytest.mark.parametrize(
+    "wrapped",
+    [
+        "(/opt/foo.zim)",
+        "[/opt/foo.zim]",
+        '"/opt/foo.zim"',
+        "'/opt/foo.zim'",
+        "<file>/opt/foo.zim</file>",
+        "file=/opt/foo.zim",
+    ],
+)
+def test_redact_handles_wrapped_absolute_paths(wrapped):
+    """redact_paths_in_message must catch paths wrapped by punctuation."""
+    from openzim_mcp.security import redact_paths_in_message
+
+    out = redact_paths_in_message(wrapped)
+    # Directory portion must not leak
+    assert "/opt/foo" not in out, out
+    # The basename ".zim" should still be visible
+    # (sanitize_path_for_error keeps the filename)
+    assert "foo.zim" in out, out
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        "%2Fopt%2Fzims%2Ffoo.zim",
+        "context=%2Fmnt%2Fdata%2Fbar.zim",
+    ],
+)
+def test_sanitize_context_redacts_url_encoded_paths(encoded):
+    """sanitize_context_for_error must decode + redact percent-encoded paths."""
+    from openzim_mcp.security import sanitize_context_for_error
+
+    out = sanitize_context_for_error(encoded)
+    assert "/opt/zims" not in out and "%2Fopt%2Fzims" not in out
+    assert "/mnt/data" not in out and "%2Fmnt%2Fdata" not in out
+
+
+def test_redact_handles_whitespace_prefixed_path():
+    """Whitespace-prefixed absolute paths must still be redacted (regression)."""
+    from openzim_mcp.security import redact_paths_in_message
+
+    out = redact_paths_in_message("hello world /tmp/x.zim")
+    assert "/tmp/x" not in out, out
+    assert "x.zim" in out, out
+
+
+def test_redact_handles_bol_path():
+    """Path at start of string (no preceding character) must be redacted."""
+    from openzim_mcp.security import redact_paths_in_message
+
+    out = redact_paths_in_message("/opt/data/baz.zim is missing")
+    assert "/opt/data" not in out, out
+    assert "baz.zim" in out, out
+
+
+def test_redact_does_not_match_relative_path_after_basename():
+    """``test.zim/A/Article`` must not have its ``/A/Article`` suffix redacted.
+
+    The ``/`` after ``test.zim`` is preceded by ``m`` (a path-continuation
+    character) and so the absolute-path regex must not fire here.
+    """
+    from openzim_mcp.security import redact_paths_in_message
+
+    text = "see test.zim/A/Article for details"
+    out = redact_paths_in_message(text)
+    # The mid-token "/A/Article" suffix must remain intact
+    assert "test.zim/A/Article" in out, out

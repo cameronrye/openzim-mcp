@@ -88,6 +88,12 @@ class PathValidator:
 
         # Check for suspicious patterns in both original and decoded paths
         suspicious_patterns = [
+            r"\.\.",  # Any embedded ``..`` — superset of the four below.
+            #          Catches mid-path ``..`` between non-separator chars
+            #          (``foo..bar``) that would otherwise slip past the
+            #          slash-anchored variants and reach ``is_relative_to``
+            #          alone. Kept above the more specific patterns so the
+            #          first match terminates fastest.
             r"\.\./",  # Directory traversal (Unix)
             r"\.\.\\",  # Directory traversal (Windows)
             r"\.\.$",  # Trailing ..
@@ -248,12 +254,57 @@ def sanitize_input(
     return sanitized
 
 
+# Match either Windows drive-letter paths (``C:\foo\bar``) or POSIX
+# absolute paths (``/foo/bar``). The negative lookbehind guarantees the
+# path is not preceded by another path-continuation character, so a
+# relative path embedded mid-token (``test.zim/A/B``) does not have its
+# ``/A/B`` suffix mistaken for an absolute path -- yet a path wrapped by
+# punctuation (``(/opt/foo)``, ``"/opt/foo"``, ``file=/opt/foo``) still
+# matches because ``(``, ``"``, ``=`` are not path-continuation chars.
+# The body stops at whitespace **and** common wrapper delimiters (``'``,
+# ``"``, ``)``, ``]``, ``<``, ``>``) so wrapped paths collapse cleanly
+# without absorbing the surrounding wrapper characters. Trailing prose punctuation
+# (``.``, ``,``, ``;``, ``:``) is stripped by ``_strip_trailing_punct``
+# before being routed through :func:`sanitize_path_for_error`. Used by
+# both :func:`sanitize_context_for_error` here and the redactor in
+# ``server.py`` so we have a single source of truth.
+_ABS_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9._\-/\\])"  # not preceded by a path-continuation char
+    r"(?:[A-Za-z]:[\\/][^\s'\")\]<>]+"  # Windows drive path
+    r"|/[^\s'\")\]<>]+)"  # POSIX absolute path
+)
+
+# Both ``/`` and ``\`` may appear as a separator in a leaked path.
+# :class:`pathlib.Path` does not split on ``\`` on POSIX hosts, so we
+# split manually to keep the redactor cross-platform.
+_PATH_SEP_RE = re.compile(r"[\\/]")
+
+# Trailing punctuation that often abuts a path token in prose
+# (``... directories: /opt/foo.zim.``) and should not become part of
+# the "filename" we keep.
+_TRAILING_PUNCT = ".,;:)]"
+
+
+def _strip_trailing_punct(token: str) -> tuple[str, str]:
+    """Split off any trailing prose-style punctuation from ``token``.
+
+    Returns ``(core, trailing)`` so callers can sanitize ``core`` and
+    re-append ``trailing`` afterwards.
+    """
+    stripped = token.rstrip(_TRAILING_PUNCT)
+    return stripped, token[len(stripped) :]
+
+
 def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
-    """Sanitize a file path for inclusion in error messages.
+    r"""Sanitize a file path for inclusion in error messages.
 
     This function obscures the full directory path while keeping the filename
     visible for debugging purposes. This helps prevent information disclosure
     of internal file system structure in production environments.
+
+    Splits on both ``/`` and ``\`` so a Windows-style path leaked on a
+    POSIX host (where :class:`pathlib.Path` would treat ``\`` as a
+    regular character) still collapses to its basename.
 
     Args:
         path: The file path to sanitize
@@ -277,9 +328,10 @@ def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
         return PATH_HIDDEN_PLACEHOLDER
 
     try:
-        # Extract just the filename
-        path_obj = Path(path)
-        filename = path_obj.name
+        # Manual split on both separators so this works for Windows-style
+        # paths even when the host OS is POSIX.
+        parts = _PATH_SEP_RE.split(path)
+        filename = parts[-1] if parts else ""
         if filename:
             return f"...{filename}"
         return PATH_HIDDEN_PLACEHOLDER
@@ -287,11 +339,56 @@ def sanitize_path_for_error(path: str, show_filename: bool = True) -> str:
         return PATH_HIDDEN_PLACEHOLDER
 
 
+def redact_paths_in_message(raw_message: str) -> str:
+    r"""Redact absolute filesystem paths from a free-form message.
+
+    Single source of truth for path redaction shared between the
+    server's enhanced-error formatter and :func:`sanitize_context_for_error`.
+    Each absolute-path match (Unix ``/foo/bar`` or Windows ``C:\foo\bar``)
+    is routed through :func:`sanitize_path_for_error` so the directory
+    portion is hidden while the filename survives for debugging.
+
+    Trailing prose punctuation (``.``, ``,``, ``;``, ``:``, ``)``, ``]``)
+    is stripped before sanitization and re-appended afterwards so we do
+    not accidentally fold sentence-ending punctuation into the
+    "filename" we keep.
+
+    Args:
+        raw_message: The raw message, possibly containing one or more
+            absolute paths.
+
+    Returns:
+        The same message with each absolute path replaced by its
+        sanitized form (e.g. ``...wikipedia.zim``).
+    """
+    if not raw_message:
+        return raw_message
+
+    def _replace(match: "re.Match[str]") -> str:
+        token = match.group(0)
+        core, trailing = _strip_trailing_punct(token)
+        return sanitize_path_for_error(core) + trailing
+
+    return _ABS_PATH_RE.sub(_replace, raw_message)
+
+
+_CONTEXT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
+_CONTEXT_MAX_LENGTH = 1024
+
+
 def sanitize_context_for_error(context: str) -> str:
     """Sanitize context strings for error messages.
 
-    Looks for patterns that might be file paths and sanitizes them.
-    Also handles URL-encoded paths to prevent information leakage.
+    Looks for absolute filesystem paths (POSIX or Windows drive-letter)
+    and replaces each one with its sanitized form. URL-encoded paths
+    are decoded first so encoded variants (``%2Fopt%2Fzims%2Ffoo.zim``)
+    are caught alongside their bare counterparts.
+
+    Also strips ASCII control characters and caps overall length so that
+    raw user-supplied values (e.g. a query that reaches the rate-limit
+    error branch before ``sanitize_input`` has had a chance to clean it)
+    cannot embed control characters or oversized payloads in the response
+    or in any log line that captures the rendered message.
 
     Args:
         context: The context string to sanitize
@@ -302,50 +399,22 @@ def sanitize_context_for_error(context: str) -> str:
     if not context:
         return context
 
-    # URL-decode the context to catch encoded paths (%2F = /, etc.)
+    # URL-decode the context to catch encoded paths (%2F = /, etc.).
+    # Apply redaction to the decoded form so any encoded path token is
+    # also stripped of its directory portion.
     try:
         decoded_context = unquote(context)
-    except Exception:  # nosec B110 - gracefully handle any decoding errors
+    except Exception:
+        # Decoding may fail on malformed input; fall back to the original.
         decoded_context = context
 
-    # Common patterns indicating file paths
-    path_indicators = [
-        "File:",
-        "Path:",
-        "Directory:",
-        "/home/",
-        "/Users/",
-        "/var/",
-        "/tmp/",  # nosec B108 - string pattern for detection, not temp file usage
-        "C:\\",
-        "D:\\",
-    ]
+    # Strip control characters before redaction so a bytes-rendered
+    # control char inside a path doesn't survive into the error message.
+    decoded_context = _CONTEXT_CONTROL_CHARS_RE.sub(" ", decoded_context)
 
-    sanitized = context
+    redacted = redact_paths_in_message(decoded_context)
 
-    # Detect indicators against the decoded form (so URL-encoded paths are
-    # caught), but tokenise from the ORIGINAL string so non-path tokens keep
-    # their original encoding instead of being silently URL-decoded.
-    context_to_check = decoded_context if decoded_context != context else context
-    for indicator in path_indicators:
-        if indicator in context_to_check:
-            parts = context.replace(",", " ").split()
-            sanitized_parts = []
-            for part in parts:
-                try:
-                    decoded_part = unquote(part)
-                except ValueError:
-                    decoded_part = part
-                if (
-                    decoded_part.startswith("/")
-                    or decoded_part.startswith("C:\\")
-                    or decoded_part.startswith("D:\\")
-                    or ".zim" in decoded_part.lower()
-                ):
-                    sanitized_parts.append(sanitize_path_for_error(decoded_part))
-                else:
-                    sanitized_parts.append(part)
-            sanitized = " ".join(sanitized_parts)
-            break
+    if len(redacted) > _CONTEXT_MAX_LENGTH:
+        redacted = redacted[:_CONTEXT_MAX_LENGTH].rstrip() + "..."
 
-    return sanitized
+    return redacted

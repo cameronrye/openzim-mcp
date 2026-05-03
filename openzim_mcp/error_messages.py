@@ -47,7 +47,7 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
             "Check if the file is currently being written to",
             "Ensure sufficient system resources (memory/disk space)",
             "Try with a different ZIM file to isolate the issue",
-            "Use `diagnose_server_state()` to check for server conflicts",
+            "Use `get_server_health()` to check overall server status",
         ],
     ),
     OpenZimMcpSecurityError: ErrorConfig(
@@ -91,7 +91,7 @@ PERMISSION_ERROR_CONFIG = ErrorConfig(
         "Ensure the server process has read access",
         "Verify the file is not locked by another process",
         "Try running with appropriate permissions",
-        "Use `diagnose_server_state()` for environment validation",
+        "Use `get_server_health()` for environment validation",
     ],
 )
 
@@ -117,7 +117,7 @@ GENERIC_ERROR_TEMPLATE = """**Operation Failed**
 
 **Troubleshooting Steps**:
 1. Try the operation again (temporary issues may resolve)
-2. Use `diagnose_server_state()` to check for server issues
+2. Use `get_server_health()` to check for server issues
 3. Verify your input parameters are correct
 4. Check if other operations work with the same file
 5. Consider using alternative tools or approaches

@@ -102,7 +102,7 @@ class TestSafeRegexSearch:
         """
         import threading
 
-        from openzim_mcp.simple_tools import safe_regex_search
+        from openzim_mcp.intent_parser import safe_regex_search
 
         outcome: list[object] = []
 

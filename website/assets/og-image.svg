@@ -1,98 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="OpenZIM MCP — Knowledge that works offline">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#f8fafc;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#e2e8f0;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#2563eb;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#10b981;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#2563eb;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#10b981;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="logoGrad2" x1="0%" y1="100%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#1d4ed8;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#059669;stop-opacity:1" />
-    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="38%" r="50%">
+      <stop offset="0%"   stop-color="#FFD24A" stop-opacity="0.18" />
+      <stop offset="60%"  stop-color="#FFD24A" stop-opacity="0.04" />
+      <stop offset="100%" stop-color="#FFD24A" stop-opacity="0" />
+    </radialGradient>
   </defs>
+  <rect width="1200" height="630" fill="#0B0F1A" />
+  <rect width="1200" height="630" fill="url(#glow)" />
 
-  <!-- Background -->
-  <rect width="1200" height="630" fill="url(#bgGrad)"/>
-
-  <!-- Grid pattern -->
-  <defs>
-    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#e2e8f0" stroke-width="1" opacity="0.5"/>
-    </pattern>
-  </defs>
-  <rect width="1200" height="630" fill="url(#grid)"/>
-
-  <!-- Main content -->
-  <g transform="translate(100, 150)">
-    <!-- Logo - Neural Archive design -->
-    <g transform="translate(0, 0)">
-      <!-- Background circle -->
-      <circle cx="60" cy="60" r="55" fill="url(#logoGrad)" opacity="0.15"/>
-      <circle cx="60" cy="60" r="50" fill="url(#logoGrad)" opacity="0.1"/>
-
-      <!-- Archive layers -->
-      <g opacity="0.7">
-        <rect x="30" y="88" width="60" height="6" rx="2" fill="url(#logoGrad)" opacity="0.5"/>
-        <rect x="26" y="96" width="68" height="7" rx="2" fill="url(#logoGrad)" opacity="0.7"/>
-        <rect x="22" y="105" width="76" height="8" rx="2" fill="url(#logoGrad)" opacity="0.9"/>
-      </g>
-
-      <!-- Neural network connections -->
-      <g stroke="url(#logoGrad)" stroke-width="3" stroke-linecap="round">
-        <line x1="60" y1="18" x2="35" y2="38"/>
-        <line x1="60" y1="18" x2="85" y2="38"/>
-        <line x1="35" y1="38" x2="28" y2="58"/>
-        <line x1="35" y1="38" x2="60" y2="52"/>
-        <line x1="85" y1="38" x2="92" y2="58"/>
-        <line x1="85" y1="38" x2="60" y2="52"/>
-        <line x1="28" y1="58" x2="45" y2="72"/>
-        <line x1="92" y1="58" x2="75" y2="72"/>
-        <line x1="60" y1="52" x2="45" y2="72"/>
-        <line x1="60" y1="52" x2="75" y2="72"/>
-        <line x1="45" y1="72" x2="75" y2="72"/>
-      </g>
-
-      <!-- Neural nodes -->
-      <circle cx="60" cy="18" r="8" fill="url(#logoGrad2)"/>
-      <circle cx="35" cy="38" r="7" fill="url(#logoGrad)"/>
-      <circle cx="85" cy="38" r="7" fill="url(#logoGrad)"/>
-      <circle cx="28" cy="58" r="5" fill="url(#logoGrad2)"/>
-      <circle cx="92" cy="58" r="5" fill="url(#logoGrad2)"/>
-      <circle cx="60" cy="52" r="7" fill="url(#logoGrad)"/>
-      <circle cx="45" cy="72" r="5" fill="url(#logoGrad2)"/>
-      <circle cx="75" cy="72" r="5" fill="url(#logoGrad2)"/>
-
-      <!-- Node highlights -->
-      <circle cx="60" cy="18" r="3" fill="white" opacity="0.6"/>
-      <circle cx="35" cy="38" r="2.5" fill="white" opacity="0.5"/>
-      <circle cx="85" cy="38" r="2.5" fill="white" opacity="0.5"/>
-      <circle cx="60" cy="52" r="2.5" fill="white" opacity="0.5"/>
-    </g>
-
-    <!-- Title -->
-    <text x="150" y="50" font-family="Inter, Arial, sans-serif" font-size="48" font-weight="bold" fill="#1f2937">OpenZIM MCP</text>
-    <text x="150" y="100" font-family="Inter, Arial, sans-serif" font-size="28" fill="#6b7280">Intelligent Knowledge Access for AI Models</text>
-
-    <!-- Description -->
-    <text x="0" y="180" font-family="Inter, Arial, sans-serif" font-size="24" fill="#374151">Transform static ZIM archives into dynamic knowledge engines</text>
-    <text x="0" y="220" font-family="Inter, Arial, sans-serif" font-size="24" fill="#374151">for Large Language Models with intelligent, structured access patterns.</text>
-
-    <!-- Features -->
-    <g transform="translate(0, 280)">
-      <text x="0" y="0" font-family="Inter, Arial, sans-serif" font-size="18" fill="#10b981">&#x2713; Smart Navigation</text>
-      <text x="200" y="0" font-family="Inter, Arial, sans-serif" font-size="18" fill="#10b981">&#x2713; Context-Aware Discovery</text>
-      <text x="450" y="0" font-family="Inter, Arial, sans-serif" font-size="18" fill="#10b981">&#x2713; High Performance</text>
-      <text x="650" y="0" font-family="Inter, Arial, sans-serif" font-size="18" fill="#10b981">&#x2713; Security First</text>
-    </g>
+  <!-- Brain-circuit, scaled and centered in the upper portion -->
+  <g transform="translate(456 96) scale(12) rotate(90 12 12)" fill="none" stroke="#F5F1E8" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+    <path d="M9 13a4.5 4.5 0 0 0 3-4"/>
+    <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>
+    <path d="M3.477 10.896a4 4 0 0 1 .585-.396"/>
+    <path d="M6 18a4 4 0 0 1-1.967-.516"/>
+    <path d="M12 13h4"/>
+    <path d="M12 18h6a2 2 0 0 1 2 2v1"/>
+    <path d="M12 8h8"/>
+    <path d="M16 8V5a2 2 0 0 1 2-2"/>
+  </g>
+  <!-- Accent dots in amber -->
+  <g transform="translate(456 96) scale(12) rotate(90 12 12)" stroke="none" fill="#FFD24A">
+    <circle cx="16" cy="13" r="0.9"/>
+    <circle cx="18" cy="3"  r="0.9"/>
+    <circle cx="20" cy="21" r="0.9"/>
+    <circle cx="20" cy="8"  r="0.9"/>
   </g>
 
-  <!-- GitHub link -->
-  <text x="1100" y="600" font-family="Inter, Arial, sans-serif" font-size="16" text-anchor="end" fill="#6b7280">github.com/cameronrye/openzim-mcp</text>
+  <text x="600" y="500" font-family="Geist, Inter, system-ui, sans-serif" font-size="68" font-weight="600" fill="#F5F1E8" text-anchor="middle" letter-spacing="-1">OpenZIM MCP</text>
+  <text x="600" y="552" font-family="JetBrains Mono, ui-monospace, monospace" font-size="22" fill="#FFD24A" text-anchor="middle" letter-spacing="2">MCP SERVER · v1.0.0</text>
+  <text x="600" y="590" font-family="Geist, Inter, system-ui, sans-serif" font-size="20" fill="#7A8499" text-anchor="middle">Knowledge that works offline.</text>
 </svg>

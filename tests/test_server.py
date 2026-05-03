@@ -856,24 +856,88 @@ class TestOpenZimMcpServerRun:
         # Verify the MCP server was called
         server.mcp.run.assert_called_once_with(transport="stdio")
 
-    def test_run_different_transports(self, server: OpenZimMcpServer):
-        """Test server run with different transport types."""
-        # Mock the MCP server run method
-        server.mcp.run = MagicMock()
+    def test_run_different_transports(self, test_config: OpenZimMcpConfig, monkeypatch):
+        """stdio/sse use mcp.run; streamable-http dispatches to http_app helper.
+
+        ``run()`` derives its transport from ``self.config.transport``, so each
+        variant gets its own server bound to a matching config.
+        """
+        served = []
+        monkeypatch.setattr(
+            "openzim_mcp.http_app.serve_streamable_http",
+            lambda s: served.append(s),
+        )
 
         # Test stdio transport
-        server.run(transport="stdio")
+        test_config.transport = "stdio"
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+        server.run()
         server.mcp.run.assert_called_with(transport="stdio")
 
         # Test sse transport
-        server.mcp.run.reset_mock()
-        server.run(transport="sse")
+        test_config.transport = "sse"
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+        server.run()
         server.mcp.run.assert_called_with(transport="sse")
 
-        # Test streamable-http transport
-        server.mcp.run.reset_mock()
-        server.run(transport="streamable-http")
-        server.mcp.run.assert_called_with(transport="streamable-http")
+        # Test streamable-http: bypasses mcp.run, goes through http_app helper.
+        # Our short config name is 'http'; run() translates to 'streamable-http'.
+        test_config.transport = "http"
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+        server.run()
+        server.mcp.run.assert_not_called()
+        assert served == [server]
+
+    def test_run_rejects_transport_argument_mismatch(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """Explicit ``run(transport=...)`` that disagrees with config raises.
+
+        Before this guard, a server constructed with ``config.transport='http'``
+        (which wires subscriptions for HTTP) would silently start in stdio if
+        called as ``run(transport='stdio')`` — capabilities advertised, never
+        delivered.
+        """
+        from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+
+        test_config.transport = "http"
+        server = OpenZimMcpServer(test_config)
+
+        with pytest.raises(OpenZimMcpConfigurationError, match="Transport mismatch"):
+            server.run(transport="stdio")
+
+    def test_run_sse_mirrors_host_port_to_fastmcp_settings(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """SSE path copies config.host/port into FastMCP settings."""
+        test_config.transport = "sse"
+        test_config.host = "127.0.0.1"
+        test_config.port = 9123
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+
+        server.run(transport="sse")
+
+        assert server.mcp.settings.host == "127.0.0.1"
+        assert server.mcp.settings.port == 9123
+        server.mcp.run.assert_called_once_with(transport="sse")
+
+    def test_run_sse_refuses_non_localhost_host(self, test_config: OpenZimMcpConfig):
+        """SSE bound to a non-localhost host is refused at startup."""
+        from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+
+        test_config.transport = "sse"
+        test_config.host = "0.0.0.0"
+        server = OpenZimMcpServer(test_config)
+        server.mcp.run = MagicMock()
+
+        with pytest.raises(OpenZimMcpConfigurationError) as exc:
+            server.run(transport="sse")
+        assert "SSE transport" in str(exc.value)
+        server.mcp.run.assert_not_called()
 
 
 class TestOpenZimMcpServerNewTools:
@@ -1094,7 +1158,7 @@ class TestOpenZimMcpServerErrorFormatting:
         assert "**Operation**: get_entry" in result
         assert "**Context**: test.zim/A/Article" in result
         assert "Verify the ZIM file is not corrupted" in result
-        assert "Use `diagnose_server_state()` to check for server conflicts" in result
+        assert "Use `get_server_health()` to check overall server status" in result
         assert "**Technical Details**: Archive corrupted" in result
 
     def test_format_error_message_security_error(self, server: OpenZimMcpServer):
@@ -1137,7 +1201,10 @@ class TestOpenZimMcpServerErrorFormatting:
 
         assert "**Permission Error**" in result
         assert "**Operation**: list_files" in result
-        assert "**Context**: /restricted/path" in result
+        # Absolute paths in the context are redacted to prevent leaking
+        # the host's filesystem layout; only the basename survives.
+        assert "/restricted/path" not in result
+        assert "**Context**: ...path" in result
         assert "Check file and directory permissions" in result
         assert "Ensure the server process has read access" in result
         assert "**Technical Details**: Permission denied: access to file" in result
@@ -1152,7 +1219,10 @@ class TestOpenZimMcpServerErrorFormatting:
 
         assert "**Permission Error**" in result
         assert "**Operation**: read_file" in result
-        assert "**Context**: /some/file.zim" in result
+        # Absolute paths in the context are redacted to prevent leaking
+        # the host's filesystem layout; only the basename survives.
+        assert "/some/file.zim" not in result
+        assert "**Context**: ...file.zim" in result
         assert "Check file and directory permissions" in result
         assert "**Technical Details**: Access denied to resource" in result
 
@@ -1198,7 +1268,7 @@ class TestOpenZimMcpServerErrorFormatting:
         assert "**Error Type**: RuntimeError" in result
         assert "**Context**: some context" in result
         assert "Try the operation again (temporary issues may resolve)" in result
-        assert "Use `diagnose_server_state()` to check for server issues" in result
+        assert "Use `get_server_health()` to check for server issues" in result
         assert "**Technical Details**: Unexpected runtime error" in result
         assert "**Need Help?** Use `get_server_configuration()`" in result
 

@@ -69,12 +69,7 @@
       "extra-files": [
         {
           "type": "generic",
-          "path": "openzim_mcp/__init__.py",
-          "glob": false
-        },
-        {
-          "type": "generic",
-          "path": "llm.txt",
+          "path": "website/llms.txt",
           "glob": false
         }
       ],
@@ -94,8 +89,6 @@
       "commit-search-depth": 500
     }
   },
-  "bootstrap-sha": "HEAD",
-  "last-release-sha": "HEAD",
   "always-link-local": false,
   "separate-pull-requests": false,
   "group-pull-request-title-pattern": "chore: release ${version}",

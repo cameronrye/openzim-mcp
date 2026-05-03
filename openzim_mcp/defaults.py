@@ -5,8 +5,21 @@ This module consolidates all default configuration values in one place,
 making it easier to understand and modify the server's default behavior.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List
+
+
+def _default_persistence_path() -> str:
+    """Return the default cache persistence path as a resolved absolute path.
+
+    Uses ``~/.cache/openzim-mcp`` rather than a CWD-relative path so the
+    cache lands in a predictable location regardless of how the server is
+    invoked (containers, systemd units, etc. often run from ``/`` and a
+    relative default would silently land in the working directory or in a
+    world-writable surface).
+    """
+    return str((Path.home() / ".cache" / "openzim-mcp").resolve())
 
 
 @dataclass(frozen=True)
@@ -17,7 +30,7 @@ class CacheDefaults:
     MAX_SIZE: int = 100
     TTL_SECONDS: int = 3600  # 1 hour
     PERSISTENCE_ENABLED: bool = False
-    PERSISTENCE_PATH: str = ".openzim_mcp_cache"
+    PERSISTENCE_PATH: str = field(default_factory=_default_persistence_path)
 
 
 @dataclass(frozen=True)
@@ -29,6 +42,11 @@ class ContentDefaults:
     SEARCH_LIMIT: int = 10
     MAX_BINARY_SIZE: int = 10_000_000  # 10MB
     MAIN_PAGE_TRUNCATION: int = 5000  # Characters for main page display
+    # Maximum redirect chain length before bailing out. Real ZIM redirects
+    # rarely chain more than once or twice; ten is well above any legitimate
+    # depth and guards against pathological data or cycles libzim itself
+    # does not detect.
+    MAX_REDIRECT_DEPTH: int = 10
 
 
 @dataclass(frozen=True)
@@ -75,6 +93,13 @@ class TimeoutDefaults:
 
     REGEX_SECONDS: float = 1.0
     ARCHIVE_OPEN_SECONDS: float = 30.0
+    # Per-subscriber timeout for ``send_resource_updated`` during broadcast.
+    # A subscriber that doesn't respond within this window is treated as dead
+    # and evicted from the registry. The fan-out is concurrent
+    # (``asyncio.gather``), so one hung subscriber never delays the others —
+    # this timeout only bounds how long an individual hung send blocks its
+    # own task before being cancelled.
+    SUBSCRIPTION_SEND_SECONDS: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -87,6 +112,13 @@ class ServerDefaults:
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
+@dataclass(frozen=True)
+class BatchDefaults:
+    """Default values for batch operations."""
+
+    MAX_SIZE: int = 50  # max entries per get_zim_entries call
+
+
 # Instantiate defaults for easy access
 CACHE = CacheDefaults()
 CONTENT = ContentDefaults()
@@ -96,6 +128,7 @@ TIMEOUTS = TimeoutDefaults()
 SERVER = ServerDefaults()
 CACHE_PERFORMANCE = CachePerformanceThresholds()
 NAMESPACE_SAMPLING = NamespaceSamplingDefaults()
+BATCH = BatchDefaults()
 
 # Tool mode constants
 TOOL_MODE_ADVANCED = "advanced"
@@ -124,11 +157,14 @@ UNWANTED_HTML_SELECTORS: List[str] = [
 RATE_LIMIT_COSTS: Dict[str, int] = {
     "search": 2,
     "search_with_filters": 2,
+    "find_entry_by_title": 2,
     "get_entry": 1,
+    "get_zim_entries": 1,
     "get_binary_entry": 3,
     "browse_namespace": 1,
     "get_metadata": 1,
     "get_structure": 1,
+    "get_related_articles": 2,
     "suggestions": 1,
     "default": 1,
 }

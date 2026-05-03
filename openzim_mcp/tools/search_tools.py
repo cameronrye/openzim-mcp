@@ -24,17 +24,23 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def search_zim_file(
         zim_file_path: str,
-        query: str,
+        query: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        cursor: Optional[str] = None,
     ) -> str:
         """Search within ZIM file content.
 
         Args:
             zim_file_path: Path to the ZIM file
-            query: Search query term
+            query: Search query term. Required unless ``cursor`` is provided,
+                in which case the query encoded in the cursor is reused.
             limit: Maximum number of results to return (default from config)
             offset: Result starting offset (for pagination)
+            cursor: Opaque pagination token from a previous result's
+                ``next_cursor`` field. When provided, overrides ``offset`` and
+                ``limit`` with the values encoded in the token, and supplies
+                ``query`` if it was not given explicitly.
 
         Returns:
             Search result text
@@ -50,8 +56,57 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                     context=f"Query: '{query}'",
                 )
 
-            # Sanitize inputs
+            # Sanitize file path eagerly; query is sanitized once resolved.
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+
+            # Resolve cursor before validating offset/limit so cursor-supplied
+            # values are subject to the same bounds checks. The cursor also
+            # carries the original query, which is used when the caller did
+            # not pass `query` explicitly.
+            if cursor:
+                from ..zim_operations import PaginationCursor
+
+                try:
+                    decoded = PaginationCursor.decode(cursor)
+                except ValueError as e:
+                    return (
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: {e}\n\n"
+                        "**Troubleshooting**: Use the exact `next_cursor` "
+                        "value from a prior search response, or fall back to "
+                        "explicit `offset`/`limit` parameters."
+                    )
+                offset = decoded["o"]
+                limit = decoded["l"]
+                cursor_query = decoded.get("q")
+                if query is None:
+                    query = cursor_query
+                elif cursor_query and cursor_query != query:
+                    # Cursors encode the query they were paired with;
+                    # honoring a different `query` would silently return the
+                    # wrong page of the wrong query. Reject instead.
+                    return (
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: `cursor` was issued for query "
+                        f"{cursor_query!r} but the request supplied "
+                        f"query {query!r}. Cursors are only valid for "
+                        "the query they were issued for.\n\n"
+                        "**Troubleshooting**: Either drop `cursor` and "
+                        "start a fresh search with the new `query`, or "
+                        "omit `query` so the cursor's embedded query is "
+                        "reused."
+                    )
+
+            if not query:
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    "**Issue**: `query` is required when `cursor` is not "
+                    "provided.\n\n"
+                    "**Troubleshooting**: Pass a search term as `query`, or "
+                    "pass a `cursor` from a prior search response to resume "
+                    "pagination."
+                )
+
             query = sanitize_input(query, INPUT_LIMIT_QUERY)
 
             # Validate parameters
@@ -77,12 +132,9 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                 )
 
             # Perform the search using async operations
-            search_result = await server.async_zim_operations.search_zim_file(
+            return await server.async_zim_operations.search_zim_file(
                 zim_file_path, query, limit, offset
             )
-
-            # Add proactive conflict detection for search operations
-            return server._check_and_append_conflict_warnings(search_result)
 
         except Exception as e:
             logger.error(f"Error searching ZIM file: {e}")
@@ -95,7 +147,8 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def search_all(
         query: str,
-        limit_per_file: int = 5,
+        limit_per_file: Optional[int] = None,
+        limit: Optional[int] = None,
     ) -> str:
         """Search across every ZIM file in the allowed directories.
 
@@ -107,6 +160,9 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
         Args:
             query: Search query term (required)
             limit_per_file: Max hits per ZIM file (1-50, default: 5)
+            limit: Alias for ``limit_per_file`` for symmetry with
+                ``search_zim_file``. If both are provided, ``limit_per_file``
+                wins.
 
         Returns:
             JSON containing per-file result groups and counts of files
@@ -124,7 +180,20 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
 
             query = sanitize_input(query, INPUT_LIMIT_QUERY)
 
-            return await server.async_zim_operations.search_all(query, limit_per_file)
+            effective_limit = limit_per_file if limit_per_file is not None else limit
+            if effective_limit is None:
+                effective_limit = 5
+
+            if effective_limit < 1 or effective_limit > 50:
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    f"**Issue**: limit_per_file must be between 1 and 50 "
+                    f"(provided: {effective_limit})\n"
+                    "**Example**: Use `limit_per_file=5` for default, "
+                    "`limit_per_file=20` for more results per file."
+                )
+
+            return await server.async_zim_operations.search_all(query, effective_limit)
 
         except Exception as e:
             logger.error(f"Error in search_all: {e}")
@@ -168,8 +237,10 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                 )
 
             title = sanitize_input(title, INPUT_LIMIT_QUERY)
-            if not cross_file:
-                zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+            # Always sanitize the path: even with cross_file=True the value
+            # is forwarded to backend operations and must not carry control
+            # characters (e.g. NUL bytes) into libzim.
+            zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
 
             return await server.async_zim_operations.find_entry_by_title(
                 zim_file_path, title, cross_file, limit

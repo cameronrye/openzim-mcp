@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.exceptions import OpenZimMcpValidationError
 from openzim_mcp.server import OpenZimMcpServer
 
 
@@ -18,222 +19,154 @@ class TestGetRelatedArticles:
         return OpenZimMcpServer(test_config)
 
     def test_outbound_uses_extract_article_links(self, server: OpenZimMcpServer):
-        """Outbound delegates to extract_article_links and dedupes."""
-        # extract_article_links returns a JSON string like:
-        #   {"internal_links": [{"path": "C/A", "title": "A"}, ...]}
+        """Outbound delegates to extract_article_links, resolves URLs, dedupes.
+
+        ``extract_article_links`` returns links with ``url`` keys carrying
+        href values relative to the source entry. ``get_related_articles``
+        resolves each href against the source path and dedupes the result.
+        """
         server.zim_operations.extract_article_links = MagicMock(
             return_value=json.dumps(
                 {
                     "internal_links": [
-                        {"path": "C/Linked_A", "title": "Linked A"},
-                        {"path": "C/Linked_B", "title": "Linked B"},
-                        {"path": "C/Linked_A", "title": "Linked A"},  # dup
+                        # Bare relative href — resolves to "C/Linked_A".
+                        {"url": "Linked_A", "text": "Linked A"},
+                        {"url": "Linked_B", "text": "Linked B"},
+                        {"url": "Linked_A", "text": "Linked A"},  # dup
+                        # Anchor-only — should be ignored.
+                        {"url": "#section", "text": "anchor"},
                     ]
                 }
             )
         )
 
         result_json = server.zim_operations.get_related_articles(
-            "/zim/test.zim", "C/Source", limit=10, direction="outbound"
+            "/zim/test.zim", "C/Source", limit=10
         )
         result = json.loads(result_json)
-        assert result["direction"] == "outbound"
-        assert len(result["outbound_results"]) == 2  # deduped
+        assert len(result["outbound_results"]) == 2  # deduped, anchor dropped
         assert {r["path"] for r in result["outbound_results"]} == {
             "C/Linked_A",
             "C/Linked_B",
         }
 
-    def test_invalid_direction_returns_error(self, server: OpenZimMcpServer):
-        """An unknown direction returns a parameter validation error."""
-        result = server.zim_operations.get_related_articles(
-            "/zim/test.zim", "C/Source", limit=10, direction="sideways"
-        )
-        assert "Parameter Validation Error" in result
-
-    def test_inbound_bounded_scan_returns_cursor(
-        self, server: OpenZimMcpServer, monkeypatch
-    ):
-        """Inbound scan respects scan_cap and returns a next_cursor."""
-        # Build a mock archive whose entries each "link" to C/Source.
-        mock_archive = MagicMock()
-        mock_archive.entry_count = 100
-        mock_archive.has_new_namespace_scheme = True
-
-        def get_entry_by_id(entry_id):
-            entry = MagicMock()
-            entry.path = f"C/Article_{entry_id}"
-            entry.title = f"Article {entry_id}"
-            return entry
-
-        mock_archive._get_entry_by_id.side_effect = get_entry_by_id
-
-        # extract_article_links returns C/Source as one of the links from
-        # every article — so every scanned entry counts as inbound.
-        server.zim_operations.extract_article_links = MagicMock(
-            return_value=json.dumps(
-                {"internal_links": [{"path": "C/Source", "title": "Source"}]}
+    def test_invalid_limit_raises(self, server: OpenZimMcpServer):
+        """An out-of-range limit raises OpenZimMcpValidationError."""
+        with pytest.raises(OpenZimMcpValidationError, match="limit must be"):
+            server.zim_operations.get_related_articles(
+                "/zim/test.zim", "C/Source", limit=0
             )
-        )
 
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
 
-        # scan_cap=10 so we hit the cap before exhausting 100 entries.
-        result_json = server.zim_operations.get_related_articles(
-            "/zim/test.zim",
-            "C/Source",
-            limit=50,
-            direction="inbound",
-            inbound_scan_cap=10,
-        )
-        result = json.loads(result_json)
-        assert result["direction"] == "inbound"
-        assert result["inbound_done"] is False
-        assert result["inbound_next_cursor"] is not None
-        assert result["inbound_scanned"] == 10
+class TestResolveLinkToEntryPath:
+    """Test ``_resolve_link_to_entry_path`` static helper.
 
-    def test_both_direction_runs_outbound_and_inbound(
-        self, server: OpenZimMcpServer, monkeypatch
-    ):
-        """direction='both' returns both outbound_results and inbound_results."""
-        server.zim_operations.extract_article_links = MagicMock(
-            return_value=json.dumps(
-                {"internal_links": [{"path": "C/Out", "title": "Out"}]}
+    Trailing-slash handling matters: in domain-scheme ZIMs, "directory"
+    entries are stored with a trailing slash (e.g. ``iep.utm.edu/a/``),
+    so URL resolution must preserve it for paths to remain fetchable.
+    """
+
+    def test_relative_dir_href_preserves_trailing_slash(self):
+        """``../a/`` against ``iep.utm.edu/aristotle/`` → ``iep.utm.edu/a/``."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../a/", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu/a/"
+
+    def test_relative_file_href_no_trailing_slash(self):
+        """``../a`` (no slash) against same source stays without slash."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../a", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu/a"
+
+    def test_dir_href_with_fragment_preserves_slash(self):
+        """``../a/#section`` resolves to ``iep.utm.edu/a/`` (slash kept)."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../a/#section", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu/a/"
+
+    def test_dir_href_with_query_preserves_slash(self):
+        """``../a/?ref=foo`` resolves to ``iep.utm.edu/a/`` (slash kept)."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../a/?ref=foo", "iep.utm.edu/aristotle/"
+        )
+        assert resolved == "iep.utm.edu/a/"
+
+    def test_anchor_only_returns_none(self):
+        """Anchor-only refs (``#section``) are non-navigable."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        assert (
+            _StructureMixin._resolve_link_to_entry_path(
+                "#section", "iep.utm.edu/aristotle/"
             )
-        )
-        mock_archive = MagicMock()
-        mock_archive.entry_count = 0  # no inbound to scan
-        mock_archive.has_new_namespace_scheme = True
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
+            is None
         )
 
-        result_json = server.zim_operations.get_related_articles(
-            "/zim/test.zim", "C/Source", direction="both", limit=10
-        )
-        result = json.loads(result_json)
-        assert result["direction"] == "both"
-        assert "outbound_results" in result
-        assert "inbound_results" in result
-        assert result["inbound_done"] is True  # 0 entries → done
+    def test_external_url_returns_none(self):
+        """Schemes like ``http://`` are external."""
+        from openzim_mcp.zim.structure import _StructureMixin
 
-    def test_inbound_limit_hit_returns_resumable_cursor(
-        self, server: OpenZimMcpServer, monkeypatch
-    ):
-        """When limit is reached before cap, return done=False and a cursor."""
-        mock_archive = MagicMock()
-        mock_archive.entry_count = 100
-        mock_archive.has_new_namespace_scheme = True
-
-        def get_entry_by_id(entry_id):
-            entry = MagicMock()
-            entry.path = f"C/Article_{entry_id}"
-            entry.title = f"Article {entry_id}"
-            return entry
-
-        mock_archive._get_entry_by_id.side_effect = get_entry_by_id
-
-        server.zim_operations.extract_article_links = MagicMock(
-            return_value=json.dumps(
-                {"internal_links": [{"path": "C/Source", "title": "Source"}]}
+        assert (
+            _StructureMixin._resolve_link_to_entry_path(
+                "https://example.com/", "iep.utm.edu/aristotle/"
             )
+            is None
         )
 
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
+    def test_legacy_namespace_no_trailing_slash(self):
+        """``Linked_A`` against ``C/Source`` → ``C/Linked_A`` (no slash)."""
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolved = _StructureMixin._resolve_link_to_entry_path("Linked_A", "C/Source")
+        assert resolved == "C/Linked_A"
+
+    @pytest.mark.parametrize("url", [".", "./", "/", "//"])
+    def test_self_referential_navigation_returns_none(self, url: str):
+        """Refs that resolve to "stay here" return None.
+
+        ``.``, ``./``, ``/`` and ``//`` don't point at navigable targets:
+        - ``./`` from ``"C/Source"`` would otherwise produce ``"C/"``,
+          which is a namespace prefix, not a fetchable entry.
+        - ``/`` is an absolute web path with no meaningful ZIM analogue.
+        - ``//`` is protocol-relative.
+        """
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        for source in ("C/Source", "C/Sub/Article", "iep.utm.edu/aristotle/"):
+            resolved = _StructureMixin._resolve_link_to_entry_path(url, source)
+            assert resolved is None, (
+                f"expected None for url={url!r} source={source!r}, " f"got {resolved!r}"
+            )
+
+    def test_parent_dir_to_archive_root_is_kept(self):
+        """``../`` from ``iep.utm.edu/aristotle/`` resolves to the archive index.
+
+        This is the legitimate "parent directory" case in domain-scheme
+        archives where ``iep.utm.edu/`` IS a real entry (the index page).
+        Unlike pure-navigation tokens, ``..``/``../`` from a path with
+        depth resolves to a different (parent) location and may map to
+        a real entry.
+        """
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        # Two-level descent — parent is the domain root, a real entry.
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "../", "iep.utm.edu/aristotle/"
         )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
+        assert resolved == "iep.utm.edu/"
+        # Without trailing slash too.
+        resolved = _StructureMixin._resolve_link_to_entry_path(
+            "..", "iep.utm.edu/aristotle/"
         )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
-
-        # limit=3 hits before cap=100 and before entry_count=100.
-        result_json = server.zim_operations.get_related_articles(
-            "/zim/test.zim",
-            "C/Source",
-            limit=3,
-            direction="inbound",
-            inbound_scan_cap=100,
-        )
-        result = json.loads(result_json)
-        assert len(result["inbound_results"]) == 3
-        assert result["inbound_done"] is False
-        assert result["inbound_next_cursor"] is not None
-
-    def test_inbound_completion_returns_done(
-        self, server: OpenZimMcpServer, monkeypatch
-    ):
-        """When entire archive is scanned, done=True and next_cursor=None."""
-        mock_archive = MagicMock()
-        mock_archive.entry_count = 5
-        mock_archive.has_new_namespace_scheme = True
-
-        def get_entry_by_id(entry_id):
-            entry = MagicMock()
-            entry.path = f"C/Article_{entry_id}"
-            entry.title = f"Article {entry_id}"
-            return entry
-
-        mock_archive._get_entry_by_id.side_effect = get_entry_by_id
-
-        server.zim_operations.extract_article_links = MagicMock(
-            return_value=json.dumps({"internal_links": []})
-        )
-
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
-
-        result_json = server.zim_operations.get_related_articles(
-            "/zim/test.zim",
-            "C/Source",
-            direction="inbound",
-            inbound_scan_cap=100,
-        )
-        result = json.loads(result_json)
-        assert result["inbound_done"] is True
-        assert result["inbound_next_cursor"] is None
-        assert result["inbound_scanned"] == 5
-
-
-def _ctx(value):
-    """Build a context manager that yields the given value."""
-
-    class _C:
-        def __enter__(self):
-            return value
-
-        def __exit__(self, *a):
-            return False
-
-    return _C()
+        assert resolved == "iep.utm.edu"

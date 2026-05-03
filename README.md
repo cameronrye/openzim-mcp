@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/cameronrye/openzim-mcp/main/website/assets/logo.svg" alt="OpenZIM MCP Logo" width="120" height="120">
+  <img src="https://raw.githubusercontent.com/cameronrye/openzim-mcp/main/website/assets/favicon.svg" alt="OpenZIM MCP Logo" width="120" height="120">
 </p>
 
 <h1 align="center">OpenZIM MCP Server</h1>
@@ -38,15 +38,15 @@
 
 ---
 
-> 🆕 **NEW in v0.9.0: Multi-Archive Search & Prompts!** Search across every ZIM file at once with `search_all`, invoke pre-built workflows with `/research` and `/summarize`, and resolve titles to paths instantly with `find_entry_by_title`. [Learn more →](#whats-new-in-v090)
+> 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a [Deployment Guide](https://github.com/cameronrye/openzim-mcp/wiki/Deployment-Guide). Also new: batch entry retrieval (`get_zim_entries`), per-entry MCP resources for direct browser rendering, and an end-to-end review pass covering archive handling, content extraction, and server hygiene. [Learn more →](#whats-new-in-v100)
 
-> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (26 specialized tools, plus 3 MCP prompts and 2 MCP resources) to match your LLM's capabilities.
+> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
 
 ## Built for LLM Intelligence
 
 **OpenZIM MCP transforms static ZIM archives into dynamic knowledge engines for Large Language Models.** Unlike basic file readers, this tool provides *intelligent, structured access* that LLMs need to effectively navigate and understand vast knowledge repositories.
 
- **Why LLMs Love OpenZIM MCP:**
+**Why LLMs Love OpenZIM MCP:**
 
 - **Smart Navigation**: Browse by namespace (articles, metadata, media) instead of blind searching
 - **Context-Aware Discovery**: Get article structure, relationships, and metadata for deeper understanding
@@ -62,10 +62,14 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 
 ## Features
 
-- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (26 specialized tools)
-- **Multi-Archive Search**: 🆕 Search every ZIM file at once with `search_all` — no need to know which archive holds the answer
-- **MCP Prompts**: 🆕 Pre-built workflow slash commands (`/research`, `/summarize`, `/explore`) that orchestrate multi-step ZIM operations
-- **Find Entries by Title**: 🆕 Resolve titles to entry paths instantly with `find_entry_by_title` — case-insensitive, optionally cross-file
+- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools)
+- **Streamable HTTP Transport**: 🆕 Run as a long-running service over HTTP — bearer-token auth, CORS, health endpoints, multi-arch Docker image, and resource subscriptions
+- **Batch Entry Retrieval**: 🆕 Fetch up to 50 entries per call with `get_zim_entries` — pairs naturally with HTTP, where round-trip cost matters
+- **Per-Entry MCP Resources**: 🆕 Stream individual entries via `zim://{name}/entry/{path}` with native MIME types — browse HTML, PDFs, and images directly
+- **Resource Subscriptions**: 🆕 Clients subscribe to `zim://files` and `zim://{name}` and receive `notifications/resources/updated` when archives change
+- **Multi-Archive Search**: Search every ZIM file at once with `search_all` — no need to know which archive holds the answer
+- **MCP Prompts**: Pre-built workflow slash commands (`/research`, `/summarize`, `/explore`) that orchestrate multi-step ZIM operations
+- **Find Entries by Title**: Resolve titles to entry paths instantly with `find_entry_by_title` — case-insensitive, optionally cross-file
 - **Binary Content Retrieval**: Extract PDFs, images, videos, and other embedded media for multi-agent workflows
 - **Security First**: Comprehensive input validation and path traversal protection
 - **High Performance**: Intelligent caching and optimized ZIM file operations
@@ -75,6 +79,67 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 - **Type Safe**: Full type annotations throughout the codebase
 - **Configurable**: Flexible configuration with validation
 - **Observable**: Structured logging and health monitoring
+
+## What's new in v1.0.0
+
+### Streamable HTTP transport
+
+Run OpenZIM MCP as a long-running service. Pass `--transport http` (or set `OPENZIM_MCP_TRANSPORT=http`) and the server boots a Starlette app on `127.0.0.1:8000` by default with:
+
+- **Bearer-token auth** — set `OPENZIM_MCP_AUTH_TOKEN`; comparison is timing-safe and the attempted token is never logged.
+- **Safe-default startup check** — the server *refuses* to bind a non-localhost host without a token. (Bind `127.0.0.1` for local-only access; put a reverse proxy in front for TLS.)
+- **CORS allow-list** — explicit origins via `OPENZIM_MCP_CORS_ORIGINS`; wildcard `*` is rejected at startup.
+- **Health endpoints** — `/healthz` (liveness) and `/readyz` (at least one allowed dir is readable). Both exempt from auth so probes work cleanly.
+- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.0.0`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
+
+Legacy SSE transport is also available via `--transport sse` (or `OPENZIM_MCP_TRANSPORT=sse`) for clients that haven't migrated to streamable-HTTP. SSE does **not** apply the bearer-token / CORS / health-endpoint middleware, so the server *refuses* to start with `--transport sse` bound to anything other than `127.0.0.1`/`::1`/`localhost`. For exposed deployments use `--transport http`.
+
+### Batch entry retrieval
+
+`get_zim_entries` fetches up to 50 entries in one call. Per-entry failures don't abort the batch — each result includes its `index` from the input order plus either `content` (success) or `error` (failure). Different `zim_file_path` values are allowed in one batch, so a multi-archive workflow can fan out from a single search. Single-archive batches can pass bare path strings paired with a top-level `zim_file_path` default, so the call site stays flat instead of dict-heavy.
+
+### Per-entry MCP resources
+
+`zim://{name}/entry/{path}` exposes individual entries with their native MIME type:
+
+- HTML and text entries return text bodies (`text/html`, `text/plain`, `application/json`, ...).
+- Binary entries (images, PDFs) return raw bytes (FastMCP base64-wraps them).
+
+**Encoding requirement:** clients MUST URL-encode `/` as `%2F` in the `{path}` segment. FastMCP's URI template engine treats `/` as a segment separator, so a literal slash won't route. Example: `zim://wikipedia_en/entry/C%2FClimate_change`. (This is a constraint of the current `mcp[cli]` SDK.)
+
+### Resource subscriptions
+
+Subscribe to `zim://files` or `zim://{name}` and the server emits `notifications/resources/updated` whenever the directory contents change or a `.zim` file is replaced. Polling interval is configurable (`OPENZIM_MCP_WATCH_INTERVAL_SECONDS`, default 5 s) and the feature can be disabled with `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false`. Implementation note: this depends on a private FastMCP attribute (`_mcp_server`) for handler registration.
+
+### Polish & fixes
+
+**Smarter archive handling**
+
+- `get_related_articles` resolves relative hrefs against the source entry's directory and identifies the content namespace correctly on domain-scheme archives (previously returned nothing).
+- Suggestion fallback uses `SuggestionSearcher(archive).suggest(text)` (the prior `archive.suggest()` call didn't exist).
+- `list_zim_files` gains a case-insensitive `name_filter` substring argument; one shared cache slot regardless of filter value.
+- `search_zim_file` accepts an opaque `cursor` parameter; passing the cursor alone resumes pagination without restating the query.
+
+**Cleaner content extraction**
+
+- Heading-id resolution falls through `id` → mw-headline anchor → preceding `<a name="">` → slug, returning `(id, source)` so consumers can distinguish real anchors from synthetic slugs.
+- Summary extraction skips USWDS banners and skip-nav blocks above the first `<h1>` (MedlinePlus / NIH / NIST style sites).
+- Link extraction drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`).
+- Per-entry paths sanitized in `get_zim_entries`.
+
+**Server hygiene**
+
+- `__version__` reads from `importlib.metadata`; `serverInfo.version` reports openzim-mcp's actual version (no longer the FastMCP SDK default).
+- HTTP transport's subscription watcher starts via wrapped lifespan.
+- Per-entry `zim://` returns libzim's native MIME (was returning a placeholder).
+
+**Streamlined scope**
+
+v1.0.0 reduces the advanced-mode tool surface from 27 to 21 by removing administrative/inspection helpers that didn't pull their weight: `warm_cache`, `cache_stats`, `cache_clear`, `get_random_entry`, `diagnose_server_state`, and `resolve_server_conflicts`. The cache itself remains; the explicit management tools were dropped. Multi-instance conflict tracking was removed entirely — `instance_tracker.py` is gone — which means HTTP server instances coexist freely without configuration warnings.
+
+**Review pass**
+
+End-to-end review pass before tagging: tightened path/PID redaction in error and diagnostics responses, locked `OPTIONS /mcp` behind auth, fixed cache poisoning on transient libzim errors, resolved redirects before rendering with cycle detection, preserved Unicode in heading slugs (Arabic, Chinese, Cyrillic, Japanese), made rate-limiting atomic, and split `zim_operations.py` into a `zim/` package via mixin classes.
 
 ## What's new in v0.9.0
 
@@ -97,10 +162,7 @@ Three pre-built workflows you can invoke as slash commands in MCP-aware clients:
 ### Power-user tools
 
 - `walk_namespace` — deterministic cursor-paginated namespace iteration (vs. `browse_namespace` which samples)
-- `warm_cache` — pre-populate cache for a ZIM file before a long session
-- `get_random_entry` — sample one random article (great with `/explore`)
-- `get_related_articles` — link-graph nearest neighbours (outbound, inbound, or both)
-- `cache_stats` / `cache_clear` — inspect and manage the in-memory cache
+- `get_related_articles` — outbound link-graph neighbours of a given entry
 
 ### MCP Resources
 
@@ -108,20 +170,23 @@ First use of the MCP **resources** primitive — your client's resource browser 
 
 - `zim://files` — index of all available ZIM files
 - `zim://{name}` — overview of one ZIM (metadata, namespaces, main page preview)
+- `zim://{name}/entry/{path}` *(new in 1.0.0)* — single entry served with native MIME type (clients must URL-encode `/` as `%2F` in the path segment)
 
 ### Reliability fixes
 
 - Namespace listing now deterministically surfaces minority namespaces (M, W, X, I) that random sampling could miss
 - Search filtering uses streaming scan instead of a hard 1000-hit cap (rare-mime-type filters now return matches that were previously hidden)
 - Error messages route by failure mode first (no more "check disk space" for "entry not found")
-- Phantom server-instance conflicts no longer reported (TOCTOU re-check before raising)
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-# Install from PyPI (recommended)
+# Install from PyPI as an isolated CLI tool (recommended)
+uv tool install openzim-mcp
+
+# Or install into your current environment with pip
 pip install openzim-mcp
 ```
 
@@ -143,7 +208,7 @@ uv sync --dev
 
 ### Prepare ZIM Files
 
-Download ZIM files (e.g., Wikipedia, Wiktionary, etc.) from the [Kiwix Library](https://browse.library.kiwix.org/) and place them in a directory:
+Download ZIM files (e.g., Wikipedia, Wiktionary, etc.) from the [Kiwix Library](https://library.kiwix.org/) and place them in a directory:
 
 ```bash
 mkdir ~/zim-files
@@ -157,7 +222,7 @@ mkdir ~/zim-files
 openzim-mcp /path/to/zim/files
 python -m openzim_mcp /path/to/zim/files
 
-# Advanced mode - all 26 specialized tools
+# Advanced mode - all 21 specialized tools
 openzim-mcp --mode advanced /path/to/zim/files
 python -m openzim_mcp --mode advanced /path/to/zim/files
 
@@ -174,19 +239,21 @@ make run ZIM_DIR=/path/to/zim/files
 OpenZIM MCP supports two modes:
 
 - **Simple Mode** (default): Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
-- **Advanced Mode**: Exposes all 26 specialized MCP tools for maximum control
-
-See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
+- **Advanced Mode**: Exposes all 21 specialized MCP tools for maximum control
 
 ### MCP Configuration
+
+Add the appropriate snippet to your MCP client's config file (`claude_desktop_config.json`, Cursor's MCP settings, etc.). The `mcpServers` wrapper is required by Claude Desktop, Cursor, and most other MCP clients.
 
 **Simple Mode (default):**
 
 ```json
 {
-  "openzim-mcp": {
-    "command": "openzim-mcp",
-    "args": ["/path/to/zim/files"]
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "openzim-mcp",
+      "args": ["/path/to/zim/files"]
+    }
   }
 }
 ```
@@ -195,9 +262,11 @@ See [Simple Mode Guide](docs/SIMPLE_MODE_GUIDE.md) for detailed information.
 
 ```json
 {
-  "openzim-mcp-advanced": {
-    "command": "openzim-mcp",
-    "args": ["--mode", "advanced", "/path/to/zim/files"]
+  "mcpServers": {
+    "openzim-mcp-advanced": {
+      "command": "openzim-mcp",
+      "args": ["--mode", "advanced", "/path/to/zim/files"]
+    }
   }
 }
 ```
@@ -206,13 +275,15 @@ Alternative configuration using Python module:
 
 ```json
 {
-  "openzim-mcp": {
-    "command": "python",
-    "args": [
-      "-m",
-      "openzim_mcp",
-      "/path/to/zim/files"
-    ]
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "python",
+      "args": [
+        "-m",
+        "openzim_mcp",
+        "/path/to/zim/files"
+      ]
+    }
   }
 }
 ```
@@ -221,17 +292,19 @@ For development (from source):
 
 ```json
 {
-  "openzim-mcp": {
-    "command": "uv",
-    "args": [
-      "--directory",
-      "/path/to/openzim-mcp",
-      "run",
-      "python",
-      "-m",
-      "openzim_mcp",
-      "/path/to/zim/files"
-    ]
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/openzim-mcp",
+        "run",
+        "python",
+        "-m",
+        "openzim_mcp",
+        "/path/to/zim/files"
+      ]
+    }
   }
 }
 ```
@@ -307,22 +380,52 @@ make check
 
 ```text
 openzim-mcp/
-├── openzim_mcp/             # Main package
-│   ├── __init__.py        # Package initialization
-│   ├── __main__.py        # Module entry point
-│   ├── main.py            # Main entry point
-│   ├── server.py          # MCP server implementation
-│   ├── config.py          # Configuration management
-│   ├── security.py        # Security and validation
-│   ├── cache.py           # Caching functionality
-│   ├── content_processor.py # Content processing
-│   ├── zim_operations.py  # ZIM file operations
-│   ├── exceptions.py      # Custom exceptions
-│   └── constants.py       # Application constants
-├── tests/                 # Test suite
-├── pyproject.toml        # Project configuration
-├── Makefile              # Development commands
-└── README.md             # This file
+├── openzim_mcp/                # Main package
+│   ├── __init__.py             # Package init, exports __version__ via importlib.metadata
+│   ├── __main__.py             # Module entry point (`python -m openzim_mcp`)
+│   ├── main.py                 # CLI entry point and arg parsing
+│   ├── server.py               # MCP server setup, transport selection
+│   ├── http_app.py             # Streamable HTTP / SSE transport, auth, CORS, health
+│   ├── config.py               # Pydantic config + env var bindings
+│   ├── defaults.py             # Default values and tunables
+│   ├── security.py             # Path validation, traversal protection, sanitization
+│   ├── error_messages.py       # User-facing error message catalog
+│   ├── exceptions.py           # Custom exception hierarchy
+│   ├── cache.py                # LRU cache with TTL
+│   ├── rate_limiter.py         # Per-client + global token-bucket rate limiting
+│   ├── content_processor.py    # HTML→text, heading-id, link extraction
+│   ├── async_operations.py     # asyncio helpers and timeouts
+│   ├── timeout_utils.py        # Timeout primitives
+│   ├── subscriptions.py        # MtimeWatcher and SubscriberRegistry
+│   ├── simple_tools.py         # Simple-mode `zim_query` tool
+│   ├── intent_parser.py        # Natural-language intent parsing
+│   ├── types.py                # Shared TypedDicts
+│   ├── constants.py            # Shared constants
+│   ├── zim_operations.py       # Backward-compat shim re-exporting from zim/ package
+│   ├── zim/                    # ZIM access (split from monolithic zim_operations.py)
+│   │   ├── __init__.py         # ZimOperations facade composed of mixins
+│   │   ├── archive.py          # Archive open/close, file listing, name resolution
+│   │   ├── content.py          # Entry retrieval, summaries, batch get
+│   │   ├── namespace.py        # Namespace listing, browse, walk
+│   │   ├── search.py           # Full-text + suggestion search; cursor pagination
+│   │   └── structure.py        # Article structure, links, related articles
+│   └── tools/                  # MCP tool registrations
+│       ├── __init__.py
+│       ├── file_tools.py       # list_zim_files
+│       ├── content_tools.py    # get_zim_entry, get_zim_entries
+│       ├── search_tools.py     # search_zim_file, search_all, find_entry_by_title
+│       ├── navigation_tools.py # browse_namespace, walk_namespace, search_with_filters, get_search_suggestions
+│       ├── structure_tools.py  # get_article_structure, extract_article_links, get_entry_summary, get_table_of_contents, get_binary_entry
+│       ├── metadata_tools.py   # get_zim_metadata, get_main_page, list_namespaces
+│       ├── server_tools.py     # get_server_health, get_server_configuration
+│       ├── resource_tools.py   # MCP resources (zim://files, zim://{name}/...)
+│       └── prompts.py          # MCP prompts (/research, /summarize, /explore)
+├── tests/                      # Test suite (pytest)
+├── website/                    # GitHub Pages site source
+├── pyproject.toml              # Project configuration
+├── Makefile                    # Development commands
+├── Dockerfile                  # Multi-stage container build
+└── README.md                   # This file
 ```
 
 ---
@@ -333,19 +436,22 @@ openzim-mcp/
 
 ### list_zim_files - List all ZIM files in allowed directories
 
-No parameters required.
+**Optional parameters:**
+
+- `name_filter` (string, default: ""): Case-insensitive substring; only files whose filename contains it are returned. Empty string lists everything. Useful for narrowing large listings (e.g. `"wikipedia"`, `"nginx"`).
 
 ### search_zim_file - Search within ZIM file content
 
 **Required parameters:**
 
 - `zim_file_path` (string): Path to the ZIM file
-- `query` (string): Search query term
+- `query` (string): Search query term — required unless `cursor` is provided.
 
 **Optional parameters:**
 
 - `limit` (integer, default: 10): Maximum number of results to return
 - `offset` (integer, default: 0): Starting offset for results (for pagination)
+- `cursor` (string): Opaque pagination token from a previous result's `next_cursor`. When provided, overrides `offset`/`limit` with the values encoded in the token, and supplies `query` if it was not given explicitly. Cursors are only valid for the query they were issued for.
 
 ### get_zim_entry - Get detailed content of a specific entry in a ZIM file
 
@@ -364,6 +470,25 @@ No parameters required.
 - **Path Mapping Cache**: Caches successful path mappings for improved performance on repeated access
 - **Enhanced Error Guidance**: Provides clear guidance when entries cannot be found, suggesting alternative approaches
 - **Transparent Operation**: Works seamlessly regardless of path encoding differences (spaces vs underscores, URL encoding, etc.)
+
+### get_zim_entries - Batch retrieve multiple ZIM entries in one call
+
+Pairs naturally with HTTP transport, where round-trip cost matters. Up to 50 entries per batch. Each entry resolves independently — per-entry failures do not abort the batch.
+
+**Required parameters:**
+
+- `entries` (list): Either a list of entry-path strings (paired with `zim_file_path` default) OR a list of `{zim_file_path, entry_path}` dicts (for multi-archive batches). Limit: 50 per batch.
+
+**Optional parameters:**
+
+- `zim_file_path` (string): Default archive path; required if `entries` are bare strings, optional when each dict carries its own.
+- `max_content_length` (integer): Per-entry max content length.
+
+**Returns:**
+JSON `{"results": [...], "succeeded": N, "failed": N}`. Each result includes `index` (input order), `success`, and either `content` or `error`.
+
+**Notes:**
+Rate limit is charged per entry, not per batch (anti-bypass).
 
 ### get_zim_metadata - Get ZIM file metadata from M namespace entries
 
@@ -407,6 +532,23 @@ JSON string containing namespace information with entry counts, descriptions, an
 **Returns:**
 JSON string containing namespace entries with titles, content previews, and pagination information.
 
+### walk_namespace - Deterministic cursor-paginated namespace iteration
+
+Unlike `browse_namespace` (which samples and may cap at 200 entries on large archives), `walk_namespace` scans the archive by entry ID from `cursor` onward. Pair the returned `next_cursor` with a follow-up call to walk the rest. `done: true` indicates iteration is complete. Use this for exhaustive enumeration — e.g. dumping every `M/*` metadata entry, or finding an entry whose path doesn't follow common patterns.
+
+**Required parameters:**
+
+- `zim_file_path` (string): Path to the ZIM file
+- `namespace` (string): Namespace to walk (C, M, W, X, A, I, etc.)
+
+**Optional parameters:**
+
+- `cursor` (integer, default: 0): Entry ID to resume from
+- `limit` (integer, default: 200, range: 1–500): Max entries per page
+
+**Returns:**
+JSON with `entries`, `next_cursor`, and `done` flag.
+
 ### search_with_filters - Search within ZIM file content with advanced filters
 
 **Required parameters:**
@@ -423,6 +565,39 @@ JSON string containing namespace entries with titles, content previews, and pagi
 
 **Returns:**
 Filtered search results with namespace and content type information.
+
+### search_all - Search across every ZIM file in the allowed directories
+
+Returns merged per-file results so the caller doesn't need to know which file holds the information. Files that can't be searched (corrupt, no full-text index) are skipped without aborting the rest.
+
+**Required parameters:**
+
+- `query` (string): Search query term
+
+**Optional parameters:**
+
+- `limit_per_file` (integer, default: 5, range: 1–50): Max hits per ZIM file
+- `limit` (integer): Alias for `limit_per_file`. If both are provided, `limit_per_file` wins.
+
+**Returns:**
+JSON containing per-file result groups and counts of files searched, files-with-results, and files that failed.
+
+### find_entry_by_title - Resolve a title to one or more entry paths
+
+Cheaper than full-text search when the caller knows the article title. Tries an exact normalized `C/<Title>` match first (fast path), then falls back to libzim's title-indexed suggestion search.
+
+**Required parameters:**
+
+- `zim_file_path` (string): Path to the ZIM file (used unless `cross_file=true`)
+- `title` (string): Title or partial title to resolve (case-insensitive)
+
+**Optional parameters:**
+
+- `cross_file` (boolean, default: false): If true, search across all allowed ZIM files
+- `limit` (integer, default: 10, range: 1–50): Max results to return
+
+**Returns:**
+JSON with `query`, ranked `results`, `fast_path_hit` flag, and `files_searched` count.
 
 ### get_search_suggestions - Get search suggestions and auto-complete
 
@@ -457,6 +632,22 @@ JSON string containing article structure including headings, sections, metadata,
 
 **Returns:**
 JSON string containing categorized links (internal, external, media) with titles and metadata.
+
+### get_related_articles - Find articles related to a given entry via outbound links
+
+Composes `extract_article_links` and deduplicates internal links, returning up to `limit` outbound targets. (Inbound discovery was removed — it required a bounded full-archive scan that was too expensive for interactive use; reach for full-text search instead.)
+
+**Required parameters:**
+
+- `zim_file_path` (string): Path to the ZIM file
+- `entry_path` (string): Source entry, e.g. 'C/Some_Article'
+
+**Optional parameters:**
+
+- `limit` (integer, default: 10, range: 1–100): Max results
+
+**Returns:**
+JSON with `outbound_results`.
 
 ### get_entry_summary - Get a concise article summary
 
@@ -648,7 +839,7 @@ A linear chain of amino acid residues is called a polypeptide. A protein contain
   "name": "get_zim_entry",
   "arguments": {
     "zim_file_path": "C:\\zim\\wikipedia_en_100_2025-08.zim",
-    "entry_path": "A/Test Article"
+    "entry_path": "C/Test Article"
   }
 }
 ```
@@ -658,8 +849,8 @@ Response (showing smart retrieval working):
 ```plain
 # Test Article
 
-Requested Path: A/Test Article
-Actual Path: A/Test_Article
+Requested Path: C/Test Article
+Actual Path: C/Test_Article
 Type: text/html
 
 ## Content
@@ -667,8 +858,8 @@ Type: text/html
 # Test Article
 
 This article demonstrates the smart retrieval system automatically handling
-path encoding differences. The system tried "A/Test Article" directly,
-then automatically searched and found "A/Test_Article".
+path encoding differences. The system tried "C/Test Article" directly,
+then automatically searched and found "C/Test_Article".
 
 ... [Content continues] ...
 ```
@@ -679,29 +870,41 @@ No parameters required.
 
 **Returns:**
 
-- Server status and performance metrics
-- Cache statistics
-- Configuration information
-- Instance tracking information
-- Conflict detection results
+- Overall status (`healthy` / `warning` / `error`)
+- Cache performance metrics (hits, misses, hit rate, size)
+- Directory and ZIM-file accessibility checks
+- Recommendations and warnings
+- Sanitized configuration summary
 
 **Example Response:**
 
 ```json
 {
+  "timestamp": "2026-05-03T10:42:11.123456",
   "status": "healthy",
   "server_name": "openzim-mcp",
-  "allowed_directories": 1,
-  "cache": {
-    "enabled": true,
-    "size": 1,
-    "max_size": 100,
-    "ttl_seconds": 3600
+  "uptime_info": {
+    "process_id": "[REDACTED]",
+    "started_at": "2026-05-03T10:30:00"
   },
-  "instance_tracking": {
-    "active_instances": 1,
-    "conflicts_detected": 0
-  }
+  "configuration": {
+    "allowed_directories": 1,
+    "cache_enabled": true,
+    "config_hash": "abc12345..."
+  },
+  "cache_performance": {
+    "enabled": true,
+    "size": 4,
+    "max_size": 100,
+    "hit_rate": 0.62
+  },
+  "health_checks": {
+    "directories_accessible": 1,
+    "zim_files_found": 3,
+    "permissions_ok": true
+  },
+  "recommendations": [],
+  "warnings": []
 }
 ```
 
@@ -710,7 +913,7 @@ No parameters required.
 No parameters required.
 
 **Returns:**
-Comprehensive server configuration including diagnostics, validation results, and conflict detection.
+Comprehensive server configuration plus diagnostics. Sensitive fields (PIDs, raw filesystem paths) are redacted/sanitized — diagnostic output is intended to be safe to paste into bug reports.
 
 **Example Response:**
 
@@ -718,65 +921,23 @@ Comprehensive server configuration including diagnostics, validation results, an
 {
   "configuration": {
     "server_name": "openzim-mcp",
-    "allowed_directories": ["/path/to/zim/files"],
+    "allowed_directories": ["[REDACTED]/zim"],
+    "allowed_directories_count": 1,
     "cache_enabled": true,
-    "config_hash": "abc123...",
-    "server_pid": 12345
+    "cache_max_size": 100,
+    "cache_ttl_seconds": 3600,
+    "content_max_length": 100000,
+    "content_snippet_length": 1000,
+    "search_default_limit": 10,
+    "config_hash": "abc12345...",
+    "server_pid": "[REDACTED]"
   },
   "diagnostics": {
-    "validation_status": "healthy",
-    "conflicts_detected": [],
+    "validation_status": "ok",
     "warnings": [],
     "recommendations": []
-  }
-}
-```
-
-### diagnose_server_state - Comprehensive server diagnostics
-
-No parameters required.
-
-**Returns:**
-Detailed diagnostic information including instance conflicts, configuration validation, file accessibility checks, and actionable recommendations.
-
-**Example Response:**
-
-```json
-{
-  "status": "healthy",
-  "server_info": {
-    "pid": 12345,
-    "server_name": "openzim-mcp",
-    "config_hash": "abc123..."
   },
-  "conflicts": [],
-  "issues": [],
-  "recommendations": ["Server appears to be running normally"],
-  "environment_checks": {
-    "directories_accessible": true,
-    "cache_functional": true
-  }
-}
-```
-
-### resolve_server_conflicts - Identify and resolve server conflicts
-
-No parameters required.
-
-**Returns:**
-Results of conflict resolution including cleanup actions and recommendations.
-
-**Example Response:**
-
-```json
-{
-  "status": "success",
-  "cleanup_results": {
-    "stale_instances_removed": 2
-  },
-  "conflicts_found": [],
-  "actions_taken": ["Removed 2 stale instance files"],
-  "recommendations": ["No active conflicts detected"]
+  "timestamp": "2026-05-03T10:42:11.123456"
 }
 ```
 
@@ -1086,71 +1247,15 @@ Response:
   "status": "healthy",
   "server_name": "openzim-mcp",
   "uptime_info": {
-    "process_id": 12345,
-    "started_at": "2025-09-14T10:30:00"
+    "process_id": "[REDACTED]",
+    "started_at": "2026-05-03T10:30:00"
   },
   "cache_performance": {
     "enabled": true,
     "size": 15,
     "max_size": 100,
     "hit_rate": 0.85
-  },
-  "instance_tracking": {
-    "active_instances": 1,
-    "conflicts_detected": 0
   }
-}
-```
-
-**Diagnosing server state:**
-
-```json
-{
-  "name": "diagnose_server_state"
-}
-```
-
-Response:
-
-```json
-{
-  "status": "healthy",
-  "server_info": {
-    "pid": 12345,
-    "server_name": "openzim-mcp",
-    "config_hash": "abc123def456..."
-  },
-  "conflicts": [],
-  "issues": [],
-  "recommendations": ["Server appears to be running normally. No issues detected."],
-  "environment_checks": {
-    "directories_accessible": true,
-    "cache_functional": true,
-    "zim_files_found": 5
-  }
-}
-```
-
-**Resolving server conflicts:**
-
-```json
-{
-  "name": "resolve_server_conflicts"
-}
-```
-
-Response:
-
-```json
-{
-  "status": "success",
-  "cleanup_results": {
-    "stale_instances_removed": 2,
-    "files_cleaned": ["/home/user/.openzim_mcp_instances/server_99999.json"]
-  },
-  "conflicts_found": [],
-  "actions_taken": ["Removed 2 stale instance files"],
-  "recommendations": ["No active conflicts detected after cleanup"]
 }
 ```
 
@@ -1178,7 +1283,7 @@ OpenZIM MCP implements an intelligent entry retrieval system that automatically 
 
 **Example Scenarios Handled Automatically:**
 
-- `A/Test Article` → `A/Test_Article` (space to underscore conversion)
+- `C/Test Article` → `C/Test_Article` (space to underscore conversion)
 - `C/Café` → `C/Caf%C3%A9` (URL encoding differences)
 - `A/Some-Page` → `A/Some_Page` (hyphen to underscore conversion)
 
@@ -1191,7 +1296,7 @@ OpenZIM MCP implements an intelligent entry retrieval system that automatically 
   "name": "get_zim_entry",
   "arguments": {
     "zim_file_path": "/path/to/file.zim",
-    "entry_path": "A/Article_Name"
+    "entry_path": "C/Article_Name"
   }
 }
 ```
@@ -1229,42 +1334,6 @@ or browse_namespace() to explore the file structure.
 
 ---
 
-## Multi-Server Instance Management
-
-OpenZIM MCP includes advanced multi-server instance tracking and conflict detection to ensure reliable operation when multiple server instances are running.
-
-### Instance Tracking Features
-
-- **Automatic Instance Registration**: Each server instance is automatically registered with a unique process ID and configuration hash
-- **Conflict Detection**: Detects when multiple servers with different configurations are accessing the same directories
-- **Stale Instance Cleanup**: Automatically identifies and cleans up orphaned instance files from terminated processes
-- **Configuration Validation**: Ensures all server instances use compatible configurations
-
-### Conflict Types
-
-1. **Configuration Mismatch**: Multiple servers with different settings accessing the same directories
-2. **Multiple Instances**: Multiple servers running simultaneously (may cause confusion)
-3. **Stale Instances**: Orphaned instance files from terminated processes
-
-### Automatic Conflict Warnings
-
-OpenZIM MCP automatically includes conflict warnings in search results and file listings when issues are detected:
-
-```plain
- **Server Conflict Detected**
- Configuration mismatch with server PID 12345. Search results may be inconsistent.
- Use 'resolve_server_conflicts()' to fix these issues.
-```
-
-### Best Practices
-
-- Use `diagnose_server_state()` regularly to check for conflicts
-- Run `resolve_server_conflicts()` to clean up stale instances
-- Ensure all server instances use the same configuration when accessing shared directories
-- Monitor server health with `get_server_health()` for instance tracking information
-
----
-
 ## Configuration
 
 OpenZIM MCP supports configuration through environment variables with the `OPENZIM_MCP_` prefix:
@@ -1292,6 +1361,14 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `OPENZIM_MCP_TOOL_MODE` | `simple` | Tool surface: `simple` (one `zim_query` tool) or `advanced` (21 specialized tools). Controlled by `--tool-mode` on the CLI as well. |
+| `OPENZIM_MCP_TRANSPORT` | `stdio` | Transport protocol: `stdio`, `http`, or `sse`. |
+| `OPENZIM_MCP_HOST` | `127.0.0.1` | HTTP/SSE bind host. Non-loopback hosts require `OPENZIM_MCP_AUTH_TOKEN`. |
+| `OPENZIM_MCP_PORT` | `8000` | HTTP/SSE bind port. |
+| `OPENZIM_MCP_AUTH_TOKEN` | *(unset)* | Bearer token required when binding HTTP/SSE to a non-loopback interface. |
+| `OPENZIM_MCP_CORS_ORIGINS` | *(empty)* | JSON array of allowed CORS origins for the HTTP transport. Wildcard `*` is rejected. |
+| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | Enable MCP resource subscriptions (HTTP transport only). When `false`, `subscribe` calls succeed but no updates fire. |
+| `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | Polling interval (1–60s) for the subscription mtime watcher. |
 | `OPENZIM_MCP_CACHE__ENABLED` | `true` | Enable/disable caching |
 | `OPENZIM_MCP_CACHE__MAX_SIZE` | `100` | Maximum cache entries |
 | `OPENZIM_MCP_CACHE__TTL_SECONDS` | `3600` | Cache TTL in seconds |
@@ -1413,7 +1490,7 @@ The project uses an **improved, consolidated release system** with automatic val
 - **Improved error handling** and rollback capabilities
 - **Branch protection** prevents broken releases
 
-For detailed instructions, see [Release Process Guide](docs/RELEASE_PROCESS_GUIDE.md).
+The release flow is implemented in [`.github/workflows/release-please.yml`](.github/workflows/release-please.yml) and [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 ### Commit Message Format
 

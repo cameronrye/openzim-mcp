@@ -2,7 +2,8 @@
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Union, cast
+import unicodedata
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import html2text
@@ -11,6 +12,83 @@ from bs4 import BeautifulSoup, Tag
 from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
 
 logger = logging.getLogger(__name__)
+
+# Link schemes that are not navigable as ZIM-internal links and should be
+# excluded from extracted-link results. Keeps results actionable for an LLM.
+NON_NAVIGABLE_LINK_SCHEMES = (
+    "javascript:",
+    "mailto:",
+    "tel:",
+    "data:",
+    "blob:",
+    "vbscript:",
+)
+
+
+def _slugify_heading(text: str) -> str:
+    """Generate a stable, URL-safe slug from heading text.
+
+    MediaWiki/MDN-style: NFKC-normalised, lowercased, whitespace collapsed
+    to hyphens, characters that aren't word characters or hyphens stripped,
+    leading/trailing hyphens removed. Unicode word characters (Arabic,
+    Chinese, Cyrillic, Japanese, etc.) are preserved — the previous
+    NFKD + ASCII-encode approach silently dropped non-Latin scripts and
+    broke TOC anchors for the majority of Wikipedia ZIM files by language.
+    Returns "" for empty/whitespace input so callers can decide how to
+    handle.
+    """
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFKC", text).strip().lower()
+    text = re.sub(r"\s+", "-", text)
+    text = re.sub(r"[^\w\-]", "", text, flags=re.UNICODE)
+    return text.strip("-")
+
+
+def resolve_heading_id(heading: Tag) -> Tuple[str, str]:
+    """Return (id, source) for a heading, falling back to anchors and slugs.
+
+    Resolution order:
+      1. ``id`` attribute on the heading itself.
+      2. ``id``/``name`` attribute of any descendant ``<a>`` (e.g. MediaWiki
+         puts ``<span class="mw-headline" id="...">`` inside the heading).
+      3. ``id``/``name`` of the immediately-preceding ``<a>`` sibling
+         (older MediaWiki and many gov.* pages put ``<a name="">`` right
+         before the heading).
+      4. Slugified heading text — best-effort synthetic anchor.
+
+    The second value is one of ``id``, ``descendant_anchor``,
+    ``preceding_anchor``, or ``slug`` so consumers know the provenance and
+    can decide whether the anchor is real (referenced in the HTML) or
+    synthetic.
+    """
+    direct = heading.get("id")
+    if direct and isinstance(direct, str) and direct.strip():
+        return direct.strip(), "id"
+
+    # Descendant anchors — typical MediaWiki ``mw-headline`` pattern.
+    for anchor in heading.find_all(["a", "span"]):
+        if not isinstance(anchor, Tag):
+            continue
+        candidate = anchor.get("id") or anchor.get("name")
+        if candidate and isinstance(candidate, str) and candidate.strip():
+            return candidate.strip(), "descendant_anchor"
+
+    # Preceding anchor — common in older HTML and government health pages
+    # where the named anchor sits *just* before the heading.
+    prev = heading.find_previous_sibling()
+    if isinstance(prev, Tag) and prev.name == "a":
+        candidate = prev.get("id") or prev.get("name")
+        if candidate and isinstance(candidate, str) and candidate.strip():
+            return candidate.strip(), "preceding_anchor"
+
+    # Synthetic slug — guarantees consumers always get a usable identifier
+    # even when the source HTML is anchor-free.
+    text = heading.get_text().strip()
+    slug = _slugify_heading(text)
+    if slug:
+        return slug, "slug"
+    return "", "none"
 
 
 class ParsedHTML:
@@ -52,6 +130,19 @@ class ParsedHTML:
 class ContentProcessor:
     """Handles HTML to text conversion and content processing."""
 
+    # Configuration for the per-call ``html2text.HTML2Text`` converter.
+    # ``HTML2Text`` keeps mutable parser state on ``self`` (``out``,
+    # ``outtextlist``, ``style``, ``pre``, ...), so a single shared instance
+    # is not safe to reuse across ``asyncio.to_thread`` calls — concurrent
+    # ``handle()`` invocations corrupt each other's output. We instead build
+    # a fresh converter per call (constructor is pure-Python and cheap) and
+    # apply these settings to it.
+    _HTML_IGNORE_LINKS = False
+    _HTML_IGNORE_IMAGES = True
+    _HTML_IGNORE_TABLES = False
+    _HTML_UNICODE_SNOB = True  # Use Unicode instead of ASCII
+    _HTML_BODY_WIDTH = 0  # No line wrapping
+
     def __init__(self, snippet_length: int = DEFAULT_SNIPPET_LENGTH):
         """
         Initialize content processor.
@@ -60,19 +151,22 @@ class ContentProcessor:
             snippet_length: Maximum length for content snippets
         """
         self.snippet_length = snippet_length
-        self._html_converter = self._create_html_converter()
         logger.debug(
             f"ContentProcessor initialized with snippet_length={snippet_length}"
         )
 
     def _create_html_converter(self) -> html2text.HTML2Text:
-        """Create and configure HTML to text converter."""
+        """Create and configure a fresh HTML to text converter.
+
+        A new instance is returned on every call so concurrent callers do
+        not share the converter's mutable parser state.
+        """
         converter = html2text.HTML2Text()
-        converter.ignore_links = False
-        converter.ignore_images = True
-        converter.ignore_tables = False
-        converter.unicode_snob = True  # Use Unicode instead of ASCII
-        converter.body_width = 0  # No line wrapping
+        converter.ignore_links = self._HTML_IGNORE_LINKS
+        converter.ignore_images = self._HTML_IGNORE_IMAGES
+        converter.ignore_tables = self._HTML_IGNORE_TABLES
+        converter.unicode_snob = self._HTML_UNICODE_SNOB
+        converter.body_width = self._HTML_BODY_WIDTH
         return converter
 
     def parse_html(self, html_content: str) -> ParsedHTML:
@@ -115,8 +209,9 @@ class ContentProcessor:
                 for element in soup.select(selector):
                     element.decompose()
 
-            # Convert to text using html2text
-            text = self._html_converter.handle(str(soup))
+            # Convert to text using a per-call ``HTML2Text`` so concurrent
+            # callers cannot corrupt each other's parser state.
+            text = self._create_html_converter().handle(str(soup))
 
             # Clean up excess empty lines
             text = re.sub(r"\n{3,}", "\n\n", text)
@@ -150,8 +245,9 @@ class ContentProcessor:
                 for element in soup.select(selector):
                     element.decompose()
 
-            # Convert to text using html2text
-            text = self._html_converter.handle(str(soup))
+            # Convert to text using a per-call ``HTML2Text`` so concurrent
+            # callers cannot corrupt each other's parser state.
+            text = self._create_html_converter().handle(str(soup))
 
             # Clean up excess empty lines
             text = re.sub(r"\n{3,}", "\n\n", text)
@@ -323,16 +419,31 @@ class ContentProcessor:
             # the document, breaking the position contract and the implicit
             # alignment with the sections list built below (which DOES walk the
             # tree in document order).
+            #
+            # Collision disambiguation: when two headings share the same
+            # synthetic slug (e.g. three "Intro" h1s), MediaWiki appends
+            # ``_2``, ``_3`` to keep anchors unique. Mirror that. Explicit
+            # author-provided ids (``id_source != "slug"``) pass through
+            # untouched — disambiguating real anchors would silently break
+            # cross-page links.
             headings: List[Dict[str, Any]] = []
+            slug_counts: Dict[str, int] = {}
             for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
                 if isinstance(heading, Tag) and heading.name:
                     text = heading.get_text().strip()
                     if text:
+                        anchor_id, id_source = resolve_heading_id(heading)
+                        if anchor_id and id_source == "slug":
+                            count = slug_counts.get(anchor_id, 0) + 1
+                            slug_counts[anchor_id] = count
+                            if count > 1:
+                                anchor_id = f"{anchor_id}_{count}"
                         headings.append(
                             {
                                 "level": int(heading.name[1]),
                                 "text": text,
-                                "id": heading.get("id", ""),
+                                "id": anchor_id,
+                                "id_source": id_source,
                                 "position": len(headings),
                             }
                         )
@@ -452,6 +563,13 @@ class ContentProcessor:
                         title = str(title_attr) if title_attr else ""
 
                         if not href:
+                            continue
+
+                        # Filter non-navigable schemes (javascript:, mailto:,
+                        # tel:, data:, blob:) — they pollute results without
+                        # being useful as ZIM-internal navigation targets.
+                        href_lower = href.lower()
+                        if href_lower.startswith(NON_NAVIGABLE_LINK_SCHEMES):
                             continue
 
                         link_info = {"url": href, "text": text, "title": title}

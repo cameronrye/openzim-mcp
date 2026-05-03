@@ -1,6 +1,6 @@
 """Tests for simple tools functionality."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -206,6 +206,41 @@ class TestIntentParser:
         assert intent == "binary"
         assert params.get("include_data") is False
 
+    def test_param_boost_is_small_increment(self):
+        """Param boost on a low-base intent must be small (+0.05, not +0.1).
+
+        Regression guard for M17: a low-priority intent (like generic
+        ``search`` at base 0.7) gets a small confidence boost when params
+        extract cleanly. The increment must stay small (cap at 0.85) so a
+        low-priority intent can't masquerade as a high-priority one.
+        """
+        # 'search Biology' matches only the generic search intent (base 0.7).
+        # With params extracted, confidence boosts to 0.75 (was 0.8 pre-fix).
+        intent, params, conf = IntentParser.parse_intent("search Biology")
+        assert intent == "search"
+        assert params.get("query")
+        # Pre-fix: conf == 0.8 (base 0.7 + 0.1). Post-fix: 0.75 (base + 0.05).
+        assert conf == pytest.approx(0.75), (
+            f"boost increment too large: confidence={conf}; expected 0.75 "
+            "(base 0.7 + 0.05). Pre-fix value was 0.8 which is the M17 bug."
+        )
+
+    def test_param_boost_skipped_when_base_already_high(self):
+        """When base_confidence >= 0.8, no boost is applied.
+
+        High-base intents are already authoritative; boosting them risks
+        pushing identical-spec competitors past each other based purely on
+        whether params extract. Tests on a high-base param-extracting intent
+        (toc, base 0.95) — confidence must stay at the base, not jump to 1.0.
+        """
+        intent, params, conf = IntentParser.parse_intent("table of contents of Biology")
+        assert intent == "toc"
+        assert params.get("entry_path") == "Biology"
+        # toc has base 0.95 — no boost should apply because base >= 0.8.
+        assert conf == pytest.approx(
+            0.95
+        ), f"high-base intent received an unwanted boost: confidence={conf}"
+
 
 class TestSimpleToolsHandler:
     """Test simple tools handler."""
@@ -352,7 +387,7 @@ class TestSimpleToolsHandler:
 
 
 class TestNewIntentPatterns:
-    """v0.9.0 intent patterns: search_all, walk_namespace, warm_cache, etc."""
+    """v0.9.0 intent patterns: search_all, walk_namespace, etc."""
 
     def test_search_all_intent(self):
         """Test that 'search all files for X' routes to search_all."""
@@ -369,13 +404,6 @@ class TestNewIntentPatterns:
         intent, _params, _ = IntentParser.parse_intent("walk namespace M")
         assert intent == "walk_namespace"
 
-    def test_warm_cache_intent(self):
-        """Test that 'warm cache' routes to warm_cache."""
-        from openzim_mcp.simple_tools import IntentParser
-
-        intent, _params, _ = IntentParser.parse_intent("warm cache")
-        assert intent == "warm_cache"
-
     def test_find_by_title_intent(self):
         """Test that 'find article titled X' routes to find_by_title."""
         from openzim_mcp.simple_tools import IntentParser
@@ -386,13 +414,6 @@ class TestNewIntentPatterns:
         assert intent == "find_by_title"
         assert "Photosynthesis" in str(params.get("title", ""))
 
-    def test_random_entry_intent(self):
-        """Test that 'random article' routes to random_entry."""
-        from openzim_mcp.simple_tools import IntentParser
-
-        intent, _params, _ = IntentParser.parse_intent("random article")
-        assert intent == "random_entry"
-
     def test_related_intent(self):
         """Test that 'articles related to X' routes to related."""
         from openzim_mcp.simple_tools import IntentParser
@@ -402,16 +423,402 @@ class TestNewIntentPatterns:
         )
         assert intent == "related"
 
-    def test_cache_stats_intent(self):
-        """Test that 'cache stats' routes to cache_stats."""
+    def test_search_all_extractor_has_redos_protection(self, monkeypatch):
+        """The search_all param extractor must time out under ReDoS.
+
+        Every other regex in ``simple_tools.py`` is wrapped via the
+        ``safe_regex_*`` helpers (which apply a threading timeout). The
+        ``search_all`` parameter extractor previously used a bare
+        ``re.sub`` with a backtracking-prone lazy quantifier; this test
+        ensures the wrapped variant aborts and falls back to the raw
+        query on timeout, rather than hanging the worker thread.
+
+        Strategy: monkeypatch ``re.sub`` (used inside the lambda) to
+        sleep longer than the regex timeout. The fixed code wraps the
+        call in ``run_with_timeout`` and catches ``RegexTimeoutError``,
+        so it should still return a valid params dict whose ``query``
+        falls back to the stripped input.
+        """
+        import re as _re
+        import time
+
+        from openzim_mcp import simple_tools
+
+        # Patch re.sub on the simple_tools module to simulate a hanging
+        # regex. The fix wraps the call in run_with_timeout, so this
+        # must time out (not hang the test) and fall back to the raw
+        # query.
+        def slow_sub(*args, **kwargs):
+            time.sleep(5)
+            return _re.sub(*args, **kwargs)
+
+        monkeypatch.setattr(simple_tools.re, "sub", slow_sub)
+
+        # Force the search_all extractor path. Use the IntentParser
+        # internal helper directly so we don't drag in slow classifier
+        # patterns.
+        start = time.monotonic()
+        params = simple_tools.IntentParser._extract_params(
+            "search all files for python", "search_all"
+        )
+        elapsed = time.monotonic() - start
+
+        # Must respect the configured regex timeout (1s default), with
+        # a small budget for thread setup / fallback path.
+        assert elapsed < 2.0, (
+            f"search_all extractor took {elapsed:.3f}s — timeout wrapping "
+            "is missing or broken"
+        )
+        # And it must still return a usable query (fallback path).
+        assert "query" in params
+        assert params["query"]
+
+
+class TestSimpleToolsOptionsPassthrough:
+    """The dispatch handler must forward caller-supplied limits to backends.
+
+    Each branch was previously hardcoding its limit (``limit_per_file=5``,
+    ``limit=200``, ``limit=10``, etc.), silently ignoring the ``limit``
+    parameter the caller passed to ``zim_query``. These tests pin the
+    passthrough so future refactors don't reintroduce the regression.
+    """
+
+    def test_search_all_forwards_options_limit_to_limit_per_file(self):
+        """search_all must use options['limit'] (not hardcoded 5)."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.search_all.return_value = '{"hits": []}'
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        handler.handle_zim_query("search all files for python", options={"limit": 25})
+        # Backend must receive the caller's limit, not the hardcoded default.
+        _args, kwargs = zim_ops.search_all.call_args
+        assert kwargs.get("limit_per_file") == 25
+
+    def test_walk_namespace_forwards_options_limit_and_offset(self):
+        """walk_namespace must use options['offset'] as cursor and options['limit']."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.walk_namespace.return_value = '{"entries": []}'
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        handler.handle_zim_query(
+            "walk namespace M",
+            options={"limit": 50, "offset": 1234},
+        )
+        _args, kwargs = zim_ops.walk_namespace.call_args
+        assert kwargs.get("cursor") == 1234
+        assert kwargs.get("limit") == 50
+
+    def test_find_by_title_forwards_options_limit(self):
+        """find_by_title must use options['limit'] (not hardcoded 10)."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.find_entry_by_title.return_value = '{"results": []}'
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        handler.handle_zim_query(
+            "find article titled Photosynthesis", options={"limit": 30}
+        )
+        _args, kwargs = zim_ops.find_entry_by_title.call_args
+        assert kwargs.get("limit") == 30
+
+    def test_related_forwards_options_limit(self):
+        """The related intent must use options['limit'] (not hardcoded 10)."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        zim_ops = MagicMock()
+        zim_ops.get_related_articles.return_value = '{"outbound_results": []}'
+        zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        handler = SimpleToolsHandler(zim_ops)
+
+        handler.handle_zim_query(
+            "articles related to Climate_Change", options={"limit": 42}
+        )
+        _args, kwargs = zim_ops.get_related_articles.call_args
+        assert kwargs.get("limit") == 42
+
+
+class TestIntentParserBatchEntries:
+    """Test intent patterns for the get_zim_entries (batch) tool."""
+
+    def test_fetch_articles_routes_to_get_zim_entries(self):
+        """Plural 'articles' cue with fetch verb routes to batch tool."""
         from openzim_mcp.simple_tools import IntentParser
 
-        intent, _params, _ = IntentParser.parse_intent("cache stats")
-        assert intent == "cache_stats"
+        intent, _params, _ = IntentParser.parse_intent("fetch articles A/Foo and A/Bar")
+        assert intent == "get_zim_entries"
 
-    def test_clear_cache_intent(self):
-        """Test that 'clear cache' routes to cache_clear."""
+    def test_get_entries_routes_to_get_zim_entries(self):
+        """Explicit 'entries' cue routes to batch tool."""
         from openzim_mcp.simple_tools import IntentParser
 
-        intent, _params, _ = IntentParser.parse_intent("clear cache")
-        assert intent == "cache_clear"
+        intent, _params, _ = IntentParser.parse_intent("get entries A/Foo, A/Bar")
+        assert intent == "get_zim_entries"
+
+    def test_singular_get_article_still_routes_to_get_article(self):
+        """The new plural pattern must NOT shadow the existing singular intent."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, _params, _ = IntentParser.parse_intent("get article A/Foo")
+        assert intent == "get_article"
+
+    def test_get_zim_entries_extracts_path_list(self):
+        """parse_intent must extract namespace/path tokens into params['entries']."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent(
+            "fetch entries A/Foo and A/Bar from wikipedia.zim"
+        )
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "A/Bar"]
+
+    def test_get_zim_entries_extracts_multiple_namespaces(self):
+        """Path extraction handles realistic comma-and-and joined lists."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent(
+            "fetch articles A/Foo, A/Bar, and M/Image.png"
+        )
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "A/Bar", "M/Image.png"]
+
+    def test_get_zim_entries_strips_trailing_sentence_punctuation(self):
+        """Trailing sentence punctuation must not glue onto the last path."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent("fetch entries A/Foo and A/Bar.")
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "A/Bar"]
+
+    def test_get_zim_entries_strips_various_trailing_punctuation(self):
+        """Other trailing punctuation (?, !, ,, ;, :) is also stripped."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent(
+            "fetch entries A/Foo? and A/Bar! and A/Baz;"
+        )
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "A/Bar", "A/Baz"]
+
+    def test_get_zim_entries_preserves_internal_dots(self):
+        """Stripping must not eat legitimate internal dots (e.g. file extensions)."""
+        from openzim_mcp.simple_tools import IntentParser
+
+        intent, params, _ = IntentParser.parse_intent(
+            "fetch entries A/Foo and M/Image.png."
+        )
+        assert intent == "get_zim_entries"
+        assert params.get("entries") == ["A/Foo", "M/Image.png"]
+
+
+class TestGetZimEntriesDispatch:
+    """H15 regression: get_zim_entries intent must dispatch to batch fetch."""
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        """Mock ZimOperations with single-file auto-select and a get_entries spy."""
+        mock = Mock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/test/wikipedia.zim", "name": "wikipedia.zim"}
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/test/wikipedia.zim", "name": "wikipedia.zim"}]'
+        )
+        mock.search_zim_file.return_value = "search-results-should-not-be-used"
+        mock.get_entries.return_value = '{"results": [], "succeeded": 0, "failed": 0}'
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        """Build a SimpleToolsHandler wired to the mock backend."""
+        return SimpleToolsHandler(mock_zim_operations)
+
+    def test_get_zim_entries_intent_dispatches_to_batch_fetch(
+        self, handler, mock_zim_operations
+    ):
+        """A 'fetch entries X and Y' query must dispatch to get_entries."""
+        handler.handle_zim_query(
+            "fetch entries A/Foo and A/Bar from wikipedia.zim",
+            zim_file_path="/test/wikipedia.zim",
+        )
+
+        assert (
+            mock_zim_operations.get_entries.called
+        ), "get_entries was not called; intent fell through to default"
+        assert (
+            not mock_zim_operations.search_zim_file.called
+        ), "search_zim_file was called; intent fell through instead of dispatching"
+
+        call_args = mock_zim_operations.get_entries.call_args
+        # get_entries(entries=[{zim_file_path, entry_path}, ...])
+        entries_arg = (
+            call_args.args[0] if call_args.args else call_args.kwargs.get("entries")
+        )
+        assert isinstance(entries_arg, list) and len(entries_arg) == 2
+        assert all(isinstance(e, dict) for e in entries_arg)
+        assert [e["entry_path"] for e in entries_arg] == ["A/Foo", "A/Bar"]
+        assert all(e["zim_file_path"] == "/test/wikipedia.zim" for e in entries_arg)
+
+    def test_get_zim_entries_intent_with_no_paths_returns_help(
+        self, handler, mock_zim_operations
+    ):
+        """If paths can't be extracted, return help, not search results."""
+        # Query matches the get_zim_entries pattern but has no namespace/path
+        # tokens — the dispatch must surface a help message rather than fall
+        # through to search.
+        result = handler.handle_zim_query(
+            "fetch articles please",
+            zim_file_path="/test/wikipedia.zim",
+        )
+
+        assert (
+            not mock_zim_operations.get_entries.called
+        ), "get_entries should not be invoked when no paths were extracted"
+        assert (
+            not mock_zim_operations.search_zim_file.called
+        ), "intent should not fall through to generic search"
+        # Help message should mention namespace/path syntax
+        lowered = result.lower()
+        assert (
+            "namespace/path" in lowered
+            or "extract entry paths" in lowered
+            or "missing entry paths" in lowered
+        ), f"unexpected help response: {result!r}"
+
+
+class TestExplicitZimPathHonored:
+    """Regression: H14 - explicit zim_file_path must not be overwritten."""
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        """Create mock ZimOperations that records the zim path it receives."""
+        mock = Mock()
+        # Auto-select would return a different path; if the fix is wrong and
+        # the intent branch calls _auto_select_zim_file, this is what would
+        # be passed through to the backend.
+        mock.list_zim_files_data.return_value = [
+            {"path": "/auto/selected.zim", "name": "selected.zim"}
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/auto/selected.zim", "name": "selected.zim"}]'
+        )
+        mock.walk_namespace.return_value = "{}"
+        mock.find_entry_by_title.return_value = "{}"
+        mock.get_related_articles.return_value = "{}"
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        """Build a SimpleToolsHandler wired to the mock backend."""
+        return SimpleToolsHandler(mock_zim_operations)
+
+    @pytest.mark.parametrize(
+        "intent_query,backend_attr",
+        [
+            ("walk namespace M", "walk_namespace"),
+            ("find article titled Photosynthesis", "find_entry_by_title"),
+            ("articles related to Climate_Change", "get_related_articles"),
+        ],
+    )
+    def test_simple_tools_uses_explicit_zim_path(
+        self, handler, mock_zim_operations, intent_query, backend_attr
+    ):
+        """The caller-supplied zim_file_path must reach the backend.
+
+        Previously, walk_namespace / find_by_title / related branches
+        called self._auto_select_zim_file() again, silently overwriting
+        the explicit path the caller supplied. Now the explicit path
+        must be honored.
+        """
+        explicit = "/zims/wikipedia_en_simple.zim"
+        handler.handle_zim_query(intent_query, zim_file_path=explicit)
+
+        backend = getattr(mock_zim_operations, backend_attr)
+        assert backend.called, f"{backend_attr} was not called"
+        # First positional arg is the zim path
+        call_args = backend.call_args
+        actual_path = (
+            call_args.args[0]
+            if call_args.args
+            else call_args.kwargs.get("zim_file_path")
+        )
+        assert (
+            actual_path == explicit
+        ), f"{backend_attr}: expected {explicit}, got {actual_path}"
+
+
+class TestLowConfidenceNoteAppendedConsistently:
+    """Regression for finding 8.13: every intent branch appends the note.
+
+    The low-confidence note must be appended whenever confidence < 0.6.
+    Previously the ``search_all`` / ``walk_namespace`` / ``find_by_title``
+    / ``related`` branches in ``handle_zim_query`` returned the backend
+    response verbatim, so callers got no warning when the query
+    interpretation was uncertain. Every other intent branch already
+    appended the note; these four were drift.
+    """
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        """Build a mock backend whose intent methods return JSON sentinels."""
+        mock = Mock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/zims/test.zim", "name": "test.zim"}
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/zims/test.zim", "name": "test.zim"}]'
+        )
+        mock.search_all.return_value = '{"results": []}'
+        mock.walk_namespace.return_value = '{"entries": []}'
+        mock.find_entry_by_title.return_value = '{"matches": []}'
+        mock.get_related_articles.return_value = '{"related": []}'
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        """Wire a ``SimpleToolsHandler`` to the mock backend."""
+        return SimpleToolsHandler(mock_zim_operations)
+
+    @pytest.mark.parametrize(
+        "intent,params",
+        [
+            ("search_all", {"query": "anything"}),
+            ("walk_namespace", {"namespace": "C"}),
+            ("find_by_title", {"title": "Photosynthesis"}),
+            ("related", {"entry_path": "C/Photosynthesis"}),
+        ],
+    )
+    def test_low_confidence_note_appended_for_all_intents(
+        self, handler, intent, params
+    ):
+        """Force confidence below 0.6 and assert every branch appends the note."""
+        explicit = "/zims/test.zim"
+
+        # Pin intent + params and force confidence below the 0.6 threshold so
+        # the low-confidence branch fires deterministically.
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=(intent, params, 0.4),
+        ):
+            result = handler.handle_zim_query("anything", zim_file_path=explicit)
+
+        assert "moderate confidence" in result, (
+            f"intent {intent!r}: low-confidence note missing from response: "
+            f"{result!r}"
+        )

@@ -62,6 +62,39 @@ class TestZimOperations:
         assert "test1.zim" in result
         assert "test2.zim" in result
 
+    def test_list_zim_files_skips_symlinks_outside_allowed_root(
+        self, zim_operations: ZimOperations, temp_dir: Path, tmp_path_factory
+    ):
+        """A symlink inside the allowed dir pointing outside MUST be skipped.
+
+        Without this guard, ``Path.glob("**/*.zim")`` follows symlinks and
+        the resolved target — which can live anywhere on the filesystem —
+        gets included in the listing, defeating the allowed-directories
+        access boundary.
+        """
+        # Make a real ZIM file outside the allowed directory.
+        outside_dir = tmp_path_factory.mktemp("outside")
+        outside_zim = outside_dir / "secret.zim"
+        outside_zim.write_text("outside content")
+
+        # Plant a symlink inside the allowed dir pointing at the outside file.
+        link_inside = temp_dir / "evil.zim"
+        try:
+            link_inside.symlink_to(outside_zim)
+        except (OSError, NotImplementedError):
+            pytest.skip("filesystem does not support symlinks")
+
+        # Also drop a normal ZIM file inside so we know the scan worked.
+        legit = temp_dir / "ok.zim"
+        legit.write_text("inside content")
+
+        result = zim_operations.list_zim_files()
+        assert "ok.zim" in result, "scan must surface legitimate inside file"
+        assert "evil.zim" not in result, "symlink to outside path must be filtered out"
+        assert (
+            "secret.zim" not in result
+        ), "resolved target outside allowed root must not appear"
+
     def test_list_zim_files_caching(
         self, zim_operations: ZimOperations, temp_dir: Path
     ):
@@ -159,6 +192,8 @@ class TestZimOperations:
         mock_archive.return_value = mock_archive_instance
 
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
+        mock_entry.path = "A/Test_Article"
         mock_entry.title = "Test Article"
         mock_item = MagicMock()
         mock_item.mimetype = "text/html"
@@ -178,20 +213,35 @@ class TestZimOperations:
     def test_search_zim_file_caching(
         self, zim_operations: ZimOperations, temp_dir: Path
     ):
-        """Test that search results are cached."""
+        """Test that successful search results are cached.
+
+        Note: zero-result responses are intentionally not cached (see
+        ``tests/test_cache_control.py``); this test exercises a non-empty
+        result set to verify the caching path.
+        """
         # Create a test ZIM file
         zim_file = temp_dir / "test.zim"
         zim_file.write_text("test content")
 
         with patch("openzim_mcp.zim_operations.Archive") as mock_archive:
-            # Mock successful search
+            # Mock successful search with at least one result so the response
+            # is cacheable.
             mock_archive_instance = MagicMock()
             mock_archive.return_value = mock_archive_instance
 
             mock_searcher = MagicMock()
             mock_search = MagicMock()
-            mock_search.getEstimatedMatches.return_value = 0
+            mock_search.getEstimatedMatches.return_value = 1
+            mock_search.getResults.return_value = ["A/Hit"]
             mock_searcher.search.return_value = mock_search
+
+            mock_entry = MagicMock()
+            mock_entry.title = "Hit"
+            mock_item = MagicMock()
+            mock_item.mimetype = "text/html"
+            mock_item.content = b"<html><body>hello</body></html>"
+            mock_entry.get_item.return_value = mock_item
+            mock_archive_instance.get_entry_by_path.return_value = mock_entry
 
             with (
                 patch(
@@ -228,8 +278,12 @@ class TestZimOperations:
             mock_archive_instance.article_count = 80
             mock_archive_instance.media_count = 20
 
-            # Mock metadata entry
+            # Mock metadata entry. ``is_redirect`` defaults to a truthy
+            # MagicMock; the metadata extractor now follows redirect chains
+            # so an unset value sends every metadata lookup down the
+            # redirect-resolution path and skips it as runaway.
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
             mock_item = MagicMock()
             mock_item.content = b"Test Title"
             mock_entry.get_item.return_value = mock_item
@@ -252,6 +306,7 @@ class TestZimOperations:
             # Mock archive with main page
             mock_archive_instance = MagicMock()
             mock_main_entry = MagicMock()
+            mock_main_entry.is_redirect = False
             mock_main_entry.title = "Main Page"
             mock_main_entry.path = "W/mainPage"
 
@@ -391,13 +446,20 @@ class TestZimOperations:
             assert "total_in_namespace" in result
 
     def test_browse_namespace_invalid_params(self, zim_operations: ZimOperations):
-        """Test namespace browsing with invalid parameters."""
+        """Test namespace browsing with invalid parameters.
+
+        Parameter-validation failures raise ``OpenZimMcpValidationError``,
+        distinct from archive failures so the tool layer can surface a
+        targeted error message to callers.
+        """
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace("test.zim", "C", limit=0)
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Offset must be non-negative"):
+        with pytest.raises(
+            OpenZimMcpValidationError, match="Offset must be non-negative"
+        ):
             zim_operations.browse_namespace("test.zim", "C", offset=-1)
 
         with pytest.raises(
@@ -405,6 +467,20 @@ class TestZimOperations:
             match="Access denied - Path is outside allowed directories",
         ):
             zim_operations.browse_namespace("test.zim", "ABC", limit=10)
+
+    def test_browse_namespace_raises_validation_error_for_bad_limit(
+        self, zim_operations: ZimOperations
+    ):
+        """Parameter validation should raise OpenZimMcpValidationError, not Archive."""
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.browse_namespace("test.zim", "A", limit=0, offset=0)
+
+    def test_browse_namespace_raises_validation_error_for_bad_namespace(
+        self, zim_operations: ZimOperations
+    ):
+        """Empty namespace should raise OpenZimMcpValidationError."""
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.browse_namespace("test.zim", "", limit=10, offset=0)
 
     def test_search_with_filters(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test filtered search functionality."""
@@ -747,32 +823,193 @@ class TestZimOperations:
             patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher),
             patch("openzim_mcp.zim_operations.Query"),
         ):
-            result = zim_operations._perform_search(mock_archive, "test", 10, 0)
+            result, total = zim_operations._perform_search(mock_archive, "test", 10, 0)
             assert "No search results found" in result
+            assert total == 0
 
     def test_get_entry_content_with_redirect(
         self, zim_operations: ZimOperations, tmp_path: Path
     ):
-        """Test _get_entry_content with redirect entry."""
+        """Test _get_entry_content with a single-step redirect.
+
+        Single-hop redirects must resolve to the target's path/title and
+        return the target's content.
+        """
         from unittest.mock import MagicMock
 
         mock_archive = MagicMock()
-        mock_entry = MagicMock()
-        mock_entry.is_redirect = True
-        mock_entry.get_redirect_entry.return_value = mock_entry
-        mock_entry.title = "Test Article"
 
-        mock_item = MagicMock()
-        mock_item.content = b"<html>Test content</html>"
-        mock_item.mimetype = "text/html"
-        mock_entry.get_item.return_value = mock_item
+        # Target (resolved) entry.
+        target_entry = MagicMock()
+        target_entry.is_redirect = False
+        target_entry.path = "A/United_States"
+        target_entry.title = "United States"
+        target_item = MagicMock()
+        target_item.content = b"<html>Target content</html>"
+        target_item.mimetype = "text/html"
+        target_entry.get_item.return_value = target_item
 
-        mock_archive.get_entry_by_path.return_value = mock_entry
+        # Redirect entry pointing at the target.
+        redirect_entry = MagicMock()
+        redirect_entry.is_redirect = True
+        redirect_entry.path = "A/USA"
+        redirect_entry.title = "USA"
+        redirect_entry.get_redirect_entry.return_value = target_entry
 
-        result = zim_operations._get_entry_content(
-            mock_archive, "A/Test", 1000, tmp_path / "test.zim"
+        mock_archive.get_entry_by_path.return_value = redirect_entry
+
+        result, content_ok = zim_operations._get_entry_content(
+            mock_archive, "A/USA", 1000, tmp_path / "test.zim"
         )
-        assert "Test Article" in result
+        # Response should reflect the resolved target, not the redirect.
+        assert "United States" in result
+        assert "A/United_States" in result
+        assert content_ok is True
+
+    def test_get_entry_content_redirect_resolution_display(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
+        """Redirect resolution should surface target's Actual Path and Title."""
+        from unittest.mock import MagicMock
+
+        mock_archive = MagicMock()
+
+        target_entry = MagicMock()
+        target_entry.is_redirect = False
+        target_entry.path = "A/United_States"
+        target_entry.title = "United States"
+        target_item = MagicMock()
+        target_item.content = b"Target body"
+        target_item.mimetype = "text/plain"
+        target_entry.get_item.return_value = target_item
+
+        redirect_entry = MagicMock()
+        redirect_entry.is_redirect = True
+        redirect_entry.path = "A/USA"
+        redirect_entry.title = "USA"
+        redirect_entry.get_redirect_entry.return_value = target_entry
+
+        mock_archive.get_entry_by_path.return_value = redirect_entry
+
+        result, content_ok = zim_operations._get_entry_content(
+            mock_archive, "A/USA", 1000, tmp_path / "test.zim"
+        )
+
+        # Title heading should reflect the target.
+        assert result.startswith("# United States")
+        # When requested != actual, Requested Path / Actual Path are shown.
+        assert "Requested Path: A/USA" in result
+        assert "Actual Path: A/United_States" in result
+        # The redirect's title must NOT appear as the heading.
+        assert not result.startswith("# USA")
+        assert content_ok is True
+
+    def test_get_entry_content_redirect_cycle_detection(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
+        """A redirect cycle (A->B->A) must raise OpenZimMcpArchiveError."""
+        from unittest.mock import MagicMock
+
+        mock_archive = MagicMock()
+
+        entry_a = MagicMock()
+        entry_a.is_redirect = True
+        entry_a.path = "A/A"
+        entry_a.title = "A"
+
+        entry_b = MagicMock()
+        entry_b.is_redirect = True
+        entry_b.path = "A/B"
+        entry_b.title = "B"
+
+        # A -> B -> A (cycle).
+        entry_a.get_redirect_entry.return_value = entry_b
+        entry_b.get_redirect_entry.return_value = entry_a
+
+        mock_archive.get_entry_by_path.return_value = entry_a
+
+        with pytest.raises(OpenZimMcpArchiveError) as exc_info:
+            zim_operations._get_entry_content(
+                mock_archive, "A/A", 1000, tmp_path / "test.zim"
+            )
+
+        msg = str(exc_info.value).lower()
+        assert "cycle" in msg or "redirect" in msg
+
+    def test_get_entry_content_redirect_depth_limit(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
+        """A redirect chain longer than MAX_REDIRECT_DEPTH must raise."""
+        from unittest.mock import MagicMock
+
+        mock_archive = MagicMock()
+
+        # Build a long chain of distinct redirects that never resolves.
+        entries = []
+        for i in range(20):
+            e = MagicMock()
+            e.is_redirect = True
+            e.path = f"A/r{i}"
+            e.title = f"r{i}"
+            entries.append(e)
+        for i in range(len(entries) - 1):
+            entries[i].get_redirect_entry.return_value = entries[i + 1]
+        # Last one keeps redirecting to itself's neighbour to keep chain growing.
+        entries[-1].get_redirect_entry.return_value = entries[-2]
+
+        mock_archive.get_entry_by_path.return_value = entries[0]
+
+        with pytest.raises(OpenZimMcpArchiveError) as exc_info:
+            zim_operations._get_entry_content(
+                mock_archive, "A/r0", 1000, tmp_path / "test.zim"
+            )
+
+        # Tighten: must hit the depth-limit branch, not the cycle-detection
+        # branch. The depth-limit message reads "Redirect chain too deep".
+        msg = str(exc_info.value)
+        assert "too deep" in msg
+
+    def test_redirect_resolved_path_is_cached(
+        self, zim_operations: ZimOperations, tmp_path: Path
+    ):
+        """The path-mapping cache must store the *resolved* target path.
+
+        For a redirect ``A/USA -> A/United_States``, looking up ``A/USA`` once
+        should populate the cache slot with ``"A/United_States"`` so the next
+        request for ``A/USA`` skips the redirect chain entirely.
+        """
+        from unittest.mock import MagicMock
+
+        mock_archive = MagicMock()
+
+        # Resolved target.
+        target_entry = MagicMock()
+        target_entry.is_redirect = False
+        target_entry.path = "A/United_States"
+        target_entry.title = "United States"
+        target_item = MagicMock()
+        target_item.content = b"<html>Target content</html>"
+        target_item.mimetype = "text/html"
+        target_entry.get_item.return_value = target_item
+
+        # Redirect stub.
+        redirect_entry = MagicMock()
+        redirect_entry.is_redirect = True
+        redirect_entry.path = "A/USA"
+        redirect_entry.title = "USA"
+        redirect_entry.get_redirect_entry.return_value = target_entry
+
+        mock_archive.get_entry_by_path.return_value = redirect_entry
+
+        zim_file = tmp_path / "test.zim"
+        zim_operations._get_entry_content(mock_archive, "A/USA", 1000, zim_file)
+
+        cache_key = f"path_mapping:{zim_file}:A/USA"
+        cached = zim_operations.cache.get(cache_key)
+        assert cached == "A/United_States", (
+            "Cache must store the resolved path so subsequent "
+            "lookups skip the redirect chain."
+        )
 
     def test_get_metadata_with_missing_entries(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -794,6 +1031,7 @@ class TestZimOperations:
             def mock_get_entry_by_path(path):
                 if path == "M/Title":
                     mock_entry = MagicMock()
+                    mock_entry.is_redirect = False
                     mock_item = MagicMock()
                     mock_item.content = b"Test Title"
                     mock_entry.get_item.return_value = mock_item
@@ -807,6 +1045,49 @@ class TestZimOperations:
             result = zim_operations.get_zim_metadata(str(zim_file))
             assert "Test Title" in result
             assert "entry_count" in result
+
+    def test_get_metadata_resolves_redirect_entries(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Metadata redirects must be resolved before calling get_item().
+
+        libzim raises RuntimeError if get_item() is invoked on a redirect entry,
+        so the extractor walks the redirect chain first.
+        """
+        from unittest.mock import MagicMock, patch
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive_instance.entry_count = 1
+            mock_archive_instance.all_entry_count = 1
+            mock_archive_instance.article_count = 0
+            mock_archive_instance.media_count = 0
+
+            target_item = MagicMock()
+            target_item.content = b"Resolved Title"
+            target_entry = MagicMock()
+            target_entry.is_redirect = False
+            target_entry.get_item.return_value = target_item
+
+            redirect_entry = MagicMock()
+            redirect_entry.is_redirect = True
+            redirect_entry.get_redirect_entry.return_value = target_entry
+
+            def mock_get_entry_by_path(path):
+                if path == "M/Title":
+                    return redirect_entry
+                raise Exception("Entry not found")
+
+            mock_archive_instance.get_entry_by_path.side_effect = mock_get_entry_by_path
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            result = zim_operations.get_zim_metadata(str(zim_file))
+            assert "Resolved Title" in result
+            redirect_entry.get_item.assert_not_called()
+            target_entry.get_item.assert_called_once()
 
     def test_get_metadata_exception_in_metadata_extraction(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -918,13 +1199,13 @@ class TestZimOperations:
 
         # Test limit too low
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 50"
         ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=0)
 
         # Test limit too high
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 50"
         ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=51)
 
@@ -1119,6 +1400,7 @@ class TestZimOperations:
 
             # Mock entry with complex content scenarios
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
             mock_entry.title = "Test Article"
             mock_entry.path = "A/Test"
 
@@ -1126,9 +1408,14 @@ class TestZimOperations:
             mock_entry.get_item.side_effect = Exception("Item access error")
             mock_archive_instance.get_entry_by_path.return_value = mock_entry
 
-            # This should raise an exception since get_item() fails early
+            # The public method re-raises typed inner OpenZimMcpArchiveError
+            # without re-wrapping (so the message no longer carries the
+            # "Structure extraction failed:" outer prefix), but the inner
+            # helper still attaches its own "Failed to extract article
+            # structure: ..." prefix, which is what we match here.
             with pytest.raises(
-                OpenZimMcpArchiveError, match="Structure extraction failed"
+                OpenZimMcpArchiveError,
+                match="Failed to extract article structure",
             ):
                 zim_operations.get_article_structure(str(zim_file), "A/Test")
 
@@ -1158,6 +1445,7 @@ class TestZimOperations:
 
             for mime_type, content in test_cases:
                 mock_entry = MagicMock()
+                mock_entry.is_redirect = False
                 mock_entry.title = f"Test {mime_type}"
                 mock_entry.path = f"A/Test_{mime_type.replace('/', '_')}"
                 mock_item = MagicMock()
@@ -1187,6 +1475,7 @@ class TestZimOperations:
 
             # Test HTML content with links
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
             mock_entry.title = "Test Article with Links"
             mock_entry.path = "A/Test_Links"
             mock_item = MagicMock()
@@ -1230,6 +1519,8 @@ class TestZimOperations:
 
             # Mock successful direct entry access
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
+            mock_entry.path = "A/Test_Article"
             mock_entry.title = "Test Article"
             mock_item = MagicMock()
             mock_item.mimetype = "text/html"
@@ -1267,6 +1558,8 @@ class TestZimOperations:
                     raise Exception("Entry not found")
                 elif path == "A/Test_Article":  # Found via search with underscore
                     mock_entry = MagicMock()
+                    mock_entry.is_redirect = False
+                    mock_entry.path = "A/Test_Article"
                     mock_entry.title = "Test Article"
                     mock_item = MagicMock()
                     mock_item.mimetype = "text/html"
@@ -1313,6 +1606,8 @@ class TestZimOperations:
 
             # Mock successful access using cached path
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
+            mock_entry.path = "A/Test_Article"
             mock_entry.title = "Test Article"
             mock_item = MagicMock()
             mock_item.mimetype = "text/html"
@@ -1357,6 +1652,8 @@ class TestZimOperations:
                     raise Exception("Direct access failed")
                 elif path == "A/Test_Article":  # Found via search
                     mock_entry = MagicMock()
+                    mock_entry.is_redirect = False
+                    mock_entry.path = "A/Test_Article"
                     mock_entry.title = "Test Article"
                     mock_item = MagicMock()
                     mock_item.mimetype = "text/html"
@@ -1706,56 +2003,140 @@ class TestZimOperations:
 
         # Test search suggestions with invalid limit
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 50"
         ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=0)
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 50"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 50"
         ):
             zim_operations.get_search_suggestions(str(zim_file), "test", limit=51)
 
-        # Test browse_namespace with invalid parameters
+        # Test browse_namespace with invalid parameters. Parameter-validation
+        # failures raise OpenZimMcpValidationError, which is distinct from
+        # OpenZimMcpArchiveError raised by archive-access failures.
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=0)
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 200"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 200"
         ):
             zim_operations.browse_namespace(str(zim_file), "A", limit=201)
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Offset must be non-negative"):
+        with pytest.raises(
+            OpenZimMcpValidationError, match="Offset must be non-negative"
+        ):
             zim_operations.browse_namespace(str(zim_file), "A", offset=-1)
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Namespace must be a non-empty string"
+            OpenZimMcpValidationError, match="Namespace must be a non-empty string"
         ):
             zim_operations.browse_namespace(str(zim_file), "")
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Namespace must be a non-empty string"
+            OpenZimMcpValidationError, match="Namespace must be a non-empty string"
         ):
             zim_operations.browse_namespace(str(zim_file), "   ")
 
-        # Test search_with_filters with invalid parameters
+        # Test search_with_filters with invalid parameters. Parameter
+        # validation surfaces as OpenZimMcpValidationError so the tool
+        # layer can render targeted "bad parameter" messages.
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 100"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 100"
         ):
             zim_operations.search_with_filters(str(zim_file), "test", limit=0)
 
         with pytest.raises(
-            OpenZimMcpArchiveError, match="Limit must be between 1 and 100"
+            OpenZimMcpValidationError, match="Limit must be between 1 and 100"
         ):
             zim_operations.search_with_filters(str(zim_file), "test", limit=101)
 
-        with pytest.raises(OpenZimMcpArchiveError, match="Offset must be non-negative"):
+        with pytest.raises(
+            OpenZimMcpValidationError, match="Offset must be non-negative"
+        ):
             zim_operations.search_with_filters(str(zim_file), "test", offset=-1)
 
         # Test parameter validation that exists in the actual methods
         # Note: max_content_length validation happens in server.py,
         # not zim_operations.py
+
+    def test_filtered_search_does_not_materialize_offset_window(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Skip-counter pagination must not materialise the offset window.
+
+        With ``offset=900, limit=10`` and 1000 raw matches all in a single
+        namespace, the old "accumulate then slice" code calls
+        ``get_entry_by_path`` for ~910 entries (offset + limit). The
+        skip-counter implementation should only need to materialize entries
+        for the collected page (about ~limit entries when no filter is
+        applied), giving a generous upper bound well below 910.
+        """
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            mock_searcher = MagicMock()
+            mock_search_result = MagicMock()
+            mock_search_result.getEstimatedMatches.return_value = 1000
+
+            def mock_get_results(start, count):
+                # libzim returns paths as strings; namespace is derivable
+                # from the leading prefix without needing an Entry.
+                return [f"A/Entry_{i}" for i in range(start, start + count)]
+
+            mock_search_result.getResults = mock_get_results
+            mock_searcher.search.return_value = mock_search_result
+
+            # Track every get_entry_by_path call so we can assert no
+            # over-fetch for skipped entries.
+            calls: list[str] = []
+
+            def make_entry(path: str):
+                e = MagicMock()
+                e.path = path
+                e.title = f"Title for {path}"
+                item = MagicMock()
+                item.mimetype = "text/html"
+                item.content = b"<p>x</p>"
+                e.get_item.return_value = item
+                return e
+
+            def tracked_get(path):
+                calls.append(path)
+                return make_entry(path)
+
+            mock_archive_instance.get_entry_by_path.side_effect = tracked_get
+
+            with (
+                patch(
+                    "openzim_mcp.zim_operations.Searcher", return_value=mock_searcher
+                ),
+                patch("openzim_mcp.zim_operations.Query"),
+            ):
+                zim_operations.search_with_filters(
+                    str(zim_file),
+                    "test",
+                    namespace=None,
+                    content_type=None,
+                    limit=10,
+                    offset=900,
+                )
+
+            # Old materialise-then-slice would call get_entry_by_path ~910
+            # times (offset + limit). Skip-counter should keep this much
+            # lower — generous slack for snippet rendering, MIME re-reads,
+            # etc.
+            assert len(calls) < 200, (
+                f"get_entry_by_path called {len(calls)} times; "
+                "expected skip-counter to skip the offset window without "
+                "materialising entries"
+            )
 
     def test_extract_article_links(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test article link extraction."""
@@ -1766,6 +2147,7 @@ class TestZimOperations:
             # Mock archive with HTML article containing links
             mock_archive_instance = MagicMock()
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
             mock_entry.title = "Test Article"
             mock_entry.path = "C/Test_Article"
 
@@ -2026,6 +2408,7 @@ class TestGetBinaryEntry:
         # Mock the archive
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
         mock_entry.title = "Test Image"
         mock_item = MagicMock()
         mock_item.mimetype = "image/png"
@@ -2063,6 +2446,7 @@ class TestGetBinaryEntry:
 
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
         mock_entry.title = "Test PDF"
         mock_item = MagicMock()
         mock_item.mimetype = "application/pdf"
@@ -2095,6 +2479,7 @@ class TestGetBinaryEntry:
 
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
         mock_entry.title = "Large Video"
         mock_item = MagicMock()
         mock_item.mimetype = "video/mp4"
@@ -2189,6 +2574,13 @@ class TestGetEntrySummaryMaxWords:
 
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
+        # _resolve_entry_with_fallback returns ``resolved.path`` so callers
+        # surface the post-redirect canonical path. Tests that mock the
+        # entry must set ``.path`` to a real string — leaving it as a
+        # MagicMock breaks json.dumps when the path is written into the
+        # response payload.
+        mock_entry.path = "A/Plain"
         mock_entry.title = "Plain"
         mock_item = MagicMock()
         mock_item.mimetype = "text/plain"
@@ -2205,3 +2597,406 @@ class TestGetEntrySummaryMaxWords:
         assert data["word_count"] == 1
         assert data["summary"] == "alpha..."
         assert data["is_truncated"] is True
+
+
+class TestZimOperationsGetEntries:
+    """Tests for ZimOperations.get_entries (batch retrieval)."""
+
+    @pytest.fixture
+    def zim_operations(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator: PathValidator,
+        openzim_mcp_cache: OpenZimMcpCache,
+        content_processor: ContentProcessor,
+    ) -> ZimOperations:
+        """Create ZimOperations instance for testing."""
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def test_get_entries_empty_list_raises(self, zim_operations: ZimOperations):
+        """Empty entries list is rejected at the boundary."""
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.get_entries([])
+
+    def test_get_entries_over_limit_raises(self, zim_operations: ZimOperations):
+        """Batches above MAX_BATCH_SIZE are rejected at the boundary."""
+        too_many = [{"zim_file_path": "/x", "entry_path": "y"} for _ in range(51)]
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.get_entries(too_many)
+
+    @patch("openzim_mcp.zim_operations.Archive")
+    def test_get_entries_happy_path(
+        self,
+        mock_archive,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+    ):
+        """Two entries succeed; results preserve input order via index."""
+        import json
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.write_text("test content")
+
+        mock_archive_instance = MagicMock()
+        mock_archive.return_value = mock_archive_instance
+        entry = MagicMock()
+        entry.title = "Article"
+        item = MagicMock()
+        item.mimetype = "text/html"
+        item.content = b"<html><body><p>hello</p></body></html>"
+        entry.get_item.return_value = item
+        mock_archive_instance.get_entry_by_path.return_value = entry
+
+        result = zim_operations.get_entries(
+            [
+                {"zim_file_path": str(zim_file), "entry_path": "A/One"},
+                {"zim_file_path": str(zim_file), "entry_path": "A/Two"},
+            ]
+        )
+        data = json.loads(result)
+
+        assert len(data["results"]) == 2
+        assert [r["index"] for r in data["results"]] == [0, 1]
+        assert data["succeeded"] + data["failed"] == 2
+
+    @patch("openzim_mcp.zim_operations.Archive")
+    def test_get_entries_partial_success(
+        self,
+        mock_archive,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+    ):
+        """A failing entry doesn't abort the batch — it's reported as failed."""
+        import json
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.write_text("test content")
+
+        # First call returns a real entry, second raises.
+        good = MagicMock()
+        good.is_redirect = False
+        good.path = "A/Good"
+        good.title = "ok"
+        good_item = MagicMock()
+        good_item.mimetype = "text/html"
+        good_item.content = b"<html><body><p>x</p></body></html>"
+        good.get_item.return_value = good_item
+
+        archive_instance = MagicMock()
+        archive_instance.get_entry_by_path.side_effect = [
+            good,
+            Exception("not found"),
+        ]
+        mock_archive.return_value = archive_instance
+
+        result = zim_operations.get_entries(
+            [
+                {"zim_file_path": str(zim_file), "entry_path": "A/Good"},
+                {"zim_file_path": str(zim_file), "entry_path": "A/Missing"},
+            ]
+        )
+        data = json.loads(result)
+        assert len(data["results"]) == 2
+        assert data["succeeded"] == 1
+        assert data["failed"] == 1
+        # Failure is recorded with success=False and an error string
+        bad = next(r for r in data["results"] if not r["success"])
+        assert "error" in bad
+
+    def test_get_entries_opens_archive_once_per_file(
+        self,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+        monkeypatch,
+    ):
+        """N entries from a single ZIM file open the archive exactly once.
+
+        Performance-driven invariant: ``get_entries`` must group requests by
+        ``zim_file_path`` and open each archive once for the whole group,
+        rather than re-opening per entry through ``get_zim_entry``.
+        """
+        from contextlib import contextmanager
+
+        import openzim_mcp.zim_operations as zo_mod
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.write_text("test content")
+
+        opens: list[Path] = []
+        original = zo_mod.zim_archive
+
+        @contextmanager
+        def tracking(path, *args, **kwargs):
+            opens.append(path)
+            archive_instance = MagicMock()
+            entry = MagicMock()
+            entry.is_redirect = False
+            entry.path = "A/Entry"
+            entry.title = "Entry"
+            item = MagicMock()
+            item.mimetype = "text/html"
+            item.content = b"<html><body><p>x</p></body></html>"
+            entry.get_item.return_value = item
+            archive_instance.get_entry_by_path.return_value = entry
+            yield archive_instance
+
+        monkeypatch.setattr(zo_mod, "zim_archive", tracking)
+
+        # Four entries from the same ZIM file
+        entries = [
+            {"zim_file_path": str(zim_file), "entry_path": f"A/E{i}"} for i in range(4)
+        ]
+        zim_operations.get_entries(entries)
+
+        assert (
+            len(opens) == 1
+        ), f"opened archive {len(opens)} times for one file, expected 1"
+        # Sanity: original is unchanged so other tests still work
+        assert zo_mod.zim_archive is tracking
+        # Avoid lint warning about unused
+        _ = original
+
+    def test_get_entries_groups_by_zim_file(
+        self,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+        monkeypatch,
+    ):
+        """Two ZIM files in the input should each be opened exactly once."""
+        from contextlib import contextmanager
+
+        import openzim_mcp.zim_operations as zo_mod
+
+        zim_a = temp_dir / "a.zim"
+        zim_a.write_text("aaa")
+        zim_b = temp_dir / "b.zim"
+        zim_b.write_text("bbb")
+
+        opens: list[Path] = []
+
+        @contextmanager
+        def tracking(path, *args, **kwargs):
+            opens.append(path)
+            archive_instance = MagicMock()
+            entry = MagicMock()
+            entry.is_redirect = False
+            entry.path = "A/Entry"
+            entry.title = "Entry"
+            item = MagicMock()
+            item.mimetype = "text/html"
+            item.content = b"<p>x</p>"
+            entry.get_item.return_value = item
+            archive_instance.get_entry_by_path.return_value = entry
+            yield archive_instance
+
+        monkeypatch.setattr(zo_mod, "zim_archive", tracking)
+
+        # 3 entries in a.zim, 2 in b.zim — interleaved input order to verify
+        # grouping doesn't depend on adjacency.
+        entries = [
+            {"zim_file_path": str(zim_a), "entry_path": "A/1"},
+            {"zim_file_path": str(zim_b), "entry_path": "A/1"},
+            {"zim_file_path": str(zim_a), "entry_path": "A/2"},
+            {"zim_file_path": str(zim_b), "entry_path": "A/2"},
+            {"zim_file_path": str(zim_a), "entry_path": "A/3"},
+        ]
+        zim_operations.get_entries(entries)
+
+        assert (
+            len(opens) == 2
+        ), f"expected one open per file (2), got {len(opens)}: {opens}"
+
+
+class TestZimOperationsPerfFixes:
+    """Performance hardening tests for v1.0 review tasks 7.4, 7.5, 7.6."""
+
+    @pytest.fixture
+    def zim_operations(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator: PathValidator,
+        openzim_mcp_cache: OpenZimMcpCache,
+        content_processor: ContentProcessor,
+    ) -> ZimOperations:
+        """Create ZimOperations instance for testing."""
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    # ----- Task 7.4: namespace listing cached once per (file, namespace) ----
+
+    def test_browse_namespace_caches_full_listing_once_per_archive_namespace(
+        self,
+        zim_operations: ZimOperations,
+        temp_dir: Path,
+        monkeypatch,
+    ):
+        """Different (limit, offset) pages must not re-scan the namespace."""
+        from contextlib import contextmanager
+
+        import openzim_mcp.zim_operations as zo_mod
+
+        zim_file = temp_dir / "ns.zim"
+        zim_file.write_text("z")
+
+        archive_instance = MagicMock()
+        archive_instance.has_new_namespace_scheme = False
+
+        # Build a deterministic entry-path → entry mapping. Pagination must
+        # all be served from the same scan.
+        paths = [f"A/Article_{i}" for i in range(30)]
+
+        def make_entry(path: str):
+            entry = MagicMock()
+            entry.path = path
+            entry.title = path.split("/", 1)[1]
+            item = MagicMock()
+            item.mimetype = "text/html"
+            item.content = b"<p>x</p>"
+            entry.get_item.return_value = item
+            return entry
+
+        def get_by_path(p):
+            return make_entry(p)
+
+        archive_instance.get_entry_by_path.side_effect = get_by_path
+
+        @contextmanager
+        def fake_zim_archive(path, *args, **kwargs):
+            yield archive_instance
+
+        monkeypatch.setattr(zo_mod, "zim_archive", fake_zim_archive)
+
+        # Force _find_entries_in_namespace to return the deterministic list
+        # and count invocations.
+        scan_calls = {"count": 0}
+
+        def fake_find(archive, namespace, has_new_scheme):
+            scan_calls["count"] += 1
+            return list(paths), True
+
+        monkeypatch.setattr(zim_operations, "_find_entries_in_namespace", fake_find)
+
+        zim_operations.browse_namespace(str(zim_file), "A", limit=10, offset=0)
+        zim_operations.browse_namespace(str(zim_file), "A", limit=10, offset=10)
+        zim_operations.browse_namespace(str(zim_file), "A", limit=10, offset=20)
+
+        # The expensive namespace scan should run exactly once even though we
+        # paginated three different windows.
+        assert (
+            scan_calls["count"] == 1
+        ), f"expected one full namespace scan, got {scan_calls['count']}"
+
+    # ----- Task 7.5: Searcher reused across path-fallback search terms -----
+
+    def test_find_entry_by_search_reuses_searcher_across_terms(
+        self,
+        zim_operations: ZimOperations,
+        monkeypatch,
+    ):
+        """Searcher() construction must be hoisted out of the per-term loop."""
+        construct_count = {"count": 0}
+
+        class CountingSearcher:
+            """Plain stand-in for libzim.Searcher.
+
+            libzim.Searcher binds via C++ and refuses non-Archive arguments,
+            so we replace it wholesale rather than subclassing it.
+            """
+
+            def __init__(self, archive):
+                construct_count["count"] += 1
+                self._archive = archive
+
+            def search(self, query):
+                fake_search = MagicMock()
+                # Return zero matches so every fallback term is tried,
+                # exercising the loop fully.
+                fake_search.getEstimatedMatches.return_value = 0
+                fake_search.getResults.return_value = []
+                return fake_search
+
+        # Patch both the libzim.search module (the source of the
+        # function-local ``from libzim.search import Searcher`` rebinding)
+        # and the libzim package re-export.
+        monkeypatch.setattr("libzim.search.Searcher", CountingSearcher)
+
+        archive = MagicMock()
+        # A path that yields multiple search-term variants — the loop will
+        # iterate every one. Searcher must still only be built once.
+        zim_operations._find_entry_by_search(archive, "A/Some_Test_Path")
+
+        assert (
+            construct_count["count"] == 1
+        ), f"expected Searcher to be built once, got {construct_count['count']}"
+
+    # ----- Task 7.6: SuggestionSearcher replaces strided ID scan ------------
+
+    def test_generate_search_suggestions_uses_suggestion_searcher(
+        self,
+        zim_operations: ZimOperations,
+        monkeypatch,
+    ):
+        """Strategy 2 must use SuggestionSearcher, not stride over entry IDs."""
+        suggest_called = {"count": 0}
+        get_entry_by_id_calls = {"count": 0}
+
+        class CountingSS:
+            """Plain stand-in for libzim.SuggestionSearcher.
+
+            libzim.SuggestionSearcher binds via C++ and refuses non-Archive
+            arguments, so we substitute the whole class.
+            """
+
+            def __init__(self, archive):
+                suggest_called["count"] += 1
+                self._archive = archive
+
+            def suggest(self, text):
+                fake = MagicMock()
+                fake.getEstimatedMatches.return_value = 0
+                fake.getResults.return_value = []
+                return fake
+
+        # The module under test imports SuggestionSearcher at module level,
+        # so patch the rebound symbol there as well.
+        monkeypatch.setattr("libzim.suggestion.SuggestionSearcher", CountingSS)
+        monkeypatch.setattr("openzim_mcp.zim_operations.SuggestionSearcher", CountingSS)
+
+        # Force Strategy 1 to return zero suggestions so Strategy 2 fires.
+        monkeypatch.setattr(
+            zim_operations,
+            "_get_suggestions_from_search",
+            lambda *a, **kw: [],
+        )
+
+        archive = MagicMock()
+        archive.entry_count = 100_000
+
+        # Track strided ID scan as a regression sentinel — the previous
+        # implementation called _get_entry_by_id once per stride.
+        def boom(*_a, **_kw):
+            get_entry_by_id_calls["count"] += 1
+            raise AssertionError(
+                "Strategy 2 must not call archive._get_entry_by_id; "
+                "use SuggestionSearcher instead"
+            )
+
+        archive._get_entry_by_id.side_effect = boom
+
+        result = zim_operations._generate_search_suggestions(archive, "bio", limit=10)
+
+        assert (
+            suggest_called["count"] >= 1
+        ), "expected SuggestionSearcher to be used in Strategy 2"
+        assert (
+            get_entry_by_id_calls["count"] == 0
+        ), "Strategy 2 must not stride-scan via _get_entry_by_id"
+        # Result still has to be valid JSON describing zero matches.
+        import json as _json
+
+        parsed = _json.loads(result)
+        assert parsed["partial_query"] == "bio"
+        assert "suggestions" in parsed

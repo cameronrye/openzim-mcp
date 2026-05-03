@@ -1,10 +1,11 @@
 """Tests for server_tools module."""
 
+import json
 import os
 
 import pytest
 
-from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.config import CacheConfig, OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
 
 
@@ -34,18 +35,6 @@ class TestGetServerHealthTool:
         # Test cache stats
         cache_stats = server.cache.stats()
         assert "enabled" in cache_stats
-
-    def test_server_health_instance_tracking(self, server: OpenZimMcpServer):
-        """Test that server health includes instance tracking info."""
-        # Instance tracking structure
-        instance_tracking = {
-            "enabled": server.instance_tracker is not None,
-            "active_instances": 0,
-            "conflicts_detected": 0,
-            "stale_instances": 0,
-        }
-        assert "enabled" in instance_tracking
-        assert "active_instances" in instance_tracking
 
     def test_health_checks_structure(self, server: OpenZimMcpServer):
         """Test that health checks have the correct structure."""
@@ -98,163 +87,108 @@ class TestGetServerConfigurationTool:
     def test_server_configuration_diagnostics_structure(self, server: OpenZimMcpServer):
         """Test that configuration diagnostics have correct structure."""
         diagnostics = {
-            "conflicts_detected": [],
             "validation_status": "ok",
             "warnings": [],
             "recommendations": [],
         }
 
-        assert "conflicts_detected" in diagnostics
         assert diagnostics["validation_status"] in ["ok", "warning", "error"]
 
 
-class TestDiagnoseServerStateTool:
-    """Test diagnose_server_state tool functionality."""
+class TestDiagnosticToolPathRedaction:
+    """Diagnostic tool responses must not leak filesystem paths or PIDs."""
 
-    @pytest.fixture
-    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a test server instance."""
-        return OpenZimMcpServer(test_config)
+    @pytest.mark.asyncio
+    async def test_get_server_configuration_redacts_allowed_directories(self, temp_dir):
+        """Allowed directory paths must not appear verbatim in the response."""
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        server = OpenZimMcpServer(config)
 
-    def test_diagnostics_structure(self, server: OpenZimMcpServer):
-        """Test that diagnostics have the correct structure."""
-        diagnostics = {
-            "status": "healthy",
-            "server_info": {
-                "pid": os.getpid(),
-                "server_name": server.config.server_name,
-                "config_hash": server.config.get_config_hash(),
-            },
-            "configuration": {
-                "allowed_directories": server.config.allowed_directories,
-                "cache_enabled": server.config.cache.enabled,
-            },
-            "conflicts": [],
-            "issues": [],
-            "recommendations": [],
-            "environment_checks": {},
-        }
+        tools = server.mcp._tool_manager._tools
+        assert "get_server_configuration" in tools
+        tool_handler = tools["get_server_configuration"].fn
+        result = await tool_handler()
 
-        assert diagnostics["status"] in ["healthy", "warning", "error"]
-        assert "server_info" in diagnostics
-        assert "configuration" in diagnostics
+        # The full directory path must not be present.
+        assert str(temp_dir) not in result, "allowed_directories path leaked"
+        # But the section identifier should still be present.
+        assert "allowed_directories" in result.lower()
 
-    def test_directory_check_structure(self, server: OpenZimMcpServer):
-        """Test that directory checks have correct structure."""
-        dir_check = {
-            "exists": True,
-            "is_directory": True,
-            "readable": True,
-            "writable": True,
-            "zim_files_count": 0,
-            "zim_files_accessible": 0,
-            "total_size_mb": 0,
-            "issues": [],
-            "warnings": [],
-        }
-
-        assert "exists" in dir_check
-        assert "readable" in dir_check
-        assert "zim_files_count" in dir_check
-
-
-class TestResolveServerConflictsTool:
-    """Test resolve_server_conflicts tool functionality."""
-
-    @pytest.fixture
-    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a test server instance."""
-        return OpenZimMcpServer(test_config)
-
-    def test_resolution_results_structure(self, server: OpenZimMcpServer):
-        """Test that resolution results have correct structure."""
-        resolution_results = {
-            "conflicts_found": [],
-            "actions_taken": [],
-            "cleanup_results": {
-                "stale_instances_removed": 0,
-                "corrupted_files_removed": 0,
-                "active_instances_found": 0,
-            },
-            "recommendations": [],
-            "status": "success",
-        }
-
-        assert resolution_results["status"] in [
-            "success",
-            "error",
-            "conflicts_detected",
-        ]
-        assert "cleanup_results" in resolution_results
-
-    def test_conflict_resolution_guidance(self):
-        """Test that conflict resolution provides proper guidance."""
-        recommendations = [
-            "",
-            "**Conflict Resolution Steps**:",
-            "1. Identify which server instance you want to keep running",
-            "2. Stop other server processes using their PID (kill <PID> on Unix/Mac)",
-            "3. Run this tool again to verify conflicts are resolved",
-            "4. Use 'diagnose_server_state()' for detailed server analysis",
-        ]
-
-        assert any("Conflict Resolution Steps" in r for r in recommendations)
-        assert any("Stop other server processes" in r for r in recommendations)
-
-    def test_no_instance_tracker_error(self, server: OpenZimMcpServer):
-        """Test behavior when instance tracker is not available."""
-        # Simulate no instance tracker
-        original_tracker = server.instance_tracker
-        server.instance_tracker = None
-
-        resolution_results = {
-            "status": "error",
-            "recommendations": ["Instance tracker not available."],
-        }
-
-        assert resolution_results["status"] == "error"
-
-        # Restore
-        server.instance_tracker = original_tracker
-
-
-class TestZimMagicNumberValidation:
-    """Test ZIM magic number validation in diagnostics."""
-
-    def test_zim_magic_number(self):
-        """Test that ZIM magic number constant is correct."""
-        # ZIM files start with "ZIM\x04"
-        zim_magic = b"ZIM\x04"
-        assert len(zim_magic) == 4
-        assert zim_magic[0:3] == b"ZIM"
-        assert zim_magic[3] == 0x04
-
-
-class TestDiskSpaceChecking:
-    """Test disk space checking functionality."""
-
-    def test_low_disk_space_warning(self):
-        """Test that low disk space generates warning."""
-        free_space_mb = 50  # Less than 100MB
-
-        warnings = []
-        if free_space_mb < 100:
-            warnings.append(f"Low disk space: {free_space_mb:.1f}MB available")
-
-        assert len(warnings) == 1
-        assert "Low disk space" in warnings[0]
-
-    def test_adequate_disk_space_no_warning(self):
-        """Test that adequate disk space doesn't generate warning."""
-        free_space_mb = 500  # More than 100MB threshold
-
-        # With adequate space, no warnings should be generated
-        warnings = []
-        # Only add warning if space is low (this condition is False for 500MB)
-        warnings = (
-            [f"Low disk space: {free_space_mb:.1f}MB available"]
-            if free_space_mb < 100
-            else []
+        parsed = json.loads(result)
+        # PID must not be exposed.
+        assert parsed["configuration"]["server_pid"] != os.getpid()
+        # A non-sensitive count should still be available for diagnostics.
+        assert parsed["configuration"].get("allowed_directories_count") == len(
+            config.allowed_directories
         )
 
-        assert len(warnings) == 0
+    @pytest.mark.asyncio
+    async def test_get_server_health_redacts_paths(self, temp_dir):
+        """get_server_health must not leak any allowed directory paths."""
+        # Create a missing/invalid subdirectory so warning paths are also exercised.
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        server = OpenZimMcpServer(config)
+
+        tools = server.mcp._tool_manager._tools
+        assert "get_server_health" in tools
+        tool_handler = tools["get_server_health"].fn
+        result = await tool_handler()
+
+        for d in server.config.allowed_directories:
+            assert str(d) not in result, f"path leaked in health response: {d}"
+
+        parsed = json.loads(result)
+        # PID must not be exposed.
+        assert parsed["uptime_info"]["process_id"] != os.getpid()
+
+    @pytest.mark.asyncio
+    async def test_get_server_health_warning_paths_redacted(self, temp_dir):
+        """Warning messages about inaccessible directories must redact paths."""
+        # Build a config that points at a real dir so validation passes,
+        # then mutate the in-memory list to include a nonexistent path so
+        # the warning code path runs and we can verify path redaction.
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        server = OpenZimMcpServer(config)
+        bogus = str(temp_dir / "definitely-not-here-xyz")
+        # Bypass validation; we only want the runtime warning text.
+        server.config.allowed_directories = list(server.config.allowed_directories) + [
+            bogus
+        ]
+
+        tools = server.mcp._tool_manager._tools
+        tool_handler = tools["get_server_health"].fn
+        result = await tool_handler()
+
+        assert bogus not in result, "bogus path leaked into warning text"
+
+    @pytest.mark.asyncio
+    async def test_get_server_configuration_invalid_dirs_redacted(self, temp_dir):
+        """Invalid-directory warnings in get_server_configuration must redact paths."""
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(temp_dir)],
+            tool_mode="advanced",
+            cache=CacheConfig(enabled=False),
+        )
+        server = OpenZimMcpServer(config)
+        bogus = str(temp_dir / "missing-subdir-zzz")
+        server.config.allowed_directories = list(server.config.allowed_directories) + [
+            bogus
+        ]
+
+        tools = server.mcp._tool_manager._tools
+        tool_handler = tools["get_server_configuration"].fn
+        result = await tool_handler()
+
+        assert bogus not in result, "bogus path leaked into config diagnostics"

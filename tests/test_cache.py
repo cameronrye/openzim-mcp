@@ -1,11 +1,14 @@
 """Tests for cache module."""
 
 import time
+from datetime import datetime
+from pathlib import Path
 
 import pytest
 
 from openzim_mcp.cache import CacheEntry, OpenZimMcpCache
 from openzim_mcp.config import CacheConfig
+from openzim_mcp.exceptions import OpenZimMcpValidationError
 
 
 class TestCacheEntry:
@@ -426,7 +429,12 @@ class TestCachePersistence:
         cache = OpenZimMcpCache(config, enable_background_cleanup=False)
 
         persistence_file = cache._get_persistence_file()
-        assert str(persistence_file) == str(temp_dir / "test_cache.json")
+        # CacheConfig.persistence_path is now normalized via .resolve() so the
+        # stored path is the canonical (symlink-resolved) form. Compare via
+        # Path.resolve() to handle the macOS /var -> /private/var symlink and
+        # any other canonicalization the validator applies.
+        assert persistence_file.resolve() == (temp_dir / "test_cache.json").resolve()
+        assert persistence_file.suffix == ".json"
 
     def test_save_and_load_from_disk(self, temp_dir):
         """Test saving cache to disk and loading it back."""
@@ -580,6 +588,59 @@ class TestCachePersistence:
         cache = OpenZimMcpCache(config, enable_background_cleanup=False)
         assert cache.stats()["size"] == 0
 
+    def test_load_skips_individual_malformed_entries(self, temp_dir):
+        """A single malformed entry must not abort loading the rest.
+
+        Older cache files (or hand-edited / partially-written ones) may
+        contain entries missing required fields. Per-entry isolation
+        means the loader logs and skips the bad record instead of
+        bailing out before valid entries that follow it.
+        """
+        import json as _json
+
+        from openzim_mcp.config import CacheConfig
+
+        cache_path = temp_dir / "test_cache.json"
+        config = CacheConfig(
+            enabled=True,
+            max_size=10,
+            ttl_seconds=60,
+            persistence_enabled=True,
+            persistence_path=str(cache_path),
+        )
+
+        now = time.time()
+        payload = {
+            "version": 1,
+            "saved_at": now,
+            "entries": {
+                "good_before": {
+                    "value": "v1",
+                    "created_at": now,
+                    "ttl_seconds": 60,
+                },
+                "missing_value": {  # bad: no "value" key
+                    "created_at": now,
+                    "ttl_seconds": 60,
+                },
+                "wrong_shape": "not-a-dict",  # bad: not an object
+                "good_after": {
+                    "value": "v2",
+                    "created_at": now,
+                    "ttl_seconds": 60,
+                },
+            },
+        }
+        with open(cache_path, "w") as f:
+            _json.dump(payload, f)
+
+        cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+        # Both good entries survive; malformed records are skipped.
+        assert cache.get("good_before") == "v1"
+        assert cache.get("good_after") == "v2"
+        assert cache.get("missing_value") is None
+        assert cache.get("wrong_shape") is None
+
 
 class TestCacheEdgeCases:
     """Test edge cases and error conditions."""
@@ -644,3 +705,70 @@ class TestCacheEdgeCases:
             t.join()
 
         assert len(errors) == 0, f"Thread safety errors: {errors}"
+
+
+class TestCacheJsonSerializableValidation:
+    """Validate cache values are JSON-serializable when persistence is enabled (M21)."""
+
+    def test_cache_set_rejects_non_json_serializable_when_persistence_enabled(
+        self, tmp_path
+    ):
+        """Non-JSON values must be rejected at write time, not silently coerced."""
+        cfg = CacheConfig(
+            enabled=True,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "cache"),
+        )
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        with pytest.raises(OpenZimMcpValidationError):
+            cache.set("k", object())
+
+    def test_cache_set_rejects_path_when_persistence_enabled(self, tmp_path):
+        """Path is not JSON-serializable; reject rather than str()-coerce."""
+        cfg = CacheConfig(
+            enabled=True,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "cache"),
+        )
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        with pytest.raises(OpenZimMcpValidationError):
+            cache.set("k", Path("/tmp/foo"))
+
+    def test_cache_set_rejects_datetime_when_persistence_enabled(self, tmp_path):
+        """Datetime is not JSON-serializable; reject rather than str()-coerce."""
+        cfg = CacheConfig(
+            enabled=True,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "cache"),
+        )
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        with pytest.raises(OpenZimMcpValidationError):
+            cache.set("k", datetime.now())
+
+    def test_cache_set_allows_non_json_when_persistence_disabled(self):
+        """In-memory caches still accept arbitrary Python objects."""
+        cfg = CacheConfig(enabled=True, persistence_enabled=False)
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        sentinel = object()
+        cache.set("k", sentinel)
+        assert cache.get("k") is sentinel
+
+    def test_cache_set_allows_json_compatible_values_when_persistence_enabled(
+        self, tmp_path
+    ):
+        """Strings, dicts, lists, numbers, None still accepted."""
+        cfg = CacheConfig(
+            enabled=True,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "cache"),
+        )
+        cache = OpenZimMcpCache(cfg, enable_background_cleanup=False)
+        cache.set("s", "value")
+        cache.set("d", {"a": 1, "b": [1, 2, 3]})
+        cache.set("l", [1, 2, 3])
+        cache.set("n", 42)
+        cache.set("z", None)
+        assert cache.get("s") == "value"
+        assert cache.get("d") == {"a": 1, "b": [1, 2, 3]}
+        assert cache.get("l") == [1, 2, 3]
+        assert cache.get("n") == 42

@@ -59,8 +59,9 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-.
+reported to the community leaders responsible for enforcement by opening a
+[GitHub Private Vulnerability Report](https://github.com/cameronrye/openzim-mcp/security/advisories/new)
+or by contacting the maintainers via [GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions).
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

@@ -1,0 +1,43 @@
+# CodeQL configuration for the openzim-mcp Python codebase.
+#
+# Most rules run with default settings. The exclusions below cover specific
+# patterns that are intentional in this codebase and would otherwise produce
+# false positives that drown out actionable findings.
+
+name: openzim-mcp CodeQL config
+
+paths:
+  - openzim_mcp
+  - tests
+
+paths-ignore:
+  - .venv
+  - htmlcov
+  - dist
+
+query-filters:
+  # The cyclic edge between ``openzim_mcp.zim_operations`` (a backward-compat
+  # re-export shim) and the ``openzim_mcp.zim.*`` mixin modules is load-bearing:
+  # the mixin modules import the shim so test code can monkeypatch symbols on
+  # ``openzim_mcp.zim_operations`` (e.g. ``patch("openzim_mcp.zim_operations.
+  # zim_archive")``) and have the patch reach the call site. The cycle is safe
+  # because the imports are only ever dereferenced at call time, never at
+  # module-import time.
+  #
+  # Note: query-filter clauses are AND-ed; specifying ``tags contain: <X>``
+  # alongside ``id:`` requires the rule to carry that tag. ``py/cyclic-import``
+  # has the ``maintainability`` tag, but ``py/unsafe-cyclic-import`` does
+  # not — so we filter by id alone here.
+  - exclude:
+      id: py/cyclic-import
+  - exclude:
+      id: py/unsafe-cyclic-import
+
+  # ``ZimOperations`` mixes in four mixin classes. Several mixin methods are
+  # forward-declared inside ``if TYPE_CHECKING:`` blocks on peer mixins so the
+  # type checker can resolve cross-mixin calls without a runtime cycle. CodeQL
+  # does not honor ``TYPE_CHECKING`` and reports these as conflicting
+  # attributes; the conflict does not exist at runtime because only the real
+  # implementation is defined outside the ``TYPE_CHECKING`` guard.
+  - exclude:
+      id: py/conflicting-attributes

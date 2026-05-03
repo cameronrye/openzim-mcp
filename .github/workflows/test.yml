@@ -5,15 +5,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
-  pull_request_target:
-    branches: [main]
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
-    inputs:
-      pr_number:
-        description: "PR number to test (optional)"
-        required: false
-        type: string
 
 jobs:
   test:
@@ -30,9 +22,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          # For pull_request_target, checkout the PR head
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -57,14 +46,6 @@ jobs:
       - name: Run unit tests
         run: |
           make test-cov
-
-      - name: Download ZIM test data
-        run: |
-          make download-test-data
-
-      - name: Run integration tests with ZIM data
-        run: |
-          make test-requires-zim-data
 
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''

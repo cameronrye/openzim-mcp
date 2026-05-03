@@ -234,28 +234,16 @@ def test_config_with_zim_data(
 
 def pytest_configure(config):
     """Configure pytest with custom markers."""
-    config.addinivalue_line(
-        "markers", "requires_zim_data: mark test as requiring ZIM test data files"
-    )
     config.addinivalue_line("markers", "integration: mark test as integration test")
     config.addinivalue_line("markers", "slow: mark test as slow running")
-
-
-def pytest_collection_modifyitems(config, items):
-    """Modify test collection to skip tests requiring ZIM data if not available."""
-    # Check if ZIM test data is available
-    zim_data_available = False
-
-    env_dir = os.environ.get("ZIM_TEST_DATA_DIR")
-    if env_dir and Path(env_dir).exists():
-        zim_data_available = True
-    else:
-        default_path = Path(__file__).parent.parent / "test_data" / "zim-testing-suite"
-        if default_path.exists():
-            zim_data_available = True
-
-    if not zim_data_available:
-        skip_zim_data = pytest.mark.skip(reason="ZIM test data not available")
-        for item in items:
-            if "requires_zim_data" in item.keywords:
-                item.add_marker(skip_zim_data)
+    config.addinivalue_line(
+        "markers",
+        "live: mark test as spawning a real openzim-mcp subprocess "
+        "(binds loopback ports; deselected unless explicitly requested via "
+        "`-m live` or `make test-live`)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "docker: mark test as additionally requiring the docker CLI and a "
+        "reachable daemon (auto-skipped otherwise)",
+    )

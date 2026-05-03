@@ -138,6 +138,28 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             namespace = sanitize_input(namespace, INPUT_LIMIT_NAMESPACE)
 
+            # Validate parameters before any backend call. The docstring
+            # promises ``limit: 1-500`` and a non-negative ``cursor``;
+            # without this check, callers could open the libzim Archive
+            # for arbitrarily oversized requests before being rejected.
+            if limit < 1 or limit > 500:
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    f"**Issue**: limit must be between 1 and 500 "
+                    f"(provided: {limit})\n\n"
+                    "**Troubleshooting**: Adjust the limit parameter to a "
+                    "value within the valid range.\n"
+                    "**Example**: Use `limit=200` for the default page size."
+                )
+            if cursor < 0:
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    f"**Issue**: cursor must be non-negative (provided: {cursor})\n\n"
+                    "**Troubleshooting**: Use cursor=0 to start, or pass the "
+                    "`next_cursor` value returned by a previous call.\n"
+                    "**Example**: `cursor=0` on the first call."
+                )
+
             return await server.async_zim_operations.walk_namespace(
                 zim_file_path, namespace, cursor, limit
             )
@@ -216,12 +238,9 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
                 )
 
             # Perform the filtered search using async operations
-            search_result = await server.async_zim_operations.search_with_filters(
+            return await server.async_zim_operations.search_with_filters(
                 zim_file_path, query, namespace, content_type, limit, offset
             )
-
-            # Add proactive conflict detection for filtered search operations
-            return server._check_and_append_conflict_warnings(search_result)
 
         except Exception as e:
             logger.error(f"Error in filtered search: {e}")

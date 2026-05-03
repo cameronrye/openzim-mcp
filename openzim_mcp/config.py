@@ -4,13 +4,22 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .defaults import CACHE, CONTENT, RATE_LIMIT, VALID_TOOL_MODES
+from .defaults import CACHE, CONTENT, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
+from .rate_limiter import RateLimitConfig
+
+__all__ = [
+    "CacheConfig",
+    "ContentConfig",
+    "LoggingConfig",
+    "OpenZimMcpConfig",
+    "RateLimitConfig",
+]
 
 
 class CacheConfig(BaseModel):
@@ -20,15 +29,18 @@ class CacheConfig(BaseModel):
     max_size: int = Field(default=CACHE.MAX_SIZE, ge=1, le=10000)
     ttl_seconds: int = Field(default=CACHE.TTL_SECONDS, ge=60, le=86400)
     persistence_enabled: bool = Field(default=CACHE.PERSISTENCE_ENABLED)
-    persistence_path: str = Field(default=CACHE.PERSISTENCE_PATH)
+    persistence_path: str = Field(default_factory=lambda: CACHE.PERSISTENCE_PATH)
 
+    @field_validator("persistence_path")
+    @classmethod
+    def normalize_persistence_path(cls, v: str) -> str:
+        """Normalize persistence_path to an absolute, tilde-expanded path.
 
-class RateLimitConfig(BaseModel):
-    """Rate limiting configuration settings."""
-
-    enabled: bool = Field(default=RATE_LIMIT.ENABLED)
-    requests_per_second: float = Field(default=RATE_LIMIT.REQUESTS_PER_SECOND, gt=0)
-    burst_size: int = Field(default=RATE_LIMIT.BURST_SIZE, ge=1, le=1000)
+        Without this, a CWD-relative default (or user-supplied relative
+        path) lands in unpredictable locations under containers/systemd
+        where the working directory is not the user's home.
+        """
+        return str(Path(v).expanduser().resolve())
 
 
 class ContentConfig(BaseModel):
@@ -72,8 +84,53 @@ class OpenZimMcpConfig(BaseSettings):
     tool_mode: Literal["advanced", "simple"] = Field(
         default="simple",
         description=(
-            "Tool mode: 'advanced' for all 18 tools, "
+            "Tool mode: 'advanced' for all 21 tools, "
             "'simple' for 1 intelligent tool plus underlying tools"
+        ),
+    )
+    transport: Literal["stdio", "http", "sse"] = Field(
+        default="stdio",
+        description=(
+            "Transport protocol: 'stdio' (default), 'http' (streamable HTTP), "
+            "or 'sse' (legacy SSE — no auth middleware, intended for local use)"
+        ),
+    )
+    host: str = Field(
+        default="127.0.0.1",
+        description="HTTP bind host (only used when transport='http' or 'sse')",
+    )
+    port: int = Field(
+        default=8000,
+        ge=1,
+        le=65535,
+        description="HTTP bind port (only used when transport='http' or 'sse')",
+    )
+    auth_token: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "Bearer token for HTTP transport. Loaded from env var "
+            "OPENZIM_MCP_AUTH_TOKEN. Never set this in a config file."
+        ),
+    )
+    cors_origins: List[str] = Field(
+        default_factory=list,
+        description=(
+            "CORS allow-list. Wildcard '*' is rejected. Default is empty "
+            "(no CORS headers emitted)."
+        ),
+    )
+    watch_interval_seconds: int = Field(
+        default=5,
+        ge=1,
+        le=60,
+        description="Polling interval for resource subscriptions (seconds).",
+    )
+    subscriptions_enabled: bool = Field(
+        default=True,
+        description=(
+            "Master switch for resource subscriptions. When False, the "
+            "polling task is not started and subscribe calls succeed but "
+            "never fire updates."
         ),
     )
 
@@ -113,6 +170,21 @@ class OpenZimMcpConfig(BaseSettings):
             )
         return v
 
+    @field_validator("cors_origins")
+    @classmethod
+    def reject_cors_wildcard(cls, v: List[str]) -> List[str]:
+        """Reject wildcard '*' in CORS origins (footgun prevention).
+
+        Strips each origin before comparing so whitespace-padded variants
+        like ``" * "`` cannot bypass the check.
+        """
+        if any(origin.strip() == "*" for origin in v):
+            raise OpenZimMcpConfigurationError(
+                "CORS wildcard '*' is not allowed. List origins explicitly "
+                "(e.g. ['http://localhost:5173'])."
+            )
+        return v
+
     def setup_logging(self) -> None:
         """Configure logging based on settings."""
         logging.basicConfig(
@@ -145,6 +217,12 @@ class OpenZimMcpConfig(BaseSettings):
             "search_default_limit": self.content.default_search_limit,
             "server_name": self.server_name,
             "tool_mode": self.tool_mode,
+            "transport": self.transport,
+            "host": self.host,
+            "port": self.port,
+            "cors_origins": sorted(self.cors_origins),
+            "watch_interval_seconds": self.watch_interval_seconds,
+            "subscriptions_enabled": self.subscriptions_enabled,
             "rate_limit_enabled": self.rate_limit.enabled,
             "rate_limit_rps": self.rate_limit.requests_per_second,
             "rate_limit_burst": self.rate_limit.burst_size,

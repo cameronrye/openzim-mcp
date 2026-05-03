@@ -1,6 +1,6 @@
 # OpenZIM MCP Development Makefile
 
-.PHONY: help install install-dev install-hooks setup-dev check-tools test test-cov test-with-zim-data test-integration test-requires-zim-data benchmark lint format type-check security download-test-data download-test-data-all list-test-data clean clean-test-data build publish publish-test run check ci
+.PHONY: help install install-dev install-hooks setup-dev check-tools test test-cov test-with-zim-data test-integration test-requires-zim-data test-live test-live-docker benchmark lint format type-check security download-test-data download-test-data-all list-test-data clean clean-test-data build publish publish-test run check ci
 
 help:  ## Show this help message
 	@uv run python scripts/generate_help.py
@@ -34,12 +34,22 @@ test-with-zim-data:  ## Run tests with ZIM test data
 test-integration:  ## Run integration tests only
 	uv run pytest -m "integration"
 
-test-requires-zim-data:  ## Run tests that require ZIM test data
-	@uv run python scripts/run_with_env.py ZIM_TEST_DATA_DIR=test_data/zim-testing-suite uv run pytest -m "requires_zim_data"
+# Transitional no-op kept so the pull_request_target workflow on main (which
+# still calls `make test-requires-zim-data` from the pre-v1.0 layout) does
+# not error against a HEAD where the marker has no consumers. Safe to delete
+# once the post-merge main no longer triggers pull_request_target.
+test-requires-zim-data:  ## (deprecated v1.0) marker has no consumers; no-op shim
+	@echo "test-requires-zim-data: requires_zim_data marker has no consumers as of v1.0; nothing to run."
 
-benchmark:  ## Run performance benchmarks
+test-live:  ## Run live-server tests (spawn real subprocesses; binds loopback ports)
+	uv run pytest -m live tests/live/ --no-cov
+
+test-live-docker:  ## Run docker live tests only (requires docker daemon; ~10min first build)
+	uv run pytest -m "live and docker" tests/live/ --no-cov
+
+benchmark:  ## Run performance benchmarks (selects tests marked/named "benchmark")
 	@echo "Running performance benchmarks..."
-	uv run pytest tests/test_benchmarks.py -v --benchmark-only
+	uv run pytest -k "benchmark" -v --benchmark-only
 	@echo "Benchmark completed. Results saved to .benchmarks/"
 
 lint:  ## Run linting
@@ -53,12 +63,12 @@ format:  ## Format code
 type-check:  ## Run type checking
 	uv run mypy openzim_mcp
 
-security:  ## Run security scans
+security:  ## Run security scans (fails on bandit/pip-audit findings)
 	@echo "Running security scans..."
 	@echo "Running bandit security scan..."
-	@uv run bandit -r openzim_mcp -ll || echo "Bandit found low-severity issues (non-blocking)"
+	uv run bandit -r openzim_mcp -ll
 	@echo "Running pip-audit dependency scan..."
-	@uv run pip-audit || echo "Pip-audit scan completed with warnings"
+	uv run pip-audit
 
 download-test-data:  ## Download ZIM test data files
 	uv run python scripts/download_test_data.py --priority 1
@@ -88,7 +98,7 @@ publish:  ## Publish to PyPI (requires authentication)
 publish-test:  ## Publish to TestPyPI (requires authentication)
 	@echo "Publishing to TestPyPI..."
 	@echo "Note: Ensure you have proper authentication configured"
-	uv publish --index-url https://test.pypi.org/simple/
+	uv publish --publish-url https://test.pypi.org/legacy/
 
 run:  ## Run the server (requires ZIM_DIR environment variable)
 	@uv run python scripts/run_server.py

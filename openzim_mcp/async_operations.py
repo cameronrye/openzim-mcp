@@ -8,7 +8,7 @@ the event loop during I/O-bound operations.
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Dict, List, Optional
 
 from .zim_operations import ZimOperations
 
@@ -37,21 +37,31 @@ class AsyncZimOperations:
         """Access the underlying synchronous operations."""
         return self._ops
 
-    async def list_zim_files(self) -> str:
+    async def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories (async).
+
+        Args:
+            name_filter: Optional case-insensitive substring filter on filename.
 
         Returns:
             JSON string containing the list of ZIM files
         """
-        return await asyncio.to_thread(self._ops.list_zim_files)
+        return await asyncio.to_thread(
+            self._ops.list_zim_files, name_filter=name_filter
+        )
 
-    async def list_zim_files_data(self) -> list:
+    async def list_zim_files_data(self, name_filter: Optional[str] = None) -> list:
         """List all ZIM files as structured data (async).
+
+        Args:
+            name_filter: Optional case-insensitive substring filter on filename.
 
         Returns:
             List of dictionaries containing ZIM file information
         """
-        return await asyncio.to_thread(self._ops.list_zim_files_data)
+        return await asyncio.to_thread(
+            self._ops.list_zim_files_data, name_filter=name_filter
+        )
 
     async def search_zim_file(
         self,
@@ -99,6 +109,26 @@ class AsyncZimOperations:
             entry_path,
             max_content_length,
             content_offset,
+        )
+
+    async def get_entries(
+        self,
+        entries: List[Dict[str, str]],
+        max_content_length: Optional[int] = None,
+    ) -> str:
+        """Fetch multiple ZIM entries in one call (async).
+
+        Args:
+            entries: list of ``{"zim_file_path", "entry_path"}`` dicts.
+            max_content_length: per-entry max content length.
+
+        Returns:
+            JSON string with results, succeeded, failed counts.
+        """
+        return await asyncio.to_thread(
+            self._ops.get_entries,
+            entries,
+            max_content_length,
         )
 
     async def get_zim_metadata(self, zim_file_path: str) -> str:
@@ -308,10 +338,6 @@ class AsyncZimOperations:
             include_data,
         )
 
-    async def warm_cache(self, zim_file_path: str) -> str:
-        """Warm the cache for a ZIM file (async)."""
-        return await asyncio.to_thread(self._ops.warm_cache, zim_file_path)
-
     async def walk_namespace(
         self,
         zim_file_path: str,
@@ -344,28 +370,16 @@ class AsyncZimOperations:
             limit,
         )
 
-    async def get_random_entry(self, zim_file_path: str, namespace: str = "C") -> str:
-        """Get random entry (async)."""
-        return await asyncio.to_thread(
-            self._ops.get_random_entry, zim_file_path, namespace
-        )
-
     async def get_related_articles(
         self,
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-        direction: str = "outbound",
-        inbound_scan_cap: int = 1000,
-        inbound_cursor: int = 0,
     ) -> str:
-        """Get related articles via link graph (async)."""
+        """Get related articles via outbound link graph (async)."""
         return await asyncio.to_thread(
             self._ops.get_related_articles,
             zim_file_path,
             entry_path,
             limit,
-            direction,
-            inbound_scan_cap,
-            inbound_cursor,
         )

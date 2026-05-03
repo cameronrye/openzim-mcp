@@ -1,8 +1,11 @@
 """Tests for configuration module."""
 
+import json
+import tempfile
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from openzim_mcp.config import (
     CacheConfig,
@@ -11,6 +14,10 @@ from openzim_mcp.config import (
     OpenZimMcpConfig,
 )
 from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+
+# Use the platform's tempdir so allowed_directories validation passes on
+# Windows runners where "/tmp" resolves to "D:\tmp" (not present).
+TMP_DIR = tempfile.gettempdir()
 
 
 class TestCacheConfig:
@@ -37,6 +44,31 @@ class TestCacheConfig:
 
         with pytest.raises(ValueError):
             CacheConfig(ttl_seconds=30)  # Should be >= 60
+
+    def test_persistence_path_defaults_to_absolute_under_user_cache(self):
+        """Default persistence_path lives under ~/.cache so it's CWD-independent."""
+        config = CacheConfig()
+        path = Path(config.persistence_path)
+        assert path.is_absolute(), f"default persistence_path is not absolute: {path}"
+        # Default lives under the platform's user cache directory.
+        expected = (Path.home() / ".cache" / "openzim-mcp").resolve()
+        assert path == expected
+
+    def test_persistence_path_is_normalized_to_absolute(self, tmp_path, monkeypatch):
+        """User-supplied relative paths are resolved to an absolute path."""
+        monkeypatch.chdir(tmp_path)
+        config = CacheConfig(persistence_path="my_cache")
+        path = Path(config.persistence_path)
+        assert path.is_absolute()
+        assert path == (tmp_path / "my_cache").resolve()
+
+    def test_persistence_path_expands_tilde(self):
+        """Tilde in persistence_path is expanded."""
+        config = CacheConfig(persistence_path="~/some-cache")
+        path = Path(config.persistence_path)
+        assert path.is_absolute()
+        assert "~" not in str(path)
+        assert path == (Path.home() / "some-cache").resolve()
 
 
 class TestContentConfig:
@@ -140,3 +172,154 @@ class TestOpenZimMcpConfig:
         assert config.cache.enabled is True
         assert config.content.max_content_length == 100000
         assert config.logging.level == "INFO"
+
+
+def test_config_defaults_to_stdio_transport():
+    """Default transport is stdio when not specified."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.transport == "stdio"
+
+
+def test_config_accepts_http_transport():
+    """Transport accepts 'http' value."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR], transport="http")
+    assert cfg.transport == "http"
+
+
+def test_config_accepts_sse_transport():
+    """Transport accepts 'sse' value."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR], transport="sse")
+    assert cfg.transport == "sse"
+
+
+def test_config_rejects_invalid_transport():
+    """Transport rejects values outside the Literal."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=[TMP_DIR], transport="websocket")
+
+
+def test_config_default_host_and_port():
+    """Default host is loopback and default port is 8000."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.host == "127.0.0.1"
+    assert cfg.port == 8000
+
+
+def test_config_rejects_port_out_of_range():
+    """Port must be within 1..65535."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=[TMP_DIR], port=70000)
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=[TMP_DIR], port=0)
+
+
+def test_config_default_auth_token_is_none():
+    """Default auth_token is None."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.auth_token is None
+
+
+def test_config_auth_token_is_secret():
+    """auth_token must use SecretStr to avoid leaking in repr/logs."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR], auth_token="abc123")
+    assert isinstance(cfg.auth_token, SecretStr)
+    assert "abc123" not in repr(cfg)
+    assert cfg.auth_token.get_secret_value() == "abc123"
+
+
+def test_config_default_cors_origins_empty():
+    """Default cors_origins is an empty list."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.cors_origins == []
+
+
+def test_config_rejects_wildcard_cors():
+    """Wildcard '*' rejected at startup as a footgun."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(OpenZimMcpConfigurationError):
+        OpenZimMcpConfig(allowed_directories=[TMP_DIR], cors_origins=["*"])
+
+
+def test_config_default_watch_interval():
+    """Default watch_interval_seconds is 5."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.watch_interval_seconds == 5
+
+
+def test_config_rejects_watch_interval_out_of_range():
+    """watch_interval_seconds must be in [1, 60]."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=[TMP_DIR], watch_interval_seconds=0)
+    with pytest.raises(ValueError):
+        OpenZimMcpConfig(allowed_directories=[TMP_DIR], watch_interval_seconds=120)
+
+
+def test_config_default_subscriptions_enabled():
+    """Default subscriptions_enabled is True."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.subscriptions_enabled is True
+
+
+def test_per_operation_limits_round_trip_through_env_vars(monkeypatch):
+    """per_operation_limits must be reachable from env-var/JSON config (M4)."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    monkeypatch.setenv("OPENZIM_MCP_ALLOWED_DIRECTORIES", json.dumps([TMP_DIR]))
+    monkeypatch.setenv(
+        "OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS",
+        '{"search": {"requests_per_second": 1.0, "burst_size": 1}}',
+    )
+    cfg = OpenZimMcpConfig()
+    assert "search" in cfg.rate_limit.per_operation_limits
+    op_cfg = cfg.rate_limit.per_operation_limits["search"]
+    assert op_cfg.requests_per_second == pytest.approx(1.0)
+    assert op_cfg.burst_size == 1
+
+
+def test_rate_limit_config_is_single_class():
+    """Verify RateLimitConfig is a single class (M4).
+
+    The class exposed via openzim_mcp.config and openzim_mcp.rate_limiter
+    must be the same object so per_operation_limits is reachable from
+    env-var/JSON config.
+    """
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.config import RateLimitConfig as ConfigRateLimitConfig
+    from openzim_mcp.rate_limiter import RateLimitConfig as RLRateLimitConfig
+
+    assert ConfigRateLimitConfig is RLRateLimitConfig
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert isinstance(cfg.rate_limit, RLRateLimitConfig)
+
+
+def test_rate_limit_config_per_operation_limits_default_empty():
+    """Default per_operation_limits is an empty dict, not None."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.rate_limit.per_operation_limits == {}

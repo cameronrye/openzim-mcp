@@ -73,7 +73,7 @@ make format
 # Type checking
 make type-check
 
-# Run all checks (lint + type-check + test)
+# Run all checks (lint + type-check + security + test)
 make check
 
 # Run integration tests with ZIM data
@@ -347,10 +347,10 @@ We use labels to categorize issues:
 
 ### Documentation
 
-- [README.md](README.md) - Project overview and usage
-- [docs/TESTING.md](docs/TESTING.md) - Testing guide
-- [docs/LLM.md](docs/LLM.md) - LLM integration guide
-- [docs/BRANCH_PROTECTION.md](docs/BRANCH_PROTECTION.md) - Branch protection setup
+- [README.md](README.md) - Project overview, configuration, and API reference
+- [CHANGELOG.md](CHANGELOG.md) - Release history
+- [SECURITY.md](SECURITY.md) - Security policy and reporting
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) - Community standards
 
 ### External Resources
 

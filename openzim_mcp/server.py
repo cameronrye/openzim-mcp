@@ -2,10 +2,11 @@
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Literal, Optional
+from typing import Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from . import __version__
 from .async_operations import AsyncZimOperations
 from .cache import OpenZimMcpCache
 from .config import OpenZimMcpConfig
@@ -17,9 +18,12 @@ from .error_messages import (
     get_error_config,
 )
 from .exceptions import OpenZimMcpConfigurationError
-from .instance_tracker import InstanceTracker
-from .rate_limiter import RateLimitConfig, RateLimiter
-from .security import PathValidator, sanitize_context_for_error
+from .rate_limiter import RateLimiter
+from .security import (
+    PathValidator,
+    redact_paths_in_message,
+    sanitize_context_for_error,
+)
 from .simple_tools import SimpleToolsHandler
 from .tools import register_all_tools
 from .zim_operations import ZimOperations
@@ -30,35 +34,26 @@ logger = logging.getLogger(__name__)
 class OpenZimMcpServer:
     """Main OpenZIM MCP server class with dependency injection."""
 
-    def __init__(
-        self,
-        config: OpenZimMcpConfig,
-        instance_tracker: Optional[InstanceTracker] = None,
-    ):
+    def __init__(self, config: OpenZimMcpConfig):
         """Initialize OpenZIM MCP server.
 
         Args:
             config: Server configuration
-            instance_tracker: Optional instance tracker for multi-server management
         """
         self.config = config
-        self.instance_tracker = instance_tracker
 
         # Setup logging
         config.setup_logging()
-        logger.info(f"Initializing OpenZIM MCP server v{config.server_name}")
+        logger.info(f"Initializing OpenZIM MCP server v{__version__}")
 
         # Initialize components
         self.path_validator = PathValidator(config.allowed_directories)
         self.cache = OpenZimMcpCache(config.cache)
         self.content_processor = ContentProcessor(config.content.snippet_length)
-        self.rate_limiter = RateLimiter(
-            RateLimitConfig(
-                enabled=config.rate_limit.enabled,
-                requests_per_second=config.rate_limit.requests_per_second,
-                burst_size=config.rate_limit.burst_size,
-            )
-        )
+        # ``RateLimitConfig`` is unified — ``OpenZimMcpConfig.rate_limit`` is
+        # the same model the limiter expects, including ``per_operation_limits``
+        # which would otherwise be unreachable from env-var/JSON config.
+        self.rate_limiter = RateLimiter(config.rate_limit)
         self.zim_operations = ZimOperations(
             config, self.path_validator, self.cache, self.content_processor
         )
@@ -69,9 +64,29 @@ class OpenZimMcpServer:
         if config.tool_mode == TOOL_MODE_SIMPLE:
             self.simple_tools_handler = SimpleToolsHandler(self.zim_operations)
 
-        # Initialize MCP server
+        # Initialize MCP server. FastMCP itself doesn't accept a version
+        # kwarg, but the underlying lowlevel Server does — set it after
+        # construction so MCP `serverInfo.version` advertises openzim-mcp's
+        # version rather than the SDK's default.
         self.mcp = FastMCP(config.server_name)
+        self.mcp._mcp_server.version = __version__
         self._register_tools()
+
+        # Subscription support is HTTP-only: the MtimeWatcher that emits
+        # update notifications only runs under the HTTP lifespan (see
+        # http_app.serve_streamable_http). Wiring handlers in stdio mode
+        # would advertise a capability we silently can't honor.
+        self.subscriber_registry = None
+        if config.subscriptions_enabled and config.transport == "http":
+            from .subscriptions import (
+                SubscriberRegistry,
+                patch_capabilities_to_advertise_subscribe,
+                register_subscription_handlers,
+            )
+
+            self.subscriber_registry = SubscriberRegistry()
+            register_subscription_handlers(self.mcp, self.subscriber_registry)
+            patch_capabilities_to_advertise_subscribe(self.mcp)
 
         logger.info(
             f"OpenZIM MCP server initialized successfully in {config.tool_mode} mode"
@@ -91,8 +106,7 @@ class OpenZimMcpServer:
             )
         else:
             logger.debug(
-                "Use get_server_configuration() or diagnose_server_state() MCP tools "
-                "for detailed configuration and diagnostics"
+                "Use get_server_configuration() MCP tool " "for detailed configuration"
             )
 
     def _create_enhanced_error_message(
@@ -111,7 +125,11 @@ class OpenZimMcpServer:
             Enhanced error message with troubleshooting guidance
         """
         error_type = type(error).__name__
-        base_message = str(error)
+        # Redact absolute paths (e.g. the canonical resolved path embedded
+        # in OpenZimMcpSecurityError) before the message reaches the
+        # client. Without this the host's allowed-dirs layout leaks via
+        # the **Technical Details** field on every rejected traversal.
+        base_message = redact_paths_in_message(str(error))
         sanitized_context = sanitize_context_for_error(context)
 
         # Check for known error types using externalized config
@@ -128,54 +146,6 @@ class OpenZimMcpServer:
             context=sanitized_context,
             details=base_message,
         )
-
-    def _format_conflict_warnings(self, conflicts: List[Dict[str, Any]]) -> str:
-        """Format conflict detection warnings for appending to results."""
-        if not conflicts:
-            return ""
-
-        warning = "\n\n**Server Conflict Detected**\n"
-        for conflict in conflicts:
-            if conflict["type"] == "configuration_mismatch":
-                warning += (
-                    f"WARNING: Configuration mismatch with server "
-                    f"PID {conflict['instance']['pid']}. "
-                    f"Results may be inconsistent.\n"
-                )
-            elif conflict["type"] == "multiple_instances":
-                warning += (
-                    f"WARNING: Multiple servers detected "
-                    f"(PID {conflict['instance']['pid']}). "
-                    f"Results may come from different server instances.\n"
-                )
-        warning += "\nTIP: Use 'resolve_server_conflicts()' to fix these issues.\n"
-        return warning
-
-    def _check_and_append_conflict_warnings(self, result: str) -> str:
-        """Check for conflicts and append warnings to result if found.
-
-        This helper method reduces code duplication by encapsulating the common
-        pattern of checking for instance conflicts and appending warnings to
-        operation results.
-
-        Args:
-            result: The operation result string to potentially append warnings to
-
-        Returns:
-            The result string, with conflict warnings appended if any were detected
-        """
-        if not self.instance_tracker:
-            return result
-        try:
-            conflicts = self.instance_tracker.detect_conflicts(
-                self.config.get_config_hash()
-            )
-            conflict_warning = self._format_conflict_warnings(conflicts)
-            if conflict_warning:
-                return result + conflict_warning
-        except Exception as e:
-            logger.debug(f"Failed to check for conflicts: {e}")
-        return result
 
     def _register_simple_tools(self) -> None:
         """Register simple mode tools with underlying tools for routing."""
@@ -207,14 +177,10 @@ class OpenZimMcpServer:
             - General search: "search for biology", "find evolution"
             - Cross-file search: "search all files for python" → search_all
             - Namespace walk: "walk namespace M" → walk_namespace
-            - Cache warming: "warm cache" → warm_cache
             - Title lookup: "find article titled Photosynthesis"
               → find_entry_by_title
-            - Random article: "random article" → get_random_entry
             - Related articles: "articles related to Climate_Change"
               → get_related_articles
-            - Cache stats: "cache stats" → cache_stats
-            - Cache clear: "clear cache" → cache_clear
 
             Args:
                 query: Natural language query (REQUIRED)
@@ -234,12 +200,8 @@ class OpenZimMcpServer:
                 - "browse namespace C with limit 10"
                 - "search all files for python"
                 - "walk namespace M"
-                - "warm cache"
                 - "find article titled Photosynthesis"
-                - "random article"
                 - "articles related to Climate_Change"
-                - "cache stats"
-                - "clear cache"
             """
             try:
                 # Build options dict from parameters
@@ -289,14 +251,13 @@ class OpenZimMcpServer:
         self._register_advanced_tools()
 
     def _register_advanced_tools(self) -> None:
-        """Register advanced mode tools (all 18 tools).
+        """Register advanced mode tools.
 
         Tools are organized into logical groups in separate modules:
         - File tools: list_zim_files
         - Search tools: search_zim_file
         - Content tools: get_zim_entry
-        - Server tools: get_server_health, get_server_configuration,
-                       diagnose_server_state, resolve_server_conflicts
+        - Server tools: get_server_health, get_server_configuration
         - Metadata tools: get_zim_metadata, get_main_page, list_namespaces
         - Navigation tools: browse_namespace, search_with_filters,
                            get_search_suggestions
@@ -319,21 +280,50 @@ class OpenZimMcpServer:
     #          _register_structure_tools (all moved to tools/ package)
 
     def run(
-        self, transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
+        self,
+        transport: Optional[Literal["stdio", "sse", "streamable-http"]] = None,
     ) -> None:
         """
         Run the OpenZIM MCP server.
 
         Args:
-            transport: Transport protocol to use ("stdio", "sse", or "streamable-http")
+            transport: Optional override for the transport protocol. When
+                ``None`` (default), the value is derived from
+                ``self.config.transport`` — which is the value the
+                ``__init__`` already used to decide whether to wire
+                subscriptions, so the two stay consistent. Passing an
+                explicit value that contradicts the configured transport
+                raises ``OpenZimMcpConfigurationError`` rather than
+                silently advertising capabilities the running transport
+                cannot honour.
 
         Raises:
-            OpenZimMcpConfigurationError: If transport type is invalid
+            OpenZimMcpConfigurationError: If transport type is invalid or
+                disagrees with ``self.config.transport``.
 
         Example:
-            >>> server = OpenZimMcpServer()
-            >>> server.run(transport="stdio")
+            >>> server = OpenZimMcpServer(config)
+            >>> server.run()  # uses config.transport
         """
+        # 'http' is our short name for FastMCP's 'streamable-http' wire value.
+        config_transport: Literal["stdio", "sse", "streamable-http"] = (
+            "streamable-http"
+            if self.config.transport == "http"
+            else self.config.transport
+        )
+
+        if transport is None:
+            transport = config_transport
+        elif transport != config_transport:
+            raise OpenZimMcpConfigurationError(
+                f"Transport mismatch: run(transport={transport!r}) but "
+                f"config.transport is {self.config.transport!r}. "
+                f"Subscriptions and other transport-specific features were "
+                f"wired against the configured transport during __init__; "
+                f"omit the run() argument to use it, or rebuild the server "
+                f"with a matching config.transport."
+            )
+
         # Validate transport type
         if transport not in VALID_TRANSPORT_TYPES:
             raise OpenZimMcpConfigurationError(
@@ -343,7 +333,20 @@ class OpenZimMcpServer:
 
         logger.info(f"Starting OpenZIM MCP server with transport: {transport}")
         try:
-            self.mcp.run(transport=transport)
+            if transport == "streamable-http":
+                from . import http_app
+
+                http_app.serve_streamable_http(self)
+            else:
+                if transport == "sse":
+                    from . import http_app
+
+                    http_app.check_safe_startup(self.config)
+                    # FastMCP's SSE path reads host/port from settings; mirror
+                    # them from config so --host/--port take effect.
+                    self.mcp.settings.host = self.config.host
+                    self.mcp.settings.port = self.config.port
+                self.mcp.run(transport=transport)
         except KeyboardInterrupt:
             logger.info("Server shutdown requested")
         except Exception as e:

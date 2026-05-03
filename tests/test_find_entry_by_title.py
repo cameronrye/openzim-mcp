@@ -1,7 +1,7 @@
 """Tests for find_entry_by_title tool."""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -26,15 +26,15 @@ class TestFindEntryByTitle:
             )
 
     def test_limit_bounds(self, server: OpenZimMcpServer):
-        """Limit < 1 or > 50 returns parameter validation error."""
-        result_low = server.zim_operations.find_entry_by_title(
-            "/zim/test.zim", "Python", cross_file=False, limit=0
-        )
-        assert "Parameter Validation Error" in result_low
-        result_high = server.zim_operations.find_entry_by_title(
-            "/zim/test.zim", "Python", cross_file=False, limit=51
-        )
-        assert "Parameter Validation Error" in result_high
+        """Limit < 1 or > 50 raises OpenZimMcpValidationError."""
+        with pytest.raises(OpenZimMcpValidationError, match="limit must be"):
+            server.zim_operations.find_entry_by_title(
+                "/zim/test.zim", "Python", cross_file=False, limit=0
+            )
+        with pytest.raises(OpenZimMcpValidationError, match="limit must be"):
+            server.zim_operations.find_entry_by_title(
+                "/zim/test.zim", "Python", cross_file=False, limit=51
+            )
 
     def test_fast_path_exact_match(self, server: OpenZimMcpServer, monkeypatch):
         """Direct C/<title> path match short-circuits the suggestion search."""
@@ -75,8 +75,15 @@ class TestFindEntryByTitle:
         mock_suggest = MagicMock()
         mock_suggest.getEstimatedMatches.return_value = 0
         mock_suggest.getResults.return_value = []
-        mock_archive.suggest.return_value = mock_suggest
-        mock_archive.suggestions_count = 0
+
+        # SuggestionSearcher(archive).suggest(title) is the real call path;
+        # patch the constructor so the test stays at the API-shape level.
+        mock_searcher = MagicMock()
+        mock_searcher.suggest.return_value = mock_suggest
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.SuggestionSearcher",
+            lambda archive: mock_searcher,
+        )
 
         monkeypatch.setattr(
             "openzim_mcp.zim_operations.zim_archive",
@@ -141,3 +148,45 @@ def _ctx(value):
             return False
 
     return _C()
+
+
+class TestFindEntryByTitleToolSanitization:
+    """Sanitization tests for the registered MCP tool wrapper."""
+
+    @pytest.fixture
+    def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
+        """Create a test server instance."""
+        return OpenZimMcpServer(test_config)
+
+    @pytest.mark.asyncio
+    async def test_zim_file_path_sanitized_when_cross_file_true(
+        self, server: OpenZimMcpServer
+    ):
+        """zim_file_path is sanitized even when cross_file=True.
+
+        Previously the sanitize call was gated on ``not cross_file``, so a
+        NUL byte in the path would flow through to the backend untouched.
+        Pin the fix by asserting the registered tool strips control chars
+        in this branch.
+        """
+        server.async_zim_operations.find_entry_by_title = AsyncMock(return_value="{}")
+        server.rate_limiter.check_rate_limit = MagicMock()
+
+        tool = server.mcp._tool_manager._tools["find_entry_by_title"]
+        fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
+        assert fn is not None
+
+        bad_path = "any\x00name.zim"
+        await fn(
+            zim_file_path=bad_path,
+            title="Foo",
+            cross_file=True,
+            limit=5,
+        )
+
+        call = server.async_zim_operations.find_entry_by_title.await_args
+        sent_path = call.args[0]
+        assert (
+            "\x00" not in sent_path
+        ), f"NUL byte leaked through with cross_file=True: {sent_path!r}"
+        assert sent_path == "anyname.zim"

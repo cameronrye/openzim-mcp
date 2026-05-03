@@ -6,8 +6,8 @@ We actively support the following versions of OpenZIM MCP with security updates:
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.2.x   |  Yes             |
-| 0.1.x   |  No (deprecated) |
+| 1.0.x   | Yes                |
+| < 1.0   | No                 |
 
 ## Reporting a Vulnerability
 
@@ -17,36 +17,14 @@ We take security vulnerabilities seriously and appreciate your help in keeping O
 
 **Please DO NOT report sensitive security vulnerabilities through public GitHub issues.**
 
-Instead, please report them privately using one of these methods:
-
-#### 1. GitHub Private Vulnerability Reporting (Preferred)
+Instead, please report them privately using GitHub Private Vulnerability Reporting:
 
 1. Go to the [Security tab](https://github.com/cameronrye/openzim-mcp/security) of this repository
 2. Click "Report a vulnerability"
 3. Fill out the vulnerability report form
 4. Submit the report
 
-#### 2. Email Reporting
-
-Send an email to: **security@[project-domain]** (replace with actual email)
-
-Include in your email:
-
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Any suggested fixes
-- Your contact information for follow-up
-
-#### 3. Encrypted Communication
-
-For highly sensitive issues, you can use PGP encryption:
-
-```
------BEGIN PGP PUBLIC KEY BLOCK-----
-[PGP public key would go here]
------END PGP PUBLIC KEY BLOCK-----
-```
+GitHub's private advisories support encrypted communication, attachments, and coordinated disclosure with maintainers — there is no separate email or PGP channel.
 
 ### For Non-Sensitive Security Issues
 
@@ -215,7 +193,6 @@ Stay informed about security updates:
 
 - **GitHub Security Advisories**: Watch this repository for security advisories
 - **Release Notes**: Check release notes for security fixes
-- **Mailing List**: Subscribe to our security mailing list (if available)
 
 ### Update Process
 
@@ -239,18 +216,17 @@ We recognize security contributors through:
 
 ## Contact Information
 
-### Security Team
+### Security Reports
 
-- **Primary Contact**: [security email]
-- **Backup Contact**: [backup email]
-- **Response Time**: 24 hours for initial response
+- **Primary channel**: [GitHub Private Vulnerability Reporting](https://github.com/cameronrye/openzim-mcp/security/advisories/new)
+- **Response time**: 24 hours for initial acknowledgment
 
 ### General Security Questions
 
-For general security questions or discussions:
+For non-sensitive security questions or discussions:
 
-- **GitHub Discussions**: Use the Security category
-- **Email**: [general email]
+- [GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions) — use the Security category
+- [GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues) — for non-exploitable hardening suggestions
 
 ## Legal
 

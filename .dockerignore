@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+.pytest_cache
+.coverage
+coverage.xml
+htmlcov
+__pycache__
+*.pyc
+docs
+website
+test_data
+tests
+*.egg-info
+dist
+.claude

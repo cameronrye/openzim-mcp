@@ -5,6 +5,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpConfigurationError,
     OpenZimMcpError,
     OpenZimMcpFileNotFoundError,
+    OpenZimMcpRateLimitError,
     OpenZimMcpSecurityError,
     OpenZimMcpValidationError,
 )
@@ -66,3 +67,21 @@ class TestOpenZimMcpExceptions:
         except OpenZimMcpError as e:
             assert e.__cause__ == original_error
             assert str(e) == "Wrapped error"
+
+    def test_repr_does_not_leak_details(self):
+        """``repr()`` of an error must not include the ``details`` payload.
+
+        Regression for finding 8.7: ``super().__init__(message, details)``
+        passed both args to ``Exception.__init__``, so ``Exception.args``
+        ended up as ``(message, details)`` and ``repr(error)`` rendered
+        the details into tracebacks. Operational metadata (rate-limit
+        cost breakdowns, request IDs, etc.) intentionally lives in
+        ``details`` and is not safe to surface in tracebacks.
+        """
+        e = OpenZimMcpRateLimitError("Rate limited", "operation=search, cost=2")
+        r = repr(e)
+        assert "operation=search" not in r, f"details leaked into repr(): {r!r}"
+        # Message should still appear so tracebacks remain useful.
+        assert "Rate limited" in r
+        # details must remain accessible programmatically.
+        assert e.details == "operation=search, cost=2"

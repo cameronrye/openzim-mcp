@@ -7,16 +7,17 @@ for cache warmup between restarts.
 """
 
 import atexit
-import contextlib
+import functools
 import heapq
 import json
 import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import CacheConfig
+from .exceptions import OpenZimMcpValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,30 @@ DEFAULT_CLEANUP_INTERVAL = 60
 
 # File extension for persistence files
 CACHE_FILE_EXTENSION = ".json"
+
+
+def _silence_logging_errors(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap an atexit-registered callable to suppress logging-handler errors.
+
+    During interpreter shutdown — or under pytest stream capture — stdout and
+    stderr may be closed before atexit handlers run. Logging calls inside
+    those handlers then raise ``ValueError: I/O operation on closed file``
+    inside ``StreamHandler.emit``, which ``handleError`` reports by writing
+    "--- Logging error ---" plus a traceback to stderr (spamming test output
+    and confusing users). Toggling ``logging.raiseExceptions`` disables that
+    fallback path so failed log writes are silently dropped instead.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        prev = logging.raiseExceptions
+        logging.raiseExceptions = False
+        try:
+            return func(*args, **kwargs)
+        finally:
+            logging.raiseExceptions = prev
+
+    return wrapper
 
 
 class CacheEntry:
@@ -131,12 +156,15 @@ class OpenZimMcpCache:
         # thread is signalled to stop *before* _save_to_disk runs, so the save
         # snapshot doesn't race with concurrent expirations from the cleanup
         # loop.
+        # Wrap both with _silence_logging_errors so that interpreter shutdown
+        # — when stdout/stderr may already be closed by pytest's capture or
+        # the runtime itself — does not spam "--- Logging error ---" tracebacks.
         if config.enabled and self._persistence_enabled:
-            atexit.register(self._save_to_disk)
+            atexit.register(_silence_logging_errors(self._save_to_disk))
 
         if config.enabled and enable_background_cleanup:
             self._start_cleanup_thread()
-            atexit.register(self._stop_cleanup_thread)
+            atexit.register(_silence_logging_errors(self._stop_cleanup_thread))
 
         logger.info(
             f"Cache initialized: enabled={config.enabled}, "
@@ -167,16 +195,10 @@ class OpenZimMcpCache:
         self._cleanup_stop_event.set()
         # Give the thread a chance to exit cleanly
         self._cleanup_thread.join(timeout=2.0)
-        # Use try/except for logging during shutdown to avoid logging errors
-        try:
-            if self._cleanup_thread.is_alive():
-                logger.debug("Cache cleanup thread did not stop in time")
-            else:
-                logger.debug("Cache background cleanup thread stopped")
-        except Exception as e:
-            # Logging may fail during shutdown - best effort debug log
-            with contextlib.suppress(Exception):
-                logger.debug(f"Exception during cleanup thread shutdown: {e}")
+        if self._cleanup_thread.is_alive():
+            logger.debug("Cache cleanup thread did not stop in time")
+        else:
+            logger.debug("Cache background cleanup thread stopped")
         self._cleanup_thread = None
 
     def _background_cleanup_loop(self) -> None:
@@ -237,9 +259,30 @@ class OpenZimMcpCache:
         Args:
             key: Cache key
             value: Value to cache
+
+        Raises:
+            OpenZimMcpValidationError: When persistence is enabled and the
+                value is not JSON-serializable. Surfacing the error at write
+                time prevents silent ``str()`` coercion on save (M21) — a
+                ``Path`` or ``datetime`` round-tripped through persistence
+                would otherwise come back as a plain string and lose its
+                type.
         """
         if not self.config.enabled:
             return
+
+        # Validate JSON-serializability at write time when persistence is
+        # enabled. Pure in-memory caches still accept arbitrary Python
+        # objects — only the persisted path needs JSON guarantees.
+        if self._persistence_enabled:
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError) as exc:
+                raise OpenZimMcpValidationError(
+                    f"Cache value for key {key!r} is not JSON-serializable; "
+                    f"persistence is enabled so the value must be JSON-safe.",
+                    details=str(exc),
+                ) from exc
 
         with self._lock:
             # Check if we need to evict entries
@@ -422,7 +465,13 @@ class OpenZimMcpCache:
 
                 persistence_file.parent.mkdir(parents=True, exist_ok=True)
 
-                # Write to temp file first, then rename for atomicity
+                # Write to temp file first, then rename for atomicity.
+                # We deliberately omit ``default=str``: ``cache.set`` already
+                # validates JSON-serializability when persistence is enabled
+                # (see :meth:`set`), so any non-JSON value reaching this
+                # point is a bug we want to surface rather than silently
+                # coerce to a ``str()`` repr that loses type information on
+                # reload.
                 temp_file = persistence_file.with_suffix(".tmp")
                 with open(temp_file, "w", encoding="utf-8") as f:
                     json.dump(
@@ -433,7 +482,6 @@ class OpenZimMcpCache:
                         },
                         f,
                         indent=2,
-                        default=str,  # Handle non-serializable values
                     )
 
                 # Atomic rename
@@ -471,33 +519,59 @@ class OpenZimMcpCache:
             now_wall = time.time()
             now_monotonic = time.monotonic()
 
+            skipped_count = 0
             with self._lock:
                 for key, entry_data in entries.items():
-                    created_at = entry_data.get("created_at", 0)
-                    ttl_seconds = entry_data.get("ttl_seconds", self.config.ttl_seconds)
+                    # Per-entry try/except so a single malformed entry
+                    # (truncated write, hand-edited file, schema change in a
+                    # future version) doesn't abort the load of every other
+                    # valid entry that follows it.
+                    try:
+                        if not isinstance(entry_data, dict):
+                            raise ValueError("entry payload is not a dict")
+                        if "value" not in entry_data:
+                            raise ValueError("entry missing 'value' field")
 
-                    # Skip expired entries (compare wall-clock-to-wall-clock)
-                    age = now_wall - created_at
-                    if age > ttl_seconds:
+                        created_at = entry_data.get("created_at", 0)
+                        ttl_seconds = entry_data.get(
+                            "ttl_seconds", self.config.ttl_seconds
+                        )
+
+                        # Skip expired entries (compare wall-clock-to-wall-clock)
+                        age = now_wall - created_at
+                        if age > ttl_seconds:
+                            continue
+
+                        # Restore entry. CacheEntry.__init__ stamps a monotonic
+                        # created_at; rewind it by the entry's age so remaining
+                        # TTL is preserved across the restart.
+                        entry = CacheEntry(entry_data["value"], ttl_seconds)
+                        entry.created_at = now_monotonic - age
+                        self._cache[key] = entry
+
+                        # Assign a fresh access_counter value to preserve LRU
+                        # ordering across restart. Loaded entries get
+                        # successively higher counters in iteration order;
+                        # live operations after restart will continue from a
+                        # higher counter.
+                        self._access_counter += 1
+                        self._access_order[key] = self._access_counter
+                        heapq.heappush(self._lru_heap, (self._access_counter, key))
+                        loaded_count += 1
+                    except Exception as entry_err:
+                        skipped_count += 1
+                        logger.debug(
+                            f"Skipped malformed cache entry {key!r}: {entry_err}"
+                        )
                         continue
 
-                    # Restore entry. CacheEntry.__init__ stamps a monotonic
-                    # created_at; rewind it by the entry's age so remaining
-                    # TTL is preserved across the restart.
-                    entry = CacheEntry(entry_data["value"], ttl_seconds)
-                    entry.created_at = now_monotonic - age
-                    self._cache[key] = entry
-
-                    # Assign a fresh access_counter value to preserve LRU
-                    # ordering across restart. Loaded entries get successively
-                    # higher counters in iteration order; live operations
-                    # after restart will continue from a higher counter.
-                    self._access_counter += 1
-                    self._access_order[key] = self._access_counter
-                    heapq.heappush(self._lru_heap, (self._access_counter, key))
-                    loaded_count += 1
-
-            logger.info(f"Loaded {loaded_count} cache entries from disk")
+            if skipped_count:
+                logger.warning(
+                    f"Loaded {loaded_count} cache entries from disk; "
+                    f"skipped {skipped_count} malformed entries"
+                )
+            else:
+                logger.info(f"Loaded {loaded_count} cache entries from disk")
 
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse cache persistence file: {e}")
