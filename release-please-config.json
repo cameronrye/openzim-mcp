@@ -69,12 +69,7 @@
       "extra-files": [
         {
           "type": "generic",
-          "path": "openzim_mcp/__init__.py",
-          "glob": false
-        },
-        {
-          "type": "generic",
-          "path": "llm.txt",
+          "path": "website/llm.txt",
           "glob": false
         }
       ],

@@ -6,7 +6,7 @@
 
 OpenZIM MCP is a Model Context Protocol (MCP) server that enables AI models to access and search ZIM format knowledge bases offline. It provides intelligent, structured access patterns that LLMs need to effectively navigate vast knowledge repositories like Wikipedia, Wiktionary, and other offline content archives.
 
-**Version**: 1.0.0
+**Version**: 1.0.0 <!-- x-release-please-version -->
 **License**: MIT
 **Python**: 3.12+
 **Repository**: https://github.com/cameronrye/openzim-mcp
