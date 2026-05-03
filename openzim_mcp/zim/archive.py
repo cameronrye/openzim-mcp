@@ -407,6 +407,12 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                 try:
                     entry = archive.get_entry_by_path(f"M/{meta_key}")
                     if entry:
+                        # libzim raises RuntimeError if get_item() is called on a
+                        # redirect entry. Resolve the redirect chain first so a
+                        # legitimate metadata redirect doesn't disappear from the
+                        # response simply because it points at the canonical key.
+                        if getattr(entry, "is_redirect", False):
+                            entry = entry.get_redirect_entry()
                         item = entry.get_item()
                         content = (
                             bytes(item.content)

@@ -184,6 +184,15 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
             if effective_limit is None:
                 effective_limit = 5
 
+            if effective_limit < 1 or effective_limit > 50:
+                return (
+                    "**Parameter Validation Error**\n\n"
+                    f"**Issue**: limit_per_file must be between 1 and 50 "
+                    f"(provided: {effective_limit})\n"
+                    "**Example**: Use `limit_per_file=5` for default, "
+                    "`limit_per_file=20` for more results per file."
+                )
+
             return await server.async_zim_operations.search_all(query, effective_limit)
 
         except Exception as e:

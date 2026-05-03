@@ -5,6 +5,8 @@ import logging
 import sys
 from typing import Literal
 
+from pydantic import ValidationError as PydanticValidationError
+
 from .config import OpenZimMcpConfig
 from .constants import TOOL_MODE_SIMPLE, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
@@ -88,7 +90,27 @@ Environment Variables:
         if args.port is not None:
             config_kwargs["port"] = args.port
 
-        config = OpenZimMcpConfig(**config_kwargs)
+        try:
+            config = OpenZimMcpConfig(**config_kwargs)
+        except PydanticValidationError as exc:
+            # Pydantic v2 wraps any exception raised inside a field_validator
+            # (including our own OpenZimMcpConfigurationError) in a
+            # ValidationError. Re-surface as OpenZimMcpConfigurationError so
+            # the operator sees the targeted message rather than pydantic's
+            # multi-line validation dump.
+            messages = []
+            for err in exc.errors():
+                ctx_err = err.get("ctx", {}).get("error")
+                if ctx_err is not None:
+                    messages.append(str(ctx_err))
+                else:
+                    loc = ".".join(str(p) for p in err.get("loc", ()))
+                    messages.append(
+                        f"{loc}: {err.get('msg', 'invalid')}"
+                        if loc
+                        else err.get("msg", "invalid")
+                    )
+            raise OpenZimMcpConfigurationError("; ".join(messages)) from exc
 
         # Create and run server
         server = OpenZimMcpServer(config)

@@ -157,11 +157,14 @@ UNWANTED_HTML_SELECTORS: List[str] = [
 RATE_LIMIT_COSTS: Dict[str, int] = {
     "search": 2,
     "search_with_filters": 2,
+    "find_entry_by_title": 2,
     "get_entry": 1,
+    "get_zim_entries": 1,
     "get_binary_entry": 3,
     "browse_namespace": 1,
     "get_metadata": 1,
     "get_structure": 1,
+    "get_related_articles": 2,
     "suggestions": 1,
     "default": 1,
 }

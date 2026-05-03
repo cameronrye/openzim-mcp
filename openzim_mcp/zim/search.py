@@ -56,6 +56,9 @@ class _SearchMixin:
         # Provided by the content mixin; declared here for type checking.
         def _get_entry_snippet(self, entry: Any) -> str: ...
 
+        # Provided by the namespace mixin; declared here for type checking.
+        def _canonicalise_namespace(self, namespace: str) -> str: ...
+
     def search_zim_file(
         self,
         zim_file_path: str,
@@ -289,6 +292,13 @@ class _SearchMixin:
             whether the response is safe to cache. ``total_filtered`` is 0 for
             both the unfiltered no-results and the post-filter no-matches cases.
         """
+        # Canonicalise user-supplied namespace ("c" -> "C", "content" -> "C")
+        # so the comparison against namespace prefixes derived from libzim
+        # paths (which always surface in canonical form) does not silently
+        # filter every result when callers pass lowercase or long-form names.
+        if namespace:
+            namespace = self._canonicalise_namespace(namespace.strip())
+
         # Create searcher and execute search
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
@@ -350,7 +360,9 @@ class _SearchMixin:
                 else:
                     cheap_namespace = ""
 
-                if namespace and cheap_namespace != namespace:
+                if namespace and (
+                    self._canonicalise_namespace(cheap_namespace) != namespace
+                ):
                     continue
 
                 # If the only filter was namespace and we haven't reached
@@ -375,7 +387,9 @@ class _SearchMixin:
 
                     # Re-check namespace after redirect resolution — a
                     # redirect may have crossed namespaces.
-                    if namespace and entry_namespace != namespace:
+                    if namespace and (
+                        self._canonicalise_namespace(entry_namespace) != namespace
+                    ):
                         continue
 
                     content_mime = ""

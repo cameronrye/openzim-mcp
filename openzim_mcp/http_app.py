@@ -209,7 +209,11 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
         CORSMiddleware,
         allow_origins=list(origins),
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        # Mcp-Session-Id is sent by streamable-HTTP clients on every request
+        # after initialization to resume a session; without allowing it,
+        # browser CORS preflight rejects all session-resume requests.
+        allow_headers=["Authorization", "Content-Type", "Mcp-Session-Id"],
+        expose_headers=["Mcp-Session-Id"],
     )
 
 

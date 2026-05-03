@@ -410,13 +410,24 @@ class _StructureMixin:
         try:
             links_json = self.extract_article_links(zim_file_path, entry_path)
             links_data = json.loads(links_json)
+            # extract_article_links resolves redirects internally and stores
+            # the post-redirect entry path in ``links_data["path"]``. Resolve
+            # relative links against THAT path, not the caller-supplied
+            # entry_path: if entry_path was a redirect to a different
+            # directory (or namespace), resolving against the source's
+            # dirname produces non-existent paths.
+            resolved_source = links_data.get("path") or entry_path
             seen: set[str] = set()
             outbound: List[Dict[str, Any]] = []
             for link in links_data.get("internal_links", []):
                 target = self._resolve_link_to_entry_path(
-                    link.get("url", ""), entry_path
+                    link.get("url", ""), resolved_source
                 )
-                if not target or target in seen or target == entry_path:
+                if (
+                    not target
+                    or target in seen
+                    or target in (entry_path, resolved_source)
+                ):
                     continue
                 seen.add(target)
                 title = link.get("text") or link.get("title") or target

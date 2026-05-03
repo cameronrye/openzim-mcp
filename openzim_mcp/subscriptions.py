@@ -260,6 +260,12 @@ async def _send_one(
             session.send_resource_updated(uri),
             timeout=SEND_TIMEOUT_SECONDS,
         )
+    except asyncio.CancelledError:
+        # CancelledError is BaseException since 3.8 — must re-raise so
+        # gather(return_exceptions=True) does NOT swallow it. Otherwise the
+        # watcher task continues running after stop() cancels it, and the
+        # await self._task in stop() blocks until the next sleep yields.
+        raise
     except asyncio.TimeoutError:
         logger.warning(
             "send_resource_updated timed out after %ss; dropping session",
