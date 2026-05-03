@@ -231,7 +231,8 @@ jobs:
 
       - name: Run slow tests
         run: |
-          uv run pytest -m "slow" --maxfail=5
+          # Exit code 5 means no tests collected; tolerate it until tests are marked @pytest.mark.slow.
+          uv run pytest -m "slow" --maxfail=5 || [ $? -eq 5 ]
 
       - name: Upload comprehensive coverage to Codecov
         if: env.CODECOV_TOKEN != ''
