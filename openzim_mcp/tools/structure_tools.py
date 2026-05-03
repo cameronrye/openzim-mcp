@@ -271,7 +271,7 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
 
         Examples:
             - Get a PDF: get_binary_entry("/path/file.zim", "I/document.pdf")
-            - Get image metadata: get_binary_entry(..., "I/logo.png", False)
+            - Image metadata: get_binary_entry(..., "I/logo.png", include_data=False)
             - Large video: get_binary_entry(..., "I/video.mp4", 100000000)
         """
         try:

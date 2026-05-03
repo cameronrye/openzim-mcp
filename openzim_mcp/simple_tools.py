@@ -237,8 +237,9 @@ class SimpleToolsHandler:
                             "'show \"C/Evolution\"'"
                         )
                 max_content_length = options.get("max_content_length")
+                content_offset = options.get("content_offset", 0)
                 result = self.zim_operations.get_zim_entry(
-                    zim_file_path, entry_path, max_content_length
+                    zim_file_path, entry_path, max_content_length, content_offset
                 )
                 return result + low_confidence_note
 

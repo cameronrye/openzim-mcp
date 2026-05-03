@@ -149,7 +149,10 @@ class MtimeWatcher:
         """Take an initial snapshot and begin polling."""
         if self._task is not None:
             return  # already running
-        self._snapshot = self._scan()
+        # _scan does os.scandir + stat syscalls that block on network-mounted
+        # filesystems. Offload to match _tick so startup doesn't stall the
+        # event loop during the ASGI lifespan.
+        self._snapshot = await asyncio.to_thread(self._scan)
         self._stop_event.clear()
         self._task = asyncio.create_task(self._loop())
 
@@ -296,10 +299,18 @@ async def broadcast_resource_updated(
     sessions = await registry.sessions_for(uri)
     if not sessions:
         return
-    await asyncio.gather(
+    results = await asyncio.gather(
         *(_send_one(registry, session, uri) for session in sessions),
         return_exceptions=True,
     )
+    # gather(return_exceptions=True) collects CancelledError as a value rather
+    # than propagating it. _send_one re-raises CancelledError specifically so
+    # the caller can observe cancellation; preserve that signal here, otherwise
+    # the watcher task continues running after stop() cancels it and the
+    # await self._task in stop() blocks until the next sleep yields.
+    for r in results:
+        if isinstance(r, asyncio.CancelledError):
+            raise r
 
 
 def register_subscription_handlers(

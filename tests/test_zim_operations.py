@@ -302,6 +302,7 @@ class TestZimOperations:
             # Mock archive with main page
             mock_archive_instance = MagicMock()
             mock_main_entry = MagicMock()
+            mock_main_entry.is_redirect = False
             mock_main_entry.title = "Main Page"
             mock_main_entry.path = "W/mainPage"
 
@@ -1026,6 +1027,7 @@ class TestZimOperations:
             def mock_get_entry_by_path(path):
                 if path == "M/Title":
                     mock_entry = MagicMock()
+                    mock_entry.is_redirect = False
                     mock_item = MagicMock()
                     mock_item.content = b"Test Title"
                     mock_entry.get_item.return_value = mock_item
@@ -1039,6 +1041,49 @@ class TestZimOperations:
             result = zim_operations.get_zim_metadata(str(zim_file))
             assert "Test Title" in result
             assert "entry_count" in result
+
+    def test_get_metadata_resolves_redirect_entries(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Metadata redirects must be resolved before calling get_item().
+
+        libzim raises RuntimeError if get_item() is invoked on a redirect entry,
+        so the extractor walks the redirect chain first.
+        """
+        from unittest.mock import MagicMock, patch
+
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive_instance.entry_count = 1
+            mock_archive_instance.all_entry_count = 1
+            mock_archive_instance.article_count = 0
+            mock_archive_instance.media_count = 0
+
+            target_item = MagicMock()
+            target_item.content = b"Resolved Title"
+            target_entry = MagicMock()
+            target_entry.is_redirect = False
+            target_entry.get_item.return_value = target_item
+
+            redirect_entry = MagicMock()
+            redirect_entry.is_redirect = True
+            redirect_entry.get_redirect_entry.return_value = target_entry
+
+            def mock_get_entry_by_path(path):
+                if path == "M/Title":
+                    return redirect_entry
+                raise Exception("Entry not found")
+
+            mock_archive_instance.get_entry_by_path.side_effect = mock_get_entry_by_path
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            result = zim_operations.get_zim_metadata(str(zim_file))
+            assert "Resolved Title" in result
+            redirect_entry.get_item.assert_not_called()
+            target_entry.get_item.assert_called_once()
 
     def test_get_metadata_exception_in_metadata_extraction(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1390,6 +1435,7 @@ class TestZimOperations:
 
             for mime_type, content in test_cases:
                 mock_entry = MagicMock()
+                mock_entry.is_redirect = False
                 mock_entry.title = f"Test {mime_type}"
                 mock_entry.path = f"A/Test_{mime_type.replace('/', '_')}"
                 mock_item = MagicMock()
@@ -1419,6 +1465,7 @@ class TestZimOperations:
 
             # Test HTML content with links
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
             mock_entry.title = "Test Article with Links"
             mock_entry.path = "A/Test_Links"
             mock_item = MagicMock()
@@ -2086,6 +2133,7 @@ class TestZimOperations:
             # Mock archive with HTML article containing links
             mock_archive_instance = MagicMock()
             mock_entry = MagicMock()
+            mock_entry.is_redirect = False
             mock_entry.title = "Test Article"
             mock_entry.path = "C/Test_Article"
 
@@ -2346,6 +2394,7 @@ class TestGetBinaryEntry:
         # Mock the archive
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
         mock_entry.title = "Test Image"
         mock_item = MagicMock()
         mock_item.mimetype = "image/png"
@@ -2383,6 +2432,7 @@ class TestGetBinaryEntry:
 
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
         mock_entry.title = "Test PDF"
         mock_item = MagicMock()
         mock_item.mimetype = "application/pdf"
@@ -2415,6 +2465,7 @@ class TestGetBinaryEntry:
 
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
         mock_entry.title = "Large Video"
         mock_item = MagicMock()
         mock_item.mimetype = "video/mp4"
@@ -2509,6 +2560,7 @@ class TestGetEntrySummaryMaxWords:
 
         mock_archive_instance = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.is_redirect = False
         mock_entry.title = "Plain"
         mock_item = MagicMock()
         mock_item.mimetype = "text/plain"

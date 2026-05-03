@@ -614,6 +614,20 @@ class _ContentMixin:
                             f"or browse_namespace() to explore the file structure."
                         )
 
+                # Resolve the redirect chain — libzim raises RuntimeError on
+                # get_item() of a redirect entry. Reflect the resolved path
+                # back into entry_path so the response identifies the entry
+                # actually served, matching _get_entry_content_direct.
+                redirect_hops = 0
+                while entry.is_redirect:
+                    if redirect_hops >= 8:
+                        raise OpenZimMcpArchiveError(
+                            f"Redirect chain exceeded 8 hops for: '{entry_path}'"
+                        )
+                    entry = entry.get_redirect_entry()
+                    entry_path = entry.path
+                    redirect_hops += 1
+
                 item = entry.get_item()
                 content_size = item.size
                 meta = {
