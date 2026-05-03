@@ -43,9 +43,9 @@ test-live:  ## Run live-server tests (spawn real subprocesses; binds loopback po
 test-live-docker:  ## Run docker live tests only (requires docker daemon; ~10min first build)
 	uv run pytest -m "live and docker" tests/live/ --no-cov
 
-benchmark:  ## Run performance benchmarks
+benchmark:  ## Run performance benchmarks (selects tests marked/named "benchmark")
 	@echo "Running performance benchmarks..."
-	uv run pytest tests/test_benchmarks.py -v --benchmark-only
+	uv run pytest -k "benchmark" -v --benchmark-only
 	@echo "Benchmark completed. Results saved to .benchmarks/"
 
 lint:  ## Run linting
@@ -59,12 +59,12 @@ format:  ## Format code
 type-check:  ## Run type checking
 	uv run mypy openzim_mcp
 
-security:  ## Run security scans
+security:  ## Run security scans (fails on bandit/pip-audit findings)
 	@echo "Running security scans..."
 	@echo "Running bandit security scan..."
-	@uv run bandit -r openzim_mcp -ll || echo "Bandit found low-severity issues (non-blocking)"
+	uv run bandit -r openzim_mcp -ll
 	@echo "Running pip-audit dependency scan..."
-	@uv run pip-audit || echo "Pip-audit scan completed with warnings"
+	uv run pip-audit
 
 download-test-data:  ## Download ZIM test data files
 	uv run python scripts/download_test_data.py --priority 1

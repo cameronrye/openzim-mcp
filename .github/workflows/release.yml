@@ -329,4 +329,6 @@ jobs:
           files: |
             dist/*
           draft: false
-          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          # Use the resolved tag name (works for workflow_dispatch where
+          # github.ref is the source branch, not the release tag).
+          prerelease: ${{ contains(steps.tag.outputs.tag_name, 'alpha') || contains(steps.tag.outputs.tag_name, 'beta') || contains(steps.tag.outputs.tag_name, 'rc') }}

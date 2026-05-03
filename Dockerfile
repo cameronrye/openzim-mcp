@@ -3,8 +3,10 @@
 # ---- builder stage ----
 FROM python:3.13-slim AS builder
 
-# Install uv (fast Python package manager)
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Install uv (fast Python package manager). Pin to a specific tag so the
+# image is reproducible — using :latest changes the binary out from under us
+# every time the upstream image is rebuilt.
+COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
