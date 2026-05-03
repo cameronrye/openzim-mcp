@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/cameronrye/openzim-mcp/main/website/assets/logo.svg" alt="OpenZIM MCP Logo" width="120" height="120">
+  <img src="https://raw.githubusercontent.com/cameronrye/openzim-mcp/main/website/assets/favicon.svg" alt="OpenZIM MCP Logo" width="120" height="120">
 </p>
 
 <h1 align="center">OpenZIM MCP Server</h1>
