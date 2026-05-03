@@ -274,14 +274,14 @@ p { color: var(--text-secondary); }
 
 /* ============= CONSTELLATION ============= */
 .constellation { width: 100%; max-width: 480px; height: auto; }
-.constellation__dot--bright {
-  filter: drop-shadow(0 0 16px rgba(255, 210, 74, 0.45));
-}
 @keyframes constellation-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.85; }
 }
-.constellation__dot--bright { animation: constellation-pulse 4s ease-in-out infinite; }
+.constellation__dot--bright {
+  filter: drop-shadow(0 0 16px rgba(255, 210, 74, 0.45));
+  animation: constellation-pulse 4s ease-in-out infinite;
+}
 @media (prefers-reduced-motion: reduce) {
   .constellation__dot--bright { animation: none; }
 }

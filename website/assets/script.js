@@ -2,24 +2,24 @@
 (function () {
   'use strict';
 
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduceMotion = globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function safeStorage(op, key, val) {
     try { return op === 'get' ? localStorage.getItem(key) : localStorage.setItem(key, val); }
-    catch (e) { return null; }
+    catch { return null; }
   }
 
   // ============= THEME =============
   function initTheme() {
     const stored = safeStorage('get', 'theme');
-    const initial = stored || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-    document.documentElement.setAttribute('data-theme', initial);
+    const initial = stored || (globalThis.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    document.documentElement.dataset.theme = initial;
 
     const toggle = document.getElementById('theme-toggle');
     if (!toggle) return;
     toggle.addEventListener('click', () => {
-      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', next);
+      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = next;
       safeStorage('set', 'theme', next);
     });
   }
@@ -78,8 +78,8 @@
     let anyAnimated = false;
     lines.forEach(l => {
       let len = 0;
-      try { len = l.getTotalLength(); } catch (e) { len = 0; }
-      if (!isFinite(len) || len <= 0) {
+      try { len = l.getTotalLength(); } catch { len = 0; }
+      if (!Number.isFinite(len) || len <= 0) {
         // Safari quirk on complex arc paths — show statically rather than risk a broken render.
         l.style.opacity = '1';
         return;
@@ -101,12 +101,14 @@
       d.style.transition = 'opacity 200ms cubic-bezier(0.2, 0.8, 0.3, 1)';
     });
 
+    const drawLine = (line, i) => setTimeout(() => { line.style.strokeDashoffset = '0'; }, i * 50);
+    const showDot = (dot, i) => {
+      const idx = Number.parseInt(dot.dataset.i || String(i), 10);
+      setTimeout(() => { dot.style.opacity = '1'; }, lines.length * 50 + idx * 60);
+    };
     requestAnimationFrame(() => {
-      lines.forEach((l, i) => setTimeout(() => { l.style.strokeDashoffset = '0'; }, i * 50));
-      dots.forEach((d, i) => {
-        const idx = parseInt(d.dataset.i || String(i), 10);
-        setTimeout(() => { d.style.opacity = '1'; }, lines.length * 50 + idx * 60);
-      });
+      lines.forEach(drawLine);
+      dots.forEach(showDot);
     });
   }
 
@@ -114,7 +116,7 @@
   function initReveal() {
     const items = document.querySelectorAll('[data-reveal]');
     if (!items.length) return;
-    if (reduceMotion || !('IntersectionObserver' in window)) {
+    if (reduceMotion || !('IntersectionObserver' in globalThis)) {
       items.forEach(el => el.classList.add('revealed'));
       return;
     }
@@ -134,18 +136,18 @@
     const buttons = document.querySelectorAll('.copy-btn[data-copy-target]');
     buttons.forEach(btn => {
       btn.addEventListener('click', async () => {
-        const sel = btn.getAttribute('data-copy-target');
+        const sel = btn.dataset.copyTarget;
         const target = sel ? document.querySelector(sel) : null;
         if (!target) return;
         const text = target.innerText.trim();
         try {
           await navigator.clipboard.writeText(text);
           showToast('Copied to clipboard');
-        } catch (e) {
+        } catch {
           // Fallback: select the text so the user can copy it manually.
           const range = document.createRange();
           range.selectNodeContents(target);
-          const sel2 = window.getSelection();
+          const sel2 = globalThis.getSelection();
           if (sel2) { sel2.removeAllRanges(); sel2.addRange(range); }
           showToast('Press ⌘/Ctrl-C to copy');
         }
@@ -170,49 +172,56 @@
   }
 
   // ============= TABS =============
-  function initTabs() {
-    document.querySelectorAll('[data-tabs]').forEach(group => {
-      const buttons = Array.from(group.querySelectorAll('.tabs__btn'));
-      const panels = Array.from(group.querySelectorAll('.tabs__panel'));
+  function nextTabIndex(key, current, count) {
+    if (key === 'ArrowRight') return (current + 1) % count;
+    if (key === 'ArrowLeft') return (current - 1 + count) % count;
+    if (key === 'Home') return 0;
+    if (key === 'End') return count - 1;
+    return -1;
+  }
 
-      const activate = (btn) => {
-        const target = btn.getAttribute('data-tab');
-        buttons.forEach(b => {
-          const active = b === btn;
-          b.classList.toggle('is-active', active);
-          b.setAttribute('aria-selected', String(active));
-          b.setAttribute('tabindex', active ? '0' : '-1');
-        });
-        panels.forEach(p => {
-          const active = p.id === target;
-          p.classList.toggle('is-active', active);
-          if (active) p.removeAttribute('hidden'); else p.setAttribute('hidden', '');
-        });
-      };
+  function setupTabGroup(group) {
+    const buttons = Array.from(group.querySelectorAll('.tabs__btn'));
+    const panels = Array.from(group.querySelectorAll('.tabs__panel'));
 
-      // Initial tabindex state — only the active tab is in the tab order.
+    const activate = (btn) => {
+      const target = btn.dataset.tab;
       buttons.forEach(b => {
-        const active = b.classList.contains('is-active');
+        const active = b === btn;
+        b.classList.toggle('is-active', active);
+        b.setAttribute('aria-selected', String(active));
         b.setAttribute('tabindex', active ? '0' : '-1');
       });
-
-      buttons.forEach(btn => {
-        btn.addEventListener('click', () => activate(btn));
-        btn.addEventListener('keydown', (e) => {
-          const i = buttons.indexOf(btn);
-          let next = -1;
-          if (e.key === 'ArrowRight') next = (i + 1) % buttons.length;
-          else if (e.key === 'ArrowLeft') next = (i - 1 + buttons.length) % buttons.length;
-          else if (e.key === 'Home') next = 0;
-          else if (e.key === 'End') next = buttons.length - 1;
-          if (next >= 0) {
-            e.preventDefault();
-            buttons[next].focus();
-            activate(buttons[next]);
-          }
-        });
+      panels.forEach(p => {
+        const active = p.id === target;
+        p.classList.toggle('is-active', active);
+        if (active) p.removeAttribute('hidden'); else p.setAttribute('hidden', '');
       });
+    };
+
+    // Initial tabindex state — only the active tab is in the tab order.
+    buttons.forEach(b => {
+      const active = b.classList.contains('is-active');
+      b.setAttribute('tabindex', active ? '0' : '-1');
     });
+
+    const onKeydown = (btn) => (e) => {
+      const next = nextTabIndex(e.key, buttons.indexOf(btn), buttons.length);
+      if (next >= 0) {
+        e.preventDefault();
+        buttons[next].focus();
+        activate(buttons[next]);
+      }
+    };
+
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => activate(btn));
+      btn.addEventListener('keydown', onKeydown(btn));
+    });
+  }
+
+  function initTabs() {
+    document.querySelectorAll('[data-tabs]').forEach(setupTabGroup);
   }
 
   // ============= LEGACY ANCHOR REDIRECT =============
