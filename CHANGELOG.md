@@ -124,6 +124,19 @@ Final bug-sweep passes after the main review work above. Categorised by area for
 * **tools:** `get_binary_entry` docstring example uses keyword `include_data=False` (positional `False` was landing in `max_size_bytes`)
 * **packaging:** `Development Status :: 5 - Production/Stable` classifier for the 1.0.0 release
 
+### Final pre-release sweep
+
+* **resource:** `ZimEntryResource.read` and the `zim://files` / `zim://{name}` resource handlers now offload archive opens via `asyncio.to_thread`; previously a single read stalled the HTTP/SSE event loop for every other concurrent client
+* **resource:** `ZimEntryResource.read` resolves redirect chains (with cycle detection and the shared `MAX_REDIRECT_DEPTH = 10` cap) before `entry.get_item()`; previously every redirect-stub path crashed with `RuntimeError` from libzim
+* **content:** `get_zim_entries` (batch) replaces manual `__enter__`/`__exit__` with a regular `with` block — cleaner cleanup on `BaseException`, no silent swallowing of `__exit__` errors
+* **content:** drop `_get_main_page_content`'s `archive._get_entry_by_id(0)` fallback (libzim private API; entry-zero is not the spec's main-page pointer); the inline redirect helper now uses `MAX_REDIRECT_DEPTH` and raises `OpenZimMcpArchiveError` on cycles or chain exhaustion to match the rest of the redirect helpers
+* **server:** `OpenZimMcpServer.run()` defaults to `self.config.transport` (translating the short name `'http'` to FastMCP's `'streamable-http'`) and rejects an explicit `transport=` argument that contradicts the configured value — closes the gap where HTTP-mode subscriptions could be wired while a stdio transport was actually started
+* **search/structure:** `find_entry_by_title`, `search_all`, and `get_related_articles` raise `OpenZimMcpValidationError` on out-of-range `limit` / `limit_per_file` instead of returning a hand-formatted markdown string, so the tool layer sees a consistent exception shape
+* **http:** `_is_loopback_host` adds a 1-second timeout around `socket.gethostbyname("localhost")` so a slow resolver can't hang server startup
+* **ci:** drop `pull_request_target` trigger from `test.yml` / `codeql.yml` / `performance.yml` (closes the pwn-request gap where untrusted PR code could exfiltrate secrets); release-please prerelease detection reads the resolved tag name (works for `workflow_dispatch`); release-please bootstrap-sha placeholders removed; Dockerfile uv image pinned to `0.11`
+* **make:** `make benchmark` selects via `-k benchmark` (the previously referenced `tests/test_benchmarks.py` does not exist); `make security` no longer swallows bandit / pip-audit non-zero exits, so `make check` (used by `release.yml`) actually fails on findings
+* **docs:** `OPENZIM_MCP_TOOL_MODE`, `_TRANSPORT`, `_HOST`, `_PORT`, `_AUTH_TOKEN`, `_CORS_ORIGINS`, `_WATCH_INTERVAL_SECONDS`, `_SUBSCRIPTIONS_ENABLED` documented in the README configuration table; install commands aligned across README / `website/llms.txt` / `website/index.html` (lead with `uv tool install openzim-mcp`); `website/llm.txt` renamed to `website/llms.txt` (matches the [llmstxt.org](https://llmstxt.org) convention) and advertised in the sitemap
+
 ## [0.9.0](https://github.com/cameronrye/openzim-mcp/compare/v0.8.3...v0.9.0) (2026-04-30)
 
 ### Features

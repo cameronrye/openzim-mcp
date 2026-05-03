@@ -927,7 +927,7 @@ Comprehensive server configuration plus diagnostics. Sensitive fields (PIDs, raw
     "cache_max_size": 100,
     "cache_ttl_seconds": 3600,
     "content_max_length": 100000,
-    "content_snippet_length": 200,
+    "content_snippet_length": 1000,
     "search_default_limit": 10,
     "config_hash": "abc12345...",
     "server_pid": "[REDACTED]"
@@ -1366,6 +1366,9 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 | `OPENZIM_MCP_HOST` | `127.0.0.1` | HTTP/SSE bind host. Non-loopback hosts require `OPENZIM_MCP_AUTH_TOKEN`. |
 | `OPENZIM_MCP_PORT` | `8000` | HTTP/SSE bind port. |
 | `OPENZIM_MCP_AUTH_TOKEN` | *(unset)* | Bearer token required when binding HTTP/SSE to a non-loopback interface. |
+| `OPENZIM_MCP_CORS_ORIGINS` | *(empty)* | JSON array of allowed CORS origins for the HTTP transport. Wildcard `*` is rejected. |
+| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | Enable MCP resource subscriptions (HTTP transport only). When `false`, `subscribe` calls succeed but no updates fire. |
+| `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | Polling interval (1–60s) for the subscription mtime watcher. |
 | `OPENZIM_MCP_CACHE__ENABLED` | `true` | Enable/disable caching |
 | `OPENZIM_MCP_CACHE__MAX_SIZE` | `100` | Maximum cache entries |
 | `OPENZIM_MCP_CACHE__TTL_SECONDS` | `3600` | Cache TTL in seconds |

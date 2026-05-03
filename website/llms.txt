@@ -26,11 +26,11 @@ OpenZIM MCP is a Model Context Protocol (MCP) server that enables AI models to a
 ## Installation
 
 ```bash
-# Install from PyPI
-pip install openzim-mcp
+# Install as an isolated CLI tool (recommended)
+uv tool install openzim-mcp
 
-# Or with uv (recommended)
-uv pip install openzim-mcp
+# Or install into the current environment
+pip install openzim-mcp
 ```
 
 ## Quick Start

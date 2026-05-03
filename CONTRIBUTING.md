@@ -73,7 +73,7 @@ make format
 # Type checking
 make type-check
 
-# Run all checks (lint + type-check + test)
+# Run all checks (lint + type-check + security + test)
 make check
 
 # Run integration tests with ZIM data
