@@ -206,7 +206,7 @@
           </div>
           <ul class="hero__stats">
             <li><span class="hero__stat-num">v1.0.0</span><span class="hero__stat-label">Latest release</span></li>
-            <li><span class="hero__stat-num">21</span><span class="hero__stat-label">Tools available</span></li>
+            <li><span class="hero__stat-num">1 + 21</span><span class="hero__stat-label">Simple / advanced tools</span></li>
             <li><span class="hero__stat-num">80%+</span><span class="hero__stat-label">Test coverage</span></li>
             <li><span class="hero__stat-num">MIT</span><span class="hero__stat-label">License</span></li>
           </ul>
@@ -305,7 +305,7 @@
           </li>
           <li>
             <h3>Structured</h3>
-            <p>Search, browse, summarize, traverse — 21 tools designed for how LLMs actually consume knowledge, not just raw file access.</p>
+            <p>Search, browse, summarize, traverse — one intelligent NL tool by default, or 21 specialized tools in advanced mode, designed for how LLMs actually consume knowledge.</p>
           </li>
         </ul>
 
@@ -331,10 +331,11 @@
             <span class="v1__card-dot" aria-hidden="true"></span>
             <h3>Streamable HTTP &amp; SSE transports</h3>
             <p>Run as a long-running service. Bearer-token auth, CORS allow-list, <code>/healthz</code> &amp; <code>/readyz</code>, multi-arch Docker.</p>
-            <pre><code>docker run -p 8080:8080 \
+            <pre><code>docker run -p 8000:8000 \
+  -e OPENZIM_MCP_AUTH_TOKEN="$TOKEN" \
+  -v /path/to/zim:/data:ro \
   ghcr.io/cameronrye/openzim-mcp:1.0.0 \
-  --transport streamable-http \
-  --auth-token "$TOKEN" /data</code></pre>
+  --transport http --host 0.0.0.0 /data</code></pre>
           </li>
 
           <li class="v1__card">
@@ -345,9 +346,9 @@
   "name": "get_zim_entries",
   "arguments": {
     "zim_file_path": "wiki.zim",
-    "entries": ["A/Evolution",
-                "A/Genetics",
-                "A/Mendel"]
+    "entries": ["C/Evolution",
+                "C/Genetics",
+                "C/Mendel"]
   }
 }</code></pre>
           </li>
@@ -356,7 +357,7 @@
             <span class="v1__card-dot" aria-hidden="true"></span>
             <h3>Per-entry MCP resources</h3>
             <p>Each entry exposed as <code>zim://{name}/entry/{path}</code> with libzim's native MIME type — HTML, PDFs, images render in MCP-aware clients.</p>
-            <pre><code>zim://wikipedia_en/entry/A%2FEvolution
+            <pre><code>zim://wikipedia_en/entry/C%2FEvolution
 # returns text/html
 
 zim://gutenberg/entry/I%2Fbook_cover.jpg
@@ -470,7 +471,7 @@ uv sync</code></pre>
             <h3>Run it</h3>
             <pre><code>uv run openzim-mcp ~/zim-files</code></pre>
             <p class="try__callout">
-              Or as an HTTP service: <code>--transport streamable-http --auth-token $TOKEN</code>
+              Or as an HTTP service: <code>OPENZIM_MCP_AUTH_TOKEN=$TOKEN openzim-mcp --transport http --host 0.0.0.0 ~/zim-files</code>
             </p>
           </li>
         </ol>
@@ -501,12 +502,12 @@ uv sync</code></pre>
                   <pre><code>Found 42 matches, showing 1-5:
 
 ## 1. Artificial Intelligence
-Path: A/Artificial_intelligence
+Path: C/Artificial_intelligence
 Snippet: Artificial intelligence (AI) is
 intelligence demonstrated by machines...
 
 ## 2. Machine Learning
-Path: A/Machine_learning
+Path: C/Machine_learning
 Snippet: Machine learning is a subset of
 artificial intelligence...</code></pre>
                 </div>

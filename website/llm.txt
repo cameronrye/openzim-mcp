@@ -138,10 +138,10 @@ Automatic fallback from direct access to search-based retrieval:
 search_zim_file(zim_file_path="wikipedia_en.zim", query="quantum physics", limit=10)
 
 # Get article content
-get_zim_entry(zim_file_path="wikipedia_en.zim", entry_path="A/Quantum_mechanics")
+get_zim_entry(zim_file_path="wikipedia_en.zim", entry_path="C/Quantum_mechanics")
 
 # Discover related articles
-get_related_articles(zim_file_path="wikipedia_en.zim", entry_path="A/Quantum_mechanics")
+get_related_articles(zim_file_path="wikipedia_en.zim", entry_path="C/Quantum_mechanics")
 ```
 
 ### Knowledge Chatbot
