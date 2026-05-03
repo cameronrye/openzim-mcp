@@ -6,11 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      pr_number:
-        description: "PR number to test (optional)"
-        required: false
-        type: string
 
 jobs:
   test:

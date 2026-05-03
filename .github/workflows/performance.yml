@@ -6,11 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      pr_number:
-        description: "PR number to benchmark (optional)"
-        required: false
-        type: string
   schedule:
     - cron: "0 2 * * 1" # Weekly on Mondays at 2 AM UTC
 

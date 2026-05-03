@@ -6,11 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      pr_number:
-        description: "PR number to analyze (optional)"
-        required: false
-        type: string
   schedule:
     - cron: "0 6 * * 1" # Weekly on Mondays at 6 AM UTC
 
