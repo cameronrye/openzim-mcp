@@ -891,7 +891,7 @@ wheels = [
 [[package]]
 name = "openzim-mcp"
 version = "1.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "html2text" },

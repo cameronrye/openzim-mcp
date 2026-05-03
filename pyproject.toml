@@ -61,6 +61,10 @@ Documentation = "https://github.com/cameronrye/openzim-mcp#readme"
 [project.scripts]
 openzim-mcp = "openzim_mcp.__main__:main"
 
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["openzim_mcp*"]

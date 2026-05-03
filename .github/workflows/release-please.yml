@@ -104,26 +104,25 @@ jobs:
           TAG_VERSION="${{ needs.release-please.outputs.version }}"
           echo "Expected version: $TAG_VERSION"
 
-          # Check pyproject.toml
+          # pyproject.toml and the release-please manifest are the two
+          # static sources of truth. ``openzim_mcp/__init__.py`` derives
+          # ``__version__`` dynamically via ``importlib.metadata`` from the
+          # installed wheel, which itself reads pyproject.toml — so a
+          # static grep there has no value, and using ``importlib.metadata``
+          # without first ``pip install``ing the package would just hit the
+          # PackageNotFoundError fallback.
           PYPROJECT_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           echo "pyproject.toml version: $PYPROJECT_VERSION"
 
-          # Check __init__.py
-          INIT_VERSION=$(grep '__version__ = ' openzim_mcp/__init__.py | sed 's/__version__ = "\(.*\)"/\1/')
-          echo "__init__.py version: $INIT_VERSION"
-
-          # Check manifest
           MANIFEST_VERSION=$(jq -r '."."' .release-please-manifest.json)
           echo "manifest version: $MANIFEST_VERSION"
 
-          # Validate all versions match
-          if [ "$TAG_VERSION" = "$PYPROJECT_VERSION" ] && [ "$TAG_VERSION" = "$INIT_VERSION" ] && [ "$TAG_VERSION" = "$MANIFEST_VERSION" ]; then
+          if [ "$TAG_VERSION" = "$PYPROJECT_VERSION" ] && [ "$TAG_VERSION" = "$MANIFEST_VERSION" ]; then
             echo "✅ All versions are synchronized!"
           else
             echo "❌ Version mismatch detected!"
             echo "Tag: $TAG_VERSION"
             echo "pyproject.toml: $PYPROJECT_VERSION"
-            echo "__init__.py: $INIT_VERSION"
             echo "manifest: $MANIFEST_VERSION"
             exit 1
           fi

@@ -81,13 +81,6 @@ jobs:
             echo '{"benchmarks": [], "datetime": "'$(date -Iseconds)'", "version": "invalid-json-fallback"}' > benchmark-results.json
           fi
 
-      - name: Store benchmark results (temporarily disabled)
-        if: false # Temporarily disable to avoid git conflicts during release system testing
-        run: |
-          echo "Benchmark storage temporarily disabled during release system testing"
-          echo "This will be re-enabled after the release system is validated"
-          echo "Benchmark results are still generated and available as artifacts"
-
       - name: Verify benchmark results file
         if: github.event_name == 'pull_request'
         run: |

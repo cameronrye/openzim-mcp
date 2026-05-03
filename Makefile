@@ -94,7 +94,7 @@ publish:  ## Publish to PyPI (requires authentication)
 publish-test:  ## Publish to TestPyPI (requires authentication)
 	@echo "Publishing to TestPyPI..."
 	@echo "Note: Ensure you have proper authentication configured"
-	uv publish --index-url https://test.pypi.org/simple/
+	uv publish --publish-url https://test.pypi.org/legacy/
 
 run:  ## Run the server (requires ZIM_DIR environment variable)
 	@uv run python scripts/run_server.py

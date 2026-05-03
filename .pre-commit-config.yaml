@@ -20,9 +20,10 @@ repos:
       - id: name-tests-test
         args: ["--pytest-test-first"]
 
-  # Python code formatting
+  # Python code formatting — keep in lockstep with the dev-deps pin in
+  # pyproject.toml so ``make format`` and pre-commit don't drift.
   - repo: https://github.com/psf/black
-    rev: 26.1.0
+    rev: 26.3.1
     hooks:
       - id: black
         language_version: python3.12
@@ -30,7 +31,7 @@ repos:
 
   # Import sorting
   - repo: https://github.com/pycqa/isort
-    rev: 7.0.0
+    rev: 8.0.1
     hooks:
       - id: isort
         args: ["--profile=black", "--line-length=88"]
@@ -49,7 +50,7 @@ repos:
 
   # Type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.1
+    rev: v1.20.2
     hooks:
       - id: mypy
         files: ^openzim_mcp/
@@ -60,18 +61,11 @@ repos:
 
   # Security scanning
   - repo: https://github.com/PyCQA/bandit
-    rev: 1.8.0
+    rev: 1.9.4
     hooks:
       - id: bandit
         args: ["-c", "pyproject.toml"]
         additional_dependencies: ["bandit[toml]"]
-
-  # Documentation
-  - repo: https://github.com/pycqa/pydocstyle
-    rev: 6.3.0
-    hooks:
-      - id: pydocstyle
-        args: ["--convention=google", "--add-ignore=D202,D212"]
 
   # Markdown linting
   - repo: https://github.com/igorshubovych/markdownlint-cli
