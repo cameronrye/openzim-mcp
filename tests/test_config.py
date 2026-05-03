@@ -291,7 +291,7 @@ def test_per_operation_limits_round_trip_through_env_vars(monkeypatch):
     cfg = OpenZimMcpConfig()
     assert "search" in cfg.rate_limit.per_operation_limits
     op_cfg = cfg.rate_limit.per_operation_limits["search"]
-    assert op_cfg.requests_per_second == 1.0
+    assert op_cfg.requests_per_second == pytest.approx(1.0)
     assert op_cfg.burst_size == 1
 
 

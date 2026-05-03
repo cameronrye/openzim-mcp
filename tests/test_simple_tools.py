@@ -237,8 +237,8 @@ class TestIntentParser:
         assert intent == "toc"
         assert params.get("entry_path") == "Biology"
         # toc has base 0.95 — no boost should apply because base >= 0.8.
-        assert (
-            conf == 0.95
+        assert conf == pytest.approx(
+            0.95
         ), f"high-base intent received an unwanted boost: confidence={conf}"
 
 

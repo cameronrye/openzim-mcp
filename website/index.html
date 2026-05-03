@@ -43,11 +43,10 @@
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
   <link rel="author" type="text/plain" href="humans.txt">
 
-  <!-- Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Fraunces:wght@600&display=swap" rel="stylesheet">
-
+  <!-- Fonts: rely on the system font stack declared in styles.css. Avoiding
+       third-party CDN fonts removes a privacy hop (no request leaks to
+       Google Fonts) and the subresource-integrity gap that comes with a
+       dynamically generated stylesheet that cannot be hashed. -->
   <link rel="stylesheet" href="assets/styles.css">
 
   <!-- Legacy fragment redirect (runs before render to avoid scroll jump) -->
@@ -93,7 +92,7 @@
   <script type="application/ld+json">
   { "@context": "https://schema.org", "@type": "Organization", "name": "OpenZIM MCP",
     "url": "https://cameronrye.github.io/openzim-mcp/",
-    "logo": "https://cameronrye.github.io/openzim-mcp/assets/logo.svg",
+    "logo": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg",
     "founder": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" } }
   </script>
   <script type="application/ld+json">

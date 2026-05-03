@@ -177,47 +177,59 @@ def _spawn(
 
     # Wait for readiness. http transport exposes /healthz; sse uses
     # FastMCP's built-in app which doesn't, so we fall back to a TCP probe.
+    # stdio has no readiness probe — the caller drives the process directly.
     if transport in ("http", "sse"):
-        deadline = time.monotonic() + 10.0
-        last_err: Optional[BaseException] = None
-        while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                stderr_text = (
-                    stderr_path.read_text()
-                    if stderr_path and stderr_path.exists()
-                    else ""
-                )
-                raise RuntimeError(
-                    f"openzim-mcp exited early with code {proc.returncode}.\n"
-                    f"Command: {' '.join(cmd)}\n"
-                    f"Stderr:\n{stderr_text}"
-                )
-            try:
-                if transport == "http":
-                    resp = httpx.get(f"http://{host}:{port}/healthz", timeout=0.5)
-                    if resp.status_code == 200:
-                        return server
-                else:  # sse
-                    with socket.create_connection((host, port), timeout=0.5):
-                        return server
-            except Exception as e:  # pragma: no cover
-                last_err = e
-            time.sleep(0.1)
-        # Timed out — kill and raise.
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        stderr_text = (
-            stderr_path.read_text() if stderr_path and stderr_path.exists() else ""
-        )
-        raise RuntimeError(
-            f"openzim-mcp on {host}:{port} did not become ready within 10s.\n"
-            f"Last error: {last_err}\nStderr:\n{stderr_text}"
-        )
+        _wait_for_ready(server, proc, cmd, host, port, transport, stderr_path)
 
     return server
+
+
+def _wait_for_ready(
+    server: "LiveServer",
+    proc: subprocess.Popen,
+    cmd: List[str],
+    host: str,
+    port: int,
+    transport: str,
+    stderr_path: Optional[Path],
+) -> None:
+    """Block until the server reports ready, or raise on timeout/early exit."""
+    deadline = time.monotonic() + 10.0
+    last_err: Optional[BaseException] = None
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            stderr_text = (
+                stderr_path.read_text() if stderr_path and stderr_path.exists() else ""
+            )
+            raise RuntimeError(
+                f"openzim-mcp exited early with code {proc.returncode}.\n"
+                f"Command: {' '.join(cmd)}\n"
+                f"Stderr:\n{stderr_text}"
+            )
+        try:
+            if transport == "http":
+                resp = httpx.get(f"http://{host}:{port}/healthz", timeout=0.5)
+                if resp.status_code == 200:
+                    return
+            else:  # sse
+                with socket.create_connection((host, port), timeout=0.5):
+                    return
+        except Exception as e:  # pragma: no cover
+            last_err = e
+        time.sleep(0.1)
+    # Timed out — kill and raise.
+    proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    stderr_text = (
+        stderr_path.read_text() if stderr_path and stderr_path.exists() else ""
+    )
+    raise RuntimeError(
+        f"openzim-mcp on {host}:{port} did not become ready within 10s.\n"
+        f"Last error: {last_err}\nStderr:\n{stderr_text}"
+    )
 
 
 def _terminate(server: LiveServer) -> None:

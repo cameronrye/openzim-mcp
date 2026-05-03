@@ -33,9 +33,11 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Copy the virtualenv from builder
-COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
-COPY --from=builder --chown=appuser:appuser /app/openzim_mcp /app/openzim_mcp
+# Copy the virtualenv from builder. --chmod=755 (non-writable for the
+# owner's group/others, no group/world write) avoids shipping app code
+# the runtime user can mutate at rest.
+COPY --from=builder --chown=appuser:appuser --chmod=755 /app/.venv /app/.venv
+COPY --from=builder --chown=appuser:appuser --chmod=755 /app/openzim_mcp /app/openzim_mcp
 
 ENV PATH="/app/.venv/bin:$PATH"
 

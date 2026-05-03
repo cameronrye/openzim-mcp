@@ -162,8 +162,6 @@ async def test_watcher_detects_same_size_replacement(tmp_path):
     a watcher: a stale subscriber gets stale data forever. A `touch`-style
     bump that triggers an extra refresh is the cheaper trade-off.
     """
-    import time
-
     from openzim_mcp.subscriptions import MtimeWatcher
 
     target = tmp_path / "archive.zim"
@@ -182,7 +180,7 @@ async def test_watcher_detects_same_size_replacement(tmp_path):
     # Replace with same-length but different content; sleep to ensure the
     # mtime delta exceeds filesystem granularity (most FSes give us at
     # least ms resolution; 50ms is comfortably above that).
-    time.sleep(0.05)
+    await asyncio.sleep(0.05)
     target.write_bytes(b"b" * 1024)
 
     await watcher._tick()

@@ -159,8 +159,9 @@ class MtimeWatcher:
             return
         self._stop_event.set()
         self._task.cancel()
-        # Cancellation always raises CancelledError on the awaited task; any
-        # other late exception during teardown is swallowed deliberately.
+        # Drive the task to completion so the cancellation actually propagates
+        # before we drop the reference. Cancellation raises CancelledError;
+        # any other late exception during teardown is swallowed deliberately.
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await self._task
         self._task = None
@@ -230,7 +231,10 @@ class MtimeWatcher:
                     return
                 await self._tick()
         except asyncio.CancelledError:
-            return
+            # Re-raise so the cancelling caller can observe completion;
+            # asyncio Tasks rely on CancelledError propagating to mark
+            # themselves cancelled rather than completed-with-result.
+            raise
 
 
 # Per-subscriber timeout for ``send_resource_updated`` during broadcast. See
