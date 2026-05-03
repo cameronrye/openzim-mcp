@@ -33,11 +33,12 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Copy the virtualenv from builder. --chmod=755 (non-writable for the
-# owner's group/others, no group/world write) avoids shipping app code
-# the runtime user can mutate at rest.
-COPY --from=builder --chown=appuser:appuser --chmod=755 /app/.venv /app/.venv
-COPY --from=builder --chown=appuser:appuser --chmod=755 /app/openzim_mcp /app/openzim_mcp
+# Copy the virtualenv and source from builder as read-only (--chmod=555:
+# r-x for owner/group/other, no write bits). uv pre-compiles .pyc during
+# install, so the runtime never needs to write into /app; making the tree
+# read-only at rest keeps the runtime user from mutating its own code.
+COPY --from=builder --chown=appuser:appuser --chmod=555 /app/.venv /app/.venv
+COPY --from=builder --chown=appuser:appuser --chmod=555 /app/openzim_mcp /app/openzim_mcp
 
 ENV PATH="/app/.venv/bin:$PATH"
 
