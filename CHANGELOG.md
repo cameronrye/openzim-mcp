@@ -100,6 +100,30 @@ Includes an end-to-end review pass before tagging — security hardening, correc
 * **main:** route startup banner through the logger (now respects `OPENZIM_MCP_LOGGING__LEVEL`)
 * **simple-tools:** consistently append low-confidence note across all intents (was missing on `search_all`, `walk_namespace`, `find_by_title`, `related`)
 
+### Pre-release fix-up
+
+Final bug-sweep passes after the main review work above. Categorised by area for easier scanning.
+
+* **content/structure:** `_resolve_entry_with_fallback` and `get_binary_entry` now follow the redirect chain (bounded to 8 hops) before calling `entry.get_item()`. Without this the structure, links, TOC, summary, and binary-entry tools all crashed with `RuntimeError` from libzim whenever the requested path was a redirect to the canonical article (the common case for Kiwix-generated ZIMs)
+* **content:** `_get_main_page_content` resolves `archive.main_entry` and the fallback `main_page_paths` entries before calling `get_item()`. Most ZIMs point `W/mainPage` at the real article via a redirect; previously this raised on every such archive
+* **content:** `get_zim_metadata` resolves redirect entries before reading metadata content
+* **content:** `get_related_articles` preserves trailing slash in path resolution and resolves relative links against the post-redirect path
+* **zim:** `_resolve_link_to_entry_path` rejects self-referential refs that previously fed back into the resolver
+* **search:** `_perform_filtered_search` canonicalises lowercase / long-form namespace input so filters stop silently dropping every result; suggestion cache now skips zero-result responses
+* **search:** `search_all` validates effective_limit is in the documented 1-50 range
+* **simple-tools:** `get_article` intent forwards `options[content_offset]` so simple-mode pagination works (previously always returned page 1); passthrough intents forward `options[limit]` / `options[offset]`
+* **subscriptions:** `broadcast_resource_updated` re-raises `CancelledError` that `gather(return_exceptions=True)` had silently collected, so `stop()` no longer hangs until the next sleep tick
+* **subscriptions:** `MtimeWatcher.start()` offloads initial `_scan` via `asyncio.to_thread` to match `_tick`, no longer blocking the ASGI lifespan on slow filesystems
+* **subscriptions:** mtime scan offloaded to thread; fan-out cleanup guarded against late exceptions
+* **prompts:** switch user-input interpolation delimiter to backticks and preserve quotes in user input
+* **rate-limit:** add missing `RATE_LIMIT_COSTS` keys for `find_entry_by_title`, `get_zim_entries`, `get_related_articles` (were silently using the cost=1 default)
+* **http:** add `Mcp-Session-Id` to CORS `allow_headers` and `expose_headers` so browser MCP clients can resume sessions
+* **main:** catch `pydantic.ValidationError` from `OpenZimMcpConfig` construction and re-surface as `OpenZimMcpConfigurationError` so operators see a clean message instead of a pydantic validation dump
+* **cache:** suppress shutdown logging spam; tolerate malformed persisted entries
+* **security:** symlink-tighten archive scan; harden error context; sanitise `name_filter`; reject whitespace-only CORS wildcard
+* **tools:** `get_binary_entry` docstring example uses keyword `include_data=False` (positional `False` was landing in `max_size_bytes`)
+* **packaging:** `Development Status :: 5 - Production/Stable` classifier for the 1.0.0 release
+
 ## [0.9.0](https://github.com/cameronrye/openzim-mcp/compare/v0.8.3...v0.9.0) (2026-04-30)
 
 ### Features
