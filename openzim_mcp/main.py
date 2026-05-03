@@ -14,9 +14,8 @@ from .server import OpenZimMcpServer
 logger = logging.getLogger(__name__)
 
 
-def main() -> None:
-    """Run the OpenZIM MCP server."""
-    # Parse command line arguments
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser used by ``main``."""
     parser = argparse.ArgumentParser(
         description="OpenZIM MCP Server - Access ZIM files through MCP",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -69,8 +68,46 @@ Environment Variables:
         default=None,
         help=("HTTP/SSE bind port (default 8000). Env: OPENZIM_MCP_PORT"),
     )
+    return parser
 
-    # Handle case where no arguments provided
+
+def _config_kwargs_from_args(args: argparse.Namespace) -> dict:
+    """Translate parsed CLI args into OpenZimMcpConfig keyword arguments."""
+    kwargs: dict = {"allowed_directories": args.directories}
+    if args.mode:
+        kwargs["tool_mode"] = args.mode
+    if args.transport:
+        kwargs["transport"] = args.transport
+    if args.host:
+        kwargs["host"] = args.host
+    if args.port is not None:
+        kwargs["port"] = args.port
+    return kwargs
+
+
+def _format_pydantic_error(exc: PydanticValidationError) -> str:
+    """Flatten a pydantic ValidationError into a single readable message.
+
+    Pydantic v2 wraps any exception raised inside a field_validator
+    (including our own OpenZimMcpConfigurationError) in a ValidationError.
+    Re-surface the original message instead of pydantic's multi-line dump.
+    """
+    messages = []
+    for err in exc.errors():
+        ctx_err = err.get("ctx", {}).get("error")
+        if ctx_err is not None:
+            messages.append(str(ctx_err))
+            continue
+        loc = ".".join(str(p) for p in err.get("loc", ()))
+        msg = err.get("msg", "invalid")
+        messages.append(f"{loc}: {msg}" if loc else msg)
+    return "; ".join(messages)
+
+
+def main() -> None:
+    """Run the OpenZIM MCP server."""
+    parser = _build_arg_parser()
+
     if len(sys.argv) == 1:
         parser.print_help(sys.stderr)
         sys.exit(1)
@@ -78,40 +115,11 @@ Environment Variables:
     args = parser.parse_args()
 
     try:
-        # Create configuration with tool mode
-        config_kwargs = {"allowed_directories": args.directories}
-        if args.mode:
-            config_kwargs["tool_mode"] = args.mode
-        if args.transport:
-            config_kwargs["transport"] = args.transport
-        if args.host:
-            config_kwargs["host"] = args.host
-        if args.port is not None:
-            config_kwargs["port"] = args.port
-
         try:
-            config = OpenZimMcpConfig(**config_kwargs)
+            config = OpenZimMcpConfig(**_config_kwargs_from_args(args))
         except PydanticValidationError as exc:
-            # Pydantic v2 wraps any exception raised inside a field_validator
-            # (including our own OpenZimMcpConfigurationError) in a
-            # ValidationError. Re-surface as OpenZimMcpConfigurationError so
-            # the operator sees the targeted message rather than pydantic's
-            # multi-line validation dump.
-            messages = []
-            for err in exc.errors():
-                ctx_err = err.get("ctx", {}).get("error")
-                if ctx_err is not None:
-                    messages.append(str(ctx_err))
-                else:
-                    loc = ".".join(str(p) for p in err.get("loc", ()))
-                    messages.append(
-                        f"{loc}: {err.get('msg', 'invalid')}"
-                        if loc
-                        else err.get("msg", "invalid")
-                    )
-            raise OpenZimMcpConfigurationError("; ".join(messages)) from exc
+            raise OpenZimMcpConfigurationError(_format_pydantic_error(exc)) from exc
 
-        # Create and run server
         server = OpenZimMcpServer(config)
 
         mode_desc = (

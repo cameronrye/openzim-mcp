@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# MIME type that drives the HTML-aware structure/links code paths.
+TEXT_HTML_MIME = "text/html"
+
 
 class _StructureMixin:
     """Article-structure / link / TOC methods for ZimOperations."""
@@ -107,7 +110,7 @@ class _StructureMixin:
             }
 
             # Process HTML content for structure
-            if mime_type.startswith("text/html"):
+            if mime_type.startswith(TEXT_HTML_MIME):
                 structure.update(
                     self.content_processor.extract_html_structure(raw_content)
                 )
@@ -202,7 +205,7 @@ class _StructureMixin:
             }
 
             # Process HTML content for links
-            if mime_type.startswith("text/html"):
+            if mime_type.startswith(TEXT_HTML_MIME):
                 links_data.update(
                     self.content_processor.extract_html_links(raw_content)
                 )
@@ -285,7 +288,7 @@ class _StructureMixin:
                 "max_depth": 0,
             }
 
-            if not mime_type.startswith("text/html"):
+            if not mime_type.startswith(TEXT_HTML_MIME):
                 toc_data["message"] = (
                     f"TOC extraction requires HTML content, got: {mime_type}"
                 )

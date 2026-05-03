@@ -13,6 +13,10 @@ from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
 
 logger = logging.getLogger(__name__)
 
+# BeautifulSoup parser name; pinned so the dependency footprint stays minimal
+# (no lxml/html5lib needed) and the parsing semantics stay consistent.
+HTML_PARSER = "html.parser"
+
 # Link schemes that are not navigable as ZIM-internal links and should be
 # excluded from extracted-link results. Keeps results actionable for an LLM.
 NON_NAVIGABLE_LINK_SCHEMES = (
@@ -112,14 +116,14 @@ class ParsedHTML:
             html_content: Raw HTML string to parse
         """
         self.original_html = html_content
-        self._soup = BeautifulSoup(html_content, "html.parser")
+        self._soup = BeautifulSoup(html_content, HTML_PARSER)
         # Store a copy of the original parsed soup for operations that modify it
         self._original_soup_html = str(self._soup)
 
     @property
     def soup(self) -> BeautifulSoup:
         """Return a fresh copy of the parsed soup for modifying operations."""
-        return BeautifulSoup(self._original_soup_html, "html.parser")
+        return BeautifulSoup(self._original_soup_html, HTML_PARSER)
 
     @property
     def soup_for_reading(self) -> BeautifulSoup:
@@ -238,7 +242,7 @@ class ContentProcessor:
 
         try:
             # Parse HTML with BeautifulSoup
-            soup = BeautifulSoup(html_content, "html.parser")
+            soup = BeautifulSoup(html_content, HTML_PARSER)
 
             # Remove unwanted elements
             for selector in UNWANTED_HTML_SELECTORS:
@@ -257,7 +261,7 @@ class ContentProcessor:
         except Exception as e:
             logger.warning(f"Error converting HTML to text: {e}")
             # Fallback: return raw text content
-            soup = BeautifulSoup(html_content, "html.parser")
+            soup = BeautifulSoup(html_content, HTML_PARSER)
             return str(soup.get_text().strip())
 
     def create_snippet(self, content: str, max_paragraphs: int = 2) -> str:
@@ -364,7 +368,7 @@ class ContentProcessor:
             Dictionary containing structure information
         """
         try:
-            soup = BeautifulSoup(html_content, "html.parser")
+            soup = BeautifulSoup(html_content, HTML_PARSER)
             return self._extract_structure_from_soup(soup)
         except Exception as e:
             logger.warning(f"Error extracting HTML structure: {e}")
@@ -525,7 +529,7 @@ class ContentProcessor:
             Dictionary containing link information
         """
         try:
-            soup = BeautifulSoup(html_content, "html.parser")
+            soup = BeautifulSoup(html_content, HTML_PARSER)
             return self._extract_links_from_soup(soup)
         except Exception as e:
             logger.warning(f"Error extracting HTML links: {e}")
