@@ -41,3 +41,22 @@ query-filters:
   # implementation is defined outside the ``TYPE_CHECKING`` guard.
   - exclude:
       id: py/conflicting-attributes
+
+  # Test-only style nits that fire on intentional patterns:
+  #  - ``py/not-named-self``: inner ``class FakeCtx`` context managers defined
+  #    inside test methods use ``self_inner`` for ``__enter__`` / ``__exit__``
+  #    to avoid shadowing the enclosing test method's ``self``. Renaming to
+  #    ``self`` would compile but obscure the intent.
+  #  - ``py/import-and-import-from``: a handful of tests pair a top-of-file
+  #    ``from openzim_mcp.X import Y`` with a deferred ``import openzim_mcp.X``
+  #    inside a test function on purpose — to exercise re-import paths or to
+  #    keep a module reference for monkeypatching.
+  #  - ``py/ineffectual-statement``: ``await <cancelled_task>`` to drain a
+  #    cancelled coroutine produces no value but is the documented way to
+  #    surface a CancelledError before the test exits.
+  - exclude:
+      id: py/not-named-self
+  - exclude:
+      id: py/import-and-import-from
+  - exclude:
+      id: py/ineffectual-statement
