@@ -1156,6 +1156,10 @@ class TestZimOperations:
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive_instance = MagicMock()
+            # Old-scheme paths are namespace-prefixed (A/Test_Entry); declare
+            # the scheme explicitly so the new-scheme short-circuit doesn't
+            # fire and skip the search results.
+            mock_archive_instance.has_new_namespace_scheme = False
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             # Mock searcher with results
@@ -1246,8 +1250,10 @@ class TestZimOperations:
         result = zim_operations.get_article_structure(str(zim_file), "A/Test")
         assert result == '{"cached": "structure"}'
 
-        # Test extract_article_links cache hit (lines 1317-1318)
-        cache_key = f"links:{validated_path}:A/Test"
+        # Test extract_article_links cache hit. The cache key now includes
+        # pagination and kind so different page requests don't collide; match
+        # the default-arg call site below.
+        cache_key = f"links:{validated_path}:A/Test:100:0:"
         zim_operations.cache.set(cache_key, '{"cached": "links"}')
 
         result = zim_operations.extract_article_links(str(zim_file), "A/Test")
@@ -1800,6 +1806,9 @@ class TestZimOperations:
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive_instance = MagicMock()
+            # Test paths use the old-scheme A/Entry_N convention; declare it
+            # so the new-scheme short-circuit doesn't skip them.
+            mock_archive_instance.has_new_namespace_scheme = False
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             # Test search with filters and complex scenarios

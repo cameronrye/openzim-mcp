@@ -476,10 +476,22 @@ class _SearchMixin:
         filtered_count = 0
         scanned = 0
         scan_cap_hit = False
+        has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
         # When namespace-only filtering is active (no content_type), the
         # entry namespace is derivable from the path string without an
         # archive lookup, so skipped entries cost nothing.
         need_entry_for_filter = bool(content_type)
+
+        # New-scheme search hits are always C (the only iterable surface).
+        # If the caller asked for any other namespace we'd otherwise scan the
+        # full result set and find nothing — short-circuit to empty.
+        if has_new_scheme and namespace and namespace != "C":
+            return page, _FilteredScanState(
+                filtered_count=0,
+                scanned=0,
+                scan_cap_hit=False,
+                total_filtered_is_lower_bound=False,
+            )
 
         while scanned < total_results and len(page) < limit:
             if scanned >= _FILTERED_MAX_SCAN:
@@ -494,14 +506,20 @@ class _SearchMixin:
                 break
 
             for entry_id in batch:
-                if namespace and not self._matches_cheap_namespace(entry_id, namespace):
+                if namespace and not self._matches_cheap_namespace(
+                    entry_id, namespace, has_new_scheme=has_new_scheme
+                ):
                     continue
                 if not need_entry_for_filter and filtered_count < offset:
                     filtered_count += 1
                     continue
 
                 materialised = self._materialise_filtered_entry(
-                    archive, entry_id, namespace, content_type
+                    archive,
+                    entry_id,
+                    namespace,
+                    content_type,
+                    has_new_scheme=has_new_scheme,
                 )
                 if materialised is None:
                     continue
@@ -522,15 +540,25 @@ class _SearchMixin:
             total_filtered_is_lower_bound=page_filled_short_of_scan,
         )
 
-    def _matches_cheap_namespace(self, entry_id: str, namespace: str) -> bool:
+    def _matches_cheap_namespace(
+        self, entry_id: str, namespace: str, has_new_scheme: bool = False
+    ) -> bool:
         """Cheap namespace filter from the path string (no archive lookup).
 
-        ``entry_id`` is the path libzim returned; resolved ``entry.path`` may
-        differ across redirects, but namespace agreement holds in practice
-        (redirects within the same namespace are the common case; for
-        cross-namespace redirects we accept the resolved entry's namespace
-        when we materialise).
+        In new-scheme archives every iterable / search-indexed entry is in C,
+        so the only valid match is ``namespace == 'C'``. Path-prefix parsing
+        on a new-scheme path like ``Evolution`` would falsely admit it as
+        namespace ``E``.
+
+        For old-scheme: ``entry_id`` is the path libzim returned; resolved
+        ``entry.path`` may differ across redirects, but namespace agreement
+        holds in practice (redirects within the same namespace are the
+        common case; for cross-namespace redirects we accept the resolved
+        entry's namespace when we materialise).
         """
+        if has_new_scheme:
+            return namespace == "C"
+
         if "/" in entry_id:
             cheap_namespace = entry_id.split("/", 1)[0]
         elif entry_id:
@@ -545,6 +573,7 @@ class _SearchMixin:
         entry_id: str,
         namespace: Optional[str],
         content_type: Optional[str],
+        has_new_scheme: bool = False,
     ) -> Optional[Tuple[str, Any, str, str]]:
         """Resolve an entry and apply the post-redirect namespace + mime filters."""
         try:
@@ -553,14 +582,19 @@ class _SearchMixin:
             logger.warning(f"Error filtering search result {entry_id}: {e}")
             return None
 
-        # Use the resolved ``entry.path`` for the response so the namespace
+        # Use the resolved entry's namespace for the response so the value
         # shown matches what libzim actually surfaces (handles
-        # cross-namespace redirects).
-        entry_namespace = ""
-        if "/" in entry.path:
-            entry_namespace = entry.path.split("/", 1)[0]
-        elif entry.path:
-            entry_namespace = entry.path[0]
+        # cross-namespace redirects). New-scheme archives only surface C
+        # via this path so we set it directly; old-scheme paths still carry
+        # the namespace as a single-character prefix.
+        if has_new_scheme:
+            entry_namespace = "C"
+        else:
+            entry_namespace = ""
+            if "/" in entry.path:
+                entry_namespace = entry.path.split("/", 1)[0]
+            elif entry.path:
+                entry_namespace = entry.path[0]
         if namespace and (self._canonicalise_namespace(entry_namespace) != namespace):
             return None
 
