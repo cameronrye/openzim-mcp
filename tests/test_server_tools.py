@@ -148,6 +148,10 @@ class TestDiagnosticToolPathRedaction:
         parsed = json.loads(result)
         # PID must not be exposed.
         assert parsed["uptime_info"]["process_id"] != os.getpid()
+        # Uptime is now tracked (replaces the old "unknown" placeholder).
+        assert parsed["uptime_info"]["started_at"] != "unknown"
+        assert isinstance(parsed["uptime_info"]["uptime_seconds"], (int, float))
+        assert parsed["uptime_info"]["uptime_seconds"] >= 0
 
     @pytest.mark.asyncio
     async def test_get_server_health_warning_paths_redacted(self, temp_dir):
