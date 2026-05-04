@@ -31,6 +31,12 @@ The README contains the full environment variable table at [Configuration Option
 
 The `http` transport refuses to bind a non-loopback host (e.g. `0.0.0.0`) unless `OPENZIM_MCP_AUTH_TOKEN` is set. This is a startup check, not a runtime one — a misconfigured server fails fast with a clear error.
 
+### Bind host and port (`OPENZIM_MCP_HOST`, `OPENZIM_MCP_PORT`)
+
+`OPENZIM_MCP_HOST` defaults to `127.0.0.1` for the bare `openzim-mcp` CLI but is set to `0.0.0.0` inside the published Docker image — containers need to listen on all interfaces because the host's port-publish (`-p 127.0.0.1:8000:8000` etc.) is what controls external exposure. The recipes below take advantage of this: the container always binds `0.0.0.0:8000`, and Docker decides which host interfaces can reach it.
+
+`OPENZIM_MCP_PORT` defaults to `8000`. Override it (and the host-side port mapping) only if 8000 collides with another service.
+
 ### Bearer-token auth (`OPENZIM_MCP_AUTH_TOKEN`)
 
 Generate a token:
@@ -166,20 +172,14 @@ Add OpenZIM MCP to your client's MCP config. Substitute the host, port, and toke
         "mcp-remote@latest",
         "http://127.0.0.1:8000/mcp",
         "--header",
-        "Authorization:Bearer ${AUTH_TOKEN}"
-      ],
-      "env": {
-        "AUTH_TOKEN": "YOUR_TOKEN_HERE"
-      }
+        "Authorization:Bearer YOUR_TOKEN_HERE"
+      ]
     }
   }
 }
 ```
 
-Two odd-looking details that are intentional:
-
-- **No space after `Authorization:`** in the `--header` argument. Some clients (notably Claude Desktop on Windows and Cursor in older versions) strip whitespace inside `args` entries, which truncates the header. The colon-without-space form is the canonical workaround used in the `mcp-remote` documentation.
-- **Token in `env`, not inlined into `args`.** Same reason — moving the secret value through an environment variable avoids the args-escaping issue and keeps the token out of process-list output.
+The `Authorization:Bearer` form (no space after the colon) matches `mcp-remote`'s documented header syntax. The token lives directly in the config file and is visible in `ps` output on the client machine while `mcp-remote` is running — treat the file as a secret: don't commit `claude_desktop_config.json` to a shared repo and keep its filesystem permissions tight (`chmod 600` on Unix).
 
 ### Tailscale variant
 
@@ -310,5 +310,5 @@ A clean startup logs the bind host/port and the configured allowed directory. An
 - **Container exits immediately on start.** Almost always one of two startup checks: HTTP transport bound to a non-loopback host without `OPENZIM_MCP_AUTH_TOKEN`, or `OPENZIM_MCP_CORS_ORIGINS` set to a value containing `*`. The startup error message identifies which.
 - **Clients get 401 Unauthorized.** Token mismatch. Verify with `curl -H "Authorization: Bearer $TOKEN" http://host/mcp/...`. Don't paste the token into chat or tickets.
 - **Browser clients get 403 / CORS errors.** Either `OPENZIM_MCP_CORS_ORIGINS` is unset (and a browser is calling) or the client's origin isn't in the allow-list. The browser console shows the offending origin; add it.
-- **`/readyz` returns 503.** The configured ZIM directory isn't readable from inside the container. Check the volume mount path (host side and `/data` side) and that the mount isn't empty. Permissions: the in-container user is UID 10001; the host directory needs to be world-readable or owned by UID 10001.
+- **`/readyz` returns 503.** None of the configured ZIM directories are readable from inside the container. (With multiple allowed directories, one bad mount is fine — readiness flips only when *all* of them fail.) Check the volume mount path (host side and `/data` side) and that the mount isn't empty. Permissions: the in-container user is UID 10001; the host directory needs to be world-readable or owned by UID 10001.
 - **Subscriptions stop firing.** Confirm `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` isn't set to `false`. If a client claims it subscribed but never gets updates, check that the subscribe call actually returned a successful response — clients silently treating a failed subscription as success is a known footgun.
