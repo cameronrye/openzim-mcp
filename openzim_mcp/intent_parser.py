@@ -82,6 +82,199 @@ def safe_regex_findall(
     )
 
 
+# Per-intent parameter extractors. Each mutates ``params`` in place so the
+# dispatching wrapper in ``IntentParser._extract_params`` stays small and the
+# overall flow reads as one regex per intent rather than one giant if/elif.
+
+
+def _extract_browse(query: str, params: Dict[str, Any]) -> None:
+    namespace_match = safe_regex_search(
+        r"namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?",
+        query,
+        re.IGNORECASE,
+    )
+    if namespace_match:
+        params["namespace"] = namespace_match.group(1)
+
+
+def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
+    search_match = safe_regex_search(
+        rf"(?:search|find|look)\s+(?:for\s+)?{_QUOTE_OPEN}?"
+        rf"({_QUOTE_NOT}+?){_QUOTE_OPEN}?\s+(?:in|within)",
+        query,
+        re.IGNORECASE,
+    )
+    if search_match:
+        params["query"] = search_match.group(1).strip()
+
+    namespace_match = safe_regex_search(
+        rf"namespace\s+{_QUOTE_OPEN}?([A-Za-z0-9_.-]+){_QUOTE_OPEN}?",
+        query,
+        re.IGNORECASE,
+    )
+    if namespace_match:
+        params["namespace"] = namespace_match.group(1)
+
+    type_match = safe_regex_search(
+        rf"type\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?",
+        query,
+        re.IGNORECASE,
+    )
+    if type_match:
+        params["content_type"] = type_match.group(1)
+
+
+def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
+    """Shared extractor for get_article / structure / links / toc / summary."""
+    quoted_match = safe_regex_search(
+        rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}", query
+    )
+    if quoted_match:
+        params["entry_path"] = quoted_match.group(1)
+        return
+
+    # The keyword set intentionally excludes "contents" — for "table of
+    # contents for Biology" we don't want "of contents" to capture
+    # "contents". We use the LAST match rather than the first: queries
+    # like "table of contents for Biology" have multiple keyword hits
+    # ("of <stop-word>", "for <real-target>") and the trailing match is
+    # the actual target the user named.
+    path_pattern = r"(?:article|entry|page|of|for|in|from|to)" r"\s+([A-Za-z0-9_/.-]+)"
+    path_matches = safe_regex_findall(path_pattern, query, re.IGNORECASE)
+    if path_matches:
+        params["entry_path"] = path_matches[-1]
+
+
+def _extract_binary(query: str, params: Dict[str, Any]) -> None:
+    quoted_match = safe_regex_search(
+        rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}", query
+    )
+    if quoted_match:
+        params["entry_path"] = quoted_match.group(1)
+    else:
+        # "get binary content from I/image.png", "extract pdf I/document.pdf",
+        # "retrieve image logo.png".
+        binary_pattern = (
+            r"(?:content|data|entry|from|of|for|"
+            r"pdf|image|video|audio|media)"
+            rf"\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?"
+        )
+        path_match = safe_regex_search(binary_pattern, query, re.IGNORECASE)
+        if path_match:
+            params["entry_path"] = path_match.group(1)
+
+    metadata_match = safe_regex_search(
+        r"\b(metadata|info)\s+only\b", query, re.IGNORECASE
+    )
+    if metadata_match:
+        params["include_data"] = False
+
+
+def _extract_suggestions(query: str, params: Dict[str, Any]) -> None:
+    suggest_pattern = (
+        r"(?:suggestions?|autocomplete|complete|hints?)"
+        rf"\s+(?:for\s+)?{_QUOTE_OPEN}?({_QUOTE_NOT}+){_QUOTE_OPEN}?"
+    )
+    suggest_match = safe_regex_search(suggest_pattern, query, re.IGNORECASE)
+    if suggest_match:
+        params["partial_query"] = suggest_match.group(1).strip()
+
+
+def _extract_search(query: str, params: Dict[str, Any]) -> None:
+    search_match = safe_regex_search(
+        rf"(?:search|find|look)\s+(?:for\s+)?"
+        rf"{_QUOTE_OPEN}?({_QUOTE_NOT}+){_QUOTE_OPEN}?",
+        query,
+        re.IGNORECASE,
+    )
+    params["query"] = search_match.group(1).strip() if search_match else query
+
+
+def _extract_search_all(query: str, params: Dict[str, Any]) -> None:
+    """Strip "search all files for" prefix to recover the bare query.
+
+    The lazy ``^.*?`` in the substitution is a known ReDoS vector on
+    adversarial input, so wrap it in the standard timeout helper and
+    fall back to the raw query on timeout — better to search a slightly
+    noisy term than to hang the worker.
+    """
+    try:
+        cleaned = run_with_timeout(
+            lambda: re.sub(
+                r"^.*?(search\s+(all|every(thing|where)?|across)"
+                r"\s+(files?|zims?)?\s*for\s*)",
+                "",
+                query,
+                flags=re.IGNORECASE,
+            ),
+            REGEX_TIMEOUT_SECONDS,
+            f"Regex operation timed out after {REGEX_TIMEOUT_SECONDS} seconds",
+            RegexTimeoutError,
+        ).strip()
+        params["query"] = cleaned
+    except RegexTimeoutError:
+        logger.warning(
+            "Regex timeout while extracting search_all query " f"from: {query[:50]}..."
+        )
+        params["query"] = query.strip()
+
+
+def _extract_walk_namespace(query: str, params: Dict[str, Any]) -> None:
+    m = safe_regex_search(r"namespace\s+([A-Za-z])\b", query, re.IGNORECASE)
+    if m:
+        params["namespace"] = m.group(1).upper()
+
+
+def _extract_find_by_title(query: str, params: Dict[str, Any]) -> None:
+    m = safe_regex_search(
+        r"(?:titled|named|called|path\s+for)\s+(.+?)$", query, re.IGNORECASE
+    )
+    if m:
+        params["title"] = m.group(1).strip().rstrip("?.")
+
+
+def _extract_related(query: str, params: Dict[str, Any]) -> None:
+    m = safe_regex_search(
+        r"(?:related\s+to|linking\s+to|links\s+(?:to|from))\s+(.+?)$",
+        query,
+        re.IGNORECASE,
+    )
+    if m:
+        params["entry_path"] = m.group(1).strip().rstrip("?.")
+
+
+def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:
+    """Extract namespace/path tokens like ``A/Foo`` or ``M/Image.png``.
+
+    Uppercase namespace letter is required, which excludes file paths
+    like ``wikipedia.zim`` but matches ZIM entry paths.
+    """
+    entries = safe_regex_findall(r"[A-Z]/[\w\-./%]+", query)
+    if entries:
+        # Strip trailing sentence punctuation that the character class
+        # greedily captures (e.g. "A/Bar." -> "A/Bar").
+        params["entries"] = [e.rstrip(".?,;:!") for e in entries]
+
+
+_PARAM_EXTRACTORS = {
+    "browse": _extract_browse,
+    "filtered_search": _extract_filtered_search,
+    "get_article": _extract_entry_path_keyworded,
+    "structure": _extract_entry_path_keyworded,
+    "links": _extract_entry_path_keyworded,
+    "toc": _extract_entry_path_keyworded,
+    "summary": _extract_entry_path_keyworded,
+    "binary": _extract_binary,
+    "suggestions": _extract_suggestions,
+    "search": _extract_search,
+    "search_all": _extract_search_all,
+    "walk_namespace": _extract_walk_namespace,
+    "find_by_title": _extract_find_by_title,
+    "related": _extract_related,
+    "get_zim_entries": _extract_get_zim_entries,
+}
+
+
 class IntentParser:
     """Parse natural language queries to determine user intent."""
 
@@ -311,202 +504,18 @@ class IntentParser:
             Dictionary of extracted parameters
         """
         params: Dict[str, Any] = {}
+        extractor = _PARAM_EXTRACTORS.get(intent)
+        if extractor is None:
+            return params
 
         try:
-            if intent == "browse":
-                # Extract namespace from query
-                namespace_match = safe_regex_search(
-                    r"namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?",
-                    query,
-                    re.IGNORECASE,
-                )
-                if namespace_match:
-                    params["namespace"] = namespace_match.group(1)
-
-            elif intent == "filtered_search":
-                # Extract search query and filters
-                # Try to extract the search term
-                search_match = safe_regex_search(
-                    rf"(?:search|find|look)\s+(?:for\s+)?{_QUOTE_OPEN}?"
-                    rf"({_QUOTE_NOT}+?){_QUOTE_OPEN}?\s+(?:in|within)",
-                    query,
-                    re.IGNORECASE,
-                )
-                if search_match:
-                    params["query"] = search_match.group(1).strip()
-
-                # Extract namespace filter
-                namespace_match = safe_regex_search(
-                    rf"namespace\s+{_QUOTE_OPEN}?([A-Za-z0-9_.-]+){_QUOTE_OPEN}?",
-                    query,
-                    re.IGNORECASE,
-                )
-                if namespace_match:
-                    params["namespace"] = namespace_match.group(1)
-
-                # Extract content type filter
-                type_match = safe_regex_search(
-                    rf"type\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?",
-                    query,
-                    re.IGNORECASE,
-                )
-                if type_match:
-                    params["content_type"] = type_match.group(1)
-
-            elif intent in ["get_article", "structure", "links", "toc", "summary"]:
-                # Extract article/entry path
-                # Try to find quoted strings first
-                quoted_match = safe_regex_search(
-                    rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}", query
-                )
-                if quoted_match:
-                    params["entry_path"] = quoted_match.group(1)
-                else:
-                    # Try to extract after keywords. The keyword set intentionally
-                    # excludes "contents" — for "table of contents for Biology"
-                    # we don't want "of contents" to capture "contents".
-                    #
-                    # We use the LAST match rather than the first: queries like
-                    # "table of contents for Biology" have multiple keyword hits
-                    # ("of <stop-word>", "for <real-target>") and the trailing
-                    # match is the actual target the user named.
-                    path_pattern = (
-                        r"(?:article|entry|page|of|for|in|from|to)"
-                        r"\s+([A-Za-z0-9_/.-]+)"
-                    )
-                    path_matches = safe_regex_findall(
-                        path_pattern,
-                        query,
-                        re.IGNORECASE,
-                    )
-                    if path_matches:
-                        params["entry_path"] = path_matches[-1]
-
-            elif intent == "binary":
-                # Extract entry path for binary content retrieval
-                # Try to find quoted strings first
-                quoted_match = safe_regex_search(
-                    rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}", query
-                )
-                if quoted_match:
-                    params["entry_path"] = quoted_match.group(1)
-                else:
-                    # Try to extract path after keywords
-                    # "get binary content from I/image.png"
-                    # "extract pdf I/document.pdf"
-                    # "retrieve image logo.png"
-                    binary_pattern = (
-                        r"(?:content|data|entry|from|of|for|"
-                        r"pdf|image|video|audio|media)"
-                        rf"\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?"
-                    )
-                    path_match = safe_regex_search(
-                        binary_pattern,
-                        query,
-                        re.IGNORECASE,
-                    )
-                    if path_match:
-                        params["entry_path"] = path_match.group(1)
-
-                # Check for metadata-only mode
-                metadata_match = safe_regex_search(
-                    r"\b(metadata|info)\s+only\b", query, re.IGNORECASE
-                )
-                if metadata_match:
-                    params["include_data"] = False
-
-            elif intent == "suggestions":
-                # Extract partial query
-                suggest_pattern = (
-                    r"(?:suggestions?|autocomplete|complete|hints?)"
-                    rf"\s+(?:for\s+)?{_QUOTE_OPEN}?({_QUOTE_NOT}+){_QUOTE_OPEN}?"
-                )
-                suggest_match = safe_regex_search(
-                    suggest_pattern,
-                    query,
-                    re.IGNORECASE,
-                )
-                if suggest_match:
-                    params["partial_query"] = suggest_match.group(1).strip()
-
-            elif intent == "search":
-                # For general search, use the whole query or extract search term
-                search_match = safe_regex_search(
-                    rf"(?:search|find|look)\s+(?:for\s+)?"
-                    rf"{_QUOTE_OPEN}?({_QUOTE_NOT}+){_QUOTE_OPEN}?",
-                    query,
-                    re.IGNORECASE,
-                )
-                if search_match:
-                    params["query"] = search_match.group(1).strip()
-                else:
-                    params["query"] = query
-
-            elif intent == "search_all":
-                # Strip the "search all files for" prefix to get the query.
-                # The lazy ``^.*?`` is a known ReDoS vector on adversarial
-                # input, so wrap the substitution in the standard timeout
-                # helper used by every other regex in this file. On
-                # timeout, fall back to the stripped query — better to
-                # search a slightly noisy term than to hang the worker.
-                try:
-                    cleaned = run_with_timeout(
-                        lambda: re.sub(
-                            r"^.*?(search\s+(all|every(thing|where)?|across)"
-                            r"\s+(files?|zims?)?\s*for\s*)",
-                            "",
-                            query,
-                            flags=re.IGNORECASE,
-                        ),
-                        REGEX_TIMEOUT_SECONDS,
-                        (
-                            "Regex operation timed out after "
-                            f"{REGEX_TIMEOUT_SECONDS} seconds"
-                        ),
-                        RegexTimeoutError,
-                    ).strip()
-                    params["query"] = cleaned
-                except RegexTimeoutError:
-                    logger.warning(
-                        "Regex timeout while extracting search_all query "
-                        f"from: {query[:50]}..."
-                    )
-                    params["query"] = query.strip()
-            elif intent == "walk_namespace":
-                m = safe_regex_search(r"namespace\s+([A-Za-z])\b", query, re.IGNORECASE)
-                if m:
-                    params["namespace"] = m.group(1).upper()
-            elif intent == "find_by_title":
-                m = safe_regex_search(
-                    r"(?:titled|named|called|path\s+for)\s+(.+?)$",
-                    query,
-                    re.IGNORECASE,
-                )
-                if m:
-                    params["title"] = m.group(1).strip().rstrip("?.")
-            elif intent == "related":
-                m = safe_regex_search(
-                    r"(?:related\s+to|linking\s+to|links\s+(?:to|from))\s+(.+?)$",
-                    query,
-                    re.IGNORECASE,
-                )
-                if m:
-                    params["entry_path"] = m.group(1).strip().rstrip("?.")
-            elif intent == "get_zim_entries":
-                # Extract namespace/path tokens like "A/Foo", "M/Image.png".
-                # Uppercase namespace letter is required, which excludes file
-                # paths like "wikipedia.zim" but matches ZIM entry paths.
-                entries = safe_regex_findall(r"[A-Z]/[\w\-./%]+", query)
-                if entries:
-                    # Strip trailing sentence punctuation that the character
-                    # class greedily captures (e.g. "A/Bar." -> "A/Bar").
-                    params["entries"] = [e.rstrip(".?,;:!") for e in entries]
-
+            extractor(query, params)
         except RegexTimeoutError:
             logger.warning(
                 f"Regex timeout during param extraction for intent {intent}: "
                 f"{query[:50]}..."
             )
-            # Return empty params on timeout - caller will handle gracefully
+            # Caller handles missing params gracefully.
+            return {}
 
         return params

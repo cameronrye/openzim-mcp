@@ -68,27 +68,18 @@ class TestSearchZimFileTool:
             "/path/to/file.zim", "test query", 10, 10
         )
 
-    def test_search_limit_validation_too_low(self):
-        """Test that limit < 1 returns validation error."""
-        limit = 0
-        if limit is not None and (limit < 1 or limit > 100):
-            error = (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: Search limit must be between 1 and 100 "
-                f"(provided: {limit})\n\n"
-            )
-            assert "must be between 1 and 100" in error
-
-    def test_search_limit_validation_too_high(self):
-        """Test that limit > 100 returns validation error."""
-        limit = 200
-        if limit is not None and (limit < 1 or limit > 100):
-            error = (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: Search limit must be between 1 and 100 "
-                f"(provided: {limit})\n\n"
-            )
-            assert "must be between 1 and 100" in error
+    @pytest.mark.parametrize("bad_limit", [0, 200])
+    @pytest.mark.asyncio
+    async def test_search_limit_out_of_range_returns_error(
+        self, server: OpenZimMcpServer, bad_limit: int
+    ):
+        """Out-of-range limits hit the registered tool's validator."""
+        server.rate_limiter.check_rate_limit = MagicMock()
+        search_zim_file = _get_tool_fn(server, "search_zim_file")
+        result = await search_zim_file(
+            zim_file_path="/path/to/file.zim", query="x", limit=bad_limit, offset=0
+        )
+        assert "must be between 1 and 100" in result
 
     def test_search_offset_validation_negative(self):
         """Test that negative offset returns validation error."""

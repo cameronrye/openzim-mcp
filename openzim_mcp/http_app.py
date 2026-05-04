@@ -31,8 +31,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+HEALTHZ_PATH = "/healthz"
+READYZ_PATH = "/readyz"
+
 # Health endpoints exempt from auth.
-AUTH_EXEMPT_PATHS = {"/healthz", "/readyz"}
+AUTH_EXEMPT_PATHS = {HEALTHZ_PATH, READYZ_PATH}
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -231,8 +234,8 @@ def build_starlette_app(server: "OpenZimMcpServer") -> Starlette:
     """
     return Starlette(
         routes=[
-            Route("/healthz", healthz),
-            Route("/readyz", _make_readyz(server)),
+            Route(HEALTHZ_PATH, healthz),
+            Route(READYZ_PATH, _make_readyz(server)),
         ]
     )
 
@@ -266,8 +269,8 @@ def serve_streamable_http(
     # custom-routes list (looked at SDK source — this is the documented hook).
     server.mcp._custom_starlette_routes.extend(
         [
-            Route("/healthz", healthz),
-            Route("/readyz", _make_readyz(server)),
+            Route(HEALTHZ_PATH, healthz),
+            Route(READYZ_PATH, _make_readyz(server)),
         ]
     )
 

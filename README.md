@@ -38,7 +38,7 @@
 
 ---
 
-> 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a [Deployment Guide](https://github.com/cameronrye/openzim-mcp/wiki/Deployment-Guide). Also new: batch entry retrieval (`get_zim_entries`), per-entry MCP resources for direct browser rendering, and an end-to-end review pass covering archive handling, content extraction, and server hygiene. [Learn more →](#whats-new-in-v100)
+> 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a [Deployment Guide](docs/deployment.md). Also new: batch entry retrieval (`get_zim_entries`), per-entry MCP resources for direct browser rendering, and an end-to-end review pass covering archive handling, content extraction, and server hygiene. [Learn more →](#whats-new-in-v100)
 
 > **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
 

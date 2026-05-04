@@ -24,7 +24,7 @@ def get_command_version(command: str, version_arg: str = "--version") -> str:
             return result.stdout.strip()
         else:
             return result.stderr.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+    except (FileNotFoundError, subprocess.SubprocessError):
         return "Unknown"
 
 
@@ -50,11 +50,7 @@ def check_python_version() -> tuple[bool, str]:
             return False, version_str
         else:
             return False, f"Error: {result.stderr.strip()}"
-    except (
-        subprocess.TimeoutExpired,
-        FileNotFoundError,
-        subprocess.SubprocessError,
-    ) as e:
+    except (FileNotFoundError, subprocess.SubprocessError) as e:
         return False, f"Error checking Python version: {e}"
 
 

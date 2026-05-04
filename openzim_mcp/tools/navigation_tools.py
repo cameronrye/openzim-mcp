@@ -20,13 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 def register_navigation_tools(server: "OpenZimMcpServer") -> None:
-    """
-    Register navigation and browsing tools.
+    """Register navigation and browsing tools."""
+    _register_browse_namespace(server)
+    _register_walk_namespace(server)
+    _register_search_with_filters(server)
+    _register_get_search_suggestions(server)
 
-    Args:
-        server: The OpenZimMcpServer instance to register tools on
-    """
 
+def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def browse_namespace(
         zim_file_path: str,
@@ -97,6 +98,8 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
                 ),
             )
 
+
+def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def walk_namespace(
         zim_file_path: str,
@@ -175,6 +178,8 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
                 ),
             )
 
+
+def _register_search_with_filters(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def search_with_filters(
         zim_file_path: str,
@@ -250,6 +255,8 @@ def register_navigation_tools(server: "OpenZimMcpServer") -> None:
                 context=f"File: {zim_file_path}, Query: {query}",
             )
 
+
+def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_search_suggestions(
         zim_file_path: str, partial_query: str, limit: int = 10

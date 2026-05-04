@@ -491,6 +491,44 @@ class OpenZimMcpCache:
         except Exception as e:
             logger.warning(f"Failed to save cache to disk: {e}")
 
+    def _restore_entry(
+        self, key: str, entry_data: Any, now_wall: float, now_monotonic: float
+    ) -> bool:
+        """Restore a single cache entry from its serialized form.
+
+        Returns True if the entry was loaded, False if it was skipped because
+        it had already expired. Raises on malformed input so the caller can
+        log and continue.
+        """
+        if not isinstance(entry_data, dict):
+            raise ValueError("entry payload is not a dict")
+        if "value" not in entry_data:
+            raise ValueError("entry missing 'value' field")
+
+        created_at = entry_data.get("created_at", 0)
+        ttl_seconds = entry_data.get("ttl_seconds", self.config.ttl_seconds)
+
+        # Skip expired entries (compare wall-clock-to-wall-clock)
+        age = now_wall - created_at
+        if age > ttl_seconds:
+            return False
+
+        # Restore entry. CacheEntry.__init__ stamps a monotonic created_at;
+        # rewind it by the entry's age so remaining TTL is preserved across
+        # the restart.
+        entry = CacheEntry(entry_data["value"], ttl_seconds)
+        entry.created_at = now_monotonic - age
+        self._cache[key] = entry
+
+        # Assign a fresh access_counter value to preserve LRU ordering across
+        # restart. Loaded entries get successively higher counters in
+        # iteration order; live operations after restart continue from a
+        # higher counter.
+        self._access_counter += 1
+        self._access_order[key] = self._access_counter
+        heapq.heappush(self._lru_heap, (self._access_counter, key))
+        return True
+
     def _load_from_disk(self) -> None:
         """Load cache contents from disk.
 
@@ -515,55 +553,25 @@ class OpenZimMcpCache:
                 return
 
             entries = data.get("entries", {})
-            loaded_count = 0
             now_wall = time.time()
             now_monotonic = time.monotonic()
-
+            loaded_count = 0
             skipped_count = 0
+
             with self._lock:
                 for key, entry_data in entries.items():
                     # Per-entry try/except so a single malformed entry
-                    # (truncated write, hand-edited file, schema change in a
-                    # future version) doesn't abort the load of every other
-                    # valid entry that follows it.
+                    # doesn't abort the load of every other valid entry.
                     try:
-                        if not isinstance(entry_data, dict):
-                            raise ValueError("entry payload is not a dict")
-                        if "value" not in entry_data:
-                            raise ValueError("entry missing 'value' field")
-
-                        created_at = entry_data.get("created_at", 0)
-                        ttl_seconds = entry_data.get(
-                            "ttl_seconds", self.config.ttl_seconds
-                        )
-
-                        # Skip expired entries (compare wall-clock-to-wall-clock)
-                        age = now_wall - created_at
-                        if age > ttl_seconds:
-                            continue
-
-                        # Restore entry. CacheEntry.__init__ stamps a monotonic
-                        # created_at; rewind it by the entry's age so remaining
-                        # TTL is preserved across the restart.
-                        entry = CacheEntry(entry_data["value"], ttl_seconds)
-                        entry.created_at = now_monotonic - age
-                        self._cache[key] = entry
-
-                        # Assign a fresh access_counter value to preserve LRU
-                        # ordering across restart. Loaded entries get
-                        # successively higher counters in iteration order;
-                        # live operations after restart will continue from a
-                        # higher counter.
-                        self._access_counter += 1
-                        self._access_order[key] = self._access_counter
-                        heapq.heappush(self._lru_heap, (self._access_counter, key))
-                        loaded_count += 1
+                        if self._restore_entry(
+                            key, entry_data, now_wall, now_monotonic
+                        ):
+                            loaded_count += 1
                     except Exception as entry_err:
                         skipped_count += 1
                         logger.debug(
                             f"Skipped malformed cache entry {key!r}: {entry_err}"
                         )
-                        continue
 
             if skipped_count:
                 logger.warning(

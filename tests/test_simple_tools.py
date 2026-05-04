@@ -19,7 +19,7 @@ class TestIntentParser:
             "get zim files",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "list_files", f"Failed for query: {query}"
 
     def test_parse_metadata_intent(self):
@@ -30,7 +30,7 @@ class TestIntentParser:
             "details of the archive",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "metadata", f"Failed for query: {query}"
 
     def test_parse_main_page_intent(self):
@@ -41,7 +41,7 @@ class TestIntentParser:
             "get start page",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "main_page", f"Failed for query: {query}"
 
     def test_parse_list_namespaces_intent(self):
@@ -52,7 +52,7 @@ class TestIntentParser:
             "what namespaces exist",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "list_namespaces", f"Failed for query: {query}"
 
     def test_parse_browse_intent(self):
@@ -63,7 +63,7 @@ class TestIntentParser:
             "show entries in namespace C",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "browse", f"Failed for query: {query}"
 
     def test_parse_browse_intent_with_namespace(self):
@@ -81,7 +81,7 @@ class TestIntentParser:
             "sections of Protein",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "structure", f"Failed for query: {query}"
 
     def test_parse_links_intent(self):
@@ -92,7 +92,7 @@ class TestIntentParser:
             # Note: "related articles in Protein" is ambiguous and may match browse
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "links", f"Failed for query: {query}"
 
     def test_parse_suggestions_intent(self):
@@ -103,7 +103,7 @@ class TestIntentParser:
             "hints for prot",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "suggestions", f"Failed for query: {query}"
 
     def test_parse_filtered_search_intent(self):
@@ -113,7 +113,7 @@ class TestIntentParser:
             "find biology within type text/html",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "filtered_search", f"Failed for query: {query}"
 
     def test_parse_get_article_intent(self):
@@ -124,7 +124,7 @@ class TestIntentParser:
             "read page Protein",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "get_article", f"Failed for query: {query}"
 
     def test_parse_search_intent(self):
@@ -135,7 +135,7 @@ class TestIntentParser:
             "look for protein",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "search", f"Failed for query: {query}"
 
     def test_parse_default_to_search(self):
@@ -169,7 +169,7 @@ class TestIntentParser:
             "fetch raw content from video.mp4",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "binary", f"Failed for query: {query}"
 
     def test_parse_binary_intent_media_types(self):
@@ -182,7 +182,7 @@ class TestIntentParser:
             "download media file.jpg",
         ]
         for query in queries:
-            intent, params, _ = IntentParser.parse_intent(query)
+            intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "binary", f"Failed for query: {query}"
 
     def test_extract_binary_entry_path_quoted(self):

@@ -223,18 +223,17 @@ class MtimeWatcher:
         self._snapshot = new_snap
 
     async def _loop(self) -> None:
-        """Run the polling loop: diff against snapshot, dispatch, repeat."""
-        try:
-            while not self._stop_event.is_set():
-                await asyncio.sleep(self._interval)
-                if self._stop_event.is_set():
-                    return
-                await self._tick()
-        except asyncio.CancelledError:
-            # Re-raise so the cancelling caller can observe completion;
-            # asyncio Tasks rely on CancelledError propagating to mark
-            # themselves cancelled rather than completed-with-result.
-            raise
+        """Run the polling loop: diff against snapshot, dispatch, repeat.
+
+        ``asyncio.CancelledError`` is allowed to propagate so the cancelling
+        caller can observe completion; asyncio Tasks rely on CancelledError
+        propagating to mark themselves cancelled rather than completed-with-result.
+        """
+        while not self._stop_event.is_set():
+            await asyncio.sleep(self._interval)
+            if self._stop_event.is_set():
+                return
+            await self._tick()
 
 
 # Per-subscriber timeout for ``send_resource_updated`` during broadcast. See

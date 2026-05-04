@@ -43,35 +43,11 @@ class TestBrowseNamespaceTool:
             "/path/to/file.zim", "A", 50, 0
         )
 
-    def test_limit_validation_too_low(self):
-        """Test that limit < 1 returns validation error."""
-        limit = 0
-        if limit < 1 or limit > 200:
-            error = (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: limit must be between 1 and 200 (provided: {limit})\n\n"
-            )
-            assert "must be between 1 and 200" in error
-
-    def test_limit_validation_too_high(self):
-        """Test that limit > 200 returns validation error."""
-        limit = 300
-        if limit < 1 or limit > 200:
-            error = (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: limit must be between 1 and 200 (provided: {limit})\n\n"
-            )
-            assert "must be between 1 and 200" in error
-
-    def test_offset_validation_negative(self):
-        """Test that negative offset returns validation error."""
-        offset = -1
-        # Negative offset should produce validation error message
-        error = (
-            "**Parameter Validation Error**\n\n"
-            f"**Issue**: offset must be non-negative (provided: {offset})\n\n"
-        )
-        assert "must be non-negative" in error
+    # NOTE: validation behaviour for browse_namespace (limit out of range,
+    # negative offset) is exercised end-to-end against the registered MCP
+    # tool handler in TestNavigationToolHandlers below — see
+    # ``test_browse_namespace_with_invalid_limit`` and
+    # ``test_browse_namespace_with_negative_offset``.
 
     @pytest.mark.asyncio
     async def test_browse_namespace_rate_limit_error(self, server: OpenZimMcpServer):
@@ -135,15 +111,10 @@ class TestSearchWithFiltersTool:
 
         assert "results" in result
 
-    def test_search_limit_validation(self):
-        """Test that search limit validation works correctly."""
-        limit = 150
-        if limit is not None and (limit < 1 or limit > 100):
-            error = (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: limit must be between 1 and 100 (provided: {limit})\n\n"
-            )
-            assert "must be between 1 and 100" in error
+    # NOTE: search_with_filters validation (limit out of range, negative
+    # offset) is exercised end-to-end via the registered MCP tool handler
+    # in TestNavigationToolHandlers — ``test_search_with_filters_invalid_limit``
+    # and ``test_search_with_filters_negative_offset``.
 
 
 class TestGetSearchSuggestionsTool:
@@ -171,25 +142,9 @@ class TestGetSearchSuggestionsTool:
             "/path/to/file.zim", "Art", 10
         )
 
-    def test_suggestions_limit_validation_too_low(self):
-        """Test that limit < 1 returns validation error."""
-        limit = 0
-        if limit < 1 or limit > 50:
-            error = (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: limit must be between 1 and 50 (provided: {limit})\n\n"
-            )
-            assert "must be between 1 and 50" in error
-
-    def test_suggestions_limit_validation_too_high(self):
-        """Test that limit > 50 returns validation error."""
-        limit = 100
-        if limit < 1 or limit > 50:
-            error = (
-                "**Parameter Validation Error**\n\n"
-                f"**Issue**: limit must be between 1 and 50 (provided: {limit})\n\n"
-            )
-            assert "must be between 1 and 50" in error
+    # NOTE: get_search_suggestions limit-validation behaviour is exercised
+    # against the real tool handler in
+    # ``TestNavigationToolHandlers.test_get_search_suggestions_invalid_limit``.
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_rate_limit_error(

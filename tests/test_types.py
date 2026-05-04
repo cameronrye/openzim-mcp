@@ -322,9 +322,15 @@ class TestArticleStructureTypes:
         assert "Python" in section["content_preview"]
 
     def test_create_article_metadata(self):
-        """Test creating a valid ArticleMetadata."""
+        """Test creating a valid ArticleMetadata.
+
+        ``ArticleMetadata`` is a TypedDict where every key is optional,
+        so the ``{}`` literal is a structurally-valid value and should
+        be assignable to the annotated name without runtime error.
+        """
         metadata: ArticleMetadata = {}  # All fields are optional
-        assert metadata is not None
+        assert isinstance(metadata, dict)
+        assert metadata == {}
 
     def test_article_metadata_with_all_fields(self):
         """Test ArticleMetadata with all optional fields."""
@@ -484,27 +490,37 @@ class TestTypeImports:
     """Test that all types can be imported from the module."""
 
     def test_all_types_importable(self):
-        """Test that all documented types are importable."""
-        # This test passes if we get here without import errors
-        # The imports are done at the top of the file
-        assert ZimFileInfo is not None
-        assert SearchResultEntry is not None
-        assert SearchResponse is not None
-        assert NamespaceEntry is not None
-        assert NamespaceInfo is not None
-        assert NamespaceListEntry is not None
-        assert UptimeInfo is not None
-        assert ConfigurationInfo is not None
-        assert HealthChecksInfo is not None
-        assert CacheStats is not None
-        assert HealthCheckResponse is not None
-        assert BinaryEntryResponse is not None
-        assert HeadingInfo is not None
-        assert SectionInfo is not None
-        assert ArticleMetadata is not None
-        assert ArticleStructure is not None
-        assert LinkInfo is not None
-        assert LinksData is not None
-        assert SummaryData is not None
-        assert TOCEntry is not None
-        assert TOCData is not None
+        """Every documented public type must import without raising.
+
+        Importing the names at the top of this file already proves the
+        symbols exist; this test additionally enumerates every name we
+        intend to export so that an accidentally-removed type fails this
+        list rather than only the call sites that referenced it.
+        """
+        documented_types = (
+            ZimFileInfo,
+            SearchResultEntry,
+            SearchResponse,
+            NamespaceEntry,
+            NamespaceInfo,
+            NamespaceListEntry,
+            UptimeInfo,
+            ConfigurationInfo,
+            HealthChecksInfo,
+            CacheStats,
+            HealthCheckResponse,
+            BinaryEntryResponse,
+            HeadingInfo,
+            SectionInfo,
+            ArticleMetadata,
+            ArticleStructure,
+            LinkInfo,
+            LinksData,
+            SummaryData,
+            TOCEntry,
+            TOCData,
+        )
+        # Each entry is a TypedDict (subclass of dict) imported at module load.
+        assert all(
+            isinstance(t, type) and issubclass(t, dict) for t in documented_types
+        )

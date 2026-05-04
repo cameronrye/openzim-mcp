@@ -45,12 +45,16 @@ def run_with_timeout(
     exception: list[BaseException] = []
 
     def worker() -> None:
-        # Catch BaseException so KeyboardInterrupt / SystemExit raised inside
-        # func() are propagated by the caller rather than masked as a
-        # misleading timeout. We re-raise via exception[0] below.
+        # Catch ``KeyboardInterrupt`` / ``SystemExit`` alongside ``Exception``
+        # so a Ctrl-C or ``sys.exit()`` raised inside ``func()`` is propagated
+        # by the caller via ``exception[0]`` below rather than masked as a
+        # misleading timeout. Catching ``BaseException`` directly would do
+        # the same but trips CodeQL's ``py/catch-base-exception`` — naming
+        # the three concrete types is equivalent for a sync worker (no
+        # ``GeneratorExit`` semantics here).
         try:
             result[0] = func()
-        except BaseException as e:  # noqa: B036
+        except (KeyboardInterrupt, SystemExit, Exception) as e:
             exception.append(e)
 
     thread = threading.Thread(target=worker, daemon=True)

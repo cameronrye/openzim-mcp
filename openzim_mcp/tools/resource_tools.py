@@ -40,6 +40,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Default MIME type when libzim has no mimetype for an entry.
+DEFAULT_BINARY_MIME = "application/octet-stream"
+
 
 def _resolve_zim_name(server: "OpenZimMcpServer", name: str) -> Optional[str]:
     """Resolve a ZIM ``name`` (bare stem or full filename) to its archive path.
@@ -71,8 +74,8 @@ def _detect_mime_type(item: Any) -> str:
     """
     raw = getattr(item, "mimetype", None) or ""
     if not raw or not isinstance(raw, str):
-        return "application/octet-stream"
-    return raw.split(";", 1)[0].strip().lower() or "application/octet-stream"
+        return DEFAULT_BINARY_MIME
+    return raw.split(";", 1)[0].strip().lower() or DEFAULT_BINARY_MIME
 
 
 class ZimEntryResource(Resource):
@@ -176,14 +179,14 @@ class ZimEntryTemplate(ResourceTemplate):
             description=self.description,
             # Placeholder; ZimEntryResource.read() mutates this to the
             # detected MIME before FastMCP reads it back.
-            mime_type="application/octet-stream",
+            mime_type=DEFAULT_BINARY_MIME,
             archive_path=target_path,
             entry_path=decoded_path,
             path_validator=self.server_ref.path_validator,
         )
 
 
-_ZIM_ENTRY_URI_TEMPLATE = "zim://{name}/entry/{path}"
+_ZIM_ENTRY_URI_TEMPLATE = "zim://{name}/entry/{path}"  # NOSONAR(python:S3776)
 
 
 def register_resources(server: "OpenZimMcpServer") -> None:
@@ -297,7 +300,7 @@ def register_resources(server: "OpenZimMcpServer") -> None:
             "Use the get_zim_entry tool for processed/truncated text output."
         ),
         # Placeholder; the per-call MIME is set on each ZimEntryResource.
-        mime_type="application/octet-stream",
+        mime_type=DEFAULT_BINARY_MIME,
         # ResourceTemplate requires `fn` and `parameters`; we never call fn
         # because we override create_resource(), but the fields are required.
         fn=lambda name, path: None,  # noqa: ARG005 — sentinel

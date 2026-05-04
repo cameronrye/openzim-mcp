@@ -153,7 +153,7 @@ class TestSanitizeInput:
         with pytest.raises(
             OpenZimMcpValidationError, match="Path must be a non-empty string"
         ):
-            validator._normalize_path(None)  # type: ignore
+            validator._normalize_path(None)  # type: ignore[arg-type]  # NOSONAR
 
     def test_normalize_path_with_home_directory(self, temp_dir: Path):
         """Test _normalize_path with home directory expansion."""
@@ -211,7 +211,7 @@ class TestSanitizeInput:
     def test_sanitize_non_string_input(self):
         """Test sanitizing non-string input."""
         with pytest.raises(OpenZimMcpValidationError, match="Input must be a string"):
-            sanitize_input(123)
+            sanitize_input(123)  # type: ignore[arg-type]  # NOSONAR
 
     def test_sanitize_preserves_newlines_and_tabs(self):
         """Test that sanitization preserves newlines and tabs."""
