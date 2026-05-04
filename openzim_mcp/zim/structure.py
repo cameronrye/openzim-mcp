@@ -141,26 +141,65 @@ class _StructureMixin:
                 f"Failed to extract article structure: {e}"
             ) from e
 
-    def extract_article_links(self, zim_file_path: str, entry_path: str) -> str:
-        """Extract internal and external links from an article.
+    def extract_article_links(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 100,
+        offset: int = 0,
+        kind: Optional[str] = None,
+    ) -> str:
+        """Extract internal and external links from an article, with pagination.
+
+        Heavy articles (e.g. Wikipedia "Evolution") carry hundreds of links;
+        the unbounded variant routinely overflowed MCP response budgets. This
+        method paginates per category (internal / external / media) and
+        always reports the full ``total_*_links`` so callers can size their
+        next request.
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'C/Some_Article'
+            limit: Max items per category in the response (1-500, default 100).
+            offset: Starting offset within each category (default 0).
+            kind: Optional filter — ``"internal"``, ``"external"``, or
+                ``"media"``. When set, the other categories are returned as
+                empty lists; their totals are still reported.
 
         Returns:
-            JSON string containing extracted links
+            JSON string with ``internal_links``, ``external_links``,
+            ``media_links`` (paged subsets), ``total_*_links`` (full counts),
+            and a ``pagination`` block (``offset``, ``limit``, ``has_more``,
+            ``kind``).
 
         Raises:
-            OpenZimMcpFileNotFoundError: If ZIM file not found
-            OpenZimMcpArchiveError: If link extraction fails
+            OpenZimMcpValidationError: limit/offset/kind out of range.
+            OpenZimMcpFileNotFoundError: If ZIM file not found.
+            OpenZimMcpArchiveError: If link extraction fails.
         """
+        # Caller-input validation surfaces as OpenZimMcpValidationError so the
+        # tool layer can render a targeted validation message (separate from
+        # archive-access errors).
+        if limit < 1 or limit > 500:
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 500 (provided: {limit})"
+            )
+        if offset < 0:
+            raise OpenZimMcpValidationError(
+                f"offset must be non-negative (provided: {offset})"
+            )
+        if kind is not None and kind not in {"internal", "external", "media"}:
+            raise OpenZimMcpValidationError(
+                f"kind must be one of internal/external/media or omitted "
+                f"(provided: {kind!r})"
+            )
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"links:{validated_path}:{entry_path}"
+        # Cache key includes pagination so different pages don't collide.
+        cache_key = f"links:{validated_path}:{entry_path}:{limit}:{offset}:{kind or ''}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached links for: {entry_path}")
@@ -168,13 +207,20 @@ class _StructureMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_article_links(archive, entry_path)
+                result = self._extract_article_links(
+                    archive, entry_path, limit, offset, kind
+                )
 
             # Cache the result
             self.cache.set(cache_key, result)
-            logger.info(f"Extracted links for: {entry_path}")
+            logger.info(
+                f"Extracted links for: {entry_path} "
+                f"(limit={limit}, offset={offset}, kind={kind})"
+            )
             return result
 
+        except OpenZimMcpValidationError:
+            raise
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
             # context. Don't re-wrap and double the message prefix.
@@ -183,8 +229,15 @@ class _StructureMixin:
             logger.error(f"Link extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Link extraction failed: {e}") from e
 
-    def _extract_article_links(self, archive: Archive, entry_path: str) -> str:
-        """Extract links from article content."""
+    def _extract_article_links(
+        self,
+        archive: Archive,
+        entry_path: str,
+        limit: int,
+        offset: int,
+        kind: Optional[str],
+    ) -> str:
+        """Extract links from article content with per-category pagination."""
         try:
             entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
             title = entry.title or "Untitled"
@@ -194,30 +247,59 @@ class _StructureMixin:
             mime_type = item.mimetype or ""
             raw_content = bytes(item.content).decode("utf-8", errors="replace")
 
+            full_internal: List[Any] = []
+            full_external: List[Any] = []
+            full_media: List[Any] = []
+            message: Optional[str] = None
+
+            if mime_type.startswith(TEXT_HTML_MIME):
+                parsed = self.content_processor.extract_html_links(raw_content)
+                full_internal = parsed.get("internal_links", []) or []
+                full_external = parsed.get("external_links", []) or []
+                full_media = parsed.get("media_links", []) or []
+            else:
+                message = f"Link extraction not supported for {mime_type}"
+
+            def _page(full: List[Any], include: bool) -> Tuple[List[Any], bool]:
+                if not include:
+                    return [], False
+                end = offset + limit
+                page = full[offset:end]
+                return page, end < len(full)
+
+            internal_page, internal_more = _page(
+                full_internal, kind in (None, "internal")
+            )
+            external_page, external_more = _page(
+                full_external, kind in (None, "external")
+            )
+            media_page, media_more = _page(full_media, kind in (None, "media"))
+
             links_data: Dict[str, Any] = {
                 "title": title,
                 "path": entry_path,
                 "content_type": mime_type,
-                "internal_links": [],
-                "external_links": [],
-                "media_links": [],
-                "total_links": 0,
+                "internal_links": internal_page,
+                "external_links": external_page,
+                "media_links": media_page,
+                "total_internal_links": len(full_internal),
+                "total_external_links": len(full_external),
+                "total_media_links": len(full_media),
+                "total_links": (
+                    len(full_internal) + len(full_external) + len(full_media)
+                ),
+                "pagination": {
+                    "offset": offset,
+                    "limit": limit,
+                    "kind": kind,
+                    "has_more": internal_more or external_more or media_more,
+                    "has_more_internal": internal_more,
+                    "has_more_external": external_more,
+                    "has_more_media": media_more,
+                },
             }
-
-            # Process HTML content for links
-            if mime_type.startswith(TEXT_HTML_MIME):
-                links_data.update(
-                    self.content_processor.extract_html_links(raw_content)
-                )
-            else:
-                # For non-HTML content, we can't extract structured links
-                links_data["message"] = f"Link extraction not supported for {mime_type}"
-
-            links_data["total_links"] = (
-                len(links_data.get("internal_links", []))
-                + len(links_data.get("external_links", []))
-                + len(links_data.get("media_links", []))
-            )
+            if message:
+                links_data["message"] = message
 
             return json.dumps(links_data, indent=2, ensure_ascii=False)
 
