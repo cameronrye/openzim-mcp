@@ -30,10 +30,10 @@
     const toggle = document.getElementById('nav-toggle');
     if (nav) {
       const onScroll = () => {
-        if (window.scrollY > 0) nav.classList.add('is-scrolled');
+        if (globalThis.scrollY > 0) nav.classList.add('is-scrolled');
         else nav.classList.remove('is-scrolled');
       };
-      window.addEventListener('scroll', onScroll, { passive: true });
+      globalThis.addEventListener('scroll', onScroll, { passive: true });
       onScroll();
     }
     if (toggle && nav) {

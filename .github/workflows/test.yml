@@ -205,7 +205,8 @@ jobs:
     name: Comprehensive Testing
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
 
@@ -231,8 +232,13 @@ jobs:
 
       - name: Run slow tests
         run: |
-          # Exit code 5 means no tests collected; tolerate it until tests are marked @pytest.mark.slow.
-          uv run pytest -m "slow" --maxfail=5 || [ $? -eq 5 ]
+          # Exit code 5 means no tests collected; tolerate it until tests are marked
+          # @pytest.mark.slow. Capture pytest's exit code into RC explicitly so the
+          # tolerance check doesn't depend on the readability-fragile `cmd || [ $? -eq N ]`
+          # idiom.
+          RC=0
+          uv run pytest -m "slow" --maxfail=5 || RC=$?
+          [ "$RC" -eq 0 ] || [ "$RC" -eq 5 ]
 
       - name: Upload comprehensive coverage to Codecov
         if: env.CODECOV_TOKEN != ''
