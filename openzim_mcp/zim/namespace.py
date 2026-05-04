@@ -34,6 +34,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Human-readable description per ZIM namespace letter; surfaced in the
+# ``list_namespaces`` JSON response.
+_NAMESPACE_DESCRIPTIONS = {
+    "C": "User content entries (articles, main content)",
+    "M": "ZIM metadata (title, description, language, etc.)",
+    "W": "Well-known entries (MainPage, Favicon, navigation)",
+    "X": "Search indexes and full-text search data",
+    "A": "Legacy content namespace (older ZIM files)",
+    "I": "Images and media files",
+    "-": "Layout and template files",
+}
+
+# Minimum sampled hits required before we project a per-namespace total
+# from the sampling ratio. Below this we report the lower-bound (sampled +
+# probed) instead of fabricating numbers from single-hit projections.
+_NAMESPACE_PROJECTION_MIN_SAMPLES = 3
+
+
 class _NamespaceMixin:
     """Namespace listing / browsing / walking methods for ZimOperations."""
 
@@ -90,23 +108,42 @@ class _NamespaceMixin:
         namespaces undiscovered and counts wildly off.
         """
         namespaces: Dict[str, Dict[str, Any]] = {}
-        namespace_descriptions = {
-            "C": "User content entries (articles, main content)",
-            "M": "ZIM metadata (title, description, language, etc.)",
-            "W": "Well-known entries (MainPage, Favicon, navigation)",
-            "X": "Search indexes and full-text search data",
-            "A": "Legacy content namespace (older ZIM files)",
-            "I": "Images and media files",
-            "-": "Layout and template files",
-        }
-
+        seen_entries: set[str] = set()
         has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
         logger.debug(f"Archive uses new namespace scheme: {has_new_scheme}")
 
         total_entries = archive.entry_count
         full_iteration = total_entries <= NAMESPACE_MAX_SAMPLE_SIZE
 
-        seen_entries: set[str] = set()
+        record = self._make_namespace_recorder(namespaces, seen_entries)
+
+        if full_iteration:
+            self._iterate_all_entries(archive, total_entries, record)
+            self._finalise_full_iteration(namespaces)
+        else:
+            self._sample_entries(archive, total_entries, seen_entries, record)
+            self._probe_known_namespaces(archive, seen_entries, record)
+            self._finalise_sampled(namespaces, total_entries)
+
+        result = {
+            "total_entries": total_entries,
+            "sampled_entries": len(seen_entries),
+            "has_new_namespace_scheme": has_new_scheme,
+            "is_total_authoritative": full_iteration,
+            "discovery_method": "full_iteration" if full_iteration else "sampling",
+            "namespaces": namespaces,
+        }
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+    def _make_namespace_recorder(
+        self, namespaces: Dict[str, Dict[str, Any]], seen_entries: set[str]
+    ) -> Any:
+        """Build a closure that registers one entry into the namespaces map.
+
+        Tracks sampled vs probed separately because probed entries are
+        deterministic existence proofs and do NOT carry the
+        sampling-frequency signal needed for ratio extrapolation.
+        """
 
         def _record(path: str, title: str, is_probe: bool = False) -> None:
             if path in seen_entries:
@@ -117,13 +154,10 @@ class _NamespaceMixin:
                 namespace,
                 {
                     "count": 0,
-                    "description": namespace_descriptions.get(
+                    "description": _NAMESPACE_DESCRIPTIONS.get(
                         namespace, f"Namespace '{namespace}'"
                     ),
                     "sample_entries": [],
-                    # Track sampled vs probed separately. Probed entries are
-                    # deterministic existence proofs — they do NOT carry the
-                    # sampling-frequency signal needed for ratio extrapolation.
                     "_probed_count": 0,
                     "_sampled_count": 0,
                 },
@@ -136,106 +170,111 @@ class _NamespaceMixin:
             if len(ns_info["sample_entries"]) < 5:
                 ns_info["sample_entries"].append({"path": path, "title": title or path})
 
-        if full_iteration:
-            logger.debug(
-                f"Iterating all {total_entries} entries for exhaustive "
-                f"namespace listing"
-            )
-            for entry_id in range(total_entries):
-                try:
-                    entry = archive._get_entry_by_id(entry_id)
-                    _record(entry.path, entry.title or "")
-                except Exception as e:
-                    logger.debug(f"Error reading entry {entry_id}: {e}")
-                    continue
+        return _record
 
-            for ns_info in namespaces.values():
-                ns_info["sampled_count"] = ns_info["count"]
-                ns_info["estimated_total"] = ns_info["count"]
-                # Drop internal counters before serialization.
-                ns_info.pop("_probed_count", None)
-                ns_info.pop("_sampled_count", None)
-        else:
-            sample_size = min(NAMESPACE_MAX_SAMPLE_SIZE, total_entries)
-            max_sample_attempts = sample_size * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
-            logger.debug(
-                f"Sampling {sample_size} entries from {total_entries} total entries"
-            )
+    @staticmethod
+    def _iterate_all_entries(archive: Archive, total_entries: int, record: Any) -> None:
+        """Walk every entry id (small-archive path)."""
+        logger.debug(
+            f"Iterating all {total_entries} entries for exhaustive "
+            f"namespace listing"
+        )
+        for entry_id in range(total_entries):
             try:
-                for _ in range(max_sample_attempts):
-                    if len(seen_entries) >= sample_size:
-                        break
-                    try:
-                        entry = archive.get_random_entry()
-                        _record(entry.path, entry.title or "", is_probe=False)
-                    except Exception as e:
-                        logger.debug(f"Error sampling entry: {e}")
-                        continue
+                entry = archive._get_entry_by_id(entry_id)
+                record(entry.path, entry.title or "")
             except Exception as e:
-                logger.warning(f"Error during namespace sampling: {e}")
+                logger.debug(f"Error reading entry {entry_id}: {e}")
 
-            # Known-prefix probe: random sampling on a large archive will
-            # silently miss minority namespaces (e.g. M, W, X, I when A holds
-            # 99%+ of entries). Try canonical paths in each common namespace
-            # to surface them deterministically.
-            sampled_only_count = sum(v["_sampled_count"] for v in namespaces.values())
-            for canonical_path in self._get_known_namespace_probes():
+    @staticmethod
+    def _finalise_full_iteration(namespaces: Dict[str, Dict[str, Any]]) -> None:
+        """Collapse internal counters into the public shape after full scan."""
+        for ns_info in namespaces.values():
+            ns_info["sampled_count"] = ns_info["count"]
+            ns_info["estimated_total"] = ns_info["count"]
+            ns_info.pop("_probed_count", None)
+            ns_info.pop("_sampled_count", None)
+
+    @staticmethod
+    def _sample_entries(
+        archive: Archive, total_entries: int, seen_entries: set[str], record: Any
+    ) -> None:
+        """Random-sample up to NAMESPACE_MAX_SAMPLE_SIZE distinct entries."""
+        sample_size = min(NAMESPACE_MAX_SAMPLE_SIZE, total_entries)
+        max_sample_attempts = sample_size * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
+        logger.debug(
+            f"Sampling {sample_size} entries from {total_entries} total entries"
+        )
+        try:
+            for _ in range(max_sample_attempts):
+                if len(seen_entries) >= sample_size:
+                    break
                 try:
-                    if (
-                        archive.has_entry_by_path(canonical_path)
-                        and canonical_path not in seen_entries
-                    ):
-                        try:
-                            entry = archive.get_entry_by_path(canonical_path)
-                            _record(entry.path, entry.title or "", is_probe=True)
-                        except Exception as e:
-                            logger.debug(
-                                f"Error reading canonical entry {canonical_path}: {e}"
-                            )
+                    entry = archive.get_random_entry()
+                    record(entry.path, entry.title or "", is_probe=False)
                 except Exception as e:
-                    logger.debug(f"Error probing canonical path {canonical_path}: {e}")
+                    logger.debug(f"Error sampling entry: {e}")
+        except Exception as e:
+            logger.warning(f"Error during namespace sampling: {e}")
 
-            # Build the final per-namespace numbers. We extrapolate ONLY the
-            # randomly-sampled count via sampling ratio — probed entries are
-            # confirmed-present-but-frequency-unknown, so they only contribute
-            # a lower-bound floor. This avoids the previous bug where, e.g.,
-            # probing 5 M/* paths produced an estimated_total of ~100 from a
-            # 1000-of-20565 sample (5 / 0.0486), a fabricated number.
-            sampling_ratio = (
-                sampled_only_count / total_entries if sampled_only_count else 0.0
-            )
-            # Project only when we have enough sampled signal to make a stable
-            # estimate. Below the threshold, single-hit projections vary by
-            # 100%+ and effectively manufacture numbers — better to report the
-            # lower-bound (confirmed sightings) honestly.
-            PROJECTION_MIN_SAMPLES = 3
-            for ns_info in namespaces.values():
-                sampled = ns_info["_sampled_count"]
-                probed = ns_info["_probed_count"]
-                if sampling_ratio > 0 and sampled >= PROJECTION_MIN_SAMPLES:
-                    estimated_from_sample = int(sampled / sampling_ratio)
-                else:
-                    estimated_from_sample = 0
-                lower_bound = sampled + probed
-                estimated_total = max(estimated_from_sample, lower_bound)
+    def _probe_known_namespaces(
+        self, archive: Archive, seen_entries: set[str], record: Any
+    ) -> None:
+        """Probe canonical paths to surface namespaces missed by sampling.
 
-                ns_info["sampled_count"] = sampled
-                ns_info["probed_count"] = probed
-                ns_info["estimated_total"] = estimated_total
-                ns_info["count"] = estimated_total
-                ns_info.pop("_probed_count", None)
-                ns_info.pop("_sampled_count", None)
+        Random sampling on a large archive will silently miss minority
+        namespaces (e.g. M, W, X, I when A holds 99%+ of entries). Trying
+        canonical paths in each common namespace surfaces them
+        deterministically.
+        """
+        for canonical_path in self._get_known_namespace_probes():
+            try:
+                if (
+                    archive.has_entry_by_path(canonical_path)
+                    and canonical_path not in seen_entries
+                ):
+                    try:
+                        entry = archive.get_entry_by_path(canonical_path)
+                        record(entry.path, entry.title or "", is_probe=True)
+                    except Exception as e:
+                        logger.debug(
+                            f"Error reading canonical entry {canonical_path}: {e}"
+                        )
+            except Exception as e:
+                logger.debug(f"Error probing canonical path {canonical_path}: {e}")
 
-        result = {
-            "total_entries": total_entries,
-            "sampled_entries": len(seen_entries),
-            "has_new_namespace_scheme": has_new_scheme,
-            "is_total_authoritative": full_iteration,
-            "discovery_method": "full_iteration" if full_iteration else "sampling",
-            "namespaces": namespaces,
-        }
+    @staticmethod
+    def _finalise_sampled(
+        namespaces: Dict[str, Dict[str, Any]], total_entries: int
+    ) -> None:
+        """Project per-namespace totals from sample counts.
 
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        We extrapolate ONLY the randomly-sampled count via sampling ratio —
+        probed entries are confirmed-present-but-frequency-unknown, so they
+        only contribute a lower-bound floor. Project only when we have
+        enough sampled signal to make a stable estimate; below the
+        threshold, single-hit projections vary by 100%+ and effectively
+        manufacture numbers.
+        """
+        sampled_only_count = sum(v["_sampled_count"] for v in namespaces.values())
+        sampling_ratio = (
+            sampled_only_count / total_entries if sampled_only_count else 0.0
+        )
+        for ns_info in namespaces.values():
+            sampled = ns_info["_sampled_count"]
+            probed = ns_info["_probed_count"]
+            if sampling_ratio > 0 and sampled >= _NAMESPACE_PROJECTION_MIN_SAMPLES:
+                estimated_from_sample = int(sampled / sampling_ratio)
+            else:
+                estimated_from_sample = 0
+            estimated_total = max(estimated_from_sample, sampled + probed)
+
+            ns_info["sampled_count"] = sampled
+            ns_info["probed_count"] = probed
+            ns_info["estimated_total"] = estimated_total
+            ns_info["count"] = estimated_total
+            ns_info.pop("_probed_count", None)
+            ns_info.pop("_sampled_count", None)
 
     def _extract_namespace_from_path(self, path: str) -> str:
         """Extract namespace from entry path based on ZIM format."""
@@ -506,85 +545,102 @@ class _NamespaceMixin:
         exhaustive). For larger archives, falls back to random sampling and
         returns False — counts/paths are then a lower bound.
         """
-        namespace_entries: list[str] = []
-        seen_entries: set[str] = set()
         total_entries = archive.entry_count
 
         # Full iteration is exhaustive and far more accurate than sampling for
         # small archives. The threshold mirrors _list_archive_namespaces.
         if total_entries <= NAMESPACE_MAX_SAMPLE_SIZE:
-            logger.debug(
-                f"Iterating all {total_entries} entries to enumerate namespace "
-                f"'{namespace}'"
+            entries = self._enumerate_namespace_entries(
+                archive, namespace, total_entries
             )
-            for entry_id in range(total_entries):
-                try:
-                    entry = archive._get_entry_by_id(entry_id)
-                    path = entry.path
-                    if path in seen_entries:
-                        continue
-                    seen_entries.add(path)
-                    if self._extract_namespace_from_path(path) == namespace:
-                        namespace_entries.append(path)
-                except Exception as e:
-                    logger.debug(f"Error reading entry {entry_id}: {e}")
+            return sorted(entries), True
+
+        sampled, seen = self._sample_namespace_entries(archive, namespace)
+        self._extend_with_pattern_probes(archive, namespace, sampled, seen)
+        return sorted(sampled), False
+
+    def _enumerate_namespace_entries(
+        self, archive: Archive, namespace: str, total_entries: int
+    ) -> List[str]:
+        """Walk every entry id and keep those that fall under ``namespace``."""
+        logger.debug(
+            f"Iterating all {total_entries} entries to enumerate namespace "
+            f"'{namespace}'"
+        )
+        seen: set[str] = set()
+        results: List[str] = []
+        for entry_id in range(total_entries):
+            try:
+                entry = archive._get_entry_by_id(entry_id)
+                path = entry.path
+                if path in seen:
                     continue
-            logger.info(
-                f"Found {len(namespace_entries)} entries in namespace '{namespace}' "
-                f"via full iteration of {total_entries} entries"
-            )
-            return sorted(namespace_entries), True
+                seen.add(path)
+                if self._extract_namespace_from_path(path) == namespace:
+                    results.append(path)
+            except Exception as e:
+                logger.debug(f"Error reading entry {entry_id}: {e}")
+        logger.info(
+            f"Found {len(results)} entries in namespace '{namespace}' via full "
+            f"iteration of {total_entries} entries"
+        )
+        return results
 
-        # Sampling fallback for large archives.
+    def _sample_namespace_entries(
+        self, archive: Archive, namespace: str
+    ) -> Tuple[List[str], set[str]]:
+        """Sample random entries until ``NAMESPACE_MAX_ENTRIES`` matches found."""
+        total_entries = archive.entry_count
         max_samples = min(NAMESPACE_MAX_SAMPLE_SIZE * 2, total_entries)
-        sample_attempts = 0
         max_attempts = max_samples * NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER
-
         logger.debug(f"Sampling for entries in namespace '{namespace}'")
 
-        while (
-            len(namespace_entries) < NAMESPACE_MAX_ENTRIES
-            and sample_attempts < max_attempts
-        ):
-            sample_attempts += 1
+        results: List[str] = []
+        seen: set[str] = set()
+        attempts = 0
+        while len(results) < NAMESPACE_MAX_ENTRIES and attempts < max_attempts:
+            attempts += 1
             try:
-                entry = archive.get_random_entry()
-                path = entry.path
-
-                if path in seen_entries:
+                path = archive.get_random_entry().path
+                if path in seen:
                     continue
-                seen_entries.add(path)
-
+                seen.add(path)
                 if self._extract_namespace_from_path(path) == namespace:
-                    namespace_entries.append(path)
-
+                    results.append(path)
             except Exception as e:
                 logger.debug(f"Error sampling entry: {e}")
-                continue
 
-        # Strategy 2: Try common path patterns for the namespace. The pattern
-        # list contains both namespace-prefixed paths (e.g. "C/index.html")
-        # and bare paths (e.g. "index.html"); the latter live in *some other*
-        # namespace, so we must verify membership before appending.
-        common_patterns = self._get_common_namespace_patterns(namespace)
-        for pattern in common_patterns:
+        logger.info(
+            f"Found {len(results)} entries in namespace '{namespace}' "
+            f"after {attempts} samples"
+        )
+        return results, seen
+
+    def _extend_with_pattern_probes(
+        self,
+        archive: Archive,
+        namespace: str,
+        results: List[str],
+        seen: set[str],
+    ) -> None:
+        """Append entries from canonical-pattern probes to the sampled list.
+
+        The pattern list contains both namespace-prefixed paths (e.g.
+        ``C/index.html``) and bare paths (e.g. ``index.html``); the latter
+        live in *some other* namespace, so we must verify membership before
+        appending.
+        """
+        for pattern in self._get_common_namespace_patterns(namespace):
             try:
                 if (
                     archive.has_entry_by_path(pattern)
-                    and pattern not in seen_entries
+                    and pattern not in seen
                     and self._extract_namespace_from_path(pattern) == namespace
                 ):
-                    namespace_entries.append(pattern)
-                    seen_entries.add(pattern)
+                    results.append(pattern)
+                    seen.add(pattern)
             except Exception as e:
                 logger.debug(f"Error checking pattern {pattern}: {e}")
-                continue
-
-        logger.info(
-            f"Found {len(namespace_entries)} entries in namespace '{namespace}' "
-            f"after {sample_attempts} samples"
-        )
-        return sorted(namespace_entries), False
 
     def _get_common_namespace_patterns(self, namespace: str) -> List[str]:
         """Get common path patterns for a namespace."""

@@ -15,6 +15,7 @@ reference at import time.
 import json
 import logging
 import urllib.parse
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
@@ -32,6 +33,102 @@ if TYPE_CHECKING:
     from openzim_mcp.security import PathValidator
 
 logger = logging.getLogger(__name__)
+
+
+# Streaming knobs for ``_perform_filtered_search``: bound memory and CPU
+# for pathological queries while keeping the page-fill loop predictable.
+_FILTERED_BATCH_SIZE = 500
+_FILTERED_MAX_SCAN = 10000
+
+
+@dataclass(frozen=True)
+class _FilteredScanState:
+    """Aggregate state captured during one filtered-search scan pass."""
+
+    filtered_count: int
+    scanned: int
+    scan_cap_hit: bool
+    total_filtered_is_lower_bound: bool
+
+
+def _format_filter_text(namespace: Optional[str], content_type: Optional[str]) -> str:
+    """Render the ``(filters: ...)`` annotation used in result headers."""
+    parts: List[str] = []
+    if namespace:
+        parts.append(f"namespace={namespace}")
+    if content_type:
+        parts.append(f"content_type={content_type}")
+    return f" (filters: {', '.join(parts)})" if parts else ""
+
+
+def _format_filtered_response(
+    query: str,
+    filter_text: str,
+    results: List[Dict[str, Any]],
+    scan: _FilteredScanState,
+    total_results: int,
+    offset: int,
+    limit: int,
+) -> str:
+    """Render the human-readable response body, header, and pagination footer."""
+    capped_note = (
+        f" (filtered from first {scan.scanned} of " f"~{total_results} unfiltered hits)"
+        if scan.scan_cap_hit
+        else ""
+    )
+    # When ``filtered_count`` is a lower bound, surface that with a ``+``
+    # suffix so callers don't mistake it for the final count.
+    total_filtered_text = (
+        f"{scan.filtered_count}+"
+        if scan.total_filtered_is_lower_bound
+        else str(scan.filtered_count)
+    )
+
+    parts: List[str] = [
+        f'Found {total_filtered_text} filtered matches for "{query}"'
+        f"{filter_text}, "
+        f"showing {offset + 1}-{offset + len(results)}{capped_note}:\n\n",
+    ]
+    for i, result in enumerate(results):
+        parts.append(f"## {offset + i + 1}. {result['title']}\n")
+        parts.append(f"Path: {result['path']}\n")
+        parts.append(f"Namespace: {result['namespace']}\n")
+        parts.append(f"Content Type: {result['content_type']}\n")
+        parts.append(f"Snippet: {result['snippet']}\n\n")
+
+    parts.append("---\n")
+    parts.append(
+        f"**Pagination**: Showing {offset + 1}-{offset + len(results)} "
+        f"of {total_filtered_text}\n"
+    )
+
+    has_more = scan.total_filtered_is_lower_bound or (
+        offset + len(results) < scan.filtered_count
+    )
+    if has_more:
+        # When ``filtered_count`` is a lower bound we know there may be more
+        # matches but we don't know the true total — ``create_next_cursor``
+        # would return ``None`` (since ``offset+limit >= filtered_count``)
+        # and we'd render ``Next cursor: None``. Pad the total so the
+        # cursor generator emits a valid token.
+        cursor_total = (
+            scan.filtered_count + 1
+            if scan.total_filtered_is_lower_bound
+            else scan.filtered_count
+        )
+        next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
+            offset, limit, cursor_total, query
+        )
+        # Edge case: the scan-cap path can leave ``offset+limit`` equal to
+        # the (true) filtered_count, so create_next_cursor returns None
+        # even though has_more was True for the lower-bound path. Don't
+        # render a literal "None" cursor — omit the line.
+        if next_cursor is not None:
+            parts.append(f"**Next cursor**: `{next_cursor}`\n")
+        parts.append(f"**Hint**: Use offset={offset + limit} to get the next page\n")
+    else:
+        parts.append("**End of results**\n")
+    return "".join(parts)
 
 
 class _SearchMixin:
@@ -331,167 +428,165 @@ class _SearchMixin:
         if namespace:
             namespace = self._canonicalise_namespace(namespace.strip())
 
-        # Create searcher and execute search
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
         search = searcher.search(query_obj)
-
-        # Get total results
         total_results = search.getEstimatedMatches()
-
         if total_results == 0:
             return f'No search results found for "{query}"', 0
 
-        # Stream raw results in batches and filter as we go, applying a
-        # **skip counter** so the offset window is never materialised. The
-        # old implementation accumulated ``offset + limit`` Entry objects in
-        # memory and called ``get_entry_by_path`` for every candidate in
-        # that window before slicing — pathological for high offsets
-        # (e.g. ``offset=9900, limit=100`` materialised ~10k entries to
-        # return 100). The new pattern only materialises entries we will
-        # actually emit (the ``limit``-sized page after ``offset``).
-        BATCH_SIZE = 500
-        MAX_SCAN = 10000  # bound memory and CPU for pathological queries
+        page, scan = self._scan_filtered_search(
+            archive, search, total_results, namespace, content_type, limit, offset
+        )
 
-        # Running count of entries that pass all filters. Used both to skip
-        # the offset window and as the response's reported ``total_filtered``
-        # — equivalent to the old ``len(filtered_results)``.
-        filtered_count = 0
-        # Page entries we will format and return. Capped at ``limit``.
+        filter_text = _format_filter_text(namespace, content_type)
+        if scan.filtered_count == 0:
+            return f'No filtered matches for "{query}"{filter_text}', 0
+        if offset >= scan.filtered_count:
+            return (
+                f'Found {scan.filtered_count} filtered matches for "{query}"'
+                f"{filter_text}, but offset {offset} exceeds total results."
+            ), scan.filtered_count
+
+        results = self._build_filtered_results(page, content_type, offset)
+        result_text = _format_filtered_response(
+            query, filter_text, results, scan, total_results, offset, limit
+        )
+        return result_text, scan.filtered_count
+
+    def _scan_filtered_search(
+        self,
+        archive: Archive,
+        search: Any,
+        total_results: int,
+        namespace: Optional[str],
+        content_type: Optional[str],
+        limit: int,
+        offset: int,
+    ) -> Tuple[List[Tuple[str, Any, str, str]], "_FilteredScanState"]:
+        """Stream search results in batches, applying filters and skip counter.
+
+        Streaming with a skip counter avoids the old pattern that materialised
+        ``offset + limit`` Entry objects via ``get_entry_by_path`` for every
+        candidate in that window — pathological for high offsets (e.g.
+        ``offset=9900, limit=100`` materialised ~10k entries to return 100).
+        We only materialise entries we will actually emit.
+        """
         page: List[Tuple[str, Any, str, str]] = []
+        filtered_count = 0
         scanned = 0
         scan_cap_hit = False
-
-        # When namespace-only filtering is active (no content_type), we can
-        # derive the entry namespace from the search-result path string
-        # itself without paying for ``get_entry_by_path``. That eliminates
-        # archive lookups for skipped entries entirely.
+        # When namespace-only filtering is active (no content_type), the
+        # entry namespace is derivable from the path string without an
+        # archive lookup, so skipped entries cost nothing.
         need_entry_for_filter = bool(content_type)
 
         while scanned < total_results and len(page) < limit:
-            if scanned >= MAX_SCAN:
+            if scanned >= _FILTERED_MAX_SCAN:
                 scan_cap_hit = True
                 break
-            batch_end = min(scanned + BATCH_SIZE, total_results, MAX_SCAN)
+            batch_end = min(
+                scanned + _FILTERED_BATCH_SIZE, total_results, _FILTERED_MAX_SCAN
+            )
             batch = list(search.getResults(scanned, batch_end - scanned))
             scanned = batch_end
             if not batch:
                 break
 
             for entry_id in batch:
-                # Cheap namespace filter from the path string. ``entry_id``
-                # is the path libzim returned; resolved entry.path may
-                # differ across redirects, but namespace agreement holds in
-                # practice (redirects within the same namespace are the
-                # common case; for cross-namespace redirects we accept the
-                # resolved entry's namespace below when we materialise).
-                if "/" in entry_id:
-                    cheap_namespace = entry_id.split("/", 1)[0]
-                elif entry_id:
-                    cheap_namespace = entry_id[0]
-                else:
-                    cheap_namespace = ""
-
-                if namespace and (
-                    self._canonicalise_namespace(cheap_namespace) != namespace
-                ):
+                if namespace and not self._matches_cheap_namespace(entry_id, namespace):
                     continue
-
-                # If the only filter was namespace and we haven't reached
-                # the offset yet, count without materialising the entry.
                 if not need_entry_for_filter and filtered_count < offset:
                     filtered_count += 1
                     continue
 
-                # Materialise the entry — needed either for the
-                # content_type filter or because we're in the page window.
-                try:
-                    entry = archive.get_entry_by_path(entry_id)
-
-                    # Use the resolved ``entry.path`` for the response so
-                    # the namespace shown matches what libzim actually
-                    # surfaces (handles cross-namespace redirects).
-                    entry_namespace = ""
-                    if "/" in entry.path:
-                        entry_namespace = entry.path.split("/", 1)[0]
-                    elif entry.path:
-                        entry_namespace = entry.path[0]
-
-                    # Re-check namespace after redirect resolution — a
-                    # redirect may have crossed namespaces.
-                    if namespace and (
-                        self._canonicalise_namespace(entry_namespace) != namespace
-                    ):
-                        continue
-
-                    content_mime = ""
-                    if content_type:
-                        try:
-                            content_mime = entry.get_item().mimetype or ""
-                            if not content_mime.startswith(content_type):
-                                continue
-                        except Exception:  # nosec B112 - intentional filter skip
-                            continue
-
-                except Exception as e:
-                    logger.warning(f"Error filtering search result {entry_id}: {e}")
+                materialised = self._materialise_filtered_entry(
+                    archive, entry_id, namespace, content_type
+                )
+                if materialised is None:
                     continue
 
-                # This entry passes all filters — count it and decide
-                # whether to keep it on the response page.
                 filtered_count += 1
                 if filtered_count > offset and len(page) < limit:
-                    page.append((entry_id, entry, entry_namespace, content_mime))
+                    page.append(materialised)
                     if len(page) >= limit:
-                        # Got the full page; stop scanning.
                         break
 
-        # Distinguish "stopped because we hit a hard scan cap" from
-        # "stopped because the page filled before we exhausted raw
-        # results". Both leave ``scanned < total_results``, but only the
-        # first should warn the user that the response is truncated by
-        # the cap; the second is a normal pagination pause where there
-        # are more matches available via ``offset += limit``.
         page_filled_short_of_scan = (
             len(page) >= limit and scanned < total_results and not scan_cap_hit
         )
-        results_capped = scan_cap_hit
-        raw_fetch_limit = scanned  # what we actually scanned
-        # ``total_filtered`` is the count of filter-passing entries we
-        # observed. When the page filled before we exhausted the raw
-        # search results, ``total_filtered`` is a lower bound — there
-        # may be additional matches we didn't get to. Callers cache the
-        # response only when this is non-zero.
-        total_filtered = filtered_count
-        # Lower-bound indicator for the response text and pagination.
-        total_filtered_is_lower_bound = page_filled_short_of_scan
-
-        filters_applied = []
-        if namespace:
-            filters_applied.append(f"namespace={namespace}")
-        if content_type:
-            filters_applied.append(f"content_type={content_type}")
-        filter_text = (
-            f" (filters: {', '.join(filters_applied)})" if filters_applied else ""
+        return page, _FilteredScanState(
+            filtered_count=filtered_count,
+            scanned=scanned,
+            scan_cap_hit=scan_cap_hit,
+            total_filtered_is_lower_bound=page_filled_short_of_scan,
         )
 
-        if total_filtered == 0:
-            return f'No filtered matches for "{query}"{filter_text}', 0
+    def _matches_cheap_namespace(self, entry_id: str, namespace: str) -> bool:
+        """Cheap namespace filter from the path string (no archive lookup).
 
-        if offset >= total_filtered:
-            return (
-                f'Found {total_filtered} filtered matches for "{query}"{filter_text}, '
-                f"but offset {offset} exceeds total results."
-            ), total_filtered
+        ``entry_id`` is the path libzim returned; resolved ``entry.path`` may
+        differ across redirects, but namespace agreement holds in practice
+        (redirects within the same namespace are the common case; for
+        cross-namespace redirects we accept the resolved entry's namespace
+        when we materialise).
+        """
+        if "/" in entry_id:
+            cheap_namespace = entry_id.split("/", 1)[0]
+        elif entry_id:
+            cheap_namespace = entry_id[0]
+        else:
+            cheap_namespace = ""
+        return self._canonicalise_namespace(cheap_namespace) == namespace
 
-        # Collect detailed results, reusing the entries already fetched above.
-        results = []
+    def _materialise_filtered_entry(
+        self,
+        archive: Archive,
+        entry_id: str,
+        namespace: Optional[str],
+        content_type: Optional[str],
+    ) -> Optional[Tuple[str, Any, str, str]]:
+        """Resolve an entry and apply the post-redirect namespace + mime filters."""
+        try:
+            entry = archive.get_entry_by_path(entry_id)
+        except Exception as e:
+            logger.warning(f"Error filtering search result {entry_id}: {e}")
+            return None
+
+        # Use the resolved ``entry.path`` for the response so the namespace
+        # shown matches what libzim actually surfaces (handles
+        # cross-namespace redirects).
+        entry_namespace = ""
+        if "/" in entry.path:
+            entry_namespace = entry.path.split("/", 1)[0]
+        elif entry.path:
+            entry_namespace = entry.path[0]
+        if namespace and (self._canonicalise_namespace(entry_namespace) != namespace):
+            return None
+
+        content_mime = ""
+        if content_type:
+            try:
+                content_mime = entry.get_item().mimetype or ""
+            except Exception:  # nosec B112 - intentional filter skip
+                return None
+            if not content_mime.startswith(content_type):
+                return None
+
+        return entry_id, entry, entry_namespace, content_mime
+
+    def _build_filtered_results(
+        self,
+        page: List[Tuple[str, Any, str, str]],
+        content_type: Optional[str],
+        offset: int,
+    ) -> List[Dict[str, Any]]:
+        """Format each materialised entry into the response result dict."""
+        results: List[Dict[str, Any]] = []
         for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
             try:
                 title = entry.title or "Untitled"
                 snippet = self._get_entry_snippet(entry)
-
-                # When content_type wasn't filtered, mimetype hasn't been read yet.
                 if not content_type:
                     try:
                         content_mime = entry.get_item().mimetype or ""
@@ -499,7 +594,6 @@ class _SearchMixin:
                         logger.debug(
                             f"Could not get mimetype for entry {entry_id}: {e}"
                         )
-
                 results.append(
                     {
                         "path": entry_id,
@@ -522,72 +616,7 @@ class _SearchMixin:
                         "content_type": "unknown",
                     }
                 )
-
-        capped_note = (
-            f" (filtered from first {raw_fetch_limit} of "
-            f"~{total_results} unfiltered hits)"
-            if results_capped
-            else ""
-        )
-        # When ``total_filtered`` is a lower bound, surface that with a
-        # ``+`` suffix so callers don't mistake it for the final count.
-        total_filtered_text = (
-            f"{total_filtered}+"
-            if total_filtered_is_lower_bound
-            else str(total_filtered)
-        )
-        result_text = (
-            f'Found {total_filtered_text} filtered matches for "{query}"'
-            f"{filter_text}, "
-            f"showing {offset + 1}-{offset + len(results)}{capped_note}:\n\n"
-        )
-
-        for i, result in enumerate(results):
-            result_text += f"## {offset + i + 1}. {result['title']}\n"
-            result_text += f"Path: {result['path']}\n"
-            result_text += f"Namespace: {result['namespace']}\n"
-            result_text += f"Content Type: {result['content_type']}\n"
-            result_text += f"Snippet: {result['snippet']}\n\n"
-
-        # Pagination footer — mirrors _perform_search so callers have a
-        # consistent way to detect and navigate additional pages. When
-        # the page filled before raw scanning completed we know there
-        # is at least the possibility of more matches, even if the
-        # observed ``total_filtered`` happens to equal ``offset+limit``.
-        has_more = (
-            total_filtered_is_lower_bound or (offset + len(results)) < total_filtered
-        )
-        result_text += "---\n"
-        result_text += (
-            f"**Pagination**: Showing {offset + 1}-{offset + len(results)} "
-            f"of {total_filtered_text}\n"
-        )
-        if has_more:
-            # When ``total_filtered`` is a lower bound we know there
-            # may be more matches but we don't know the true total —
-            # ``create_next_cursor`` would return ``None`` (since
-            # ``offset+limit >= total_filtered``) and we'd render
-            # ``Next cursor: None``. Pad the total so the cursor
-            # generator emits a valid token.
-            cursor_total = (
-                total_filtered + 1 if total_filtered_is_lower_bound else total_filtered
-            )
-            next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
-                offset, limit, cursor_total, query
-            )
-            # Edge case: the scan-cap path can leave offset+limit equal to
-            # the (true) total_filtered, so create_next_cursor returns
-            # None even though has_more was True for the lower-bound path.
-            # Don't render a literal "None" cursor — omit the line.
-            if next_cursor is not None:
-                result_text += f"**Next cursor**: `{next_cursor}`\n"
-            result_text += (
-                f"**Hint**: Use offset={offset + limit} to get the next page\n"
-            )
-        else:
-            result_text += "**End of results**\n"
-
-        return result_text, total_filtered
+        return results
 
     def get_search_suggestions(
         self, zim_file_path: str, partial_query: str, limit: int = 10
@@ -1018,12 +1047,6 @@ class _SearchMixin:
         Returns:
             The actual entry path if found, None otherwise
         """
-        # Extract potential search terms from the path
-        search_terms = self._extract_search_terms_from_path(entry_path)
-
-        # Hoist Searcher construction out of the loop. Each ``Searcher(archive)``
-        # opens the archive's Xapian DB; building a fresh one per fallback term
-        # multiplied that cost by up to 5x.
         # Re-import to honour test patches against ``libzim.search.Searcher``.
         # Tests for this method historically patched the upstream libzim
         # symbols rather than the ``zim_operations`` re-export, and the
@@ -1034,40 +1057,50 @@ class _SearchMixin:
             Searcher,
         )
 
+        # Hoist Searcher construction out of the loop. Each ``Searcher(archive)``
+        # opens the archive's Xapian DB; building a fresh one per fallback term
+        # multiplied that cost by up to 5x.
         try:
             searcher = Searcher(archive)
         except Exception as e:
             logger.debug(f"Searcher initialization failed: {e}")
             return None
 
-        for search_term in search_terms:
+        for search_term in self._extract_search_terms_from_path(entry_path):
             if len(search_term) < 2:  # Skip very short terms
                 continue
+            match = self._search_term_for_path(searcher, Query, search_term, entry_path)
+            if match is not None:
+                return match
+        return None
 
-            try:
-                logger.debug(f"Searching for entry with term: '{search_term}'")
-                query_obj = Query().set_query(search_term)
-                search = searcher.search(query_obj)
+    def _search_term_for_path(
+        self,
+        searcher: Any,
+        query_factory: Any,
+        search_term: str,
+        entry_path: str,
+    ) -> Optional[str]:
+        """Run one search term and return the first result that matches the path.
 
-                total_results = search.getEstimatedMatches()
-                if total_results == 0:
-                    continue
-
-                # Check first few results for exact or close matches
-                max_results = min(total_results, 10)  # Limit search for performance
-                result_entries = list(search.getResults(0, max_results))
-
-                for result_path in result_entries:
-                    # Check if this result is a good match for our requested path
-                    result_path_str = str(result_path)
-                    if self._is_path_match(entry_path, result_path_str):
-                        logger.debug(f"Found matching entry: {result_path_str}")
-                        return result_path_str
-
-            except Exception as e:
-                logger.debug(f"Search failed for term '{search_term}': {e}")
-                continue
-
+        Returns ``None`` if the term yields no results, all results miss, or
+        the search itself raises (a single bad term shouldn't abort the
+        outer loop's other fallbacks).
+        """
+        try:
+            logger.debug(f"Searching for entry with term: '{search_term}'")
+            search = searcher.search(query_factory().set_query(search_term))
+            total_results = search.getEstimatedMatches()
+            if total_results == 0:
+                return None
+            max_results = min(total_results, 10)
+            for result_path in search.getResults(0, max_results):
+                result_path_str = str(result_path)
+                if self._is_path_match(entry_path, result_path_str):
+                    logger.debug(f"Found matching entry: {result_path_str}")
+                    return result_path_str
+        except Exception as e:
+            logger.debug(f"Search failed for term '{search_term}': {e}")
         return None
 
     def _extract_search_terms_from_path(self, entry_path: str) -> List[str]:
