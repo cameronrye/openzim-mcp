@@ -169,7 +169,7 @@ Add OpenZIM MCP to your client's MCP config. Substitute the host, port, and toke
       "command": "npx",
       "args": [
         "-y",
-        "mcp-remote@latest",
+        "mcp-remote@^0.1.16",
         "http://127.0.0.1:8000/mcp",
         "--header",
         "Authorization:Bearer YOUR_TOKEN_HERE"
