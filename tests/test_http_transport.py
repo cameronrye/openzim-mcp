@@ -128,6 +128,76 @@ def test_check_safe_startup_localhost_resolving_to_loopback_is_safe(monkeypatch)
     check_safe_startup(config)
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1:*", "localhost:*", "[::1]:*"}
+
+
+def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
+    """allowed_hosts plumbs through to FastMCP as TransportSecuritySettings.
+
+    Loopback values are always present in the resulting allow-list so that
+    direct localhost access keeps working alongside the proxied hostname.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.server import OpenZimMcpServer
+
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        transport="http",
+        allowed_hosts=["mcp.example.com", "alt.example.com:*"],
+    )
+    server = OpenZimMcpServer(cfg)
+
+    # FastMCP stores transport_security on its settings object. We assert
+    # via set-superset rather than per-element ``in`` so neither (a) future
+    # SDK additions to the loopback defaults nor (b) order changes break
+    # the test, and so static analyzers don't mistake list-membership for
+    # URL substring matching.
+    sec: TransportSecuritySettings = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    assert sec is not None
+    hosts = set(sec.allowed_hosts)
+    assert hosts >= _LOOPBACK_HOSTS | {"mcp.example.com", "alt.example.com:*"}
+
+
+def test_fastmcp_uses_sdk_default_when_hosts_unset(tmp_path):
+    """Empty allowed_hosts ⇒ no transport_security passed; SDK default applies.
+
+    The SDK default is loopback-only, which is the right behavior for
+    purely local deployments.
+    """
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.server import OpenZimMcpServer
+
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        transport="http",
+    )
+    server = OpenZimMcpServer(cfg)
+    sec = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    assert sec is not None
+    hosts = set(sec.allowed_hosts)
+    assert hosts >= _LOOPBACK_HOSTS
+    assert hosts.isdisjoint({"mcp.example.com"})
+
+
+def test_fastmcp_ignores_allowed_hosts_when_transport_stdio(tmp_path):
+    """allowed_hosts is HTTP-only; stdio transport doesn't surface a Host header."""
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.server import OpenZimMcpServer
+
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        transport="stdio",
+        allowed_hosts=["mcp.example.com"],
+    )
+    server = OpenZimMcpServer(cfg)
+    sec = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    # Custom host NOT applied — SDK default in effect (loopback-only).
+    if sec is not None:
+        assert set(sec.allowed_hosts).isdisjoint({"mcp.example.com"})
+
+
 def test_serve_streamable_http_runs_safe_check_and_serves(monkeypatch, tmp_path):
     """serve_streamable_http calls check_safe_startup, builds app, runs uvicorn."""
     from openzim_mcp.http_app import serve_streamable_http

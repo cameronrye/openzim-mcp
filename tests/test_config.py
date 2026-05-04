@@ -259,6 +259,46 @@ def test_config_rejects_wildcard_cors():
         OpenZimMcpConfig(allowed_directories=[TMP_DIR], cors_origins=["*"])
 
 
+def test_config_default_allowed_hosts_empty():
+    """Default allowed_hosts is an empty list."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.allowed_hosts == []
+
+
+def test_config_rejects_wildcard_allowed_hosts():
+    """Wildcard '*' rejected at startup as a footgun.
+
+    The point of an allow-list is DNS rebinding protection; accepting
+    '*' would defeat it.
+    """
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(OpenZimMcpConfigurationError):
+        OpenZimMcpConfig(allowed_directories=[TMP_DIR], allowed_hosts=["*"])
+
+
+def test_config_rejects_wildcard_allowed_hosts_with_padding():
+    """Whitespace-padded ' * ' is also rejected (mirrors cors_origins)."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    with pytest.raises(OpenZimMcpConfigurationError):
+        OpenZimMcpConfig(allowed_directories=[TMP_DIR], allowed_hosts=[" * "])
+
+
+def test_config_hash_includes_allowed_hosts():
+    """allowed_hosts changes alter the config hash (used for conflict detection)."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    base = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    extended = OpenZimMcpConfig(
+        allowed_directories=[TMP_DIR],
+        allowed_hosts=["mcp.example.com"],
+    )
+    assert base.get_config_hash() != extended.get_config_hash()
+
+
 def test_config_default_watch_interval():
     """Default watch_interval_seconds is 5."""
     from openzim_mcp.config import OpenZimMcpConfig
