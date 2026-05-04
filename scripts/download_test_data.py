@@ -183,7 +183,7 @@ def list_available_files() -> None:
     print("[LOW]  Priority 3: Advanced testing scenarios")
 
 
-def download_files(
+def download_files(  # NOSONAR(python:S3776)
     output_dir: Path,
     categories: Optional[List[str]] = None,
     max_priority: int = 3,

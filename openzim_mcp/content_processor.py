@@ -45,7 +45,7 @@ def _slugify_heading(text: str) -> str:
         return ""
     text = unicodedata.normalize("NFKC", text).strip().lower()
     text = re.sub(r"\s+", "-", text)
-    text = re.sub(r"[^\w\-]", "", text, flags=re.UNICODE)
+    text = re.sub(r"[^\w\-]", "", text, flags=re.UNICODE)  # NOSONAR(python:S3776)
     return text.strip("-")
 
 

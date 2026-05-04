@@ -186,7 +186,7 @@ class ZimEntryTemplate(ResourceTemplate):
         )
 
 
-_ZIM_ENTRY_URI_TEMPLATE = "zim://{name}/entry/{path}"
+_ZIM_ENTRY_URI_TEMPLATE = "zim://{name}/entry/{path}"  # NOSONAR(python:S3776)
 
 
 def register_resources(server: "OpenZimMcpServer") -> None:

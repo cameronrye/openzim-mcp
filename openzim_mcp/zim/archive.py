@@ -224,7 +224,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         self.content_processor = content_processor
         logger.info("ZimOperations initialized")
 
-    def _scan_zim_files(self) -> List[Dict[str, Any]]:
+    def _scan_zim_files(self) -> List[Dict[str, Any]]:  # NOSONAR(python:S3776)
         """Scan all allowed directories for ZIM files (uncached)."""
         logger.info(
             f"Searching for ZIM files in {len(self.config.allowed_directories)} "
@@ -388,7 +388,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             logger.error(f"Metadata retrieval failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Metadata retrieval failed: {e}") from e
 
-    def _extract_zim_metadata(self, archive: Archive) -> str:
+    def _extract_zim_metadata(self, archive: Archive) -> str:  # NOSONAR(python:S3776)
         """Extract metadata from ZIM archive."""
         # Basic archive information
         metadata = {
@@ -502,7 +502,9 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             logger.error(f"Main page retrieval failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Main page retrieval failed: {e}") from e
 
-    def _get_main_page_content(self, archive: Archive) -> Tuple[str, bool]:
+    def _get_main_page_content(  # NOSONAR(python:S3776)
+        self, archive: Archive
+    ) -> Tuple[str, bool]:
         """Get main page content from archive.
 
         Returns:

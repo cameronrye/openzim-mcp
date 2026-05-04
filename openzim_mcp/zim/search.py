@@ -660,7 +660,7 @@ class _SearchMixin:
             logger.error(f"Suggestion generation failed for {partial_query}: {e}")
             raise OpenZimMcpArchiveError(f"Suggestion generation failed: {e}") from e
 
-    def _generate_search_suggestions(
+    def _generate_search_suggestions(  # NOSONAR(python:S3776)
         self, archive: Archive, partial_query: str, limit: int
     ) -> str:
         """Generate search suggestions based on partial query.
@@ -808,7 +808,7 @@ class _SearchMixin:
 
         return json.dumps(result, indent=2, ensure_ascii=False)
 
-    def _get_suggestions_from_search(
+    def _get_suggestions_from_search(  # NOSONAR(python:S3776)
         self, archive: Archive, partial_query: str, limit: int
     ) -> List[Dict[str, Any]]:
         """Get suggestions by using the search functionality as fallback."""

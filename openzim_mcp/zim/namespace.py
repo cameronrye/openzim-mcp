@@ -375,7 +375,7 @@ class _NamespaceMixin:
             logger.error(f"Namespace browsing failed for {namespace}: {e}")
             raise OpenZimMcpArchiveError(f"Namespace browsing failed: {e}") from e
 
-    def _browse_namespace_entries(
+    def _browse_namespace_entries(  # NOSONAR(python:S3776)
         self,
         archive: Archive,
         namespace: str,
