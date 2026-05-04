@@ -110,7 +110,7 @@ class TestSafeRegexSearch:
             try:
                 match = safe_regex_search(r"hello", "hello world")
                 outcome.append(("ok", match.group() if match else None))
-            except BaseException as e:  # noqa: B036  # NOSONAR
+            except (KeyboardInterrupt, SystemExit, Exception) as e:
                 outcome.append(("err", e))
 
         t = threading.Thread(target=worker)
