@@ -12,15 +12,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Bound for ``get_binary_entry``: reading and base64-encoding is performed
+# in memory, so an unbounded value lets a single call attempt to buffer
+# arbitrarily large data and exhaust the process.
+_MAX_BINARY_LIMIT = 100 * 1024 * 1024  # 100 MB
+
 
 def register_structure_tools(server: "OpenZimMcpServer") -> None:
-    """
-    Register article structure and content analysis tools.
+    """Register article structure and content analysis tools."""
+    _register_get_article_structure(server)
+    _register_extract_article_links(server)
+    _register_get_entry_summary(server)
+    _register_get_table_of_contents(server)
+    _register_get_binary_entry(server)
+    _register_get_related_articles(server)
 
-    Args:
-        server: The OpenZimMcpServer instance to register tools on
-    """
 
+def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_article_structure(zim_file_path: str, entry_path: str) -> str:
         """Extract article structure including headings, sections, and key metadata.
@@ -38,7 +46,6 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
             JSON string containing article structure
         """
         try:
-            # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
@@ -48,11 +55,9 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                     context=f"Entry: {entry_path}",
                 )
 
-            # Sanitize inputs
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            # Use async operations
             return await server.async_zim_operations.get_article_structure(
                 zim_file_path, entry_path
             )
@@ -65,6 +70,8 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
+
+def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def extract_article_links(zim_file_path: str, entry_path: str) -> str:
         """Extract internal and external links from an article.
@@ -77,7 +84,6 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
             JSON string containing extracted links
         """
         try:
-            # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
@@ -87,11 +93,9 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                     context=f"Entry: {entry_path}",
                 )
 
-            # Sanitize inputs
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            # Use async operations
             return await server.async_zim_operations.extract_article_links(
                 zim_file_path, entry_path
             )
@@ -104,6 +108,8 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
+
+def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_entry_summary(
         zim_file_path: str,
@@ -134,7 +140,6 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
             - Longer summary: get_entry_summary(..., "Evolution", max_words=500)
         """
         try:
-            # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("get_entry")
             except OpenZimMcpRateLimitError as e:
@@ -144,11 +149,9 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                     context=f"Entry: {entry_path}",
                 )
 
-            # Sanitize inputs
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            # Validate parameters
             if max_words < 1 or max_words > 1000:
                 return (
                     "**Parameter Validation Error**\n\n"
@@ -159,7 +162,6 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                     "**Example**: Use `max_words=200` for a typical summary."
                 )
 
-            # Use async operations
             return await server.async_zim_operations.get_entry_summary(
                 zim_file_path, entry_path, max_words
             )
@@ -172,6 +174,8 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
+
+def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_table_of_contents(
         zim_file_path: str,
@@ -210,7 +214,6 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
             - Get TOC: get_table_of_contents("/path/to/wiki.zim", "Biology")
         """
         try:
-            # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
@@ -220,11 +223,9 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                     context=f"Entry: {entry_path}",
                 )
 
-            # Sanitize inputs
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            # Use async operations
             return await server.async_zim_operations.get_table_of_contents(
                 zim_file_path, entry_path
             )
@@ -237,6 +238,8 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
+
+def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_binary_entry(
         zim_file_path: str,
@@ -275,7 +278,6 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
             - Large video: get_binary_entry(..., "I/video.mp4", 100000000)
         """
         try:
-            # Check rate limit (binary is most expensive)
             try:
                 server.rate_limiter.check_rate_limit("get_binary_entry")
             except OpenZimMcpRateLimitError as e:
@@ -285,27 +287,21 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                     context=f"Entry: {entry_path}",
                 )
 
-            # Bound max_size_bytes — reading and base64-encoding is performed
-            # in memory, so an unbounded value lets a single call attempt to
-            # buffer arbitrarily large data and exhaust the process.
-            MAX_BINARY_LIMIT = 100 * 1024 * 1024  # 100 MB
             if max_size_bytes is not None and (
-                max_size_bytes < 1 or max_size_bytes > MAX_BINARY_LIMIT
+                max_size_bytes < 1 or max_size_bytes > _MAX_BINARY_LIMIT
             ):
                 return (
                     "**Parameter Validation Error**\n\n"
                     f"**Issue**: max_size_bytes must be between 1 and "
-                    f"{MAX_BINARY_LIMIT} bytes (100 MB), got {max_size_bytes}.\n"
+                    f"{_MAX_BINARY_LIMIT} bytes (100 MB), got {max_size_bytes}.\n"
                     "**Tip**: For larger entries, retrieve the entry in "
                     "chunks via repeated calls or use include_data=False to "
                     "fetch metadata only."
                 )
 
-            # Sanitize inputs
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            # Use async operations
             return await server.async_zim_operations.get_binary_entry(
                 zim_file_path, entry_path, max_size_bytes, include_data
             )
@@ -318,6 +314,8 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
+
+def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_related_articles(
         zim_file_path: str,
