@@ -14,13 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 def register_search_tools(server: "OpenZimMcpServer") -> None:
-    """
-    Register search-related tools.
+    """Register search-related tools."""
+    _register_search_zim_file(server)
+    _register_search_all(server)
+    _register_find_entry_by_title(server)
 
-    Args:
-        server: The OpenZimMcpServer instance to register tools on
-    """
 
+def _register_search_zim_file(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def search_zim_file(
         zim_file_path: str,
@@ -144,6 +144,8 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                 context=f"File: {zim_file_path}, Query: '{query}'",
             )
 
+
+def _register_search_all(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def search_all(
         query: str,
@@ -203,6 +205,8 @@ def register_search_tools(server: "OpenZimMcpServer") -> None:
                 context=f"Query: '{query}'",
             )
 
+
+def _register_find_entry_by_title(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def find_entry_by_title(
         zim_file_path: str,

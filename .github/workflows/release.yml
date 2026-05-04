@@ -25,15 +25,13 @@ on:
           - major
         default: patch
 
-permissions:
-  contents: write
-  id-token: write # Required for trusted publishing to PyPI
-
 jobs:
   validate-and-prepare:
     name: Validate and Prepare Release
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write # Pushes a new tag when create_tag input is true
     outputs:
       tag_name: ${{ steps.prepare.outputs.tag_name }}
       should_create_tag: ${{ steps.prepare.outputs.should_create_tag }}
@@ -112,6 +110,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-and-prepare]
     if: always() && (needs.validate-and-prepare.result == 'success' || needs.validate-and-prepare.result == 'skipped')
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -146,6 +146,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-and-prepare, test]
     if: always() && needs.test.result == 'success'
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -178,6 +180,8 @@ jobs:
     environment:
       name: pypi
       url: https://pypi.org/p/openzim-mcp
+    permissions:
+      id-token: write # Required for trusted publishing to PyPI
     steps:
       - name: Validate deployment context
         run: |
@@ -210,6 +214,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-and-prepare, build, publish-pypi]
     if: always() && needs.publish-pypi.result == 'success'
+    permissions:
+      contents: write # Creates GitHub release and uploads release assets
     steps:
       - uses: actions/checkout@v6
         with:

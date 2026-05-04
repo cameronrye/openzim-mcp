@@ -196,7 +196,7 @@ class _ContentMixin:
         logger.info(f"Retrieved entry: {entry_path}")
         return result
 
-    def get_entries(
+    def get_entries(  # NOSONAR(python:S3776)
         self,
         entries: List[Dict[str, str]],
         max_content_length: Optional[int] = None,
@@ -439,7 +439,7 @@ class _ContentMixin:
                     f"Try using search_zim_file() to find the correct entry path."
                 ) from search_error
 
-    def _get_entry_content_direct(
+    def _get_entry_content_direct(  # NOSONAR(python:S3776)
         self,
         archive: Archive,
         actual_path: str,
@@ -540,7 +540,7 @@ class _ContentMixin:
 
         return result_text, content_ok, actual_path
 
-    def get_binary_entry(
+    def get_binary_entry(  # NOSONAR(python:S3776)
         self,
         zim_file_path: str,
         entry_path: str,
@@ -814,7 +814,7 @@ class _ContentMixin:
                 f"Failed to extract article summary: {e}"
             ) from e
 
-    def _extract_html_summary(
+    def _extract_html_summary(  # NOSONAR(python:S3776)
         self, html_content: str, max_words: int
     ) -> Dict[str, Any]:
         """Extract summary from HTML content.

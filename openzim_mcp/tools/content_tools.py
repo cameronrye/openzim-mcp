@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 def register_content_tools(server: "OpenZimMcpServer") -> None:
-    """Register content retrieval tools.
+    """Register content retrieval tools."""
+    _register_get_zim_entry(server)
+    _register_get_zim_entries(server)
 
-    Args:
-        server: The OpenZimMcpServer instance to register tools on
-    """
 
+def _register_get_zim_entry(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_zim_entry(
         zim_file_path: str,
@@ -92,6 +92,8 @@ def register_content_tools(server: "OpenZimMcpServer") -> None:
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
+
+def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_zim_entries(
         entries: List[Any],

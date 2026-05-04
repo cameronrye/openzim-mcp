@@ -92,7 +92,7 @@ class LiveServer:
         return httpx.get(f"{self.base_url}/readyz", timeout=timeout)
 
 
-def _spawn(
+def _spawn(  # NOSONAR(python:S3776)
     *,
     zim_dir: Path,
     transport: str,
@@ -184,7 +184,7 @@ def _spawn(
     return server
 
 
-def _wait_for_ready(
+def _wait_for_ready(  # NOSONAR(python:S3776)
     server: "LiveServer",
     proc: subprocess.Popen,
     cmd: List[str],

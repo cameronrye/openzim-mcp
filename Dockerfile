@@ -22,12 +22,10 @@ RUN uv sync --frozen --no-dev
 # ---- final stage ----
 FROM python:3.13-slim
 
-# Create non-root user
+# Create non-root user and install curl for HEALTHCHECK in a single layer
 RUN groupadd --gid 10001 appuser \
- && useradd --uid 10001 --gid appuser --shell /bin/bash --create-home appuser
-
-# Install curl for HEALTHCHECK
-RUN apt-get update \
+ && useradd --uid 10001 --gid appuser --shell /bin/bash --create-home appuser \
+ && apt-get update \
  && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/*
 

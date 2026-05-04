@@ -311,7 +311,7 @@ class TestMainEntryPoint:
                 openzim_mcp.main.main()
 
         except SystemExit:
-            pass  # Expected when main() is called
+            pass  # Expected when main() is called  # NOSONAR
         finally:
             # Restore the original __name__
             openzim_mcp.main.__name__ = original_name
@@ -338,7 +338,7 @@ class TestMainEntryPoint:
                 openzim_mcp.__main__.main()
 
         except SystemExit:
-            pass  # Expected when main() is called
+            pass  # Expected when main() is called  # NOSONAR
         finally:
             # Restore the original __name__
             openzim_mcp.__main__.__name__ = original_name

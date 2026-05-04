@@ -663,7 +663,7 @@ class TestZimOperations:
             pytest.raises(OpenZimMcpArchiveError, match="Failed to open ZIM archive"),
             zim_archive(invalid_file),
         ):
-            pass
+            pass  # NOSONAR  -- body unreachable; zim_archive's __enter__ raises
 
     def test_get_zim_entry_exception_handling(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -2197,44 +2197,42 @@ class TestZimOperationsUtilityFunctions:
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction from path with new scheme (has slash)."""
-        result = zim_operations._extract_namespace_from_path(
-            "content/article/test", True
-        )
+        result = zim_operations._extract_namespace_from_path("content/article/test")
         assert result == "C"  # content gets mapped to C
 
     def test_extract_namespace_from_path_new_scheme_no_slash(
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction from path with new scheme (no slash)."""
-        result = zim_operations._extract_namespace_from_path("A", True)
+        result = zim_operations._extract_namespace_from_path("A")
         assert result == "A"
 
     def test_extract_namespace_from_path_old_scheme_with_slash(
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction from path with old scheme (has slash)."""
-        result = zim_operations._extract_namespace_from_path("A/Article_Title", False)
+        result = zim_operations._extract_namespace_from_path("A/Article_Title")
         assert result == "A"
 
     def test_extract_namespace_from_path_old_scheme_no_slash(
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction from path with old scheme (no slash)."""
-        result = zim_operations._extract_namespace_from_path("M", False)
+        result = zim_operations._extract_namespace_from_path("M")
         assert result == "M"
 
     def test_extract_namespace_from_path_empty_string(
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction from empty path."""
-        result = zim_operations._extract_namespace_from_path("", True)
+        result = zim_operations._extract_namespace_from_path("")
         assert result == "Unknown"
 
     def test_extract_namespace_from_path_empty_string_old_scheme(
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction from empty path with old scheme."""
-        result = zim_operations._extract_namespace_from_path("", False)
+        result = zim_operations._extract_namespace_from_path("")
         assert result == "Unknown"
 
     def test_get_common_namespace_patterns_content(self, zim_operations: ZimOperations):
@@ -2283,35 +2281,35 @@ class TestZimOperationsUtilityFunctions:
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction for metadata paths."""
-        result = zim_operations._extract_namespace_from_path("metadata/title", True)
+        result = zim_operations._extract_namespace_from_path("metadata/title")
         assert result == "M"  # metadata gets mapped to M
 
     def test_extract_namespace_from_path_wellknown_mapping(
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction for wellknown paths."""
-        result = zim_operations._extract_namespace_from_path("wellknown/mainPage", True)
+        result = zim_operations._extract_namespace_from_path("wellknown/mainPage")
         assert result == "W"  # wellknown gets mapped to W
 
     def test_extract_namespace_from_path_search_mapping(
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction for search paths."""
-        result = zim_operations._extract_namespace_from_path("search/fulltext", True)
+        result = zim_operations._extract_namespace_from_path("search/fulltext")
         assert result == "X"  # search gets mapped to X
 
     def test_extract_namespace_from_path_single_char_uppercase(
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction for single character paths."""
-        result = zim_operations._extract_namespace_from_path("c/article", True)
+        result = zim_operations._extract_namespace_from_path("c/article")
         assert result == "C"  # single char gets uppercased
 
     def test_extract_namespace_from_path_unknown_namespace(
         self, zim_operations: ZimOperations
     ):
         """Test namespace extraction for unknown namespace."""
-        result = zim_operations._extract_namespace_from_path("unknown/path", True)
+        result = zim_operations._extract_namespace_from_path("unknown/path")
         assert result == "unknown"  # unknown namespace returned as-is
 
     def test_get_common_namespace_patterns_c_namespace(
