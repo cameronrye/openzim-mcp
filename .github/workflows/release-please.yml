@@ -29,8 +29,13 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-          # Skip automatic GitHub release creation (handled by separate release.yml workflow)
-          skip-github-release: true
+          # Let release-please own tag creation and the GitHub release shell
+          # (changelog body). release.yml's create-release job detects an
+          # existing release and uploads the wheel/sdist into it rather than
+          # creating a duplicate. Without this, release-please does not set
+          # `release_created=true` on its outputs, and the trigger-release /
+          # trigger-docker-publish jobs below stay perpetually skipped — the
+          # symptom that bit v1.0.1 (release PR merged but never tagged).
 
           # Token for creating PRs and releases
           token: ${{ secrets.GITHUB_TOKEN }}
