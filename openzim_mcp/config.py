@@ -119,6 +119,19 @@ class OpenZimMcpConfig(BaseSettings):
             "(no CORS headers emitted)."
         ),
     )
+    allowed_hosts: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Public-facing hostnames the HTTP transport accepts in the "
+            "Host header (e.g. ['mcp.example.com']). Loopback values "
+            "('127.0.0.1', 'localhost', '[::1]') are always allowed; this "
+            "setting extends them when openzim-mcp sits behind a reverse "
+            "proxy or Tailscale serve, which preserve the original Host. "
+            "Entries may be exact ('mcp.example.com') or include the "
+            "':*' wildcard-port suffix ('mcp.example.com:*'). Wildcard "
+            "'*' alone is rejected. Honored only when transport='http'."
+        ),
+    )
     watch_interval_seconds: int = Field(
         default=5,
         ge=1,
@@ -185,6 +198,22 @@ class OpenZimMcpConfig(BaseSettings):
             )
         return v
 
+    @field_validator("allowed_hosts")
+    @classmethod
+    def reject_allowed_hosts_wildcard(cls, v: List[str]) -> List[str]:
+        """Reject wildcard '*' in allowed_hosts (footgun prevention).
+
+        DNS rebinding protection is the whole point of the allow-list;
+        accepting '*' would defeat it. Whitespace-padded variants are
+        normalized before comparison.
+        """
+        if any(host.strip() == "*" for host in v):
+            raise OpenZimMcpConfigurationError(
+                "allowed_hosts wildcard '*' is not allowed. List hostnames "
+                "explicitly (e.g. ['mcp.example.com'])."
+            )
+        return v
+
     def setup_logging(self) -> None:
         """Configure logging based on settings."""
         logging.basicConfig(
@@ -221,6 +250,7 @@ class OpenZimMcpConfig(BaseSettings):
             "host": self.host,
             "port": self.port,
             "cors_origins": sorted(self.cors_origins),
+            "allowed_hosts": sorted(self.allowed_hosts),
             "watch_interval_seconds": self.watch_interval_seconds,
             "subscriptions_enabled": self.subscriptions_enabled,
             "rate_limit_enabled": self.rate_limit.enabled,

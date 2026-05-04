@@ -1367,6 +1367,7 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 | `OPENZIM_MCP_PORT` | `8000` | HTTP/SSE bind port. |
 | `OPENZIM_MCP_AUTH_TOKEN` | *(unset)* | Bearer token required when binding HTTP/SSE to a non-loopback interface. |
 | `OPENZIM_MCP_CORS_ORIGINS` | *(empty)* | JSON array of allowed CORS origins for the HTTP transport. Wildcard `*` is rejected. |
+| `OPENZIM_MCP_ALLOWED_HOSTS` | *(empty)* | JSON array of public-facing hostnames the HTTP transport accepts in the `Host` header (e.g. `["mcp.example.com"]`). Loopback is always allowed; this extends it for reverse-proxy and Tailscale-serve deployments. Wildcard `*` is rejected. |
 | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | Enable MCP resource subscriptions (HTTP transport only). When `false`, `subscribe` calls succeed but no updates fire. |
 | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | Polling interval (1–60s) for the subscription mtime watcher. |
 | `OPENZIM_MCP_CACHE__ENABLED` | `true` | Enable/disable caching |

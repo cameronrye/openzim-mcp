@@ -61,6 +61,18 @@ The wildcard `*` is rejected at startup. Listing exact origins is a deliberate c
 
 If no browser client connects (you're hitting the endpoint from another server, a CLI client, or a desktop MCP client), leave this unset.
 
+### Public hostname allow-list (`OPENZIM_MCP_ALLOWED_HOSTS`)
+
+Required when openzim-mcp sits behind a reverse proxy (Caddy, nginx) or Tailscale serve and the public hostname differs from the bind interface. The MCP SDK applies DNS rebinding protection by validating the `Host` header against an allow-list — loopback values (`127.0.0.1`, `localhost`, `[::1]`) are always permitted, but anything else needs to be listed explicitly:
+
+```bash
+OPENZIM_MCP_ALLOWED_HOSTS='["mcp.example.com"]'
+```
+
+Symptom of a missing entry: requests proxied to openzim-mcp return `421 Misdirected Request` with body `Invalid Host header`, and the server log shows `Invalid Host header: <hostname>`. Recipe 1's loopback variant doesn't need this set; the Tailscale variant and Recipe 2 do.
+
+Entries can include the `:*` wildcard-port suffix (`mcp.example.com:*`) when the proxy preserves a non-default port in the `Host` header. The wildcard `*` alone is rejected at startup — the whole point of the allow-list is DNS rebinding protection.
+
 ### Health probes: `/healthz` and `/readyz`
 
 | Endpoint | Returns 200 when | Use for |
@@ -183,14 +195,19 @@ The `Authorization:Bearer` form (no space after the colon) matches `mcp-remote`'
 
 ### Tailscale variant
 
-To reach the server from your tailnet instead of the LAN, change exactly one line in `docker-compose.yml`:
+To reach the server from your tailnet instead of the LAN, change two lines in `docker-compose.yml`:
 
 ```yaml
     ports:
       - "100.x.y.z:8000:8000"  # your Tailscale IPv4, from `tailscale ip -4`
+    environment:
+      OPENZIM_MCP_AUTH_TOKEN: "${OPENZIM_MCP_AUTH_TOKEN}"
+      OPENZIM_MCP_ALLOWED_HOSTS: '["<device>.<tailnet>.ts.net"]'
 ```
 
 Then make sure the host firewall blocks port 8000 on the public interface (it should already, since you're not publishing on `0.0.0.0`). The bearer token plus tailnet ACLs are your trust boundary; you don't need TLS because the tailnet itself is encrypted.
+
+`OPENZIM_MCP_ALLOWED_HOSTS` is required because Tailscale serve and similar reverse proxies preserve the original `Host` header (the MagicDNS name), which the SDK's default DNS-rebinding allow-list rejects. List the MagicDNS hostname your clients connect to. If you connect by raw Tailscale IP rather than MagicDNS, add `100.x.y.z` to the list instead.
 
 ## Recipe 2: VPS with Caddy and automatic TLS
 
@@ -218,6 +235,7 @@ services:
       - /srv/zim:/data:ro
     environment:
       OPENZIM_MCP_AUTH_TOKEN: "${OPENZIM_MCP_AUTH_TOKEN}"
+      OPENZIM_MCP_ALLOWED_HOSTS: '["zim.example.com"]'
 
   caddy:
     image: caddy:2
@@ -307,7 +325,8 @@ A clean startup logs the bind host/port and the configured allowed directory. An
 
 ### Common failure modes
 
-- **Container exits immediately on start.** Almost always one of two startup checks: HTTP transport bound to a non-loopback host without `OPENZIM_MCP_AUTH_TOKEN`, or `OPENZIM_MCP_CORS_ORIGINS` set to a value containing `*`. The startup error message identifies which.
+- **Container exits immediately on start.** Almost always one of three startup checks: HTTP transport bound to a non-loopback host without `OPENZIM_MCP_AUTH_TOKEN`, or `OPENZIM_MCP_CORS_ORIGINS` / `OPENZIM_MCP_ALLOWED_HOSTS` set to a value containing `*`. The startup error message identifies which.
+- **Clients get 421 Misdirected Request / `Invalid Host header`.** The proxied `Host` header (e.g. `zim.example.com`) isn't in `OPENZIM_MCP_ALLOWED_HOSTS`. Add it. Loopback (`127.0.0.1`, `localhost`, `[::1]`) is always allowed without configuration; everything else needs an explicit entry.
 - **Clients get 401 Unauthorized.** Token mismatch. Verify with `curl -H "Authorization: Bearer $TOKEN" http://host/mcp/...`. Don't paste the token into chat or tickets.
 - **Browser clients get 403 / CORS errors.** Either `OPENZIM_MCP_CORS_ORIGINS` is unset (and a browser is calling) or the client's origin isn't in the allow-list. The browser console shows the offending origin; add it.
 - **`/readyz` returns 503.** None of the configured ZIM directories are readable from inside the container. (With multiple allowed directories, one bad mount is fine — readiness flips only when *all* of them fail.) Check the volume mount path (host side and `/data` side) and that the mount isn't empty. Permissions: the in-container user is UID 10001; the host directory needs to be world-readable or owned by UID 10001.

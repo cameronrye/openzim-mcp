@@ -68,7 +68,27 @@ class OpenZimMcpServer:
         # kwarg, but the underlying lowlevel Server does — set it after
         # construction so MCP `serverInfo.version` advertises openzim-mcp's
         # version rather than the SDK's default.
-        self.mcp = FastMCP(config.server_name)
+        #
+        # When sitting behind a reverse proxy or Tailscale serve, the
+        # public hostname differs from the bind interface and the SDK's
+        # default Host allowlist (loopback only) rejects every request
+        # with 421 Misdirected Request. Operators extend the allowlist
+        # via OPENZIM_MCP_ALLOWED_HOSTS for those deployments. Loopback
+        # entries are always preserved so localhost-direct access keeps
+        # working alongside the proxied path.
+        fastmcp_kwargs: dict = {}
+        if config.transport == "http" and config.allowed_hosts:
+            from mcp.server.transport_security import TransportSecuritySettings
+
+            fastmcp_kwargs["transport_security"] = TransportSecuritySettings(
+                allowed_hosts=[
+                    "127.0.0.1:*",
+                    "localhost:*",
+                    "[::1]:*",
+                    *config.allowed_hosts,
+                ],
+            )
+        self.mcp = FastMCP(config.server_name, **fastmcp_kwargs)
         self.mcp._mcp_server.version = __version__
         self._register_tools()
 
