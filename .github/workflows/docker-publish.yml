@@ -9,6 +9,12 @@ on:
       - "Dockerfile"
       - ".dockerignore"
       - ".github/workflows/docker-publish.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and publish (e.g., v1.0.0)"
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -18,6 +24,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -26,7 +34,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -35,13 +43,18 @@ jobs:
 
       - name: Extract version from tag
         id: meta
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         run: |
-          TAG=${GITHUB_REF#refs/tags/v}
-          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Strip leading 'v' so the image tag is X.Y.Z, not vX.Y.Z
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push (on tag)
-        if: github.event_name == 'push'
+      - name: Build and push (on tag or dispatch)
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .

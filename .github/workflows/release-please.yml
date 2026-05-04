@@ -167,3 +167,39 @@ jobs:
               console.error('❌ Failed to trigger release workflow:', error.message);
               throw error;
             }
+
+  # Trigger the docker-publish workflow when a release is created.
+  # Tag pushes from release-please use GITHUB_TOKEN, which GitHub explicitly
+  # blocks from triggering downstream workflows — so the `push: tags` trigger
+  # on docker-publish.yml never fires for bot-created releases. We dispatch
+  # it explicitly here, mirroring the trigger-release pattern above.
+  trigger-docker-publish:
+    runs-on: ubuntu-latest
+    needs: [release-please, validate-release]
+    if: needs.release-please.outputs.release_created && needs.validate-release.result == 'success'
+    permissions:
+      actions: write
+    steps:
+      - name: Trigger docker-publish workflow
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const tagName = '${{ needs.release-please.outputs.tag_name }}';
+            console.log(`Triggering docker-publish workflow for tag: ${tagName}`);
+
+            try {
+              const result = await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'docker-publish.yml',
+                ref: 'main',
+                inputs: {
+                  tag: tagName
+                }
+              });
+              console.log('✅ docker-publish workflow triggered successfully');
+              console.log(`Workflow dispatch result: ${result.status}`);
+            } catch (error) {
+              console.error('❌ Failed to trigger docker-publish workflow:', error.message);
+              throw error;
+            }
