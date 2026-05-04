@@ -79,19 +79,83 @@ def safe_regex_findall(
             signal.signal(signal.SIGALRM, old_handler)
 
 
+_CATEGORY_NAMES = (
+    "Setup & Installation",
+    "Code Quality",
+    "Testing",
+    "Data Management",
+    "Build & Distribution",
+    "Utilities",
+)
+
+_SETUP_TARGETS = {
+    "install",
+    "install-dev",
+    "install-hooks",
+    "setup-dev",
+    "check-tools",
+}
+
+_QUALITY_TARGETS = {"lint", "format", "type-check", "security"}
+
+
+def _categorise_target(target: str) -> str:
+    """Map a Makefile target name to one of ``_CATEGORY_NAMES``."""
+    if target in _SETUP_TARGETS:
+        return "Setup & Installation"
+    if target in _QUALITY_TARGETS:
+        return "Code Quality"
+    if target.startswith("test") or target == "benchmark":
+        return "Testing"
+    if target.startswith(("download", "list", "clean")):
+        return "Data Management"
+    if target.startswith(("build", "publish")):
+        return "Build & Distribution"
+    return "Utilities"
+
+
+def _extract_targets(content: str) -> List[Tuple[str, str]]:
+    """Pull (target, description) pairs out of Makefile contents.
+
+    Limits per-line work and total line count to keep the regex pass
+    bounded even on adversarial input.
+    """
+    lines = content.split("\n")
+    max_lines = 10000
+    if len(lines) > max_lines:
+        print(
+            f"Warning: Makefile has {len(lines)} lines, "
+            f"processing only first {max_lines}",
+            file=sys.stderr,
+        )
+        lines = lines[:max_lines]
+
+    target_pattern = re.compile(r"^([a-zA-Z][a-zA-Z0-9_-]{0,50}):")
+    comment_pattern = re.compile(r"## (.{0,200})$")
+
+    matches: List[Tuple[str, str]] = []
+    for line_num, line in enumerate(lines, 1):
+        if len(line) > 1000:
+            continue
+        try:
+            target_match = target_pattern.match(line)
+            if not target_match:
+                continue
+            comment_match = comment_pattern.search(line)
+            if not comment_match:
+                continue
+            target_name = target_match.group(1)
+            comment_text = comment_match.group(1).strip()
+            if target_name and comment_text:
+                matches.append((target_name, comment_text))
+        except Exception as e:
+            print(f"Warning: Error processing line {line_num}: {e}", file=sys.stderr)
+    return matches
+
+
 def parse_makefile(makefile_path: Path) -> Dict[str, List[Tuple[str, str]]]:
     """Parse the Makefile and extract targets with help comments."""
-    categories = {
-        "Setup & Installation": ["install", "setup", "check-tools"],
-        "Code Quality": ["lint", "format", "type-check", "security"],
-        "Testing": ["test", "benchmark"],
-        "Data Management": ["download", "list", "clean"],
-        "Build & Distribution": ["build", "publish"],
-        "Utilities": ["check", "ci", "run", "help"],
-    }
-
-    # Initialize result dictionary
-    result = {category: [] for category in categories.keys()}
+    result: Dict[str, List[Tuple[str, str]]] = {c: [] for c in _CATEGORY_NAMES}
 
     try:
         with open(makefile_path, "r", encoding="utf-8") as f:
@@ -100,88 +164,13 @@ def parse_makefile(makefile_path: Path) -> Dict[str, List[Tuple[str, str]]]:
         print(f"Error: Makefile not found at {makefile_path}")
         sys.exit(1)
 
-    # Find all targets with help comments using a safe, non-backtracking regex
-    # This pattern avoids catastrophic backtracking by:
-    # 1. Using possessive quantifiers where possible
-    # 2. Being very specific about what can appear between target and comment
-    # 3. Limiting the search scope with line-by-line processing
-
-    matches = []
-
     try:
-        lines = content.split("\n")
-
-        # Limit processing to reasonable number of lines to prevent DoS
-        max_lines = 10000
-        if len(lines) > max_lines:
-            print(
-                f"Warning: Makefile has {len(lines)} lines, "
-                f"processing only first {max_lines}",
-                file=sys.stderr,
-            )
-            lines = lines[:max_lines]
-
-        # Process line by line to avoid backtracking issues
-        target_pattern = re.compile(
-            r"^([a-zA-Z][a-zA-Z0-9_-]{0,50}):"
-        )  # Limit target name length
-        comment_pattern = re.compile(r"## (.{0,200})$")  # Limit comment length
-
-        for line_num, line in enumerate(lines, 1):
-            # Skip overly long lines that might cause issues
-            if len(line) > 1000:
-                continue
-
-            try:
-                # First check if line starts with a valid target
-                target_match = target_pattern.match(line)
-                if target_match:
-                    # Then check if it has a help comment
-                    comment_match = comment_pattern.search(line)
-                    if comment_match:
-                        target_name = target_match.group(1)
-                        comment_text = comment_match.group(1).strip()
-
-                        # Additional validation
-                        if target_name and comment_text:
-                            matches.append((target_name, comment_text))
-            except Exception as e:
-                print(
-                    f"Warning: Error processing line {line_num}: {e}", file=sys.stderr
-                )
-                continue
-
+        for target, description in _extract_targets(content):
+            result[_categorise_target(target)].append((target, description))
     except Exception as e:
         print(f"Error parsing Makefile: {e}", file=sys.stderr)
-        return {category: [] for category in categories.keys()}
+        return {c: [] for c in _CATEGORY_NAMES}
 
-    # Categorize targets with more specific matching
-    for target, description in matches:
-        # Use more specific categorization rules
-        if target in [
-            "install",
-            "install-dev",
-            "install-hooks",
-            "setup-dev",
-            "check-tools",
-        ]:
-            result["Setup & Installation"].append((target, description))
-        elif target in ["lint", "format", "type-check", "security"]:
-            result["Code Quality"].append((target, description))
-        elif target.startswith("test") or target == "benchmark":
-            result["Testing"].append((target, description))
-        elif (
-            target.startswith("download")
-            or target.startswith("list")
-            or target.startswith("clean")
-        ):
-            result["Data Management"].append((target, description))
-        elif target.startswith("build") or target.startswith("publish"):
-            result["Build & Distribution"].append((target, description))
-        else:
-            result["Utilities"].append((target, description))
-
-    # Sort targets within each category
     for category in result:
         result[category].sort(key=lambda x: x[0])
 

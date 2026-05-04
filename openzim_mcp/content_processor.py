@@ -95,6 +95,171 @@ def resolve_heading_id(heading: Tag) -> Tuple[str, str]:
     return "", "none"
 
 
+def _collect_meta_tag_metadata(soup: BeautifulSoup) -> Dict[str, str]:
+    """Pull ``name|property|http-equiv`` → ``content`` pairs from <meta> tags.
+
+    Called before unwanted-element pruning so meta tags inside <head> aren't
+    accidentally removed.
+    """
+    metadata: Dict[str, str] = {}
+    for meta in soup.find_all("meta"):
+        if not isinstance(meta, Tag):
+            continue
+        name = meta.get("name") or meta.get("property") or meta.get("http-equiv")
+        content = meta.get("content")
+        if name and content:
+            metadata[str(name)] = str(content)
+    return metadata
+
+
+def _build_headings(soup: BeautifulSoup) -> List[Dict[str, Any]]:
+    """Collect headings (h1-h6) in document order with disambiguated anchors.
+
+    Iterating level-first would group all h1s before any h2 even when they
+    appear later in the document, breaking the position contract and the
+    implicit alignment with the sections list (which DOES walk in document
+    order).
+
+    Collision disambiguation: when two headings share the same synthetic
+    slug (e.g. three "Intro" h1s), MediaWiki appends ``_2``, ``_3`` to keep
+    anchors unique. Mirror that. Explicit author-provided ids
+    (``id_source != "slug"``) pass through untouched — disambiguating real
+    anchors would silently break cross-page links.
+    """
+    headings: List[Dict[str, Any]] = []
+    slug_counts: Dict[str, int] = {}
+    for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+        if not (isinstance(heading, Tag) and heading.name):
+            continue
+        text = heading.get_text().strip()
+        if not text:
+            continue
+        anchor_id, id_source = resolve_heading_id(heading)
+        if anchor_id and id_source == "slug":
+            count = slug_counts.get(anchor_id, 0) + 1
+            slug_counts[anchor_id] = count
+            if count > 1:
+                anchor_id = f"{anchor_id}_{count}"
+        headings.append(
+            {
+                "level": int(heading.name[1]),
+                "text": text,
+                "id": anchor_id,
+                "id_source": id_source,
+                "position": len(headings),
+            }
+        )
+    return headings
+
+
+def _append_section_content(
+    current_section: Dict[str, Union[str, int]], element: Tag
+) -> None:
+    """Append paragraph/div text into the current section's preview + word count."""
+    text = element.get_text().strip()
+    if not text:
+        return
+    preview = cast(str, current_section["content_preview"])
+    if len(preview) < 300:
+        if preview:
+            preview += " "
+        preview += text[: 300 - len(preview)]
+        current_section["content_preview"] = preview
+    current_section["word_count"] = cast(int, current_section["word_count"]) + len(
+        text.split()
+    )
+
+
+# (tag, attribute, classification) tuples for media-link extraction.
+_MEDIA_SELECTORS = (
+    ("img", "src", "image"),
+    ("video", "src", "video"),
+    ("audio", "src", "audio"),
+    ("source", "src", "media"),
+    ("embed", "src", "embed"),
+    ("object", "data", "object"),
+)
+
+
+def _classify_anchor(link: Tag, links_data: Dict[str, Any]) -> None:
+    """Categorise one ``<a href>`` into internal/external/anchor lists.
+
+    Skips empty hrefs and non-navigable schemes (``javascript:``, ``mailto:``,
+    ``tel:``, ``data:``, ``blob:``, ``vbscript:``) which pollute results
+    without being useful navigation targets.
+    """
+    href_attr = link.get("href")
+    if not (href_attr and isinstance(href_attr, str)):
+        return
+    href = href_attr.strip()
+    if not href:
+        return
+    if href.lower().startswith(NON_NAVIGABLE_LINK_SCHEMES):
+        return
+
+    title_attr = link.get("title", "")
+    link_info: Dict[str, Any] = {
+        "url": href,
+        "text": link.get_text().strip(),
+        "title": str(title_attr) if title_attr else "",
+    }
+
+    if href.startswith(("http://", "https://", "//")):
+        link_info["domain"] = urlparse(href).netloc
+        links_data["external_links"].append(link_info)
+    elif href.startswith("#"):
+        link_info["type"] = "anchor"
+        links_data["internal_links"].append(link_info)
+    else:
+        link_info["type"] = "internal"
+        links_data["internal_links"].append(link_info)
+
+
+def _append_media_link(
+    element: Tag, attr: str, media_type: str, links_data: Dict[str, Any]
+) -> None:
+    """Append a single media element (img/video/etc.) into ``media_links``."""
+    src = element.get(attr)
+    if not (src and isinstance(src, str)):
+        return
+    alt_attr = element.get("alt", "")
+    title_attr = element.get("title", "")
+    links_data["media_links"].append(
+        {
+            "url": src.strip(),
+            "type": media_type,
+            "alt": str(alt_attr) if alt_attr else "",
+            "title": str(title_attr) if title_attr else "",
+        }
+    )
+
+
+def _build_sections(soup: BeautifulSoup) -> List[Dict[str, Union[str, int]]]:
+    """Walk the document in order, grouping <p>/<div> content under headings."""
+    sections: List[Dict[str, Union[str, int]]] = []
+    current_section: Optional[Dict[str, Union[str, int]]] = None
+
+    for page_element in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "div"]):
+        if not (isinstance(page_element, Tag) and page_element.name):
+            continue
+        element = cast(Tag, page_element)
+        if element.name.startswith("h"):
+            if current_section:
+                sections.append(current_section)
+            current_section = {
+                "title": element.get_text().strip(),
+                "level": int(element.name[1]),
+                "content_preview": "",
+                "word_count": 0,
+            }
+        elif current_section and element.name in ("p", "div"):
+            _append_section_content(current_section, element)
+
+    if current_section:
+        sections.append(current_section)
+    return sections
+
+
 class ParsedHTML:
     """Container for pre-parsed HTML to enable reuse across multiple operations.
 
@@ -397,106 +562,17 @@ class ContentProcessor:
         }
 
         try:
+            structure["metadata"] = _collect_meta_tag_metadata(soup)
 
-            # Extract metadata from meta tags BEFORE removing unwanted elements
-            metadata = {}
-            for meta in soup.find_all("meta"):
-                if isinstance(meta, Tag):
-                    name = (
-                        meta.get("name")
-                        or meta.get("property")
-                        or meta.get("http-equiv")
-                    )
-                    content = meta.get("content")
-                    if name and content:
-                        metadata[name] = content
-
-            structure["metadata"] = metadata
-
-            # Remove unwanted elements for analysis
+            # Strip unwanted elements before walking headings/sections so the
+            # text-content + word counts ignore navigation, footers, etc.
             for selector in UNWANTED_HTML_SELECTORS:
                 for element in soup.select(selector):
                     element.decompose()
 
-            # Extract headings (h1-h6) in document order. Iterating level-first
-            # would group all h1s before any h2 even when they appear later in
-            # the document, breaking the position contract and the implicit
-            # alignment with the sections list built below (which DOES walk the
-            # tree in document order).
-            #
-            # Collision disambiguation: when two headings share the same
-            # synthetic slug (e.g. three "Intro" h1s), MediaWiki appends
-            # ``_2``, ``_3`` to keep anchors unique. Mirror that. Explicit
-            # author-provided ids (``id_source != "slug"``) pass through
-            # untouched — disambiguating real anchors would silently break
-            # cross-page links.
-            headings: List[Dict[str, Any]] = []
-            slug_counts: Dict[str, int] = {}
-            for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
-                if isinstance(heading, Tag) and heading.name:
-                    text = heading.get_text().strip()
-                    if text:
-                        anchor_id, id_source = resolve_heading_id(heading)
-                        if anchor_id and id_source == "slug":
-                            count = slug_counts.get(anchor_id, 0) + 1
-                            slug_counts[anchor_id] = count
-                            if count > 1:
-                                anchor_id = f"{anchor_id}_{count}"
-                        headings.append(
-                            {
-                                "level": int(heading.name[1]),
-                                "text": text,
-                                "id": anchor_id,
-                                "id_source": id_source,
-                                "position": len(headings),
-                            }
-                        )
-
-            structure["headings"] = headings
-
-            # Extract sections based on headings
-            sections = []
-            current_section: Optional[Dict[str, Union[str, int]]] = None
-
-            elements = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "div"])
-            for page_element in elements:
-                if isinstance(page_element, Tag) and page_element.name:
-                    # MyPy type narrowing: page_element is now definitely a Tag
-                    element = cast(Tag, page_element)
-                    if element.name.startswith("h"):
-                        # Start new section
-                        if current_section:
-                            sections.append(current_section)
-
-                        current_section = {
-                            "title": element.get_text().strip(),
-                            "level": int(element.name[1]),
-                            "content_preview": "",
-                            "word_count": 0,
-                        }
-                    elif current_section and element.name in ["p", "div"]:
-                        # Add content to current section, capped at 300 chars.
-                        text = element.get_text().strip()
-                        if text:
-                            preview = cast(str, current_section["content_preview"])
-                            if len(preview) < 300:
-                                if preview:
-                                    preview += " "
-                                preview += text[: 300 - len(preview)]
-                                current_section["content_preview"] = preview
-                            current_section["word_count"] = cast(
-                                int, current_section["word_count"]
-                            ) + len(text.split())
-
-            # Add the last section
-            if current_section:
-                sections.append(current_section)
-
-            structure["sections"] = sections
-
-            # Calculate word count
-            text_content = soup.get_text()
-            structure["word_count"] = len(text_content.split())
+            structure["headings"] = _build_headings(soup)
+            structure["sections"] = _build_sections(soup)
+            structure["word_count"] = len(soup.get_text().split())
 
         except Exception as e:
             logger.warning(f"Error extracting HTML structure: {e}")
@@ -554,69 +630,17 @@ class ContentProcessor:
             "external_links": [],
             "media_links": [],
         }
-
         try:
-            # Extract all links
             for link in soup.find_all("a", href=True):
-                if isinstance(link, Tag):
-                    href_attr = link.get("href")
-                    if href_attr and isinstance(href_attr, str):
-                        href = href_attr.strip()
-                        text = link.get_text().strip()
-                        title_attr = link.get("title", "")
-                        title = str(title_attr) if title_attr else ""
+                if not isinstance(link, Tag):
+                    continue
+                _classify_anchor(link, links_data)
 
-                        if not href:
-                            continue
-
-                        # Filter non-navigable schemes (javascript:, mailto:,
-                        # tel:, data:, blob:) — they pollute results without
-                        # being useful as ZIM-internal navigation targets.
-                        href_lower = href.lower()
-                        if href_lower.startswith(NON_NAVIGABLE_LINK_SCHEMES):
-                            continue
-
-                        link_info = {"url": href, "text": text, "title": title}
-
-                        # Categorize links
-                        if href.startswith(("http://", "https://", "//")):
-                            # External link
-                            parsed_url = urlparse(href)
-                            link_info["domain"] = parsed_url.netloc
-                            links_data["external_links"].append(link_info)
-                        elif href.startswith("#"):
-                            # Internal anchor
-                            link_info["type"] = "anchor"
-                            links_data["internal_links"].append(link_info)
-                        else:
-                            # Internal link (relative path)
-                            link_info["type"] = "internal"
-                            links_data["internal_links"].append(link_info)
-
-            # Extract media links (images, videos, audio)
-            media_selectors = [
-                ("img", "src", "image"),
-                ("video", "src", "video"),
-                ("audio", "src", "audio"),
-                ("source", "src", "media"),
-                ("embed", "src", "embed"),
-                ("object", "data", "object"),
-            ]
-
-            for tag, attr, media_type in media_selectors:
+            for tag, attr, media_type in _MEDIA_SELECTORS:
                 for element in soup.find_all(tag):
-                    if isinstance(element, Tag):
-                        src = element.get(attr)
-                        if src and isinstance(src, str):
-                            alt_attr = element.get("alt", "")
-                            title_attr = element.get("title", "")
-                            media_info = {
-                                "url": src.strip(),
-                                "type": media_type,
-                                "alt": str(alt_attr) if alt_attr else "",
-                                "title": str(title_attr) if title_attr else "",
-                            }
-                            links_data["media_links"].append(media_info)
+                    if not isinstance(element, Tag):
+                        continue
+                    _append_media_link(element, attr, media_type, links_data)
 
         except Exception as e:
             logger.warning(f"Error extracting HTML links: {e}")
