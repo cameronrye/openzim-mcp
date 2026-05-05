@@ -140,7 +140,7 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Get a concise summary of an article without returning the full content.
 
         This tool extracts the opening paragraph(s) or introduction section,
@@ -153,12 +153,15 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             max_words: Maximum number of words in the summary (default: 200, max: 1000)
 
         Returns:
-            JSON string containing:
+            Dict containing:
             - title: Article title
             - path: Entry path
             - summary: Extracted summary text
             - word_count: Number of words in summary
             - is_truncated: Whether the summary was truncated
+
+            On failure, returns a ``{"error": True, ...}`` envelope (see
+            ``responses.tool_error``).
 
         Examples:
             - Quick overview: get_entry_summary("/path/to/wiki.zim", "Biology")
@@ -168,9 +171,13 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_entry")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get entry summary",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get entry summary",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
@@ -178,24 +185,32 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
             if max_words < 1 or max_words > 1000:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: max_words must be between 1 and 1000 "
-                    f"(provided: {max_words})\n\n"
-                    "**Troubleshooting**: Adjust max_words to a value within the "
-                    "valid range.\n"
-                    "**Example**: Use `max_words=200` for a typical summary."
+                return tool_error(
+                    operation="get entry summary",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: max_words must be between 1 and 1000 "
+                        f"(provided: {max_words})\n\n"
+                        "**Troubleshooting**: Adjust max_words to a value within "
+                        "the valid range.\n"
+                        "**Example**: Use `max_words=200` for a typical summary."
+                    ),
+                    context=f"Entry: {entry_path}, max_words: {max_words}",
                 )
 
-            return await server.async_zim_operations.get_entry_summary(
+            return await server.async_zim_operations.get_entry_summary_data(
                 zim_file_path, entry_path, max_words
             )
 
         except Exception as e:
             logger.error(f"Error getting entry summary: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get entry summary",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get entry summary",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 

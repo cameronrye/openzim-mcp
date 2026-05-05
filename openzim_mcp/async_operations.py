@@ -376,6 +376,17 @@ class AsyncZimOperations:
             self._ops.get_entry_summary, zim_file_path, entry_path, max_words
         )
 
+    async def get_entry_summary_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        max_words: int = 200,
+    ) -> dict:
+        """Structured variant of ``get_entry_summary`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_entry_summary_data, zim_file_path, entry_path, max_words
+        )
+
     async def get_table_of_contents(
         self,
         zim_file_path: str,

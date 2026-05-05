@@ -738,25 +738,16 @@ class _ContentMixin:
         else:
             return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
-    def get_entry_summary(
+    def get_entry_summary_data(
         self,
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
-    ) -> str:
-        """Get a concise summary of an article without returning the full content.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_entry_summary``.
 
-        This method extracts the opening paragraph(s) or introduction section,
-        providing a quick overview of the article content. Useful for getting
-        context without loading full articles.
-
-        Args:
-            zim_file_path: Path to the ZIM file
-            entry_path: Entry path, e.g., 'C/Some_Article'
-            max_words: Maximum number of words in the summary (default: 200)
-
-        Returns:
-            JSON string containing the article summary
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -775,16 +766,19 @@ class _ContentMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"summary:{validated_path}:{entry_path}:{max_words}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"summary_data:{validated_path}:{entry_path}:{max_words}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached summary for: {entry_path}")
+            logger.debug(f"Returning cached summary dict for: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_entry_summary(archive, entry_path, max_words)
+                result = self._extract_entry_summary_data(
+                    archive, entry_path, max_words
+                )
 
             # Cache the result
             self.cache.set(cache_key, result)
@@ -795,10 +789,42 @@ class _ContentMixin:
             logger.error(f"Summary extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Summary extraction failed: {e}") from e
 
-    def _extract_entry_summary(
-        self, archive: Archive, entry_path: str, max_words: int
+    def get_entry_summary(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        max_words: int = 200,
     ) -> str:
-        """Extract summary from article content."""
+        """Legacy JSON-string variant of ``get_entry_summary_data``.
+
+        Get a concise summary of an article without returning the full content.
+
+        This method extracts the opening paragraph(s) or introduction section,
+        providing a quick overview of the article content. Useful for getting
+        context without loading full articles.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Entry path, e.g., 'C/Some_Article'
+            max_words: Maximum number of words in the summary (default: 200)
+
+        Returns:
+            JSON string containing the article summary
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If summary extraction fails
+        """
+        return json.dumps(
+            self.get_entry_summary_data(zim_file_path, entry_path, max_words),
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    def _extract_entry_summary_data(
+        self, archive: Archive, entry_path: str, max_words: int
+    ) -> Dict[str, Any]:
+        """Extract summary from article content as a dict."""
         try:
             entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
 
@@ -831,7 +857,7 @@ class _ContentMixin:
             else:
                 summary_data["summary"] = f"(Non-text content: {mime_type})"
 
-            return json.dumps(summary_data, indent=2, ensure_ascii=False)
+            return summary_data
 
         except OpenZimMcpArchiveError:
             raise

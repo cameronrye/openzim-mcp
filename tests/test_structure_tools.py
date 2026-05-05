@@ -379,8 +379,8 @@ class TestStructureToolsDirectInvocation:
     @pytest.mark.asyncio
     async def test_get_entry_summary_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking get_entry_summary tool handler directly."""
-        advanced_server.async_zim_operations.get_entry_summary = AsyncMock(
-            return_value='{"title": "Article", "summary": "Test", "word_count": 50}'
+        advanced_server.async_zim_operations.get_entry_summary_data = AsyncMock(
+            return_value={"title": "Article", "summary": "Test", "word_count": 50}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -391,12 +391,13 @@ class TestStructureToolsDirectInvocation:
                 entry_path="C/Article",
                 max_words=100,
             )
+            assert isinstance(result, dict)
             assert "summary" in result
 
     @pytest.mark.asyncio
     async def test_get_entry_summary_with_exception(self, advanced_server, temp_dir):
         """Test get_entry_summary when an exception occurs."""
-        advanced_server.async_zim_operations.get_entry_summary = AsyncMock(
+        advanced_server.async_zim_operations.get_entry_summary_data = AsyncMock(
             side_effect=ValueError("Invalid entry")
         )
 
@@ -407,7 +408,8 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Invalid",
             )
-            assert "Error" in result or "error" in result.lower()
+            assert isinstance(result, dict)
+            assert result.get("error") is True
 
     @pytest.mark.asyncio
     async def test_get_table_of_contents_tool_invocation(
