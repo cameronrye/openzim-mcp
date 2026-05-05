@@ -32,16 +32,16 @@ class TestGetZimMetadataToolInvocation:
     @pytest.mark.asyncio
     async def test_get_zim_metadata_success(self, server, temp_dir):
         """Test successful metadata retrieval through tool handler."""
-        server.async_zim_operations.get_zim_metadata = AsyncMock(
-            return_value='{"title": "Test", "language": "en"}'
+        server.async_zim_operations.get_zim_metadata_data = AsyncMock(
+            return_value={"title": "Test", "language": "en"}
         )
 
         tools = server.mcp._tool_manager._tools
         if "get_zim_metadata" in tools:
             tool_handler = tools["get_zim_metadata"].fn
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            assert "title" in result
-            assert "Test" in result
+            assert isinstance(result, dict)
+            assert result.get("title") == "Test"
 
     @pytest.mark.asyncio
     async def test_get_zim_metadata_rate_limit_error(self, server, temp_dir):
@@ -54,13 +54,15 @@ class TestGetZimMetadataToolInvocation:
         if "get_zim_metadata" in tools:
             tool_handler = tools["get_zim_metadata"].fn
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            # Should return error message, not raise
-            assert "Error" in result or "Rate" in result
+            # Should return a structured error envelope, not raise
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert result.get("operation") == "get ZIM metadata"
 
     @pytest.mark.asyncio
     async def test_get_zim_metadata_generic_exception(self, server, temp_dir):
         """Test generic exception handling in get_zim_metadata."""
-        server.async_zim_operations.get_zim_metadata = AsyncMock(
+        server.async_zim_operations.get_zim_metadata_data = AsyncMock(
             side_effect=RuntimeError("Metadata retrieval failed")
         )
 
@@ -68,8 +70,10 @@ class TestGetZimMetadataToolInvocation:
         if "get_zim_metadata" in tools:
             tool_handler = tools["get_zim_metadata"].fn
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            # Should return error message, not raise
-            assert "Error" in result or "error" in result.lower()
+            # Should return a structured error envelope, not raise
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "message" in result
 
 
 class TestGetMainPageToolInvocation:
@@ -203,8 +207,8 @@ class TestMetadataToolsInputSanitization:
     @pytest.mark.asyncio
     async def test_get_zim_metadata_input_sanitization(self, server, temp_dir):
         """Test that get_zim_metadata sanitizes file path input."""
-        server.async_zim_operations.get_zim_metadata = AsyncMock(
-            return_value='{"title": "Test"}'
+        server.async_zim_operations.get_zim_metadata_data = AsyncMock(
+            return_value={"title": "Test"}
         )
 
         tools = server.mcp._tool_manager._tools
@@ -212,7 +216,8 @@ class TestMetadataToolsInputSanitization:
             tool_handler = tools["get_zim_metadata"].fn
             # Normal path should work
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            assert "title" in result
+            assert isinstance(result, dict)
+            assert result.get("title") == "Test"
 
     @pytest.mark.asyncio
     async def test_get_main_page_input_sanitization(self, server, temp_dir):

@@ -412,9 +412,17 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
 
             for tool_name, params in tools_to_test:
                 result = asyncio.run(server.mcp.call_tool(tool_name, params))
-                # Each tool should return an error message (either format)
+                # Each tool should signal failure -- either via the legacy
+                # markdown error string ("**Operation Failed**" / "Error:")
+                # or via the structured-content error envelope (which carries
+                # ``error: True`` and an ``**Operation**`` header).
                 result_str = str(result)
-                assert "**Operation Failed**" in result_str or "Error:" in result_str
+                assert (
+                    "**Operation Failed**" in result_str
+                    or "Error:" in result_str
+                    or "'error': True" in result_str
+                    or "**Operation**" in result_str
+                )
 
         finally:
             # Restore all original methods

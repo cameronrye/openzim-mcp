@@ -142,6 +142,10 @@ class AsyncZimOperations:
         """
         return await asyncio.to_thread(self._ops.get_zim_metadata, zim_file_path)
 
+    async def get_zim_metadata_data(self, zim_file_path: str) -> dict:
+        """Structured variant of ``get_zim_metadata`` (async)."""
+        return await asyncio.to_thread(self._ops.get_zim_metadata_data, zim_file_path)
+
     async def get_main_page(self, zim_file_path: str) -> str:
         """Get the main page of a ZIM file (async).
 
