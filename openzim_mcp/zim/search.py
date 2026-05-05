@@ -97,37 +97,27 @@ def _format_filtered_response(
         parts.append(f"Snippet: {result['snippet']}\n\n")
 
     parts.append("---\n")
-    parts.append(
-        f"**Pagination**: Showing {offset + 1}-{offset + len(results)} "
-        f"of {total_filtered_text}\n"
-    )
-
     has_more = scan.total_filtered_is_lower_bound or (
         offset + len(results) < scan.filtered_count
     )
+    # Compact one-liner footer (v1.2.0+). The previous 3-4 line block (with a
+    # base64 cursor blob spelled out alongside the offset hint) added ~50
+    # tokens to every search response that the agentic loop then re-prompt-
+    # eval'd on every subsequent turn. The cursor parameter is still an
+    # accepted input — it's just no longer advertised in the response, since
+    # an LLM keeping the conversation context can pass ``offset`` and re-
+    # supply the original query without losing any information.
     if has_more:
-        # When ``filtered_count`` is a lower bound we know there may be more
-        # matches but we don't know the true total — ``create_next_cursor``
-        # would return ``None`` (since ``offset+limit >= filtered_count``)
-        # and we'd render ``Next cursor: None``. Pad the total so the
-        # cursor generator emits a valid token.
-        cursor_total = (
-            scan.filtered_count + 1
-            if scan.total_filtered_is_lower_bound
-            else scan.filtered_count
+        parts.append(
+            f"Showing {offset + 1}-{offset + len(results)} "
+            f"of {total_filtered_text} — "
+            f"pass `offset={offset + limit}` for the next page\n"
         )
-        next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
-            offset, limit, cursor_total, query
-        )
-        # Edge case: the scan-cap path can leave ``offset+limit`` equal to
-        # the (true) filtered_count, so create_next_cursor returns None
-        # even though has_more was True for the lower-bound path. Don't
-        # render a literal "None" cursor — omit the line.
-        if next_cursor is not None:
-            parts.append(f"**Next cursor**: `{next_cursor}`\n")
-        parts.append(f"**Hint**: Use offset={offset + limit} to get the next page\n")
     else:
-        parts.append("**End of results**\n")
+        parts.append(
+            f"Showing {offset + 1}-{offset + len(results)} "
+            f"of {total_filtered_text} (end of results)\n"
+        )
     return "".join(parts)
 
 
@@ -378,28 +368,26 @@ class _SearchMixin:
             result_text += f"Path: {result['path']}\n"
             result_text += f"Snippet: {result['snippet']}\n\n"
 
+        # Compact one-liner footer — see the matching comment in the simple
+        # search renderer above for rationale.
         result_text += "---\n"
-        result_text += (
-            f"**Pagination**: Showing {offset + 1}-{offset + len(results)} "
-            f"of {total_results}\n"
-        )
-
         has_more = pagination.get("has_more", False)
         if has_more:
-            next_cursor = pagination.get("next_cursor")
-            if next_cursor is not None:
-                result_text += f"**Next cursor**: `{next_cursor}`\n"
-                result_text += (
-                    f"**Hint**: pass `cursor={next_cursor}` "
-                    f"or `offset={offset + limit}` to get the next page\n"
-                )
-            else:
-                result_text += (
-                    f"**Hint**: pass `offset={offset + len(results)}` "
-                    f"to get the next page\n"
-                )
+            next_offset = offset + limit
+            if pagination.get("next_cursor") is None:
+                # Filtered/limited path that doesn't know the next-page
+                # boundary precisely; advance by what we actually returned.
+                next_offset = offset + len(results)
+            result_text += (
+                f"Showing {offset + 1}-{offset + len(results)} "
+                f"of {total_results} — "
+                f"pass `offset={next_offset}` for the next page\n"
+            )
         else:
-            result_text += "**End of results**\n"
+            result_text += (
+                f"Showing {offset + 1}-{offset + len(results)} "
+                f"of {total_results} (end of results)\n"
+            )
 
         return result_text
 

@@ -267,6 +267,65 @@ class TestSearchCursor:
         server.async_zim_operations.search_zim_file.assert_not_awaited()
 
 
+class TestSearchPaginationFooterFormat:
+    """v1.2.0 search/filter renderers emit a compact one-line footer.
+
+    Prior to v1.2.0 each search response ended with a 3-4 line block:
+    a ``**Pagination**`` header, a ``**Next cursor**`` line spelling out a
+    ~80-char base64 token, and a ``**Hint**`` line offering both cursor and
+    offset. That payload was added to every prompt re-eval in an agentic
+    loop. The cursor parameter is still accepted as an *input* — it's just
+    no longer advertised in the rendered response, since an LLM keeping the
+    conversation context can pass ``offset`` and re-supply the original
+    query without losing any information.
+    """
+
+    def test_filtered_response_has_more_uses_compact_footer(self):
+        from openzim_mcp.zim.search import _FilteredScanState, _format_filtered_response
+
+        scan = _FilteredScanState(
+            filtered_count=42,
+            scanned=100,
+            scan_cap_hit=False,
+            total_filtered_is_lower_bound=False,
+        )
+        results = [
+            {"title": f"R{i}", "path": f"C/R{i}", "namespace": "C",
+             "content_type": "text/html", "snippet": "..."} for i in range(5)
+        ]
+        out = _format_filtered_response(
+            query="x", filter_text="", results=results, scan=scan,
+            total_results=42, offset=0, limit=5,
+        )
+        assert "Showing 1-5 of 42" in out
+        assert "pass `offset=5` for the next page" in out
+        # Old verbose markers must not appear.
+        assert "**Pagination**" not in out
+        assert "**Next cursor**" not in out
+        assert "**Hint**" not in out
+
+    def test_filtered_response_end_of_results_compact(self):
+        from openzim_mcp.zim.search import _FilteredScanState, _format_filtered_response
+
+        scan = _FilteredScanState(
+            filtered_count=3,
+            scanned=20,
+            scan_cap_hit=False,
+            total_filtered_is_lower_bound=False,
+        )
+        results = [
+            {"title": f"R{i}", "path": f"C/R{i}", "namespace": "C",
+             "content_type": "text/html", "snippet": "..."} for i in range(3)
+        ]
+        out = _format_filtered_response(
+            query="x", filter_text="", results=results, scan=scan,
+            total_results=3, offset=0, limit=10,
+        )
+        assert "Showing 1-3 of 3 (end of results)" in out
+        assert "**Next cursor**" not in out
+        assert "**End of results**" not in out
+
+
 class TestSearchAllLimitAlias:
     """`limit` is accepted as an alias of `limit_per_file` on search_all."""
 
