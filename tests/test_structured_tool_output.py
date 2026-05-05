@@ -74,3 +74,30 @@ class TestStructuredOutput:
         assert isinstance(payload, dict)
         assert "namespaces" in payload
         assert isinstance(payload["namespaces"], dict)
+
+    @pytest.mark.asyncio
+    async def test_search_all_returns_structured_content(
+        self, server: OpenZimMcpServer
+    ) -> None:
+        """search_all per-file results must be dicts, not stringified markdown.
+
+        Catches both wire-format requirements: (a) the tool emits
+        structuredContent at all, and (b) ``per_file[].result`` is itself
+        a real dict (the triple-encoding fix).
+        """
+        result = await server.mcp._tool_manager.call_tool(
+            "search_all", {"query": "evolution"}, convert_result=True
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # The previous tool migration revealed FastMCP wraps
+        # ``Dict[str, Any]`` returns under a ``"result"`` key. Tolerate that.
+        payload = structured["result"] if "result" in structured else structured
+        assert "per_file" in payload
+        for entry in payload.get("per_file", []):
+            if "result" in entry:
+                assert isinstance(
+                    entry["result"], dict
+                ), f"per_file[].result should be dict, got {type(entry['result'])}"
+                assert "results" in entry["result"]

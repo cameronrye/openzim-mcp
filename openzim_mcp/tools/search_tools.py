@@ -1,10 +1,11 @@
 """Search tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..constants import INPUT_LIMIT_FILE_PATH, INPUT_LIMIT_QUERY
 from ..exceptions import OpenZimMcpRateLimitError
+from ..responses import tool_error
 from ..security import sanitize_input
 
 if TYPE_CHECKING:
@@ -151,7 +152,7 @@ def _register_search_all(server: "OpenZimMcpServer") -> None:
         query: str,
         limit_per_file: Optional[int] = None,
         limit: Optional[int] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Search across every ZIM file in the allowed directories.
 
         Returns merged per-file results so the caller doesn't need to know
@@ -167,16 +168,21 @@ def _register_search_all(server: "OpenZimMcpServer") -> None:
                 wins.
 
         Returns:
-            JSON containing per-file result groups and counts of files
-            searched / with-results / failed
+            Dict with per-file result groups. Each ``per_file[].result`` is
+            itself a structured search payload (no nested markdown strings).
+            On failure, returns a ``{"error": True, ...}`` envelope.
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("search")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="search across ZIM files",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="search across ZIM files",
+                        error=e,
+                        context=f"Query: '{query}'",
+                    ),
                     context=f"Query: '{query}'",
                 )
 
@@ -187,21 +193,28 @@ def _register_search_all(server: "OpenZimMcpServer") -> None:
                 effective_limit = 5
 
             if effective_limit < 1 or effective_limit > 50:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit_per_file must be between 1 and 50 "
-                    f"(provided: {effective_limit})\n"
-                    "**Example**: Use `limit_per_file=5` for default, "
-                    "`limit_per_file=20` for more results per file."
+                return tool_error(
+                    operation="search across ZIM files",
+                    message=(
+                        f"limit_per_file must be between 1 and 50 "
+                        f"(provided: {effective_limit})"
+                    ),
+                    context=f"Query: '{query}'",
                 )
 
-            return await server.async_zim_operations.search_all(query, effective_limit)
+            return await server.async_zim_operations.search_all_data(
+                query, effective_limit
+            )
 
         except Exception as e:
             logger.error(f"Error in search_all: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="search across ZIM files",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="search across ZIM files",
+                    error=e,
+                    context=f"Query: '{query}'",
+                ),
                 context=f"Query: '{query}'",
             )
 
