@@ -140,7 +140,7 @@ class SimpleToolsHandler:
         if (
             intent == "search"
             and confidence < 0.7
-            and SimpleToolsHandler._looks_like_bare_topic(query)
+            and IntentParser._looks_like_bare_topic(query)
         ):
             return ""
         if confidence < 0.55:
@@ -158,44 +158,6 @@ class SimpleToolsHandler:
             )
         return ""
 
-    # Words that signal an explicit verb-shaped intent. If a query contains
-    # one of these (case-insensitive, whole-word), it isn't "bare-topic" — it
-    # has structure the intent classifier should have caught, and a
-    # low-confidence fallback warning is appropriate. Conservative list:
-    # only words that the intent parser specifically looks for as command
-    # verbs / interrogatives, not generic English words like "the" or "of"
-    # that appear in titles ("The Lord of the Rings").
-    _BARE_TOPIC_VERB_TOKENS = frozenset(
-        {
-            "what", "who", "when", "where", "why", "how", "which",
-            "list", "show", "get", "find", "fetch", "search", "browse",
-            "tell", "describe", "explain", "give", "info", "about",
-            "metadata", "namespace", "namespaces", "main", "page",
-            "structure", "outline", "links", "related", "suggestions",
-            "autocomplete", "walk", "all",
-        }
-    )
-
-    @staticmethod
-    def _looks_like_bare_topic(query: str) -> bool:
-        """Return True if ``query`` looks like a bare topic name.
-
-        Heuristic — the query is not too long and contains no command-verb
-        / interrogative tokens. ``"Martin Luther King Jr."`` qualifies;
-        ``"tell me about MLK"`` does not (verb ``tell``); ``"what is X"``
-        does not (interrogative ``what``).
-        """
-        if not query:
-            return False
-        # Cap length so accidental paragraphs don't slip through.
-        if len(query) > 80:
-            return False
-        # Tokenize on alphanumerics so punctuation in titles ("Jr.", "U.S.A.")
-        # doesn't fragment names.
-        tokens = re.findall(r"[A-Za-z0-9]+", query.lower())
-        if not tokens:
-            return False
-        return not any(t in SimpleToolsHandler._BARE_TOPIC_VERB_TOKENS for t in tokens)
 
     # ---------------------------------------------------------------- handlers
 
@@ -417,6 +379,122 @@ class SimpleToolsHandler:
             options.get("offset", 0),
         )
 
+    def _handle_tell_me_about(
+        self,
+        query: str,
+        zim_file_path: str,
+        params: Dict[str, Any],
+        options: Dict[str, Any],
+    ) -> str:
+        """Search for a topic and inline the top article body when it's a
+        strong title match.
+
+        Triggered by explicit "tell me about X" / "who is X" / "what is X" /
+        "describe X" phrasings, and by the bare-topic fallback in
+        ``IntentParser.parse_intent`` (e.g. ``"Martin Luther King Jr."``).
+
+        Strategy:
+          1. Run a small (limit=3) structured search for the topic.
+          2. If there are no results → render the empty-search response
+             so the caller still gets a clear "nothing found" message.
+          3. If the top hit's title or path is a strong match for the topic
+             (normalized substring containment in either direction) →
+             fetch the article body and inline it ahead of the search hits.
+          4. Otherwise → fall through to the rendered search response so
+             the caller sees the multiple weak matches and can disambiguate.
+
+        Saves the model an entire agentic round trip on the common
+        topic-lookup case ("who is X" today is two tool calls: search,
+        then get_article).
+        """
+        topic = (params.get("topic") or query).strip()
+        if not topic:
+            topic = query
+        # ``limit`` from caller wins; cap at 3 for the auto-fetch path so
+        # the tool response stays compact even when the article body is
+        # included.
+        search_limit = min(options.get("limit") or 3, 3)
+        max_content_length = options.get("max_content_length") or 8000
+
+        try:
+            payload = self.zim_operations.search_zim_file_data(
+                zim_file_path, topic, search_limit, 0
+            )
+        except Exception:
+            # If the structured search fails, fall through to the legacy
+            # rendered search so the caller still gets useful output.
+            return self.zim_operations.search_zim_file(
+                zim_file_path, topic, search_limit, 0
+            )
+
+        results = payload.get("results", []) if isinstance(payload, dict) else []
+        if not results:
+            return self.zim_operations.search_zim_file(
+                zim_file_path, topic, search_limit, 0
+            )
+
+        top = results[0]
+        top_path = top.get("path", "")
+        top_title = top.get("title", "")
+        if not self._is_strong_title_match(topic, top_path, top_title):
+            return self.zim_operations.search_zim_file(
+                zim_file_path, topic, search_limit, 0
+            )
+
+        try:
+            article_body = self.zim_operations.get_zim_entry(
+                zim_file_path, top_path, max_content_length, 0
+            )
+        except Exception as e:
+            # Article fetch failed — degrade gracefully to plain search.
+            logger.warning(
+                "tell_me_about: article fetch failed for %r, falling back to "
+                "search: %s",
+                top_path,
+                e,
+            )
+            return self.zim_operations.search_zim_file(
+                zim_file_path, topic, search_limit, 0
+            )
+
+        rendered_search = self.zim_operations.search_zim_file(
+            zim_file_path, topic, search_limit, 0
+        )
+        return (
+            f"# {top_title or topic}\n\n"
+            f"_Source: `{top_path}`_\n\n"
+            f"{article_body}\n\n"
+            f"---\n\n"
+            f"## Other matches for \"{topic}\"\n\n"
+            f"{rendered_search}"
+        )
+
+    @staticmethod
+    def _is_strong_title_match(topic: str, path: str, title: str) -> bool:
+        """Return True iff ``path`` or ``title`` looks like the article
+        for ``topic``.
+
+        Normalization strips everything except ASCII alphanumerics and
+        lowercases — so ``"Martin Luther King Jr."`` and the path
+        ``"Martin_Luther_King_Jr."`` both reduce to ``"martinlutherkingjr"``
+        and match exactly. Substring containment in either direction
+        forgives trailing disambiguation suffixes like
+        ``"Apollo 11 (mission)"`` matching the topic ``"Apollo 11"``.
+        """
+        norm_topic = re.sub(r"[^a-z0-9]+", "", topic.lower())
+        if not norm_topic or len(norm_topic) < 3:
+            return False
+        norm_path = re.sub(r"[^a-z0-9]+", "", path.lower())
+        norm_title = re.sub(r"[^a-z0-9]+", "", title.lower())
+        for candidate in (norm_path, norm_title):
+            if not candidate:
+                continue
+            if norm_topic == candidate:
+                return True
+            if norm_topic in candidate or candidate in norm_topic:
+                return True
+        return False
+
     def _handle_search_all(
         self,
         query: str,
@@ -513,6 +591,7 @@ class SimpleToolsHandler:
         "get_article": _handle_get_article,
         "search": _handle_search,
         "search_all": _handle_search_all,
+        "tell_me_about": _handle_tell_me_about,
         "walk_namespace": _handle_walk_namespace,
         "find_by_title": _handle_find_by_title,
         "related": _handle_related,
