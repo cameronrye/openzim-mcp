@@ -441,6 +441,22 @@ class AsyncZimOperations:
             include_data,
         )
 
+    async def get_binary_entry_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        max_size_bytes: Optional[int] = None,
+        include_data: bool = True,
+    ) -> dict:
+        """Structured variant of ``get_binary_entry`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_binary_entry_data,
+            zim_file_path,
+            entry_path,
+            max_size_bytes,
+            include_data,
+        )
+
     async def walk_namespace(
         self,
         zim_file_path: str,

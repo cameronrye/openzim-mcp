@@ -367,3 +367,34 @@ class TestStructuredOutput:
             assert "operation" in payload
         else:
             assert "toc" in payload
+
+    @pytest.mark.asyncio
+    async def test_get_binary_entry_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """get_binary_entry must emit a structured dict envelope."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        # Use include_data=False to keep the test fast and avoid loading
+        # binary bytes — the wire format is what we're verifying.
+        result = await server.mcp._tool_manager.call_tool(
+            "get_binary_entry",
+            {
+                "zim_file_path": str(zim_path),
+                "entry_path": "I/some.png",
+                "include_data": False,
+            },
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        payload = structured["result"] if "result" in structured else structured
+        # Tool may return error envelope on a missing-entry call — accept either.
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            assert "mime_type" in payload
