@@ -94,6 +94,110 @@ class TestGetRelatedArticles:
                 "/zim/test.zim", "C/Source", limit=10
             )
 
+    def test_title_is_target_entry_title_not_anchor_text(
+        self, server: OpenZimMcpServer, monkeypatch
+    ):
+        """Outbound ``title`` is the linked entry's title; ``link_text`` is the anchor.
+
+        Beta-test feedback: prior shape conflated the two — the result said
+        ``{path: "Animal", title: "Animalia"}`` (where "Animalia" is the
+        inline anchor text in the source article, not the article title).
+        """
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "path": "C/Source",
+                "internal_links": [
+                    # Anchor text differs from the target's actual title.
+                    {"url": "Animal", "text": "Animalia"},
+                ],
+            }
+        )
+
+        # Stub archive lookup so the target's "real" title is resolved.
+        target_entry = MagicMock()
+        target_entry.title = "Animal"
+        target_entry.path = "C/Animal"
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.return_value = target_entry
+
+        class _Ctx:
+            def __enter__(self):
+                return mock_archive
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _Ctx(),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.get_related_articles_data(
+            "/zim/test.zim", "C/Source", limit=10
+        )
+        outbound = result["outbound_results"]
+        assert len(outbound) == 1
+        assert outbound[0]["path"] == "C/Animal"
+        assert outbound[0]["title"] == "Animal"
+        assert outbound[0]["link_text"] == "Animalia"
+
+    def test_title_falls_back_to_path_when_archive_lookup_fails(
+        self, server: OpenZimMcpServer, monkeypatch
+    ):
+        """When archive lookup fails, ``title`` falls back to the path.
+
+        Possible failure modes: target lives in a different namespace,
+        the entry is missing, or libzim raises. ``link_text`` still
+        carries the original anchor text either way.
+        """
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "path": "C/Source",
+                "internal_links": [
+                    {"url": "Missing_Article", "text": "see Missing"},
+                ],
+            }
+        )
+
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.side_effect = Exception("not found")
+
+        class _Ctx:
+            def __enter__(self):
+                return mock_archive
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _Ctx(),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.get_related_articles_data(
+            "/zim/test.zim", "C/Source", limit=10
+        )
+        outbound = result["outbound_results"]
+        assert len(outbound) == 1
+        assert outbound[0]["path"] == "C/Missing_Article"
+        # No title resolvable -> falls back to the target path
+        assert outbound[0]["title"] == "C/Missing_Article"
+        assert outbound[0]["link_text"] == "see Missing"
+
 
 class TestResolveLinkToEntryPath:
     """Test ``_resolve_link_to_entry_path`` static helper.

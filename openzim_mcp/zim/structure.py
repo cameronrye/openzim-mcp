@@ -612,6 +612,14 @@ class _StructureMixin:
 
         Returns the result dict directly (not a JSON string) so MCP tools
         can hand it straight to FastMCP's structured-content path.
+
+        Each outbound result carries:
+
+        - ``path``: the resolved ZIM entry path of the link target.
+        - ``title``: the linked entry's actual archive title (resolved by
+          looking up ``path`` in the archive). Falls back to ``path`` when
+          the entry is missing or the lookup fails.
+        - ``link_text``: the original anchor text from the source article.
         """
         if limit < 1 or limit > 100:
             raise OpenZimMcpValidationError(
@@ -645,10 +653,19 @@ class _StructureMixin:
                 ):
                     continue
                 seen.add(target)
-                title = link.get("text") or link.get("title") or target
-                outbound.append({"path": target, "title": title})
+                outbound.append(
+                    {
+                        "path": target,
+                        # Placeholder; resolved via archive lookup below
+                        # under a single archive open so we don't pay one
+                        # open per result.
+                        "title": target,
+                        "link_text": link.get("text") or link.get("title") or "",
+                    }
+                )
                 if len(outbound) >= limit:
                     break
+            self._resolve_outbound_titles(zim_file_path, outbound)
             result["outbound_results"] = outbound
         except OpenZimMcpArchiveError as e:
             # Partial-success contract: an archive- or extraction-level
@@ -662,6 +679,32 @@ class _StructureMixin:
             result["outbound_error"] = str(e)
 
         return result
+
+    @staticmethod
+    def _resolve_outbound_titles(
+        zim_file_path: str, outbound: List[Dict[str, Any]]
+    ) -> None:
+        """Fill in each outbound entry's ``title`` from its archive title.
+
+        Single archive open shared across all entries (limit ≤ 100). On any
+        per-entry lookup failure the title stays at its placeholder (path)
+        so callers always see a non-empty string. A failure to open the
+        archive at all is also non-fatal — leave placeholders in place.
+        """
+        if not outbound:
+            return
+        try:
+            with _zim_ops_mod.zim_archive(Path(zim_file_path)) as archive:
+                for item in outbound:
+                    try:
+                        entry = archive.get_entry_by_path(item["path"])
+                        title = getattr(entry, "title", None)
+                        if title:
+                            item["title"] = title
+                    except Exception as e:
+                        logger.debug(f"title lookup for {item['path']} failed: {e}")
+        except Exception as e:
+            logger.debug(f"archive open for title resolution failed: {e}")
 
     def get_related_articles(
         self,

@@ -424,8 +424,13 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
 
         Returns:
             Dict with ``entry_path`` and ``outbound_results`` (a list of
-            ``{path, title}`` records). On failure, returns a
-            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
+            ``{path, title, link_text}`` records). ``title`` is the linked
+            entry's actual archive title (resolved by archive lookup;
+            falls back to ``path`` when the entry is missing). ``link_text``
+            is the original anchor text from the source article — useful
+            when the source article links to the target with a different
+            display string. On failure, returns a ``{"error": True, ...}``
+            envelope (see ``responses.tool_error``).
         """
         try:
             try:
