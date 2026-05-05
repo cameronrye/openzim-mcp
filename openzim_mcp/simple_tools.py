@@ -76,7 +76,7 @@ class SimpleToolsHandler:
                 f"confidence: {confidence:.2f}"
             )
 
-            low_confidence_note = self._confidence_note(intent, confidence)
+            low_confidence_note = self._confidence_note(intent, confidence, query)
 
             # ``list_files`` is the only intent that doesn't need a ZIM file.
             if intent == "list_files":
@@ -117,7 +117,7 @@ class SimpleToolsHandler:
             )
 
     @staticmethod
-    def _confidence_note(intent: str, confidence: float) -> str:
+    def _confidence_note(intent: str, confidence: float, query: str = "") -> str:
         """Render a confidence note tier-appropriate for the parsed intent.
 
         Tiers:
@@ -127,7 +127,22 @@ class SimpleToolsHandler:
             "moderate confidence" understates that nothing matched).
           * 0.55–0.7 — "moderate confidence" (legacy wording).
           * >= 0.7 — no note (well-calibrated, don't pester).
+
+        Suppression: when the intent is ``search`` and the query looks like
+        a bare topic name (proper noun phrase with no command verbs),
+        defaulting to search is the *correct* interpretation — the
+        confidence number is low because the intent classifier had nothing
+        verb-shaped to latch onto, not because the answer is uncertain.
+        Emitting a "low confidence" warning in that case has misled both
+        humans (who think the search results are bad) and LLMs (who choose
+        not to trust them). Skip the note for that pattern.
         """
+        if (
+            intent == "search"
+            and confidence < 0.7
+            and SimpleToolsHandler._looks_like_bare_topic(query)
+        ):
+            return ""
         if confidence < 0.55:
             return (
                 "\n\n*Note: Low confidence in query interpretation "
@@ -142,6 +157,45 @@ class SimpleToolsHandler:
                 "try rephrasing your query.*\n"
             )
         return ""
+
+    # Words that signal an explicit verb-shaped intent. If a query contains
+    # one of these (case-insensitive, whole-word), it isn't "bare-topic" — it
+    # has structure the intent classifier should have caught, and a
+    # low-confidence fallback warning is appropriate. Conservative list:
+    # only words that the intent parser specifically looks for as command
+    # verbs / interrogatives, not generic English words like "the" or "of"
+    # that appear in titles ("The Lord of the Rings").
+    _BARE_TOPIC_VERB_TOKENS = frozenset(
+        {
+            "what", "who", "when", "where", "why", "how", "which",
+            "list", "show", "get", "find", "fetch", "search", "browse",
+            "tell", "describe", "explain", "give", "info", "about",
+            "metadata", "namespace", "namespaces", "main", "page",
+            "structure", "outline", "links", "related", "suggestions",
+            "autocomplete", "walk", "all",
+        }
+    )
+
+    @staticmethod
+    def _looks_like_bare_topic(query: str) -> bool:
+        """Return True if ``query`` looks like a bare topic name.
+
+        Heuristic — the query is not too long and contains no command-verb
+        / interrogative tokens. ``"Martin Luther King Jr."`` qualifies;
+        ``"tell me about MLK"`` does not (verb ``tell``); ``"what is X"``
+        does not (interrogative ``what``).
+        """
+        if not query:
+            return False
+        # Cap length so accidental paragraphs don't slip through.
+        if len(query) > 80:
+            return False
+        # Tokenize on alphanumerics so punctuation in titles ("Jr.", "U.S.A.")
+        # doesn't fragment names.
+        tokens = re.findall(r"[A-Za-z0-9]+", query.lower())
+        if not tokens:
+            return False
+        return not any(t in SimpleToolsHandler._BARE_TOPIC_VERB_TOKENS for t in tokens)
 
     # ---------------------------------------------------------------- handlers
 

@@ -884,3 +884,92 @@ class TestLowConfidenceNoteAppendedConsistently:
         ):
             result = handler.handle_zim_query("anything", zim_file_path=explicit)
         assert "confidence" not in result.lower()
+
+
+class TestBareTopicSuppressesLowConfidenceNote:
+    """v1.2.0: when a search query is a bare topic name, defaulting to
+    ``intent=search`` is the *correct* interpretation — the confidence
+    score is low only because there's no verb to latch onto, not because
+    the answer is uncertain. The "Low confidence" note in that case has
+    misled both humans (who interpret "low confidence" as "bad results")
+    and LLMs (which then choose not to trust the snippets). Suppressed.
+    """
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        mock = Mock()
+        mock.search_zim_file.return_value = "## 1. Some Article\nSnippet text"
+        # Other backend methods that may be reached by other-intent tests in
+        # this class. They all return string sentinels so the handler's
+        # ``result + low_confidence_note`` concatenation succeeds.
+        mock.walk_namespace.return_value = "{}"
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        return SimpleToolsHandler(mock_zim_operations)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Martin Luther King Jr.",
+            "Photosynthesis",
+            "World War II",
+            "DNA",
+            "U.S.A.",
+        ],
+    )
+    def test_bare_topic_search_suppresses_note(self, handler, query):
+        """A search-fallback for a bare topic name does not append the note."""
+        explicit = "/zims/test.zim"
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=("search", {"query": query}, 0.5),
+        ):
+            result = handler.handle_zim_query(query, zim_file_path=explicit)
+        assert (
+            "confidence" not in result.lower()
+        ), f"bare-topic query {query!r} should suppress the note: got {result!r}"
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "tell me a joke",
+            "what is the meaning of life",
+            "how does this work",
+            "explain photosynthesis",
+            "search for python",
+        ],
+    )
+    def test_verb_shaped_search_still_emits_note(self, handler, query):
+        """Verb-shaped searches that fell through to the search fallback
+        keep the existing low-confidence note — the user/model needs to
+        know the structured intent didn't match.
+        """
+        explicit = "/zims/test.zim"
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=("search", {"query": query}, 0.5),
+        ):
+            result = handler.handle_zim_query(query, zim_file_path=explicit)
+        assert (
+            "low confidence" in result.lower()
+        ), f"verb-shaped query {query!r} should keep the note: got {result!r}"
+
+    def test_suppression_only_applies_to_search_intent(self, handler):
+        """A bare-topic query with intent != ``search`` (e.g. the parser
+        somehow classified it as ``walk_namespace``) keeps the note —
+        suppression is specific to the search fallback case.
+        """
+        explicit = "/zims/test.zim"
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=("walk_namespace", {"namespace": "C"}, 0.5),
+        ):
+            result = handler.handle_zim_query(
+                "Photosynthesis", zim_file_path=explicit
+            )
+        assert "low confidence" in result.lower()
