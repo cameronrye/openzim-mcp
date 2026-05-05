@@ -3080,9 +3080,9 @@ class TestZimOperationsPerfFixes:
         assert (
             get_entry_by_id_calls["count"] == 0
         ), "Strategy 2 must not stride-scan via _get_entry_by_id"
-        # Result still has to be valid JSON describing zero matches.
-        import json as _json
-
-        parsed = _json.loads(result)
-        assert parsed["partial_query"] == "bio"
-        assert "suggestions" in parsed
+        # ``_generate_search_suggestions`` now returns the dict directly so
+        # the structured-content path can hand it to FastMCP without an
+        # intermediate json.dumps + re-parse.
+        assert isinstance(result, dict)
+        assert result["partial_query"] == "bio"
+        assert "suggestions" in result

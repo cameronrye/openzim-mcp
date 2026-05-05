@@ -185,6 +185,28 @@ class TestStructuredOutput:
         assert "namespace" in payload
 
     @pytest.mark.asyncio
+    async def test_get_search_suggestions_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """get_search_suggestions must emit a structured dict, not a JSON string."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        result = await server.mcp._tool_manager.call_tool(
+            "get_search_suggestions",
+            {"zim_file_path": str(zim_path), "partial_query": "ev"},
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        payload = structured["result"] if "result" in structured else structured
+        assert "suggestions" in payload
+        assert isinstance(payload["suggestions"], list)
+
+    @pytest.mark.asyncio
     async def test_search_all_returns_structured_content(
         self, server: OpenZimMcpServer
     ) -> None:

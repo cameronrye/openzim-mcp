@@ -411,8 +411,8 @@ class TestNavigationToolsDirectInvocation:
         self, advanced_server, temp_dir
     ):
         """Test invoking get_search_suggestions tool handler directly."""
-        advanced_server.async_zim_operations.get_search_suggestions = AsyncMock(
-            return_value='{"suggestions": ["Python", "Python programming"]}'
+        advanced_server.async_zim_operations.get_search_suggestions_data = AsyncMock(
+            return_value={"suggestions": ["Python", "Python programming"]}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -423,6 +423,7 @@ class TestNavigationToolsDirectInvocation:
                 partial_query="Pyt",
                 limit=10,
             )
+            assert isinstance(result, dict)
             assert "suggestions" in result
 
     @pytest.mark.asyncio
@@ -440,7 +441,9 @@ class TestNavigationToolsDirectInvocation:
                 partial_query="test",
                 limit=100,  # > 50
             )
-            assert "must be between 1 and 50" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be between 1 and 50" in result.get("message", "")
 
             # Limit too low
             result = await tool_handler(
@@ -448,7 +451,9 @@ class TestNavigationToolsDirectInvocation:
                 partial_query="test",
                 limit=0,  # < 1
             )
-            assert "must be between 1 and 50" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be between 1 and 50" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_with_rate_limit(
@@ -466,14 +471,17 @@ class TestNavigationToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 partial_query="test",
             )
-            assert "Error" in result or "Rate limit" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "Rate limit" in message or "Operation" in message
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_with_exception(
         self, advanced_server, temp_dir
     ):
         """Test get_search_suggestions when an exception occurs."""
-        advanced_server.async_zim_operations.get_search_suggestions = AsyncMock(
+        advanced_server.async_zim_operations.get_search_suggestions_data = AsyncMock(
             side_effect=ValueError("Invalid query")
         )
 
@@ -484,7 +492,10 @@ class TestNavigationToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 partial_query="test",
             )
-            assert "Error" in result or "error" in result.lower()
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "Error" in message or "error" in message.lower()
 
 
 class TestWalkNamespaceLimitValidation:

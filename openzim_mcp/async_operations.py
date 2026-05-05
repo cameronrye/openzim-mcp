@@ -274,6 +274,20 @@ class AsyncZimOperations:
             self._ops.get_search_suggestions, zim_file_path, partial_query, limit
         )
 
+    async def get_search_suggestions_data(
+        self,
+        zim_file_path: str,
+        partial_query: str,
+        limit: int = 10,
+    ) -> dict:
+        """Structured variant of ``get_search_suggestions`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_search_suggestions_data,
+            zim_file_path,
+            partial_query,
+            limit,
+        )
+
     async def get_article_structure(
         self,
         zim_file_path: str,

@@ -320,7 +320,7 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_search_suggestions(
         zim_file_path: str, partial_query: str, limit: int = 10
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Get search suggestions and auto-complete for partial queries.
 
         Args:
@@ -329,17 +329,27 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
             limit: Maximum number of suggestions to return (1-50, default: 10)
 
         Returns:
-            JSON string containing search suggestions
+            Dict with keys: partial_query, suggestions (list of {text, path,
+            type}), count. For very short queries, returns
+            ``{"suggestions": [], "message": "..."}``. On failure, returns a
+            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
         """
         try:
             # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("suggestions")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
-                    operation="get search suggestions",
-                    error=e,
-                    context=f"Query: '{partial_query}'",
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
+                        operation="get search suggestions",
+                        message=server._create_enhanced_error_message(
+                            operation="get search suggestions",
+                            error=e,
+                            context=f"Query: '{partial_query}'",
+                        ),
+                        context=f"Query: '{partial_query}'",
+                    ),
                 )
 
             # Sanitize inputs
@@ -348,24 +358,35 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
 
             # Validate parameters
             if limit < 1 or limit > 50:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 50 "
-                    f"(provided: {limit})\n\n"
-                    "**Troubleshooting**: Adjust the limit parameter to a "
-                    "value within the valid range.\n"
-                    "**Example**: Use `limit=10` for reasonable suggestions."
+                return tool_error(
+                    operation="get search suggestions",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 50 "
+                        f"(provided: {limit})\n\n"
+                        "**Troubleshooting**: Adjust the limit parameter to a "
+                        "value within the valid range.\n"
+                        "**Example**: Use `limit=10` for reasonable suggestions."
+                    ),
+                    context=f"Query: '{partial_query}', Limit: {limit}",
                 )
 
             # Use async operations
-            return await server.async_zim_operations.get_search_suggestions(
+            return await server.async_zim_operations.get_search_suggestions_data(
                 zim_file_path, partial_query, limit
             )
 
         except Exception as e:
             logger.error(f"Error getting search suggestions: {e}")
-            return server._create_enhanced_error_message(
-                operation="get search suggestions",
-                error=e,
-                context=f"File: {zim_file_path}, Query: {partial_query}",
+            return cast(
+                Dict[str, Any],
+                tool_error(
+                    operation="get search suggestions",
+                    message=server._create_enhanced_error_message(
+                        operation="get search suggestions",
+                        error=e,
+                        context=f"File: {zim_file_path}, Query: {partial_query}",
+                    ),
+                    context=f"File: {zim_file_path}, Query: {partial_query}",
+                ),
             )

@@ -707,18 +707,13 @@ class _SearchMixin:
                 )
         return results
 
-    def get_search_suggestions(
+    def get_search_suggestions_data(
         self, zim_file_path: str, partial_query: str, limit: int = 10
-    ) -> str:
-        """Get search suggestions and auto-complete for partial queries.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_search_suggestions``.
 
-        Args:
-            zim_file_path: Path to the ZIM file
-            partial_query: Partial search query
-            limit: Maximum number of suggestions to return
-
-        Returns:
-            JSON string containing search suggestions
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -729,19 +724,18 @@ class _SearchMixin:
         if limit < 1 or limit > 50:
             raise OpenZimMcpValidationError("Limit must be between 1 and 50")
         if not partial_query or len(partial_query.strip()) < 2:
-            return json.dumps(
-                {"suggestions": [], "message": "Query too short for suggestions"}
-            )
+            return {"suggestions": [], "message": "Query too short for suggestions"}
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"suggestions:{validated_path}:{partial_query}:{limit}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"suggestions_data:{validated_path}:{partial_query}:{limit}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached suggestions for: {partial_query}")
+            logger.debug(f"Returning cached suggestions dict for: {partial_query}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -750,20 +744,13 @@ class _SearchMixin:
                     archive, partial_query, limit
                 )
 
-            # Parse result to get actual count for accurate logging and to
-            # decide whether the response is worth caching. A cold-cache
+            # Read the count straight off the dict for accurate logging and
+            # to decide whether the response is worth caching. A cold-cache
             # request that hits before the libzim title index has warmed up
             # can return zero suggestions for a query that will produce
             # results moments later — caching that empty payload locks the
             # query into "no suggestions" for the full TTL.
-            try:
-                result_data = json.loads(result)
-                actual_count = result_data.get(
-                    "count", len(result_data.get("suggestions", []))
-                )
-            except (json.JSONDecodeError, TypeError):
-                actual_count = "unknown"
-
+            actual_count = result.get("count", len(result.get("suggestions", [])))
             count_for_gate = actual_count if isinstance(actual_count, int) else 0
             if count_for_gate > 0:
                 self.cache.set(cache_key, result)
@@ -778,9 +765,35 @@ class _SearchMixin:
             logger.error(f"Suggestion generation failed for {partial_query}: {e}")
             raise OpenZimMcpArchiveError(f"Suggestion generation failed: {e}") from e
 
+    def get_search_suggestions(
+        self, zim_file_path: str, partial_query: str, limit: int = 10
+    ) -> str:
+        """Legacy JSON-string variant of ``get_search_suggestions_data``.
+
+        Get search suggestions and auto-complete for partial queries.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            partial_query: Partial search query
+            limit: Maximum number of suggestions to return
+
+        Returns:
+            JSON string containing search suggestions
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpValidationError: If ``limit`` is outside ``1..50``.
+            OpenZimMcpArchiveError: If suggestion generation fails
+        """
+        return json.dumps(
+            self.get_search_suggestions_data(zim_file_path, partial_query, limit),
+            indent=2,
+            ensure_ascii=False,
+        )
+
     def _generate_search_suggestions(  # NOSONAR(python:S3776)
         self, archive: Archive, partial_query: str, limit: int
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Generate search suggestions based on partial query.
 
         Errors during iteration of individual entries are logged and skipped
@@ -802,12 +815,11 @@ class _SearchMixin:
 
         if suggestions:
             logger.info(f"Found {len(suggestions)} suggestions using search fallback")
-            result = {
+            return {
                 "partial_query": partial_query,
                 "suggestions": suggestions,
                 "count": len(suggestions),
             }
-            return json.dumps(result, indent=2, ensure_ascii=False)
 
         # Strategy 2: Use the libzim title-index suggestion API. Replaces the
         # previous strided ``_get_entry_by_id`` scan, which only inspected
@@ -918,13 +930,11 @@ class _SearchMixin:
                 }
             )
 
-        result = {
+        return {
             "partial_query": partial_query,
             "suggestions": suggestions[:limit],
             "count": len(suggestions[:limit]),
         }
-
-        return json.dumps(result, indent=2, ensure_ascii=False)
 
     def _get_suggestions_from_search(  # NOSONAR(python:S3776)
         self, archive: Archive, partial_query: str, limit: int
