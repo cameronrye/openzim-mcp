@@ -1337,12 +1337,15 @@ class TestZimOperations:
         result = zim_operations.get_article_structure_data(str(zim_file), "A/Test")
         assert result == {"cached": "structure"}
 
-        # Test extract_article_links cache hit (lines 1317-1318)
-        cache_key = f"links:{validated_path}:A/Test"
-        zim_operations.cache.set(cache_key, '{"cached": "links"}')
+        # Test extract_article_links_data cache hit. extract_article_links now
+        # delegates to extract_article_links_data, which caches dicts under a
+        # `links_data:` key. Exercise the cache hit path against the
+        # dict-returning entry point directly.
+        cache_key = f"links_data:{validated_path}:A/Test"
+        zim_operations.cache.set(cache_key, {"cached": "links"})
 
-        result = zim_operations.extract_article_links(str(zim_file), "A/Test")
-        assert result == '{"cached": "links"}'
+        result = zim_operations.extract_article_links_data(str(zim_file), "A/Test")
+        assert result == {"cached": "links"}
 
     def test_complex_search_operations(
         self, zim_operations: ZimOperations, temp_dir: Path

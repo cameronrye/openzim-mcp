@@ -342,8 +342,8 @@ class TestStructureToolsDirectInvocation:
         self, advanced_server, temp_dir
     ):
         """Test invoking extract_article_links tool handler directly."""
-        advanced_server.async_zim_operations.extract_article_links = AsyncMock(
-            return_value='{"internal_links": [], "external_links": []}'
+        advanced_server.async_zim_operations.extract_article_links_data = AsyncMock(
+            return_value={"internal_links": [], "external_links": []}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -353,14 +353,15 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
-            assert "links" in result
+            assert isinstance(result, dict)
+            assert "internal_links" in result
 
     @pytest.mark.asyncio
     async def test_extract_article_links_with_exception(
         self, advanced_server, temp_dir
     ):
         """Test extract_article_links when an exception occurs."""
-        advanced_server.async_zim_operations.extract_article_links = AsyncMock(
+        advanced_server.async_zim_operations.extract_article_links_data = AsyncMock(
             side_effect=Exception("Test error")
         )
 
@@ -371,8 +372,9 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
-            # Should return error message, not raise
-            assert "Error" in result or "error" in result.lower()
+            # Should return error envelope, not raise
+            assert isinstance(result, dict)
+            assert result.get("error") is True
 
     @pytest.mark.asyncio
     async def test_get_entry_summary_tool_invocation(self, advanced_server, temp_dir):

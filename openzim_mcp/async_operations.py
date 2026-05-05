@@ -346,6 +346,16 @@ class AsyncZimOperations:
             self._ops.extract_article_links, zim_file_path, entry_path
         )
 
+    async def extract_article_links_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+    ) -> dict:
+        """Structured variant of ``extract_article_links`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.extract_article_links_data, zim_file_path, entry_path
+        )
+
     async def get_entry_summary(
         self,
         zim_file_path: str,

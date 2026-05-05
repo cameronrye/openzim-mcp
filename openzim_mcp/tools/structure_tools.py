@@ -86,7 +86,9 @@ def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
 
 def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
-    async def extract_article_links(zim_file_path: str, entry_path: str) -> str:
+    async def extract_article_links(
+        zim_file_path: str, entry_path: str
+    ) -> Dict[str, Any]:
         """Extract internal and external links from an article.
 
         Args:
@@ -94,30 +96,40 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
             entry_path: Entry path, e.g., 'C/Some_Article'
 
         Returns:
-            JSON string containing extracted links
+            Dict containing extracted links (title, path, internal_links,
+            external_links, media_links, total_links). On failure, returns a
+            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="extract article links",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="extract article links",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            return await server.async_zim_operations.extract_article_links(
+            return await server.async_zim_operations.extract_article_links_data(
                 zim_file_path, entry_path
             )
 
         except Exception as e:
             logger.error(f"Error extracting article links: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="extract article links",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="extract article links",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 

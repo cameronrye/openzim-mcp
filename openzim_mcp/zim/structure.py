@@ -164,15 +164,13 @@ class _StructureMixin:
                 f"Failed to extract article structure: {e}"
             ) from e
 
-    def extract_article_links(self, zim_file_path: str, entry_path: str) -> str:
-        """Extract internal and external links from an article.
+    def extract_article_links_data(
+        self, zim_file_path: str, entry_path: str
+    ) -> Dict[str, Any]:
+        """Structured variant of ``extract_article_links``.
 
-        Args:
-            zim_file_path: Path to the ZIM file
-            entry_path: Entry path, e.g., 'C/Some_Article'
-
-        Returns:
-            JSON string containing extracted links
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -182,16 +180,17 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"links:{validated_path}:{entry_path}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"links_data:{validated_path}:{entry_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached links for: {entry_path}")
+            logger.debug(f"Returning cached links dict for: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_article_links(archive, entry_path)
+                result = self._extract_article_links_data(archive, entry_path)
 
             # Cache the result
             self.cache.set(cache_key, result)
@@ -206,8 +205,32 @@ class _StructureMixin:
             logger.error(f"Link extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Link extraction failed: {e}") from e
 
-    def _extract_article_links(self, archive: Archive, entry_path: str) -> str:
-        """Extract links from article content."""
+    def extract_article_links(self, zim_file_path: str, entry_path: str) -> str:
+        """Legacy JSON-string variant of ``extract_article_links_data``.
+
+        Extract internal and external links from an article.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Entry path, e.g., 'C/Some_Article'
+
+        Returns:
+            JSON string containing extracted links
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If link extraction fails
+        """
+        return json.dumps(
+            self.extract_article_links_data(zim_file_path, entry_path),
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    def _extract_article_links_data(
+        self, archive: Archive, entry_path: str
+    ) -> Dict[str, Any]:
+        """Extract links from article content as a dict."""
         try:
             entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
             title = entry.title or "Untitled"
@@ -242,7 +265,7 @@ class _StructureMixin:
                 + len(links_data.get("media_links", []))
             )
 
-            return json.dumps(links_data, indent=2, ensure_ascii=False)
+            return links_data
 
         except Exception as e:
             logger.error(f"Error extracting links for {entry_path}: {e}")
