@@ -138,7 +138,7 @@ class TestGetZimEntriesBatchValidation:
 
         advanced_server.rate_limiter.check_rate_limit = MagicMock(side_effect=record_rl)
         # Backend should not be called at all.
-        advanced_server.async_zim_operations.get_entries = AsyncMock(
+        advanced_server.async_zim_operations.get_entries_data = AsyncMock(
             side_effect=AssertionError("backend should not be reached")
         )
 
@@ -152,15 +152,18 @@ class TestGetZimEntriesBatchValidation:
         tool_handler = tools["get_zim_entries"].fn
         result = await tool_handler(entries=oversized)
 
-        # Validation/error message returned to caller.
-        assert "exceeds" in result.lower() or "batch size" in result.lower()
+        # Validation/error envelope returned to caller.
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        message = result.get("message", "")
+        assert "exceeds" in message.lower() or "batch size" in message.lower()
         # No rate-limit charges incurred.
         assert len(rl_calls) == 0, (
             f"expected 0 rate-limit calls before size validation, "
             f"got {len(rl_calls)}"
         )
         # Backend not invoked.
-        advanced_server.async_zim_operations.get_entries.assert_not_called()
+        advanced_server.async_zim_operations.get_entries_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_valid_batch_still_charges_per_entry_rate_limit(
@@ -173,8 +176,8 @@ class TestGetZimEntriesBatchValidation:
             rl_calls.append(args)
 
         advanced_server.rate_limiter.check_rate_limit = MagicMock(side_effect=record_rl)
-        advanced_server.async_zim_operations.get_entries = AsyncMock(
-            return_value='{"results": [], "succeeded": 0, "failed": 0}'
+        advanced_server.async_zim_operations.get_entries_data = AsyncMock(
+            return_value={"results": [], "succeeded": 0, "failed": 0}
         )
 
         entries = [

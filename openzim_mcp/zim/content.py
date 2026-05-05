@@ -196,12 +196,15 @@ class _ContentMixin:
         logger.info(f"Retrieved entry: {entry_path}")
         return result
 
-    def get_entries(  # NOSONAR(python:S3776)
+    def get_entries_data(  # NOSONAR(python:S3776)
         self,
         entries: List[Dict[str, str]],
         max_content_length: Optional[int] = None,
-    ) -> str:
-        """Fetch multiple ZIM entries in one call.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_entries``.
+
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Per-entry partial success: one failure does not abort the batch.
         Each result carries the input ``index`` so callers can correlate
@@ -212,7 +215,7 @@ class _ContentMixin:
             max_content_length: per-entry max content length.
 
         Returns:
-            JSON string ``{"results": [...], "succeeded": N, "failed": N}``.
+            Dict ``{"results": [...], "succeeded": N, "failed": N}``.
 
         Raises:
             OpenZimMcpValidationError: empty list or > MAX_BATCH_SIZE.
@@ -326,8 +329,32 @@ class _ContentMixin:
         # they submitted entries (grouping is a transparent optimisation).
         results.sort(key=lambda r: r["index"])
 
+        return {"results": results, "succeeded": succeeded, "failed": failed}
+
+    def get_entries(
+        self,
+        entries: List[Dict[str, str]],
+        max_content_length: Optional[int] = None,
+    ) -> str:
+        """Legacy JSON-string variant of ``get_entries_data``.
+
+        Fetch multiple ZIM entries in one call. Per-entry partial success:
+        one failure does not abort the batch. Each result carries the
+        input ``index`` so callers can correlate responses with their
+        original request order.
+
+        Args:
+            entries: list of ``{"zim_file_path", "entry_path"}`` dicts.
+            max_content_length: per-entry max content length.
+
+        Returns:
+            JSON string ``{"results": [...], "succeeded": N, "failed": N}``.
+
+        Raises:
+            OpenZimMcpValidationError: empty list or > MAX_BATCH_SIZE.
+        """
         return json.dumps(
-            {"results": results, "succeeded": succeeded, "failed": failed},
+            self.get_entries_data(entries, max_content_length),
             ensure_ascii=False,
         )
 

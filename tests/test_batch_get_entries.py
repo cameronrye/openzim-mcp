@@ -44,8 +44,8 @@ async def test_get_zim_entries_tool_passes_through(
 ):
     """Calling the registered tool function delegates to async_zim_operations."""
     server = OpenZimMcpServer(test_config)
-    server.async_zim_operations.get_entries = AsyncMock(
-        return_value='{"results": [], "succeeded": 0, "failed": 0}'
+    server.async_zim_operations.get_entries_data = AsyncMock(
+        return_value={"results": [], "succeeded": 0, "failed": 0}
     )
     server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -57,8 +57,9 @@ async def test_get_zim_entries_tool_passes_through(
     result = await fn(
         entries=[{"zim_file_path": "/x", "entry_path": "y"}],
     )
-    assert json.loads(result)["succeeded"] == 0
-    server.async_zim_operations.get_entries.assert_awaited_once()
+    assert isinstance(result, dict)
+    assert result["succeeded"] == 0
+    server.async_zim_operations.get_entries_data.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -67,8 +68,8 @@ async def test_get_zim_entries_tool_sanitizes_inputs(
 ):
     """Per-entry paths go through sanitize_input before delegation."""
     server = OpenZimMcpServer(test_config)
-    server.async_zim_operations.get_entries = AsyncMock(
-        return_value='{"results": [], "succeeded": 0, "failed": 0}'
+    server.async_zim_operations.get_entries_data = AsyncMock(
+        return_value={"results": [], "succeeded": 0, "failed": 0}
     )
     server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -81,7 +82,7 @@ async def test_get_zim_entries_tool_sanitizes_inputs(
         entries=[{"zim_file_path": bad_path, "entry_path": bad_entry}],
     )
     # The args passed to the async op are the *sanitized* values.
-    call = server.async_zim_operations.get_entries.await_args
+    call = server.async_zim_operations.get_entries_data.await_args
     sent_entries = call.args[0]
     assert sent_entries[0]["zim_file_path"].strip() == "/zim/wiki.zim"
     assert "\x00" not in sent_entries[0]["entry_path"]
@@ -99,16 +100,18 @@ async def test_get_zim_entries_tool_rate_limit_error(
     server.rate_limiter.check_rate_limit = MagicMock(
         side_effect=OpenZimMcpRateLimitError("rate limit hit")
     )
-    server.async_zim_operations.get_entries = AsyncMock()
+    server.async_zim_operations.get_entries_data = AsyncMock()
 
     tool = server.mcp._tool_manager._tools["get_zim_entries"]
     fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
 
     result = await fn(entries=[{"zim_file_path": "/x", "entry_path": "y"}])
     # Rate-limit error → never delegates to async op
-    server.async_zim_operations.get_entries.assert_not_awaited()
-    # Rendered message mentions batch size context
-    assert "Batch size: 1" in result
+    server.async_zim_operations.get_entries_data.assert_not_awaited()
+    # Structured error envelope: error=True, with batch-size context.
+    assert isinstance(result, dict)
+    assert result.get("error") is True
+    assert "Batch size: 1" in result.get("context", "")
 
 
 @pytest.mark.asyncio
@@ -118,7 +121,7 @@ async def test_get_zim_entries_tool_exception_returns_error_message(
     """Generic exceptions in the async op are wrapped in an error message."""
     server = OpenZimMcpServer(test_config)
     server.rate_limiter.check_rate_limit = MagicMock()
-    server.async_zim_operations.get_entries = AsyncMock(
+    server.async_zim_operations.get_entries_data = AsyncMock(
         side_effect=RuntimeError("unexpected failure")
     )
 
@@ -126,9 +129,12 @@ async def test_get_zim_entries_tool_exception_returns_error_message(
     fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
 
     result = await fn(entries=[{"zim_file_path": "/x", "entry_path": "y"}])
-    assert "Batch size: 1" in result
+    assert isinstance(result, dict)
+    assert result.get("error") is True
+    assert "Batch size: 1" in result.get("context", "")
     # The error message surfaces the underlying message somewhere.
-    assert "unexpected failure" in result or "RuntimeError" in result
+    message = result.get("message", "")
+    assert "unexpected failure" in message or "RuntimeError" in message
 
 
 @pytest.mark.asyncio
@@ -138,8 +144,8 @@ async def test_get_zim_entries_tool_accepts_string_paths_with_default_archive(
     """Bare strings are valid entry paths, paired with the kwarg-level archive."""
     server = OpenZimMcpServer(test_config)
     server.rate_limiter.check_rate_limit = MagicMock()
-    server.async_zim_operations.get_entries = AsyncMock(
-        return_value='{"results": [], "succeeded": 0, "failed": 0}'
+    server.async_zim_operations.get_entries_data = AsyncMock(
+        return_value={"results": [], "succeeded": 0, "failed": 0}
     )
 
     tool = server.mcp._tool_manager._tools["get_zim_entries"]
@@ -153,7 +159,7 @@ async def test_get_zim_entries_tool_accepts_string_paths_with_default_archive(
         ],
         zim_file_path="/default.zim",
     )
-    call = server.async_zim_operations.get_entries.await_args
+    call = server.async_zim_operations.get_entries_data.await_args
     sent_entries = call.args[0]
     assert len(sent_entries) == 2
     assert sent_entries[0] == {"zim_file_path": "/default.zim", "entry_path": "A/Foo"}
@@ -167,8 +173,8 @@ async def test_get_zim_entries_tool_coerces_non_string_non_dict_entries(
     """Non-string non-dict entries (None, int, etc.) become empty pairs."""
     server = OpenZimMcpServer(test_config)
     server.rate_limiter.check_rate_limit = MagicMock()
-    server.async_zim_operations.get_entries = AsyncMock(
-        return_value='{"results": [], "succeeded": 0, "failed": 0}'
+    server.async_zim_operations.get_entries_data = AsyncMock(
+        return_value={"results": [], "succeeded": 0, "failed": 0}
     )
 
     tool = server.mcp._tool_manager._tools["get_zim_entries"]
@@ -181,7 +187,7 @@ async def test_get_zim_entries_tool_coerces_non_string_non_dict_entries(
             {"zim_file_path": "/ok", "entry_path": "ok"},
         ],
     )
-    call = server.async_zim_operations.get_entries.await_args
+    call = server.async_zim_operations.get_entries_data.await_args
     sent_entries = call.args[0]
     assert len(sent_entries) == 3
     assert sent_entries[0] == {"zim_file_path": "", "entry_path": ""}

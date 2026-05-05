@@ -232,3 +232,38 @@ class TestStructuredOutput:
                     entry["result"], dict
                 ), f"per_file[].result should be dict, got {type(entry['result'])}"
                 assert "results" in entry["result"]
+
+    @pytest.mark.asyncio
+    async def test_get_zim_entries_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """get_zim_entries (batch) must emit a structured dict envelope."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        # An entry path that may or may not resolve — we're testing the wire
+        # format, not the resolution. The structured response must include
+        # results + succeeded + failed regardless of per-entry outcomes.
+        result = await server.mcp._tool_manager.call_tool(
+            "get_zim_entries",
+            {
+                "entries": ["A/Main_Page"],
+                "zim_file_path": str(zim_path),
+            },
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        payload = structured["result"] if "result" in structured else structured
+        # Tool returns either the success dict (results+succeeded+failed)
+        # or the structured-error envelope (error: True). Accept either —
+        # the wire format is what we're verifying.
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            assert "results" in payload
+            assert "succeeded" in payload
+            assert "failed" in payload

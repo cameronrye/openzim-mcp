@@ -143,6 +143,18 @@ class AsyncZimOperations:
             max_content_length,
         )
 
+    async def get_entries_data(
+        self,
+        entries: List[Dict[str, str]],
+        max_content_length: Optional[int] = None,
+    ) -> dict:
+        """Structured variant of ``get_entries`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_entries_data,
+            entries,
+            max_content_length,
+        )
+
     async def get_zim_metadata(self, zim_file_path: str) -> str:
         """Get metadata for a ZIM file (async).
 
