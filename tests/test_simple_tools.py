@@ -278,6 +278,20 @@ class TestSimpleToolsHandler:
         mock_zim_operations.list_zim_files.assert_called_once()
         assert "file.zim" in result
 
+    @pytest.mark.parametrize("empty_query", ["", "   ", "\n\t"])
+    def test_handle_empty_query_rejected(
+        self, handler, mock_zim_operations, empty_query
+    ):
+        """Empty/whitespace-only queries must surface a validation message.
+
+        Without this, the router silently falls through to a no-op search.
+        """
+        result = handler.handle_zim_query(empty_query)
+        assert "Query Required" in result
+        # And no underlying op should have been invoked.
+        mock_zim_operations.list_zim_files.assert_not_called()
+        mock_zim_operations.search_zim_file.assert_not_called()
+
     def test_handle_search(self, handler, mock_zim_operations):
         """Test handling search queries."""
         result = handler.handle_zim_query("search for biology", "/test/file.zim")

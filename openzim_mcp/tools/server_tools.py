@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
@@ -14,6 +14,15 @@ if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now_iso() -> str:
+    """Return the current UTC time as an ISO-8601 string with offset.
+
+    All server-tools timestamps go through this helper so a single response
+    never mixes timezone-aware (``+00:00``) and naive local strings.
+    """
+    return datetime.now(timezone.utc).isoformat()
 
 
 def register_server_tools(server: "OpenZimMcpServer") -> None:
@@ -91,9 +100,18 @@ def _check_directory_health(
 def _append_cache_recommendations(
     cache_stats: Dict[str, Any], recommendations: List[str]
 ) -> None:
-    """Translate cache hit-rate stats into human-readable recommendations."""
+    """Translate cache hit-rate stats into human-readable recommendations.
+
+    Skip the "low" warning until the cache has seen a meaningful sample
+    (>= ``_CACHE_RECOMMENDATION_MIN_SAMPLES`` total accesses). A fresh
+    session legitimately has a low hit rate while it warms up; warning
+    on the first query was misleading and got beta-tester complaints.
+    """
     if cache_stats.get("enabled", False):
         hit_rate = cache_stats.get("hit_rate", 0)
+        total_accesses = cache_stats.get("hits", 0) + cache_stats.get("misses", 0)
+        if total_accesses < _CACHE_RECOMMENDATION_MIN_SAMPLES:
+            return  # Not enough signal yet — silence is more useful than noise.
         if hit_rate < CACHE_LOW_HIT_RATE_THRESHOLD:
             recommendations.append(
                 "Cache hit rate is low — consider issuing repeated "
@@ -103,6 +121,12 @@ def _append_cache_recommendations(
             recommendations.append("Cache is performing well")
     else:
         recommendations.append("Consider enabling cache for better performance")
+
+
+# Minimum cache accesses before we report on hit-rate trends. Below this we
+# treat the rate as too noisy to comment on. 50 is enough that a steady-state
+# pattern has emerged; below that, warming-up effects dominate.
+_CACHE_RECOMMENDATION_MIN_SAMPLES = 50
 
 
 def _finalize_health_status(
@@ -129,6 +153,44 @@ def _finalize_health_status(
         recommendations.append("Server is running optimally")
 
 
+def _redact_directory_path(path: str) -> str:
+    """Render a directory path for the configuration response.
+
+    Returns ``<redacted>/<basename>`` so it's unambiguous that the leading
+    components were intentionally hidden. The basename stays so operators
+    can still tell which configured directory each entry corresponds to.
+    """
+    if not path:
+        return "<redacted>"
+    parts = path.replace("\\", "/").split("/")
+    basename = parts[-1] if parts[-1] else (parts[-2] if len(parts) > 1 else "")
+    if not basename:
+        return "<redacted>"
+    return f"<redacted>/{basename}"
+
+
+def _build_uptime_info(server: "OpenZimMcpServer") -> Dict[str, Any]:
+    """Return uptime block for the health report.
+
+    ``started_at`` and ``uptime_seconds`` are filled in from the server's
+    init-time anchors when present; falls back to ``"unknown"`` /
+    ``None`` for legacy paths that didn't record them.
+    """
+    import time as _time
+
+    start_iso = getattr(server, "_start_time", None) or "unknown"
+    start_mono = getattr(server, "_start_monotonic", None)
+    uptime_seconds: Any = None
+    if start_mono is not None:
+        uptime_seconds = round(_time.monotonic() - start_mono, 3)
+    return {
+        # Redact PID — diagnostic output may end up in bug reports.
+        "process_id": "[REDACTED]",
+        "started_at": start_iso,
+        "uptime_seconds": uptime_seconds,
+    }
+
+
 def _build_health_report(server: "OpenZimMcpServer") -> str:
     try:
         cache_stats = server.cache.stats()
@@ -140,14 +202,10 @@ def _build_health_report(server: "OpenZimMcpServer") -> str:
             "permissions_ok": True,
         }
         health_info: Dict[str, Any] = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _utc_now_iso(),
             "status": "healthy",
             "server_name": server.config.server_name,
-            "uptime_info": {
-                # Redact PID — diagnostic output may end up in bug reports.
-                "process_id": "[REDACTED]",
-                "started_at": getattr(server, "_start_time", "unknown"),
-            },
+            "uptime_info": _build_uptime_info(server),
             "configuration": {
                 "allowed_directories": len(server.config.allowed_directories),
                 "cache_enabled": server.config.cache.enabled,
@@ -194,10 +252,15 @@ def _build_configuration_report(server: "OpenZimMcpServer") -> str:
         # leaking host topology is an info-disclosure risk regardless of
         # transport. The unredacted values remain available to operators
         # in server logs.
+        #
+        # The basename-only format (``<redacted>/<basename>``) is
+        # unambiguous: a leading ``...`` was reading like a malformed path
+        # in beta testing while ``list_zim_files`` exposes the real paths
+        # for tool-input use. Making the redaction explicit closes that gap.
         config_info = {
             "server_name": server.config.server_name,
             "allowed_directories": [
-                sanitize_path_for_error(str(p))
+                _redact_directory_path(str(p))
                 for p in server.config.allowed_directories
             ],
             "allowed_directories_count": len(server.config.allowed_directories),
@@ -219,8 +282,10 @@ def _build_configuration_report(server: "OpenZimMcpServer") -> str:
             "recommendations": recommendations_list,
         }
 
+        # Match the redaction format used for ``allowed_directories`` so
+        # callers comparing the two lists don't see a different convention.
         invalid_dirs = [
-            sanitize_path_for_error(str(d))
+            _redact_directory_path(str(d))
             for d in server.config.allowed_directories
             if not Path(d).exists()
         ]
@@ -234,7 +299,7 @@ def _build_configuration_report(server: "OpenZimMcpServer") -> str:
         result = {
             "configuration": config_info,
             "diagnostics": diagnostics,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _utc_now_iso(),
         }
 
         return json.dumps(result, indent=2)

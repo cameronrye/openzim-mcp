@@ -42,6 +42,16 @@ class OpenZimMcpServer:
         """
         self.config = config
 
+        # Track server start so health reports can show real uptime instead
+        # of the placeholder ``"unknown"`` it returned before. Stored as both
+        # a UTC ISO-8601 string (for display) and a monotonic anchor (for
+        # uptime maths that survive wall-clock jumps).
+        import time as _time
+        from datetime import datetime, timezone
+
+        self._start_time = datetime.now(timezone.utc).isoformat()
+        self._start_monotonic = _time.monotonic()
+
         # Setup logging
         config.setup_logging()
         logger.info(f"Initializing OpenZIM MCP server v{__version__}")
