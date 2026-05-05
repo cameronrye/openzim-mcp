@@ -143,14 +143,15 @@ class TestListNamespacesToolInvocation:
     @pytest.mark.asyncio
     async def test_list_namespaces_success(self, server, temp_dir):
         """Test successful namespace listing through tool handler."""
-        server.async_zim_operations.list_namespaces = AsyncMock(
-            return_value='{"namespaces": ["A", "C", "M", "W"]}'
+        server.async_zim_operations.list_namespaces_data = AsyncMock(
+            return_value={"namespaces": {"A": {}, "C": {}, "M": {}, "W": {}}}
         )
 
         tools = server.mcp._tool_manager._tools
         if "list_namespaces" in tools:
             tool_handler = tools["list_namespaces"].fn
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
+            assert isinstance(result, dict)
             assert "namespaces" in result
 
     @pytest.mark.asyncio
@@ -164,13 +165,15 @@ class TestListNamespacesToolInvocation:
         if "list_namespaces" in tools:
             tool_handler = tools["list_namespaces"].fn
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            # Should return error message, not raise
-            assert "Error" in result or "Rate" in result
+            # Should return a structured error envelope, not raise
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert result.get("operation") == "list namespaces"
 
     @pytest.mark.asyncio
     async def test_list_namespaces_generic_exception(self, server, temp_dir):
         """Test generic exception handling in list_namespaces."""
-        server.async_zim_operations.list_namespaces = AsyncMock(
+        server.async_zim_operations.list_namespaces_data = AsyncMock(
             side_effect=RuntimeError("Namespace listing failed")
         )
 
@@ -178,8 +181,10 @@ class TestListNamespacesToolInvocation:
         if "list_namespaces" in tools:
             tool_handler = tools["list_namespaces"].fn
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            # Should return error message, not raise
-            assert "Error" in result or "error" in result.lower()
+            # Should return a structured error envelope, not raise
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "message" in result
 
 
 class TestMetadataToolsInputSanitization:
@@ -226,8 +231,8 @@ class TestMetadataToolsInputSanitization:
     @pytest.mark.asyncio
     async def test_list_namespaces_input_sanitization(self, server, temp_dir):
         """Test that list_namespaces sanitizes file path input."""
-        server.async_zim_operations.list_namespaces = AsyncMock(
-            return_value='{"namespaces": ["A"]}'
+        server.async_zim_operations.list_namespaces_data = AsyncMock(
+            return_value={"namespaces": {"A": {}}}
         )
 
         tools = server.mcp._tool_manager._tools
@@ -235,4 +240,5 @@ class TestMetadataToolsInputSanitization:
             tool_handler = tools["list_namespaces"].fn
             # Normal path should work
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
+            assert isinstance(result, dict)
             assert "namespaces" in result

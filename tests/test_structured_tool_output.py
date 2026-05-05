@@ -30,10 +30,6 @@ def server(test_config_with_zim_data: OpenZimMcpConfig) -> OpenZimMcpServer:
 class TestStructuredOutput:
     """Each test asserts a single migrated tool returns structured content."""
 
-    @pytest.mark.xfail(
-        reason="awaiting Phase 2 migration of list_namespaces",
-        strict=False,
-    )
     @pytest.mark.asyncio
     async def test_list_namespaces_returns_structured_content(
         self, server: OpenZimMcpServer, basic_test_zim_files
@@ -68,5 +64,13 @@ class TestStructuredOutput:
         assert isinstance(
             structured, dict
         ), f"structured payload should be dict, got {type(structured)}"
-        assert "namespaces" in structured
-        assert isinstance(structured["namespaces"], dict)
+
+        # FastMCP wraps generic ``Dict[str, Any]`` return types under a
+        # ``"result"`` key (see ``_try_create_model_and_schema`` in
+        # ``mcp.server.fastmcp.utilities.func_metadata``). TypedDict /
+        # Pydantic returns would land at the top level instead. The pilot
+        # uses ``Dict[str, Any]`` so the payload sits one level down.
+        payload = structured["result"] if "result" in structured else structured
+        assert isinstance(payload, dict)
+        assert "namespaces" in payload
+        assert isinstance(payload["namespaces"], dict)
