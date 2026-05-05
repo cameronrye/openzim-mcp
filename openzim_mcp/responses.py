@@ -8,7 +8,7 @@ helpers in this module standardize the shapes used for error responses
 so every tool emits a recognisable envelope on failure.
 """
 
-from typing import NotRequired, Optional, TypedDict
+from typing import Any, Dict, NotRequired, Optional, TypedDict
 
 
 class ToolErrorPayload(TypedDict):
@@ -31,7 +31,7 @@ def tool_error(
     operation: str,
     message: str,
     context: Optional[str] = None,
-) -> ToolErrorPayload:
+) -> Dict[str, Any]:
     """Build a structured error payload for a failed tool invocation.
 
     Args:
@@ -42,8 +42,11 @@ def tool_error(
         context: Optional contextual hint (file path, query, etc.).
 
     Returns:
-        A ``ToolErrorPayload`` dict suitable for returning from a tool
-        function annotated with a structured return type.
+        A ``ToolErrorPayload``-shaped dict; the broader ``Dict[str, Any]``
+        return annotation lets the result be assigned/returned from MCP
+        tool functions (which annotate ``-> Dict[str, Any]``) without
+        casting. ``ToolErrorPayload`` remains the documented schema for
+        the payload's keys.
     """
     payload: ToolErrorPayload = {
         "error": True,
@@ -52,4 +55,6 @@ def tool_error(
     }
     if context is not None:
         payload["context"] = context
-    return payload
+    # Explicit dict() conversion so mypy sees the wider return type the
+    # signature advertises rather than the narrower TypedDict.
+    return dict(payload)

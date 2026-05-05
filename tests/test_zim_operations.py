@@ -1270,12 +1270,16 @@ class TestZimOperations:
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
         assert result == "cached entry content"
 
-        # Test list_namespaces cache hit (lines 584-585)
-        cache_key = f"namespaces:{validated_path}"
-        zim_operations.cache.set(cache_key, '{"cached": "namespaces"}')
+        # Test list_namespaces_data cache hit (lines 584-585).
+        # list_namespaces now delegates to list_namespaces_data, which caches
+        # dicts under a `namespaces_data:` key. Exercise the cache hit path
+        # against the dict-returning entry point directly so we test the
+        # cache layer without an extra json.dumps round trip.
+        cache_key = f"namespaces_data:{validated_path}"
+        zim_operations.cache.set(cache_key, {"cached": "namespaces"})
 
-        result = zim_operations.list_namespaces(str(zim_file))
-        assert result == '{"cached": "namespaces"}'
+        result = zim_operations.list_namespaces_data(str(zim_file))
+        assert result == {"cached": "namespaces"}
 
         # Test browse_namespace cache hit (lines 691-692)
         cache_key = f"browse_ns:{validated_path}:A:50:0"
