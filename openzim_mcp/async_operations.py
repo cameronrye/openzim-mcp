@@ -394,6 +394,22 @@ class AsyncZimOperations:
             limit,
         )
 
+    async def find_entry_by_title_data(
+        self,
+        zim_file_path: str,
+        title: str,
+        cross_file: bool = False,
+        limit: int = 10,
+    ) -> dict:
+        """Structured variant of ``find_entry_by_title`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.find_entry_by_title_data,
+            zim_file_path,
+            title,
+            cross_file,
+            limit,
+        )
+
     async def get_related_articles(
         self,
         zim_file_path: str,

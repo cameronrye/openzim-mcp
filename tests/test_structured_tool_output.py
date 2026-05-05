@@ -117,6 +117,29 @@ class TestStructuredOutput:
         assert "count" in payload
 
     @pytest.mark.asyncio
+    async def test_find_entry_by_title_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """find_entry_by_title must emit a structured dict, not a JSON string."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        result = await server.mcp._tool_manager.call_tool(
+            "find_entry_by_title",
+            {"zim_file_path": str(zim_path), "title": "anything"},
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        payload = structured["result"] if "result" in structured else structured
+        assert "results" in payload and isinstance(payload["results"], list)
+        assert "query" in payload
+        assert "files_searched" in payload
+
+    @pytest.mark.asyncio
     async def test_search_all_returns_structured_content(
         self, server: OpenZimMcpServer
     ) -> None:

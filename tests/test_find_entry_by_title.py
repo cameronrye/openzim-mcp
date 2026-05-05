@@ -169,7 +169,9 @@ class TestFindEntryByTitleToolSanitization:
         Pin the fix by asserting the registered tool strips control chars
         in this branch.
         """
-        server.async_zim_operations.find_entry_by_title = AsyncMock(return_value="{}")
+        server.async_zim_operations.find_entry_by_title_data = AsyncMock(
+            return_value={}
+        )
         server.rate_limiter.check_rate_limit = MagicMock()
 
         tool = server.mcp._tool_manager._tools["find_entry_by_title"]
@@ -184,7 +186,7 @@ class TestFindEntryByTitleToolSanitization:
             limit=5,
         )
 
-        call = server.async_zim_operations.find_entry_by_title.await_args
+        call = server.async_zim_operations.find_entry_by_title_data.await_args
         sent_path = call.args[0]
         assert (
             "\x00" not in sent_path

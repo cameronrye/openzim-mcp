@@ -226,7 +226,7 @@ def _register_find_entry_by_title(server: "OpenZimMcpServer") -> None:
         title: str,
         cross_file: bool = False,
         limit: int = 10,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Resolve a title to one or more entry paths.
 
         Cheaper than full-text search when the caller knows the article title.
@@ -241,15 +241,22 @@ def _register_find_entry_by_title(server: "OpenZimMcpServer") -> None:
             limit: Max results to return (1-50, default: 10)
 
         Returns:
-            JSON with query, ranked results, fast_path_hit flag, files_searched
+            Dict with keys: query, results (list of {path, title, score,
+            zim_file}), fast_path_hit (bool), files_searched (int). On
+            failure, returns a ``{"error": True, ...}`` envelope (see
+            ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("find_entry_by_title")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="find entry by title",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="find entry by title",
+                        error=e,
+                        context=f"Title: '{title}'",
+                    ),
                     context=f"Title: '{title}'",
                 )
 
@@ -259,14 +266,18 @@ def _register_find_entry_by_title(server: "OpenZimMcpServer") -> None:
             # characters (e.g. NUL bytes) into libzim.
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
 
-            return await server.async_zim_operations.find_entry_by_title(
+            return await server.async_zim_operations.find_entry_by_title_data(
                 zim_file_path, title, cross_file, limit
             )
 
         except Exception as e:
             logger.error(f"Error in find_entry_by_title: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="find entry by title",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="find entry by title",
+                    error=e,
+                    context=f"File: {zim_file_path}, Title: '{title}'",
+                ),
                 context=f"File: {zim_file_path}, Title: '{title}'",
             )

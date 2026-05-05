@@ -1016,14 +1016,17 @@ class _SearchMixin:
             logger.error(f"Error in search-based suggestions: {e}")
             return []
 
-    def find_entry_by_title(
+    def find_entry_by_title_data(
         self,
         zim_file_path: str,
         title: str,
         cross_file: bool = False,
         limit: int = 10,
-    ) -> str:
-        """Resolve a title or partial title to one or more entry paths.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``find_entry_by_title``.
+
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Implementation order:
           1. Direct path probe in C/ namespace for normalized title (fast path).
@@ -1112,13 +1115,30 @@ class _SearchMixin:
                     raise
                 logger.debug(f"find_entry_by_title: skipped {file_path}: {e}")
 
+        return {
+            "query": title,
+            "results": aggregate_results[:limit],
+            "fast_path_hit": fast_path_hit,
+            "files_searched": len(files),
+        }
+
+    def find_entry_by_title(
+        self,
+        zim_file_path: str,
+        title: str,
+        cross_file: bool = False,
+        limit: int = 10,
+    ) -> str:
+        """Legacy JSON-string variant of ``find_entry_by_title_data``.
+
+        Resolve a title or partial title to one or more entry paths.
+
+        Returns:
+            JSON string with query, ranked results, fast_path_hit flag,
+            files_searched.
+        """
         return json.dumps(
-            {
-                "query": title,
-                "results": aggregate_results[:limit],
-                "fast_path_hit": fast_path_hit,
-                "files_searched": len(files),
-            },
+            self.find_entry_by_title_data(zim_file_path, title, cross_file, limit),
             indent=2,
             ensure_ascii=False,
         )
