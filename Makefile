@@ -55,6 +55,7 @@ benchmark:  ## Run performance benchmarks (selects tests marked/named "benchmark
 lint:  ## Run linting
 	uv run flake8 openzim_mcp tests
 	uv run isort --check-only openzim_mcp tests
+	uv run black --check openzim_mcp tests
 
 format:  ## Format code
 	uv run black openzim_mcp tests
