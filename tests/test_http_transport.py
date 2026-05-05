@@ -181,6 +181,60 @@ def test_fastmcp_uses_sdk_default_when_hosts_unset(tmp_path):
     assert hosts.isdisjoint({"mcp.example.com"})
 
 
+def test_fastmcp_mirrors_cors_origins_into_transport_allowed_origins(tmp_path):
+    """``cors_origins`` is mirrored into the SDK's ``allowed_origins``.
+
+    The SDK's transport security validates the Origin header (separate from
+    CORS — application-layer DNS-rebinding defense) against
+    ``allowed_origins``. Without populating it, every browser request fails
+    with ``403 Invalid Origin header`` even after CORS preflight succeeds.
+    Reusing ``cors_origins`` is correct because the two encode the same
+    trust decision: an origin we let into CORS is one we let past the
+    rebinding check.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.server import OpenZimMcpServer
+
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        transport="http",
+        allowed_hosts=["mcp.example.com"],
+        cors_origins=["https://app.example.com", "https://chat.example.com"],
+    )
+    server = OpenZimMcpServer(cfg)
+
+    sec: TransportSecuritySettings = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    assert sec is not None
+    origins = set(sec.allowed_origins)
+    assert origins == {"https://app.example.com", "https://chat.example.com"}
+
+
+def test_fastmcp_allowed_origins_empty_when_cors_unset(tmp_path):
+    """No cors_origins ⇒ empty SDK allowed_origins.
+
+    Non-browser MCP clients send no Origin header and bypass the SDK's
+    origin check, so the empty list is the right default for deployments
+    that only serve curl/desktop MCP clients.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    from openzim_mcp.config import OpenZimMcpConfig
+    from openzim_mcp.server import OpenZimMcpServer
+
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        transport="http",
+        allowed_hosts=["mcp.example.com"],
+    )
+    server = OpenZimMcpServer(cfg)
+
+    sec: TransportSecuritySettings = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    assert sec is not None
+    assert list(sec.allowed_origins) == []
+
+
 def test_fastmcp_ignores_allowed_hosts_when_transport_stdio(tmp_path):
     """allowed_hosts is HTTP-only; stdio transport doesn't surface a Host header."""
     from openzim_mcp.config import OpenZimMcpConfig
