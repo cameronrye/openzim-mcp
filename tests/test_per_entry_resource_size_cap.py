@@ -52,3 +52,59 @@ def test_zero_or_negative_cap_returns_only_notice(max_bytes):
     # Either an empty string with notice, or just the notice — both are
     # acceptable so long as it doesn't raise.
     assert isinstance(out, str)
+
+
+class TestBinaryResourceCap:
+    """Oversize binary resources must refuse rather than silently truncate.
+
+    A clipped PDF / PNG / video is unusable and the caller has no way to
+    detect the corruption. Better to raise so the caller can switch to
+    ``get_binary_entry`` (which exposes ``max_size_bytes`` and returns
+    a ``truncated`` flag).
+    """
+
+    @pytest.mark.asyncio
+    async def test_oversize_binary_raises_with_actionable_message(self):
+        """Read of an oversize binary entry raises and points at get_binary_entry."""
+        from unittest.mock import MagicMock, patch
+
+        from openzim_mcp.exceptions import OpenZimMcpArchiveError
+        from openzim_mcp.tools.resource_tools import (
+            DEFAULT_RESOURCE_MAX_BYTES,
+            ZimEntryResource,
+        )
+
+        # Construct a fake archive whose only entry returns oversize bytes
+        # with a binary MIME type (image/png).
+        mock_entry = MagicMock()
+        mock_entry.path = "I/big.png"
+        mock_entry.is_redirect = False
+        mock_item = MagicMock()
+        mock_item.mimetype = "image/png"
+        mock_item.content = b"\x89PNG\r\n\x1a\n" + b"x" * (
+            DEFAULT_RESOURCE_MAX_BYTES + 1024
+        )
+        mock_entry.get_item.return_value = mock_item
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.return_value = mock_entry
+
+        # Stub the validator + zim_archive context manager.
+        validator = MagicMock()
+        validator.validate_path.return_value = "/data/x.zim"
+        validator.validate_zim_file.return_value = "/data/x.zim"
+
+        resource = ZimEntryResource(
+            uri="zim://x.zim/entry/I%2Fbig.png",
+            name="zim_entry",
+            mime_type="application/octet-stream",
+            archive_path="/data/x.zim",
+            entry_path="I/big.png",
+            path_validator=validator,
+        )
+        with patch("openzim_mcp.tools.resource_tools.zim_archive") as mock_zim_archive:
+            mock_zim_archive.return_value.__enter__.return_value = mock_archive
+            with pytest.raises(OpenZimMcpArchiveError) as exc:
+                await resource.read()
+        msg = str(exc.value)
+        assert "get_binary_entry" in msg, msg
+        assert "max_size_bytes" in msg, msg

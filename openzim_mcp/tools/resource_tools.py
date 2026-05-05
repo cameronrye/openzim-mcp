@@ -176,11 +176,33 @@ class ZimEntryResource(Resource):
             # the response token budget. The notice points callers at the
             # paged get_zim_entry tool for the rest.
             decoded = raw.decode("utf-8", errors="replace")
+            if len(decoded.encode("utf-8")) > DEFAULT_RESOURCE_MAX_BYTES:
+                logger.info(
+                    "Resource %s truncated: %d bytes -> %d byte cap",
+                    self.entry_path,
+                    len(raw),
+                    DEFAULT_RESOURCE_MAX_BYTES,
+                )
             return _truncate_text_body(decoded, DEFAULT_RESOURCE_MAX_BYTES)
-        # Binary — FastMCP base64-wraps when content is bytes. Cap on raw
-        # byte length (base64 inflates ~33%, so the wire size is ~340 KB).
+        # Binary — FastMCP base64-wraps when content is bytes. Truncating a
+        # binary body silently corrupts it (a clipped PDF / PNG won't open),
+        # so refuse oversize binaries with an actionable error pointing at
+        # ``get_binary_entry``, which exposes ``max_size_bytes`` so callers
+        # can opt in to large fetches and get a ``truncated`` flag back.
         if len(raw) > DEFAULT_RESOURCE_MAX_BYTES:
-            return raw[:DEFAULT_RESOURCE_MAX_BYTES]
+            logger.info(
+                "Resource %s rejected: binary %d bytes exceeds %d byte cap",
+                self.entry_path,
+                len(raw),
+                DEFAULT_RESOURCE_MAX_BYTES,
+            )
+            raise OpenZimMcpArchiveError(
+                f"Binary resource {self.entry_path!r} is "
+                f"{len(raw):,} bytes — over the {DEFAULT_RESOURCE_MAX_BYTES:,} "
+                f"byte resource cap. Use the get_binary_entry tool with "
+                f"max_size_bytes set to fetch large media (PDFs, video, etc.) "
+                f"safely; the tool returns a truncated flag and pages by size."
+            )
         return raw
 
 
