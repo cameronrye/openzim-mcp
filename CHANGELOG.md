@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2](https://github.com/cameronrye/openzim-mcp/compare/v1.1.1...v1.1.2) (2026-05-05)
+
+
+### Bug Fixes
+
+* **server:** mirror cors_origins into SDK transport allowed_origins ([#100](https://github.com/cameronrye/openzim-mcp/issues/100)) ([96001d1](https://github.com/cameronrye/openzim-mcp/commit/96001d1365933cd948027e6291c34d26234792fe))
+
 ## [1.1.1](https://github.com/cameronrye/openzim-mcp/compare/v1.1.0...v1.1.1) (2026-05-05)
 
 
