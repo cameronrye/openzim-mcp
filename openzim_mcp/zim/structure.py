@@ -477,13 +477,17 @@ class _StructureMixin:
 
         return root
 
-    def get_related_articles(
+    def get_related_articles_data(
         self,
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-    ) -> str:
-        """Find articles related to entry_path via outbound links."""
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_related_articles``.
+
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
+        """
         if limit < 1 or limit > 100:
             raise OpenZimMcpValidationError(
                 f"limit must be between 1 and 100 (provided: {limit})"
@@ -492,11 +496,13 @@ class _StructureMixin:
         result: Dict[str, Any] = {"entry_path": entry_path}
 
         try:
-            links_json = self.extract_article_links(zim_file_path, entry_path)
-            links_data = json.loads(links_json)
-            # extract_article_links resolves redirects internally and stores
-            # the post-redirect entry path in ``links_data["path"]``. Resolve
-            # relative links against THAT path, not the caller-supplied
+            # Use the dict-returning extract_article_links_data so we don't
+            # round-trip through json.dumps + json.loads just to walk the
+            # outbound link graph.
+            links_data = self.extract_article_links_data(zim_file_path, entry_path)
+            # extract_article_links_data resolves redirects internally and
+            # stores the post-redirect entry path in ``links_data["path"]``.
+            # Resolve relative links against THAT path, not the caller-supplied
             # entry_path: if entry_path was a redirect to a different
             # directory (or namespace), resolving against the source's
             # dirname produces non-existent paths.
@@ -524,7 +530,23 @@ class _StructureMixin:
             result["outbound_results"] = []
             result["outbound_error"] = str(e)
 
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        return result
+
+    def get_related_articles(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 10,
+    ) -> str:
+        """Legacy JSON-string variant of ``get_related_articles_data``.
+
+        Find articles related to entry_path via outbound links.
+        """
+        return json.dumps(
+            self.get_related_articles_data(zim_file_path, entry_path, limit),
+            indent=2,
+            ensure_ascii=False,
+        )
 
     @staticmethod
     def _resolve_link_to_entry_path(url: str, source_entry_path: str) -> Optional[str]:

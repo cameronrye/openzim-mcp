@@ -398,3 +398,28 @@ class TestStructuredOutput:
             assert "operation" in payload
         else:
             assert "mime_type" in payload
+
+    @pytest.mark.asyncio
+    async def test_get_related_articles_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """get_related_articles must emit a structured dict envelope."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        result = await server.mcp._tool_manager.call_tool(
+            "get_related_articles",
+            {"zim_file_path": str(zim_path), "entry_path": "A/Main_Page"},
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        payload = structured["result"] if "result" in structured else structured
+        # Tool may return error envelope on a missing-entry call — accept either.
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            assert "outbound_results" in payload

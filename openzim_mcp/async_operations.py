@@ -538,3 +538,17 @@ class AsyncZimOperations:
             entry_path,
             limit,
         )
+
+    async def get_related_articles_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 10,
+    ) -> dict:
+        """Structured variant of ``get_related_articles`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_related_articles_data,
+            zim_file_path,
+            entry_path,
+            limit,
+        )

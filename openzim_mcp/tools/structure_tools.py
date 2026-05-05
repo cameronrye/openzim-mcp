@@ -388,7 +388,7 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Find articles related to entry_path via outbound links.
 
         Composes extract_article_links and deduplicates internal links,
@@ -402,22 +402,28 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
             limit: Max results (1-100, default: 10)
 
         Returns:
-            JSON with outbound_results
+            Dict with ``entry_path`` and ``outbound_results`` (a list of
+            ``{path, title}`` records). On failure, returns a
+            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("get_related_articles")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get related articles",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get related articles",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            return await server.async_zim_operations.get_related_articles(
+            return await server.async_zim_operations.get_related_articles_data(
                 zim_file_path,
                 entry_path,
                 limit,
@@ -425,8 +431,12 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error in get_related_articles: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get related articles",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get related articles",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
