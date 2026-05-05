@@ -271,8 +271,51 @@ class _StructureMixin:
             logger.error(f"Error extracting links for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Failed to extract article links: {e}") from e
 
+    def get_table_of_contents_data(
+        self, zim_file_path: str, entry_path: str
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_table_of_contents``.
+
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If TOC extraction fails
+        """
+        # Validate and resolve file path
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"toc_data:{validated_path}:{entry_path}"
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Returning cached TOC dict for: {entry_path}")
+            return cached_result  # type: ignore[no-any-return]
+
+        try:
+            with _zim_ops_mod.zim_archive(validated_path) as archive:
+                result = self._extract_table_of_contents_data(archive, entry_path)
+
+            # Cache the result
+            self.cache.set(cache_key, result)
+            logger.info(f"Extracted TOC for: {entry_path}")
+            return result
+
+        except OpenZimMcpArchiveError:
+            # Inner helper already raised a typed archive error with full
+            # context. Don't re-wrap and double the message prefix.
+            raise
+        except Exception as e:
+            logger.error(f"TOC extraction failed for {entry_path}: {e}")
+            raise OpenZimMcpArchiveError(f"TOC extraction failed: {e}") from e
+
     def get_table_of_contents(self, zim_file_path: str, entry_path: str) -> str:
-        """Extract a hierarchical table of contents from an article.
+        """Legacy JSON-string variant of ``get_table_of_contents_data``.
+
+        Extract a hierarchical table of contents from an article.
 
         Returns a structured TOC tree based on heading levels (h1-h6),
         suitable for navigation and content overview.
@@ -288,36 +331,16 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If TOC extraction fails
         """
-        # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        return json.dumps(
+            self.get_table_of_contents_data(zim_file_path, entry_path),
+            indent=2,
+            ensure_ascii=False,
+        )
 
-        # Check cache
-        cache_key = f"toc:{validated_path}:{entry_path}"
-        cached_result = self.cache.get(cache_key)
-        if cached_result is not None:
-            logger.debug(f"Returning cached TOC for: {entry_path}")
-            return cached_result  # type: ignore[no-any-return]
-
-        try:
-            with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_table_of_contents(archive, entry_path)
-
-            # Cache the result
-            self.cache.set(cache_key, result)
-            logger.info(f"Extracted TOC for: {entry_path}")
-            return result
-
-        except OpenZimMcpArchiveError:
-            # Inner helper already raised a typed archive error with full
-            # context. Don't re-wrap and double the message prefix.
-            raise
-        except Exception as e:
-            logger.error(f"TOC extraction failed for {entry_path}: {e}")
-            raise OpenZimMcpArchiveError(f"TOC extraction failed: {e}") from e
-
-    def _extract_table_of_contents(self, archive: Archive, entry_path: str) -> str:
-        """Extract hierarchical table of contents from article."""
+    def _extract_table_of_contents_data(
+        self, archive: Archive, entry_path: str
+    ) -> Dict[str, Any]:
+        """Extract hierarchical table of contents from article as a dict."""
         try:
             entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
 
@@ -338,12 +361,12 @@ class _StructureMixin:
                 toc_data["message"] = (
                     f"TOC extraction requires HTML content, got: {mime_type}"
                 )
-                return json.dumps(toc_data, indent=2, ensure_ascii=False)
+                return toc_data
 
             raw_content = bytes(item.content).decode("utf-8", errors="replace")
             toc_data.update(self._build_hierarchical_toc(raw_content))
 
-            return json.dumps(toc_data, indent=2, ensure_ascii=False)
+            return toc_data
 
         except OpenZimMcpArchiveError:
             raise

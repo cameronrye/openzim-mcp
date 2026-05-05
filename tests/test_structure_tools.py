@@ -416,8 +416,8 @@ class TestStructureToolsDirectInvocation:
         self, advanced_server, temp_dir
     ):
         """Test invoking get_table_of_contents tool handler directly."""
-        advanced_server.async_zim_operations.get_table_of_contents = AsyncMock(
-            return_value='{"toc": [], "heading_count": 0, "max_depth": 0}'
+        advanced_server.async_zim_operations.get_table_of_contents_data = AsyncMock(
+            return_value={"toc": [], "heading_count": 0, "max_depth": 0}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -427,6 +427,7 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
+            assert isinstance(result, dict)
             assert "toc" in result
 
     @pytest.mark.asyncio
@@ -434,7 +435,7 @@ class TestStructureToolsDirectInvocation:
         self, advanced_server, temp_dir
     ):
         """Test get_table_of_contents when an exception occurs."""
-        advanced_server.async_zim_operations.get_table_of_contents = AsyncMock(
+        advanced_server.async_zim_operations.get_table_of_contents_data = AsyncMock(
             side_effect=RuntimeError("Failed to parse")
         )
 
@@ -445,7 +446,8 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
-            assert "Error" in result or "error" in result.lower()
+            assert isinstance(result, dict)
+            assert result.get("error") is True
 
     @pytest.mark.asyncio
     async def test_get_binary_entry_tool_invocation(self, advanced_server, temp_dir):

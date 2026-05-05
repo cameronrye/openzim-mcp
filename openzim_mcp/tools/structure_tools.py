@@ -220,7 +220,7 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
     async def get_table_of_contents(
         zim_file_path: str,
         entry_path: str,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Extract a hierarchical table of contents from an article.
 
         Returns a structured TOC tree based on heading levels (h1-h6),
@@ -237,12 +237,15 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
             entry_path: Entry path, e.g., 'C/Some_Article'
 
         Returns:
-            JSON string containing:
+            Dict containing:
             - title: Article title
             - path: Entry path
             - toc: Hierarchical list of headings with children
             - heading_count: Total number of headings
             - max_depth: Deepest heading level used
+
+            On failure, returns a ``{"error": True, ...}`` envelope (see
+            ``responses.tool_error``).
 
         Each TOC entry contains:
             - level: Heading level (1-6)
@@ -257,24 +260,32 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get table of contents",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get table of contents",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            return await server.async_zim_operations.get_table_of_contents(
+            return await server.async_zim_operations.get_table_of_contents_data(
                 zim_file_path, entry_path
             )
 
         except Exception as e:
             logger.error(f"Error getting table of contents: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get table of contents",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get table of contents",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
