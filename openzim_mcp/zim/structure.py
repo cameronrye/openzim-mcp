@@ -626,13 +626,23 @@ class _StructureMixin:
                 f"limit must be between 1 and 100 (provided: {limit})"
             )
 
+        # Resolve the path once so both link extraction and the title
+        # resolution archive open use the same canonical absolute path.
+        # Without this, ``~/zims/foo.zim`` opens fine for link extraction
+        # (validated inside extract_article_links_data) but silently fails
+        # in _resolve_outbound_titles, which would otherwise call
+        # ``Path("~/zims/foo.zim")`` directly — Path does not expand ``~``.
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_str = str(validated_path)
+
         result: Dict[str, Any] = {"entry_path": entry_path}
 
         try:
             # Use the dict-returning extract_article_links_data so we don't
             # round-trip through json.dumps + json.loads just to walk the
             # outbound link graph.
-            links_data = self.extract_article_links_data(zim_file_path, entry_path)
+            links_data = self.extract_article_links_data(validated_str, entry_path)
             # extract_article_links_data resolves redirects internally and
             # stores the post-redirect entry path in ``links_data["path"]``.
             # Resolve relative links against THAT path, not the caller-supplied
@@ -665,7 +675,7 @@ class _StructureMixin:
                 )
                 if len(outbound) >= limit:
                     break
-            self._resolve_outbound_titles(zim_file_path, outbound)
+            self._resolve_outbound_titles(validated_str, outbound)
             result["outbound_results"] = outbound
         except OpenZimMcpArchiveError as e:
             # Partial-success contract: an archive- or extraction-level

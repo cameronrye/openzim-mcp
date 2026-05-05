@@ -15,8 +15,18 @@ class TestGetRelatedArticles:
 
     @pytest.fixture
     def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a test server instance."""
-        return OpenZimMcpServer(test_config)
+        """Create a test server instance with a stub path validator.
+
+        The stub passes the input through unchanged so unit tests can
+        focus on outbound-link logic without registering paths in
+        ``allowed_directories``. Tests that need to verify the validated
+        path actually flows into the archive open replace this stub.
+        """
+        srv = OpenZimMcpServer(test_config)
+        srv.zim_operations.path_validator = MagicMock()
+        srv.zim_operations.path_validator.validate_path.side_effect = lambda p: p
+        srv.zim_operations.path_validator.validate_zim_file.side_effect = lambda p: p
+        return srv
 
     def test_outbound_uses_extract_article_links(self, server: OpenZimMcpServer):
         """Outbound delegates to extract_article_links_data, resolves URLs, dedupes.
@@ -147,6 +157,74 @@ class TestGetRelatedArticles:
         assert outbound[0]["path"] == "C/Animal"
         assert outbound[0]["title"] == "Animal"
         assert outbound[0]["link_text"] == "Animalia"
+
+    def test_title_resolution_uses_validated_path_not_raw_input(
+        self, server: OpenZimMcpServer, monkeypatch
+    ):
+        """Title resolution must open the archive with the path validator's output.
+
+        ``extract_article_links_data`` runs the input through ``validate_path``
+        (which expands ``~`` and resolves symlinks) before opening libzim;
+        ``_resolve_outbound_titles`` must use the same resolved path.
+        Otherwise inputs like ``~/zims/wiki.zim`` open successfully for
+        link extraction but silently fail to open for title resolution,
+        leaving every outbound title at its placeholder.
+        """
+        raw_input = "~/zims/wiki.zim"
+        resolved = "/abs/path/to/zims/wiki.zim"
+
+        # Path validator simulates ``~`` expansion: raw input → resolved abs path.
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = resolved
+        server.zim_operations.path_validator.validate_zim_file.return_value = resolved
+
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "path": "C/Source",
+                "internal_links": [
+                    {"url": "Animal", "text": "Animalia"},
+                ],
+            }
+        )
+
+        # Track every path we're asked to open so we can assert it's the
+        # validated one, not the raw ``~/...`` input.
+        opened_paths: list = []
+
+        target_entry = MagicMock()
+        target_entry.title = "Animal"
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.return_value = target_entry
+
+        class _Ctx:
+            def __enter__(self):
+                return mock_archive
+
+            def __exit__(self, *a):
+                return False
+
+        def _zim_archive_spy(path, *a, **kw):
+            opened_paths.append(str(path))
+            return _Ctx()
+
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            _zim_archive_spy,
+        )
+
+        server.zim_operations.get_related_articles_data(raw_input, "C/Source", limit=10)
+
+        # The archive must be opened with the validator's output, not the raw
+        # ``~/...`` string. Path("~/zims/wiki.zim") does NOT auto-expand on
+        # Python 3, so the raw form would silently fail to find the file.
+        assert resolved in opened_paths, (
+            f"expected archive open to use validated path {resolved!r}; "
+            f"actually opened: {opened_paths!r}"
+        )
+        assert raw_input not in opened_paths, (
+            f"archive was opened with the raw, unresolved path {raw_input!r}; "
+            f"this bypasses path expansion and silently fails on `~` paths"
+        )
 
     def test_title_falls_back_to_path_when_archive_lookup_fails(
         self, server: OpenZimMcpServer, monkeypatch
