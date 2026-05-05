@@ -398,8 +398,8 @@ class SimpleToolsHandler:
           2. If there are no results → render the empty-search response
              so the caller still gets a clear "nothing found" message.
           3. If the top hit's title or path is a strong match for the topic
-             (normalized substring containment in either direction) →
-             fetch the article body and inline it ahead of the search hits.
+             (token-list equality or prefix in either direction) →
+             fetch the article body and return it as the response.
           4. Otherwise → fall through to the rendered search response so
              the caller sees the multiple weak matches and can disambiguate.
 
@@ -410,9 +410,12 @@ class SimpleToolsHandler:
         topic = (params.get("topic") or query).strip()
         if not topic:
             topic = query
-        # ``limit`` from caller wins; cap at 3 for the auto-fetch path so
-        # the tool response stays compact even when the article body is
-        # included.
+        # Cap the search at 3 results: the auto-fetch path either inlines
+        # the top article (in which case we don't render the others — see
+        # below) or falls through to a plain rendered search, where 3 hits
+        # is enough to disambiguate without flooding the response. A
+        # caller-supplied ``limit`` only takes effect when it asks for
+        # *fewer* than 3 hits.
         search_limit = min(options.get("limit") or 3, 3)
         max_content_length = options.get("max_content_length") or 8000
 
@@ -457,16 +460,16 @@ class SimpleToolsHandler:
                 zim_file_path, topic, search_limit, 0
             )
 
-        rendered_search = self.zim_operations.search_zim_file(
-            zim_file_path, topic, search_limit, 0
-        )
+        # Strong-match path: return just the article. We deliberately do
+        # NOT append a "## Other matches" section here — the rendered
+        # search would duplicate the top hit (we already inlined it
+        # above), and the agentic-loop UX value of seeing related-but-not
+        # asked-for articles is low. If the caller wants alternatives,
+        # they can issue a separate ``search ...`` query.
         return (
             f"# {top_title or topic}\n\n"
             f"_Source: `{top_path}`_\n\n"
-            f"{article_body}\n\n"
-            f"---\n\n"
-            f"## Other matches for \"{topic}\"\n\n"
-            f"{rendered_search}"
+            f"{article_body}"
         )
 
     @staticmethod
@@ -474,24 +477,52 @@ class SimpleToolsHandler:
         """Return True iff ``path`` or ``title`` looks like the article
         for ``topic``.
 
-        Normalization strips everything except ASCII alphanumerics and
-        lowercases — so ``"Martin Luther King Jr."`` and the path
-        ``"Martin_Luther_King_Jr."`` both reduce to ``"martinlutherkingjr"``
-        and match exactly. Substring containment in either direction
-        forgives trailing disambiguation suffixes like
-        ``"Apollo 11 (mission)"`` matching the topic ``"Apollo 11"``.
+        Tokenizes both sides on alphanumerics (so ``"Martin_Luther_King_Jr."``
+        and ``"Martin Luther King Jr."`` both yield
+        ``("martin", "luther", "king", "jr")``), then accepts the match
+        when the token lists are either equal or one is a prefix of the
+        other:
+
+        * Equal: ``"DNA"`` ↔ ``"DNA"``.
+        * Topic is a prefix of the candidate: ``"Apollo 11"`` →
+          ``"Apollo_11_(mission)"`` (caller asked for a topic, candidate
+          adds a disambiguation suffix).
+        * Candidate is a prefix of the topic: ``"Apollo 11 (mission)"``
+          → ``"Apollo_11"`` (the caller pre-disambiguated; the bare
+          article matches).
+
+        Pure substring containment was the v1.2.0-pre version of this
+        check, but that false-matched short topics: ``"cat"`` "matched"
+        ``"Catfish"`` and ``"py"`` "matched" ``"Pyramid"``. Token-list
+        comparison fixes those without losing the disambiguation
+        forgiveness above.
+
+        A short-topic guard rejects topics whose tokens collectively have
+        fewer than 3 characters, except for *exact* matches — so
+        ``"Pi"`` ↔ ``"Pi"`` still works but ``"Pi"`` ↔ ``"Pizza"`` does
+        not enter the prefix path at all.
         """
-        norm_topic = re.sub(r"[^a-z0-9]+", "", topic.lower())
-        if not norm_topic or len(norm_topic) < 3:
+        topic_tokens = tuple(re.findall(r"[a-z0-9]+", topic.lower()))
+        if not topic_tokens:
             return False
-        norm_path = re.sub(r"[^a-z0-9]+", "", path.lower())
-        norm_title = re.sub(r"[^a-z0-9]+", "", title.lower())
-        for candidate in (norm_path, norm_title):
+
+        for candidate in (path, title):
             if not candidate:
                 continue
-            if norm_topic == candidate:
+            cand_tokens = tuple(re.findall(r"[a-z0-9]+", candidate.lower()))
+            if not cand_tokens:
+                continue
+            # Exact match is always strong — works at any length.
+            if topic_tokens == cand_tokens:
                 return True
-            if norm_topic in candidate or candidate in norm_topic:
+            # Prefix matches are only safe for topics with enough material
+            # to be unambiguous; below 3 chars total, "Pi" / "Pizza" type
+            # collisions outweigh the value.
+            if sum(len(t) for t in topic_tokens) < 3:
+                continue
+            if cand_tokens[: len(topic_tokens)] == topic_tokens:
+                return True
+            if topic_tokens[: len(cand_tokens)] == cand_tokens:
                 return True
         return False
 

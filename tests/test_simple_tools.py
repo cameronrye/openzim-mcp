@@ -1036,8 +1036,12 @@ class TestTellMeAboutAutoPromote:
         return SimpleToolsHandler(mock_zim_operations)
 
     def test_strong_match_inlines_article_body(self, handler, mock_zim_operations):
-        """When the top hit's path/title matches the topic (normalized
-        substring), fetch the article and inline its body in the response.
+        """When the top hit's path/title matches the topic, fetch the
+        article and return its body as the response. The strong-match
+        branch deliberately does NOT also append a "## Other matches"
+        section: the rendered search would duplicate the top hit (we
+        already inlined it above), and the agentic-loop UX value of
+        related-but-not-asked-for articles is low.
         """
         explicit = "/zims/test.zim"
         result = handler.handle_zim_query(
@@ -1050,11 +1054,15 @@ class TestTellMeAboutAutoPromote:
         mock_zim_operations.get_zim_entry.assert_called_once()
         called_path = mock_zim_operations.get_zim_entry.call_args.args[1]
         assert called_path == "Martin_Luther_King_Jr."
-        # Response includes the article body, the source path, and the
-        # search results for related matches.
+        # The legacy rendered-search path must NOT be invoked on the
+        # strong-match branch — that was the source of the duplicate
+        # top-result bug in the first cut of this handler.
+        mock_zim_operations.search_zim_file.assert_not_called()
+        # Response includes the article body and the source path.
         assert "American Baptist minister" in result
         assert "Martin_Luther_King_Jr." in result
-        assert "Other matches" in result
+        # And no "Other matches" section.
+        assert "Other matches" not in result
 
     def test_no_results_falls_through_to_search(self, handler, mock_zim_operations):
         """No search results → render the (empty) search response so the
@@ -1115,16 +1123,22 @@ class TestTellMeAboutAutoPromote:
         assert "American Baptist minister" in result
 
     def test_strong_title_match_helper(self):
-        """Direct unit test of the normalization heuristic."""
+        """Direct unit test of the title-match heuristic."""
         match = SimpleToolsHandler._is_strong_title_match
         # Exact-modulo-punctuation match.
         assert match(
             "Martin Luther King Jr.", "Martin_Luther_King_Jr.", "Martin Luther King Jr."
         )
-        # Abbreviation-style match (path is a prefix of the topic).
+        # 3-char single-token exact match.
         assert match("DNA", "DNA", "DNA")
+        # 2-char single-token exact match — still allowed because it's
+        # *exact*; only the prefix path requires >= 3 chars.
+        assert match("Pi", "Pi", "Pi")
         # Disambiguation suffix on the article side.
         assert match("Apollo 11", "Apollo_11_(mission)", "Apollo 11 (mission)")
+        # Disambiguation suffix on the topic side (caller pre-disambiguated;
+        # the bare article should still match).
+        assert match("Apollo 11 (mission)", "Apollo_11", "Apollo 11")
         # Completely unrelated.
         assert not match(
             "Martin Luther King Jr.", "Some_Unrelated_Article", "Some Unrelated Article"
@@ -1132,3 +1146,21 @@ class TestTellMeAboutAutoPromote:
         # Empty / too-short topic must be rejected (no spurious matches).
         assert not match("a", "Apple", "Apple")
         assert not match("", "anything", "anything")
+
+    def test_short_topic_substring_does_not_false_match(self):
+        """Regression: pure character-substring matching false-matched
+        short topics — ``"cat"`` "matched" ``"Catfish"`` because
+        ``"cat" in "catfish"`` is True. Token-list comparison fixes this:
+        distinct single tokens never match each other unless equal.
+        """
+        match = SimpleToolsHandler._is_strong_title_match
+        assert not match("cat", "Catfish", "Catfish")
+        assert not match("py", "Pyramid", "Pyramid")
+        assert not match("Pi", "Pizza", "Pizza")
+        # JavaScript ↔ Java is a famous example — the prior substring
+        # check would have matched in both directions.
+        assert not match("Java", "JavaScript", "JavaScript")
+        assert not match("Java", "Javadoc", "Javadoc")
+        # Even longer topics shouldn't match unrelated longer strings just
+        # because they share a substring (e.g. "form" ⊂ "Reformation").
+        assert not match("form", "Reformation", "Reformation")
