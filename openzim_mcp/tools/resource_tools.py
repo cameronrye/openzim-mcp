@@ -175,14 +175,20 @@ class ZimEntryResource(Resource):
             # Cap text bodies so an 800 KB Wikipedia article doesn't overrun
             # the response token budget. The notice points callers at the
             # paged get_zim_entry tool for the rest.
-            decoded = raw.decode("utf-8", errors="replace")
-            if len(decoded.encode("utf-8")) > DEFAULT_RESOURCE_MAX_BYTES:
+            # Cap-cross check uses raw byte length so the decoded string
+            # isn't re-encoded twice on the hot path (once here, again in
+            # _truncate_text_body). For valid UTF-8 the counts match
+            # exactly; for invalid input the diagnostic log might miss
+            # bodies that only cross the cap after errors="replace"
+            # expansion — _truncate_text_body still truncates correctly.
+            if len(raw) > DEFAULT_RESOURCE_MAX_BYTES:
                 logger.info(
                     "Resource %s truncated: %d bytes -> %d byte cap",
                     self.entry_path,
                     len(raw),
                     DEFAULT_RESOURCE_MAX_BYTES,
                 )
+            decoded = raw.decode("utf-8", errors="replace")
             return _truncate_text_body(decoded, DEFAULT_RESOURCE_MAX_BYTES)
         # Binary — FastMCP base64-wraps when content is bytes. Truncating a
         # binary body silently corrupts it (a clipped PDF / PNG won't open),
