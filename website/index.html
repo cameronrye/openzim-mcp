@@ -20,7 +20,7 @@
   <meta property="og:site_name" content="OpenZIM MCP">
   <meta property="og:url" content="https://cameronrye.github.io/openzim-mcp/">
   <meta property="og:title" content="OpenZIM MCP — Knowledge that works offline">
-  <meta property="og:description" content="MCP server for offline ZIM-archive access. Streamable HTTP, batch retrieval, per-entry resources, subscriptions. v1.1.0.">
+  <meta property="og:description" content="MCP server for offline ZIM-archive access. Streamable HTTP, batch retrieval, per-entry resources, subscriptions. v1.1.1.">
   <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -35,7 +35,7 @@
   <meta name="twitter:creator" content="@cameronrye">
   <meta name="twitter:url" content="https://cameronrye.github.io/openzim-mcp/">
   <meta name="twitter:title" content="OpenZIM MCP — Knowledge that works offline">
-  <meta name="twitter:description" content="MCP server for offline ZIM-archive access. Streamable HTTP, batch retrieval, per-entry resources, subscriptions. v1.1.0.">
+  <meta name="twitter:description" content="MCP server for offline ZIM-archive access. Streamable HTTP, batch retrieval, per-entry resources, subscriptions. v1.1.1.">
   <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
   <meta name="twitter:image:alt" content="OpenZIM MCP 1.0 — Knowledge that works offline">
 
@@ -72,7 +72,7 @@
     "alternateName": "OpenZIM MCP Server",
     "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
     "url": "https://cameronrye.github.io/openzim-mcp/",
-    "softwareVersion": "1.1.0",
+    "softwareVersion": "1.1.1",
     "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
     "applicationCategory": "DeveloperApplication",
     "applicationSubCategory": "AI Tools",
@@ -182,7 +182,7 @@
     <section id="hero" class="hero">
       <div class="container hero__inner">
         <div class="hero__content">
-          <span class="eyebrow">MCP&nbsp;SERVER · v1.1.0</span>
+          <span class="eyebrow">MCP&nbsp;SERVER · v1.1.1</span>
           <h1 class="hero__title">Knowledge that works offline.</h1>
           <p class="hero__lead">
             OpenZIM MCP gives any AI model structured, secure access to ZIM archives —
@@ -204,7 +204,7 @@
             </button>
           </div>
           <ul class="hero__stats">
-            <li><span class="hero__stat-num">v1.1.0</span><span class="hero__stat-label">Latest release</span></li>
+            <li><span class="hero__stat-num">v1.1.1</span><span class="hero__stat-label">Latest release</span></li>
             <li><span class="hero__stat-num">1 + 21</span><span class="hero__stat-label">Simple / advanced tools</span></li>
             <li><span class="hero__stat-num">80%+</span><span class="hero__stat-label">Test coverage</span></li>
             <li><span class="hero__stat-num">MIT</span><span class="hero__stat-label">License</span></li>
@@ -333,7 +333,7 @@
             <pre><code>docker run -p 8000:8000 \
   -e OPENZIM_MCP_AUTH_TOKEN="$TOKEN" \
   -v /path/to/zim:/data:ro \
-  ghcr.io/cameronrye/openzim-mcp:1.1.0 \
+  ghcr.io/cameronrye/openzim-mcp:1.1.1 \
   --transport http --host 0.0.0.0 /data</code></pre>
           </li>
 
@@ -447,7 +447,7 @@ zim://gutenberg/entry/I%2Fbook_cover.jpg
                 <pre><code>uv tool install openzim-mcp</code></pre>
               </div>
               <div class="tabs__panel" id="install-docker" role="tabpanel" aria-labelledby="tab-install-docker" hidden>
-                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:1.1.0</code></pre>
+                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:1.1.1</code></pre>
               </div>
               <div class="tabs__panel" id="install-source" role="tabpanel" aria-labelledby="tab-install-source" hidden>
                 <pre><code>git clone https://github.com/cameronrye/openzim-mcp.git

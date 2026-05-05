@@ -139,7 +139,7 @@ Run OpenZIM MCP as a long-running service. Pass `--transport http` (or set `OPEN
 - **Safe-default startup check** — the server *refuses* to bind a non-localhost host without a token. (Bind `127.0.0.1` for local-only access; put a reverse proxy in front for TLS.)
 - **CORS allow-list** — explicit origins via `OPENZIM_MCP_CORS_ORIGINS`; wildcard `*` is rejected at startup.
 - **Health endpoints** — `/healthz` (liveness) and `/readyz` (at least one allowed dir is readable). Both exempt from auth so probes work cleanly.
-- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.1.0`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
+- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.1.1`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
 
 Legacy SSE transport is also available via `--transport sse` (or `OPENZIM_MCP_TRANSPORT=sse`) for clients that haven't migrated to streamable-HTTP. SSE does **not** apply the bearer-token / CORS / health-endpoint middleware, so the server *refuses* to start with `--transport sse` bound to anything other than `127.0.0.1`/`::1`/`localhost`. For exposed deployments use `--transport http`.
 
