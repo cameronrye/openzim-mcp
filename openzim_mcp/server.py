@@ -86,6 +86,15 @@ class OpenZimMcpServer:
         # via OPENZIM_MCP_ALLOWED_HOSTS for those deployments. Loopback
         # entries are always preserved so localhost-direct access keeps
         # working alongside the proxied path.
+        #
+        # The MCP SDK's transport security ALSO validates the Origin header
+        # against ``allowed_origins`` (separate from CORS — application-layer
+        # DNS-rebinding defense). Without populating it, every browser
+        # request fails with ``403 Invalid Origin header`` even after CORS
+        # preflight succeeds. We mirror ``OPENZIM_MCP_CORS_ORIGINS`` into the
+        # SDK's ``allowed_origins`` because they encode the same trust
+        # decision: an origin we let into CORS is one we let past the
+        # rebinding check.
         fastmcp_kwargs: dict = {}
         if config.transport == "http" and config.allowed_hosts:
             from mcp.server.transport_security import TransportSecuritySettings
@@ -97,6 +106,7 @@ class OpenZimMcpServer:
                     "[::1]:*",
                     *config.allowed_hosts,
                 ],
+                allowed_origins=list(config.cors_origins),
             )
         self.mcp = FastMCP(config.server_name, **fastmcp_kwargs)
         self.mcp._mcp_server.version = __version__
