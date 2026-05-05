@@ -375,6 +375,51 @@ class TestZimOperations:
             found_namespaces = set(result_data["namespaces"].keys())
             assert found_namespaces == {"C", "M", "W"}
 
+    def test_list_namespaces_data_returns_dict(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """``list_namespaces_data`` returns the structured payload as a real dict.
+
+        And the legacy ``list_namespaces`` string remains a json.dumps view
+        of the same payload — so existing callers don't break.
+        """
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive_instance.entry_count = 3
+            mock_archive_instance.has_new_namespace_scheme = False
+
+            mock_entries = []
+            for path, title in [
+                ("C/Article1", "Article 1"),
+                ("M/Title", "Test ZIM"),
+                ("W/mainPage", "Main Page"),
+            ]:
+                entry = MagicMock()
+                entry.path = path
+                entry.title = title
+                mock_entries.append(entry)
+
+            mock_archive_instance._get_entry_by_id.side_effect = lambda i: mock_entries[
+                i
+            ]
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            data = zim_operations.list_namespaces_data(str(zim_file))
+            assert isinstance(data, dict)
+            assert "namespaces" in data
+            assert "total_entries" in data
+            assert isinstance(data["namespaces"], dict)
+
+            # The legacy string variant must remain a json.dumps view of
+            # the same payload.
+            import json
+
+            string_result = zim_operations.list_namespaces(str(zim_file))
+            assert json.loads(string_result) == data
+
     def test_browse_namespace(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test namespace browsing."""
         zim_file = temp_dir / "test.zim"

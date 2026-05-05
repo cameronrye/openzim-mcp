@@ -61,14 +61,13 @@ class _NamespaceMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
-    def list_namespaces(self, zim_file_path: str) -> str:
-        """List available namespaces and their entry counts.
+    def list_namespaces_data(self, zim_file_path: str) -> Dict[str, Any]:
+        """Structured variant of ``list_namespaces``.
 
-        Args:
-            zim_file_path: Path to the ZIM file
-
-        Returns:
-            JSON string containing namespace information
+        Returns the same payload as ``list_namespaces`` but as a Python
+        dict, so MCP tool functions can hand it straight to FastMCP's
+        structured-output path without the json.dumps + re-parse round
+        trip the legacy string variant required.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -78,18 +77,18 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"namespaces:{validated_path}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"namespaces_data:{validated_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached namespaces for: {validated_path}")
+            logger.debug(f"Returning cached namespaces dict for: {validated_path}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 result = self._list_archive_namespaces(archive)
 
-            # Cache the result
             self.cache.set(cache_key, result)
             logger.info(f"Listed namespaces for: {validated_path}")
             return result
@@ -98,7 +97,20 @@ class _NamespaceMixin:
             logger.error(f"Namespace listing failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Namespace listing failed: {e}") from e
 
-    def _list_archive_namespaces(self, archive: Archive) -> str:
+    def list_namespaces(self, zim_file_path: str) -> str:
+        """Legacy JSON-string variant of ``list_namespaces_data``.
+
+        Retained so ``SimpleToolsHandler`` (which composes natural-language
+        responses out of these strings) keeps working unchanged. New
+        callers should prefer ``list_namespaces_data``.
+        """
+        return json.dumps(
+            self.list_namespaces_data(zim_file_path),
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    def _list_archive_namespaces(self, archive: Archive) -> Dict[str, Any]:
         """List namespaces in the archive.
 
         For small archives (entry_count <= NAMESPACE_MAX_SAMPLE_SIZE) iterate
@@ -133,7 +145,7 @@ class _NamespaceMixin:
             "discovery_method": "full_iteration" if full_iteration else "sampling",
             "namespaces": namespaces,
         }
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        return result
 
     def _make_namespace_recorder(
         self, namespaces: Dict[str, Dict[str, Any]], seen_entries: set[str]
