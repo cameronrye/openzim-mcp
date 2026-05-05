@@ -1412,10 +1412,10 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 |---------|---------|-------------|
 | `OPENZIM_MCP_TOOL_MODE` | `simple` | Tool surface: `simple` (one `zim_query` tool) or `advanced` (21 specialized tools). Controlled by `--tool-mode` on the CLI as well. |
 | `OPENZIM_MCP_TRANSPORT` | `stdio` | Transport protocol: `stdio`, `http`, or `sse`. |
-| `OPENZIM_MCP_HOST` | `127.0.0.1` | HTTP/SSE bind host. Non-loopback hosts require `OPENZIM_MCP_AUTH_TOKEN` (or `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1` for HTTP on a closed network). |
+| `OPENZIM_MCP_HOST` | `127.0.0.1` | HTTP/SSE bind host. For `--transport http`, non-loopback hosts require `OPENZIM_MCP_AUTH_TOKEN` (or `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1` on a closed network). For `--transport sse`, non-loopback is refused outright — SSE has no auth middleware and is localhost-only. |
 | `OPENZIM_MCP_PORT` | `8000` | HTTP/SSE bind port. |
-| `OPENZIM_MCP_AUTH_TOKEN` | *(unset)* | Bearer token required when binding HTTP/SSE to a non-loopback interface. |
-| `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | Operator-acknowledged opt-out of the auth requirement on non-loopback HTTP binds. Logs a `WARNING` naming the bound host on every startup. Use only when the surrounding network is your trust boundary (Docker bridge, Tailscale-only, isolated LAN). Does **not** apply to `--transport sse`. |
+| `OPENZIM_MCP_AUTH_TOKEN` | *(unset)* | Bearer token enforced by the streamable-HTTP transport (`--transport http`). Required when binding HTTP to a non-loopback interface. SSE has no auth middleware; setting a token does **not** allow non-loopback SSE binds. |
+| `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | Operator-acknowledged opt-out of the auth requirement on non-loopback HTTP binds. Logs a `WARNING` naming the bound host on every startup. Use only when the surrounding network is your trust boundary (Docker bridge, Tailscale-only, isolated LAN). Does **not** apply to `--transport sse` (SSE remains localhost-only). |
 | `OPENZIM_MCP_CORS_ORIGINS` | *(empty)* | JSON array of allowed CORS origins for the HTTP transport. Wildcard `*` is rejected. |
 | `OPENZIM_MCP_ALLOWED_HOSTS` | *(empty)* | JSON array of public-facing hostnames the HTTP transport accepts in the `Host` header (e.g. `["mcp.example.com"]`). Loopback is always allowed; this extends it for reverse-proxy and Tailscale-serve deployments. Wildcard `*` is rejected. |
 | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | Enable MCP resource subscriptions (HTTP transport only). When `false`, `subscribe` calls succeed but no updates fire. |
@@ -1438,12 +1438,12 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 
 ```bash
 export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{
-  "search_zim_file": {"enabled": true, "requests_per_second": 5,  "burst_size": 10},
-  "get_zim_entry":   {"enabled": true, "requests_per_second": 50, "burst_size": 100}
+  "search":     {"enabled": true, "requests_per_second": 5,  "burst_size": 10},
+  "get_entry":  {"enabled": true, "requests_per_second": 50, "burst_size": 100}
 }'
 ```
 
-Operation names match the tool names registered on the server (e.g. `search_zim_file`, `get_zim_entry`, `list_zim_files`, `get_zim_metadata`, `find_entry_by_title`).
+Operation names are the internal categories the rate-limiter classifies each call under (not MCP tool names). The recognised set lives in [`openzim_mcp/defaults.py`](openzim_mcp/defaults.py) under `RATE_LIMIT_COSTS`: `search`, `search_with_filters`, `find_entry_by_title`, `get_entry`, `get_zim_entries`, `get_binary_entry`, `browse_namespace`, `get_metadata`, `get_structure`, `get_related_articles`, `suggestions`, and `default` (the fallback bucket for anything uncategorised, e.g. `list_zim_files`).
 
 > **Disabling rate limiting.** The secure default is on. For closed deployments with a small group of trusted users, `OPENZIM_MCP_RATE_LIMIT__ENABLED=false` turns it off entirely.
 
