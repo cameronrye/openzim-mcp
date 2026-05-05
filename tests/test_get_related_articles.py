@@ -1,6 +1,7 @@
 """Tests for get_related_articles tool."""
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -159,7 +160,7 @@ class TestGetRelatedArticles:
         assert outbound[0]["link_text"] == "Animalia"
 
     def test_title_resolution_uses_validated_path_not_raw_input(
-        self, server: OpenZimMcpServer, monkeypatch
+        self, server: OpenZimMcpServer, monkeypatch, tmp_path
     ):
         """Title resolution must open the archive with the path validator's output.
 
@@ -170,13 +171,21 @@ class TestGetRelatedArticles:
         link extraction but silently fail to open for title resolution,
         leaving every outbound title at its placeholder.
         """
+        # Use ``tmp_path`` so the "resolved" path is a real absolute path
+        # in this OS's native form. Comparing string equality across
+        # platforms breaks on Windows because ``Path()`` normalises
+        # forward slashes to backslashes — assert via Path equality
+        # instead, which is platform-correct.
         raw_input = "~/zims/wiki.zim"
-        resolved = "/abs/path/to/zims/wiki.zim"
+        resolved = tmp_path / "zims" / "wiki.zim"
+        resolved_str = str(resolved)
 
         # Path validator simulates ``~`` expansion: raw input → resolved abs path.
         server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = resolved
-        server.zim_operations.path_validator.validate_zim_file.return_value = resolved
+        server.zim_operations.path_validator.validate_path.return_value = resolved_str
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            resolved_str
+        )
 
         server.zim_operations.extract_article_links_data = MagicMock(
             return_value={
@@ -204,7 +213,9 @@ class TestGetRelatedArticles:
                 return False
 
         def _zim_archive_spy(path, *a, **kw):
-            opened_paths.append(str(path))
+            # Normalise to Path so cross-platform comparisons work
+            # (Windows' ``Path('/foo/bar')`` is ``\foo\bar``).
+            opened_paths.append(Path(path))
             return _Ctx()
 
         monkeypatch.setattr(
@@ -221,7 +232,7 @@ class TestGetRelatedArticles:
             f"expected archive open to use validated path {resolved!r}; "
             f"actually opened: {opened_paths!r}"
         )
-        assert raw_input not in opened_paths, (
+        assert Path(raw_input) not in opened_paths, (
             f"archive was opened with the raw, unresolved path {raw_input!r}; "
             f"this bypasses path expansion and silently fails on `~` paths"
         )
