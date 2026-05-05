@@ -423,3 +423,33 @@ class TestStructuredOutput:
             assert "operation" in payload
         else:
             assert "outbound_results" in payload
+
+    @pytest.mark.asyncio
+    async def test_get_server_health_returns_structured_content(
+        self, server: OpenZimMcpServer
+    ) -> None:
+        """get_server_health must emit a structured dict envelope."""
+        result = await server.mcp._tool_manager.call_tool(
+            "get_server_health", {}, convert_result=True
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        payload = structured["result"] if "result" in structured else structured
+        assert "status" in payload
+        assert "timestamp" in payload
+
+    @pytest.mark.asyncio
+    async def test_get_server_configuration_returns_structured_content(
+        self, server: OpenZimMcpServer
+    ) -> None:
+        """get_server_configuration must emit a structured dict envelope."""
+        result = await server.mcp._tool_manager.call_tool(
+            "get_server_configuration", {}, convert_result=True
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        payload = structured["result"] if "result" in structured else structured
+        assert "configuration" in payload
+        assert "diagnostics" in payload

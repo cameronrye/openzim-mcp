@@ -113,16 +113,18 @@ class TestDiagnosticToolPathRedaction:
         tool_handler = tools["get_server_configuration"].fn
         result = await tool_handler()
 
-        # The full directory path must not be present.
-        assert str(temp_dir) not in result, "allowed_directories path leaked"
+        # Result is now a dict (structured output). Substring checks
+        # serialize via json.dumps to preserve the "no path leaks anywhere
+        # in the response" semantic.
+        serialized = json.dumps(result)
+        assert str(temp_dir) not in serialized, "allowed_directories path leaked"
         # But the section identifier should still be present.
-        assert "allowed_directories" in result.lower()
+        assert "allowed_directories" in serialized.lower()
 
-        parsed = json.loads(result)
         # PID must not be exposed.
-        assert parsed["configuration"]["server_pid"] != os.getpid()
+        assert result["configuration"]["server_pid"] != os.getpid()
         # A non-sensitive count should still be available for diagnostics.
-        assert parsed["configuration"].get("allowed_directories_count") == len(
+        assert result["configuration"].get("allowed_directories_count") == len(
             config.allowed_directories
         )
 
@@ -142,12 +144,13 @@ class TestDiagnosticToolPathRedaction:
         tool_handler = tools["get_server_health"].fn
         result = await tool_handler()
 
+        # Result is now a dict; serialize for substring checks.
+        serialized = json.dumps(result)
         for d in server.config.allowed_directories:
-            assert str(d) not in result, f"path leaked in health response: {d}"
+            assert str(d) not in serialized, f"path leaked in health response: {d}"
 
-        parsed = json.loads(result)
         # PID must not be exposed.
-        assert parsed["uptime_info"]["process_id"] != os.getpid()
+        assert result["uptime_info"]["process_id"] != os.getpid()
 
     @pytest.mark.asyncio
     async def test_get_server_health_warning_paths_redacted(self, temp_dir):
@@ -171,7 +174,7 @@ class TestDiagnosticToolPathRedaction:
         tool_handler = tools["get_server_health"].fn
         result = await tool_handler()
 
-        assert bogus not in result, "bogus path leaked into warning text"
+        assert bogus not in json.dumps(result), "bogus path leaked into warning text"
 
     @pytest.mark.asyncio
     async def test_get_server_configuration_invalid_dirs_redacted(self, temp_dir):
@@ -191,4 +194,6 @@ class TestDiagnosticToolPathRedaction:
         tool_handler = tools["get_server_configuration"].fn
         result = await tool_handler()
 
-        assert bogus not in result, "bogus path leaked into config diagnostics"
+        assert bogus not in json.dumps(
+            result
+        ), "bogus path leaked into config diagnostics"
