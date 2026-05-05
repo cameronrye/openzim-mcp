@@ -32,11 +32,16 @@ from openzim_mcp.zim_operations import ZimOperations
 @pytest.fixture
 def ops_for_zim_data(
     basic_test_zim_files: Dict[str, Optional[Path]],
-) -> Optional[ZimOperations]:
-    """Build a real ZimOperations rooted at the testing-suite directory."""
+) -> ZimOperations:
+    """Build a real ZimOperations rooted at the testing-suite directory.
+
+    Calls ``pytest.skip`` directly when no fixture archive is available so
+    each test body can assume a non-None value (cleaner than threading
+    ``Optional`` through every test and re-checking).
+    """
     sample = basic_test_zim_files.get("withns") or basic_test_zim_files.get("nons")
     if sample is None:
-        return None
+        pytest.skip("ZIM testing-suite fixture not available")
     root = sample.parent.parent  # .../zim-testing-suite/
     cfg = OpenZimMcpConfig(
         allowed_directories=[str(root)],
@@ -53,6 +58,7 @@ def ops_for_zim_data(
 
 
 def _require(path: Optional[Path]) -> Path:
+    """Return ``path`` or skip the test if it's unavailable."""
     if path is None:
         pytest.skip("ZIM testing-suite fixture not available")
     return path
@@ -63,15 +69,13 @@ class TestListNamespacesNewScheme:
 
     def test_no_first_letter_buckets(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """Iterable entries in nons/small.zim must all bucket into C.
 
         Never into 'F' (favicon.png) or 'M' (main.html) by first letter.
         """
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.list_namespaces(str(zim)))
         # The two iterable entries (favicon.png, main.html) are both content.
@@ -88,12 +92,10 @@ class TestListNamespacesNewScheme:
 
     def test_content_namespace_present(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """C must be present and equal to entry_count for the iterable entries."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.list_namespaces(str(zim)))
         assert "C" in result["namespaces"], "C namespace must exist for new-scheme"
@@ -103,15 +105,13 @@ class TestListNamespacesNewScheme:
 
     def test_metadata_namespace_from_metadata_keys(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """M should be populated from archive.metadata_keys.
 
         nons/small.zim has 10 metadata_keys (not derived from path parsing).
         """
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.list_namespaces(str(zim)))
         assert (
@@ -125,12 +125,10 @@ class TestListNamespacesOldScheme:
 
     def test_known_namespaces_present(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """Old-scheme withns/small.zim must surface its known namespaces."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["withns"])
         result = json.loads(ops_for_zim_data.list_namespaces(str(zim)))
         assert {"-", "A", "I", "M", "X"} <= set(result["namespaces"].keys())
@@ -143,12 +141,10 @@ class TestBrowseNamespaceNewScheme:
 
     def test_browse_C_returns_iterable_entries(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """browse_namespace('C') in new-scheme returns every iterable entry."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "C", limit=50))
         paths = {e["path"] for e in result["entries"]}
@@ -156,24 +152,20 @@ class TestBrowseNamespaceNewScheme:
 
     def test_browse_F_returns_empty(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """The bogus first-letter bucket 'F' must yield zero entries."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "F", limit=50))
         assert result["entries"] == []
 
     def test_browse_M_returns_metadata_entries(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """browse_namespace('M') in new-scheme returns metadata entries."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "M", limit=50))
         # Should include metadata keys like Title, Language, etc.
@@ -188,12 +180,10 @@ class TestBrowseNamespaceOldScheme:
 
     def test_browse_M_finds_metadata(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """Old-scheme browse_namespace('M') still finds M/* metadata entries."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["withns"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "M", limit=50))
         paths = {e["path"] for e in result["entries"]}
@@ -207,12 +197,10 @@ class TestWalkNamespaceNewScheme:
 
     def test_walk_C_enumerates_all(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """walk_namespace('C') must surface every iterable entry."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.walk_namespace(str(zim), "C", limit=500))
         paths = {e["path"] for e in result["entries"]}
@@ -220,12 +208,10 @@ class TestWalkNamespaceNewScheme:
 
     def test_walk_F_empty(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """First-letter bucket 'F' must walk to zero results, done=True."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.walk_namespace(str(zim), "F", limit=500))
         assert result["entries"] == []
@@ -237,12 +223,10 @@ class TestSearchWithFiltersNewScheme:
 
     def test_filter_by_F_returns_no_matches(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """A real namespace=C filter should not silently match by first letter."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         # Use the larger climate archive if available so we have content to search.
         # This test uses nons/small.zim's filter logic — even if the archive
         # has no full-text index for the query, the namespace filter must not
@@ -268,15 +252,13 @@ class TestBrowseNamespaceTotalIsAuthoritative:
 
     def test_new_scheme_C_total_matches_entry_count(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """For new-scheme C, totals come straight from archive.entry_count.
 
         is_total_authoritative must be True (libzim tells us exactly).
         """
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "C", limit=50))
         # nons/small.zim has entry_count=2 (favicon.png, main.html)
@@ -285,12 +267,10 @@ class TestBrowseNamespaceTotalIsAuthoritative:
 
     def test_new_scheme_M_total_matches_metadata_keys(
         self,
-        ops_for_zim_data: Optional[ZimOperations],
+        ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
         """For new-scheme M, totals come from archive.metadata_keys."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "M", limit=50))
         # nons/small.zim has 10 metadata_keys
@@ -303,8 +283,6 @@ class TestExtractNamespaceFromPathSchemeAware:
 
     def test_new_scheme_returns_C_regardless_of_path(self, ops_for_zim_data):
         """Any new-scheme entry path must bucket as C, not by first letter."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         ops = ops_for_zim_data
         for p in ["favicon.png", "main.html", "Evolution", "Bob_Dylan", "🐜"]:
             assert (
@@ -313,8 +291,6 @@ class TestExtractNamespaceFromPathSchemeAware:
 
     def test_old_scheme_uses_path_prefix(self, ops_for_zim_data):
         """Old-scheme paths still bucket by their single-char prefix."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         ops = ops_for_zim_data
         assert ops._extract_namespace_from_path("A/main.html") == "A"
         assert ops._extract_namespace_from_path("M/Title") == "M"
@@ -324,8 +300,6 @@ class TestExtractNamespaceFromPathSchemeAware:
         self, ops_for_zim_data
     ):
         """Existing callers that don't pass the flag must see the old behaviour."""
-        if ops_for_zim_data is None:
-            pytest.skip("ZIM testing-suite fixture not available")
         ops = ops_for_zim_data
         # No scheme flag → old-scheme parsing
         assert ops._extract_namespace_from_path("A/Article_Title") == "A"
