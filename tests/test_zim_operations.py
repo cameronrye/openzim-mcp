@@ -265,6 +265,36 @@ class TestZimOperations:
                 # Archive should only be opened once due to caching
                 assert mock_archive.call_count == 1
 
+    def test_search_zim_file_data_returns_structured_dict(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """``search_zim_file_data`` returns the search payload as a real dict."""
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with (
+            patch("openzim_mcp.zim_operations.zim_archive") as mock_archive,
+            patch("openzim_mcp.zim_operations.Searcher") as mock_searcher_cls,
+            patch("openzim_mcp.zim_operations.Query") as mock_query_cls,
+        ):
+            mock_archive_instance = MagicMock()
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            mock_search = MagicMock()
+            mock_search.getEstimatedMatches.return_value = 0
+            mock_searcher_cls.return_value.search.return_value = mock_search
+            mock_query_cls.return_value.set_query.return_value = MagicMock()
+
+            data = zim_operations.search_zim_file_data(
+                str(zim_file), "no_match", limit=5, offset=0
+            )
+
+        assert isinstance(data, dict)
+        assert data["query"] == "no_match"
+        assert data["total_results"] == 0
+        assert data["results"] == []
+        assert data["pagination"]["has_more"] is False
+
     def test_get_zim_metadata(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test ZIM metadata retrieval."""
         zim_file = temp_dir / "test.zim"
@@ -868,8 +898,14 @@ class TestZimOperations:
             patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher),
             patch("openzim_mcp.zim_operations.Query"),
         ):
-            result, total = zim_operations._perform_search(mock_archive, "test", 10, 0)
-            assert "No search results found" in result
+            payload, total = zim_operations._perform_search(mock_archive, "test", 10, 0)
+            assert isinstance(payload, dict)
+            assert payload["total_results"] == 0
+            assert payload["results"] == []
+            # The legacy markdown rendering still produces the same text.
+            assert "No search results found" in zim_operations._format_search_text(
+                payload
+            )
             assert total == 0
 
     def test_get_entry_content_with_redirect(
