@@ -650,7 +650,13 @@ class _StructureMixin:
                 if len(outbound) >= limit:
                     break
             result["outbound_results"] = outbound
-        except Exception as e:
+        except OpenZimMcpArchiveError as e:
+            # Partial-success contract: an archive- or extraction-level
+            # failure surfaces as an empty result with an error string,
+            # not a hard tool error. Programming errors (TypeError,
+            # AttributeError, etc.) are intentionally NOT caught here
+            # so they propagate up to the tool layer and become real
+            # tool_error envelopes instead of fake successes.
             logger.debug(f"get_related_articles outbound failed: {e}")
             result["outbound_results"] = []
             result["outbound_error"] = str(e)

@@ -56,6 +56,44 @@ class TestGetRelatedArticles:
                 "/zim/test.zim", "C/Source", limit=0
             )
 
+    def test_archive_error_swallowed_into_outbound_error(
+        self, server: OpenZimMcpServer
+    ):
+        """Archive-level failures surface as outbound_error, not as a raise.
+
+        Partial-success contract: callers get an empty outbound_results
+        list plus an outbound_error string, so a successful entry header
+        still ships even when link extraction fails.
+        """
+        from openzim_mcp.exceptions import OpenZimMcpArchiveError
+
+        server.zim_operations.extract_article_links_data = MagicMock(
+            side_effect=OpenZimMcpArchiveError("entry not found")
+        )
+
+        result = server.zim_operations.get_related_articles_data(
+            "/zim/test.zim", "C/Missing", limit=10
+        )
+        assert result["outbound_results"] == []
+        assert "entry not found" in result["outbound_error"]
+
+    def test_unexpected_exception_propagates(self, server: OpenZimMcpServer):
+        """Programming errors (e.g. TypeError) must NOT be swallowed.
+
+        Previously this method caught bare ``Exception``, so a real bug
+        in the link-extraction path would surface as a successful-looking
+        response with the bug message embedded as a string. Narrowed to
+        ``OpenZimMcpArchiveError`` so genuine programming errors bubble
+        up to the tool layer's ``tool_error`` envelope instead.
+        """
+        server.zim_operations.extract_article_links_data = MagicMock(
+            side_effect=TypeError("boom")
+        )
+        with pytest.raises(TypeError, match="boom"):
+            server.zim_operations.get_related_articles_data(
+                "/zim/test.zim", "C/Source", limit=10
+            )
+
 
 class TestResolveLinkToEntryPath:
     """Test ``_resolve_link_to_entry_path`` static helper.

@@ -38,7 +38,9 @@
 
 ---
 
-> 🆕 **NEW in v1.0.0: Streamable HTTP Transport!** Run OpenZIM MCP as a long-running service over HTTP — perfect for homelab, Tailscale, or VPS deployments. Includes bearer-token auth, multi-arch Docker images, resource subscriptions, and a [Deployment Guide](docs/deployment.md). Also new: batch entry retrieval (`get_zim_entries`), per-entry MCP resources for direct browser rendering, and an end-to-end review pass covering archive handling, content extraction, and server hygiene. [Learn more →](#whats-new-in-v100)
+> 🆕 **NEW in v1.1.0: Structured tool output!** All 17 JSON-returning tools now emit MCP `structuredContent` alongside the legacy text envelope — no more double-stringified JSON, no more escape soup. Plus a major namespace-handling fix for new-scheme archives (`list_namespaces` / `browse_namespace` / `walk_namespace` were silently broken on Wikipedia-style ZIMs), pagination for `extract_article_links`, case-insensitive `find_entry_by_title` with proper scoring, and CORS support for browser MCP clients. [Learn more →](#whats-new-in-v110)
+>
+> Still on the v1.0.0 highlights? Streamable HTTP transport, batch entry retrieval, and per-entry resources are documented in the [v1.0.0 section](#whats-new-in-v100).
 
 > **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
 
@@ -80,6 +82,53 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 - **Configurable**: Flexible configuration with validation
 - **Observable**: Structured logging and health monitoring
 
+## What's new in v1.1.0
+
+### Structured tool output
+
+The 17 JSON-returning tools now emit MCP `structuredContent` alongside the legacy `content[].text` envelope. Old clients keep parsing the text JSON; new clients read the dict directly. The biggest beneficiary is `search_all`, whose `per_file[].result` field used to be a pre-rendered markdown blob escaped twice through `json.dumps` — it's now a real nested dict.
+
+The four prose/markdown tools (`search_zim_file`, `search_with_filters`, `get_zim_entry`, `get_main_page`) and the simple-mode `zim_query` stay on `-> str` by design.
+
+### Namespace handling, fixed
+
+In new-scheme ZIM archives (the modern format used by current Kiwix Wikipedia builds), libzim's iterable surface only exposes the C namespace and reaches metadata through `archive.metadata_keys`. The previous code parsed the first character of each entry path *as* the namespace, so `Evolution` looked like namespace `'E'`, `Bob_Dylan` like `'B'`, `favicon.png` like `'F'` — including emoji buckets like `'🐜'`. `search_with_filters(namespace='C')` was silently dropping ~95% of legitimate hits.
+
+`list_namespaces`, `browse_namespace`, `walk_namespace`, and the `namespace=` filter now branch on `archive.has_new_namespace_scheme`: new-scheme C uses `entry_count` as an authoritative total, M is enumerated from `metadata_keys`, W is surfaced via `has_main_entry` / `has_illustration`. Old-scheme archives are unaffected.
+
+### Pagination for `extract_article_links`
+
+`extract_article_links` previously dumped every internal/external/media link in one call. On a heavily-linked Wikipedia article (~6k links) that was ~400 KB and overflowed the response token budget. The tool now accepts `limit` / `offset` / `kind` parameters; full counts ship in `total_internal_links` / `total_external_links` / `total_media_links` so callers can size the next page. Parsed extraction is cached once per entry and sliced in-memory (~40× speedup on cached pages).
+
+### Smarter `find_entry_by_title`
+
+The fast path was case-sensitive, so `"evolution"` against an archive titled `"Evolution"` missed and fell through to suggestion fallback with a hardcoded `score: 0.8`. Now the fast path tries five case variants × C/A namespaces; suggestion results get rank-derived scores in (0, 0.95] so an exact case-insensitive match (promoted to 1.0) always outranks partials.
+
+### Per-entry resource size caps
+
+`zim://{name}/entry/{path}` now caps text bodies at 256 KB UTF-8 with a notice pointing at `get_zim_entry` for paged reads. Oversize binary bodies are *refused* (not silently clipped, since a sliced PDF/PNG won't open) — callers should use `get_binary_entry`, which has explicit `max_size_bytes` and a `truncated` flag.
+
+### Simple mode actually works
+
+`_register_simple_tools` was also calling `_register_advanced_tools`, so simple-mode clients received every advanced tool's schema in the prompt anyway — defeating the entire point of the mode and inflating prefill into the multi-thousand-token range. Fixed: simple mode now registers exactly one tool (`zim_query`). Confirmed against llama.cpp's MCP webui — single-turn prompt size dropped from ~6,200 tokens to ~1,100.
+
+### CORS for browser MCP clients
+
+Two additions to the HTTP transport's CORS layer:
+
+- `MCP-Protocol-Version` is now in `allow_headers`. Browser MCP clients send this on every post-init request per the MCP spec; without it, the second preflight returned `400 Disallowed CORS headers` and the connection dropped.
+- `DELETE` is now in `allow_methods`. The MCP streamable-HTTP SDK uses DELETE for explicit session termination.
+
+### Polish
+
+- `get_server_health` now reports a real `started_at` and `uptime_seconds` instead of `"unknown"`.
+- Configuration redaction format changed from the misleading `...data` to unambiguous `<redacted>/data`.
+- Server-tools timestamps go through a single `_utc_now_iso()` helper so a response no longer mixes timezone-aware UTC with naive local.
+- `zim_query("")` rejects empty input upfront with example queries instead of falling through to a no-op search.
+- `get_search_suggestions` schema now documents the 2-character minimum.
+- The "cache hit rate is low" warning waits until ≥50 accesses before commenting (previously fired at 22% during normal session warm-up).
+- `get_zim_entry`'s truncation tail now reads "of body content" so callers can tell the limit applies to the body, not the wrapper headers.
+
 ## What's new in v1.0.0
 
 ### Streamable HTTP transport
@@ -90,7 +139,7 @@ Run OpenZIM MCP as a long-running service. Pass `--transport http` (or set `OPEN
 - **Safe-default startup check** — the server *refuses* to bind a non-localhost host without a token. (Bind `127.0.0.1` for local-only access; put a reverse proxy in front for TLS.)
 - **CORS allow-list** — explicit origins via `OPENZIM_MCP_CORS_ORIGINS`; wildcard `*` is rejected at startup.
 - **Health endpoints** — `/healthz` (liveness) and `/readyz` (at least one allowed dir is readable). Both exempt from auth so probes work cleanly.
-- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.0.0`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
+- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.1.0`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
 
 Legacy SSE transport is also available via `--transport sse` (or `OPENZIM_MCP_TRANSPORT=sse`) for clients that haven't migrated to streamable-HTTP. SSE does **not** apply the bearer-token / CORS / health-endpoint middleware, so the server *refuses* to start with `--transport sse` bound to anything other than `127.0.0.1`/`::1`/`localhost`. For exposed deployments use `--transport http`.
 
