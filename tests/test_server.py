@@ -1494,3 +1494,69 @@ class TestToolModeRegistration:
         assert (
             "zim_query" not in names
         ), "advanced mode should not register the simple-mode wrapper"
+
+
+class TestSimpleModeWrapperDefaults:
+    """The simple-mode ``zim_query`` wrapper applies tighter defaults than
+    advanced-mode ``ContentConfig`` because simple mode targets context-
+    constrained LLMs. A 100 000-char article (the prod default) injected
+    into a small chat context dominates prefill and re-evaluates on every
+    subsequent agentic turn, so the simple wrapper caps both ``limit`` and
+    ``max_content_length`` when the caller doesn't pass them.
+    """
+
+    def test_zim_query_caps_max_content_length_when_unspecified(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """Calling ``zim_query`` without ``max_content_length`` passes 8000 to
+        the handler — not None, and not the 100 000-char ContentConfig default.
+        """
+        simple_config = test_config.model_copy(update={"tool_mode": "simple"})
+        server = OpenZimMcpServer(simple_config)
+        captured: dict = {}
+
+        def fake_handle_zim_query(query, zim_file_path, options):
+            captured["options"] = options
+            return "ok"
+
+        assert server.simple_tools_handler is not None
+        server.simple_tools_handler.handle_zim_query = fake_handle_zim_query
+
+        tool_fn = server.mcp._tool_manager._tools["zim_query"].fn
+        asyncio.run(tool_fn(query="search for evolution"))
+
+        assert captured["options"]["max_content_length"] == 8000
+        assert captured["options"]["limit"] == 5
+        assert "offset" not in captured["options"]  # default 0 is suppressed
+
+    def test_zim_query_caller_overrides_take_precedence(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """An explicit caller-supplied ``max_content_length`` / ``limit``
+        wins over the simple-wrapper defaults. The caps are a floor for
+        small LLMs, not a ceiling on what advanced callers can request.
+        """
+        simple_config = test_config.model_copy(update={"tool_mode": "simple"})
+        server = OpenZimMcpServer(simple_config)
+        captured: dict = {}
+
+        def fake_handle_zim_query(query, zim_file_path, options):
+            captured["options"] = options
+            return "ok"
+
+        assert server.simple_tools_handler is not None
+        server.simple_tools_handler.handle_zim_query = fake_handle_zim_query
+
+        tool_fn = server.mcp._tool_manager._tools["zim_query"].fn
+        asyncio.run(
+            tool_fn(
+                query="get article Evolution",
+                limit=20,
+                max_content_length=50000,
+                offset=10,
+            )
+        )
+
+        assert captured["options"]["max_content_length"] == 50000
+        assert captured["options"]["limit"] == 20
+        assert captured["options"]["offset"] == 10

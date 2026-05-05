@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -248,14 +248,21 @@ class OpenZimMcpServer:
                 - "articles related to Climate_Change"
             """
             try:
-                # Build options dict from parameters
-                options = {}
-                if limit is not None:
-                    options["limit"] = limit
+                # Build options dict from parameters. Simple mode is for
+                # smaller / context-limited LLMs, so we apply tighter
+                # defaults than ContentConfig's (100 000-char articles,
+                # 10-result searches) when the caller doesn't specify them.
+                # An LLM that wants the full article can still pass an
+                # explicit ``max_content_length``; this only affects calls
+                # that omit it.
+                options: Dict[str, Any] = {
+                    "limit": limit if limit is not None else 5,
+                    "max_content_length": (
+                        max_content_length if max_content_length is not None else 8000
+                    ),
+                }
                 if offset != 0:
                     options["offset"] = offset
-                if max_content_length is not None:
-                    options["max_content_length"] = max_content_length
 
                 # Use simple tools handler. handle_zim_query is synchronous and
                 # performs blocking ZIM I/O, so dispatch it to a worker thread
