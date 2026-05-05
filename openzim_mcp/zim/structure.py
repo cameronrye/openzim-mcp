@@ -12,6 +12,7 @@ without changes.
 
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
@@ -198,21 +199,11 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key includes pagination so different pages don't collide.
-        cache_key = f"links:{validated_path}:{entry_path}:{limit}:{offset}:{kind or ''}"
-        cached_result = self.cache.get(cache_key)
-        if cached_result is not None:
-            logger.debug(f"Returning cached links for: {entry_path}")
-            return cached_result  # type: ignore[no-any-return]
-
         try:
-            with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_article_links(
-                    archive, entry_path, limit, offset, kind
-                )
-
-            # Cache the result
-            self.cache.set(cache_key, result)
+            extraction = self._get_or_load_link_extraction(
+                str(validated_path), entry_path
+            )
+            result = self._render_paged_links(extraction, limit, offset, kind)
             logger.info(
                 f"Extracted links for: {entry_path} "
                 f"(limit={limit}, offset={offset}, kind={kind})"
@@ -229,20 +220,36 @@ class _StructureMixin:
             logger.error(f"Link extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Link extraction failed: {e}") from e
 
-    def _extract_article_links(
-        self,
-        archive: Archive,
-        entry_path: str,
-        limit: int,
-        offset: int,
-        kind: Optional[str],
-    ) -> str:
-        """Extract links from article content with per-category pagination."""
-        try:
-            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
-            title = entry.title or "Untitled"
+    def _get_or_load_link_extraction(
+        self, validated_path: str, entry_path: str
+    ) -> Dict[str, Any]:
+        """Return the parsed extraction (cached) for ``(file, entry)``.
 
-            # Get raw content
+        The extraction dict carries the *full* internal/external/media lists
+        plus title/path/mime/message metadata. Pagination slices from this
+        dict in-memory; callers paging through results pay the HTML parse
+        cost exactly once per (archive, entry) pair instead of once per page.
+        """
+        cache_key = f"links_full:{validated_path}:{entry_path}"
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            logger.debug(f"Returning cached link extraction for: {entry_path}")
+            return cached  # type: ignore[no-any-return]
+
+        with _zim_ops_mod.zim_archive(Path(validated_path)) as archive:
+            extraction = self._load_link_extraction(archive, entry_path)
+        self.cache.set(cache_key, extraction)
+        return extraction
+
+    def _load_link_extraction(
+        self, archive: Archive, entry_path: str
+    ) -> Dict[str, Any]:
+        """Resolve the entry and parse all links once, returning the full lists."""
+        try:
+            entry, resolved_path = self._resolve_entry_with_fallback(
+                archive, entry_path
+            )
+            title = entry.title or "Untitled"
             item = entry.get_item()
             mime_type = item.mimetype or ""
             raw_content = bytes(item.content).decode("utf-8", errors="replace")
@@ -260,52 +267,67 @@ class _StructureMixin:
             else:
                 message = f"Link extraction not supported for {mime_type}"
 
-            def _page(full: List[Any], include: bool) -> Tuple[List[Any], bool]:
-                if not include:
-                    return [], False
-                end = offset + limit
-                page = full[offset:end]
-                return page, end < len(full)
-
-            internal_page, internal_more = _page(
-                full_internal, kind in (None, "internal")
-            )
-            external_page, external_more = _page(
-                full_external, kind in (None, "external")
-            )
-            media_page, media_more = _page(full_media, kind in (None, "media"))
-
-            links_data: Dict[str, Any] = {
+            return {
                 "title": title,
-                "path": entry_path,
+                "path": resolved_path,
                 "content_type": mime_type,
-                "internal_links": internal_page,
-                "external_links": external_page,
-                "media_links": media_page,
-                "total_internal_links": len(full_internal),
-                "total_external_links": len(full_external),
-                "total_media_links": len(full_media),
-                "total_links": (
-                    len(full_internal) + len(full_external) + len(full_media)
-                ),
-                "pagination": {
-                    "offset": offset,
-                    "limit": limit,
-                    "kind": kind,
-                    "has_more": internal_more or external_more or media_more,
-                    "has_more_internal": internal_more,
-                    "has_more_external": external_more,
-                    "has_more_media": media_more,
-                },
+                "internal": full_internal,
+                "external": full_external,
+                "media": full_media,
+                "message": message,
             }
-            if message:
-                links_data["message"] = message
-
-            return json.dumps(links_data, indent=2, ensure_ascii=False)
-
         except Exception as e:
             logger.error(f"Error extracting links for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Failed to extract article links: {e}") from e
+
+    @staticmethod
+    def _render_paged_links(
+        extraction: Dict[str, Any],
+        limit: int,
+        offset: int,
+        kind: Optional[str],
+    ) -> str:
+        """Slice cached extraction into a paged JSON response."""
+        full_internal: List[Any] = extraction["internal"]
+        full_external: List[Any] = extraction["external"]
+        full_media: List[Any] = extraction["media"]
+
+        def _page(full: List[Any], include: bool) -> Tuple[List[Any], bool]:
+            if not include:
+                return [], False
+            end = offset + limit
+            page = full[offset:end]
+            return page, end < len(full)
+
+        internal_page, internal_more = _page(full_internal, kind in (None, "internal"))
+        external_page, external_more = _page(full_external, kind in (None, "external"))
+        media_page, media_more = _page(full_media, kind in (None, "media"))
+
+        links_data: Dict[str, Any] = {
+            "title": extraction["title"],
+            "path": extraction["path"],
+            "content_type": extraction["content_type"],
+            "internal_links": internal_page,
+            "external_links": external_page,
+            "media_links": media_page,
+            "total_internal_links": len(full_internal),
+            "total_external_links": len(full_external),
+            "total_media_links": len(full_media),
+            "total_links": (len(full_internal) + len(full_external) + len(full_media)),
+            "pagination": {
+                "offset": offset,
+                "limit": limit,
+                "kind": kind,
+                "has_more": internal_more or external_more or media_more,
+                "has_more_internal": internal_more,
+                "has_more_external": external_more,
+                "has_more_media": media_more,
+            },
+        }
+        if extraction.get("message"):
+            links_data["message"] = extraction["message"]
+
+        return json.dumps(links_data, indent=2, ensure_ascii=False)
 
     def get_table_of_contents(self, zim_file_path: str, entry_path: str) -> str:
         """Extract a hierarchical table of contents from an article.

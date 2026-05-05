@@ -1250,14 +1250,27 @@ class TestZimOperations:
         result = zim_operations.get_article_structure(str(zim_file), "A/Test")
         assert result == '{"cached": "structure"}'
 
-        # Test extract_article_links cache hit. The cache key now includes
-        # pagination and kind so different page requests don't collide; match
-        # the default-arg call site below.
-        cache_key = f"links:{validated_path}:A/Test:100:0:"
-        zim_operations.cache.set(cache_key, '{"cached": "links"}')
+        # Test extract_article_links cache hit. The cache stores the parsed
+        # extraction (full lists) under a stable key so different paginated
+        # requests share one parse; the response is rendered fresh per call,
+        # so the hit assertion checks the post-render JSON contains the
+        # cached title/path metadata rather than asserting raw equality.
+        cache_key = f"links_full:{validated_path}:A/Test"
+        zim_operations.cache.set(
+            cache_key,
+            {
+                "title": "Cached Title",
+                "path": "A/Test",
+                "content_type": "text/html",
+                "internal": [],
+                "external": [],
+                "media": [],
+                "message": None,
+            },
+        )
 
         result = zim_operations.extract_article_links(str(zim_file), "A/Test")
-        assert result == '{"cached": "links"}'
+        assert "Cached Title" in result
 
     def test_complex_search_operations(
         self, zim_operations: ZimOperations, temp_dir: Path
