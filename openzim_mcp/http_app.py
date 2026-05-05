@@ -218,11 +218,21 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(origins),
-        allow_methods=["GET", "POST", "OPTIONS"],
+        # DELETE is the MCP streamable-HTTP method for explicit session
+        # termination (per the spec; see also the SDK handler in
+        # streamable_http.py: "Allow: GET, POST, DELETE"). Without it,
+        # browser preflight blocks clean session shutdown.
+        allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
         # Mcp-Session-Id is sent by streamable-HTTP clients on every request
-        # after initialization to resume a session; without allowing it,
-        # browser CORS preflight rejects all session-resume requests.
-        allow_headers=["Authorization", "Content-Type", "Mcp-Session-Id"],
+        # after initialization to resume a session; MCP-Protocol-Version is
+        # sent on every post-init request per the MCP spec. Without allowing
+        # both, browser CORS preflight rejects all session-resume requests.
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Mcp-Session-Id",
+            "MCP-Protocol-Version",
+        ],
         expose_headers=["Mcp-Session-Id"],
     )
 
