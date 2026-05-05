@@ -1,6 +1,8 @@
 """Tests for get_related_articles tool."""
 
 import json
+from pathlib import Path
+from typing import Callable, List
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,13 +12,50 @@ from openzim_mcp.exceptions import OpenZimMcpValidationError
 from openzim_mcp.server import OpenZimMcpServer
 
 
+def _patch_zim_archive(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_archive: MagicMock,
+    on_open: Callable[[object], None] | None = None,
+) -> None:
+    """Patch ``openzim_mcp.zim_operations.zim_archive`` to return ``mock_archive``.
+
+    The hook ``on_open`` (when provided) is called with each path the
+    production code asks to open — useful for asserting the archive is
+    opened with the expected (validated) path, not the raw caller input.
+    """
+
+    class _Ctx:
+        def __enter__(self) -> MagicMock:
+            return mock_archive
+
+        def __exit__(self, *a: object) -> bool:
+            return False
+
+    def _factory(path: object, *_a: object, **_kw: object) -> _Ctx:
+        if on_open is not None:
+            on_open(path)
+        return _Ctx()
+
+    monkeypatch.setattr("openzim_mcp.zim_operations.zim_archive", _factory)
+
+
 class TestGetRelatedArticles:
     """Test get_related_articles operation."""
 
     @pytest.fixture
     def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a test server instance."""
-        return OpenZimMcpServer(test_config)
+        """Create a test server instance with a stub path validator.
+
+        The stub passes the input through unchanged so unit tests can
+        focus on outbound-link logic without registering paths in
+        ``allowed_directories``. Tests that need to verify the validated
+        path actually flows into the archive open replace this stub.
+        """
+        srv = OpenZimMcpServer(test_config)
+        srv.zim_operations.path_validator = MagicMock()
+        srv.zim_operations.path_validator.validate_path.side_effect = lambda p: p
+        srv.zim_operations.path_validator.validate_zim_file.side_effect = lambda p: p
+        return srv
 
     def test_outbound_uses_extract_article_links(self, server: OpenZimMcpServer):
         """Outbound delegates to extract_article_links_data, resolves URLs, dedupes.
@@ -93,6 +132,141 @@ class TestGetRelatedArticles:
             server.zim_operations.get_related_articles_data(
                 "/zim/test.zim", "C/Source", limit=10
             )
+
+    def test_title_is_target_entry_title_not_anchor_text(
+        self, server: OpenZimMcpServer, monkeypatch
+    ):
+        """Outbound ``title`` is the linked entry's title; ``link_text`` is the anchor.
+
+        Beta-test feedback: prior shape conflated the two — the result said
+        ``{path: "Animal", title: "Animalia"}`` (where "Animalia" is the
+        inline anchor text in the source article, not the article title).
+        """
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "path": "C/Source",
+                "internal_links": [
+                    # Anchor text differs from the target's actual title.
+                    {"url": "Animal", "text": "Animalia"},
+                ],
+            }
+        )
+
+        # Stub archive lookup so the target's "real" title is resolved.
+        target_entry = MagicMock()
+        target_entry.title = "Animal"
+        target_entry.path = "C/Animal"
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.return_value = target_entry
+        _patch_zim_archive(monkeypatch, mock_archive)
+
+        result = server.zim_operations.get_related_articles_data(
+            "/zim/test.zim", "C/Source", limit=10
+        )
+        outbound = result["outbound_results"]
+        assert len(outbound) == 1
+        assert outbound[0]["path"] == "C/Animal"
+        assert outbound[0]["title"] == "Animal"
+        assert outbound[0]["link_text"] == "Animalia"
+
+    def test_title_resolution_uses_validated_path_not_raw_input(
+        self, server: OpenZimMcpServer, monkeypatch, tmp_path
+    ):
+        """Title resolution must open the archive with the path validator's output.
+
+        ``extract_article_links_data`` runs the input through ``validate_path``
+        (which expands ``~`` and resolves symlinks) before opening libzim;
+        ``_resolve_outbound_titles`` must use the same resolved path.
+        Otherwise inputs like ``~/zims/wiki.zim`` open successfully for
+        link extraction but silently fail to open for title resolution,
+        leaving every outbound title at its placeholder.
+        """
+        # Use ``tmp_path`` so the "resolved" path is a real absolute path
+        # in this OS's native form. Comparing string equality across
+        # platforms breaks on Windows because ``Path()`` normalises
+        # forward slashes to backslashes — assert via Path equality
+        # instead, which is platform-correct.
+        raw_input = "~/zims/wiki.zim"
+        resolved = tmp_path / "zims" / "wiki.zim"
+        resolved_str = str(resolved)
+
+        # Path validator simulates ``~`` expansion: raw input → resolved abs path.
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = resolved_str
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            resolved_str
+        )
+
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "path": "C/Source",
+                "internal_links": [
+                    {"url": "Animal", "text": "Animalia"},
+                ],
+            }
+        )
+
+        # Track every path we're asked to open so we can assert it's the
+        # validated one, not the raw ``~/...`` input. Normalise via Path so
+        # cross-platform comparisons work (Windows' ``Path('/foo/bar')`` is
+        # ``\foo\bar``).
+        opened_paths: List[Path] = []
+
+        target_entry = MagicMock()
+        target_entry.title = "Animal"
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.return_value = target_entry
+        _patch_zim_archive(
+            monkeypatch,
+            mock_archive,
+            on_open=lambda path: opened_paths.append(Path(path)),
+        )
+
+        server.zim_operations.get_related_articles_data(raw_input, "C/Source", limit=10)
+
+        # The archive must be opened with the validator's output, not the raw
+        # ``~/...`` string. Path("~/zims/wiki.zim") does NOT auto-expand on
+        # Python 3, so the raw form would silently fail to find the file.
+        assert resolved in opened_paths, (
+            f"expected archive open to use validated path {resolved!r}; "
+            f"actually opened: {opened_paths!r}"
+        )
+        assert Path(raw_input) not in opened_paths, (
+            f"archive was opened with the raw, unresolved path {raw_input!r}; "
+            f"this bypasses path expansion and silently fails on `~` paths"
+        )
+
+    def test_title_falls_back_to_path_when_archive_lookup_fails(
+        self, server: OpenZimMcpServer, monkeypatch
+    ):
+        """When archive lookup fails, ``title`` falls back to the path.
+
+        Possible failure modes: target lives in a different namespace,
+        the entry is missing, or libzim raises. ``link_text`` still
+        carries the original anchor text either way.
+        """
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "path": "C/Source",
+                "internal_links": [
+                    {"url": "Missing_Article", "text": "see Missing"},
+                ],
+            }
+        )
+
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.side_effect = Exception("not found")
+        _patch_zim_archive(monkeypatch, mock_archive)
+
+        result = server.zim_operations.get_related_articles_data(
+            "/zim/test.zim", "C/Source", limit=10
+        )
+        outbound = result["outbound_results"]
+        assert len(outbound) == 1
+        assert outbound[0]["path"] == "C/Missing_Article"
+        # No title resolvable -> falls back to the target path
+        assert outbound[0]["title"] == "C/Missing_Article"
+        assert outbound[0]["link_text"] == "see Missing"
 
 
 class TestResolveLinkToEntryPath:

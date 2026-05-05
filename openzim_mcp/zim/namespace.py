@@ -974,34 +974,37 @@ class _NamespaceMixin:
             with _zim_ops_mod.zim_archive(validated) as archive:
                 has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
 
+                archive_entry_count = archive.entry_count
+
                 # New-scheme M is sourced from metadata_keys, not the entry
                 # iterator (which only surfaces C). Hand the request to a
                 # dedicated walker so callers see real metadata entries
                 # instead of zero matches after a full archive scan.
                 if has_new_scheme and namespace == "M":
-                    return self._walk_new_scheme_metadata(archive, cursor, limit)
+                    return self._walk_new_scheme_metadata(
+                        archive, cursor, limit, archive_entry_count
+                    )
                 # Other-than-C namespaces in new-scheme aren't on the
                 # iterable surface; short-circuit so callers don't pay the
                 # full-archive scan to discover that.
                 if has_new_scheme and namespace != "C":
-                    result = {
-                        "namespace": namespace,
-                        "cursor": cursor,
-                        "limit": limit,
-                        "returned_count": 0,
-                        "scanned_count": 0,
-                        "next_cursor": None,
-                        "done": True,
-                        "scanned_through_id": None,
-                        "total_entries": archive.entry_count,
-                        "entries": [],
-                    }
-                    return result
+                    return self._build_walk_result(
+                        namespace=namespace,
+                        cursor=cursor,
+                        limit=limit,
+                        entries=[],
+                        scanned_count=0,
+                        scanned_through_id=None,
+                        done=True,
+                        next_cursor=None,
+                        archive_entry_count=archive_entry_count,
+                        total_in_namespace=0,
+                        total_in_namespace_is_lower_bound=False,
+                    )
 
-                total = archive.entry_count
                 entries: List[Dict[str, Any]] = []
                 entry_id = cursor
-                while entry_id < total and len(entries) < limit:
+                while entry_id < archive_entry_count and len(entries) < limit:
                     try:
                         entry = archive._get_entry_by_id(entry_id)
                         path = entry.path
@@ -1021,33 +1024,95 @@ class _NamespaceMixin:
                         logger.debug(f"walk_namespace: entry {entry_id} skipped: {e}")
                     entry_id += 1
 
-                done = entry_id >= total
+                done = entry_id >= archive_entry_count
                 next_cursor = None if done else entry_id
                 # scanned_through_id reflects the last ID we examined regardless
                 # of whether it matched the filter. None if we never entered the
                 # loop (cursor was already past the end).
                 scanned_through_id = entry_id - 1 if entry_id > cursor else None
-                result = {
-                    "namespace": namespace,
-                    "cursor": cursor,
-                    "limit": limit,
-                    "returned_count": len(entries),
-                    "scanned_count": entry_id - cursor,
-                    "next_cursor": next_cursor,
-                    "done": done,
-                    "scanned_through_id": scanned_through_id,
-                    "total_entries": total,
-                    "entries": entries,
-                }
-                return result
+
+                # Namespace count is only authoritative for new-scheme C
+                # (iterator emits exactly C). Old-scheme would need a full
+                # archive scan to derive it; report None rather than mislead.
+                # ``is_lower_bound`` is meaningless when the count is None,
+                # so report None there too — saying ``False`` alongside a
+                # null count would read as "this null is the exact count".
+                total_in_namespace: Optional[int]
+                is_lower_bound: Optional[bool]
+                if has_new_scheme:
+                    total_in_namespace = archive_entry_count
+                    is_lower_bound = False
+                else:
+                    total_in_namespace = None
+                    is_lower_bound = None
+
+                return self._build_walk_result(
+                    namespace=namespace,
+                    cursor=cursor,
+                    limit=limit,
+                    entries=entries,
+                    scanned_count=entry_id - cursor,
+                    scanned_through_id=scanned_through_id,
+                    done=done,
+                    next_cursor=next_cursor,
+                    archive_entry_count=archive_entry_count,
+                    total_in_namespace=total_in_namespace,
+                    total_in_namespace_is_lower_bound=is_lower_bound,
+                )
         except OpenZimMcpArchiveError:
             raise
         except Exception as e:
             raise OpenZimMcpArchiveError(f"walk_namespace failed: {e}") from e
 
     @staticmethod
+    def _build_walk_result(
+        *,
+        namespace: str,
+        cursor: int,
+        limit: int,
+        entries: List[Dict[str, Any]],
+        scanned_count: int,
+        scanned_through_id: Optional[int],
+        done: bool,
+        next_cursor: Optional[int],
+        archive_entry_count: int,
+        total_in_namespace: Optional[int],
+        total_in_namespace_is_lower_bound: Optional[bool],
+    ) -> Dict[str, Any]:
+        """Assemble the walk_namespace result dict.
+
+        ``archive_entry_count`` is the file-level entry count.
+        ``total_in_namespace`` is the namespace-specific count (None when
+        not derivable without a full scan, e.g. old-scheme archives).
+        ``total_in_namespace_is_lower_bound`` is False when authoritative,
+        True when sampling-derived, None when ``total_in_namespace`` is
+        also None (no count means no lower-bound semantics).
+        ``total_entries`` is kept as a deprecated alias of
+        ``archive_entry_count`` for v1.1.0 callers; remove in a future major.
+        """
+        return {
+            "namespace": namespace,
+            "cursor": cursor,
+            "limit": limit,
+            "returned_count": len(entries),
+            "scanned_count": scanned_count,
+            "next_cursor": next_cursor,
+            "done": done,
+            "scanned_through_id": scanned_through_id,
+            "archive_entry_count": archive_entry_count,
+            "total_in_namespace": total_in_namespace,
+            "total_in_namespace_is_lower_bound": total_in_namespace_is_lower_bound,
+            "total_entries": archive_entry_count,  # deprecated alias
+            "entries": entries,
+        }
+
+    @classmethod
     def _walk_new_scheme_metadata(
-        archive: Archive, cursor: int, limit: int
+        cls,
+        archive: Archive,
+        cursor: int,
+        limit: int,
+        archive_entry_count: int,
     ) -> Dict[str, Any]:
         """Walk M (metadata) entries in a new-scheme archive via metadata_keys."""
         try:
@@ -1060,19 +1125,19 @@ class _NamespaceMixin:
         end = min(start + limit, total)
         entries = [{"path": f"M/{k}", "title": k} for k in keys[start:end]]
         done = end >= total
-        result: Dict[str, Any] = {
-            "namespace": "M",
-            "cursor": cursor,
-            "limit": limit,
-            "returned_count": len(entries),
-            "scanned_count": end - start,
-            "next_cursor": None if done else end,
-            "done": done,
-            "scanned_through_id": end - 1 if end > start else None,
-            "total_entries": total,
-            "entries": entries,
-        }
-        return result
+        return cls._build_walk_result(
+            namespace="M",
+            cursor=cursor,
+            limit=limit,
+            entries=entries,
+            scanned_count=end - start,
+            scanned_through_id=end - 1 if end > start else None,
+            done=done,
+            next_cursor=None if done else end,
+            archive_entry_count=archive_entry_count,
+            total_in_namespace=total,
+            total_in_namespace_is_lower_bound=False,
+        )
 
     def walk_namespace(
         self,

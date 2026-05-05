@@ -76,13 +76,7 @@ class SimpleToolsHandler:
                 f"confidence: {confidence:.2f}"
             )
 
-            low_confidence_note = ""
-            if confidence < 0.6:
-                low_confidence_note = (
-                    "\n\n*Note: This query interpretation has moderate confidence. "
-                    "If the results aren't what you expected, "
-                    "try rephrasing your query.*\n"
-                )
+            low_confidence_note = self._confidence_note(intent, confidence)
 
             # ``list_files`` is the only intent that doesn't need a ZIM file.
             if intent == "list_files":
@@ -121,6 +115,33 @@ class SimpleToolsHandler:
                 f"3. Try a simpler query\n"
                 f"4. Check server logs for details"
             )
+
+    @staticmethod
+    def _confidence_note(intent: str, confidence: float) -> str:
+        """Render a confidence note tier-appropriate for the parsed intent.
+
+        Tiers:
+          * < 0.55 — "low confidence". Names the interpreted intent so the
+            caller can spot fallbacks (e.g. ``"tell me a joke"`` lands on
+            the search-fallback at confidence 0.5; saying the result is
+            "moderate confidence" understates that nothing matched).
+          * 0.55–0.7 — "moderate confidence" (legacy wording).
+          * >= 0.7 — no note (well-calibrated, don't pester).
+        """
+        if confidence < 0.55:
+            return (
+                "\n\n*Note: Low confidence in query interpretation "
+                f"(interpreted as `{intent}`). "
+                "Try rephrasing your query if the results aren't what "
+                "you expected.*\n"
+            )
+        if confidence < 0.7:
+            return (
+                "\n\n*Note: This query interpretation has moderate confidence. "
+                "If the results aren't what you expected, "
+                "try rephrasing your query.*\n"
+            )
+        return ""
 
     # ---------------------------------------------------------------- handlers
 

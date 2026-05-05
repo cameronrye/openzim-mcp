@@ -159,8 +159,15 @@ def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
         Returns:
             Dict with keys: namespace, cursor, limit, returned_count,
             scanned_count, next_cursor, done, scanned_through_id,
-            total_entries, entries. On failure, returns a
-            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
+            archive_entry_count, total_in_namespace,
+            total_in_namespace_is_lower_bound, total_entries, entries.
+            ``archive_entry_count`` is the file-level entry count;
+            ``total_in_namespace`` is the namespace-specific count (None
+            when not derivable without a full scan, i.e. old-scheme
+            archives). ``total_entries`` is a deprecated alias of
+            ``archive_entry_count`` retained for v1.1.0 callers.
+            On failure, returns a ``{"error": True, ...}`` envelope (see
+            ``responses.tool_error``).
         """
         try:
             try:
