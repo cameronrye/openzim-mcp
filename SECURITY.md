@@ -6,8 +6,8 @@ We actively support the following versions of OpenZIM MCP with security updates:
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.0.x   | Yes                |
-| < 1.0   | No                 |
+| 1.1.x   | Yes                |
+| < 1.1   | No                 |
 
 ## Reporting a Vulnerability
 
