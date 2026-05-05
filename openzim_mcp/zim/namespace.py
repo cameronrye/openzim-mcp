@@ -1034,12 +1034,17 @@ class _NamespaceMixin:
                 # Namespace count is only authoritative for new-scheme C
                 # (iterator emits exactly C). Old-scheme would need a full
                 # archive scan to derive it; report None rather than mislead.
+                # ``is_lower_bound`` is meaningless when the count is None,
+                # so report None there too — saying ``False`` alongside a
+                # null count would read as "this null is the exact count".
+                total_in_namespace: Optional[int]
+                is_lower_bound: Optional[bool]
                 if has_new_scheme:
-                    total_in_namespace: Optional[int] = archive_entry_count
+                    total_in_namespace = archive_entry_count
                     is_lower_bound = False
                 else:
                     total_in_namespace = None
-                    is_lower_bound = False
+                    is_lower_bound = None
 
                 return self._build_walk_result(
                     namespace=namespace,
@@ -1072,13 +1077,16 @@ class _NamespaceMixin:
         next_cursor: Optional[int],
         archive_entry_count: int,
         total_in_namespace: Optional[int],
-        total_in_namespace_is_lower_bound: bool,
+        total_in_namespace_is_lower_bound: Optional[bool],
     ) -> Dict[str, Any]:
         """Assemble the walk_namespace result dict.
 
         ``archive_entry_count`` is the file-level entry count.
         ``total_in_namespace`` is the namespace-specific count (None when
         not derivable without a full scan, e.g. old-scheme archives).
+        ``total_in_namespace_is_lower_bound`` is False when authoritative,
+        True when sampling-derived, None when ``total_in_namespace`` is
+        also None (no count means no lower-bound semantics).
         ``total_entries`` is kept as a deprecated alias of
         ``archive_entry_count`` for v1.1.0 callers; remove in a future major.
         """

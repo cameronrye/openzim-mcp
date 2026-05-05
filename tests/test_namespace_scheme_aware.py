@@ -288,6 +288,9 @@ class TestWalkNamespaceTotalInNamespace:
 
         Reporting an inaccurate number would be misleading; None signals
         "not derivable" so callers know to fall back to browse_namespace.
+        ``is_lower_bound`` must also be None — saying ``False`` next to a
+        null count would read as "this null is the exact count", which is
+        nonsense.
         """
         zim = _require(basic_test_zim_files["withns"])
         result = ops_for_zim_data.walk_namespace_data(str(zim), "M", limit=10)
@@ -295,6 +298,8 @@ class TestWalkNamespaceTotalInNamespace:
         assert result["archive_entry_count"] >= 1
         # Old-scheme: count not derivable without full scan
         assert result["total_in_namespace"] is None
+        # When the count is unknown, the lower-bound flag is also unknown
+        assert result["total_in_namespace_is_lower_bound"] is None
 
 
 class TestSearchWithFiltersNewScheme:
