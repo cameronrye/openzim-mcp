@@ -164,6 +164,10 @@ class AsyncZimOperations:
         """
         return await asyncio.to_thread(self._ops.list_namespaces, zim_file_path)
 
+    async def list_namespaces_data(self, zim_file_path: str) -> dict:
+        """Structured variant of ``list_namespaces`` (async)."""
+        return await asyncio.to_thread(self._ops.list_namespaces_data, zim_file_path)
+
     async def browse_namespace(
         self,
         zim_file_path: str,
