@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0](https://github.com/cameronrye/openzim-mcp/compare/v1.0.1...v1.1.0) (2026-05-05)
+
+
+### Features
+
+* tool responses use MCP structured content (no more double-stringified JSON) ([#96](https://github.com/cameronrye/openzim-mcp/issues/96)) ([5b541ec](https://github.com/cameronrye/openzim-mcp/commit/5b541ec616386128e6a9d105f07c27bc94676265))
+
+
+### Bug Fixes
+
+* **http:** allow MCP-Protocol-Version header and DELETE method in CORS ([#93](https://github.com/cameronrye/openzim-mcp/issues/93)) ([dbb791e](https://github.com/cameronrye/openzim-mcp/commit/dbb791e5a6b90a229283ee0a6a283615deae6e42))
+* namespace, pagination, resources, and find-by-title beta-test fixes ([#92](https://github.com/cameronrye/openzim-mcp/issues/92)) ([4b572ef](https://github.com/cameronrye/openzim-mcp/commit/4b572efa9acdec84551163e0170c3e6569c28151))
+* **server:** make simple mode actually expose only zim_query ([#94](https://github.com/cameronrye/openzim-mcp/issues/94)) ([92c725f](https://github.com/cameronrye/openzim-mcp/commit/92c725f0cffd43f592185c0f2173f4c6ca0ef1e4))
+
 ## [1.0.1](https://github.com/cameronrye/openzim-mcp/compare/v1.0.0...v1.0.1) (2026-05-04)
 
 
