@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Callable, List
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +10,33 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpValidationError
 from openzim_mcp.server import OpenZimMcpServer
+
+
+def _patch_zim_archive(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_archive: MagicMock,
+    on_open: Callable[[object], None] | None = None,
+) -> None:
+    """Patch ``openzim_mcp.zim_operations.zim_archive`` to return ``mock_archive``.
+
+    The hook ``on_open`` (when provided) is called with each path the
+    production code asks to open — useful for asserting the archive is
+    opened with the expected (validated) path, not the raw caller input.
+    """
+
+    class _Ctx:
+        def __enter__(self) -> MagicMock:
+            return mock_archive
+
+        def __exit__(self, *a: object) -> bool:
+            return False
+
+    def _factory(path: object, *_a: object, **_kw: object) -> _Ctx:
+        if on_open is not None:
+            on_open(path)
+        return _Ctx()
+
+    monkeypatch.setattr("openzim_mcp.zim_operations.zim_archive", _factory)
 
 
 class TestGetRelatedArticles:
@@ -130,25 +158,7 @@ class TestGetRelatedArticles:
         target_entry.path = "C/Animal"
         mock_archive = MagicMock()
         mock_archive.get_entry_by_path.return_value = target_entry
-
-        class _Ctx:
-            def __enter__(self):
-                return mock_archive
-
-            def __exit__(self, *a):
-                return False
-
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _Ctx(),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _patch_zim_archive(monkeypatch, mock_archive)
 
         result = server.zim_operations.get_related_articles_data(
             "/zim/test.zim", "C/Source", limit=10
@@ -197,30 +207,19 @@ class TestGetRelatedArticles:
         )
 
         # Track every path we're asked to open so we can assert it's the
-        # validated one, not the raw ``~/...`` input.
-        opened_paths: list = []
+        # validated one, not the raw ``~/...`` input. Normalise via Path so
+        # cross-platform comparisons work (Windows' ``Path('/foo/bar')`` is
+        # ``\foo\bar``).
+        opened_paths: List[Path] = []
 
         target_entry = MagicMock()
         target_entry.title = "Animal"
         mock_archive = MagicMock()
         mock_archive.get_entry_by_path.return_value = target_entry
-
-        class _Ctx:
-            def __enter__(self):
-                return mock_archive
-
-            def __exit__(self, *a):
-                return False
-
-        def _zim_archive_spy(path, *a, **kw):
-            # Normalise to Path so cross-platform comparisons work
-            # (Windows' ``Path('/foo/bar')`` is ``\foo\bar``).
-            opened_paths.append(Path(path))
-            return _Ctx()
-
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            _zim_archive_spy,
+        _patch_zim_archive(
+            monkeypatch,
+            mock_archive,
+            on_open=lambda path: opened_paths.append(Path(path)),
         )
 
         server.zim_operations.get_related_articles_data(raw_input, "C/Source", limit=10)
@@ -257,25 +256,7 @@ class TestGetRelatedArticles:
 
         mock_archive = MagicMock()
         mock_archive.get_entry_by_path.side_effect = Exception("not found")
-
-        class _Ctx:
-            def __enter__(self):
-                return mock_archive
-
-            def __exit__(self, *a):
-                return False
-
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _Ctx(),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _patch_zim_archive(monkeypatch, mock_archive)
 
         result = server.zim_operations.get_related_articles_data(
             "/zim/test.zim", "C/Source", limit=10
