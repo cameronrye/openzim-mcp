@@ -64,4 +64,4 @@
     Language: English
     Doctype: HTML5
     IDE: Various (VS Code, Vim, etc.)
-    Version: 1.1.0
+    Version: 1.1.1

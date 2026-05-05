@@ -30,6 +30,6 @@
   </g>
 
   <text x="600" y="500" font-family="Geist, Inter, system-ui, sans-serif" font-size="68" font-weight="600" fill="#F5F1E8" text-anchor="middle" letter-spacing="-1">OpenZIM MCP</text>
-  <text x="600" y="552" font-family="JetBrains Mono, ui-monospace, monospace" font-size="22" fill="#FFD24A" text-anchor="middle" letter-spacing="2">MCP SERVER · v1.1.0</text>
+  <text x="600" y="552" font-family="JetBrains Mono, ui-monospace, monospace" font-size="22" fill="#FFD24A" text-anchor="middle" letter-spacing="2">MCP SERVER · v1.1.1</text>
   <text x="600" y="590" font-family="Geist, Inter, system-ui, sans-serif" font-size="20" fill="#7A8499" text-anchor="middle">Knowledge that works offline.</text>
 </svg>
