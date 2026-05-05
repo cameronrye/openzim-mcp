@@ -94,3 +94,45 @@ def test_unauthorized_response_includes_cors_headers():
     assert (
         resp.headers.get("access-control-allow-origin") == "https://allowed.example.com"
     )
+
+
+def test_cors_preflight_allows_mcp_protocol_version_header():
+    """MCP-Protocol-Version is sent on every post-init request per the MCP spec.
+
+    Without this header in allow_headers, browser preflight rejects every
+    request after the initial handshake — making the streamable-HTTP server
+    unreachable from any browser MCP client.
+    """
+    app = _build_app(["http://localhost:5173"])
+    client = TestClient(app)
+    resp = client.options(
+        "/hello",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "mcp-protocol-version",
+        },
+    )
+    assert resp.status_code == 200
+    allowed = resp.headers.get("access-control-allow-headers", "").lower()
+    assert "mcp-protocol-version" in allowed
+
+
+def test_cors_preflight_allows_delete_for_session_termination():
+    """The MCP streamable-HTTP spec defines DELETE for explicit session
+    termination (the SDK's handler advertises ``Allow: GET, POST, DELETE``).
+
+    Without DELETE in allow_methods, browser MCP clients cannot cleanly
+    end a session and must abandon it (the server eventually times it out).
+    """
+    app = _build_app(["http://localhost:5173"])
+    client = TestClient(app)
+    resp = client.options(
+        "/hello",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "DELETE",
+        },
+    )
+    assert resp.status_code == 200
+    assert "DELETE" in resp.headers.get("access-control-allow-methods", "")
