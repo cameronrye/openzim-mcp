@@ -64,7 +64,10 @@ class TestContentDefaults:
 
     def test_content_defaults_values(self):
         """Test content default values."""
-        assert ContentDefaults.SNIPPET_LENGTH == 1000
+        # ``SNIPPET_LENGTH`` was bumped from 1000 → 3000 in v1.2.0 so search
+        # results from a single call typically include the lead section, not
+        # just the infobox header. See PR/CHANGELOG for rationale.
+        assert ContentDefaults.SNIPPET_LENGTH == 3000
         assert ContentDefaults.MAX_CONTENT_LENGTH == 100000
         assert ContentDefaults.SEARCH_LIMIT == 10
         assert ContentDefaults.MAX_BINARY_SIZE == 10_000_000
@@ -72,7 +75,7 @@ class TestContentDefaults:
 
     def test_content_instance(self):
         """Test CONTENT instance has correct values."""
-        assert CONTENT.SNIPPET_LENGTH == 1000
+        assert CONTENT.SNIPPET_LENGTH == 3000
         assert CONTENT.MAX_CONTENT_LENGTH == 100000
         assert CONTENT.SEARCH_LIMIT == 10
 
