@@ -98,6 +98,25 @@ class TestStructuredOutput:
         assert "entry_count" in payload
 
     @pytest.mark.asyncio
+    async def test_list_zim_files_returns_structured_content(
+        self, server: OpenZimMcpServer
+    ) -> None:
+        """Verify list_zim_files emits a structured dict envelope.
+
+        It must not be the legacy ``"Found N ZIM files in M directories: ..."``
+        markdown-header-plus-JSON string the SimpleToolsHandler still uses.
+        """
+        result = await server.mcp._tool_manager.call_tool(
+            "list_zim_files", {}, convert_result=True
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        payload = structured["result"] if "result" in structured else structured
+        assert "files" in payload and isinstance(payload["files"], list)
+        assert "count" in payload
+
+    @pytest.mark.asyncio
     async def test_search_all_returns_structured_content(
         self, server: OpenZimMcpServer
     ) -> None:

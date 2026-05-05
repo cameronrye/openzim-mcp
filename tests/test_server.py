@@ -216,14 +216,26 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
         """Test server tool execution by mocking dependencies and triggering errors."""
         # This test aims to actually execute server code by manipulating dependencies
 
-        # Mock zim_operations to throw exceptions, then try to trigger the tools
+        # Mock zim_operations to throw exceptions, then try to trigger the tools.
+        # The list_zim_files MCP tool now routes through
+        # ``list_zim_files_summary_data`` -> ``list_zim_files_data``, so mock
+        # both the legacy and the structured backend to keep this test
+        # provider-agnostic across the structured-output migration.
         original_list_method = server.zim_operations.list_zim_files
+        original_list_data_method = server.zim_operations.list_zim_files_data
+        original_list_summary_method = server.zim_operations.list_zim_files_summary_data
         original_search_method = server.zim_operations.search_zim_file
         original_entry_method = server.zim_operations.get_zim_entry
 
         try:
             # Set up mocks that will cause exceptions
             server.zim_operations.list_zim_files = MagicMock(
+                side_effect=Exception("List error")
+            )
+            server.zim_operations.list_zim_files_data = MagicMock(
+                side_effect=Exception("List error")
+            )
+            server.zim_operations.list_zim_files_summary_data = MagicMock(
                 side_effect=Exception("List error")
             )
             server.zim_operations.search_zim_file = MagicMock(
@@ -236,9 +248,13 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
             # Use call_tool to invoke the MCP tools and trigger exception paths
             # This actually executes the server code and achieves coverage!
 
-            # Test list_zim_files exception handling
+            # Test list_zim_files exception handling. The migrated tool now
+            # returns a structured ``{"error": True, ...}`` envelope instead
+            # of a markdown string, so accept either presentation.
             result = asyncio.run(server.mcp.call_tool("list_zim_files", {}))
-            assert "**Operation Failed**" in str(result) and "List error" in str(result)
+            result_str = str(result)
+            assert "List error" in result_str
+            assert "**Operation Failed**" in result_str or "'error': True" in result_str
 
             # Test search_zim_file exception handling
             result = asyncio.run(
@@ -264,6 +280,10 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
         finally:
             # Restore original methods
             server.zim_operations.list_zim_files = original_list_method
+            server.zim_operations.list_zim_files_data = original_list_data_method
+            server.zim_operations.list_zim_files_summary_data = (
+                original_list_summary_method
+            )
             server.zim_operations.search_zim_file = original_search_method
             server.zim_operations.get_zim_entry = original_entry_method
 

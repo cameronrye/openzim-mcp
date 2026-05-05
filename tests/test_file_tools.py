@@ -32,7 +32,16 @@ class TestListZimFilesToolNameFilter:
     def _build_mock_server(self):
         server = MagicMock()
         server.mcp = MagicMock()
-        server.async_zim_operations.list_zim_files = AsyncMock(return_value="[]")
+        # The tool now calls the structured ``list_zim_files_summary_data``
+        # backend that returns a dict envelope rather than a JSON string.
+        server.async_zim_operations.list_zim_files_summary_data = AsyncMock(
+            return_value={
+                "count": 0,
+                "directories_count": 0,
+                "name_filter": "",
+                "files": [],
+            }
+        )
         server.rate_limiter.check_rate_limit = MagicMock()
         return server
 
@@ -44,7 +53,7 @@ class TestListZimFilesToolNameFilter:
 
         await tool_fn(name_filter="nginx")
 
-        server.async_zim_operations.list_zim_files.assert_called_once_with(
+        server.async_zim_operations.list_zim_files_summary_data.assert_called_once_with(
             name_filter="nginx"
         )
 
@@ -56,7 +65,7 @@ class TestListZimFilesToolNameFilter:
 
         await tool_fn()
 
-        server.async_zim_operations.list_zim_files.assert_called_once_with(
+        server.async_zim_operations.list_zim_files_summary_data.assert_called_once_with(
             name_filter=""
         )
 

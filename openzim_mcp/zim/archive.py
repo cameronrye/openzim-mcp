@@ -319,6 +319,29 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             return all_zim_files
         return [f for f in all_zim_files if needle in f["name"].lower()]
 
+    def list_zim_files_summary_data(
+        self, name_filter: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Structured ``list_zim_files`` payload.
+
+        Wraps :py:meth:`list_zim_files_data` with the count/directories
+        metadata that the legacy markdown-header string variant carries
+        in its prose preamble, so MCP clients consuming the structured
+        output get the same context without reparsing a header.
+
+        Returns:
+            ``{count, directories_count, name_filter, files}`` where
+            ``files`` is the list ``list_zim_files_data`` already returns
+            (per-file dicts with name/path/directory/size/size_bytes/modified).
+        """
+        files = self.list_zim_files_data(name_filter=name_filter)
+        return {
+            "count": len(files),
+            "directories_count": len(self.config.allowed_directories),
+            "name_filter": name_filter or "",
+            "files": files,
+        }
+
     def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories.
 

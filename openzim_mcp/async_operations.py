@@ -63,6 +63,18 @@ class AsyncZimOperations:
             self._ops.list_zim_files_data, name_filter=name_filter
         )
 
+    async def list_zim_files_summary_data(
+        self, name_filter: Optional[str] = None
+    ) -> dict:
+        """Structured variant of ``list_zim_files`` (async).
+
+        Returns the count/directories_count/name_filter/files envelope
+        used by the migrated MCP tool.
+        """
+        return await asyncio.to_thread(
+            self._ops.list_zim_files_summary_data, name_filter=name_filter
+        )
+
     async def search_zim_file(
         self,
         zim_file_path: str,
