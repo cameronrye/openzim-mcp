@@ -45,15 +45,13 @@ class _StructureMixin:
         ) -> Tuple[Any, str]:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
-    def get_article_structure(self, zim_file_path: str, entry_path: str) -> str:
-        """Extract article structure including headings, sections, and key metadata.
+    def get_article_structure_data(
+        self, zim_file_path: str, entry_path: str
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_article_structure``.
 
-        Args:
-            zim_file_path: Path to the ZIM file
-            entry_path: Entry path, e.g., 'C/Some_Article'
-
-        Returns:
-            JSON string containing article structure
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -63,16 +61,17 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"structure:{validated_path}:{entry_path}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"structure_data:{validated_path}:{entry_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached structure for: {entry_path}")
+            logger.debug(f"Returning cached structure dict for: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_article_structure(archive, entry_path)
+                result = self._extract_article_structure_data(archive, entry_path)
 
             # Cache the result
             self.cache.set(cache_key, result)
@@ -87,8 +86,32 @@ class _StructureMixin:
             logger.error(f"Structure extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Structure extraction failed: {e}") from e
 
-    def _extract_article_structure(self, archive: Archive, entry_path: str) -> str:
-        """Extract structure from article content."""
+    def get_article_structure(self, zim_file_path: str, entry_path: str) -> str:
+        """Legacy JSON-string variant of ``get_article_structure_data``.
+
+        Extract article structure including headings, sections, and key metadata.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Entry path, e.g., 'C/Some_Article'
+
+        Returns:
+            JSON string containing article structure
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If structure extraction fails
+        """
+        return json.dumps(
+            self.get_article_structure_data(zim_file_path, entry_path),
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    def _extract_article_structure_data(
+        self, archive: Archive, entry_path: str
+    ) -> Dict[str, Any]:
+        """Extract structure from article content as a dict."""
         try:
             entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
             title = entry.title or "Untitled"
@@ -133,7 +156,7 @@ class _StructureMixin:
                     }
                 ]
 
-            return json.dumps(structure, indent=2, ensure_ascii=False)
+            return structure
 
         except Exception as e:
             logger.error(f"Error extracting structure for {entry_path}: {e}")

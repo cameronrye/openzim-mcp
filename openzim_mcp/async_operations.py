@@ -318,6 +318,16 @@ class AsyncZimOperations:
             self._ops.get_article_structure, zim_file_path, entry_path
         )
 
+    async def get_article_structure_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+    ) -> dict:
+        """Structured variant of ``get_article_structure`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_article_structure_data, zim_file_path, entry_path
+        )
+
     async def extract_article_links(
         self,
         zim_file_path: str,

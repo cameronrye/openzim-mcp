@@ -301,8 +301,8 @@ class TestStructureToolsDirectInvocation:
     ):
         """Test invoking get_article_structure tool handler directly."""
         # Mock the async operations
-        advanced_server.async_zim_operations.get_article_structure = AsyncMock(
-            return_value='{"headings": [{"level": 1, "text": "Test"}], "sections": []}'
+        advanced_server.async_zim_operations.get_article_structure_data = AsyncMock(
+            return_value={"headings": [{"level": 1, "text": "Test"}], "sections": []}
         )
 
         # Find and call the registered tool
@@ -313,6 +313,7 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
+            assert isinstance(result, dict)
             assert "headings" in result
 
     @pytest.mark.asyncio
@@ -331,7 +332,10 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
-            assert "Error" in result or "Rate limit" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "Error" in message or "Rate limit" in message
 
     @pytest.mark.asyncio
     async def test_extract_article_links_tool_invocation(

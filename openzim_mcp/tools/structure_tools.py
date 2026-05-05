@@ -1,10 +1,11 @@
 """Article structure and content analysis tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH, INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
+from ..responses import tool_error
 from ..security import sanitize_input
 
 if TYPE_CHECKING:
@@ -30,7 +31,9 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
 
 def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
-    async def get_article_structure(zim_file_path: str, entry_path: str) -> str:
+    async def get_article_structure(
+        zim_file_path: str, entry_path: str
+    ) -> Dict[str, Any]:
         """Extract article structure including headings, sections, and key metadata.
 
         Note: depends on heading markup in the source HTML. ZIM builds with
@@ -43,30 +46,40 @@ def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
             entry_path: Entry path, e.g., 'C/Some_Article'
 
         Returns:
-            JSON string containing article structure
+            Dict containing article structure (title, path, headings, sections,
+            metadata, word_count, character_count). On failure, returns a
+            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get article structure",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get article structure",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            return await server.async_zim_operations.get_article_structure(
+            return await server.async_zim_operations.get_article_structure_data(
                 zim_file_path, entry_path
             )
 
         except Exception as e:
             logger.error(f"Error getting article structure: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get article structure",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get article structure",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
