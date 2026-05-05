@@ -820,10 +820,10 @@ class TestLowConfidenceNoteAppendedConsistently:
     def test_low_confidence_note_appended_for_all_intents(
         self, handler, intent, params
     ):
-        """Force confidence below 0.6 and assert every branch appends the note."""
+        """Confidence < 0.55 appends the low-confidence note in every branch."""
         explicit = "/zims/test.zim"
 
-        # Pin intent + params and force confidence below the 0.6 threshold so
+        # Pin intent + params and force confidence below the 0.55 threshold so
         # the low-confidence branch fires deterministically.
         with patch.object(
             IntentParser,
@@ -832,7 +832,55 @@ class TestLowConfidenceNoteAppendedConsistently:
         ):
             result = handler.handle_zim_query("anything", zim_file_path=explicit)
 
-        assert "moderate confidence" in result, (
+        assert "low confidence" in result.lower(), (
             f"intent {intent!r}: low-confidence note missing from response: "
             f"{result!r}"
         )
+
+    def test_low_confidence_note_includes_interpreted_intent(
+        self, handler, mock_zim_operations
+    ):
+        """Low-confidence note surfaces the interpreted intent.
+
+        Callers must be able to see what happened on a fallback — e.g.
+        ``"tell me a joke"`` falls through to the search-fallback at
+        confidence 0.5, and the note should say so.
+        """
+        mock_zim_operations.search_zim_file.return_value = "no results"
+        explicit = "/zims/test.zim"
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=("search", {"query": "tell me a joke"}, 0.5),
+        ):
+            result = handler.handle_zim_query("tell me a joke", zim_file_path=explicit)
+
+        # The interpreted intent must be visible to the caller.
+        assert "`search`" in result
+        assert "low confidence" in result.lower()
+
+    def test_moderate_confidence_tier_uses_existing_wording(self, handler):
+        """Confidence in the 0.55-0.7 band keeps the legacy 'moderate' wording.
+
+        Avoid churning well-calibrated mid-tier matches; only the tier-1
+        (default-fallback) wording needed to change.
+        """
+        explicit = "/zims/test.zim"
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=("walk_namespace", {"namespace": "C"}, 0.6),
+        ):
+            result = handler.handle_zim_query("anything", zim_file_path=explicit)
+        assert "moderate confidence" in result
+
+    def test_high_confidence_appends_no_note(self, handler):
+        """Confidence ≥ 0.7 should not append any note."""
+        explicit = "/zims/test.zim"
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=("walk_namespace", {"namespace": "C"}, 0.95),
+        ):
+            result = handler.handle_zim_query("anything", zim_file_path=explicit)
+        assert "confidence" not in result.lower()
