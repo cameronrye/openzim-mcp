@@ -87,18 +87,35 @@ def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
 def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def extract_article_links(
-        zim_file_path: str, entry_path: str
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 100,
+        offset: int = 0,
+        kind: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Extract internal and external links from an article.
+        """Extract internal and external links from an article (paginated).
+
+        Heavy articles (e.g. Wikipedia "Evolution") carry hundreds of links;
+        the response is paged per category to fit within MCP token budgets.
+        ``total_internal_links`` / ``total_external_links`` /
+        ``total_media_links`` always report the full counts so callers can
+        request the next page.
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'C/Some_Article'
+            limit: Max items per category in the response (1-500, default 100).
+            offset: Starting offset within each category (default 0).
+            kind: Optional filter — ``"internal"``, ``"external"``, or
+                ``"media"``. When set, the other categories are returned as
+                empty lists; their totals are still reported.
 
         Returns:
-            Dict containing extracted links (title, path, internal_links,
-            external_links, media_links, total_links). On failure, returns a
-            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
+            Dict with paged links plus per-category totals and a
+            ``pagination`` block (``offset``, ``limit``, ``has_more``,
+            ``has_more_internal``, ``has_more_external``, ``has_more_media``,
+            ``kind``). On failure, returns a ``{"error": True, ...}``
+            envelope (see ``responses.tool_error``).
         """
         try:
             try:
@@ -118,7 +135,11 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
             return await server.async_zim_operations.extract_article_links_data(
-                zim_file_path, entry_path
+                zim_file_path,
+                entry_path,
+                limit=limit,
+                offset=offset,
+                kind=kind,
             )
 
         except Exception as e:

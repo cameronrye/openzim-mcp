@@ -58,6 +58,37 @@ class TestGetServerHealthTool:
         assert CACHE_LOW_HIT_RATE_THRESHOLD >= 0
         assert CACHE_HIGH_HIT_RATE_THRESHOLD <= 1
 
+    def test_cache_low_recommendation_silent_below_min_samples(self):
+        """No 'cache hit rate is low' warning until enough accesses logged.
+
+        Beta testers complained that the warning fired at 22% on a fresh
+        session — which is the natural rate while the cache is warming up.
+        The recommendation must require a minimum sample size before
+        commenting on the trend.
+        """
+        from openzim_mcp.tools.server_tools import _append_cache_recommendations
+
+        recs: list[str] = []
+        # 5 hits + 15 misses = 20 accesses; below the threshold.
+        _append_cache_recommendations(
+            {"enabled": True, "hit_rate": 0.25, "hits": 5, "misses": 15}, recs
+        )
+        assert recs == [], (
+            "low-rate warning must stay silent until cache has seen "
+            "enough accesses to be representative"
+        )
+
+    def test_cache_low_recommendation_fires_above_min_samples(self):
+        """Once enough samples accumulate, the warning fires as before."""
+        from openzim_mcp.tools.server_tools import _append_cache_recommendations
+
+        recs: list[str] = []
+        # 200 accesses, 25% hit rate — enough signal to warn.
+        _append_cache_recommendations(
+            {"enabled": True, "hit_rate": 0.25, "hits": 50, "misses": 150}, recs
+        )
+        assert any("hit rate is low" in r for r in recs), recs
+
 
 class TestGetServerConfigurationTool:
     """Test get_server_configuration tool functionality."""
@@ -151,6 +182,16 @@ class TestDiagnosticToolPathRedaction:
 
         # PID must not be exposed.
         assert result["uptime_info"]["process_id"] != os.getpid()
+        # Uptime is now tracked (replaces the old "unknown" placeholder).
+        assert result["uptime_info"]["started_at"] != "unknown"
+        assert isinstance(result["uptime_info"]["uptime_seconds"], (int, float))
+        assert result["uptime_info"]["uptime_seconds"] >= 0
+        # Timestamps must be timezone-aware UTC (ends with +00:00 or Z) so
+        # the response doesn't mix naive local time with the UTC started_at.
+        for ts_field in (result["timestamp"], result["uptime_info"]["started_at"]):
+            assert ts_field.endswith(
+                ("+00:00", "Z")
+            ), f"timestamp {ts_field!r} must be UTC (Z or +00:00)"
 
     @pytest.mark.asyncio
     async def test_get_server_health_warning_paths_redacted(self, temp_dir):

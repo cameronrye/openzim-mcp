@@ -325,7 +325,9 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file
-            partial_query: Partial search query
+            partial_query: Partial search query. Must be at least 2 characters
+                after stripping whitespace; shorter queries return an empty
+                suggestion list with an explanatory ``message`` field.
             limit: Maximum number of suggestions to return (1-50, default: 10)
 
         Returns:

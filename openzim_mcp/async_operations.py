@@ -332,28 +332,47 @@ class AsyncZimOperations:
         self,
         zim_file_path: str,
         entry_path: str,
+        limit: int = 100,
+        offset: int = 0,
+        kind: Optional[str] = None,
     ) -> str:
-        """Extract links from an article (async).
+        """Extract links from an article (async, paginated).
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Path to the entry
+            limit: Max items per category (1-500)
+            offset: Starting offset within each category
+            kind: Optional filter — "internal", "external", or "media"
 
         Returns:
             Links as JSON string
         """
         return await asyncio.to_thread(
-            self._ops.extract_article_links, zim_file_path, entry_path
+            self._ops.extract_article_links,
+            zim_file_path,
+            entry_path,
+            limit,
+            offset,
+            kind,
         )
 
     async def extract_article_links_data(
         self,
         zim_file_path: str,
         entry_path: str,
+        limit: int = 100,
+        offset: int = 0,
+        kind: Optional[str] = None,
     ) -> dict:
-        """Structured variant of ``extract_article_links`` (async)."""
+        """Structured variant of ``extract_article_links`` (async, paginated)."""
         return await asyncio.to_thread(
-            self._ops.extract_article_links_data, zim_file_path, entry_path
+            self._ops.extract_article_links_data,
+            zim_file_path,
+            entry_path,
+            limit,
+            offset,
+            kind,
         )
 
     async def get_entry_summary(

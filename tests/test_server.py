@@ -1432,3 +1432,65 @@ class TestOpenZimMcpServerParameterValidation:
         server.zim_operations.browse_namespace.assert_called_once_with(
             "test.zim", "A", 50, 10
         )
+
+
+def _registered_tool_names(server: OpenZimMcpServer) -> set[str]:
+    """Return the set of MCP tools registered on ``server``.
+
+    FastMCP exposes the live registry via ``_tool_manager._tools`` (also used
+    by ``test_batch_get_entries``).
+    """
+    tools = (
+        server.mcp._tool_manager._tools if hasattr(server.mcp, "_tool_manager") else {}
+    )
+    return set(tools.keys())
+
+
+class TestToolModeRegistration:
+    """Registered tool surface must match the configured ``tool_mode``.
+
+    Simple mode advertises a single intelligent tool (``zim_query``); any
+    extra registered tool defeats the entire point of the mode (the model
+    receives every advanced tool's schema as part of the prompt, which is
+    what bloats prefill into the multi-thousand-token range observed in
+    real chat clients).
+    """
+
+    def test_simple_mode_registers_only_zim_query(self, test_config: OpenZimMcpConfig):
+        """Simple mode must register exactly one tool: ``zim_query``."""
+        simple_config = test_config.model_copy(update={"tool_mode": "simple"})
+        server = OpenZimMcpServer(simple_config)
+
+        names = _registered_tool_names(server)
+        assert names == {"zim_query"}, (
+            "simple mode must expose only zim_query; " f"got {sorted(names)}"
+        )
+
+    def test_advanced_mode_registers_full_tool_surface(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """Advanced mode registers the full advanced tool surface.
+
+        It must NOT include the simple-mode wrapper ``zim_query``.
+        """
+        # test_config now defaults to tool_mode='advanced' (see conftest).
+        assert test_config.tool_mode == "advanced"
+        server = OpenZimMcpServer(test_config)
+
+        names = _registered_tool_names(server)
+        # A representative sample of advanced-only tools that should appear.
+        for expected in (
+            "list_zim_files",
+            "search_zim_file",
+            "get_zim_entry",
+            "get_zim_metadata",
+            "browse_namespace",
+            "get_article_structure",
+        ):
+            assert (
+                expected in names
+            ), f"advanced mode missing {expected!r}; got {sorted(names)}"
+        # And the simple-only wrapper must NOT be present in advanced mode.
+        assert (
+            "zim_query" not in names
+        ), "advanced mode should not register the simple-mode wrapper"

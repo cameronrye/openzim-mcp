@@ -43,6 +43,43 @@ logger = logging.getLogger(__name__)
 # Default MIME type when libzim has no mimetype for an entry.
 DEFAULT_BINARY_MIME = "application/octet-stream"
 
+# Byte cap for text bodies served via ``zim://{name}/entry/{path}``. Resources
+# don't carry per-call parameters in MCP, so callers can't ask for paging
+# inline; without a cap, a 1 MB Wikipedia article would land in the response
+# verbatim and overflow the LLM token budget. 256 KB ≈ ~64K tokens worst-case
+# and matches the order of magnitude of ``get_zim_entry``'s default
+# ``content_max_length`` (100 KB) while leaving headroom for richer HTML.
+DEFAULT_RESOURCE_MAX_BYTES = 256 * 1024
+
+
+def _truncate_text_body(body: str, max_bytes: int) -> str:
+    """Truncate ``body`` so its UTF-8 encoding fits within ``max_bytes``.
+
+    Appends a notice that points callers at ``get_zim_entry``, which supports
+    paging via ``content_offset`` / ``max_content_length``. Multi-byte
+    characters (CJK, emoji) are counted by their UTF-8 byte width so a
+    Japanese/Chinese article can't bypass the cap by virtue of having many
+    short visible characters.
+
+    A non-positive ``max_bytes`` returns the notice on its own — callers that
+    misconfigure the cap don't get a wedged response, just an empty body.
+    """
+    notice_template = (
+        "\n\n[Resource truncated at {limit:,} bytes. The full entry has "
+        "{total:,} bytes. Use the get_zim_entry tool with `content_offset` "
+        "to page through the rest, or get_binary_entry for raw bytes.]"
+    )
+    encoded = body.encode("utf-8")
+    total = len(encoded)
+    if max_bytes <= 0:
+        return notice_template.format(limit=max_bytes, total=total).lstrip()
+    if total <= max_bytes:
+        return body
+    # Decode the head safely — utf-8 'replace' handles any boundary that
+    # would split a multi-byte sequence.
+    head = encoded[:max_bytes].decode("utf-8", errors="replace")
+    return head + notice_template.format(limit=max_bytes, total=total)
+
 
 def _resolve_zim_name(server: "OpenZimMcpServer", name: str) -> Optional[str]:
     """Resolve a ZIM ``name`` (bare stem or full filename) to its archive path.
@@ -135,8 +172,37 @@ class ZimEntryResource(Resource):
             "application/xml",
             "application/javascript",
         ):
-            return raw.decode("utf-8", errors="replace")
-        # Binary — FastMCP base64-wraps when content is bytes.
+            # Cap text bodies so an 800 KB Wikipedia article doesn't overrun
+            # the response token budget. The notice points callers at the
+            # paged get_zim_entry tool for the rest.
+            decoded = raw.decode("utf-8", errors="replace")
+            if len(decoded.encode("utf-8")) > DEFAULT_RESOURCE_MAX_BYTES:
+                logger.info(
+                    "Resource %s truncated: %d bytes -> %d byte cap",
+                    self.entry_path,
+                    len(raw),
+                    DEFAULT_RESOURCE_MAX_BYTES,
+                )
+            return _truncate_text_body(decoded, DEFAULT_RESOURCE_MAX_BYTES)
+        # Binary — FastMCP base64-wraps when content is bytes. Truncating a
+        # binary body silently corrupts it (a clipped PDF / PNG won't open),
+        # so refuse oversize binaries with an actionable error pointing at
+        # ``get_binary_entry``, which exposes ``max_size_bytes`` so callers
+        # can opt in to large fetches and get a ``truncated`` flag back.
+        if len(raw) > DEFAULT_RESOURCE_MAX_BYTES:
+            logger.info(
+                "Resource %s rejected: binary %d bytes exceeds %d byte cap",
+                self.entry_path,
+                len(raw),
+                DEFAULT_RESOURCE_MAX_BYTES,
+            )
+            raise OpenZimMcpArchiveError(
+                f"Binary resource {self.entry_path!r} is "
+                f"{len(raw):,} bytes — over the {DEFAULT_RESOURCE_MAX_BYTES:,} "
+                f"byte resource cap. Use the get_binary_entry tool with "
+                f"max_size_bytes set to fetch large media (PDFs, video, etc.) "
+                f"safely; the tool returns a truncated flag and pages by size."
+            )
         return raw
 
 

@@ -42,6 +42,16 @@ class OpenZimMcpServer:
         """
         self.config = config
 
+        # Track server start so health reports can show real uptime instead
+        # of the placeholder ``"unknown"`` it returned before. Stored as both
+        # a UTC ISO-8601 string (for display) and a monotonic anchor (for
+        # uptime maths that survive wall-clock jumps).
+        import time as _time
+        from datetime import datetime, timezone
+
+        self._start_time = datetime.now(timezone.utc).isoformat()
+        self._start_monotonic = _time.monotonic()
+
         # Setup logging
         config.setup_logging()
         logger.info(f"Initializing OpenZIM MCP server v{__version__}")
@@ -121,8 +131,7 @@ class OpenZimMcpServer:
         )
         if config.tool_mode == TOOL_MODE_SIMPLE:
             logger.info(
-                "Running in SIMPLE mode with 1 intelligent tool (zim_query) "
-                "plus all underlying tools"
+                "Running in SIMPLE mode with 1 intelligent tool (zim_query)"
             )
         else:
             logger.debug(
@@ -168,7 +177,14 @@ class OpenZimMcpServer:
         )
 
     def _register_simple_tools(self) -> None:
-        """Register simple mode tools with underlying tools for routing."""
+        """Register the single ``zim_query`` tool used in simple mode.
+
+        Simple mode exposes exactly one MCP tool. ``zim_query`` parses the
+        natural-language query, classifies its intent, and delegates to
+        ``ZimOperations`` directly — the underlying advanced-mode tools are
+        deliberately not registered, so the schema sent to the model stays
+        compact and matches the README's "simple mode = 1 tool" promise.
+        """
 
         # Register the simple wrapper tools that LLMs will primarily use
         @self.mcp.tool()
@@ -252,11 +268,7 @@ class OpenZimMcpServer:
                     context=f"Query: {query}, File: {zim_file_path}",
                 )
 
-        # Also register the advanced tools so they're available for advanced use
-        # This allows the simple mode to still have access to all functionality
-        self._register_advanced_tools()
-
-        logger.info("Simple mode tools registered (zim_query + all underlying tools)")
+        logger.info("Simple mode tools registered (zim_query only)")
 
     def _register_tools(self) -> None:
         """Register MCP tools based on configured mode."""

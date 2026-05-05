@@ -1237,6 +1237,10 @@ class TestZimOperations:
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive_instance = MagicMock()
+            # Old-scheme paths are namespace-prefixed (A/Test_Entry); declare
+            # the scheme explicitly so the new-scheme short-circuit doesn't
+            # fire and skip the search results.
+            mock_archive_instance.has_new_namespace_scheme = False
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             # Mock searcher with results
@@ -1337,15 +1341,29 @@ class TestZimOperations:
         result = zim_operations.get_article_structure_data(str(zim_file), "A/Test")
         assert result == {"cached": "structure"}
 
-        # Test extract_article_links_data cache hit. extract_article_links now
-        # delegates to extract_article_links_data, which caches dicts under a
-        # `links_data:` key. Exercise the cache hit path against the
-        # dict-returning entry point directly.
-        cache_key = f"links_data:{validated_path}:A/Test"
-        zim_operations.cache.set(cache_key, {"cached": "links"})
+        # Test extract_article_links_data cache hit. extract_article_links_data
+        # caches the parsed extraction (full lists) under a stable
+        # ``links_full:`` key so different paginated requests share one parse;
+        # the response is rendered fresh per call, so the hit assertion checks
+        # the post-render dict carries the cached title/path metadata rather
+        # than asserting raw equality.
+        cache_key = f"links_full:{validated_path}:A/Test"
+        zim_operations.cache.set(
+            cache_key,
+            {
+                "title": "Cached Title",
+                "path": "A/Test",
+                "content_type": "text/html",
+                "internal": [],
+                "external": [],
+                "media": [],
+                "message": None,
+            },
+        )
 
         result = zim_operations.extract_article_links_data(str(zim_file), "A/Test")
-        assert result == {"cached": "links"}
+        assert result["title"] == "Cached Title"
+        assert result["path"] == "A/Test"
 
     def test_complex_search_operations(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1894,6 +1912,9 @@ class TestZimOperations:
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive_instance = MagicMock()
+            # Test paths use the old-scheme A/Entry_N convention; declare it
+            # so the new-scheme short-circuit doesn't skip them.
+            mock_archive_instance.has_new_namespace_scheme = False
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             # Test search with filters and complex scenarios
