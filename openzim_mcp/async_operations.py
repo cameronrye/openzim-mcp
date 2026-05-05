@@ -386,6 +386,22 @@ class AsyncZimOperations:
             self._ops.walk_namespace, zim_file_path, namespace, cursor, limit
         )
 
+    async def walk_namespace_data(
+        self,
+        zim_file_path: str,
+        namespace: str,
+        cursor: int = 0,
+        limit: int = 200,
+    ) -> dict:
+        """Structured variant of ``walk_namespace`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.walk_namespace_data,
+            zim_file_path,
+            namespace,
+            cursor,
+            limit,
+        )
+
     async def search_all(self, query: str, limit_per_file: int = 5) -> str:
         """Search across every ZIM file in allowed dirs (async)."""
         return await asyncio.to_thread(self._ops.search_all, query, limit_per_file)

@@ -725,31 +725,17 @@ class _NamespaceMixin:
 
         return patterns
 
-    def walk_namespace(
+    def walk_namespace_data(
         self,
         zim_file_path: str,
         namespace: str,
         cursor: int = 0,
         limit: int = 200,
-    ) -> str:
-        """Walk every entry in a namespace by entry ID, with cursor pagination.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``walk_namespace``.
 
-        Unlike browse_namespace (which samples), this iterates the archive
-        deterministically from ``cursor`` onward and returns up to ``limit``
-        entries that belong to the requested namespace. Pair the returned
-        ``next_cursor`` with a follow-up call to walk the rest. Set to None
-        when iteration is complete.
-
-        Args:
-            zim_file_path: Path to the ZIM file
-            namespace: Namespace to walk (C, M, W, X, A, I, etc.)
-            cursor: Entry ID to resume from (default 0; use the value from
-                ``next_cursor`` of the previous call)
-            limit: Maximum entries to return per page (1–500, default 200)
-
-        Returns:
-            JSON containing entries in the namespace, the next cursor, and
-            ``done: true`` if iteration finished
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
@@ -812,8 +798,45 @@ class _NamespaceMixin:
                     "total_entries": total,
                     "entries": entries,
                 }
-                return json.dumps(result, indent=2, ensure_ascii=False)
+                return result
         except OpenZimMcpArchiveError:
             raise
         except Exception as e:
             raise OpenZimMcpArchiveError(f"walk_namespace failed: {e}") from e
+
+    def walk_namespace(
+        self,
+        zim_file_path: str,
+        namespace: str,
+        cursor: int = 0,
+        limit: int = 200,
+    ) -> str:
+        """Legacy JSON-string variant of ``walk_namespace_data``.
+
+        Walk every entry in a namespace by entry ID, with cursor pagination.
+
+        Unlike browse_namespace (which samples), this iterates the archive
+        deterministically from ``cursor`` onward and returns up to ``limit``
+        entries that belong to the requested namespace. Pair the returned
+        ``next_cursor`` with a follow-up call to walk the rest. Set to None
+        when iteration is complete.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            namespace: Namespace to walk (C, M, W, X, A, I, etc.)
+            cursor: Entry ID to resume from (default 0; use the value from
+                ``next_cursor`` of the previous call)
+            limit: Maximum entries to return per page (1–500, default 200)
+
+        Returns:
+            JSON containing entries in the namespace, the next cursor, and
+            ``done: true`` if iteration finished
+
+        Raises:
+            OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
+        """
+        return json.dumps(
+            self.walk_namespace_data(zim_file_path, namespace, cursor, limit),
+            indent=2,
+            ensure_ascii=False,
+        )

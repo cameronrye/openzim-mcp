@@ -508,7 +508,7 @@ class TestWalkNamespaceLimitValidation:
     ):
         """Reject limit > 500 with a validation error before backend access."""
         # Backend should never be reached; raise loudly if it is.
-        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
             side_effect=AssertionError("backend should not be called for invalid limit")
         )
 
@@ -521,15 +521,17 @@ class TestWalkNamespaceLimitValidation:
             cursor=0,
             limit=100000,
         )
-        assert "must be between 1 and 500" in result
-        advanced_server.async_zim_operations.walk_namespace.assert_not_called()
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "must be between 1 and 500" in result.get("message", "")
+        advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_walk_namespace_rejects_limit_too_low(
         self, advanced_server, temp_dir
     ):
         """Reject limit < 1 with a validation error."""
-        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
             side_effect=AssertionError("backend should not be called for invalid limit")
         )
 
@@ -542,15 +544,17 @@ class TestWalkNamespaceLimitValidation:
             cursor=0,
             limit=0,
         )
-        assert "must be between 1 and 500" in result
-        advanced_server.async_zim_operations.walk_namespace.assert_not_called()
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "must be between 1 and 500" in result.get("message", "")
+        advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_walk_namespace_rejects_negative_cursor(
         self, advanced_server, temp_dir
     ):
         """Negative cursor must produce a validation error."""
-        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
             side_effect=AssertionError(
                 "backend should not be called for invalid cursor"
             )
@@ -565,14 +569,16 @@ class TestWalkNamespaceLimitValidation:
             cursor=-1,
             limit=200,
         )
-        assert "must be non-negative" in result
-        advanced_server.async_zim_operations.walk_namespace.assert_not_called()
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "must be non-negative" in result.get("message", "")
+        advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_walk_namespace_accepts_valid_bounds(self, advanced_server, temp_dir):
         """Valid limit/cursor must reach the backend."""
-        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
-            return_value='{"entries": [], "next_cursor": 200, "done": false}'
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
+            return_value={"entries": [], "next_cursor": 200, "done": False}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -584,5 +590,6 @@ class TestWalkNamespaceLimitValidation:
             cursor=0,
             limit=200,
         )
+        assert isinstance(result, dict)
         assert "entries" in result
-        advanced_server.async_zim_operations.walk_namespace.assert_called_once()
+        advanced_server.async_zim_operations.walk_namespace_data.assert_called_once()

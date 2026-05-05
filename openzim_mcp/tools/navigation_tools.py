@@ -137,7 +137,7 @@ def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
         namespace: str,
         cursor: int = 0,
         limit: int = 200,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Iterate every entry in a namespace via deterministic cursor pagination.
 
         Unlike browse_namespace (which samples and may cap at 200 entries
@@ -157,16 +157,26 @@ def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
             limit: Max entries per page (1-500, default: 200)
 
         Returns:
-            JSON containing entries, `next_cursor`, and `done` flag
+            Dict with keys: namespace, cursor, limit, returned_count,
+            scanned_count, next_cursor, done, scanned_through_id,
+            total_entries, entries. On failure, returns a
+            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("browse_namespace")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
-                    operation="walk namespace",
-                    error=e,
-                    context=f"Namespace: {namespace}",
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
+                        operation="walk namespace",
+                        message=server._create_enhanced_error_message(
+                            operation="walk namespace",
+                            error=e,
+                            context=f"Namespace: {namespace}",
+                        ),
+                        context=f"Namespace: {namespace}",
+                    ),
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -177,35 +187,54 @@ def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
             # without this check, callers could open the libzim Archive
             # for arbitrarily oversized requests before being rejected.
             if limit < 1 or limit > 500:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 500 "
-                    f"(provided: {limit})\n\n"
-                    "**Troubleshooting**: Adjust the limit parameter to a "
-                    "value within the valid range.\n"
-                    "**Example**: Use `limit=200` for the default page size."
+                return tool_error(
+                    operation="walk namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 500 "
+                        f"(provided: {limit})\n\n"
+                        "**Troubleshooting**: Adjust the limit parameter to a "
+                        "value within the valid range.\n"
+                        "**Example**: Use `limit=200` for the default page size."
+                    ),
+                    context=f"Namespace: {namespace}, Limit: {limit}",
                 )
             if cursor < 0:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: cursor must be non-negative (provided: {cursor})\n\n"
-                    "**Troubleshooting**: Use cursor=0 to start, or pass the "
-                    "`next_cursor` value returned by a previous call.\n"
-                    "**Example**: `cursor=0` on the first call."
+                return tool_error(
+                    operation="walk namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: cursor must be non-negative "
+                        f"(provided: {cursor})\n\n"
+                        "**Troubleshooting**: Use cursor=0 to start, or pass the "
+                        "`next_cursor` value returned by a previous call.\n"
+                        "**Example**: `cursor=0` on the first call."
+                    ),
+                    context=f"Namespace: {namespace}, Cursor: {cursor}",
                 )
 
-            return await server.async_zim_operations.walk_namespace(
+            return await server.async_zim_operations.walk_namespace_data(
                 zim_file_path, namespace, cursor, limit
             )
 
         except Exception as e:
             logger.error(f"Error in walk_namespace: {e}")
-            return server._create_enhanced_error_message(
-                operation="walk namespace",
-                error=e,
-                context=(
-                    f"File: {zim_file_path}, Namespace: {namespace}, "
-                    f"Cursor: {cursor}, Limit: {limit}"
+            return cast(
+                Dict[str, Any],
+                tool_error(
+                    operation="walk namespace",
+                    message=server._create_enhanced_error_message(
+                        operation="walk namespace",
+                        error=e,
+                        context=(
+                            f"File: {zim_file_path}, Namespace: {namespace}, "
+                            f"Cursor: {cursor}, Limit: {limit}"
+                        ),
+                    ),
+                    context=(
+                        f"File: {zim_file_path}, Namespace: {namespace}, "
+                        f"Cursor: {cursor}, Limit: {limit}"
+                    ),
                 ),
             )
 
