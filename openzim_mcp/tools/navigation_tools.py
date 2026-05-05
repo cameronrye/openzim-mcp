@@ -1,7 +1,7 @@
 """Navigation and browsing tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from ..constants import (
     INPUT_LIMIT_CONTENT_TYPE,
@@ -11,6 +11,7 @@ from ..constants import (
     INPUT_LIMIT_QUERY,
 )
 from ..exceptions import OpenZimMcpRateLimitError
+from ..responses import tool_error
 from ..security import sanitize_input
 
 if TYPE_CHECKING:
@@ -34,7 +35,7 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
         namespace: str,
         limit: int = 50,
         offset: int = 0,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Browse entries in a specific namespace with pagination.
 
         Args:
@@ -44,17 +45,28 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
             offset: Starting offset for pagination (default: 0)
 
         Returns:
-            JSON string containing namespace entries
+            Dict with keys: namespace, total_in_namespace, offset, limit,
+            returned_count, has_more, next_cursor, entries, sampling_based,
+            discovery_method, is_total_authoritative, results_may_be_incomplete.
+            On failure, returns a ``{"error": True, ...}`` envelope (see
+            ``responses.tool_error``).
         """
         try:
             # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("browse_namespace")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
-                    operation="browse namespace",
-                    error=e,
-                    context=f"Namespace: {namespace}",
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
+                        operation="browse namespace",
+                        message=server._create_enhanced_error_message(
+                            operation="browse namespace",
+                            error=e,
+                            context=f"Namespace: {namespace}",
+                        ),
+                        context=f"Namespace: {namespace}",
+                    ),
                 )
 
             # Sanitize inputs
@@ -65,36 +77,55 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
 
             # Validate parameters
             if limit < 1 or limit > 200:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 200 "
-                    f"(provided: {limit})\n\n"
-                    "**Troubleshooting**: Adjust the limit parameter to a "
-                    "value within the valid range.\n"
-                    "**Example**: Use `limit=50` for reasonable pagination."
+                return tool_error(
+                    operation="browse namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 200 "
+                        f"(provided: {limit})\n\n"
+                        "**Troubleshooting**: Adjust the limit parameter to a "
+                        "value within the valid range.\n"
+                        "**Example**: Use `limit=50` for reasonable pagination."
+                    ),
+                    context=f"Namespace: {namespace}, Limit: {limit}",
                 )
             if offset < 0:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: offset must be non-negative (provided: {offset})\n\n"
-                    "**Troubleshooting**: Use offset=0 to start from the beginning, "
-                    "or a positive number to skip entries.\n"
-                    "**Example**: Use `offset=50` to skip the first 50 entries."
+                return tool_error(
+                    operation="browse namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: offset must be non-negative "
+                        f"(provided: {offset})\n\n"
+                        "**Troubleshooting**: Use offset=0 to start from the "
+                        "beginning, or a positive number to skip entries.\n"
+                        "**Example**: Use `offset=50` to skip the first 50 entries."
+                    ),
+                    context=f"Namespace: {namespace}, Offset: {offset}",
                 )
 
             # Use async operations
-            return await server.async_zim_operations.browse_namespace(
+            return await server.async_zim_operations.browse_namespace_data(
                 zim_file_path, namespace, limit, offset
             )
 
         except Exception as e:
             logger.error(f"Error browsing namespace: {e}")
-            return server._create_enhanced_error_message(
-                operation="browse namespace",
-                error=e,
-                context=(
-                    f"File: {zim_file_path}, Namespace: {namespace}, "
-                    f"Limit: {limit}, Offset: {offset}"
+            return cast(
+                Dict[str, Any],
+                tool_error(
+                    operation="browse namespace",
+                    message=server._create_enhanced_error_message(
+                        operation="browse namespace",
+                        error=e,
+                        context=(
+                            f"File: {zim_file_path}, Namespace: {namespace}, "
+                            f"Limit: {limit}, Offset: {offset}"
+                        ),
+                    ),
+                    context=(
+                        f"File: {zim_file_path}, Namespace: {namespace}, "
+                        f"Limit: {limit}, Offset: {offset}"
+                    ),
                 ),
             )
 

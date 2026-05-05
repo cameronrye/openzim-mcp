@@ -1317,12 +1317,15 @@ class TestZimOperations:
         result = zim_operations.list_namespaces_data(str(zim_file))
         assert result == {"cached": "namespaces"}
 
-        # Test browse_namespace cache hit (lines 691-692)
-        cache_key = f"browse_ns:{validated_path}:A:50:0"
-        zim_operations.cache.set(cache_key, '{"cached": "browse"}')
+        # Test browse_namespace_data cache hit. browse_namespace now
+        # delegates to browse_namespace_data, which caches dicts under a
+        # `browse_ns_data:` key. Exercise the cache hit path against the
+        # dict-returning entry point directly.
+        cache_key = f"browse_ns_data:{validated_path}:A:50:0"
+        zim_operations.cache.set(cache_key, {"cached": "browse"})
 
-        result = zim_operations.browse_namespace(str(zim_file), "A")
-        assert result == '{"cached": "browse"}'
+        result = zim_operations.browse_namespace_data(str(zim_file), "A")
+        assert result == {"cached": "browse"}
 
         # Test get_article_structure cache hit (lines 1228-1229)
         cache_key = f"structure:{validated_path}:A/Test"

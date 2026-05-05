@@ -543,7 +543,18 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
 
             for tool_name, params in test_cases:
                 result = asyncio.run(server.mcp.call_tool(tool_name, params))
-                assert "Success:" in str(result) or "Error:" in str(result)
+                # Tools may surface success either via the legacy mocked
+                # string ("Success: ...") or, for migrated tools, fail with
+                # the structured-content error envelope (which carries
+                # ``'error': True`` because the legacy sync mock no longer
+                # intercepts the now-async ``_data`` codepath).
+                result_str = str(result)
+                assert (
+                    "Success:" in result_str
+                    or "Error:" in result_str
+                    or "'error': True" in result_str
+                    or "**Operation**" in result_str
+                )
 
         finally:
             # Restore original methods

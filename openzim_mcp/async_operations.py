@@ -206,6 +206,22 @@ class AsyncZimOperations:
             self._ops.browse_namespace, zim_file_path, namespace, limit, offset
         )
 
+    async def browse_namespace_data(
+        self,
+        zim_file_path: str,
+        namespace: str = "C",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """Structured variant of ``browse_namespace`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.browse_namespace_data,
+            zim_file_path,
+            namespace,
+            limit,
+            offset,
+        )
+
     async def search_with_filters(
         self,
         zim_file_path: str,

@@ -217,8 +217,8 @@ class TestNavigationToolsDirectInvocation:
     @pytest.mark.asyncio
     async def test_browse_namespace_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking browse_namespace tool handler directly."""
-        advanced_server.async_zim_operations.browse_namespace = AsyncMock(
-            return_value='{"entries": [{"path": "C/Article", "title": "Article"}]}'
+        advanced_server.async_zim_operations.browse_namespace_data = AsyncMock(
+            return_value={"entries": [{"path": "C/Article", "title": "Article"}]}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -230,6 +230,7 @@ class TestNavigationToolsDirectInvocation:
                 limit=50,
                 offset=0,
             )
+            assert isinstance(result, dict)
             assert "entries" in result
 
     @pytest.mark.asyncio
@@ -246,7 +247,9 @@ class TestNavigationToolsDirectInvocation:
                 limit=300,  # > 200
                 offset=0,
             )
-            assert "must be between 1 and 200" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be between 1 and 200" in result.get("message", "")
 
             # Test limit too low
             result = await tool_handler(
@@ -255,7 +258,9 @@ class TestNavigationToolsDirectInvocation:
                 limit=0,  # < 1
                 offset=0,
             )
-            assert "must be between 1 and 200" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be between 1 and 200" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_browse_namespace_with_negative_offset(
@@ -271,7 +276,9 @@ class TestNavigationToolsDirectInvocation:
                 limit=50,
                 offset=-1,  # Negative
             )
-            assert "must be non-negative" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be non-negative" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_browse_namespace_with_rate_limit(self, advanced_server, temp_dir):
@@ -289,12 +296,15 @@ class TestNavigationToolsDirectInvocation:
                 limit=50,
                 offset=0,
             )
-            assert "Error" in result or "Rate limit" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "Rate limit" in message or "Operation" in message
 
     @pytest.mark.asyncio
     async def test_browse_namespace_with_exception(self, advanced_server, temp_dir):
         """Test browse_namespace when an exception occurs."""
-        advanced_server.async_zim_operations.browse_namespace = AsyncMock(
+        advanced_server.async_zim_operations.browse_namespace_data = AsyncMock(
             side_effect=Exception("Namespace not found")
         )
 
@@ -307,9 +317,13 @@ class TestNavigationToolsDirectInvocation:
                 limit=50,
                 offset=0,
             )
-            # Error messages may be formatted with **Error** or **Resource Not Found**
-            assert "**" in result and (
-                "Error" in result or "Not Found" in result or "Operation" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            # Error messages may be formatted with **Error** / **Resource Not Found**
+            # / **Operation** depending on the underlying exception classification.
+            assert "**" in message and (
+                "Error" in message or "Not Found" in message or "Operation" in message
             )
 
     @pytest.mark.asyncio
