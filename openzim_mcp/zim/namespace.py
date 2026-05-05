@@ -8,6 +8,7 @@ that surfaces or iterates over the archive's namespace structure.
 shim's symbols continue to work without changes.
 """
 
+import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -106,6 +107,10 @@ class _NamespaceMixin:
         archives, fall back to random sampling and return estimated counts.
         Random sampling on small entry pools collides heavily, leaving
         namespaces undiscovered and counts wildly off.
+
+        For new-scheme archives, the iterable surface only contains C
+        entries; M is enumerated separately via ``archive.metadata_keys`` and
+        W is surfaced via canonical probes.
         """
         namespaces: Dict[str, Dict[str, Any]] = {}
         seen_entries: set[str] = set()
@@ -115,7 +120,9 @@ class _NamespaceMixin:
         total_entries = archive.entry_count
         full_iteration = total_entries <= NAMESPACE_MAX_SAMPLE_SIZE
 
-        record = self._make_namespace_recorder(namespaces, seen_entries)
+        record = self._make_namespace_recorder(
+            namespaces, seen_entries, has_new_scheme=has_new_scheme
+        )
 
         if full_iteration:
             self._iterate_all_entries(archive, total_entries, record)
@@ -124,6 +131,13 @@ class _NamespaceMixin:
             self._sample_entries(archive, total_entries, seen_entries, record)
             self._probe_known_namespaces(archive, seen_entries, record)
             self._finalise_sampled(namespaces, total_entries)
+
+        # In new-scheme archives, M, W, X are reached via dedicated APIs, not
+        # via the entry iterator. Surface them explicitly so callers see the
+        # archive's real namespace inventory.
+        if has_new_scheme:
+            self._add_new_scheme_metadata_namespace(archive, namespaces)
+            self._add_new_scheme_well_known_namespace(archive, namespaces)
 
         result = {
             "total_entries": total_entries,
@@ -135,21 +149,93 @@ class _NamespaceMixin:
         }
         return json.dumps(result, indent=2, ensure_ascii=False)
 
+    @staticmethod
+    def _add_new_scheme_metadata_namespace(
+        archive: Archive, namespaces: Dict[str, Dict[str, Any]]
+    ) -> None:
+        """Populate the M namespace entry from ``archive.metadata_keys``.
+
+        In new-scheme archives the public entry iterator surfaces only C
+        entries; metadata is reached through ``Archive.metadata_keys`` and
+        ``get_metadata_item``. Without this, list_namespaces would silently
+        omit M for every modern archive.
+        """
+        try:
+            keys = list(getattr(archive, "metadata_keys", []) or [])
+        except Exception as e:
+            logger.debug(f"Unable to read metadata_keys: {e}")
+            return
+        if not keys:
+            return
+        ns_info = {
+            "count": len(keys),
+            "description": _NAMESPACE_DESCRIPTIONS["M"],
+            "sample_entries": [{"path": f"M/{k}", "title": k} for k in keys[:5]],
+            "sampled_count": len(keys),
+            "estimated_total": len(keys),
+            "probed_count": 0,
+        }
+        namespaces["M"] = ns_info
+
+    @staticmethod
+    def _add_new_scheme_well_known_namespace(
+        archive: Archive, namespaces: Dict[str, Dict[str, Any]]
+    ) -> None:
+        """Surface the W namespace via canonical probes (mainPage, favicon).
+
+        New-scheme archives expose well-known entries through dedicated APIs
+        (``main_entry``, ``get_illustration_item``); they aren't part of the
+        iterable C surface. Probing canonical paths gives a deterministic
+        existence proof.
+        """
+        probes: List[Tuple[str, str]] = []
+        # Suppressing exceptions here is intentional: probes are best-effort
+        # advertisements of well-known entries. A failed probe simply means
+        # we don't surface that path; it must not abort the listing.
+        with contextlib.suppress(Exception):
+            if getattr(archive, "has_main_entry", False):
+                probes.append(("W/mainPage", "mainPage"))
+        # ``has_illustration()`` (no size arg) reports whether any
+        # illustration is available; preferred over the deprecated
+        # ``get_illustration_sizes`` which carries a DeprecationWarning.
+        with contextlib.suppress(Exception):
+            if archive.has_illustration():
+                probes.append(("W/favicon", "favicon"))
+        if not probes:
+            return
+        namespaces["W"] = {
+            "count": len(probes),
+            "description": _NAMESPACE_DESCRIPTIONS["W"],
+            "sample_entries": [{"path": p, "title": t} for p, t in probes],
+            "sampled_count": 0,
+            "probed_count": len(probes),
+            "estimated_total": len(probes),
+        }
+
     def _make_namespace_recorder(
-        self, namespaces: Dict[str, Dict[str, Any]], seen_entries: set[str]
+        self,
+        namespaces: Dict[str, Dict[str, Any]],
+        seen_entries: set[str],
+        has_new_scheme: bool = False,
     ) -> Any:
         """Build a closure that registers one entry into the namespaces map.
 
         Tracks sampled vs probed separately because probed entries are
         deterministic existence proofs and do NOT carry the
         sampling-frequency signal needed for ratio extrapolation.
+
+        ``has_new_scheme`` is forwarded to the namespace extractor so that
+        new-scheme archives don't fabricate first-letter buckets like
+        ``F`` from ``favicon.png`` or ``E`` from ``Evolution``.
         """
 
         def _record(path: str, title: str, is_probe: bool = False) -> None:
             if path in seen_entries:
                 return
             seen_entries.add(path)
-            namespace = self._extract_namespace_from_path(path)
+            namespace = self._extract_namespace_from_path(
+                path, has_new_scheme=has_new_scheme
+            )
             ns_info = namespaces.setdefault(
                 namespace,
                 {
@@ -276,17 +362,38 @@ class _NamespaceMixin:
             ns_info.pop("_probed_count", None)
             ns_info.pop("_sampled_count", None)
 
-    def _extract_namespace_from_path(self, path: str) -> str:
-        """Extract namespace from entry path based on ZIM format."""
+    def _extract_namespace_from_path(
+        self, path: str, has_new_scheme: bool = False
+    ) -> str:
+        """Extract namespace from entry path.
+
+        In **new-scheme** ZIM files, libzim's iterable entry surface
+        (``entry_count`` / ``_get_entry_by_id`` / ``get_random_entry``) only
+        exposes the C (content) namespace; entry paths carry no namespace
+        prefix. So every iterable path is by definition in C, regardless of
+        what its first character happens to be — parsing ``favicon.png`` or
+        ``Evolution`` as namespace ``F`` / ``E`` is wrong.
+
+        In **old-scheme** ZIMs, paths are namespace-prefixed (``A/Article``,
+        ``M/Title``); the first segment is the namespace.
+
+        Callers that have an ``Archive`` in scope must pass
+        ``has_new_scheme=archive.has_new_namespace_scheme``. The default
+        (``False``) preserves legacy single-arg call sites and keeps the
+        canonicaliser-style behaviour used by some unit tests.
+        """
         if not path:
             return "Unknown"
 
-        # For new namespace scheme, namespace is typically the first part before '/'
-        # For old scheme, it might be just the first character
+        if has_new_scheme:
+            # libzim's iterable surface in new-scheme is C-only.
+            return "C"
+
+        # Old-scheme: namespace is the first segment before '/' (or, rarely,
+        # the first character if no slash is present).
         if "/" in path:
             namespace = path.split("/", 1)[0]
         else:
-            # If no slash, treat the first character as namespace (old scheme)
             namespace = path[0] if path else "Unknown"
 
         return self._canonicalise_namespace(namespace)
@@ -461,39 +568,11 @@ class _NamespaceMixin:
         # Get detailed information for paginated entries
         for entry_path in paginated_entries:
             try:
-                entry = archive.get_entry_by_path(entry_path)
-                title = entry.title or entry_path
-
-                # Try to get content preview for text entries
-                preview = ""
-                content_type = ""
-                try:
-                    item = entry.get_item()
-                    content_type = item.mimetype or "unknown"
-
-                    if item.mimetype and item.mimetype.startswith("text/"):
-                        content = self.content_processor.process_mime_content(
-                            bytes(item.content), item.mimetype
-                        )
-                        preview = self.content_processor.create_snippet(
-                            content, max_paragraphs=1
-                        )
-                    else:
-                        preview = f"({content_type} content)"
-
-                except Exception as e:
-                    logger.debug(f"Error getting preview for {entry_path}: {e}")
-                    preview = "(Preview unavailable)"
-
-                entries.append(
-                    {
-                        "path": entry_path,
-                        "title": title,
-                        "content_type": content_type,
-                        "preview": preview,
-                    }
+                materialised = self._materialise_browse_entry(
+                    archive, entry_path, has_new_scheme
                 )
-
+                if materialised is not None:
+                    entries.append(materialised)
             except Exception as e:
                 logger.warning(f"Error processing entry {entry_path}: {e}")
                 continue
@@ -521,6 +600,11 @@ class _NamespaceMixin:
         result = {
             "namespace": namespace,
             "total_in_namespace": total_in_namespace,
+            # When sampling-based, ``total_in_namespace`` is the size of the
+            # sampled listing — the real namespace may contain more entries.
+            # Mirror that through a positively-named flag so callers don't
+            # have to invert ``is_total_authoritative`` mentally.
+            "total_in_namespace_is_lower_bound": not full_iteration,
             "offset": offset,
             "limit": limit,
             "returned_count": len(entries),
@@ -535,6 +619,78 @@ class _NamespaceMixin:
 
         return json.dumps(result, indent=2, ensure_ascii=False)
 
+    def _materialise_browse_entry(
+        self, archive: Archive, entry_path: str, has_new_scheme: bool
+    ) -> Optional[Dict[str, Any]]:
+        """Render one browse_namespace row for ``entry_path``.
+
+        New-scheme metadata entries (paths shaped ``M/<key>``) aren't on
+        libzim's regular entry surface — they're reached via
+        ``archive.get_metadata_item``. Without this branch a new-scheme
+        ``browse_namespace('M', ...)`` would error on every row.
+        """
+        if has_new_scheme and entry_path.startswith("M/"):
+            return self._materialise_new_scheme_metadata_entry(archive, entry_path)
+
+        entry = archive.get_entry_by_path(entry_path)
+        title = entry.title or entry_path
+        preview, content_type = self._render_entry_preview(entry, entry_path)
+        return {
+            "path": entry_path,
+            "title": title,
+            "content_type": content_type,
+            "preview": preview,
+        }
+
+    def _materialise_new_scheme_metadata_entry(
+        self, archive: Archive, entry_path: str
+    ) -> Optional[Dict[str, Any]]:
+        key = entry_path.split("/", 1)[1] if "/" in entry_path else entry_path
+        try:
+            item = archive.get_metadata_item(key)
+        except Exception as e:
+            logger.debug(f"get_metadata_item failed for {key}: {e}")
+            return None
+        content_type = (item.mimetype or "unknown") if item else "unknown"
+        preview = ""
+        try:
+            if item and item.mimetype and item.mimetype.startswith("text/"):
+                raw = bytes(item.content)
+                preview = self.content_processor.create_snippet(
+                    self.content_processor.process_mime_content(raw, item.mimetype),
+                    max_paragraphs=1,
+                )
+            elif item:
+                preview = f"({content_type} content)"
+        except Exception as e:
+            logger.debug(f"metadata preview failed for {key}: {e}")
+            preview = "(Preview unavailable)"
+        return {
+            "path": entry_path,
+            "title": key,
+            "content_type": content_type,
+            "preview": preview,
+        }
+
+    def _render_entry_preview(self, entry: Any, entry_path: str) -> Tuple[str, str]:
+        """Return (preview_text, content_type) for a regular entry."""
+        try:
+            item = entry.get_item()
+            content_type = item.mimetype or "unknown"
+            if item.mimetype and item.mimetype.startswith("text/"):
+                content = self.content_processor.process_mime_content(
+                    bytes(item.content), item.mimetype
+                )
+                preview = self.content_processor.create_snippet(
+                    content, max_paragraphs=1
+                )
+            else:
+                preview = f"({content_type} content)"
+            return preview, content_type
+        except Exception as e:
+            logger.debug(f"Error getting preview for {entry_path}: {e}")
+            return "(Preview unavailable)", ""
+
     def _find_entries_in_namespace(
         self, archive: Archive, namespace: str, has_new_scheme: bool
     ) -> Tuple[List[str], bool]:
@@ -544,23 +700,63 @@ class _NamespaceMixin:
         True when every entry in the archive was inspected (so the result is
         exhaustive). For larger archives, falls back to random sampling and
         returns False — counts/paths are then a lower bound.
+
+        New-scheme dispatch: M is enumerated from ``archive.metadata_keys``
+        (full iteration, exhaustive); namespaces other than C/M return empty
+        because libzim's iterable surface only exposes C in this scheme.
         """
+        if has_new_scheme:
+            if namespace == "M":
+                paths = self._enumerate_new_scheme_metadata(archive)
+                return sorted(paths), True
+            if namespace != "C":
+                # Other namespaces (W, X, etc.) aren't on the iterable surface;
+                # return empty rather than path-prefix-matching them into
+                # nonsense buckets.
+                return [], True
+            # New-scheme + C: every iterable entry is in C, so full iteration
+            # is the right call regardless of archive size. Sampling here was
+            # wasteful (same per-entry cost) and produced misleading
+            # ``total_in_namespace`` values capped at the sample size.
+            entries = self._enumerate_namespace_entries(
+                archive, namespace, archive.entry_count, has_new_scheme=True
+            )
+            return sorted(entries), True
+
         total_entries = archive.entry_count
 
         # Full iteration is exhaustive and far more accurate than sampling for
         # small archives. The threshold mirrors _list_archive_namespaces.
         if total_entries <= NAMESPACE_MAX_SAMPLE_SIZE:
             entries = self._enumerate_namespace_entries(
-                archive, namespace, total_entries
+                archive, namespace, total_entries, has_new_scheme=has_new_scheme
             )
             return sorted(entries), True
 
-        sampled, seen = self._sample_namespace_entries(archive, namespace)
-        self._extend_with_pattern_probes(archive, namespace, sampled, seen)
+        sampled, seen = self._sample_namespace_entries(
+            archive, namespace, has_new_scheme=has_new_scheme
+        )
+        self._extend_with_pattern_probes(
+            archive, namespace, sampled, seen, has_new_scheme=has_new_scheme
+        )
         return sorted(sampled), False
 
+    @staticmethod
+    def _enumerate_new_scheme_metadata(archive: Archive) -> List[str]:
+        """Build M/<key> paths from archive.metadata_keys for new-scheme."""
+        try:
+            keys = list(getattr(archive, "metadata_keys", []) or [])
+        except Exception as e:
+            logger.debug(f"Unable to read metadata_keys: {e}")
+            return []
+        return [f"M/{k}" for k in keys]
+
     def _enumerate_namespace_entries(
-        self, archive: Archive, namespace: str, total_entries: int
+        self,
+        archive: Archive,
+        namespace: str,
+        total_entries: int,
+        has_new_scheme: bool = False,
     ) -> List[str]:
         """Walk every entry id and keep those that fall under ``namespace``."""
         logger.debug(
@@ -576,7 +772,12 @@ class _NamespaceMixin:
                 if path in seen:
                     continue
                 seen.add(path)
-                if self._extract_namespace_from_path(path) == namespace:
+                if (
+                    self._extract_namespace_from_path(
+                        path, has_new_scheme=has_new_scheme
+                    )
+                    == namespace
+                ):
                     results.append(path)
             except Exception as e:
                 logger.debug(f"Error reading entry {entry_id}: {e}")
@@ -587,7 +788,7 @@ class _NamespaceMixin:
         return results
 
     def _sample_namespace_entries(
-        self, archive: Archive, namespace: str
+        self, archive: Archive, namespace: str, has_new_scheme: bool = False
     ) -> Tuple[List[str], set[str]]:
         """Sample random entries until ``NAMESPACE_MAX_ENTRIES`` matches found."""
         total_entries = archive.entry_count
@@ -605,7 +806,12 @@ class _NamespaceMixin:
                 if path in seen:
                     continue
                 seen.add(path)
-                if self._extract_namespace_from_path(path) == namespace:
+                if (
+                    self._extract_namespace_from_path(
+                        path, has_new_scheme=has_new_scheme
+                    )
+                    == namespace
+                ):
                     results.append(path)
             except Exception as e:
                 logger.debug(f"Error sampling entry: {e}")
@@ -622,6 +828,7 @@ class _NamespaceMixin:
         namespace: str,
         results: List[str],
         seen: set[str],
+        has_new_scheme: bool = False,
     ) -> None:
         """Append entries from canonical-pattern probes to the sampled list.
 
@@ -635,7 +842,10 @@ class _NamespaceMixin:
                 if (
                     archive.has_entry_by_path(pattern)
                     and pattern not in seen
-                    and self._extract_namespace_from_path(pattern) == namespace
+                    and self._extract_namespace_from_path(
+                        pattern, has_new_scheme=has_new_scheme
+                    )
+                    == namespace
                 ):
                     results.append(pattern)
                     seen.add(pattern)
@@ -741,6 +951,32 @@ class _NamespaceMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated) as archive:
+                has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
+
+                # New-scheme M is sourced from metadata_keys, not the entry
+                # iterator (which only surfaces C). Hand the request to a
+                # dedicated walker so callers see real metadata entries
+                # instead of zero matches after a full archive scan.
+                if has_new_scheme and namespace == "M":
+                    return self._walk_new_scheme_metadata(archive, cursor, limit)
+                # Other-than-C namespaces in new-scheme aren't on the
+                # iterable surface; short-circuit so callers don't pay the
+                # full-archive scan to discover that.
+                if has_new_scheme and namespace != "C":
+                    result = {
+                        "namespace": namespace,
+                        "cursor": cursor,
+                        "limit": limit,
+                        "returned_count": 0,
+                        "scanned_count": 0,
+                        "next_cursor": None,
+                        "done": True,
+                        "scanned_through_id": None,
+                        "total_entries": archive.entry_count,
+                        "entries": [],
+                    }
+                    return json.dumps(result, indent=2, ensure_ascii=False)
+
                 total = archive.entry_count
                 entries: List[Dict[str, Any]] = []
                 entry_id = cursor
@@ -748,7 +984,12 @@ class _NamespaceMixin:
                     try:
                         entry = archive._get_entry_by_id(entry_id)
                         path = entry.path
-                        if self._extract_namespace_from_path(path) == namespace:
+                        if (
+                            self._extract_namespace_from_path(
+                                path, has_new_scheme=has_new_scheme
+                            )
+                            == namespace
+                        ):
                             entries.append(
                                 {
                                     "path": path,
@@ -782,3 +1023,30 @@ class _NamespaceMixin:
             raise
         except Exception as e:
             raise OpenZimMcpArchiveError(f"walk_namespace failed: {e}") from e
+
+    @staticmethod
+    def _walk_new_scheme_metadata(archive: Archive, cursor: int, limit: int) -> str:
+        """Walk M (metadata) entries in a new-scheme archive via metadata_keys."""
+        try:
+            keys = list(getattr(archive, "metadata_keys", []) or [])
+        except Exception as e:
+            logger.debug(f"metadata_keys read failed: {e}")
+            keys = []
+        total = len(keys)
+        start = cursor
+        end = min(start + limit, total)
+        entries = [{"path": f"M/{k}", "title": k} for k in keys[start:end]]
+        done = end >= total
+        result = {
+            "namespace": "M",
+            "cursor": cursor,
+            "limit": limit,
+            "returned_count": len(entries),
+            "scanned_count": end - start,
+            "next_cursor": None if done else end,
+            "done": done,
+            "scanned_through_id": end - 1 if end > start else None,
+            "total_entries": total,
+            "entries": entries,
+        }
+        return json.dumps(result, indent=2, ensure_ascii=False)

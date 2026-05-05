@@ -86,8 +86,15 @@ class TestGetServerHealthDirectoryAndCacheChecks:
             cache=CacheConfig(enabled=True, max_size=100),
         )
         server = OpenZimMcpServer(config)
+        # Use enough accesses (>= 50) to clear the warm-up gate that
+        # silences low-rate warnings in fresh sessions.
         server.cache.stats = MagicMock(
-            return_value={"enabled": True, "hit_rate": 0.1, "hits": 1, "misses": 9}
+            return_value={
+                "enabled": True,
+                "hit_rate": 0.1,
+                "hits": 10,
+                "misses": 90,
+            }
         )
 
         tools = server.mcp._tool_manager._tools

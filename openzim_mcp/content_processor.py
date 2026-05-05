@@ -462,6 +462,11 @@ class ContentProcessor:
         """
         Truncate content to maximum length with informative message.
 
+        The message explicitly references "body content" so callers don't
+        confuse the truncation budget with the response wrapper headers
+        (``# Title``, ``Path:``, ``## Content``, etc.) that surround the
+        body in the final output. ``max_length`` applies only to the body.
+
         Args:
             content: Content to truncate
             max_length: Maximum allowed length
@@ -477,8 +482,8 @@ class ContentProcessor:
 
         return (
             f"{truncated}\n\n"
-            f"... [Content truncated, total of {total_length:,} characters, "
-            f"only showing first {max_length:,} characters] ..."
+            f"... [Content truncated, total of {total_length:,} characters of "
+            f"body content, only showing first {max_length:,}] ..."
         )
 
     def process_mime_content(self, content_bytes: bytes, mime_type: str) -> str:
