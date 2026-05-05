@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
@@ -14,6 +14,15 @@ if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now_iso() -> str:
+    """Return the current UTC time as an ISO-8601 string with offset.
+
+    All server-tools timestamps go through this helper so a single response
+    never mixes timezone-aware (``+00:00``) and naive local strings.
+    """
+    return datetime.now(timezone.utc).isoformat()
 
 
 def register_server_tools(server: "OpenZimMcpServer") -> None:
@@ -91,9 +100,18 @@ def _check_directory_health(
 def _append_cache_recommendations(
     cache_stats: Dict[str, Any], recommendations: List[str]
 ) -> None:
-    """Translate cache hit-rate stats into human-readable recommendations."""
+    """Translate cache hit-rate stats into human-readable recommendations.
+
+    Skip the "low" warning until the cache has seen a meaningful sample
+    (>= ``_CACHE_RECOMMENDATION_MIN_SAMPLES`` total accesses). A fresh
+    session legitimately has a low hit rate while it warms up; warning
+    on the first query was misleading and got beta-tester complaints.
+    """
     if cache_stats.get("enabled", False):
         hit_rate = cache_stats.get("hit_rate", 0)
+        total_accesses = cache_stats.get("hits", 0) + cache_stats.get("misses", 0)
+        if total_accesses < _CACHE_RECOMMENDATION_MIN_SAMPLES:
+            return  # Not enough signal yet — silence is more useful than noise.
         if hit_rate < CACHE_LOW_HIT_RATE_THRESHOLD:
             recommendations.append(
                 "Cache hit rate is low — consider issuing repeated "
@@ -103,6 +121,12 @@ def _append_cache_recommendations(
             recommendations.append("Cache is performing well")
     else:
         recommendations.append("Consider enabling cache for better performance")
+
+
+# Minimum cache accesses before we report on hit-rate trends. Below this we
+# treat the rate as too noisy to comment on. 50 is enough that a steady-state
+# pattern has emerged; below that, warming-up effects dominate.
+_CACHE_RECOMMENDATION_MIN_SAMPLES = 50
 
 
 def _finalize_health_status(
@@ -178,7 +202,7 @@ def _build_health_report(server: "OpenZimMcpServer") -> str:
             "permissions_ok": True,
         }
         health_info: Dict[str, Any] = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _utc_now_iso(),
             "status": "healthy",
             "server_name": server.config.server_name,
             "uptime_info": _build_uptime_info(server),
@@ -275,7 +299,7 @@ def _build_configuration_report(server: "OpenZimMcpServer") -> str:
         result = {
             "configuration": config_info,
             "diagnostics": diagnostics,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _utc_now_iso(),
         }
 
         return json.dumps(result, indent=2)
