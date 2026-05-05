@@ -1282,24 +1282,27 @@ class _SearchMixin:
 
         return False
 
-    def search_all(
+    def search_all_data(
         self,
         query: str,
         limit_per_file: int = 5,
-    ) -> str:
-        """Search every ZIM file in allowed directories and return merged results.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``search_all``.
 
-        Useful when the model doesn't know which ZIM file holds the
-        information it needs. Skips files that can't be searched (corrupt,
-        no full-text index) without aborting the rest.
+        Per-file results are real dicts (the structured payload from
+        ``search_zim_file_data``) rather than markdown strings — fixing
+        the triple-stringification of the legacy ``search_all`` (where
+        the per-file ``result`` field was a markdown blob escaped inside
+        the outer JSON string).
 
         Args:
             query: Search query
-            limit_per_file: Maximum hits to return per ZIM file (1–50, default 5)
+            limit_per_file: Maximum hits to return per ZIM file (1-50, default 5)
 
         Returns:
-            JSON with per-file result groups and a flat ``hits`` list sorted
-            by file then rank
+            Dict with per-file result groups and aggregate counts. Each
+            ``per_file[].result`` is the structured search payload from
+            ``search_zim_file_data`` — a dict, not a string.
         """
         if not query or not query.strip():
             raise OpenZimMcpValidationError(
@@ -1318,19 +1321,13 @@ class _SearchMixin:
             if not path:
                 continue
             try:
-                result_text = self.search_zim_file(path, query, limit_per_file, 0)
-                # Real result text begins with "Found N matches..." while
-                # empty results begin with "No search results found...". We
-                # can't filter on `**` because real search snippets contain
-                # bold markdown for emphasis. Match on the leading prefix.
-                stripped = result_text.lstrip()
-                has_hits = stripped.startswith("Found ")
+                payload = self.search_zim_file_data(path, query, limit_per_file, 0)
                 per_file.append(
                     {
                         "zim_file_path": path,
                         "name": file_info.get("name"),
-                        "result": result_text,
-                        "has_hits": has_hits,
+                        "result": payload,
+                        "has_hits": payload.get("total_results", 0) > 0,
                     }
                 )
             except Exception as e:
@@ -1343,17 +1340,40 @@ class _SearchMixin:
                     }
                 )
 
+        return {
+            "query": query,
+            "files_searched": len(files),
+            "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
+            "files_searched_successfully": sum(1 for r in per_file if "result" in r),
+            "files_failed": sum(1 for r in per_file if "error" in r),
+            "per_file": per_file,
+        }
+
+    def search_all(
+        self,
+        query: str,
+        limit_per_file: int = 5,
+    ) -> str:
+        """Legacy JSON-string variant of ``search_all_data``.
+
+        Useful when the model doesn't know which ZIM file holds the
+        information it needs. Skips files that can't be searched (corrupt,
+        no full-text index) without aborting the rest.
+
+        New callers should prefer ``search_all_data`` so the per-file
+        result payload stays as a structured dict instead of being
+        re-stringified inside the outer JSON envelope.
+
+        Args:
+            query: Search query
+            limit_per_file: Maximum hits to return per ZIM file (1-50, default 5)
+
+        Returns:
+            JSON with per-file result groups (each ``result`` is itself a
+            structured search payload) and aggregate counts.
+        """
         return json.dumps(
-            {
-                "query": query,
-                "files_searched": len(files),
-                "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
-                "files_searched_successfully": sum(
-                    1 for r in per_file if "result" in r
-                ),
-                "files_failed": sum(1 for r in per_file if "error" in r),
-                "per_file": per_file,
-            },
+            self.search_all_data(query, limit_per_file),
             indent=2,
             ensure_ascii=False,
         )
