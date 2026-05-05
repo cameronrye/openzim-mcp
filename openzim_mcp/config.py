@@ -85,7 +85,7 @@ class OpenZimMcpConfig(BaseSettings):
         default="simple",
         description=(
             "Tool mode: 'advanced' for all 21 tools, "
-            "'simple' for 1 intelligent tool plus underlying tools"
+            "'simple' for 1 intelligent natural-language tool (zim_query)"
         ),
     )
     transport: Literal["stdio", "http", "sse"] = Field(

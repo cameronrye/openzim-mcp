@@ -28,9 +28,17 @@ def temp_dir() -> Generator[Path, None, None]:
 
 @pytest.fixture
 def test_config(temp_dir: Path) -> OpenZimMcpConfig:
-    """Create a test configuration."""
+    """Create a test configuration with the full advanced tool surface.
+
+    Most tests exercise individual advanced-mode tools (``get_zim_entries``,
+    ``search_zim_file``, the per-entry resource handler, etc.). Pinning the
+    fixture to ``tool_mode='advanced'`` keeps those tests independent of the
+    default mode. The few tests that specifically validate simple-mode
+    behavior construct their own ``OpenZimMcpConfig`` instead.
+    """
     return OpenZimMcpConfig(
         allowed_directories=[str(temp_dir)],
+        tool_mode="advanced",
         cache=CacheConfig(enabled=True, max_size=10, ttl_seconds=60),
         content=ContentConfig(max_content_length=1000, snippet_length=100),
         logging=LoggingConfig(level="DEBUG"),
@@ -226,6 +234,7 @@ def test_config_with_zim_data(
 
     return OpenZimMcpConfig(
         allowed_directories=allowed_dirs,
+        tool_mode="advanced",
         cache=CacheConfig(enabled=True, max_size=10, ttl_seconds=60),
         content=ContentConfig(max_content_length=1000, snippet_length=100),
         logging=LoggingConfig(level="DEBUG"),

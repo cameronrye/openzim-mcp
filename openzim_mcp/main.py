@@ -43,7 +43,7 @@ Environment Variables:
         default=None,
         help=(
             f"Tool mode: 'advanced' for all 21 tools, 'simple' for 1 "
-            f"intelligent NL tool + underlying tools "
+            f"intelligent NL tool "
             f"(default: {TOOL_MODE_SIMPLE}, or from OPENZIM_MCP_TOOL_MODE env var)"
         ),
     )
@@ -123,7 +123,7 @@ def main() -> None:
         server = OpenZimMcpServer(config)
 
         mode_desc = (
-            "SIMPLE mode (1 intelligent tool + all underlying tools)"
+            "SIMPLE mode (1 intelligent tool)"
             if config.tool_mode == TOOL_MODE_SIMPLE
             else "ADVANCED mode (21 specialized tools)"
         )
