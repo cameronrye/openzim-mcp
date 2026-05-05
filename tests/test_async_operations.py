@@ -208,7 +208,7 @@ class TestAsyncZimOperations:
 
         assert result == '{"links": []}'
         mock_zim_operations.extract_article_links.assert_called_once_with(
-            "/path/to/file.zim", "C/Article"
+            "/path/to/file.zim", "C/Article", 100, 0, None
         )
 
     @pytest.mark.asyncio

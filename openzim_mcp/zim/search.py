@@ -476,10 +476,22 @@ class _SearchMixin:
         filtered_count = 0
         scanned = 0
         scan_cap_hit = False
+        has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
         # When namespace-only filtering is active (no content_type), the
         # entry namespace is derivable from the path string without an
         # archive lookup, so skipped entries cost nothing.
         need_entry_for_filter = bool(content_type)
+
+        # New-scheme search hits are always C (the only iterable surface).
+        # If the caller asked for any other namespace we'd otherwise scan the
+        # full result set and find nothing — short-circuit to empty.
+        if has_new_scheme and namespace and namespace != "C":
+            return page, _FilteredScanState(
+                filtered_count=0,
+                scanned=0,
+                scan_cap_hit=False,
+                total_filtered_is_lower_bound=False,
+            )
 
         while scanned < total_results and len(page) < limit:
             if scanned >= _FILTERED_MAX_SCAN:
@@ -494,14 +506,20 @@ class _SearchMixin:
                 break
 
             for entry_id in batch:
-                if namespace and not self._matches_cheap_namespace(entry_id, namespace):
+                if namespace and not self._matches_cheap_namespace(
+                    entry_id, namespace, has_new_scheme=has_new_scheme
+                ):
                     continue
                 if not need_entry_for_filter and filtered_count < offset:
                     filtered_count += 1
                     continue
 
                 materialised = self._materialise_filtered_entry(
-                    archive, entry_id, namespace, content_type
+                    archive,
+                    entry_id,
+                    namespace,
+                    content_type,
+                    has_new_scheme=has_new_scheme,
                 )
                 if materialised is None:
                     continue
@@ -522,15 +540,25 @@ class _SearchMixin:
             total_filtered_is_lower_bound=page_filled_short_of_scan,
         )
 
-    def _matches_cheap_namespace(self, entry_id: str, namespace: str) -> bool:
+    def _matches_cheap_namespace(
+        self, entry_id: str, namespace: str, has_new_scheme: bool = False
+    ) -> bool:
         """Cheap namespace filter from the path string (no archive lookup).
 
-        ``entry_id`` is the path libzim returned; resolved ``entry.path`` may
-        differ across redirects, but namespace agreement holds in practice
-        (redirects within the same namespace are the common case; for
-        cross-namespace redirects we accept the resolved entry's namespace
-        when we materialise).
+        In new-scheme archives every iterable / search-indexed entry is in C,
+        so the only valid match is ``namespace == 'C'``. Path-prefix parsing
+        on a new-scheme path like ``Evolution`` would falsely admit it as
+        namespace ``E``.
+
+        For old-scheme: ``entry_id`` is the path libzim returned; resolved
+        ``entry.path`` may differ across redirects, but namespace agreement
+        holds in practice (redirects within the same namespace are the
+        common case; for cross-namespace redirects we accept the resolved
+        entry's namespace when we materialise).
         """
+        if has_new_scheme:
+            return namespace == "C"
+
         if "/" in entry_id:
             cheap_namespace = entry_id.split("/", 1)[0]
         elif entry_id:
@@ -545,6 +573,7 @@ class _SearchMixin:
         entry_id: str,
         namespace: Optional[str],
         content_type: Optional[str],
+        has_new_scheme: bool = False,
     ) -> Optional[Tuple[str, Any, str, str]]:
         """Resolve an entry and apply the post-redirect namespace + mime filters."""
         try:
@@ -553,14 +582,19 @@ class _SearchMixin:
             logger.warning(f"Error filtering search result {entry_id}: {e}")
             return None
 
-        # Use the resolved ``entry.path`` for the response so the namespace
+        # Use the resolved entry's namespace for the response so the value
         # shown matches what libzim actually surfaces (handles
-        # cross-namespace redirects).
-        entry_namespace = ""
-        if "/" in entry.path:
-            entry_namespace = entry.path.split("/", 1)[0]
-        elif entry.path:
-            entry_namespace = entry.path[0]
+        # cross-namespace redirects). New-scheme archives only surface C
+        # via this path so we set it directly; old-scheme paths still carry
+        # the namespace as a single-character prefix.
+        if has_new_scheme:
+            entry_namespace = "C"
+        else:
+            entry_namespace = ""
+            if "/" in entry.path:
+                entry_namespace = entry.path.split("/", 1)[0]
+            elif entry.path:
+                entry_namespace = entry.path[0]
         if namespace and (self._canonicalise_namespace(entry_namespace) != namespace):
             return None
 
@@ -927,6 +961,44 @@ class _SearchMixin:
             logger.error(f"Error in search-based suggestions: {e}")
             return []
 
+    @staticmethod
+    def _find_entry_fast_path(archive: Any, title: str) -> Optional[Any]:
+        """Try a small set of case variants to resolve ``title`` by path.
+
+        libzim's ``has_entry_by_path`` is case-sensitive, so a user who
+        types ``"climate change"`` against an archive that filed the entry
+        as ``A/Climate_change`` would otherwise fall straight through to
+        suggestion search (and miss the fast-path 1.0 score). Try the
+        common natural variants in priority order: as-typed, capitalize-
+        first-letter, title-case, lowercase, uppercase. Stop at the first
+        hit. ``C/`` is tried before ``A/`` so new-scheme aliases win on
+        modern archives; old-scheme A-namespace entries are still reached.
+
+        Returns the resolved Entry on first match, or None on miss.
+        """
+        normalized = title.replace(" ", "_")
+        # Order matters: most specific / common first. ``capitalize`` only
+        # uppercases the first character; ``title`` upper-cases each word.
+        variants: List[str] = []
+        for candidate in (
+            normalized,
+            normalized.capitalize(),
+            normalized.title(),
+            normalized.lower(),
+            normalized.upper(),
+        ):
+            if candidate not in variants:
+                variants.append(candidate)
+        for prefix in ("C/", "A/"):
+            for variant in variants:
+                full = f"{prefix}{variant}"
+                try:
+                    if archive.has_entry_by_path(full):
+                        return archive.get_entry_by_path(full)
+                except Exception as e:  # pragma: no cover — defensive
+                    logger.debug(f"_find_entry_fast_path probe {full!r} failed: {e}")
+        return None
+
     def find_entry_by_title(
         self,
         zim_file_path: str,
@@ -937,9 +1009,13 @@ class _SearchMixin:
         """Resolve a title or partial title to one or more entry paths.
 
         Implementation order:
-          1. Direct path probe in C/ namespace for normalized title (fast path).
+          1. Direct path probe in C/ and A/ namespaces against a small set of
+             case variants (fast path) — handles the common "user typed
+             lowercase" case without paying for a suggestion search.
           2. libzim suggestion search (title-indexed) — primary fallback.
-          3. Return ranked list with score.
+             Results carry rank-derived scores; an exact case-insensitive
+             title match is promoted to score 1.0 and flips fast_path_hit.
+          3. Return list sorted by score (descending).
         """
         if not title or not title.strip():
             raise OpenZimMcpValidationError(
@@ -959,32 +1035,33 @@ class _SearchMixin:
 
         aggregate_results: List[Dict[str, Any]] = []
         fast_path_hit = False
+        title_lower = title.lower()
 
         for file_path in files:
             try:
                 with _zim_ops_mod.zim_archive(file_path) as archive:
-                    # Fast path: C/<normalized_title>
-                    normalized = title.replace(" ", "_")
-                    candidate = f"C/{normalized}"
-                    if archive.has_entry_by_path(candidate):
-                        try:
-                            entry = archive.get_entry_by_path(candidate)
-                            aggregate_results.append(
-                                {
-                                    "path": entry.path,
-                                    "title": entry.title or candidate,
-                                    "score": 1.0,
-                                    "zim_file": file_path,
-                                }
-                            )
-                            fast_path_hit = True
-                            if not cross_file:
-                                break
-                            continue
-                        except Exception as e:
-                            logger.debug(
-                                f"find_entry_by_title fast-path read failed: {e}"
-                            )
+                    # Fast path: try a handful of case variants against
+                    # ``C/<normalized>`` and ``A/<normalized>`` (legacy
+                    # content namespace). libzim's path lookups are
+                    # case-sensitive, so we expand a small set of natural
+                    # variants — ``Climate change``, ``climate change``,
+                    # ``Climate Change``, etc. — rather than asking callers
+                    # to know exactly how the entry was filed. has_new_scheme
+                    # archives accept ``C/<path>`` as an alias for ``<path>``.
+                    fast_hit_entry = self._find_entry_fast_path(archive, title)
+                    if fast_hit_entry is not None:
+                        aggregate_results.append(
+                            {
+                                "path": fast_hit_entry.path,
+                                "title": fast_hit_entry.title or title,
+                                "score": 1.0,
+                                "zim_file": file_path,
+                            }
+                        )
+                        fast_path_hit = True
+                        if not cross_file:
+                            break
+                        continue
 
                     # Fallback: libzim suggestion search (title-indexed).
                     # Note: ``Archive.suggest()`` does not exist; the public
@@ -995,22 +1072,43 @@ class _SearchMixin:
                         ).suggest(title)
                         total = suggestion_search.getEstimatedMatches()
                         if total > 0:
-                            for path in suggestion_search.getResults(0, limit):
+                            paths = list(suggestion_search.getResults(0, limit))
+                            # Score by rank — first result is the best
+                            # libzim suggestion match. Legacy behaviour was a
+                            # hardcoded 0.8 for every hit, which made the
+                            # ``score`` field decorative; rank-based scoring
+                            # gives callers a real ordering signal. An exact
+                            # case-insensitive title match is promoted to
+                            # 1.0 (and flips fast_path_hit) so callers can
+                            # recognise the strongest possible match.
+                            n = max(len(paths), 1)
+                            for idx, path in enumerate(paths):
                                 try:
                                     entry = archive.get_entry_by_path(path)
-                                    aggregate_results.append(
-                                        {
-                                            "path": entry.path,
-                                            "title": entry.title or path,
-                                            "score": 0.8,
-                                            "zim_file": file_path,
-                                        }
-                                    )
                                 except Exception as e:
                                     logger.debug(
                                         f"find_entry_by_title suggestion read "
                                         f"failed for {path}: {e}"
                                     )
+                                    continue
+                                resolved_title = entry.title or path
+                                exact_ci = resolved_title.lower() == title_lower
+                                if exact_ci:
+                                    score: float = 1.0
+                                    fast_path_hit = True
+                                else:
+                                    # Linearly decaying rank-score in (0, 0.95].
+                                    # Capped below 1.0 so an exact match always
+                                    # outranks any prefix/partial.
+                                    score = round(0.95 * (1.0 - idx / n), 4)
+                                aggregate_results.append(
+                                    {
+                                        "path": entry.path,
+                                        "title": resolved_title,
+                                        "score": score,
+                                        "zim_file": file_path,
+                                    }
+                                )
                     except Exception as e:
                         if not cross_file:
                             raise
@@ -1022,6 +1120,10 @@ class _SearchMixin:
                 if not cross_file:
                     raise
                 logger.debug(f"find_entry_by_title: skipped {file_path}: {e}")
+
+        # Sort results so exact case-insensitive matches (score=1.0) lead;
+        # otherwise preserve per-file rank order.
+        aggregate_results.sort(key=lambda r: -r["score"])
 
         return json.dumps(
             {

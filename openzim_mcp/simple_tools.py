@@ -52,6 +52,23 @@ class SimpleToolsHandler:
             Response string with results
         """
         try:
+            # Reject empty / whitespace-only queries upfront. The router
+            # would otherwise classify the input as a low-confidence search
+            # and fall through to ``search_zim_file("")``, which the search
+            # tool itself rejects — so the only thing we'd return is a
+            # confusing "No search results found for ''" string. Validate
+            # at the front door so the caller gets an actionable message.
+            if not query or not query.strip():
+                return (
+                    "**Query Required**\n\n"
+                    "**Issue**: query must be a non-empty natural-language "
+                    "string.\n\n"
+                    "**Examples**:\n"
+                    "- `list available ZIM files`\n"
+                    '- `search for "evolution"`\n'
+                    "- `get article Tiger`\n"
+                    "- `show structure of Biology`\n"
+                )
             options = options or {}
             intent, params, confidence = self.intent_parser.parse_intent(query)
             logger.info(
