@@ -144,16 +144,18 @@ class TestDiagnosticToolPathRedaction:
         tool_handler = tools["get_server_configuration"].fn
         result = await tool_handler()
 
-        # The full directory path must not be present.
-        assert str(temp_dir) not in result, "allowed_directories path leaked"
+        # Result is now a dict (structured output). Substring checks
+        # serialize via json.dumps to preserve the "no path leaks anywhere
+        # in the response" semantic.
+        serialized = json.dumps(result)
+        assert str(temp_dir) not in serialized, "allowed_directories path leaked"
         # But the section identifier should still be present.
-        assert "allowed_directories" in result.lower()
+        assert "allowed_directories" in serialized.lower()
 
-        parsed = json.loads(result)
         # PID must not be exposed.
-        assert parsed["configuration"]["server_pid"] != os.getpid()
+        assert result["configuration"]["server_pid"] != os.getpid()
         # A non-sensitive count should still be available for diagnostics.
-        assert parsed["configuration"].get("allowed_directories_count") == len(
+        assert result["configuration"].get("allowed_directories_count") == len(
             config.allowed_directories
         )
 
@@ -173,19 +175,20 @@ class TestDiagnosticToolPathRedaction:
         tool_handler = tools["get_server_health"].fn
         result = await tool_handler()
 
+        # Result is now a dict; serialize for substring checks.
+        serialized = json.dumps(result)
         for d in server.config.allowed_directories:
-            assert str(d) not in result, f"path leaked in health response: {d}"
+            assert str(d) not in serialized, f"path leaked in health response: {d}"
 
-        parsed = json.loads(result)
         # PID must not be exposed.
-        assert parsed["uptime_info"]["process_id"] != os.getpid()
+        assert result["uptime_info"]["process_id"] != os.getpid()
         # Uptime is now tracked (replaces the old "unknown" placeholder).
-        assert parsed["uptime_info"]["started_at"] != "unknown"
-        assert isinstance(parsed["uptime_info"]["uptime_seconds"], (int, float))
-        assert parsed["uptime_info"]["uptime_seconds"] >= 0
+        assert result["uptime_info"]["started_at"] != "unknown"
+        assert isinstance(result["uptime_info"]["uptime_seconds"], (int, float))
+        assert result["uptime_info"]["uptime_seconds"] >= 0
         # Timestamps must be timezone-aware UTC (ends with +00:00 or Z) so
         # the response doesn't mix naive local time with the UTC started_at.
-        for ts_field in (parsed["timestamp"], parsed["uptime_info"]["started_at"]):
+        for ts_field in (result["timestamp"], result["uptime_info"]["started_at"]):
             assert ts_field.endswith(
                 ("+00:00", "Z")
             ), f"timestamp {ts_field!r} must be UTC (Z or +00:00)"
@@ -212,7 +215,7 @@ class TestDiagnosticToolPathRedaction:
         tool_handler = tools["get_server_health"].fn
         result = await tool_handler()
 
-        assert bogus not in result, "bogus path leaked into warning text"
+        assert bogus not in json.dumps(result), "bogus path leaked into warning text"
 
     @pytest.mark.asyncio
     async def test_get_server_configuration_invalid_dirs_redacted(self, temp_dir):
@@ -232,4 +235,6 @@ class TestDiagnosticToolPathRedaction:
         tool_handler = tools["get_server_configuration"].fn
         result = await tool_handler()
 
-        assert bogus not in result, "bogus path leaked into config diagnostics"
+        assert bogus not in json.dumps(
+            result
+        ), "bogus path leaked into config diagnostics"

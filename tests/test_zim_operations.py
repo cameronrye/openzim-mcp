@@ -265,6 +265,36 @@ class TestZimOperations:
                 # Archive should only be opened once due to caching
                 assert mock_archive.call_count == 1
 
+    def test_search_zim_file_data_returns_structured_dict(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """``search_zim_file_data`` returns the search payload as a real dict."""
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with (
+            patch("openzim_mcp.zim_operations.zim_archive") as mock_archive,
+            patch("openzim_mcp.zim_operations.Searcher") as mock_searcher_cls,
+            patch("openzim_mcp.zim_operations.Query") as mock_query_cls,
+        ):
+            mock_archive_instance = MagicMock()
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            mock_search = MagicMock()
+            mock_search.getEstimatedMatches.return_value = 0
+            mock_searcher_cls.return_value.search.return_value = mock_search
+            mock_query_cls.return_value.set_query.return_value = MagicMock()
+
+            data = zim_operations.search_zim_file_data(
+                str(zim_file), "no_match", limit=5, offset=0
+            )
+
+        assert isinstance(data, dict)
+        assert data["query"] == "no_match"
+        assert data["total_results"] == 0
+        assert data["results"] == []
+        assert data["pagination"]["has_more"] is False
+
     def test_get_zim_metadata(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test ZIM metadata retrieval."""
         zim_file = temp_dir / "test.zim"
@@ -374,6 +404,51 @@ class TestZimOperations:
             assert result_data["discovery_method"] == "full_iteration"
             found_namespaces = set(result_data["namespaces"].keys())
             assert found_namespaces == {"C", "M", "W"}
+
+    def test_list_namespaces_data_returns_dict(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """``list_namespaces_data`` returns the structured payload as a real dict.
+
+        And the legacy ``list_namespaces`` string remains a json.dumps view
+        of the same payload — so existing callers don't break.
+        """
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive_instance = MagicMock()
+            mock_archive_instance.entry_count = 3
+            mock_archive_instance.has_new_namespace_scheme = False
+
+            mock_entries = []
+            for path, title in [
+                ("C/Article1", "Article 1"),
+                ("M/Title", "Test ZIM"),
+                ("W/mainPage", "Main Page"),
+            ]:
+                entry = MagicMock()
+                entry.path = path
+                entry.title = title
+                mock_entries.append(entry)
+
+            mock_archive_instance._get_entry_by_id.side_effect = lambda i: mock_entries[
+                i
+            ]
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            data = zim_operations.list_namespaces_data(str(zim_file))
+            assert isinstance(data, dict)
+            assert "namespaces" in data
+            assert "total_entries" in data
+            assert isinstance(data["namespaces"], dict)
+
+            # The legacy string variant must remain a json.dumps view of
+            # the same payload.
+            import json
+
+            string_result = zim_operations.list_namespaces(str(zim_file))
+            assert json.loads(string_result) == data
 
     def test_browse_namespace(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test namespace browsing."""
@@ -823,8 +898,14 @@ class TestZimOperations:
             patch("openzim_mcp.zim_operations.Searcher", return_value=mock_searcher),
             patch("openzim_mcp.zim_operations.Query"),
         ):
-            result, total = zim_operations._perform_search(mock_archive, "test", 10, 0)
-            assert "No search results found" in result
+            payload, total = zim_operations._perform_search(mock_archive, "test", 10, 0)
+            assert isinstance(payload, dict)
+            assert payload["total_results"] == 0
+            assert payload["results"] == []
+            # The legacy markdown rendering still produces the same text.
+            assert "No search results found" in zim_operations._format_search_text(
+                payload
+            )
             assert total == 0
 
     def test_get_entry_content_with_redirect(
@@ -1229,32 +1310,43 @@ class TestZimOperations:
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
         assert result == "cached entry content"
 
-        # Test list_namespaces cache hit (lines 584-585)
-        cache_key = f"namespaces:{validated_path}"
-        zim_operations.cache.set(cache_key, '{"cached": "namespaces"}')
+        # Test list_namespaces_data cache hit (lines 584-585).
+        # list_namespaces now delegates to list_namespaces_data, which caches
+        # dicts under a `namespaces_data:` key. Exercise the cache hit path
+        # against the dict-returning entry point directly so we test the
+        # cache layer without an extra json.dumps round trip.
+        cache_key = f"namespaces_data:{validated_path}"
+        zim_operations.cache.set(cache_key, {"cached": "namespaces"})
 
-        result = zim_operations.list_namespaces(str(zim_file))
-        assert result == '{"cached": "namespaces"}'
+        result = zim_operations.list_namespaces_data(str(zim_file))
+        assert result == {"cached": "namespaces"}
 
-        # Test browse_namespace cache hit (lines 691-692)
-        cache_key = f"browse_ns:{validated_path}:A:50:0"
-        zim_operations.cache.set(cache_key, '{"cached": "browse"}')
+        # Test browse_namespace_data cache hit. browse_namespace now
+        # delegates to browse_namespace_data, which caches dicts under a
+        # `browse_ns_data:` key. Exercise the cache hit path against the
+        # dict-returning entry point directly.
+        cache_key = f"browse_ns_data:{validated_path}:A:50:0"
+        zim_operations.cache.set(cache_key, {"cached": "browse"})
 
-        result = zim_operations.browse_namespace(str(zim_file), "A")
-        assert result == '{"cached": "browse"}'
+        result = zim_operations.browse_namespace_data(str(zim_file), "A")
+        assert result == {"cached": "browse"}
 
-        # Test get_article_structure cache hit (lines 1228-1229)
-        cache_key = f"structure:{validated_path}:A/Test"
-        zim_operations.cache.set(cache_key, '{"cached": "structure"}')
+        # Test get_article_structure_data cache hit. get_article_structure now
+        # delegates to get_article_structure_data, which caches dicts under a
+        # `structure_data:` key. Exercise the cache hit path against the
+        # dict-returning entry point directly.
+        cache_key = f"structure_data:{validated_path}:A/Test"
+        zim_operations.cache.set(cache_key, {"cached": "structure"})
 
-        result = zim_operations.get_article_structure(str(zim_file), "A/Test")
-        assert result == '{"cached": "structure"}'
+        result = zim_operations.get_article_structure_data(str(zim_file), "A/Test")
+        assert result == {"cached": "structure"}
 
-        # Test extract_article_links cache hit. The cache stores the parsed
-        # extraction (full lists) under a stable key so different paginated
-        # requests share one parse; the response is rendered fresh per call,
-        # so the hit assertion checks the post-render JSON contains the
-        # cached title/path metadata rather than asserting raw equality.
+        # Test extract_article_links_data cache hit. extract_article_links_data
+        # caches the parsed extraction (full lists) under a stable
+        # ``links_full:`` key so different paginated requests share one parse;
+        # the response is rendered fresh per call, so the hit assertion checks
+        # the post-render dict carries the cached title/path metadata rather
+        # than asserting raw equality.
         cache_key = f"links_full:{validated_path}:A/Test"
         zim_operations.cache.set(
             cache_key,
@@ -1269,8 +1361,9 @@ class TestZimOperations:
             },
         )
 
-        result = zim_operations.extract_article_links(str(zim_file), "A/Test")
-        assert "Cached Title" in result
+        result = zim_operations.extract_article_links_data(str(zim_file), "A/Test")
+        assert result["title"] == "Cached Title"
+        assert result["path"] == "A/Test"
 
     def test_complex_search_operations(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -3014,9 +3107,9 @@ class TestZimOperationsPerfFixes:
         assert (
             get_entry_by_id_calls["count"] == 0
         ), "Strategy 2 must not stride-scan via _get_entry_by_id"
-        # Result still has to be valid JSON describing zero matches.
-        import json as _json
-
-        parsed = _json.loads(result)
-        assert parsed["partial_query"] == "bio"
-        assert "suggestions" in parsed
+        # ``_generate_search_suggestions`` now returns the dict directly so
+        # the structured-content path can hand it to FastMCP without an
+        # intermediate json.dumps + re-parse.
+        assert isinstance(result, dict)
+        assert result["partial_query"] == "bio"
+        assert "suggestions" in result

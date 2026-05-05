@@ -272,9 +272,10 @@ class TestSearchAllLimitAlias:
 
     @pytest.fixture
     def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a server with search_all stubbed to a passthrough."""
+        """Create a server with search_all_data stubbed to a passthrough."""
         srv = OpenZimMcpServer(test_config)
-        srv.async_zim_operations.search_all = AsyncMock(return_value="ok")
+        # The MCP tool now hits the structured backend ``search_all_data``.
+        srv.async_zim_operations.search_all_data = AsyncMock(return_value={})
         srv.rate_limiter.check_rate_limit = MagicMock()
         return srv
 
@@ -285,7 +286,7 @@ class TestSearchAllLimitAlias:
         """`limit` flows through when `limit_per_file` is unset."""
         fn = _get_tool_fn(server, "search_all")
         await fn(query="x", limit=8)
-        call = server.async_zim_operations.search_all.await_args
+        call = server.async_zim_operations.search_all_data.await_args
         assert call.args[1] == 8
 
     @pytest.mark.asyncio
@@ -295,7 +296,7 @@ class TestSearchAllLimitAlias:
         """`limit_per_file` wins when both names are provided."""
         fn = _get_tool_fn(server, "search_all")
         await fn(query="x", limit_per_file=3, limit=99)
-        call = server.async_zim_operations.search_all.await_args
+        call = server.async_zim_operations.search_all_data.await_args
         assert call.args[1] == 3
 
     @pytest.mark.asyncio
@@ -303,7 +304,7 @@ class TestSearchAllLimitAlias:
         """Default of 5 still applies when neither limit nor limit_per_file is set."""
         fn = _get_tool_fn(server, "search_all")
         await fn(query="x")
-        call = server.async_zim_operations.search_all.await_args
+        call = server.async_zim_operations.search_all_data.await_args
         assert call.args[1] == 5
 
 

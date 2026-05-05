@@ -1,10 +1,11 @@
 """Article structure and content analysis tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH, INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
+from ..responses import tool_error
 from ..security import sanitize_input
 
 if TYPE_CHECKING:
@@ -30,7 +31,9 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
 
 def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
-    async def get_article_structure(zim_file_path: str, entry_path: str) -> str:
+    async def get_article_structure(
+        zim_file_path: str, entry_path: str
+    ) -> Dict[str, Any]:
         """Extract article structure including headings, sections, and key metadata.
 
         Note: depends on heading markup in the source HTML. ZIM builds with
@@ -43,30 +46,40 @@ def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
             entry_path: Entry path, e.g., 'C/Some_Article'
 
         Returns:
-            JSON string containing article structure
+            Dict containing article structure (title, path, headings, sections,
+            metadata, word_count, character_count). On failure, returns a
+            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get article structure",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get article structure",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            return await server.async_zim_operations.get_article_structure(
+            return await server.async_zim_operations.get_article_structure_data(
                 zim_file_path, entry_path
             )
 
         except Exception as e:
             logger.error(f"Error getting article structure: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get article structure",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get article structure",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
@@ -79,7 +92,7 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
         limit: int = 100,
         offset: int = 0,
         kind: Optional[str] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Extract internal and external links from an article (paginated).
 
         Heavy articles (e.g. Wikipedia "Evolution") carry hundreds of links;
@@ -98,33 +111,46 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
                 empty lists; their totals are still reported.
 
         Returns:
-            JSON string with paged links plus per-category totals and a
+            Dict with paged links plus per-category totals and a
             ``pagination`` block (``offset``, ``limit``, ``has_more``,
             ``has_more_internal``, ``has_more_external``, ``has_more_media``,
-            ``kind``).
+            ``kind``). On failure, returns a ``{"error": True, ...}``
+            envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="extract article links",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="extract article links",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            return await server.async_zim_operations.extract_article_links(
-                zim_file_path, entry_path, limit=limit, offset=offset, kind=kind
+            return await server.async_zim_operations.extract_article_links_data(
+                zim_file_path,
+                entry_path,
+                limit=limit,
+                offset=offset,
+                kind=kind,
             )
 
         except Exception as e:
             logger.error(f"Error extracting article links: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="extract article links",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="extract article links",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
@@ -135,7 +161,7 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Get a concise summary of an article without returning the full content.
 
         This tool extracts the opening paragraph(s) or introduction section,
@@ -148,12 +174,15 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             max_words: Maximum number of words in the summary (default: 200, max: 1000)
 
         Returns:
-            JSON string containing:
+            Dict containing:
             - title: Article title
             - path: Entry path
             - summary: Extracted summary text
             - word_count: Number of words in summary
             - is_truncated: Whether the summary was truncated
+
+            On failure, returns a ``{"error": True, ...}`` envelope (see
+            ``responses.tool_error``).
 
         Examples:
             - Quick overview: get_entry_summary("/path/to/wiki.zim", "Biology")
@@ -163,9 +192,13 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_entry")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get entry summary",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get entry summary",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
@@ -173,24 +206,32 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
             if max_words < 1 or max_words > 1000:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: max_words must be between 1 and 1000 "
-                    f"(provided: {max_words})\n\n"
-                    "**Troubleshooting**: Adjust max_words to a value within the "
-                    "valid range.\n"
-                    "**Example**: Use `max_words=200` for a typical summary."
+                return tool_error(
+                    operation="get entry summary",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: max_words must be between 1 and 1000 "
+                        f"(provided: {max_words})\n\n"
+                        "**Troubleshooting**: Adjust max_words to a value within "
+                        "the valid range.\n"
+                        "**Example**: Use `max_words=200` for a typical summary."
+                    ),
+                    context=f"Entry: {entry_path}, max_words: {max_words}",
                 )
 
-            return await server.async_zim_operations.get_entry_summary(
+            return await server.async_zim_operations.get_entry_summary_data(
                 zim_file_path, entry_path, max_words
             )
 
         except Exception as e:
             logger.error(f"Error getting entry summary: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get entry summary",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get entry summary",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
@@ -200,7 +241,7 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
     async def get_table_of_contents(
         zim_file_path: str,
         entry_path: str,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Extract a hierarchical table of contents from an article.
 
         Returns a structured TOC tree based on heading levels (h1-h6),
@@ -217,12 +258,15 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
             entry_path: Entry path, e.g., 'C/Some_Article'
 
         Returns:
-            JSON string containing:
+            Dict containing:
             - title: Article title
             - path: Entry path
             - toc: Hierarchical list of headings with children
             - heading_count: Total number of headings
             - max_depth: Deepest heading level used
+
+            On failure, returns a ``{"error": True, ...}`` envelope (see
+            ``responses.tool_error``).
 
         Each TOC entry contains:
             - level: Heading level (1-6)
@@ -237,24 +281,32 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get table of contents",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get table of contents",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            return await server.async_zim_operations.get_table_of_contents(
+            return await server.async_zim_operations.get_table_of_contents_data(
                 zim_file_path, entry_path
             )
 
         except Exception as e:
             logger.error(f"Error getting table of contents: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get table of contents",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get table of contents",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
@@ -266,7 +318,7 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         max_size_bytes: Optional[int] = None,
         include_data: bool = True,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Retrieve binary content from a ZIM entry.
 
         This tool returns raw binary content encoded in base64, enabling
@@ -282,7 +334,7 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
                 Set to False to retrieve metadata only without the binary data.
 
         Returns:
-            JSON string containing:
+            Dict containing:
             - path: Entry path in ZIM file
             - title: Entry title
             - mime_type: Content type (e.g., "application/pdf", "image/png")
@@ -291,6 +343,9 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
             - encoding: "base64" when data is included, null otherwise
             - data: Base64-encoded content (if include_data=True and under size limit)
             - truncated: Boolean indicating if content exceeded size limit
+
+            On failure, returns a ``{"error": True, ...}`` envelope (see
+            ``responses.tool_error``).
 
         Examples:
             - Get a PDF: get_binary_entry("/path/file.zim", "I/document.pdf")
@@ -301,36 +356,49 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_binary_entry")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="retrieve binary entry",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="retrieve binary entry",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
             if max_size_bytes is not None and (
                 max_size_bytes < 1 or max_size_bytes > _MAX_BINARY_LIMIT
             ):
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: max_size_bytes must be between 1 and "
-                    f"{_MAX_BINARY_LIMIT} bytes (100 MB), got {max_size_bytes}.\n"
-                    "**Tip**: For larger entries, retrieve the entry in "
-                    "chunks via repeated calls or use include_data=False to "
-                    "fetch metadata only."
+                return tool_error(
+                    operation="retrieve binary entry",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: max_size_bytes must be between 1 and "
+                        f"{_MAX_BINARY_LIMIT} bytes (100 MB), got "
+                        f"{max_size_bytes}.\n"
+                        "**Tip**: For larger entries, retrieve the entry in "
+                        "chunks via repeated calls or use include_data=False to "
+                        "fetch metadata only."
+                    ),
+                    context=f"Entry: {entry_path}, max_size_bytes: {max_size_bytes}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            return await server.async_zim_operations.get_binary_entry(
+            return await server.async_zim_operations.get_binary_entry_data(
                 zim_file_path, entry_path, max_size_bytes, include_data
             )
 
         except Exception as e:
             logger.error(f"Error retrieving binary entry: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="retrieve binary entry",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="retrieve binary entry",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
@@ -341,7 +409,7 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Find articles related to entry_path via outbound links.
 
         Composes extract_article_links and deduplicates internal links,
@@ -355,22 +423,28 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
             limit: Max results (1-100, default: 10)
 
         Returns:
-            JSON with outbound_results
+            Dict with ``entry_path`` and ``outbound_results`` (a list of
+            ``{path, title}`` records). On failure, returns a
+            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("get_related_articles")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get related articles",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get related articles",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
-            return await server.async_zim_operations.get_related_articles(
+            return await server.async_zim_operations.get_related_articles_data(
                 zim_file_path,
                 entry_path,
                 limit,
@@ -378,8 +452,12 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error in get_related_articles: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get related articles",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get related articles",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )

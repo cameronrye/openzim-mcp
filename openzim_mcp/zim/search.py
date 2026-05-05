@@ -166,7 +166,11 @@ class _SearchMixin:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> str:
-        """Search within ZIM file content.
+        """Markdown-rendered search result (legacy surface).
+
+        See ``search_zim_file_data`` for the structured variant. This wrapper
+        is retained so existing callers (and tests) that consume the rendered
+        text keep working unchanged.
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -181,6 +185,27 @@ class _SearchMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If search operation fails
         """
+        payload = self.search_zim_file_data(zim_file_path, query, limit, offset)
+        return self._format_search_text(payload)
+
+    def search_zim_file_data(
+        self,
+        zim_file_path: str,
+        query: str,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Structured variant of ``search_zim_file``.
+
+        Returns the raw search payload as a Python dict so MCP tool functions
+        and aggregators (``search_all``) can hand it straight to FastMCP's
+        structured-output path without the json.dumps + re-parse round trip
+        the legacy string variant required.
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If search operation fails
+        """
         if limit is None:
             limit = self.config.content.default_search_limit
 
@@ -188,16 +213,17 @@ class _SearchMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"search:{validated_path}:{query}:{limit}:{offset}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"search_data:{validated_path}:{query}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached search results for query: {query}")
+            logger.debug(f"Returning cached search dict for query: {query}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result, total_results = self._perform_search(
+                payload, total_results = self._perform_search(
                     archive, query, limit, offset
                 )
 
@@ -205,9 +231,9 @@ class _SearchMixin:
             # can return 0 matches transiently, and a TTL-cached "no results"
             # would mask the index becoming ready.
             if total_results > 0:
-                self.cache.set(cache_key, result)
+                self.cache.set(cache_key, payload)
             logger.debug(f"Search completed: query='{query}', results found")
-            return result
+            return payload
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -219,12 +245,13 @@ class _SearchMixin:
 
     def _perform_search(
         self, archive: Archive, query: str, limit: int, offset: int
-    ) -> Tuple[str, int]:
+    ) -> Tuple[Dict[str, Any], int]:
         """Perform the actual search operation.
 
         Returns:
-            (result_text, total_results) — caller uses total_results to decide
-            whether the response is safe to cache.
+            (structured_payload, total_results) — caller uses total_results
+            to decide whether the response is safe to cache. The payload
+            shape is documented on ``search_zim_file_data``.
         """
         # Create searcher and execute search
         query_obj = _zim_ops_mod.Query().set_query(query)
@@ -235,14 +262,34 @@ class _SearchMixin:
         total_results = search.getEstimatedMatches()
 
         if total_results == 0:
-            return f'No search results found for "{query}"', 0
+            return (
+                {
+                    "query": query,
+                    "total_results": 0,
+                    "offset": offset,
+                    "limit": limit,
+                    "results": [],
+                    "pagination": {"has_more": False},
+                },
+                0,
+            )
 
         # Guard against offset exceeding total results (would produce negative count)
         if offset >= total_results:
             return (
-                f'Found {total_results} matches for "{query}", '
-                f"but offset {offset} exceeds total results."
-            ), total_results
+                {
+                    "query": query,
+                    "total_results": total_results,
+                    "offset": offset,
+                    "limit": limit,
+                    "results": [],
+                    "pagination": {
+                        "has_more": False,
+                        "offset_exceeds_total": True,
+                    },
+                },
+                total_results,
+            )
 
         result_count = min(limit, total_results - offset)
 
@@ -250,7 +297,7 @@ class _SearchMixin:
         result_entries = list(search.getResults(offset, result_count))
 
         # Collect search results
-        results = []
+        results: List[Dict[str, Any]] = []
         for i, entry_id in enumerate(result_entries):
             try:
                 entry = archive.get_entry_by_path(entry_id)
@@ -270,7 +317,57 @@ class _SearchMixin:
                     }
                 )
 
-        # Build result text with pagination info
+        has_more = (offset + len(results)) < total_results
+        pagination: Dict[str, Any] = {
+            "has_more": has_more,
+            "showing_start": offset + 1,
+            "showing_end": offset + len(results),
+        }
+        if has_more:
+            next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
+                offset, limit, total_results, query
+            )
+            # Partial-page case: has_more can be True (offset+len(results)
+            # < total_results) while offset+limit >= total_results, in which
+            # case create_next_cursor returns None. Omit the cursor key in
+            # that case — the caller falls back to the offset hint.
+            if next_cursor is not None:
+                pagination["next_cursor"] = next_cursor
+
+        return (
+            {
+                "query": query,
+                "total_results": total_results,
+                "offset": offset,
+                "limit": limit,
+                "results": results,
+                "pagination": pagination,
+            },
+            total_results,
+        )
+
+    def _format_search_text(self, payload: Dict[str, Any]) -> str:
+        """Render a structured search payload as the legacy markdown text.
+
+        Mirrors the original ``_perform_search`` output exactly so callers
+        (and tests) that consume the rendered text keep working unchanged.
+        """
+        query = payload["query"]
+        total_results = payload["total_results"]
+        offset = payload["offset"]
+        limit = payload["limit"]
+        results = payload["results"]
+        pagination = payload.get("pagination", {})
+
+        if total_results == 0:
+            return f'No search results found for "{query}"'
+
+        if pagination.get("offset_exceeds_total"):
+            return (
+                f'Found {total_results} matches for "{query}", '
+                f"but offset {offset} exceeds total results."
+            )
+
         result_text = (
             f'Found {total_results} matches for "{query}", '
             f"showing {offset + 1}-{offset + len(results)}:\n\n"
@@ -281,23 +378,15 @@ class _SearchMixin:
             result_text += f"Path: {result['path']}\n"
             result_text += f"Snippet: {result['snippet']}\n\n"
 
-        # Add pagination information
-        has_more = (offset + len(results)) < total_results
         result_text += "---\n"
         result_text += (
             f"**Pagination**: Showing {offset + 1}-{offset + len(results)} "
             f"of {total_results}\n"
         )
 
+        has_more = pagination.get("has_more", False)
         if has_more:
-            next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
-                offset, limit, total_results, query
-            )
-            # Partial-page case: has_more can be True (offset+len(results)
-            # < total_results) while offset+limit >= total_results, in which
-            # case create_next_cursor returns None. Don't render a literal
-            # "None" cursor — omit the line and fall back to the offset
-            # hint below.
+            next_cursor = pagination.get("next_cursor")
             if next_cursor is not None:
                 result_text += f"**Next cursor**: `{next_cursor}`\n"
                 result_text += (
@@ -312,7 +401,7 @@ class _SearchMixin:
         else:
             result_text += "**End of results**\n"
 
-        return result_text, total_results
+        return result_text
 
     def search_with_filters(
         self,
@@ -652,18 +741,13 @@ class _SearchMixin:
                 )
         return results
 
-    def get_search_suggestions(
+    def get_search_suggestions_data(
         self, zim_file_path: str, partial_query: str, limit: int = 10
-    ) -> str:
-        """Get search suggestions and auto-complete for partial queries.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_search_suggestions``.
 
-        Args:
-            zim_file_path: Path to the ZIM file
-            partial_query: Partial search query
-            limit: Maximum number of suggestions to return
-
-        Returns:
-            JSON string containing search suggestions
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -674,19 +758,18 @@ class _SearchMixin:
         if limit < 1 or limit > 50:
             raise OpenZimMcpValidationError("Limit must be between 1 and 50")
         if not partial_query or len(partial_query.strip()) < 2:
-            return json.dumps(
-                {"suggestions": [], "message": "Query too short for suggestions"}
-            )
+            return {"suggestions": [], "message": "Query too short for suggestions"}
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"suggestions:{validated_path}:{partial_query}:{limit}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"suggestions_data:{validated_path}:{partial_query}:{limit}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached suggestions for: {partial_query}")
+            logger.debug(f"Returning cached suggestions dict for: {partial_query}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -695,20 +778,13 @@ class _SearchMixin:
                     archive, partial_query, limit
                 )
 
-            # Parse result to get actual count for accurate logging and to
-            # decide whether the response is worth caching. A cold-cache
+            # Read the count straight off the dict for accurate logging and
+            # to decide whether the response is worth caching. A cold-cache
             # request that hits before the libzim title index has warmed up
             # can return zero suggestions for a query that will produce
             # results moments later — caching that empty payload locks the
             # query into "no suggestions" for the full TTL.
-            try:
-                result_data = json.loads(result)
-                actual_count = result_data.get(
-                    "count", len(result_data.get("suggestions", []))
-                )
-            except (json.JSONDecodeError, TypeError):
-                actual_count = "unknown"
-
+            actual_count = result.get("count", len(result.get("suggestions", [])))
             count_for_gate = actual_count if isinstance(actual_count, int) else 0
             if count_for_gate > 0:
                 self.cache.set(cache_key, result)
@@ -723,9 +799,35 @@ class _SearchMixin:
             logger.error(f"Suggestion generation failed for {partial_query}: {e}")
             raise OpenZimMcpArchiveError(f"Suggestion generation failed: {e}") from e
 
+    def get_search_suggestions(
+        self, zim_file_path: str, partial_query: str, limit: int = 10
+    ) -> str:
+        """Legacy JSON-string variant of ``get_search_suggestions_data``.
+
+        Get search suggestions and auto-complete for partial queries.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            partial_query: Partial search query
+            limit: Maximum number of suggestions to return
+
+        Returns:
+            JSON string containing search suggestions
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpValidationError: If ``limit`` is outside ``1..50``.
+            OpenZimMcpArchiveError: If suggestion generation fails
+        """
+        return json.dumps(
+            self.get_search_suggestions_data(zim_file_path, partial_query, limit),
+            indent=2,
+            ensure_ascii=False,
+        )
+
     def _generate_search_suggestions(  # NOSONAR(python:S3776)
         self, archive: Archive, partial_query: str, limit: int
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Generate search suggestions based on partial query.
 
         Errors during iteration of individual entries are logged and skipped
@@ -747,12 +849,11 @@ class _SearchMixin:
 
         if suggestions:
             logger.info(f"Found {len(suggestions)} suggestions using search fallback")
-            result = {
+            return {
                 "partial_query": partial_query,
                 "suggestions": suggestions,
                 "count": len(suggestions),
             }
-            return json.dumps(result, indent=2, ensure_ascii=False)
 
         # Strategy 2: Use the libzim title-index suggestion API. Replaces the
         # previous strided ``_get_entry_by_id`` scan, which only inspected
@@ -863,13 +964,11 @@ class _SearchMixin:
                 }
             )
 
-        result = {
+        return {
             "partial_query": partial_query,
             "suggestions": suggestions[:limit],
             "count": len(suggestions[:limit]),
         }
-
-        return json.dumps(result, indent=2, ensure_ascii=False)
 
     def _get_suggestions_from_search(  # NOSONAR(python:S3776)
         self, archive: Archive, partial_query: str, limit: int
@@ -999,14 +1098,17 @@ class _SearchMixin:
                     logger.debug(f"_find_entry_fast_path probe {full!r} failed: {e}")
         return None
 
-    def find_entry_by_title(
+    def find_entry_by_title_data(
         self,
         zim_file_path: str,
         title: str,
         cross_file: bool = False,
         limit: int = 10,
-    ) -> str:
-        """Resolve a title or partial title to one or more entry paths.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``find_entry_by_title``.
+
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Implementation order:
           1. Direct path probe in C/ and A/ namespaces against a small set of
@@ -1125,13 +1227,30 @@ class _SearchMixin:
         # otherwise preserve per-file rank order.
         aggregate_results.sort(key=lambda r: -r["score"])
 
+        return {
+            "query": title,
+            "results": aggregate_results[:limit],
+            "fast_path_hit": fast_path_hit,
+            "files_searched": len(files),
+        }
+
+    def find_entry_by_title(
+        self,
+        zim_file_path: str,
+        title: str,
+        cross_file: bool = False,
+        limit: int = 10,
+    ) -> str:
+        """Legacy JSON-string variant of ``find_entry_by_title_data``.
+
+        Resolve a title or partial title to one or more entry paths.
+
+        Returns:
+            JSON string with query, ranked results, fast_path_hit flag,
+            files_searched.
+        """
         return json.dumps(
-            {
-                "query": title,
-                "results": aggregate_results[:limit],
-                "fast_path_hit": fast_path_hit,
-                "files_searched": len(files),
-            },
+            self.find_entry_by_title_data(zim_file_path, title, cross_file, limit),
             indent=2,
             ensure_ascii=False,
         )
@@ -1295,24 +1414,27 @@ class _SearchMixin:
 
         return False
 
-    def search_all(
+    def search_all_data(
         self,
         query: str,
         limit_per_file: int = 5,
-    ) -> str:
-        """Search every ZIM file in allowed directories and return merged results.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``search_all``.
 
-        Useful when the model doesn't know which ZIM file holds the
-        information it needs. Skips files that can't be searched (corrupt,
-        no full-text index) without aborting the rest.
+        Per-file results are real dicts (the structured payload from
+        ``search_zim_file_data``) rather than markdown strings — fixing
+        the triple-stringification of the legacy ``search_all`` (where
+        the per-file ``result`` field was a markdown blob escaped inside
+        the outer JSON string).
 
         Args:
             query: Search query
-            limit_per_file: Maximum hits to return per ZIM file (1–50, default 5)
+            limit_per_file: Maximum hits to return per ZIM file (1-50, default 5)
 
         Returns:
-            JSON with per-file result groups and a flat ``hits`` list sorted
-            by file then rank
+            Dict with per-file result groups and aggregate counts. Each
+            ``per_file[].result`` is the structured search payload from
+            ``search_zim_file_data`` — a dict, not a string.
         """
         if not query or not query.strip():
             raise OpenZimMcpValidationError(
@@ -1331,19 +1453,13 @@ class _SearchMixin:
             if not path:
                 continue
             try:
-                result_text = self.search_zim_file(path, query, limit_per_file, 0)
-                # Real result text begins with "Found N matches..." while
-                # empty results begin with "No search results found...". We
-                # can't filter on `**` because real search snippets contain
-                # bold markdown for emphasis. Match on the leading prefix.
-                stripped = result_text.lstrip()
-                has_hits = stripped.startswith("Found ")
+                payload = self.search_zim_file_data(path, query, limit_per_file, 0)
                 per_file.append(
                     {
                         "zim_file_path": path,
                         "name": file_info.get("name"),
-                        "result": result_text,
-                        "has_hits": has_hits,
+                        "result": payload,
+                        "has_hits": payload.get("total_results", 0) > 0,
                     }
                 )
             except Exception as e:
@@ -1356,17 +1472,40 @@ class _SearchMixin:
                     }
                 )
 
+        return {
+            "query": query,
+            "files_searched": len(files),
+            "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
+            "files_searched_successfully": sum(1 for r in per_file if "result" in r),
+            "files_failed": sum(1 for r in per_file if "error" in r),
+            "per_file": per_file,
+        }
+
+    def search_all(
+        self,
+        query: str,
+        limit_per_file: int = 5,
+    ) -> str:
+        """Legacy JSON-string variant of ``search_all_data``.
+
+        Useful when the model doesn't know which ZIM file holds the
+        information it needs. Skips files that can't be searched (corrupt,
+        no full-text index) without aborting the rest.
+
+        New callers should prefer ``search_all_data`` so the per-file
+        result payload stays as a structured dict instead of being
+        re-stringified inside the outer JSON envelope.
+
+        Args:
+            query: Search query
+            limit_per_file: Maximum hits to return per ZIM file (1-50, default 5)
+
+        Returns:
+            JSON with per-file result groups (each ``result`` is itself a
+            structured search payload) and aggregate counts.
+        """
         return json.dumps(
-            {
-                "query": query,
-                "files_searched": len(files),
-                "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
-                "files_searched_successfully": sum(
-                    1 for r in per_file if "result" in r
-                ),
-                "files_failed": sum(1 for r in per_file if "error" in r),
-                "per_file": per_file,
-            },
+            self.search_all_data(query, limit_per_file),
             indent=2,
             ensure_ascii=False,
         )

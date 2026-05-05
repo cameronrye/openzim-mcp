@@ -301,8 +301,8 @@ class TestStructureToolsDirectInvocation:
     ):
         """Test invoking get_article_structure tool handler directly."""
         # Mock the async operations
-        advanced_server.async_zim_operations.get_article_structure = AsyncMock(
-            return_value='{"headings": [{"level": 1, "text": "Test"}], "sections": []}'
+        advanced_server.async_zim_operations.get_article_structure_data = AsyncMock(
+            return_value={"headings": [{"level": 1, "text": "Test"}], "sections": []}
         )
 
         # Find and call the registered tool
@@ -313,6 +313,7 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
+            assert isinstance(result, dict)
             assert "headings" in result
 
     @pytest.mark.asyncio
@@ -331,15 +332,18 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
-            assert "Error" in result or "Rate limit" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "Error" in message or "Rate limit" in message
 
     @pytest.mark.asyncio
     async def test_extract_article_links_tool_invocation(
         self, advanced_server, temp_dir
     ):
         """Test invoking extract_article_links tool handler directly."""
-        advanced_server.async_zim_operations.extract_article_links = AsyncMock(
-            return_value='{"internal_links": [], "external_links": []}'
+        advanced_server.async_zim_operations.extract_article_links_data = AsyncMock(
+            return_value={"internal_links": [], "external_links": []}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -349,14 +353,15 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
-            assert "links" in result
+            assert isinstance(result, dict)
+            assert "internal_links" in result
 
     @pytest.mark.asyncio
     async def test_extract_article_links_with_exception(
         self, advanced_server, temp_dir
     ):
         """Test extract_article_links when an exception occurs."""
-        advanced_server.async_zim_operations.extract_article_links = AsyncMock(
+        advanced_server.async_zim_operations.extract_article_links_data = AsyncMock(
             side_effect=Exception("Test error")
         )
 
@@ -367,14 +372,15 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
-            # Should return error message, not raise
-            assert "Error" in result or "error" in result.lower()
+            # Should return error envelope, not raise
+            assert isinstance(result, dict)
+            assert result.get("error") is True
 
     @pytest.mark.asyncio
     async def test_get_entry_summary_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking get_entry_summary tool handler directly."""
-        advanced_server.async_zim_operations.get_entry_summary = AsyncMock(
-            return_value='{"title": "Article", "summary": "Test", "word_count": 50}'
+        advanced_server.async_zim_operations.get_entry_summary_data = AsyncMock(
+            return_value={"title": "Article", "summary": "Test", "word_count": 50}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -385,12 +391,13 @@ class TestStructureToolsDirectInvocation:
                 entry_path="C/Article",
                 max_words=100,
             )
+            assert isinstance(result, dict)
             assert "summary" in result
 
     @pytest.mark.asyncio
     async def test_get_entry_summary_with_exception(self, advanced_server, temp_dir):
         """Test get_entry_summary when an exception occurs."""
-        advanced_server.async_zim_operations.get_entry_summary = AsyncMock(
+        advanced_server.async_zim_operations.get_entry_summary_data = AsyncMock(
             side_effect=ValueError("Invalid entry")
         )
 
@@ -401,15 +408,16 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Invalid",
             )
-            assert "Error" in result or "error" in result.lower()
+            assert isinstance(result, dict)
+            assert result.get("error") is True
 
     @pytest.mark.asyncio
     async def test_get_table_of_contents_tool_invocation(
         self, advanced_server, temp_dir
     ):
         """Test invoking get_table_of_contents tool handler directly."""
-        advanced_server.async_zim_operations.get_table_of_contents = AsyncMock(
-            return_value='{"toc": [], "heading_count": 0, "max_depth": 0}'
+        advanced_server.async_zim_operations.get_table_of_contents_data = AsyncMock(
+            return_value={"toc": [], "heading_count": 0, "max_depth": 0}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -419,6 +427,7 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
+            assert isinstance(result, dict)
             assert "toc" in result
 
     @pytest.mark.asyncio
@@ -426,7 +435,7 @@ class TestStructureToolsDirectInvocation:
         self, advanced_server, temp_dir
     ):
         """Test get_table_of_contents when an exception occurs."""
-        advanced_server.async_zim_operations.get_table_of_contents = AsyncMock(
+        advanced_server.async_zim_operations.get_table_of_contents_data = AsyncMock(
             side_effect=RuntimeError("Failed to parse")
         )
 
@@ -437,13 +446,14 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="C/Article",
             )
-            assert "Error" in result or "error" in result.lower()
+            assert isinstance(result, dict)
+            assert result.get("error") is True
 
     @pytest.mark.asyncio
     async def test_get_binary_entry_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking get_binary_entry tool handler directly."""
-        advanced_server.async_zim_operations.get_binary_entry = AsyncMock(
-            return_value='{"path": "I/img.png", "mime_type": "image/png", "size": 1024}'
+        advanced_server.async_zim_operations.get_binary_entry_data = AsyncMock(
+            return_value={"path": "I/img.png", "mime_type": "image/png", "size": 1024}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -453,13 +463,14 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="I/image.png",
             )
+            assert isinstance(result, dict)
             assert "mime_type" in result
 
     @pytest.mark.asyncio
     async def test_get_binary_entry_with_all_params(self, advanced_server, temp_dir):
         """Test get_binary_entry with all parameters specified."""
-        advanced_server.async_zim_operations.get_binary_entry = AsyncMock(
-            return_value='{"path": "I/doc.pdf", "mime_type": "application/pdf"}'
+        advanced_server.async_zim_operations.get_binary_entry_data = AsyncMock(
+            return_value={"path": "I/doc.pdf", "mime_type": "application/pdf"}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -471,12 +482,13 @@ class TestStructureToolsDirectInvocation:
                 max_size_bytes=5000000,
                 include_data=False,
             )
-            assert "pdf" in result
+            assert isinstance(result, dict)
+            assert "pdf" in result.get("mime_type", "")
 
     @pytest.mark.asyncio
     async def test_get_binary_entry_with_exception(self, advanced_server, temp_dir):
         """Test get_binary_entry when an exception occurs."""
-        advanced_server.async_zim_operations.get_binary_entry = AsyncMock(
+        advanced_server.async_zim_operations.get_binary_entry_data = AsyncMock(
             side_effect=IOError("File not found")
         )
 
@@ -487,7 +499,10 @@ class TestStructureToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 entry_path="I/missing.png",
             )
-            # Error messages may be formatted with **Error** or **Resource Not Found**
-            assert "**" in result and (
-                "Error" in result or "Not Found" in result or "Operation" in result
+            # Error envelope: error=True with a markdown-formatted message.
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "**" in message and (
+                "Error" in message or "Not Found" in message or "Operation" in message
             )

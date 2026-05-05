@@ -1,13 +1,13 @@
 """Server health and diagnostics tools for OpenZIM MCP server."""
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
 from ..constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
+from ..responses import tool_error
 from ..security import redact_paths_in_message, sanitize_path_for_error
 
 if TYPE_CHECKING:
@@ -33,25 +33,29 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
 
 def _register_get_server_health(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
-    async def get_server_health() -> str:
+    async def get_server_health() -> Dict[str, Any]:
         """Get comprehensive server health and statistics.
 
         Includes cache performance, directory health, and recommendations.
 
         Returns:
-            JSON string containing detailed server health information
+            Structured dict containing detailed server health information.
+            On failure, returns a structured error envelope (see
+            ``responses.tool_error``).
         """
         return await asyncio.to_thread(_build_health_report, server)
 
 
 def _register_get_server_configuration(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
-    async def get_server_configuration() -> str:
+    async def get_server_configuration() -> Dict[str, Any]:
         """Get detailed server configuration with diagnostics and validation.
 
         Returns:
-            Server configuration information including validation results
-            and recommendations
+            Structured dict containing server configuration information
+            including validation results and recommendations. On failure,
+            returns a structured error envelope (see
+            ``responses.tool_error``).
         """
         return await asyncio.to_thread(_build_configuration_report, server)
 
@@ -191,7 +195,7 @@ def _build_uptime_info(server: "OpenZimMcpServer") -> Dict[str, Any]:
     }
 
 
-def _build_health_report(server: "OpenZimMcpServer") -> str:
+def _build_health_report(server: "OpenZimMcpServer") -> Dict[str, Any]:
     try:
         cache_stats = server.cache.stats()
         recommendations: List[str] = []
@@ -234,18 +238,22 @@ def _build_health_report(server: "OpenZimMcpServer") -> str:
             health_info, accessible_dirs, total_zim_files, warnings, recommendations
         )
 
-        return json.dumps(health_info, indent=2)
+        return health_info
 
     except Exception as e:
         logger.error(f"Error getting server health: {e}")
-        return server._create_enhanced_error_message(
+        return tool_error(
             operation="get server health",
-            error=e,
+            message=server._create_enhanced_error_message(
+                operation="get server health",
+                error=e,
+                context="Checking server health and performance metrics",
+            ),
             context="Checking server health and performance metrics",
         )
 
 
-def _build_configuration_report(server: "OpenZimMcpServer") -> str:
+def _build_configuration_report(server: "OpenZimMcpServer") -> Dict[str, Any]:
     try:
         # Always redact paths and PID — even on stdio, diagnostic output
         # frequently ends up in bug reports / logs / issue trackers, so
@@ -302,11 +310,15 @@ def _build_configuration_report(server: "OpenZimMcpServer") -> str:
             "timestamp": _utc_now_iso(),
         }
 
-        return json.dumps(result, indent=2)
+        return result
     except Exception as e:
         logger.error(f"Error getting server configuration: {e}")
-        return server._create_enhanced_error_message(
+        return tool_error(
             operation="get server configuration",
-            error=e,
+            message=server._create_enhanced_error_message(
+                operation="get server configuration",
+                error=e,
+                context="Configuration diagnostics",
+            ),
             context="Configuration diagnostics",
         )

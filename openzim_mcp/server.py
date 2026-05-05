@@ -130,9 +130,7 @@ class OpenZimMcpServer:
             f"Cache: {self.config.cache.enabled}"
         )
         if config.tool_mode == TOOL_MODE_SIMPLE:
-            logger.info(
-                "Running in SIMPLE mode with 1 intelligent tool (zim_query)"
-            )
+            logger.info("Running in SIMPLE mode with 1 intelligent tool (zim_query)")
         else:
             logger.debug(
                 "Use get_server_configuration() MCP tool for detailed configuration"

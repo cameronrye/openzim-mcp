@@ -319,6 +319,29 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             return all_zim_files
         return [f for f in all_zim_files if needle in f["name"].lower()]
 
+    def list_zim_files_summary_data(
+        self, name_filter: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Structured ``list_zim_files`` payload.
+
+        Wraps :py:meth:`list_zim_files_data` with the count/directories
+        metadata that the legacy markdown-header string variant carries
+        in its prose preamble, so MCP clients consuming the structured
+        output get the same context without reparsing a header.
+
+        Returns:
+            ``{count, directories_count, name_filter, files}`` where
+            ``files`` is the list ``list_zim_files_data`` already returns
+            (per-file dicts with name/path/directory/size/size_bytes/modified).
+        """
+        files = self.list_zim_files_data(name_filter=name_filter)
+        return {
+            "count": len(files),
+            "directories_count": len(self.config.allowed_directories),
+            "name_filter": name_filter or "",
+            "files": files,
+        }
+
     def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories.
 
@@ -347,14 +370,11 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         result_text += json.dumps(all_zim_files, indent=2, ensure_ascii=False)
         return result_text
 
-    def get_zim_metadata(self, zim_file_path: str) -> str:
-        """Get ZIM file metadata from M namespace entries.
+    def get_zim_metadata_data(self, zim_file_path: str) -> Dict[str, Any]:
+        """Structured variant of ``get_zim_metadata``.
 
-        Args:
-            zim_file_path: Path to the ZIM file
-
-        Returns:
-            JSON string containing ZIM metadata
+        Returns the metadata dict directly (not a JSON string) so MCP
+        tools can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -364,11 +384,12 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"metadata:{validated_path}"
+        # Distinct cache key from the legacy string variant so the two
+        # don't collide on shared cache backends.
+        cache_key = f"metadata_data:{validated_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached metadata for: {validated_path}")
+            logger.debug(f"Returning cached metadata dict for: {validated_path}")
             return cached_result  # type: ignore[no-any-return]
 
         # Late-bound lookup so test patches against
@@ -388,10 +409,31 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             logger.error(f"Metadata retrieval failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Metadata retrieval failed: {e}") from e
 
-    def _extract_zim_metadata(self, archive: Archive) -> str:  # NOSONAR(python:S3776)
+    def get_zim_metadata(self, zim_file_path: str) -> str:
+        """Legacy JSON-string variant of ``get_zim_metadata_data``.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+
+        Returns:
+            JSON string containing ZIM metadata
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If metadata retrieval fails
+        """
+        return json.dumps(
+            self.get_zim_metadata_data(zim_file_path),
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    def _extract_zim_metadata(  # NOSONAR(python:S3776)
+        self, archive: Archive
+    ) -> Dict[str, Any]:
         """Extract metadata from ZIM archive."""
         # Basic archive information
-        metadata = {
+        metadata: Dict[str, Any] = {
             "entry_count": archive.entry_count,
             "all_entry_count": archive.all_entry_count,
             "article_count": archive.article_count,
@@ -457,7 +499,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         if metadata_entries:
             metadata["metadata_entries"] = metadata_entries
 
-        return json.dumps(metadata, indent=2, ensure_ascii=False)
+        return metadata
 
     def get_main_page(self, zim_file_path: str) -> str:
         """Get the main page entry from W namespace.

@@ -8,6 +8,7 @@ from ..constants import (
     INPUT_LIMIT_FILE_PATH,
 )
 from ..exceptions import OpenZimMcpRateLimitError
+from ..responses import tool_error
 from ..security import sanitize_input
 
 if TYPE_CHECKING:
@@ -99,7 +100,7 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
         entries: List[Any],
         zim_file_path: Optional[str] = None,
         max_content_length: Optional[int] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Fetch multiple ZIM entries in one call.
 
         Pairs naturally with HTTP transport, where round-trip cost matters.
@@ -122,9 +123,10 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
             max_content_length: per-entry max content length.
 
         Returns:
-            JSON string ``{"results": [...], "succeeded": N, "failed": N}``.
-            Each result includes ``index``, ``success``, and either ``content``
-            or ``error``.
+            Dict ``{"results": [...], "succeeded": N, "failed": N}``. Each
+            result includes ``index``, ``success``, and either ``content`` or
+            ``error``. On failure, returns a ``{"error": True, ...}`` envelope
+            (see ``responses.tool_error``).
 
         Notes:
             Rate limit is charged per entry, not per batch (anti-bypass).
@@ -151,9 +153,13 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
                 for _ in entries or []:
                     server.rate_limiter.check_rate_limit("get_zim_entries")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="batch get entries",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="batch get entries",
+                        error=e,
+                        context=f"Batch size: {batch_size}",
+                    ),
                     context=f"Batch size: {batch_size}",
                 )
 
@@ -184,14 +190,18 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
                     }
                 )
 
-            return await server.async_zim_operations.get_entries(
+            return await server.async_zim_operations.get_entries_data(
                 sanitized, max_content_length
             )
 
         except Exception as e:
             logger.error(f"Error in get_zim_entries: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="batch get entries",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="batch get entries",
+                    error=e,
+                    context=f"Batch size: {batch_size}",
+                ),
                 context=f"Batch size: {batch_size}",
             )

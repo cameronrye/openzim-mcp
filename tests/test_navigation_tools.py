@@ -217,8 +217,8 @@ class TestNavigationToolsDirectInvocation:
     @pytest.mark.asyncio
     async def test_browse_namespace_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking browse_namespace tool handler directly."""
-        advanced_server.async_zim_operations.browse_namespace = AsyncMock(
-            return_value='{"entries": [{"path": "C/Article", "title": "Article"}]}'
+        advanced_server.async_zim_operations.browse_namespace_data = AsyncMock(
+            return_value={"entries": [{"path": "C/Article", "title": "Article"}]}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -230,6 +230,7 @@ class TestNavigationToolsDirectInvocation:
                 limit=50,
                 offset=0,
             )
+            assert isinstance(result, dict)
             assert "entries" in result
 
     @pytest.mark.asyncio
@@ -246,7 +247,9 @@ class TestNavigationToolsDirectInvocation:
                 limit=300,  # > 200
                 offset=0,
             )
-            assert "must be between 1 and 200" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be between 1 and 200" in result.get("message", "")
 
             # Test limit too low
             result = await tool_handler(
@@ -255,7 +258,9 @@ class TestNavigationToolsDirectInvocation:
                 limit=0,  # < 1
                 offset=0,
             )
-            assert "must be between 1 and 200" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be between 1 and 200" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_browse_namespace_with_negative_offset(
@@ -271,7 +276,9 @@ class TestNavigationToolsDirectInvocation:
                 limit=50,
                 offset=-1,  # Negative
             )
-            assert "must be non-negative" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be non-negative" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_browse_namespace_with_rate_limit(self, advanced_server, temp_dir):
@@ -289,12 +296,15 @@ class TestNavigationToolsDirectInvocation:
                 limit=50,
                 offset=0,
             )
-            assert "Error" in result or "Rate limit" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "Rate limit" in message or "Operation" in message
 
     @pytest.mark.asyncio
     async def test_browse_namespace_with_exception(self, advanced_server, temp_dir):
         """Test browse_namespace when an exception occurs."""
-        advanced_server.async_zim_operations.browse_namespace = AsyncMock(
+        advanced_server.async_zim_operations.browse_namespace_data = AsyncMock(
             side_effect=Exception("Namespace not found")
         )
 
@@ -307,9 +317,13 @@ class TestNavigationToolsDirectInvocation:
                 limit=50,
                 offset=0,
             )
-            # Error messages may be formatted with **Error** or **Resource Not Found**
-            assert "**" in result and (
-                "Error" in result or "Not Found" in result or "Operation" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            # Error messages may be formatted with **Error** / **Resource Not Found**
+            # / **Operation** depending on the underlying exception classification.
+            assert "**" in message and (
+                "Error" in message or "Not Found" in message or "Operation" in message
             )
 
     @pytest.mark.asyncio
@@ -397,8 +411,8 @@ class TestNavigationToolsDirectInvocation:
         self, advanced_server, temp_dir
     ):
         """Test invoking get_search_suggestions tool handler directly."""
-        advanced_server.async_zim_operations.get_search_suggestions = AsyncMock(
-            return_value='{"suggestions": ["Python", "Python programming"]}'
+        advanced_server.async_zim_operations.get_search_suggestions_data = AsyncMock(
+            return_value={"suggestions": ["Python", "Python programming"]}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -409,6 +423,7 @@ class TestNavigationToolsDirectInvocation:
                 partial_query="Pyt",
                 limit=10,
             )
+            assert isinstance(result, dict)
             assert "suggestions" in result
 
     @pytest.mark.asyncio
@@ -426,7 +441,9 @@ class TestNavigationToolsDirectInvocation:
                 partial_query="test",
                 limit=100,  # > 50
             )
-            assert "must be between 1 and 50" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be between 1 and 50" in result.get("message", "")
 
             # Limit too low
             result = await tool_handler(
@@ -434,7 +451,9 @@ class TestNavigationToolsDirectInvocation:
                 partial_query="test",
                 limit=0,  # < 1
             )
-            assert "must be between 1 and 50" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be between 1 and 50" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_with_rate_limit(
@@ -452,14 +471,17 @@ class TestNavigationToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 partial_query="test",
             )
-            assert "Error" in result or "Rate limit" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "Rate limit" in message or "Operation" in message
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_with_exception(
         self, advanced_server, temp_dir
     ):
         """Test get_search_suggestions when an exception occurs."""
-        advanced_server.async_zim_operations.get_search_suggestions = AsyncMock(
+        advanced_server.async_zim_operations.get_search_suggestions_data = AsyncMock(
             side_effect=ValueError("Invalid query")
         )
 
@@ -470,7 +492,10 @@ class TestNavigationToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 partial_query="test",
             )
-            assert "Error" in result or "error" in result.lower()
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "Error" in message or "error" in message.lower()
 
 
 class TestWalkNamespaceLimitValidation:
@@ -494,7 +519,7 @@ class TestWalkNamespaceLimitValidation:
     ):
         """Reject limit > 500 with a validation error before backend access."""
         # Backend should never be reached; raise loudly if it is.
-        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
             side_effect=AssertionError("backend should not be called for invalid limit")
         )
 
@@ -507,15 +532,17 @@ class TestWalkNamespaceLimitValidation:
             cursor=0,
             limit=100000,
         )
-        assert "must be between 1 and 500" in result
-        advanced_server.async_zim_operations.walk_namespace.assert_not_called()
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "must be between 1 and 500" in result.get("message", "")
+        advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_walk_namespace_rejects_limit_too_low(
         self, advanced_server, temp_dir
     ):
         """Reject limit < 1 with a validation error."""
-        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
             side_effect=AssertionError("backend should not be called for invalid limit")
         )
 
@@ -528,15 +555,17 @@ class TestWalkNamespaceLimitValidation:
             cursor=0,
             limit=0,
         )
-        assert "must be between 1 and 500" in result
-        advanced_server.async_zim_operations.walk_namespace.assert_not_called()
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "must be between 1 and 500" in result.get("message", "")
+        advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_walk_namespace_rejects_negative_cursor(
         self, advanced_server, temp_dir
     ):
         """Negative cursor must produce a validation error."""
-        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
             side_effect=AssertionError(
                 "backend should not be called for invalid cursor"
             )
@@ -551,14 +580,16 @@ class TestWalkNamespaceLimitValidation:
             cursor=-1,
             limit=200,
         )
-        assert "must be non-negative" in result
-        advanced_server.async_zim_operations.walk_namespace.assert_not_called()
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "must be non-negative" in result.get("message", "")
+        advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_walk_namespace_accepts_valid_bounds(self, advanced_server, temp_dir):
         """Valid limit/cursor must reach the backend."""
-        advanced_server.async_zim_operations.walk_namespace = AsyncMock(
-            return_value='{"entries": [], "next_cursor": 200, "done": false}'
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
+            return_value={"entries": [], "next_cursor": 200, "done": False}
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -570,5 +601,6 @@ class TestWalkNamespaceLimitValidation:
             cursor=0,
             limit=200,
         )
+        assert isinstance(result, dict)
         assert "entries" in result
-        advanced_server.async_zim_operations.walk_namespace.assert_called_once()
+        advanced_server.async_zim_operations.walk_namespace_data.assert_called_once()

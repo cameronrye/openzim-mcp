@@ -1,10 +1,11 @@
 """File listing tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict
 
 from ..constants import INPUT_LIMIT_QUERY
 from ..exceptions import OpenZimMcpRateLimitError
+from ..responses import tool_error
 from ..security import sanitize_input
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
     """
 
     @server.mcp.tool()
-    async def list_zim_files(name_filter: str = "") -> str:
+    async def list_zim_files(name_filter: str = "") -> Dict[str, Any]:
         """List all ZIM files in allowed directories.
 
         Args:
@@ -31,15 +32,22 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
                 listings (e.g. "wikipedia", "nginx"). Empty string lists all.
 
         Returns:
-            JSON string containing the list of ZIM files.
+            Dict with keys ``count``, ``directories_count``, ``name_filter``,
+            ``files`` (list of per-file dicts: name, path, directory, size,
+            size_bytes, modified). On failure, returns a ``{"error": True, ...}``
+            envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("default")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="list ZIM files",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="list ZIM files",
+                        error=e,
+                        context="Listing available ZIM files",
+                    ),
                     context="Listing available ZIM files",
                 )
 
@@ -53,14 +61,18 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
                 name_filter, INPUT_LIMIT_QUERY, allow_empty=True
             )
 
-            return await server.async_zim_operations.list_zim_files(
+            return await server.async_zim_operations.list_zim_files_summary_data(
                 name_filter=name_filter
             )
 
         except Exception as e:
             logger.error(f"Error listing ZIM files: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="list ZIM files",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="list ZIM files",
+                    error=e,
+                    context="Scanning allowed directories for ZIM files",
+                ),
                 context="Scanning allowed directories for ZIM files",
             )

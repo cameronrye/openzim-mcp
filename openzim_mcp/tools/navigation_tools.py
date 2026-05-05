@@ -1,7 +1,7 @@
 """Navigation and browsing tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from ..constants import (
     INPUT_LIMIT_CONTENT_TYPE,
@@ -11,6 +11,7 @@ from ..constants import (
     INPUT_LIMIT_QUERY,
 )
 from ..exceptions import OpenZimMcpRateLimitError
+from ..responses import tool_error
 from ..security import sanitize_input
 
 if TYPE_CHECKING:
@@ -34,7 +35,7 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
         namespace: str,
         limit: int = 50,
         offset: int = 0,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Browse entries in a specific namespace with pagination.
 
         Args:
@@ -44,17 +45,28 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
             offset: Starting offset for pagination (default: 0)
 
         Returns:
-            JSON string containing namespace entries
+            Dict with keys: namespace, total_in_namespace, offset, limit,
+            returned_count, has_more, next_cursor, entries, sampling_based,
+            discovery_method, is_total_authoritative, results_may_be_incomplete.
+            On failure, returns a ``{"error": True, ...}`` envelope (see
+            ``responses.tool_error``).
         """
         try:
             # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("browse_namespace")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
-                    operation="browse namespace",
-                    error=e,
-                    context=f"Namespace: {namespace}",
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
+                        operation="browse namespace",
+                        message=server._create_enhanced_error_message(
+                            operation="browse namespace",
+                            error=e,
+                            context=f"Namespace: {namespace}",
+                        ),
+                        context=f"Namespace: {namespace}",
+                    ),
                 )
 
             # Sanitize inputs
@@ -65,36 +77,55 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
 
             # Validate parameters
             if limit < 1 or limit > 200:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 200 "
-                    f"(provided: {limit})\n\n"
-                    "**Troubleshooting**: Adjust the limit parameter to a "
-                    "value within the valid range.\n"
-                    "**Example**: Use `limit=50` for reasonable pagination."
+                return tool_error(
+                    operation="browse namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 200 "
+                        f"(provided: {limit})\n\n"
+                        "**Troubleshooting**: Adjust the limit parameter to a "
+                        "value within the valid range.\n"
+                        "**Example**: Use `limit=50` for reasonable pagination."
+                    ),
+                    context=f"Namespace: {namespace}, Limit: {limit}",
                 )
             if offset < 0:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: offset must be non-negative (provided: {offset})\n\n"
-                    "**Troubleshooting**: Use offset=0 to start from the beginning, "
-                    "or a positive number to skip entries.\n"
-                    "**Example**: Use `offset=50` to skip the first 50 entries."
+                return tool_error(
+                    operation="browse namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: offset must be non-negative "
+                        f"(provided: {offset})\n\n"
+                        "**Troubleshooting**: Use offset=0 to start from the "
+                        "beginning, or a positive number to skip entries.\n"
+                        "**Example**: Use `offset=50` to skip the first 50 entries."
+                    ),
+                    context=f"Namespace: {namespace}, Offset: {offset}",
                 )
 
             # Use async operations
-            return await server.async_zim_operations.browse_namespace(
+            return await server.async_zim_operations.browse_namespace_data(
                 zim_file_path, namespace, limit, offset
             )
 
         except Exception as e:
             logger.error(f"Error browsing namespace: {e}")
-            return server._create_enhanced_error_message(
-                operation="browse namespace",
-                error=e,
-                context=(
-                    f"File: {zim_file_path}, Namespace: {namespace}, "
-                    f"Limit: {limit}, Offset: {offset}"
+            return cast(
+                Dict[str, Any],
+                tool_error(
+                    operation="browse namespace",
+                    message=server._create_enhanced_error_message(
+                        operation="browse namespace",
+                        error=e,
+                        context=(
+                            f"File: {zim_file_path}, Namespace: {namespace}, "
+                            f"Limit: {limit}, Offset: {offset}"
+                        ),
+                    ),
+                    context=(
+                        f"File: {zim_file_path}, Namespace: {namespace}, "
+                        f"Limit: {limit}, Offset: {offset}"
+                    ),
                 ),
             )
 
@@ -106,7 +137,7 @@ def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
         namespace: str,
         cursor: int = 0,
         limit: int = 200,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Iterate every entry in a namespace via deterministic cursor pagination.
 
         Unlike browse_namespace (which samples and may cap at 200 entries
@@ -126,16 +157,26 @@ def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
             limit: Max entries per page (1-500, default: 200)
 
         Returns:
-            JSON containing entries, `next_cursor`, and `done` flag
+            Dict with keys: namespace, cursor, limit, returned_count,
+            scanned_count, next_cursor, done, scanned_through_id,
+            total_entries, entries. On failure, returns a
+            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("browse_namespace")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
-                    operation="walk namespace",
-                    error=e,
-                    context=f"Namespace: {namespace}",
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
+                        operation="walk namespace",
+                        message=server._create_enhanced_error_message(
+                            operation="walk namespace",
+                            error=e,
+                            context=f"Namespace: {namespace}",
+                        ),
+                        context=f"Namespace: {namespace}",
+                    ),
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -146,35 +187,54 @@ def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
             # without this check, callers could open the libzim Archive
             # for arbitrarily oversized requests before being rejected.
             if limit < 1 or limit > 500:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 500 "
-                    f"(provided: {limit})\n\n"
-                    "**Troubleshooting**: Adjust the limit parameter to a "
-                    "value within the valid range.\n"
-                    "**Example**: Use `limit=200` for the default page size."
+                return tool_error(
+                    operation="walk namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 500 "
+                        f"(provided: {limit})\n\n"
+                        "**Troubleshooting**: Adjust the limit parameter to a "
+                        "value within the valid range.\n"
+                        "**Example**: Use `limit=200` for the default page size."
+                    ),
+                    context=f"Namespace: {namespace}, Limit: {limit}",
                 )
             if cursor < 0:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: cursor must be non-negative (provided: {cursor})\n\n"
-                    "**Troubleshooting**: Use cursor=0 to start, or pass the "
-                    "`next_cursor` value returned by a previous call.\n"
-                    "**Example**: `cursor=0` on the first call."
+                return tool_error(
+                    operation="walk namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: cursor must be non-negative "
+                        f"(provided: {cursor})\n\n"
+                        "**Troubleshooting**: Use cursor=0 to start, or pass the "
+                        "`next_cursor` value returned by a previous call.\n"
+                        "**Example**: `cursor=0` on the first call."
+                    ),
+                    context=f"Namespace: {namespace}, Cursor: {cursor}",
                 )
 
-            return await server.async_zim_operations.walk_namespace(
+            return await server.async_zim_operations.walk_namespace_data(
                 zim_file_path, namespace, cursor, limit
             )
 
         except Exception as e:
             logger.error(f"Error in walk_namespace: {e}")
-            return server._create_enhanced_error_message(
-                operation="walk namespace",
-                error=e,
-                context=(
-                    f"File: {zim_file_path}, Namespace: {namespace}, "
-                    f"Cursor: {cursor}, Limit: {limit}"
+            return cast(
+                Dict[str, Any],
+                tool_error(
+                    operation="walk namespace",
+                    message=server._create_enhanced_error_message(
+                        operation="walk namespace",
+                        error=e,
+                        context=(
+                            f"File: {zim_file_path}, Namespace: {namespace}, "
+                            f"Cursor: {cursor}, Limit: {limit}"
+                        ),
+                    ),
+                    context=(
+                        f"File: {zim_file_path}, Namespace: {namespace}, "
+                        f"Cursor: {cursor}, Limit: {limit}"
+                    ),
                 ),
             )
 
@@ -260,7 +320,7 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_search_suggestions(
         zim_file_path: str, partial_query: str, limit: int = 10
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Get search suggestions and auto-complete for partial queries.
 
         Args:
@@ -271,17 +331,27 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
             limit: Maximum number of suggestions to return (1-50, default: 10)
 
         Returns:
-            JSON string containing search suggestions
+            Dict with keys: partial_query, suggestions (list of {text, path,
+            type}), count. For very short queries, returns
+            ``{"suggestions": [], "message": "..."}``. On failure, returns a
+            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
         """
         try:
             # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("suggestions")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
-                    operation="get search suggestions",
-                    error=e,
-                    context=f"Query: '{partial_query}'",
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
+                        operation="get search suggestions",
+                        message=server._create_enhanced_error_message(
+                            operation="get search suggestions",
+                            error=e,
+                            context=f"Query: '{partial_query}'",
+                        ),
+                        context=f"Query: '{partial_query}'",
+                    ),
                 )
 
             # Sanitize inputs
@@ -290,24 +360,35 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
 
             # Validate parameters
             if limit < 1 or limit > 50:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 50 "
-                    f"(provided: {limit})\n\n"
-                    "**Troubleshooting**: Adjust the limit parameter to a "
-                    "value within the valid range.\n"
-                    "**Example**: Use `limit=10` for reasonable suggestions."
+                return tool_error(
+                    operation="get search suggestions",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 50 "
+                        f"(provided: {limit})\n\n"
+                        "**Troubleshooting**: Adjust the limit parameter to a "
+                        "value within the valid range.\n"
+                        "**Example**: Use `limit=10` for reasonable suggestions."
+                    ),
+                    context=f"Query: '{partial_query}', Limit: {limit}",
                 )
 
             # Use async operations
-            return await server.async_zim_operations.get_search_suggestions(
+            return await server.async_zim_operations.get_search_suggestions_data(
                 zim_file_path, partial_query, limit
             )
 
         except Exception as e:
             logger.error(f"Error getting search suggestions: {e}")
-            return server._create_enhanced_error_message(
-                operation="get search suggestions",
-                error=e,
-                context=f"File: {zim_file_path}, Query: {partial_query}",
+            return cast(
+                Dict[str, Any],
+                tool_error(
+                    operation="get search suggestions",
+                    message=server._create_enhanced_error_message(
+                        operation="get search suggestions",
+                        error=e,
+                        context=f"File: {zim_file_path}, Query: {partial_query}",
+                    ),
+                    context=f"File: {zim_file_path}, Query: {partial_query}",
+                ),
             )

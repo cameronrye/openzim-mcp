@@ -7,7 +7,6 @@ These tests focus on the untested paths in server_tools.py:
 - exception handling
 """
 
-import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,8 +31,7 @@ class TestGetServerHealthDirectoryAndCacheChecks:
         tools = server.mcp._tool_manager._tools
         if "get_server_health" in tools:
             tool_handler = tools["get_server_health"].fn
-            result = await tool_handler()
-            health = json.loads(result)
+            health = await tool_handler()
 
             assert health["health_checks"]["directories_accessible"] >= 1
 
@@ -50,8 +48,7 @@ class TestGetServerHealthDirectoryAndCacheChecks:
         tools = server.mcp._tool_manager._tools
         if "get_server_health" in tools:
             tool_handler = tools["get_server_health"].fn
-            result = await tool_handler()
-            health = json.loads(result)
+            health = await tool_handler()
 
             assert health["health_checks"]["zim_files_found"] == 0
             assert any("no zim files" in w.lower() for w in health["warnings"])
@@ -72,8 +69,7 @@ class TestGetServerHealthDirectoryAndCacheChecks:
         tools = server.mcp._tool_manager._tools
         if "get_server_health" in tools:
             tool_handler = tools["get_server_health"].fn
-            result = await tool_handler()
-            health = json.loads(result)
+            health = await tool_handler()
 
             assert health["health_checks"]["zim_files_found"] >= 1
 
@@ -100,8 +96,7 @@ class TestGetServerHealthDirectoryAndCacheChecks:
         tools = server.mcp._tool_manager._tools
         if "get_server_health" in tools:
             tool_handler = tools["get_server_health"].fn
-            result = await tool_handler()
-            health = json.loads(result)
+            health = await tool_handler()
 
             assert any("hit rate" in r.lower() for r in health["recommendations"])
 
@@ -121,8 +116,7 @@ class TestGetServerHealthDirectoryAndCacheChecks:
         tools = server.mcp._tool_manager._tools
         if "get_server_health" in tools:
             tool_handler = tools["get_server_health"].fn
-            result = await tool_handler()
-            health = json.loads(result)
+            health = await tool_handler()
 
             assert any(
                 "performing well" in r.lower() for r in health["recommendations"]
@@ -141,8 +135,7 @@ class TestGetServerHealthDirectoryAndCacheChecks:
         tools = server.mcp._tool_manager._tools
         if "get_server_health" in tools:
             tool_handler = tools["get_server_health"].fn
-            result = await tool_handler()
-            health = json.loads(result)
+            health = await tool_handler()
 
             assert any(
                 "enabling cache" in r.lower() or "performance" in r.lower()
@@ -155,7 +148,7 @@ class TestGetServerConfigurationToolInvocation:
 
     @pytest.mark.asyncio
     async def test_get_server_configuration_basic(self, temp_dir):
-        """Test get_server_configuration returns valid JSON."""
+        """Test get_server_configuration returns a structured dict."""
         config = OpenZimMcpConfig(
             allowed_directories=[str(temp_dir)],
             tool_mode="advanced",
@@ -166,8 +159,7 @@ class TestGetServerConfigurationToolInvocation:
         tools = server.mcp._tool_manager._tools
         if "get_server_configuration" in tools:
             tool_handler = tools["get_server_configuration"].fn
-            result = await tool_handler()
-            config_info = json.loads(result)
+            config_info = await tool_handler()
 
             assert "configuration" in config_info
             assert "diagnostics" in config_info
@@ -193,4 +185,7 @@ class TestServerToolsExceptionHandling:
         if "get_server_health" in tools:
             tool_handler = tools["get_server_health"].fn
             result = await tool_handler()
-            assert "Error" in result or "error" in result.lower()
+            # Tool now returns a structured error envelope.
+            assert result.get("error") is True
+            assert result.get("operation") == "get server health"
+            assert "message" in result

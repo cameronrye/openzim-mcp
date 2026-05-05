@@ -62,14 +62,13 @@ class _NamespaceMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
-    def list_namespaces(self, zim_file_path: str) -> str:
-        """List available namespaces and their entry counts.
+    def list_namespaces_data(self, zim_file_path: str) -> Dict[str, Any]:
+        """Structured variant of ``list_namespaces``.
 
-        Args:
-            zim_file_path: Path to the ZIM file
-
-        Returns:
-            JSON string containing namespace information
+        Returns the same payload as ``list_namespaces`` but as a Python
+        dict, so MCP tool functions can hand it straight to FastMCP's
+        structured-output path without the json.dumps + re-parse round
+        trip the legacy string variant required.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -79,18 +78,18 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"namespaces:{validated_path}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"namespaces_data:{validated_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached namespaces for: {validated_path}")
+            logger.debug(f"Returning cached namespaces dict for: {validated_path}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 result = self._list_archive_namespaces(archive)
 
-            # Cache the result
             self.cache.set(cache_key, result)
             logger.info(f"Listed namespaces for: {validated_path}")
             return result
@@ -99,7 +98,20 @@ class _NamespaceMixin:
             logger.error(f"Namespace listing failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Namespace listing failed: {e}") from e
 
-    def _list_archive_namespaces(self, archive: Archive) -> str:
+    def list_namespaces(self, zim_file_path: str) -> str:
+        """Legacy JSON-string variant of ``list_namespaces_data``.
+
+        Retained so ``SimpleToolsHandler`` (which composes natural-language
+        responses out of these strings) keeps working unchanged. New
+        callers should prefer ``list_namespaces_data``.
+        """
+        return json.dumps(
+            self.list_namespaces_data(zim_file_path),
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    def _list_archive_namespaces(self, archive: Archive) -> Dict[str, Any]:
         """List namespaces in the archive.
 
         For small archives (entry_count <= NAMESPACE_MAX_SAMPLE_SIZE) iterate
@@ -147,7 +159,7 @@ class _NamespaceMixin:
             "discovery_method": "full_iteration" if full_iteration else "sampling",
             "namespaces": namespaces,
         }
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        return result
 
     @staticmethod
     def _add_new_scheme_metadata_namespace(
@@ -452,19 +464,13 @@ class _NamespaceMixin:
             "-/favicon",
         ]
 
-    def browse_namespace(
+    def browse_namespace_data(
         self, zim_file_path: str, namespace: str, limit: int = 50, offset: int = 0
-    ) -> str:
-        """Browse entries in a specific namespace with pagination.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``browse_namespace``.
 
-        Args:
-            zim_file_path: Path to the ZIM file
-            namespace: Namespace to browse (C, M, W, X, A, I for old; domains for new)
-            limit: Maximum number of entries to return
-            offset: Starting offset for pagination
-
-        Returns:
-            JSON string containing namespace entries
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpValidationError: If parameter validation fails (limit,
@@ -493,11 +499,12 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"browse_ns:{validated_path}:{namespace}:{limit}:{offset}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"browse_ns_data:{validated_path}:{namespace}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached namespace browse for: {namespace}")
+            logger.debug(f"Returning cached namespace browse dict for: {namespace}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -521,6 +528,34 @@ class _NamespaceMixin:
             logger.error(f"Namespace browsing failed for {namespace}: {e}")
             raise OpenZimMcpArchiveError(f"Namespace browsing failed: {e}") from e
 
+    def browse_namespace(
+        self, zim_file_path: str, namespace: str, limit: int = 50, offset: int = 0
+    ) -> str:
+        """Legacy JSON-string variant of ``browse_namespace_data``.
+
+        Browse entries in a specific namespace with pagination.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            namespace: Namespace to browse (C, M, W, X, A, I for old; domains for new)
+            limit: Maximum number of entries to return
+            offset: Starting offset for pagination
+
+        Returns:
+            JSON string containing namespace entries
+
+        Raises:
+            OpenZimMcpValidationError: If parameter validation fails (limit,
+                offset, or namespace).
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If browsing fails
+        """
+        return json.dumps(
+            self.browse_namespace_data(zim_file_path, namespace, limit, offset),
+            indent=2,
+            ensure_ascii=False,
+        )
+
     def _browse_namespace_entries(  # NOSONAR(python:S3776)
         self,
         archive: Archive,
@@ -528,7 +563,7 @@ class _NamespaceMixin:
         limit: int,
         offset: int,
         archive_path: Optional[str] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Browse entries in a specific namespace using sampling and search.
 
         ``archive_path`` enables caching the full namespace listing per
@@ -617,7 +652,7 @@ class _NamespaceMixin:
             "results_may_be_incomplete": results_may_be_incomplete,
         }
 
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        return result
 
     def _materialise_browse_entry(
         self, archive: Archive, entry_path: str, has_new_scheme: bool
@@ -900,31 +935,17 @@ class _NamespaceMixin:
 
         return patterns
 
-    def walk_namespace(
+    def walk_namespace_data(
         self,
         zim_file_path: str,
         namespace: str,
         cursor: int = 0,
         limit: int = 200,
-    ) -> str:
-        """Walk every entry in a namespace by entry ID, with cursor pagination.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``walk_namespace``.
 
-        Unlike browse_namespace (which samples), this iterates the archive
-        deterministically from ``cursor`` onward and returns up to ``limit``
-        entries that belong to the requested namespace. Pair the returned
-        ``next_cursor`` with a follow-up call to walk the rest. Set to None
-        when iteration is complete.
-
-        Args:
-            zim_file_path: Path to the ZIM file
-            namespace: Namespace to walk (C, M, W, X, A, I, etc.)
-            cursor: Entry ID to resume from (default 0; use the value from
-                ``next_cursor`` of the previous call)
-            limit: Maximum entries to return per page (1–500, default 200)
-
-        Returns:
-            JSON containing entries in the namespace, the next cursor, and
-            ``done: true`` if iteration finished
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
@@ -975,7 +996,7 @@ class _NamespaceMixin:
                         "total_entries": archive.entry_count,
                         "entries": [],
                     }
-                    return json.dumps(result, indent=2, ensure_ascii=False)
+                    return result
 
                 total = archive.entry_count
                 entries: List[Dict[str, Any]] = []
@@ -1018,14 +1039,16 @@ class _NamespaceMixin:
                     "total_entries": total,
                     "entries": entries,
                 }
-                return json.dumps(result, indent=2, ensure_ascii=False)
+                return result
         except OpenZimMcpArchiveError:
             raise
         except Exception as e:
             raise OpenZimMcpArchiveError(f"walk_namespace failed: {e}") from e
 
     @staticmethod
-    def _walk_new_scheme_metadata(archive: Archive, cursor: int, limit: int) -> str:
+    def _walk_new_scheme_metadata(
+        archive: Archive, cursor: int, limit: int
+    ) -> Dict[str, Any]:
         """Walk M (metadata) entries in a new-scheme archive via metadata_keys."""
         try:
             keys = list(getattr(archive, "metadata_keys", []) or [])
@@ -1037,7 +1060,7 @@ class _NamespaceMixin:
         end = min(start + limit, total)
         entries = [{"path": f"M/{k}", "title": k} for k in keys[start:end]]
         done = end >= total
-        result = {
+        result: Dict[str, Any] = {
             "namespace": "M",
             "cursor": cursor,
             "limit": limit,
@@ -1049,4 +1072,41 @@ class _NamespaceMixin:
             "total_entries": total,
             "entries": entries,
         }
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        return result
+
+    def walk_namespace(
+        self,
+        zim_file_path: str,
+        namespace: str,
+        cursor: int = 0,
+        limit: int = 200,
+    ) -> str:
+        """Legacy JSON-string variant of ``walk_namespace_data``.
+
+        Walk every entry in a namespace by entry ID, with cursor pagination.
+
+        Unlike browse_namespace (which samples), this iterates the archive
+        deterministically from ``cursor`` onward and returns up to ``limit``
+        entries that belong to the requested namespace. Pair the returned
+        ``next_cursor`` with a follow-up call to walk the rest. Set to None
+        when iteration is complete.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            namespace: Namespace to walk (C, M, W, X, A, I, etc.)
+            cursor: Entry ID to resume from (default 0; use the value from
+                ``next_cursor`` of the previous call)
+            limit: Maximum entries to return per page (1–500, default 200)
+
+        Returns:
+            JSON containing entries in the namespace, the next cursor, and
+            ``done: true`` if iteration finished
+
+        Raises:
+            OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
+        """
+        return json.dumps(
+            self.walk_namespace_data(zim_file_path, namespace, cursor, limit),
+            indent=2,
+            ensure_ascii=False,
+        )

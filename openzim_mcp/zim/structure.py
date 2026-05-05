@@ -46,15 +46,13 @@ class _StructureMixin:
         ) -> Tuple[Any, str]:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
-    def get_article_structure(self, zim_file_path: str, entry_path: str) -> str:
-        """Extract article structure including headings, sections, and key metadata.
+    def get_article_structure_data(
+        self, zim_file_path: str, entry_path: str
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_article_structure``.
 
-        Args:
-            zim_file_path: Path to the ZIM file
-            entry_path: Entry path, e.g., 'C/Some_Article'
-
-        Returns:
-            JSON string containing article structure
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -64,16 +62,17 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Check cache
-        cache_key = f"structure:{validated_path}:{entry_path}"
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"structure_data:{validated_path}:{entry_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(f"Returning cached structure for: {entry_path}")
+            logger.debug(f"Returning cached structure dict for: {entry_path}")
             return cached_result  # type: ignore[no-any-return]
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_article_structure(archive, entry_path)
+                result = self._extract_article_structure_data(archive, entry_path)
 
             # Cache the result
             self.cache.set(cache_key, result)
@@ -88,8 +87,32 @@ class _StructureMixin:
             logger.error(f"Structure extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Structure extraction failed: {e}") from e
 
-    def _extract_article_structure(self, archive: Archive, entry_path: str) -> str:
-        """Extract structure from article content."""
+    def get_article_structure(self, zim_file_path: str, entry_path: str) -> str:
+        """Legacy JSON-string variant of ``get_article_structure_data``.
+
+        Extract article structure including headings, sections, and key metadata.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Entry path, e.g., 'C/Some_Article'
+
+        Returns:
+            JSON string containing article structure
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If structure extraction fails
+        """
+        return json.dumps(
+            self.get_article_structure_data(zim_file_path, entry_path),
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    def _extract_article_structure_data(
+        self, archive: Archive, entry_path: str
+    ) -> Dict[str, Any]:
+        """Extract structure from article content as a dict."""
         try:
             entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
             title = entry.title or "Untitled"
@@ -134,7 +157,7 @@ class _StructureMixin:
                     }
                 ]
 
-            return json.dumps(structure, indent=2, ensure_ascii=False)
+            return structure
 
         except Exception as e:
             logger.error(f"Error extracting structure for {entry_path}: {e}")
@@ -142,15 +165,18 @@ class _StructureMixin:
                 f"Failed to extract article structure: {e}"
             ) from e
 
-    def extract_article_links(
+    def extract_article_links_data(
         self,
         zim_file_path: str,
         entry_path: str,
         limit: int = 100,
         offset: int = 0,
         kind: Optional[str] = None,
-    ) -> str:
-        """Extract internal and external links from an article, with pagination.
+    ) -> Dict[str, Any]:
+        """Structured variant of ``extract_article_links``.
+
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
 
         Heavy articles (e.g. Wikipedia "Evolution") carry hundreds of links;
         the unbounded variant routinely overflowed MCP response budgets. This
@@ -168,9 +194,9 @@ class _StructureMixin:
                 empty lists; their totals are still reported.
 
         Returns:
-            JSON string with ``internal_links``, ``external_links``,
-            ``media_links`` (paged subsets), ``total_*_links`` (full counts),
-            and a ``pagination`` block (``offset``, ``limit``, ``has_more``,
+            Dict with ``internal_links``, ``external_links``, ``media_links``
+            (paged subsets), ``total_*_links`` (full counts), and a
+            ``pagination`` block (``offset``, ``limit``, ``has_more``,
             ``kind``).
 
         Raises:
@@ -219,6 +245,47 @@ class _StructureMixin:
         except Exception as e:
             logger.error(f"Link extraction failed for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Link extraction failed: {e}") from e
+
+    def extract_article_links(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 100,
+        offset: int = 0,
+        kind: Optional[str] = None,
+    ) -> str:
+        """Legacy JSON-string variant of ``extract_article_links_data``.
+
+        Extract internal and external links from an article, with pagination.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Entry path, e.g., 'C/Some_Article'
+            limit: Max items per category in the response (1-500, default 100).
+            offset: Starting offset within each category (default 0).
+            kind: Optional filter — ``"internal"``, ``"external"``, or
+                ``"media"``.
+
+        Returns:
+            JSON string containing extracted links, totals, and pagination
+            metadata.
+
+        Raises:
+            OpenZimMcpValidationError: limit/offset/kind out of range.
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If link extraction fails
+        """
+        return json.dumps(
+            self.extract_article_links_data(
+                zim_file_path,
+                entry_path,
+                limit=limit,
+                offset=offset,
+                kind=kind,
+            ),
+            indent=2,
+            ensure_ascii=False,
+        )
 
     def _get_or_load_link_extraction(
         self, validated_path: str, entry_path: str
@@ -286,8 +353,8 @@ class _StructureMixin:
         limit: int,
         offset: int,
         kind: Optional[str],
-    ) -> str:
-        """Slice cached extraction into a paged JSON response."""
+    ) -> Dict[str, Any]:
+        """Slice cached extraction into a paged response dict."""
         full_internal: List[Any] = extraction["internal"]
         full_external: List[Any] = extraction["external"]
         full_media: List[Any] = extraction["media"]
@@ -327,10 +394,53 @@ class _StructureMixin:
         if extraction.get("message"):
             links_data["message"] = extraction["message"]
 
-        return json.dumps(links_data, indent=2, ensure_ascii=False)
+        return links_data
+
+    def get_table_of_contents_data(
+        self, zim_file_path: str, entry_path: str
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_table_of_contents``.
+
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If TOC extraction fails
+        """
+        # Validate and resolve file path
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"toc_data:{validated_path}:{entry_path}"
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Returning cached TOC dict for: {entry_path}")
+            return cached_result  # type: ignore[no-any-return]
+
+        try:
+            with _zim_ops_mod.zim_archive(validated_path) as archive:
+                result = self._extract_table_of_contents_data(archive, entry_path)
+
+            # Cache the result
+            self.cache.set(cache_key, result)
+            logger.info(f"Extracted TOC for: {entry_path}")
+            return result
+
+        except OpenZimMcpArchiveError:
+            # Inner helper already raised a typed archive error with full
+            # context. Don't re-wrap and double the message prefix.
+            raise
+        except Exception as e:
+            logger.error(f"TOC extraction failed for {entry_path}: {e}")
+            raise OpenZimMcpArchiveError(f"TOC extraction failed: {e}") from e
 
     def get_table_of_contents(self, zim_file_path: str, entry_path: str) -> str:
-        """Extract a hierarchical table of contents from an article.
+        """Legacy JSON-string variant of ``get_table_of_contents_data``.
+
+        Extract a hierarchical table of contents from an article.
 
         Returns a structured TOC tree based on heading levels (h1-h6),
         suitable for navigation and content overview.
@@ -346,36 +456,16 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If TOC extraction fails
         """
-        # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        return json.dumps(
+            self.get_table_of_contents_data(zim_file_path, entry_path),
+            indent=2,
+            ensure_ascii=False,
+        )
 
-        # Check cache
-        cache_key = f"toc:{validated_path}:{entry_path}"
-        cached_result = self.cache.get(cache_key)
-        if cached_result is not None:
-            logger.debug(f"Returning cached TOC for: {entry_path}")
-            return cached_result  # type: ignore[no-any-return]
-
-        try:
-            with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_table_of_contents(archive, entry_path)
-
-            # Cache the result
-            self.cache.set(cache_key, result)
-            logger.info(f"Extracted TOC for: {entry_path}")
-            return result
-
-        except OpenZimMcpArchiveError:
-            # Inner helper already raised a typed archive error with full
-            # context. Don't re-wrap and double the message prefix.
-            raise
-        except Exception as e:
-            logger.error(f"TOC extraction failed for {entry_path}: {e}")
-            raise OpenZimMcpArchiveError(f"TOC extraction failed: {e}") from e
-
-    def _extract_table_of_contents(self, archive: Archive, entry_path: str) -> str:
-        """Extract hierarchical table of contents from article."""
+    def _extract_table_of_contents_data(
+        self, archive: Archive, entry_path: str
+    ) -> Dict[str, Any]:
+        """Extract hierarchical table of contents from article as a dict."""
         try:
             entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
 
@@ -396,12 +486,12 @@ class _StructureMixin:
                 toc_data["message"] = (
                     f"TOC extraction requires HTML content, got: {mime_type}"
                 )
-                return json.dumps(toc_data, indent=2, ensure_ascii=False)
+                return toc_data
 
             raw_content = bytes(item.content).decode("utf-8", errors="replace")
             toc_data.update(self._build_hierarchical_toc(raw_content))
 
-            return json.dumps(toc_data, indent=2, ensure_ascii=False)
+            return toc_data
 
         except OpenZimMcpArchiveError:
             raise
@@ -512,13 +602,17 @@ class _StructureMixin:
 
         return root
 
-    def get_related_articles(
+    def get_related_articles_data(
         self,
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-    ) -> str:
-        """Find articles related to entry_path via outbound links."""
+    ) -> Dict[str, Any]:
+        """Structured variant of ``get_related_articles``.
+
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
+        """
         if limit < 1 or limit > 100:
             raise OpenZimMcpValidationError(
                 f"limit must be between 1 and 100 (provided: {limit})"
@@ -527,11 +621,13 @@ class _StructureMixin:
         result: Dict[str, Any] = {"entry_path": entry_path}
 
         try:
-            links_json = self.extract_article_links(zim_file_path, entry_path)
-            links_data = json.loads(links_json)
-            # extract_article_links resolves redirects internally and stores
-            # the post-redirect entry path in ``links_data["path"]``. Resolve
-            # relative links against THAT path, not the caller-supplied
+            # Use the dict-returning extract_article_links_data so we don't
+            # round-trip through json.dumps + json.loads just to walk the
+            # outbound link graph.
+            links_data = self.extract_article_links_data(zim_file_path, entry_path)
+            # extract_article_links_data resolves redirects internally and
+            # stores the post-redirect entry path in ``links_data["path"]``.
+            # Resolve relative links against THAT path, not the caller-supplied
             # entry_path: if entry_path was a redirect to a different
             # directory (or namespace), resolving against the source's
             # dirname produces non-existent paths.
@@ -559,7 +655,23 @@ class _StructureMixin:
             result["outbound_results"] = []
             result["outbound_error"] = str(e)
 
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        return result
+
+    def get_related_articles(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 10,
+    ) -> str:
+        """Legacy JSON-string variant of ``get_related_articles_data``.
+
+        Find articles related to entry_path via outbound links.
+        """
+        return json.dumps(
+            self.get_related_articles_data(zim_file_path, entry_path, limit),
+            indent=2,
+            ensure_ascii=False,
+        )
 
     @staticmethod
     def _resolve_link_to_entry_path(url: str, source_entry_path: str) -> Optional[str]:
