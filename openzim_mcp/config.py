@@ -112,6 +112,18 @@ class OpenZimMcpConfig(BaseSettings):
             "OPENZIM_MCP_AUTH_TOKEN. Never set this in a config file."
         ),
     )
+    insecure_disable_auth: bool = Field(
+        default=False,
+        description=(
+            "Operator-acknowledged escape hatch: allow --transport http to "
+            "bind a non-loopback host without OPENZIM_MCP_AUTH_TOKEN. "
+            "Intended for closed networks (Docker bridge, Tailscale-only, "
+            "isolated LAN) where the network itself is the trust boundary. "
+            "Logs a WARNING naming the bound host on every startup. "
+            "Does not apply to --transport sse — SSE has no auth middleware "
+            "to reason about and remains localhost-only."
+        ),
+    )
     cors_origins: List[str] = Field(
         default_factory=list,
         description=(

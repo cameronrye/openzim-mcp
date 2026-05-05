@@ -111,15 +111,28 @@ def check_safe_startup(config: object) -> None:
                 f"SSE transport bound to {host} is not allowed. SSE has no "
                 "auth middleware in this server, so it must bind 127.0.0.1. "
                 "For exposed deployments use --transport http (streamable "
-                "HTTP) with OPENZIM_MCP_AUTH_TOKEN."
+                "HTTP) with OPENZIM_MCP_AUTH_TOKEN. "
+                "OPENZIM_MCP_INSECURE_DISABLE_AUTH does not apply to SSE."
             )
         return
     has_token = getattr(config, "auth_token", None) is not None
     if not is_localhost and not has_token:
+        if getattr(config, "insecure_disable_auth", False):
+            logger.warning(
+                "INSECURE: HTTP transport bound to %s with no auth token "
+                "(OPENZIM_MCP_INSECURE_DISABLE_AUTH=1). The server is "
+                "trusting the surrounding network as the trust boundary. "
+                "Anyone who can reach this address can call every tool.",
+                host,
+            )
+            return
         raise OpenZimMcpConfigurationError(
             f"HTTP transport bound to {host} requires authentication. "
             "Set OPENZIM_MCP_AUTH_TOKEN, or bind to 127.0.0.1 for "
-            "localhost-only access. (Use a reverse proxy for TLS termination.)"
+            "localhost-only access. (Use a reverse proxy for TLS termination.) "
+            "If the surrounding network is your trust boundary (Docker bridge, "
+            "Tailscale-only, isolated LAN) and you accept the risk, set "
+            "OPENZIM_MCP_INSECURE_DISABLE_AUTH=1."
         )
 
 
