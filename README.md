@@ -139,7 +139,7 @@ Run OpenZIM MCP as a long-running service. Pass `--transport http` (or set `OPEN
 - **Safe-default startup check** — the server *refuses* to bind a non-localhost host without a token. (Bind `127.0.0.1` for local-only access; put a reverse proxy in front for TLS.)
 - **CORS allow-list** — explicit origins via `OPENZIM_MCP_CORS_ORIGINS`; wildcard `*` is rejected at startup.
 - **Health endpoints** — `/healthz` (liveness) and `/readyz` (at least one allowed dir is readable). Both exempt from auth so probes work cleanly.
-- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.1.2`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
+- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp:1.2.0`, builds for `linux/amd64` and `linux/arm64`, runs as non-root.
 
 Legacy SSE transport is also available via `--transport sse` (or `OPENZIM_MCP_TRANSPORT=sse`) for clients that haven't migrated to streamable-HTTP. SSE does **not** apply the bearer-token / CORS / health-endpoint middleware, so the server *refuses* to start with `--transport sse` bound to anything other than `127.0.0.1`/`::1`/`localhost`. For exposed deployments use `--transport http`.
 
@@ -1412,9 +1412,10 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 |---------|---------|-------------|
 | `OPENZIM_MCP_TOOL_MODE` | `simple` | Tool surface: `simple` (one `zim_query` tool) or `advanced` (21 specialized tools). Controlled by `--tool-mode` on the CLI as well. |
 | `OPENZIM_MCP_TRANSPORT` | `stdio` | Transport protocol: `stdio`, `http`, or `sse`. |
-| `OPENZIM_MCP_HOST` | `127.0.0.1` | HTTP/SSE bind host. Non-loopback hosts require `OPENZIM_MCP_AUTH_TOKEN`. |
+| `OPENZIM_MCP_HOST` | `127.0.0.1` | HTTP/SSE bind host. For `--transport http`, non-loopback hosts require `OPENZIM_MCP_AUTH_TOKEN` (or `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1` on a closed network). For `--transport sse`, non-loopback is refused outright — SSE has no auth middleware and is localhost-only. |
 | `OPENZIM_MCP_PORT` | `8000` | HTTP/SSE bind port. |
-| `OPENZIM_MCP_AUTH_TOKEN` | *(unset)* | Bearer token required when binding HTTP/SSE to a non-loopback interface. |
+| `OPENZIM_MCP_AUTH_TOKEN` | *(unset)* | Bearer token enforced by the streamable-HTTP transport (`--transport http`). Required when binding HTTP to a non-loopback interface. SSE has no auth middleware; setting a token does **not** allow non-loopback SSE binds. |
+| `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | Operator-acknowledged opt-out of the auth requirement on non-loopback HTTP binds. Logs a `WARNING` naming the bound host on every startup. Use only when the surrounding network is your trust boundary (Docker bridge, Tailscale-only, isolated LAN). Does **not** apply to `--transport sse` (SSE remains localhost-only). |
 | `OPENZIM_MCP_CORS_ORIGINS` | *(empty)* | JSON array of allowed CORS origins for the HTTP transport. Wildcard `*` is rejected. |
 | `OPENZIM_MCP_ALLOWED_HOSTS` | *(empty)* | JSON array of public-facing hostnames the HTTP transport accepts in the `Host` header (e.g. `["mcp.example.com"]`). Loopback is always allowed; this extends it for reverse-proxy and Tailscale-serve deployments. Wildcard `*` is rejected. |
 | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | Enable MCP resource subscriptions (HTTP transport only). When `false`, `subscribe` calls succeed but no updates fire. |
@@ -1428,6 +1429,23 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 | `OPENZIM_MCP_LOGGING__LEVEL` | `INFO` | Logging level |
 | `OPENZIM_MCP_LOGGING__FORMAT` | `%(asctime)s - %(name)s - %(levelname)s - %(message)s` | Log message format |
 | `OPENZIM_MCP_SERVER_NAME` | `openzim-mcp` | Server instance name |
+| `OPENZIM_MCP_RATE_LIMIT__ENABLED` | `true` | Master switch for the global + per-client token-bucket limiter. |
+| `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` | `10` | Steady-state token refill rate. |
+| `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE` | `20` | Bucket capacity (must be ≤ 1000). |
+| `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` | `{}` | JSON map of operation name → nested rate-limit config; see snippet below. |
+
+**Per-operation rate-limit overrides** — `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` accepts a JSON object keyed by operation name. Each value is a full nested `RateLimitConfig`, so an operation can have its own bucket parameters (and its own `enabled` flag). Operations not listed fall through to the global `OPENZIM_MCP_RATE_LIMIT__*` settings.
+
+```bash
+export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{
+  "search":     {"enabled": true, "requests_per_second": 5,  "burst_size": 10},
+  "get_entry":  {"enabled": true, "requests_per_second": 50, "burst_size": 100}
+}'
+```
+
+Operation names are the internal categories the rate-limiter classifies each call under (not MCP tool names). The recognised set lives in [`openzim_mcp/defaults.py`](openzim_mcp/defaults.py) under `RATE_LIMIT_COSTS`: `search`, `search_with_filters`, `find_entry_by_title`, `get_entry`, `get_zim_entries`, `get_binary_entry`, `browse_namespace`, `get_metadata`, `get_structure`, `get_related_articles`, `suggestions`, and `default` (the fallback bucket for anything uncategorised, e.g. `list_zim_files`).
+
+> **Disabling rate limiting.** The secure default is on. For closed deployments with a small group of trusted users, `OPENZIM_MCP_RATE_LIMIT__ENABLED=false` turns it off entirely.
 
 ---
 

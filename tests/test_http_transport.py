@@ -101,6 +101,7 @@ def test_check_safe_startup_warns_when_localhost_resolves_to_public(monkeypatch)
     config.transport = "http"
     config.host = "localhost"
     config.auth_token = None  # no token → must REFUSE because not loopback
+    config.insecure_disable_auth = False
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

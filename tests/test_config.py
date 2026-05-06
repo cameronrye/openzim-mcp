@@ -243,6 +243,23 @@ def test_config_auth_token_is_secret():
     assert cfg.auth_token.get_secret_value() == "abc123"
 
 
+def test_config_default_insecure_disable_auth_is_false():
+    """Default insecure_disable_auth is False (safe default)."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.insecure_disable_auth is False
+
+
+def test_config_insecure_disable_auth_from_env(monkeypatch):
+    """OPENZIM_MCP_INSECURE_DISABLE_AUTH=1 flips the field to True."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    monkeypatch.setenv("OPENZIM_MCP_INSECURE_DISABLE_AUTH", "1")
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.insecure_disable_auth is True
+
+
 def test_config_default_cors_origins_empty():
     """Default cors_origins is an empty list."""
     from openzim_mcp.config import OpenZimMcpConfig

@@ -46,7 +46,11 @@ repos:
           - flake8-bugbear
           - flake8-comprehensions
           - flake8-simplify
-        args: ["--max-line-length=88", "--extend-ignore=E203,W503,D202"]
+        # Read the same .flake8 that ``make lint`` (and CI) use, so the
+        # local hook can't drift away from CI. The previous inline args
+        # set max-line-length=88 while .flake8 says 128, which silently
+        # blocked commits on lines CI was happy with.
+        args: ["--config=.flake8"]
 
   # Type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
