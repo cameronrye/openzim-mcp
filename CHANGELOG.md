@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/cameronrye/openzim-mcp/compare/v1.1.2...v1.2.0) (2026-05-06)
+
+
+### Features
+
+* **http:** operator-acknowledged auth bypass + rate-limit env-var docs ([#104](https://github.com/cameronrye/openzim-mcp/issues/104)) ([7294b1d](https://github.com/cameronrye/openzim-mcp/commit/7294b1d33dfa40a8e07c7ba67c062cc2d3c741c7))
+* v1.2.0 simple-mode tool ergonomics — tell_me_about, bigger snippets, compact pagination ([#103](https://github.com/cameronrye/openzim-mcp/issues/103)) ([212a60a](https://github.com/cameronrye/openzim-mcp/commit/212a60afd7c1e66bd573605925ccbb06261ed27c))
+
 ## [1.1.2](https://github.com/cameronrye/openzim-mcp/compare/v1.1.1...v1.1.2) (2026-05-05)
 
 
