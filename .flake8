@@ -1,6 +1,13 @@
 [flake8]
 max-line-length = 128
-extend-ignore = E203, W503, D202
+# Docstring rules the project pervasively doesn't follow are ignored to keep
+# the pre-commit hook (which loads flake8-docstrings) in sync with `make lint`
+# and CI (which don't). Without these, the hook blocks routine commits on
+# pre-existing violations the maintainer has chosen not to enforce:
+#   D205 — blank line between summary line and description
+#   D209 — closing quotes on a separate line
+#   D400 — first line ends with a period
+extend-ignore = E203, W503, D202, D205, D209, D400
 exclude =
     .git,
     __pycache__,
@@ -9,3 +16,6 @@ exclude =
     htmlcov,
     build,
     dist
+per-file-ignores =
+    # Test fixtures and helpers don't need docstrings on every public method.
+    tests/*: D102
