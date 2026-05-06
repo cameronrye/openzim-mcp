@@ -1171,6 +1171,142 @@ class TestTellMeAboutAutoPromote:
         # because they share a substring (e.g. "form" ⊂ "Reformation").
         assert not match("form", "Reformation", "Reformation")
 
+    def test_canonical_article_below_top_auto_fetches(
+        self, handler, mock_zim_operations
+    ):
+        """Wikipedia's full-text search ranks word-frequency higher than
+        title-match, so a bare-topic query for ``"Björk"`` returns
+        ``List_of_songs_recorded_by_Björk`` first and the actual ``Björk``
+        article third. The handler scans the top results and auto-fetches
+        the *unique* strong-title-match if one exists, even when it isn't
+        ``results[0]``.
+        """
+        mock_zim_operations.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "path": "List_of_songs_recorded_by_Björk",
+                    "title": "List of songs recorded by Björk",
+                    "snippet": "...",
+                },
+                {
+                    "path": "Family_Tree_(Björk_album)",
+                    "title": "Family Tree (Björk album)",
+                    "snippet": "...",
+                },
+                {
+                    "path": "Björk",
+                    "title": "Björk",
+                    "snippet": "Icelandic singer...",
+                },
+            ]
+        }
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Björk\n\nBjörk Guðmundsdóttir is an Icelandic singer..."
+        )
+        result = handler.handle_zim_query("Björk", zim_file_path="/zims/test.zim")
+        # Auto-fetched the canonical article, not the top-ranked list page.
+        mock_zim_operations.get_zim_entry.assert_called_once()
+        called_path = mock_zim_operations.get_zim_entry.call_args.args[1]
+        assert called_path == "Björk"
+        assert "Icelandic singer" in result
+        # Did NOT fall through to a rendered search response.
+        mock_zim_operations.search_zim_file.assert_not_called()
+
+    def test_multiple_strong_matches_falls_through_to_search(
+        self, handler, mock_zim_operations
+    ):
+        """When multiple top-N results are equally strong title matches
+        (e.g. disambiguation: ``Mercury_(planet)``, ``Mercury_(element)``,
+        ``Mercury_(mythology)``), don't auto-promote any of them — let
+        the caller see the disambiguation and choose.
+        """
+        mock_zim_operations.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "path": "Mercury_(planet)",
+                    "title": "Mercury (planet)",
+                    "snippet": "...",
+                },
+                {
+                    "path": "Mercury_(element)",
+                    "title": "Mercury (element)",
+                    "snippet": "...",
+                },
+                {
+                    "path": "Mercury_(mythology)",
+                    "title": "Mercury (mythology)",
+                    "snippet": "...",
+                },
+            ]
+        }
+        result = handler.handle_zim_query("Mercury", zim_file_path="/zims/test.zim")
+        # No article fetch — multiple candidates, ambiguous.
+        mock_zim_operations.get_zim_entry.assert_not_called()
+        mock_zim_operations.search_zim_file.assert_called_once()
+        assert isinstance(result, str)
+
+    def test_leading_article_stripping_for_topic(self, handler, mock_zim_operations):
+        """``"tell me about the Apollo 11 mission"`` strips the leading
+        ``"tell me about"``, leaving topic ``"the Apollo 11 mission"``.
+        Without leading-article fallback, ``("the","apollo","11","mission")``
+        doesn't prefix-match ``("apollo","11")`` in either direction. With
+        the fallback, stripping the leading ``"the"`` gives
+        ``("apollo","11","mission")`` which is a candidate-prefix match.
+        """
+        mock_zim_operations.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "path": "Apollo_11",
+                    "title": "Apollo 11",
+                    "snippet": "first crewed Moon landing...",
+                },
+            ]
+        }
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Apollo 11\n\nApollo 11 was the spaceflight..."
+        )
+        result = handler.handle_zim_query(
+            "tell me about the Apollo 11 mission", zim_file_path="/zims/test.zim"
+        )
+        mock_zim_operations.get_zim_entry.assert_called_once()
+        called_path = mock_zim_operations.get_zim_entry.call_args.args[1]
+        assert called_path == "Apollo_11"
+        assert "spaceflight" in result
+
+    def test_leading_article_preserved_when_literal_matches(self):
+        """``"The Beatles"`` is a real band name; the canonical article is
+        at ``"The_Beatles"``. The literal-token comparison matches, so
+        the leading-article fallback must not be needed (and stripping
+        ``"The"`` would break the match because
+        ``("beatles",)`` is not a prefix of ``("the","beatles")`` in either
+        direction).
+        """
+        match = SimpleToolsHandler._is_strong_title_match
+        # Literal exact match — no stripping needed.
+        assert match("The Beatles", "The_Beatles", "The Beatles")
+        # And the disambiguation pattern still applies.
+        assert match("The Beatles", "The_Beatles_(album)", "The Beatles (album)")
+
+    def test_leading_article_stripping_unit_helper(self):
+        """Direct unit test of the leading-article fallback in
+        ``_is_strong_title_match``.
+        """
+        match = SimpleToolsHandler._is_strong_title_match
+        # Leading "the" stripped — topic with extra material matches the
+        # bare canonical article via candidate-prefix-of-topic.
+        assert match("the Apollo 11 mission", "Apollo_11", "Apollo 11")
+        # Leading "a" / "an" / "the" all stripped.
+        assert match("an Apollo 11 mission", "Apollo_11", "Apollo 11")
+        assert match("a Tiger", "Tiger", "Tiger")
+        # Mid-string stop words are NOT stripped — they belong to the
+        # title proper. ``"The Lord of the Rings"`` must keep both ``the``
+        # tokens to match its article.
+        assert match(
+            "The Lord of the Rings",
+            "The_Lord_of_the_Rings",
+            "The Lord of the Rings",
+        )
+
     def test_non_ascii_topic_matches_diacritic_and_ascii_paths(self):
         """The tokenizer used to be ``[a-z0-9]+``, which silently dropped
         non-ASCII characters: ``"Björk"`` tokenised to ``("bj", "rk")``.

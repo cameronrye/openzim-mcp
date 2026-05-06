@@ -438,13 +438,28 @@ class SimpleToolsHandler:
             # not cached.
             return f'No search results found for "{topic}"'
 
-        top = results[0]
-        top_path = top.get("path", "")
-        top_title = top.get("title", "")
-        if not self._is_strong_title_match(topic, top_path, top_title):
+        # Scan all returned results for strong title matches, not just
+        # ``results[0]``. Wikipedia full-text search ranks word frequency
+        # higher than title match, so for many bare-topic queries the
+        # canonical article ranks below derivative pages (``Björk`` returns
+        # ``List_of_songs_recorded_by_Björk`` first, the actual ``Björk``
+        # article third). Auto-fetch only when there's *exactly one*
+        # strong match — multiple matches mean genuine ambiguity (e.g.
+        # ``Mercury`` -> planet, element, mythology) that the caller
+        # should disambiguate.
+        strong_matches = [
+            r
+            for r in results
+            if self._is_strong_title_match(topic, r.get("path", ""), r.get("title", ""))
+        ]
+        if len(strong_matches) != 1:
             return self.zim_operations.search_zim_file(
                 zim_file_path, topic, search_limit, 0
             )
+
+        top = strong_matches[0]
+        top_path = top.get("path", "")
+        top_title = top.get("title", "")
 
         try:
             article_body = self.zim_operations.get_zim_entry(
@@ -487,6 +502,15 @@ class SimpleToolsHandler:
         nfkd = unicodedata.normalize("NFKD", text)
         return "".join(c for c in nfkd if not unicodedata.combining(c))
 
+    # Leading articles stripped from a topic on the second match attempt.
+    # Covers the common "tell me about <leading article> <topic>" phrasing
+    # that survives the ``tell me about`` prefix strip — e.g. ``"the
+    # Apollo 11 mission"`` should still match ``Apollo_11``. We strip only
+    # leading occurrences (``"The Beatles"`` ↔ ``"The_Beatles"`` matches
+    # literally without stripping, and we never strip mid-string ``"the"``
+    # from titles like ``"The Lord of the Rings"``).
+    _LEADING_TOPIC_ARTICLES = ("the", "a", "an")
+
     @staticmethod
     def _is_strong_title_match(topic: str, path: str, title: str) -> bool:
         """Return True iff ``path`` or ``title`` looks like the article
@@ -523,6 +547,31 @@ class SimpleToolsHandler:
         fewer than 3 characters, except for *exact* matches — so
         ``"Pi"`` ↔ ``"Pi"`` still works but ``"Pi"`` ↔ ``"Pizza"`` does
         not enter the prefix path at all.
+
+        Leading-article fallback: if the literal topic doesn't match,
+        try again with leading ``"the"`` / ``"a"`` / ``"an"`` stripped.
+        Catches the common ``"tell me about the X"`` phrasing without
+        breaking ``"The Beatles"``-style titles, which match literally
+        before the fallback runs.
+        """
+        if SimpleToolsHandler._match_against_candidates(topic, path, title):
+            return True
+        # Fallback: strip a single leading article and retry. We only do
+        # one pass — the goal is to forgive ``"the X"`` phrasings, not to
+        # peel arbitrary stop-word prefixes.
+        topic_tokens = tuple(re.findall(r"[A-Za-z0-9]+", topic))
+        if (
+            len(topic_tokens) >= 2
+            and topic_tokens[0].lower() in SimpleToolsHandler._LEADING_TOPIC_ARTICLES
+        ):
+            stripped = topic[len(topic_tokens[0]) :].lstrip(" \t_-")
+            return SimpleToolsHandler._match_against_candidates(stripped, path, title)
+        return False
+
+    @staticmethod
+    def _match_against_candidates(topic: str, path: str, title: str) -> bool:
+        """Token-list match check, factored out so the caller can retry
+        with a transformed topic (e.g. leading articles stripped).
         """
         topic_normalized = SimpleToolsHandler._fold_diacritics(topic.lower())
         topic_tokens = tuple(re.findall(r"[a-z0-9]+", topic_normalized))
