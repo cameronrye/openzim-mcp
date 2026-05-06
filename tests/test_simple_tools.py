@@ -1162,3 +1162,46 @@ class TestTellMeAboutAutoPromote:
         # Even longer topics shouldn't match unrelated longer strings just
         # because they share a substring (e.g. "form" ⊂ "Reformation").
         assert not match("form", "Reformation", "Reformation")
+
+    def test_subtitle_prefix_does_not_false_match(self):
+        """Regression: token-list prefix matching false-matched
+        subtitle-style titles. Topic ``"Marie Curie"`` tokenises to
+        ``("marie", "curie")``, which IS a clean token-prefix of
+        ``("marie", "curie", "the", "courage", "of", "knowledge")`` —
+        so the v1.2.0 implementation auto-fetched the 2016 biopic
+        ``Marie_Curie:_The_Courage_of_Knowledge`` instead of the
+        scientist's article. The fix narrows the topic-prefix branch
+        to *parenthesised disambiguation only*, matching Wikipedia's
+        convention (``Mercury_(planet)``, ``Apollo_11_(mission)``).
+        """
+        match = SimpleToolsHandler._is_strong_title_match
+        # The original bug — colon-subtitle works named after the topic.
+        assert not match(
+            "Marie Curie",
+            "Marie_Curie:_The_Courage_of_Knowledge",
+            "Marie Curie: The Courage of Knowledge",
+        )
+        # Generic colon-subtitle pattern.
+        assert not match(
+            "Climate Change",
+            "Climate_Change:_The_Documentary",
+            "Climate Change: The Documentary",
+        )
+        # Comma-list / "X, Y, Z" titles also aren't disambiguation.
+        assert not match(
+            "Quantum Mechanics",
+            "Quantum_Mechanics,_Relativity,_and_Reality",
+            "Quantum Mechanics, Relativity, and Reality",
+        )
+        # Hyphen-subtitle: ``"Mercury — A Memoir"`` is not the planet.
+        assert not match(
+            "Mercury",
+            "Mercury_-_A_Memoir",
+            "Mercury - A Memoir",
+        )
+        # Parenthesised disambiguation must STILL match — that's the
+        # legitimate use case the topic-prefix branch was added for.
+        assert match("Mercury", "Mercury_(planet)", "Mercury (planet)")
+        assert match("Apollo 11", "Apollo_11_(mission)", "Apollo 11 (mission)")
+        # Disambiguation with multiple words inside the parens.
+        assert match("Mercury", "Mercury_(Roman_god)", "Mercury (Roman god)")

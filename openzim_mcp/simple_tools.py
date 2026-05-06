@@ -483,9 +483,13 @@ class SimpleToolsHandler:
         other:
 
         * Equal: ``"DNA"`` ↔ ``"DNA"``.
-        * Topic is a prefix of the candidate: ``"Apollo 11"`` →
-          ``"Apollo_11_(mission)"`` (caller asked for a topic, candidate
-          adds a disambiguation suffix).
+        * Topic is a prefix of the candidate, **and the extra material
+          is a Wikipedia-style parenthesised disambiguation suffix**:
+          ``"Mercury"`` → ``"Mercury_(planet)"``, ``"Apollo 11"`` →
+          ``"Apollo_11_(mission)"``. Subtitle-style titles like
+          ``"Marie Curie: The Courage of Knowledge"`` (a 2016 biopic)
+          are *not* disambiguations of ``"Marie Curie"`` and must not
+          auto-promote — they're separate works named after the topic.
         * Candidate is a prefix of the topic: ``"Apollo 11 (mission)"``
           → ``"Apollo_11"`` (the caller pre-disambiguated; the bare
           article matches).
@@ -519,8 +523,17 @@ class SimpleToolsHandler:
             # collisions outweigh the value.
             if sum(len(t) for t in topic_tokens) < 3:
                 continue
+            # Topic is a token-prefix of candidate. Only accept when the
+            # raw "extra" portion is a parenthesised disambiguation — not
+            # a colon/dash subtitle or an arbitrary continuation.
             if cand_tokens[: len(topic_tokens)] == topic_tokens:
-                return True
+                topic_span = r"[^a-z0-9]+".join(re.escape(t) for t in topic_tokens)
+                m = re.match(topic_span, candidate.lower())
+                if m:
+                    rest = candidate[m.end() :].lstrip(" \t_-")
+                    if rest.startswith("("):
+                        return True
+                continue
             if topic_tokens[: len(cand_tokens)] == cand_tokens:
                 return True
         return False
