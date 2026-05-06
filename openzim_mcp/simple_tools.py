@@ -158,7 +158,6 @@ class SimpleToolsHandler:
             )
         return ""
 
-
     # ---------------------------------------------------------------- handlers
 
     def _handle_metadata(

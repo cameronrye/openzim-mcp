@@ -290,12 +290,23 @@ class TestSearchPaginationFooterFormat:
             total_filtered_is_lower_bound=False,
         )
         results = [
-            {"title": f"R{i}", "path": f"C/R{i}", "namespace": "C",
-             "content_type": "text/html", "snippet": "..."} for i in range(5)
+            {
+                "title": f"R{i}",
+                "path": f"C/R{i}",
+                "namespace": "C",
+                "content_type": "text/html",
+                "snippet": "...",
+            }
+            for i in range(5)
         ]
         out = _format_filtered_response(
-            query="x", filter_text="", results=results, scan=scan,
-            total_results=42, offset=0, limit=5,
+            query="x",
+            filter_text="",
+            results=results,
+            scan=scan,
+            total_results=42,
+            offset=0,
+            limit=5,
         )
         assert "Showing 1-5 of 42" in out
         assert "pass `offset=5` for the next page" in out
@@ -314,12 +325,23 @@ class TestSearchPaginationFooterFormat:
             total_filtered_is_lower_bound=False,
         )
         results = [
-            {"title": f"R{i}", "path": f"C/R{i}", "namespace": "C",
-             "content_type": "text/html", "snippet": "..."} for i in range(3)
+            {
+                "title": f"R{i}",
+                "path": f"C/R{i}",
+                "namespace": "C",
+                "content_type": "text/html",
+                "snippet": "...",
+            }
+            for i in range(3)
         ]
         out = _format_filtered_response(
-            query="x", filter_text="", results=results, scan=scan,
-            total_results=3, offset=0, limit=10,
+            query="x",
+            filter_text="",
+            results=results,
+            scan=scan,
+            total_results=3,
+            offset=0,
+            limit=10,
         )
         assert "Showing 1-3 of 3 (end of results)" in out
         assert "**Next cursor**" not in out

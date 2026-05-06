@@ -990,9 +990,7 @@ class TestBareTopicSuppressesLowConfidenceNote:
             "parse_intent",
             return_value=("walk_namespace", {"namespace": "C"}, 0.5),
         ):
-            result = handler.handle_zim_query(
-                "Photosynthesis", zim_file_path=explicit
-            )
+            result = handler.handle_zim_query("Photosynthesis", zim_file_path=explicit)
         assert "low confidence" in result.lower()
 
 
