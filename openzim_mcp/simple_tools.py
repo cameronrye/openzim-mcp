@@ -76,7 +76,7 @@ class SimpleToolsHandler:
                 f"confidence: {confidence:.2f}"
             )
 
-            low_confidence_note = self._confidence_note(intent, confidence)
+            low_confidence_note = self._confidence_note(intent, confidence, query)
 
             # ``list_files`` is the only intent that doesn't need a ZIM file.
             if intent == "list_files":
@@ -117,7 +117,7 @@ class SimpleToolsHandler:
             )
 
     @staticmethod
-    def _confidence_note(intent: str, confidence: float) -> str:
+    def _confidence_note(intent: str, confidence: float, query: str = "") -> str:
         """Render a confidence note tier-appropriate for the parsed intent.
 
         Tiers:
@@ -127,7 +127,22 @@ class SimpleToolsHandler:
             "moderate confidence" understates that nothing matched).
           * 0.55–0.7 — "moderate confidence" (legacy wording).
           * >= 0.7 — no note (well-calibrated, don't pester).
+
+        Suppression: when the intent is ``search`` and the query looks like
+        a bare topic name (proper noun phrase with no command verbs),
+        defaulting to search is the *correct* interpretation — the
+        confidence number is low because the intent classifier had nothing
+        verb-shaped to latch onto, not because the answer is uncertain.
+        Emitting a "low confidence" warning in that case has misled both
+        humans (who think the search results are bad) and LLMs (who choose
+        not to trust them). Skip the note for that pattern.
         """
+        if (
+            intent == "search"
+            and confidence < 0.7
+            and IntentParser._looks_like_bare_topic(query)
+        ):
+            return ""
         if confidence < 0.55:
             return (
                 "\n\n*Note: Low confidence in query interpretation "
@@ -363,6 +378,153 @@ class SimpleToolsHandler:
             options.get("offset", 0),
         )
 
+    def _handle_tell_me_about(
+        self,
+        query: str,
+        zim_file_path: str,
+        params: Dict[str, Any],
+        options: Dict[str, Any],
+    ) -> str:
+        """Search for a topic and inline the top article body when it's a
+        strong title match.
+
+        Triggered by explicit "tell me about X" / "who is X" / "what is X" /
+        "describe X" phrasings, and by the bare-topic fallback in
+        ``IntentParser.parse_intent`` (e.g. ``"Martin Luther King Jr."``).
+
+        Strategy:
+          1. Run a small (limit=3) structured search for the topic.
+          2. If there are no results → render the empty-search response
+             so the caller still gets a clear "nothing found" message.
+          3. If the top hit's title or path is a strong match for the topic
+             (token-list equality or prefix in either direction) →
+             fetch the article body and return it as the response.
+          4. Otherwise → fall through to the rendered search response so
+             the caller sees the multiple weak matches and can disambiguate.
+
+        Saves the model an entire agentic round trip on the common
+        topic-lookup case ("who is X" today is two tool calls: search,
+        then get_article).
+        """
+        topic = (params.get("topic") or query).strip()
+        if not topic:
+            topic = query
+        # Cap the search at 3 results: the auto-fetch path either inlines
+        # the top article (in which case we don't render the others — see
+        # below) or falls through to a plain rendered search, where 3 hits
+        # is enough to disambiguate without flooding the response. A
+        # caller-supplied ``limit`` only takes effect when it asks for
+        # *fewer* than 3 hits.
+        search_limit = min(options.get("limit") or 3, 3)
+        max_content_length = options.get("max_content_length") or 8000
+
+        try:
+            payload = self.zim_operations.search_zim_file_data(
+                zim_file_path, topic, search_limit, 0
+            )
+        except Exception:
+            # If the structured search fails, fall through to the legacy
+            # rendered search so the caller still gets useful output.
+            return self.zim_operations.search_zim_file(
+                zim_file_path, topic, search_limit, 0
+            )
+
+        results = payload.get("results", []) if isinstance(payload, dict) else []
+        if not results:
+            return self.zim_operations.search_zim_file(
+                zim_file_path, topic, search_limit, 0
+            )
+
+        top = results[0]
+        top_path = top.get("path", "")
+        top_title = top.get("title", "")
+        if not self._is_strong_title_match(topic, top_path, top_title):
+            return self.zim_operations.search_zim_file(
+                zim_file_path, topic, search_limit, 0
+            )
+
+        try:
+            article_body = self.zim_operations.get_zim_entry(
+                zim_file_path, top_path, max_content_length, 0
+            )
+        except Exception as e:
+            # Article fetch failed — degrade gracefully to plain search.
+            logger.warning(
+                "tell_me_about: article fetch failed for %r, falling back to "
+                "search: %s",
+                top_path,
+                e,
+            )
+            return self.zim_operations.search_zim_file(
+                zim_file_path, topic, search_limit, 0
+            )
+
+        # Strong-match path: return just the article. We deliberately do
+        # NOT append a "## Other matches" section here — the rendered
+        # search would duplicate the top hit (we already inlined it
+        # above), and the agentic-loop UX value of seeing related-but-not
+        # asked-for articles is low. If the caller wants alternatives,
+        # they can issue a separate ``search ...`` query.
+        return (
+            f"# {top_title or topic}\n\n"
+            f"_Source: `{top_path}`_\n\n"
+            f"{article_body}"
+        )
+
+    @staticmethod
+    def _is_strong_title_match(topic: str, path: str, title: str) -> bool:
+        """Return True iff ``path`` or ``title`` looks like the article
+        for ``topic``.
+
+        Tokenizes both sides on alphanumerics (so ``"Martin_Luther_King_Jr."``
+        and ``"Martin Luther King Jr."`` both yield
+        ``("martin", "luther", "king", "jr")``), then accepts the match
+        when the token lists are either equal or one is a prefix of the
+        other:
+
+        * Equal: ``"DNA"`` ↔ ``"DNA"``.
+        * Topic is a prefix of the candidate: ``"Apollo 11"`` →
+          ``"Apollo_11_(mission)"`` (caller asked for a topic, candidate
+          adds a disambiguation suffix).
+        * Candidate is a prefix of the topic: ``"Apollo 11 (mission)"``
+          → ``"Apollo_11"`` (the caller pre-disambiguated; the bare
+          article matches).
+
+        Pure substring containment was the v1.2.0-pre version of this
+        check, but that false-matched short topics: ``"cat"`` "matched"
+        ``"Catfish"`` and ``"py"`` "matched" ``"Pyramid"``. Token-list
+        comparison fixes those without losing the disambiguation
+        forgiveness above.
+
+        A short-topic guard rejects topics whose tokens collectively have
+        fewer than 3 characters, except for *exact* matches — so
+        ``"Pi"`` ↔ ``"Pi"`` still works but ``"Pi"`` ↔ ``"Pizza"`` does
+        not enter the prefix path at all.
+        """
+        topic_tokens = tuple(re.findall(r"[a-z0-9]+", topic.lower()))
+        if not topic_tokens:
+            return False
+
+        for candidate in (path, title):
+            if not candidate:
+                continue
+            cand_tokens = tuple(re.findall(r"[a-z0-9]+", candidate.lower()))
+            if not cand_tokens:
+                continue
+            # Exact match is always strong — works at any length.
+            if topic_tokens == cand_tokens:
+                return True
+            # Prefix matches are only safe for topics with enough material
+            # to be unambiguous; below 3 chars total, "Pi" / "Pizza" type
+            # collisions outweigh the value.
+            if sum(len(t) for t in topic_tokens) < 3:
+                continue
+            if cand_tokens[: len(topic_tokens)] == topic_tokens:
+                return True
+            if topic_tokens[: len(cand_tokens)] == cand_tokens:
+                return True
+        return False
+
     def _handle_search_all(
         self,
         query: str,
@@ -459,6 +621,7 @@ class SimpleToolsHandler:
         "get_article": _handle_get_article,
         "search": _handle_search,
         "search_all": _handle_search_all,
+        "tell_me_about": _handle_tell_me_about,
         "walk_namespace": _handle_walk_namespace,
         "find_by_title": _handle_find_by_title,
         "related": _handle_related,

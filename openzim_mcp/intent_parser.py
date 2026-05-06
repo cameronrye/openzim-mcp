@@ -243,6 +243,37 @@ def _extract_related(query: str, params: Dict[str, Any]) -> None:
         params["entry_path"] = m.group(1).strip().rstrip("?.")
 
 
+def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
+    """Extract the topic from a ``tell_me_about``-shaped query.
+
+    Examples:
+      * ``"tell me about Photosynthesis"`` -> topic ``"Photosynthesis"``
+      * ``"who is Martin Luther King Jr."`` -> topic ``"Martin Luther King Jr."``
+      * ``"what is DNA"`` -> topic ``"DNA"``
+      * ``"info about the Apollo program"`` -> topic ``"the Apollo program"``
+
+    Strips the verb / interrogative prefix and any trailing sentence
+    punctuation. Falls back to the raw query so the search has *something*
+    to look up if no prefix matched.
+    """
+    m = safe_regex_search(
+        r"^\s*("
+        r"tell\s+me\s+about\s+|"
+        r"who\s+(?:is|was|are|were)\s+|"
+        r"what\s+(?:is|are|was|were)\s+|"
+        r"describe\s+|"
+        r"explain\s+|"
+        r"info(?:rmation)?\s+(?:about|on)\s+"
+        r")(.+?)\s*\??\s*$",
+        query,
+        re.IGNORECASE,
+    )
+    if m:
+        params["topic"] = m.group(2).strip().rstrip("?.,;:!")
+    else:
+        params["topic"] = query.strip().rstrip("?.,;:!")
+
+
 def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:
     """Extract namespace/path tokens like ``A/Foo`` or ``M/Image.png``.
 
@@ -268,6 +299,7 @@ _PARAM_EXTRACTORS = {
     "suggestions": _extract_suggestions,
     "search": _extract_search,
     "search_all": _extract_search_all,
+    "tell_me_about": _extract_tell_me_about,
     "walk_namespace": _extract_walk_namespace,
     "find_by_title": _extract_find_by_title,
     "related": _extract_related,
@@ -393,6 +425,23 @@ class IntentParser:
         ),
         # Search - general fallback
         (r"\b(search|find|look\s+for|query)\b", "search", 0.7, 3),
+        # Topic ask — explicit interrogative or "tell me about" phrasing.
+        # Routes to the ``tell_me_about`` handler which runs a search and,
+        # when the top result is a strong title match, also fetches the
+        # article body so the caller gets primary content in a single
+        # round trip. Confidence is set to beat the bare ``search``
+        # fallback (0.7) but stay below specific intents like
+        # ``walk_namespace`` / ``search_all`` (>= 0.9).
+        (
+            r"\b(tell\s+me\s+about|"
+            r"who\s+(is|was|are|were)|"
+            r"what\s+(is|are|was|were)|"
+            r"describe|explain|"
+            r"info(rmation)?\s+(about|on))\b",
+            "tell_me_about",
+            0.85,
+            7,
+        ),
     ]
 
     @classmethod
@@ -438,13 +487,89 @@ class IntentParser:
                 continue
 
         if not matches:
-            # Default to search
+            # Default fallback. A query that didn't match any pattern falls
+            # into one of two buckets:
+            #
+            # * A bare topic name (proper-noun phrase with no verb,
+            #   e.g. ``"Martin Luther King Jr."`` or ``"Photosynthesis"``).
+            #   The caller almost certainly wants information *about* that
+            #   topic — route to ``tell_me_about`` so the handler fetches
+            #   the article body when the top hit is a strong title match.
+            #
+            # * Anything else — keep the legacy bare-search fallback.
+            if cls._looks_like_bare_topic(query):
+                return "tell_me_about", {"topic": query.strip()}, 0.7
             return "search", {"query": query}, 0.5
 
         # Select best match using weighted scoring
         # Primary: confidence, Secondary: specificity
         best_match = cls._select_best_match(matches)
         return best_match[0], best_match[1], best_match[2]
+
+    # Words that signal an explicit verb-shaped intent. If a query contains
+    # one of these (case-insensitive, whole-word), it isn't "bare-topic" — it
+    # has structure the intent classifier should have caught, and a
+    # bare-topic fallback is inappropriate. Conservative list: only words
+    # the intent parser specifically looks for as command verbs /
+    # interrogatives, not generic English words like "the" or "of" that
+    # appear in titles ("The Lord of the Rings").
+    _BARE_TOPIC_VERB_TOKENS = frozenset(
+        {
+            "what",
+            "who",
+            "when",
+            "where",
+            "why",
+            "how",
+            "which",
+            "list",
+            "show",
+            "get",
+            "find",
+            "fetch",
+            "search",
+            "browse",
+            "tell",
+            "describe",
+            "explain",
+            "give",
+            "info",
+            "about",
+            "metadata",
+            "namespace",
+            "namespaces",
+            "main",
+            "page",
+            "structure",
+            "outline",
+            "links",
+            "related",
+            "suggestions",
+            "autocomplete",
+            "walk",
+            "all",
+        }
+    )
+
+    @classmethod
+    def _looks_like_bare_topic(cls, query: str) -> bool:
+        """Return True if ``query`` looks like a bare topic name.
+
+        Heuristic — the query is not too long and contains no command-verb /
+        interrogative tokens. ``"Martin Luther King Jr."`` qualifies;
+        ``"tell me about MLK"`` does not (verb ``tell``); ``"what is X"``
+        does not (interrogative ``what``).
+        """
+        if not query:
+            return False
+        if len(query) > 80:
+            return False
+        # Tokenize on alphanumerics so punctuation in titles ("Jr.", "U.S.A.")
+        # doesn't fragment names.
+        tokens = re.findall(r"[A-Za-z0-9]+", query.lower())
+        if not tokens:
+            return False
+        return not any(t in cls._BARE_TOPIC_VERB_TOKENS for t in tokens)
 
     @classmethod
     def _select_best_match(

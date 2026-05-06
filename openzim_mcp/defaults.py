@@ -37,7 +37,7 @@ class CacheDefaults:
 class ContentDefaults:
     """Default values for content processing."""
 
-    SNIPPET_LENGTH: int = 1000
+    SNIPPET_LENGTH: int = 3000
     MAX_CONTENT_LENGTH: int = 100000
     SEARCH_LIMIT: int = 10
     MAX_BINARY_SIZE: int = 10_000_000  # 10MB

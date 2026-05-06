@@ -138,10 +138,31 @@ class TestIntentParser:
             intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "search", f"Failed for query: {query}"
 
-    def test_parse_default_to_search(self):
-        """Test that ambiguous queries default to search."""
+    def test_parse_bare_topic_routes_to_tell_me_about(self):
+        """Bare topic queries (no verb, looks like a name) route to
+        ``tell_me_about`` so the handler auto-fetches the article body
+        when the top search hit is a strong title match. This replaces
+        the v1.1.x behaviour where the same queries fell through to a
+        bare ``search`` at confidence 0.5 — the search-only path
+        returned snippets without the article body, leaving the LLM to
+        either round-trip again or hallucinate from training memory."""
         query = "biology evolution protein"
         intent, params, _ = IntentParser.parse_intent(query)
+        assert intent == "tell_me_about"
+        assert params.get("topic") == query
+
+    def test_parse_truly_ambiguous_falls_through_to_search(self):
+        """Queries containing verbs/interrogatives that *don't* match any
+        specific intent pattern still fall through to the bare ``search``
+        intent — only verb-less topic-shaped queries get the new
+        ``tell_me_about`` routing.
+        """
+        query = "tell me a joke"
+        intent, params, _ = IntentParser.parse_intent(query)
+        # ``tell me about ...`` would route to tell_me_about, but ``tell me
+        # a joke`` (no "about") doesn't match the prefix and the verb
+        # ``tell`` keeps the bare-topic heuristic from triggering, so it
+        # falls through to the old bare-search fallback.
         assert intent == "search"
         assert params.get("query") == query
 
@@ -884,3 +905,260 @@ class TestLowConfidenceNoteAppendedConsistently:
         ):
             result = handler.handle_zim_query("anything", zim_file_path=explicit)
         assert "confidence" not in result.lower()
+
+
+class TestBareTopicSuppressesLowConfidenceNote:
+    """v1.2.0: when a search query is a bare topic name, defaulting to
+    ``intent=search`` is the *correct* interpretation — the confidence
+    score is low only because there's no verb to latch onto, not because
+    the answer is uncertain. The "Low confidence" note in that case has
+    misled both humans (who interpret "low confidence" as "bad results")
+    and LLMs (which then choose not to trust the snippets). Suppressed.
+    """
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        mock = Mock()
+        mock.search_zim_file.return_value = "## 1. Some Article\nSnippet text"
+        # Other backend methods that may be reached by other-intent tests in
+        # this class. They all return string sentinels so the handler's
+        # ``result + low_confidence_note`` concatenation succeeds.
+        mock.walk_namespace.return_value = "{}"
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        return SimpleToolsHandler(mock_zim_operations)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Martin Luther King Jr.",
+            "Photosynthesis",
+            "World War II",
+            "DNA",
+            "U.S.A.",
+        ],
+    )
+    def test_bare_topic_search_suppresses_note(self, handler, query):
+        """A search-fallback for a bare topic name does not append the note."""
+        explicit = "/zims/test.zim"
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=("search", {"query": query}, 0.5),
+        ):
+            result = handler.handle_zim_query(query, zim_file_path=explicit)
+        assert (
+            "confidence" not in result.lower()
+        ), f"bare-topic query {query!r} should suppress the note: got {result!r}"
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "tell me a joke",
+            "what is the meaning of life",
+            "how does this work",
+            "explain photosynthesis",
+            "search for python",
+        ],
+    )
+    def test_verb_shaped_search_still_emits_note(self, handler, query):
+        """Verb-shaped searches that fell through to the search fallback
+        keep the existing low-confidence note — the user/model needs to
+        know the structured intent didn't match.
+        """
+        explicit = "/zims/test.zim"
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=("search", {"query": query}, 0.5),
+        ):
+            result = handler.handle_zim_query(query, zim_file_path=explicit)
+        assert (
+            "low confidence" in result.lower()
+        ), f"verb-shaped query {query!r} should keep the note: got {result!r}"
+
+    def test_suppression_only_applies_to_search_intent(self, handler):
+        """A bare-topic query with intent != ``search`` (e.g. the parser
+        somehow classified it as ``walk_namespace``) keeps the note —
+        suppression is specific to the search fallback case.
+        """
+        explicit = "/zims/test.zim"
+        with patch.object(
+            IntentParser,
+            "parse_intent",
+            return_value=("walk_namespace", {"namespace": "C"}, 0.5),
+        ):
+            result = handler.handle_zim_query("Photosynthesis", zim_file_path=explicit)
+        assert "low confidence" in result.lower()
+
+
+class TestTellMeAboutAutoPromote:
+    """v1.2.0: ``tell_me_about`` runs a search and, when the top hit is a
+    strong title match, also fetches the article body so the caller gets
+    primary content in a single tool round trip — saving the agentic loop
+    a full prompt-eval cycle on the common topic-lookup pattern.
+    """
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        mock = Mock()
+        mock.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "path": "Martin_Luther_King_Jr.",
+                    "title": "Martin Luther King Jr.",
+                    "snippet": "civil rights leader...",
+                },
+                {
+                    "path": "Legacy_of_Martin_Luther_King_Jr.",
+                    "title": "Legacy of Martin Luther King Jr.",
+                    "snippet": "his impact...",
+                },
+            ]
+        }
+        mock.search_zim_file.return_value = (
+            "## 1. Martin Luther King Jr.\nPath: Martin_Luther_King_Jr.\n"
+            "Snippet: civil rights leader...\n\n"
+        )
+        mock.get_zim_entry.return_value = (
+            "# Martin Luther King Jr.\n\nThe Reverend Martin Luther King Jr. "
+            "(1929–1968) was an American Baptist minister and civil rights "
+            "activist..."
+        )
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        return SimpleToolsHandler(mock_zim_operations)
+
+    def test_strong_match_inlines_article_body(self, handler, mock_zim_operations):
+        """When the top hit's path/title matches the topic, fetch the
+        article and return its body as the response. The strong-match
+        branch deliberately does NOT also append a "## Other matches"
+        section: the rendered search would duplicate the top hit (we
+        already inlined it above), and the agentic-loop UX value of
+        related-but-not-asked-for articles is low.
+        """
+        explicit = "/zims/test.zim"
+        result = handler.handle_zim_query(
+            "tell me about Martin Luther King Jr.",
+            zim_file_path=explicit,
+        )
+        # search_zim_file_data was called to get structured top hit
+        mock_zim_operations.search_zim_file_data.assert_called_once()
+        # get_zim_entry was called for the matched article
+        mock_zim_operations.get_zim_entry.assert_called_once()
+        called_path = mock_zim_operations.get_zim_entry.call_args.args[1]
+        assert called_path == "Martin_Luther_King_Jr."
+        # The legacy rendered-search path must NOT be invoked on the
+        # strong-match branch — that was the source of the duplicate
+        # top-result bug in the first cut of this handler.
+        mock_zim_operations.search_zim_file.assert_not_called()
+        # Response includes the article body and the source path.
+        assert "American Baptist minister" in result
+        assert "Martin_Luther_King_Jr." in result
+        # And no "Other matches" section.
+        assert "Other matches" not in result
+
+    def test_no_results_falls_through_to_search(self, handler, mock_zim_operations):
+        """No search results → render the (empty) search response so the
+        caller still gets a clear "nothing found" message instead of an
+        article-fetch attempt with no path.
+        """
+        mock_zim_operations.search_zim_file_data.return_value = {"results": []}
+        explicit = "/zims/test.zim"
+        result = handler.handle_zim_query(
+            "tell me about ZZZNonExistentTopic",
+            zim_file_path=explicit,
+        )
+        mock_zim_operations.get_zim_entry.assert_not_called()
+        # Falls back to rendered search output.
+        mock_zim_operations.search_zim_file.assert_called_once()
+        assert isinstance(result, str)
+
+    def test_weak_match_returns_search_only(self, handler, mock_zim_operations):
+        """When the top hit's title doesn't match the topic, return the
+        rendered search results without fetching an article — the caller
+        needs to disambiguate among multiple weak hits, not have one
+        promoted to authoritative.
+        """
+        # Top hit's title doesn't normalize-match "Quantum Mechanics"
+        mock_zim_operations.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "path": "Some_Unrelated_Article",
+                    "title": "Some Unrelated Article",
+                    "snippet": "barely about quantum mechanics...",
+                },
+            ]
+        }
+        explicit = "/zims/test.zim"
+        result = handler.handle_zim_query(
+            "tell me about Quantum Mechanics",
+            zim_file_path=explicit,
+        )
+        mock_zim_operations.get_zim_entry.assert_not_called()
+        mock_zim_operations.search_zim_file.assert_called_once()
+        assert isinstance(result, str)
+
+    def test_bare_noun_query_routes_through_tell_me_about(
+        self, handler, mock_zim_operations
+    ):
+        """Bare-noun queries (no verb) flow through the tell_me_about
+        handler thanks to the new fallback in IntentParser.parse_intent —
+        so ``"Martin Luther King Jr."`` alone produces the same auto-fetch
+        behaviour as ``"tell me about Martin Luther King Jr."``.
+        """
+        explicit = "/zims/test.zim"
+        result = handler.handle_zim_query(
+            "Martin Luther King Jr.",
+            zim_file_path=explicit,
+        )
+        # Article fetch fired even though the user typed only the topic.
+        mock_zim_operations.get_zim_entry.assert_called_once()
+        assert "American Baptist minister" in result
+
+    def test_strong_title_match_helper(self):
+        """Direct unit test of the title-match heuristic."""
+        match = SimpleToolsHandler._is_strong_title_match
+        # Exact-modulo-punctuation match.
+        assert match(
+            "Martin Luther King Jr.", "Martin_Luther_King_Jr.", "Martin Luther King Jr."
+        )
+        # 3-char single-token exact match.
+        assert match("DNA", "DNA", "DNA")
+        # 2-char single-token exact match — still allowed because it's
+        # *exact*; only the prefix path requires >= 3 chars.
+        assert match("Pi", "Pi", "Pi")
+        # Disambiguation suffix on the article side.
+        assert match("Apollo 11", "Apollo_11_(mission)", "Apollo 11 (mission)")
+        # Disambiguation suffix on the topic side (caller pre-disambiguated;
+        # the bare article should still match).
+        assert match("Apollo 11 (mission)", "Apollo_11", "Apollo 11")
+        # Completely unrelated.
+        assert not match(
+            "Martin Luther King Jr.", "Some_Unrelated_Article", "Some Unrelated Article"
+        )
+        # Empty / too-short topic must be rejected (no spurious matches).
+        assert not match("a", "Apple", "Apple")
+        assert not match("", "anything", "anything")
+
+    def test_short_topic_substring_does_not_false_match(self):
+        """Regression: pure character-substring matching false-matched
+        short topics — ``"cat"`` "matched" ``"Catfish"`` because
+        ``"cat" in "catfish"`` is True. Token-list comparison fixes this:
+        distinct single tokens never match each other unless equal.
+        """
+        match = SimpleToolsHandler._is_strong_title_match
+        assert not match("cat", "Catfish", "Catfish")
+        assert not match("py", "Pyramid", "Pyramid")
+        assert not match("Pi", "Pizza", "Pizza")
+        # JavaScript ↔ Java is a famous example — the prior substring
+        # check would have matched in both directions.
+        assert not match("Java", "JavaScript", "JavaScript")
+        assert not match("Java", "Javadoc", "Javadoc")
+        # Even longer topics shouldn't match unrelated longer strings just
+        # because they share a substring (e.g. "form" ⊂ "Reformation").
+        assert not match("form", "Reformation", "Reformation")

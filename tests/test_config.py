@@ -78,7 +78,8 @@ class TestContentConfig:
         """Test content config with default values."""
         config = ContentConfig()
         assert config.max_content_length == 100000
-        assert config.snippet_length == 1000
+        # ``snippet_length`` was bumped 1000 → 3000 in v1.2.0; see defaults.py.
+        assert config.snippet_length == 3000
         assert config.default_search_limit == 10
 
     def test_content_config_validation(self):
