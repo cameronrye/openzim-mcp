@@ -134,6 +134,7 @@ def test_safe_default_startup_check(host, token, should_start):
     config.transport = "http"
     config.host = host
     config.auth_token = SecretStr(token) if token else None
+    config.insecure_disable_auth = False
 
     if should_start:
         check_safe_startup(config)  # should not raise
@@ -151,6 +152,7 @@ def test_safe_default_check_skipped_for_stdio():
     config.transport = "stdio"
     config.host = "0.0.0.0"  # would refuse for HTTP
     config.auth_token = None
+    config.insecure_disable_auth = False
     check_safe_startup(config)  # no raise
 
 
@@ -175,6 +177,7 @@ def test_safe_default_startup_check_sse(host, should_start):
     # Token presence should not change the SSE outcome — there is no middleware
     # to enforce it on the SSE path.
     config.auth_token = SecretStr("any-token")
+    config.insecure_disable_auth = False
 
     if should_start:
         check_safe_startup(config)
@@ -183,3 +186,56 @@ def test_safe_default_startup_check_sse(host, should_start):
             check_safe_startup(config)
         assert "SSE transport" in str(exc.value)
         assert "127.0.0.1" in str(exc.value)
+
+
+def test_insecure_disable_auth_allows_public_http_no_token(caplog):
+    """With the bypass set, public HTTP bind without token is allowed and warns."""
+    from openzim_mcp.http_app import check_safe_startup
+
+    config = MagicMock()
+    config.transport = "http"
+    config.host = "0.0.0.0"
+    config.auth_token = None
+    config.insecure_disable_auth = True
+
+    with caplog.at_level("WARNING", logger="openzim_mcp.http_app"):
+        check_safe_startup(config)  # must not raise
+
+    assert any(
+        "INSECURE" in rec.getMessage() and "0.0.0.0" in rec.getMessage()
+        for rec in caplog.records
+    ), "expected loud WARNING naming the bound host"
+
+
+def test_insecure_disable_auth_does_not_apply_to_sse():
+    """Bypass is HTTP-only — SSE still refuses non-loopback even when set."""
+    from openzim_mcp.exceptions import OpenZimMcpConfigurationError
+    from openzim_mcp.http_app import check_safe_startup
+
+    config = MagicMock()
+    config.transport = "sse"
+    config.host = "0.0.0.0"
+    config.auth_token = None
+    config.insecure_disable_auth = True
+
+    with pytest.raises(OpenZimMcpConfigurationError) as exc:
+        check_safe_startup(config)
+    assert "SSE transport" in str(exc.value)
+
+
+def test_insecure_disable_auth_redundant_when_token_already_set(caplog):
+    """If a token is set, the bypass is unused (token path takes priority)."""
+    from openzim_mcp.http_app import check_safe_startup
+
+    config = MagicMock()
+    config.transport = "http"
+    config.host = "0.0.0.0"
+    config.auth_token = SecretStr("abc")
+    config.insecure_disable_auth = True
+
+    with caplog.at_level("WARNING", logger="openzim_mcp.http_app"):
+        check_safe_startup(config)
+
+    assert not any(
+        "INSECURE" in rec.getMessage() for rec in caplog.records
+    ), "no INSECURE warning expected when a real token is configured"
