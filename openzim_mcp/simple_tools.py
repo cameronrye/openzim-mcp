@@ -11,6 +11,7 @@ re-exported here for backward-compatibility with existing imports.
 
 import logging
 import re
+import unicodedata
 from typing import Any, Dict, Optional
 
 from .intent_parser import IntentParser
@@ -431,9 +432,11 @@ class SimpleToolsHandler:
 
         results = payload.get("results", []) if isinstance(payload, dict) else []
         if not results:
-            return self.zim_operations.search_zim_file(
-                zim_file_path, topic, search_limit, 0
-            )
+            # Render the no-results message inline from the structured
+            # payload — falling through to ``search_zim_file`` would
+            # re-execute the same search, and zero-result responses are
+            # not cached.
+            return f'No search results found for "{topic}"'
 
         top = results[0]
         top_path = top.get("path", "")
@@ -472,13 +475,29 @@ class SimpleToolsHandler:
         )
 
     @staticmethod
+    def _fold_diacritics(text: str) -> str:
+        """Strip combining marks via NFKD so ``"Björk"`` -> ``"Bjork"``.
+
+        Used by the strong-title-match heuristic so a topic with diacritics
+        matches articles whose paths the ZIM stores ASCII-folded — and
+        vice versa. NFKD also normalises composed vs decomposed forms of
+        the same character (``"Å"`` U+00C5 vs ``"A"`` + U+030A), so the
+        match is stable regardless of how either side encodes accents.
+        """
+        nfkd = unicodedata.normalize("NFKD", text)
+        return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+    @staticmethod
     def _is_strong_title_match(topic: str, path: str, title: str) -> bool:
         """Return True iff ``path`` or ``title`` looks like the article
         for ``topic``.
 
-        Tokenizes both sides on alphanumerics (so ``"Martin_Luther_King_Jr."``
+        Tokenizes both sides on alphanumerics after NFKD normalization
+        with combining-mark stripping (so ``"Martin_Luther_King_Jr."``
         and ``"Martin Luther King Jr."`` both yield
-        ``("martin", "luther", "king", "jr")``), then accepts the match
+        ``("martin", "luther", "king", "jr")``, and ``"Björk"`` matches
+        both ``"Björk"`` and the ASCII-folded ``"Bjork"`` some ZIMs
+        store), then accepts the match
         when the token lists are either equal or one is a prefix of the
         other:
 
@@ -505,14 +524,16 @@ class SimpleToolsHandler:
         ``"Pi"`` ↔ ``"Pi"`` still works but ``"Pi"`` ↔ ``"Pizza"`` does
         not enter the prefix path at all.
         """
-        topic_tokens = tuple(re.findall(r"[a-z0-9]+", topic.lower()))
+        topic_normalized = SimpleToolsHandler._fold_diacritics(topic.lower())
+        topic_tokens = tuple(re.findall(r"[a-z0-9]+", topic_normalized))
         if not topic_tokens:
             return False
 
         for candidate in (path, title):
             if not candidate:
                 continue
-            cand_tokens = tuple(re.findall(r"[a-z0-9]+", candidate.lower()))
+            cand_normalized = SimpleToolsHandler._fold_diacritics(candidate.lower())
+            cand_tokens = tuple(re.findall(r"[a-z0-9]+", cand_normalized))
             if not cand_tokens:
                 continue
             # Exact match is always strong — works at any length.
@@ -528,9 +549,9 @@ class SimpleToolsHandler:
             # a colon/dash subtitle or an arbitrary continuation.
             if cand_tokens[: len(topic_tokens)] == topic_tokens:
                 topic_span = r"[^a-z0-9]+".join(re.escape(t) for t in topic_tokens)
-                m = re.match(topic_span, candidate.lower())
+                m = re.match(topic_span, cand_normalized)
                 if m:
-                    rest = candidate[m.end() :].lstrip(" \t_-")
+                    rest = cand_normalized[m.end() :].lstrip(" \t_-")
                     if rest.startswith("("):
                         return True
                 continue

@@ -1062,10 +1062,15 @@ class TestTellMeAboutAutoPromote:
         # And no "Other matches" section.
         assert "Other matches" not in result
 
-    def test_no_results_falls_through_to_search(self, handler, mock_zim_operations):
-        """No search results → render the (empty) search response so the
-        caller still gets a clear "nothing found" message instead of an
-        article-fetch attempt with no path.
+    def test_no_results_renders_inline_without_redundant_search(
+        self, handler, mock_zim_operations
+    ):
+        """No search results → return a "nothing found" message inline
+        from the structured payload we already have. The previous
+        implementation fell through to ``search_zim_file``, which itself
+        calls ``search_zim_file_data`` — duplicating the libzim hit on
+        the no-results path (zero-result responses are not cached, so
+        both calls reach the archive).
         """
         mock_zim_operations.search_zim_file_data.return_value = {"results": []}
         explicit = "/zims/test.zim"
@@ -1074,9 +1079,12 @@ class TestTellMeAboutAutoPromote:
             zim_file_path=explicit,
         )
         mock_zim_operations.get_zim_entry.assert_not_called()
-        # Falls back to rendered search output.
-        mock_zim_operations.search_zim_file.assert_called_once()
-        assert isinstance(result, str)
+        # Single structured-search call — no fallback round trip.
+        mock_zim_operations.search_zim_file_data.assert_called_once()
+        mock_zim_operations.search_zim_file.assert_not_called()
+        # Result still has a meaningful no-results message.
+        assert "No" in result or "no" in result
+        assert "ZZZNonExistentTopic" in result
 
     def test_weak_match_returns_search_only(self, handler, mock_zim_operations):
         """When the top hit's title doesn't match the topic, return the
@@ -1162,6 +1170,30 @@ class TestTellMeAboutAutoPromote:
         # Even longer topics shouldn't match unrelated longer strings just
         # because they share a substring (e.g. "form" ⊂ "Reformation").
         assert not match("form", "Reformation", "Reformation")
+
+    def test_non_ascii_topic_matches_diacritic_and_ascii_paths(self):
+        """The tokenizer used to be ``[a-z0-9]+``, which silently dropped
+        non-ASCII characters: ``"Björk"`` tokenised to ``("bj", "rk")``.
+        That self-equally-broke for paths preserving diacritics, but
+        failed for ZIMs that store ASCII-folded paths (``A/Bjork``). Fold
+        diacritics before tokenising so both paths produce the same
+        tokens — a topic with accents matches its accented OR
+        ASCII-folded canonical article path.
+        """
+        match = SimpleToolsHandler._is_strong_title_match
+        # Diacritic-preserving path.
+        assert match("Björk", "Björk", "Björk")
+        # ASCII-folded path (some ZIMs do this for compatibility).
+        assert match("Björk", "Bjork", "Bjork")
+        # Both directions.
+        assert match("Bjork", "Björk", "Björk")
+        # Multi-word non-ASCII names.
+        assert match("Ångström", "Ångström", "Ångström")
+        assert match("Ångström", "Angstrom", "Angstrom")
+        # German umlauts.
+        assert match("Schrödinger", "Schrodinger", "Schrödinger")
+        # Disambiguation still works with diacritics.
+        assert match("Björk", "Björk_(album)", "Björk (album)")
 
     def test_subtitle_prefix_does_not_false_match(self):
         """Regression: token-list prefix matching false-matched
