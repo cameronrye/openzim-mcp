@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 from .zim_operations import ZimOperations
 
 if TYPE_CHECKING:
-    from .tool_schemas import SearchResponse
+    from .tool_schemas import SearchAllResponse, SearchResponse
 
 logger = logging.getLogger(__name__)
 
@@ -527,7 +527,9 @@ class AsyncZimOperations:
         """Search across every ZIM file in allowed dirs (async)."""
         return await asyncio.to_thread(self._ops.search_all, query, limit_per_file)
 
-    async def search_all_data(self, query: str, limit_per_file: int = 5) -> dict:
+    async def search_all_data(
+        self, query: str, limit_per_file: int = 5
+    ) -> "SearchAllResponse":
         """Structured variant of ``search_all`` (async)."""
         return await asyncio.to_thread(self._ops.search_all_data, query, limit_per_file)
 

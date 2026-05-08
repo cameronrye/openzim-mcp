@@ -253,8 +253,17 @@ class TestStructuredOutput:
         """search_all per-file results must be dicts, not stringified markdown.
 
         Catches both wire-format requirements: (a) the tool emits
-        structuredContent at all, and (b) ``per_file[].result`` is itself
-        a real dict (the triple-encoding fix).
+        structuredContent at all, and (b) ``results[].result`` is itself
+        a real ``SearchResponse`` dict (the triple-encoding fix, plus
+        Phase B contract-shape).
+
+        Note on the ``"result"`` wrapper: FastMCP wraps Union return
+        annotations (``Union[SearchAllResponse, ToolErrorPayload]``) under
+        a generic ``{"result": ...}`` envelope because ``Union`` falls
+        through ``_try_create_model_and_schema``'s wrap path. A
+        TypedDict-only return would land at the top level, but the spec
+        keeps the ``Union`` for the error-as-data envelope. We tolerate
+        the wrapper — what matters is the inner shape.
         """
         result = await server.mcp._tool_manager.call_tool(
             "search_all", {"query": "evolution"}, convert_result=True
@@ -262,16 +271,27 @@ class TestStructuredOutput:
         assert isinstance(result, tuple)
         _, structured = result
         assert isinstance(structured, dict)
-        # The previous tool migration revealed FastMCP wraps
-        # ``Dict[str, Any]`` returns under a ``"result"`` key. Tolerate that.
         payload = structured["result"] if "result" in structured else structured
-        assert "per_file" in payload
-        for entry in payload.get("per_file", []):
-            if "result" in entry:
-                assert isinstance(
-                    entry["result"], dict
-                ), f"per_file[].result should be dict, got {type(entry['result'])}"
-                assert "results" in entry["result"]
+        # Phase B: results is the renamed per-file list, no longer ``per_file``.
+        assert "per_file" not in payload, (
+            "TypedDict migration regression: top-level still uses legacy "
+            "``per_file`` key — Task 6 renamed it to ``results``."
+        )
+        assert "results" in payload
+        # Top-level Phase B contract keys (always done=True, no cursor —
+        # search_all is fan-out, not paginated at the top level).
+        assert payload["done"] is True
+        assert payload["next_cursor"] is None
+        assert "page_info" in payload
+        for entry in payload["results"]:
+            inner = entry["result"]
+            assert isinstance(
+                inner, dict
+            ), f"per_file[].result should be dict, got {type(inner)}"
+            # inner is itself a SearchResponse — it has its own results list
+            assert "results" in inner
+            assert "done" in inner
+            assert "next_cursor" in inner
 
     @pytest.mark.asyncio
     async def test_get_zim_entries_returns_structured_content(

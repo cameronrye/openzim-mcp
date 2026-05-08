@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
-    from openzim_mcp.tool_schemas import SearchResponse
+    from openzim_mcp.tool_schemas import SearchAllResponse, SearchResponse
 
 logger = logging.getLogger(__name__)
 
@@ -1578,8 +1578,14 @@ class _SearchMixin:
         self,
         query: str,
         limit_per_file: int = 5,
-    ) -> Dict[str, Any]:
-        """Structured variant of ``search_all``.
+    ) -> "SearchAllResponse":
+        """Structured variant of ``search_all`` (Phase B contract).
+
+        Top-level shape is a non-paginated ``PaginatedResponse[per_file]``
+        — ``done`` is always ``True`` and ``next_cursor`` is always
+        ``None`` because fan-out across archives happens in one shot.
+        Each ``results[].result`` is itself a Phase B ``SearchResponse``
+        carrying its own per-archive cursor.
 
         Per-file results are real dicts (the structured payload from
         ``search_zim_file_data``) rather than markdown strings — fixing
@@ -1592,9 +1598,12 @@ class _SearchMixin:
             limit_per_file: Maximum hits to return per ZIM file (1-50, default 5)
 
         Returns:
-            Dict with per-file result groups and aggregate counts. Each
-            ``per_file[].result`` is the structured search payload from
-            ``search_zim_file_data`` — a dict, not a string.
+            ``SearchAllResponse``-shaped dict. Each ``results[].result``
+            is the structured search payload from ``search_zim_file_data``
+            — a dict, not a string. Aggregate counts (``files_searched``,
+            ``files_with_hits``, ``files_searched_successfully``,
+            ``files_failed``) live at the top level alongside the
+            contract keys.
         """
         if not query or not query.strip():
             raise OpenZimMcpValidationError(
@@ -1614,18 +1623,13 @@ class _SearchMixin:
                 continue
             try:
                 payload = self.search_zim_file_data(path, query, limit_per_file, 0)
-                # Task 6: search_all shape migration. ``total_results`` was
-                # renamed to ``total`` in Phase B, but this aggregator's
-                # response shape is rewritten by Task 6 — read both keys for
-                # the transitional window so search_all's ``has_hits`` flag
-                # still works while Task 5 lands.
-                _total = payload.get("total", payload.get("total_results", 0))
+                _total = payload.get("total", 0) or 0
                 per_file.append(
                     {
                         "zim_file_path": path,
                         "name": file_info.get("name"),
                         "result": payload,
-                        "has_hits": (_total or 0) > 0,
+                        "has_hits": _total > 0,
                     }
                 )
             except Exception as e:
@@ -1638,17 +1642,29 @@ class _SearchMixin:
                     }
                 )
 
-        return attach_meta(
-            {
-                "query": query,
-                "files_searched": len(files),
-                "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
-                "files_searched_successfully": sum(
-                    1 for r in per_file if "result" in r
-                ),
-                "files_failed": sum(1 for r in per_file if "error" in r),
-                "per_file": per_file,
-            }
+        files_searched = len(files)
+        return cast(
+            "SearchAllResponse",
+            attach_meta(
+                {
+                    "query": query,
+                    "files_searched": files_searched,
+                    "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
+                    "files_searched_successfully": sum(
+                        1 for r in per_file if "result" in r
+                    ),
+                    "files_failed": sum(1 for r in per_file if "error" in r),
+                    "results": per_file,
+                    "next_cursor": None,
+                    "total": files_searched,
+                    "done": True,
+                    "page_info": {
+                        "offset": 0,
+                        "limit": files_searched,
+                        "returned_count": len(per_file),
+                    },
+                }
+            ),
         )
 
     def search_all(

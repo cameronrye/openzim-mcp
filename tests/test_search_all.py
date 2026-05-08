@@ -44,22 +44,18 @@ class TestSearchAll:
             ]
         )
 
-        # First call returns a structured hit; second raises
+        # First call returns a Phase B SearchResponse; second raises
         def fake(path, q, lim, off):
             if "good" in path:
                 return {
                     "query": q,
-                    "total_results": 1,
-                    "offset": 0,
-                    "limit": lim,
                     "results": [
                         {"path": "A/Python", "title": "Python", "snippet": "..."}
                     ],
-                    "pagination": {
-                        "has_more": False,
-                        "showing_start": 1,
-                        "showing_end": 1,
-                    },
+                    "next_cursor": None,
+                    "total": 1,
+                    "done": True,
+                    "page_info": {"offset": 0, "limit": lim, "returned_count": 1},
                 }
             raise RuntimeError("corrupt index")
 
@@ -69,7 +65,16 @@ class TestSearchAll:
         assert result["files_searched"] == 2
         assert result["files_with_hits"] == 1
         assert result["files_failed"] == 1
-        assert any("error" in entry for entry in result["per_file"])
+        assert any("error" in entry for entry in result["results"])
+        # Phase B contract-shape assertions
+        assert result["done"] is True
+        assert result["next_cursor"] is None
+        assert result["total"] == result["files_searched"]
+        assert result["page_info"] == {
+            "offset": 0,
+            "limit": result["files_searched"],
+            "returned_count": len(result["results"]),
+        }
 
     def test_no_hits_anywhere(self, server: OpenZimMcpServer):
         """Test that result aggregates files_with_hits=0 when nothing matches."""
@@ -79,20 +84,29 @@ class TestSearchAll:
         server.zim_operations.search_zim_file_data = MagicMock(
             return_value={
                 "query": "xyzzy",
-                "total_results": 0,
-                "offset": 0,
-                "limit": 5,
                 "results": [],
-                "pagination": {"has_more": False},
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 5, "returned_count": 0},
             }
         )
 
         result = server.zim_operations.search_all_data("xyzzy", limit_per_file=5)
         assert result["files_with_hits"] == 0
-        assert result["per_file"][0]["has_hits"] is False
+        assert result["results"][0]["has_hits"] is False
+        # Phase B contract-shape assertions
+        assert result["done"] is True
+        assert result["next_cursor"] is None
+        assert result["total"] == result["files_searched"]
+        assert result["page_info"] == {
+            "offset": 0,
+            "limit": result["files_searched"],
+            "returned_count": len(result["results"]),
+        }
 
     def test_search_all_data_per_file_payload_is_dict(self, server: OpenZimMcpServer):
-        """``search_all_data['per_file'][i]['result']`` is a dict, not a string.
+        """``search_all_data['results'][i]['result']`` is a dict, not a string.
 
         Catches the triple-encoding regression: previously per_file.result
         was a markdown blob (string) and the outer json.dumps escaped its
@@ -105,23 +119,30 @@ class TestSearchAll:
         server.zim_operations.search_zim_file_data = MagicMock(
             return_value={
                 "query": "python",
-                "total_results": 1,
-                "offset": 0,
-                "limit": 5,
                 "results": [{"path": "C/Python", "title": "Python", "snippet": "..."}],
-                "pagination": {
-                    "has_more": False,
-                    "showing_start": 1,
-                    "showing_end": 1,
-                },
+                "next_cursor": None,
+                "total": 1,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 5, "returned_count": 1},
             }
         )
 
         result = server.zim_operations.search_all_data("python", limit_per_file=5)
         assert isinstance(result, dict)
-        per_file = result["per_file"][0]
+        per_file = result["results"][0]
         # The fix: ``result`` is a dict, not a stringified markdown blob.
         assert isinstance(per_file["result"], dict)
         assert per_file["result"]["query"] == "python"
-        assert per_file["result"]["total_results"] == 1
+        # Phase B: per-file SearchResponse uses ``total`` (not legacy
+        # ``total_results``).
+        assert per_file["result"]["total"] == 1
         assert per_file["has_hits"] is True
+        # Phase B contract-shape assertions on the top level
+        assert result["done"] is True
+        assert result["next_cursor"] is None
+        assert result["total"] == result["files_searched"]
+        assert result["page_info"] == {
+            "offset": 0,
+            "limit": result["files_searched"],
+            "returned_count": len(result["results"]),
+        }

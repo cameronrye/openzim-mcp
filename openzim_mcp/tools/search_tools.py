@@ -7,7 +7,7 @@ from ..constants import INPUT_LIMIT_FILE_PATH, INPUT_LIMIT_QUERY
 from ..exceptions import OpenZimMcpRateLimitError
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
-from ..tool_schemas import SearchResponse
+from ..tool_schemas import SearchAllResponse, SearchResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -154,7 +154,7 @@ def _register_search_all(server: "OpenZimMcpServer") -> None:
         query: str,
         limit_per_file: Optional[int] = None,
         limit: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> Union[SearchAllResponse, ToolErrorPayload]:
         """Search across every ZIM file in the allowed directories.
 
         Returns merged per-file results so the caller doesn't need to know
@@ -170,25 +170,26 @@ def _register_search_all(server: "OpenZimMcpServer") -> None:
                 wins.
 
         Returns:
-            Dict with per-file result groups. Each ``per_file[].result`` is
-            itself a structured search payload (no nested markdown strings).
-            On failure, returns a ``{"error": True, ...}`` envelope.
+            ``SearchAllResponse``-shaped dict on success (Phase B contract:
+            top-level ``results`` / ``next_cursor`` / ``total`` / ``done`` /
+            ``page_info``, with each ``results[].result`` itself a
+            ``SearchResponse``); ``ToolErrorPayload`` envelope on failure.
+            ``search_all`` does not paginate at the top level — fan-out
+            across archives happens in one shot, so ``done`` is always
+            ``True`` and ``next_cursor`` is always ``None``.
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("search")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="search across ZIM files",
+                    message=server._create_enhanced_error_message(
                         operation="search across ZIM files",
-                        message=server._create_enhanced_error_message(
-                            operation="search across ZIM files",
-                            error=e,
-                            context=f"Query: '{query}'",
-                        ),
+                        error=e,
                         context=f"Query: '{query}'",
                     ),
+                    context=f"Query: '{query}'",
                 )
 
             query = sanitize_input(query, INPUT_LIMIT_QUERY)
@@ -198,16 +199,13 @@ def _register_search_all(server: "OpenZimMcpServer") -> None:
                 effective_limit = 5
 
             if effective_limit < 1 or effective_limit > 50:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
-                        operation="search across ZIM files",
-                        message=(
-                            f"limit_per_file must be between 1 and 50 "
-                            f"(provided: {effective_limit})"
-                        ),
-                        context=f"Query: '{query}'",
+                return tool_error(
+                    operation="search across ZIM files",
+                    message=(
+                        f"limit_per_file must be between 1 and 50 "
+                        f"(provided: {effective_limit})"
                     ),
+                    context=f"Query: '{query}'",
                 )
 
             return await server.async_zim_operations.search_all_data(
@@ -216,17 +214,14 @@ def _register_search_all(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error in search_all: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="search across ZIM files",
+                message=server._create_enhanced_error_message(
                     operation="search across ZIM files",
-                    message=server._create_enhanced_error_message(
-                        operation="search across ZIM files",
-                        error=e,
-                        context=f"Query: '{query}'",
-                    ),
+                    error=e,
                     context=f"Query: '{query}'",
                 ),
+                context=f"Query: '{query}'",
             )
 
 
