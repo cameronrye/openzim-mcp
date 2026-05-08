@@ -8,7 +8,7 @@ or any I/O, which makes it cheap to unit-test in isolation.
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from .constants import REGEX_TIMEOUT_SECONDS
 from .exceptions import RegexTimeoutError
@@ -20,6 +20,7 @@ __all__ = [
     "IntentParser",
     "safe_regex_search",
     "safe_regex_findall",
+    "safe_regex_sub",
 ]
 
 
@@ -76,6 +77,39 @@ def safe_regex_findall(
     """
     return run_with_timeout(
         lambda: re.findall(pattern, text, flags),
+        timeout_seconds,
+        f"Regex operation timed out after {timeout_seconds} seconds",
+        RegexTimeoutError,
+    )
+
+
+def safe_regex_sub(
+    pattern: Union[str, "re.Pattern[str]"],
+    repl: Union[str, Callable[["re.Match[str]"], str]],
+    text: str,
+    flags: int = 0,
+    timeout_seconds: float = REGEX_TIMEOUT_SECONDS,
+) -> str:
+    """re.sub with cross-platform timeout protection.
+
+    Accepts either a string pattern or a pre-compiled :class:`re.Pattern`.
+    When a pre-compiled pattern is passed, ``flags`` is ignored (use the
+    pattern's own flags). Same threading-based timeout as
+    :func:`safe_regex_search`.
+
+    Used by the compact-rendering layer to defang catastrophic-backtracking
+    risk on adversarial article bodies (long unclosed markdown links,
+    pathological snippet headers, etc.).
+    """
+    if isinstance(pattern, re.Pattern):
+        return run_with_timeout(
+            lambda: pattern.sub(repl, text),
+            timeout_seconds,
+            f"Regex operation timed out after {timeout_seconds} seconds",
+            RegexTimeoutError,
+        )
+    return run_with_timeout(
+        lambda: re.sub(pattern, repl, text, flags=flags),
         timeout_seconds,
         f"Regex operation timed out after {timeout_seconds} seconds",
         RegexTimeoutError,
@@ -287,6 +321,46 @@ def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:
         params["entries"] = [e.rstrip(".?,;:!") for e in entries]
 
 
+def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
+    """Extract ``section_name`` and ``entry_path`` from a section query.
+
+    Examples:
+      * ``"section Evolution of Biology"`` -> name=Evolution, path=Biology
+      * ``"the Evolution section of Biology"`` -> name=Evolution, path=Biology
+      * ``"section 'Cellular respiration' of Biology"`` -> name=Cellular
+        respiration, path=Biology
+      * ``"section 3 of Biology"`` -> name="3" (numeric) — handler treats
+        bare integers as 1-indexed positions into the article's headings.
+
+    Two separate patterns because the section-name placement differs:
+    pre-keyword (``"section X of Y"``) vs. pre-keyword-with-determiner
+    (``"the X section of Y"``). Quoted names take precedence so a
+    section called ``"In the news"`` doesn't get parsed as ``"In"`` +
+    `` the news`` of nothing.
+    """
+    # Form A: ``[the] section <name> of|in|from <path>``
+    m = safe_regex_search(
+        rf"\b(?:the\s+)?section\s+{_QUOTE_OPEN}?({_QUOTE_NOT}+?){_QUOTE_OPEN}?"
+        rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
+        query,
+        re.IGNORECASE,
+    )
+    if m:
+        params["section_name"] = m.group(1).strip()
+        params["entry_path"] = m.group(2).strip().rstrip("?.,;:!")
+        return
+    # Form B: ``the <name> section of|in|from <path>``
+    m = safe_regex_search(
+        rf"\bthe\s+{_QUOTE_OPEN}?({_QUOTE_NOT}+?){_QUOTE_OPEN}?\s+section"
+        rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
+        query,
+        re.IGNORECASE,
+    )
+    if m:
+        params["section_name"] = m.group(1).strip()
+        params["entry_path"] = m.group(2).strip().rstrip("?.,;:!")
+
+
 _PARAM_EXTRACTORS = {
     "browse": _extract_browse,
     "filtered_search": _extract_filtered_search,
@@ -304,6 +378,7 @@ _PARAM_EXTRACTORS = {
     "find_by_title": _extract_find_by_title,
     "related": _extract_related,
     "get_zim_entries": _extract_get_zim_entries,
+    "get_section": _extract_get_section,
 }
 
 
@@ -334,6 +409,23 @@ class IntentParser:
             "browse",
             0.85,
             7,
+        ),
+        # Get specific article section — must beat the generic
+        # ``structure`` pattern below (which also matches ``section``).
+        # Two surface forms: ``section X of Y`` and ``the X section of Y``.
+        # Specificity 10 + base 0.95 keeps it well above the
+        # ``sections? of`` pattern (specificity 8, base 0.85).
+        (
+            r"\bsection\s+\S+.*\s+(?:of|in|from)\s+\S+",
+            "get_section",
+            0.95,
+            10,
+        ),
+        (
+            r"\bthe\s+\S+.*\s+section\s+(?:of|in|from)\s+\S+",
+            "get_section",
+            0.95,
+            10,
         ),
         # Article structure - moderately specific
         (
@@ -551,25 +643,227 @@ class IntentParser:
         }
     )
 
+    # Common English filler / conversational tokens. A query whose tokens
+    # are *only* drawn from this set looks like meta-instruction or
+    # conversational filler ("do both", "try again", "ok", "test this")
+    # rather than a topic ask, even though none of the tokens are
+    # explicit command verbs in ``_BARE_TOPIC_VERB_TOKENS``. Used by
+    # ``_looks_like_bare_topic`` to require at least one *content-shaped*
+    # token before treating a query as a bare topic — otherwise small
+    # LLMs that copy the user's literal message verbatim will trip the
+    # bare-topic-fallback into ``tell_me_about``, where the strong-title
+    # match path can dump entire article bodies for unrelated common-word
+    # collisions (Aaliyah's "Try Again" for the literal user string
+    # ``"try again"`` is the canonical motivating example).
+    _COMMON_FILLER_TOKENS = frozenset(
+        {
+            # Affirmation / negation / acknowledgement
+            "yes",
+            "yeah",
+            "yep",
+            "no",
+            "nope",
+            "nah",
+            "ok",
+            "okay",
+            "sure",
+            "alright",
+            "fine",
+            # Greetings / politeness
+            "hi",
+            "hello",
+            "hey",
+            "thanks",
+            "thank",
+            "please",
+            # Continuation cues
+            "go",
+            "continue",
+            "next",
+            "more",
+            "again",
+            "also",
+            "still",
+            "keep",
+            "going",
+            # Determiners / particles
+            "the",
+            "a",
+            "an",
+            "this",
+            "that",
+            "these",
+            "those",
+            "here",
+            "there",
+            "now",
+            # Pronouns
+            "i",
+            "me",
+            "my",
+            "mine",
+            "you",
+            "your",
+            "yours",
+            "we",
+            "us",
+            "our",
+            "ours",
+            "they",
+            "them",
+            "their",
+            "it",
+            "its",
+            # Coordinators
+            "and",
+            "or",
+            "but",
+            "if",
+            "then",
+            "else",
+            # Common short verbs (non-intent)
+            "do",
+            "does",
+            "did",
+            "doing",
+            "done",
+            "try",
+            "tries",
+            "tried",
+            "trying",
+            "use",
+            "uses",
+            "used",
+            "using",
+            "have",
+            "has",
+            "had",
+            "is",
+            "are",
+            "was",
+            "were",
+            "am",
+            "be",
+            "been",
+            "being",
+            "can",
+            "could",
+            "would",
+            "should",
+            "may",
+            "might",
+            "must",
+            "will",
+            "shall",
+            # Meta-tool vocabulary (matches the LLM-passthrough patterns
+            # observed in the v1.2.0 beta-test transcripts)
+            "test",
+            "tests",
+            "tested",
+            "testing",
+            "tester",
+            "demo",
+            "demos",
+            "explore",
+            "exploring",
+            "beta",
+            "alpha",
+            "regression",
+            "stress",
+            "smoke",
+            "tool",
+            "tools",
+            # Vague nouns / quantifiers
+            "thing",
+            "things",
+            "stuff",
+            "anything",
+            "everything",
+            "something",
+            "nothing",
+            "any",
+            "each",
+            "every",
+            "some",
+            "none",
+            "both",
+            # Generic responses
+            "right",
+            "wrong",
+            "true",
+            "false",
+            # User asked for help on the tool, not for a "Help" article
+            "help",
+        }
+    )
+
     @classmethod
     def _looks_like_bare_topic(cls, query: str) -> bool:
         """Return True if ``query`` looks like a bare topic name.
 
-        Heuristic — the query is not too long and contains no command-verb /
-        interrogative tokens. ``"Martin Luther King Jr."`` qualifies;
-        ``"tell me about MLK"`` does not (verb ``tell``); ``"what is X"``
-        does not (interrogative ``what``).
+        Two layers of evidence:
+
+        1. Negative — the query has no command-verb / interrogative
+           tokens from ``_BARE_TOPIC_VERB_TOKENS`` (otherwise it has
+           structure the intent classifier should have caught).
+
+        2. Positive — at least one token is *distinctive*: not common
+           filler AND either capitalized in the original query
+           (proper-noun signal) or at least five characters long
+           (content-word signal).
+
+        The positive layer is what stops conversational fragments like
+        ``"do both"`` / ``"try again"`` / ``"test"`` / ``"help"`` from
+        qualifying as bare topics under the negative-only rule. Without
+        it, the strong-title-match branch in
+        ``SimpleToolsHandler._handle_tell_me_about`` could dump full
+        article bodies for unrelated common-word matches (the
+        ``"try again"`` -> 105k-char Aaliyah article body trap).
+
+        Examples:
+          * ``"Martin Luther King Jr."`` qualifies (proper-noun cap).
+          * ``"biology"`` qualifies (>=5 chars, not filler).
+          * ``"DNA"`` qualifies (cap, not filler — even at 3 chars).
+          * ``"量子力学"`` qualifies (non-Latin script — Chinese, Arabic,
+            Russian, etc. — is treated as inherently distinctive since
+            those scripts don't have casing or short ASCII filler).
+          * ``"do both"`` does NOT (every token is common filler).
+          * ``"try again"`` does NOT (every token is common filler).
+          * ``"test"`` / ``"help"`` do NOT (single filler token).
+          * ``"tell me about MLK"`` does NOT (verb ``tell``).
         """
-        if not query:
+        if not query or len(query) > 80:
             return False
-        if len(query) > 80:
+        # Non-Latin scripts (CJK, Cyrillic, Arabic, Devanagari, Hebrew,
+        # …) have no casing and no overlap with the ASCII filler-token
+        # set, so any unicode "letter" character is a strong distinctive
+        # signal on its own. Without this, the ASCII-only tokenizer below
+        # treats ``"量子力学"`` as zero tokens and the gate falsely
+        # rejects every non-Latin topic ask. ``str.isalpha()`` returns
+        # True for letters in any script.
+        if any(c.isalpha() and ord(c) > 127 for c in query):
+            verb_match = re.search(r"[A-Za-z]+", query)
+            if verb_match:
+                ascii_tokens = [t.lower() for t in re.findall(r"[A-Za-z]+", query)]
+                if any(t in cls._BARE_TOPIC_VERB_TOKENS for t in ascii_tokens):
+                    return False
+            return True
+        # Tokenize on alphanumerics so punctuation in titles ("Jr.",
+        # "U.S.A.") doesn't fragment names.
+        raw_tokens = re.findall(r"[A-Za-z0-9]+", query)
+        if not raw_tokens:
             return False
-        # Tokenize on alphanumerics so punctuation in titles ("Jr.", "U.S.A.")
-        # doesn't fragment names.
-        tokens = re.findall(r"[A-Za-z0-9]+", query.lower())
-        if not tokens:
+        lower_tokens = [t.lower() for t in raw_tokens]
+        if any(t in cls._BARE_TOPIC_VERB_TOKENS for t in lower_tokens):
             return False
-        return not any(t in cls._BARE_TOPIC_VERB_TOKENS for t in tokens)
+        # Positive check: any single token that is non-filler AND either
+        # capitalized in the original query or content-word-length is
+        # enough evidence that this is a topic ask.
+        return any(
+            t.lower() not in cls._COMMON_FILLER_TOKENS
+            and (t[0].isupper() or len(t) >= 5)
+            for t in raw_tokens
+        )
 
     @classmethod
     def _select_best_match(

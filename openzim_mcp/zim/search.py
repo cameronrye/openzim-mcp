@@ -350,7 +350,22 @@ class _SearchMixin:
         pagination = payload.get("pagination", {})
 
         if total_results == 0:
-            return f'No search results found for "{query}"'
+            # Append actionable next-step hints so an LLM caller knows
+            # the recovery options instead of just seeing "no results"
+            # and giving up. Two common rescues:
+            #   * suggestions/autocomplete catches typos and partial
+            #     names ("Photosynthsis" → "Photosynthesis").
+            #   * tell_me_about runs a structured search + auto-fetch
+            #     for any reasonably-named topic.
+            return (
+                f'No search results found for "{query}".\n\n'
+                f"**Try one of these:**\n"
+                f"- `suggestions for {query[:30]}` — autocomplete to "
+                f"catch typos or partial names\n"
+                f"- `tell me about {query[:30]}` — structured topic "
+                f"lookup with auto article fetch\n"
+                f"- A shorter or differently-cased query"
+            )
 
         if pagination.get("offset_exceeds_total"):
             return (
@@ -1086,6 +1101,73 @@ class _SearchMixin:
                     logger.debug(f"_find_entry_fast_path probe {full!r} failed: {e}")
         return None
 
+    @staticmethod
+    def _typo_variants(title: str) -> List[str]:
+        """Yield single-edit variants of ``title`` for typo-tolerant lookup.
+
+        Targets the two most common keystroke errors that survive the
+        case-variant fast path AND produce no libzim suggestions:
+
+          * Adjacent character transposition — ``"Einstien"`` →
+            ``"Einstein"`` (swap of ``i``/``e`` at positions 5-6).
+          * Single character deletion — ``"Phyton"`` → ``"Python"``
+            (extra ``h`` removed).
+
+        Substitutions and insertions are deliberately NOT generated —
+        the search space explodes (26× per character) and the false-
+        match rate becomes unacceptable for short titles.
+
+        Variants are de-duplicated. Whitespace is preserved; the caller
+        (the fast path) is responsible for the space→underscore
+        normalisation.
+        """
+        seen: set = {title}
+        variants: List[str] = []
+
+        # Adjacent character transposition. Skips no-op swaps where
+        # the adjacent characters are identical (``"Coffee"`` → ``"Coffee"``).
+        for i in range(len(title) - 1):
+            if title[i] == title[i + 1]:
+                continue
+            v = title[:i] + title[i + 1] + title[i] + title[i + 2 :]
+            if v not in seen:
+                seen.add(v)
+                variants.append(v)
+
+        # Single character deletion. Capped to titles >= 5 chars on the
+        # *result* (i.e. >= 6 on the input) — below that, deletions match
+        # too many spurious short articles ("test" -> "tes" -> any 3-char
+        # title is a false positive).
+        if len(title) >= 6:
+            for i in range(len(title)):
+                v = title[:i] + title[i + 1 :]
+                if v and v not in seen:
+                    seen.add(v)
+                    variants.append(v)
+
+        return variants
+
+    @classmethod
+    def _find_entry_typo_fallback(cls, archive: Any, title: str) -> Optional[Any]:
+        """Try typo-corrected variants of ``title`` against the fast path.
+
+        Runs only when the case-variant fast path AND the libzim
+        suggestion search both came up empty — fuzzy-matching is a
+        last-resort try-this-before-giving-up step. Returns the first
+        Entry whose case-variant fast path hits any single-edit variant.
+
+        Length-gated at >= 4 characters: short queries like ``"DNA"`` or
+        ``"Pi"`` get too many spurious adjacent-swap collisions to be
+        worth the lookup cost.
+        """
+        if len(title) < 4:
+            return None
+        for variant in cls._typo_variants(title):
+            entry = cls._find_entry_fast_path(archive, variant)
+            if entry is not None:
+                return entry
+        return None
+
     def find_entry_by_title_data(
         self,
         zim_file_path: str,
@@ -1125,6 +1207,7 @@ class _SearchMixin:
 
         aggregate_results: List[Dict[str, Any]] = []
         fast_path_hit = False
+        fuzzy_path_hit = False
         title_lower = title.lower()
 
         for file_path in files:
@@ -1156,6 +1239,7 @@ class _SearchMixin:
                     # Fallback: libzim suggestion search (title-indexed).
                     # Note: ``Archive.suggest()`` does not exist; the public
                     # API is ``SuggestionSearcher(archive).suggest(text)``.
+                    pre_suggestion_count = len(aggregate_results)
                     try:
                         suggestion_search = _zim_ops_mod.SuggestionSearcher(
                             archive
@@ -1206,6 +1290,33 @@ class _SearchMixin:
                             f"find_entry_by_title suggest() failed for "
                             f"{file_path}: {e}"
                         )
+
+                    # Typo-tolerant fallback: when both fast path AND
+                    # the libzim suggestion index came up empty, try a
+                    # small set of single-edit variants of the input
+                    # (transposition / single deletion). Runs only as a
+                    # last resort because the false-match rate isn't
+                    # zero — we don't want it competing with real hits.
+                    if (
+                        not fast_path_hit
+                        and len(aggregate_results) == pre_suggestion_count
+                    ):
+                        typo_entry = self._find_entry_typo_fallback(archive, title)
+                        if typo_entry is not None:
+                            aggregate_results.append(
+                                {
+                                    "path": typo_entry.path,
+                                    "title": typo_entry.title or title,
+                                    # Below 0.95 (suggestion-rank top) and
+                                    # well below 1.0 (exact match) so a
+                                    # fuzzy hit never silently outranks a
+                                    # legitimate result from another file.
+                                    "score": 0.7,
+                                    "zim_file": file_path,
+                                    "match_type": "typo_corrected",
+                                }
+                            )
+                            fuzzy_path_hit = True
             except Exception as e:
                 if not cross_file:
                     raise
@@ -1219,6 +1330,7 @@ class _SearchMixin:
             "query": title,
             "results": aggregate_results[:limit],
             "fast_path_hit": fast_path_hit,
+            "fuzzy_path_hit": fuzzy_path_hit,
             "files_searched": len(files),
         }
 

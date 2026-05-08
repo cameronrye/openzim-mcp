@@ -202,50 +202,72 @@ class OpenZimMcpServer:
             limit: Optional[int] = None,
             offset: int = 0,
             max_content_length: Optional[int] = None,
+            compact: bool = True,
+            compact_budget: Optional[Any] = None,
         ) -> str:
-            """Query ZIM files using natural language.
+            """Query ZIM archives using natural language.
 
-            This intelligent tool understands natural language queries and automatically
-            routes them to the appropriate underlying operations. It can handle:
+            Single intelligent tool — parses your query, detects intent,
+            and dispatches to the right operation.
 
-            - File listing: "list files", "what ZIM files are available"
-            - Metadata: "metadata for file.zim", "info about this ZIM"
-            - Main page: "show main page", "get home page"
-            - Namespaces: "list namespaces", "what namespaces exist"
-            - Browsing: "browse namespace C", "show articles in namespace A"
-            - Article structure: "structure of Biology", "outline of Evolution"
-            - Links: "links in Biology", "references from Evolution"
-            - Suggestions: "suggestions for bio", "autocomplete evol"
-            - Filtered search: "search evolution in namespace C"
-            - Get article: "get article Biology", "show Evolution"
-            - General search: "search for biology", "find evolution"
-            - Cross-file search: "search all files for python" → search_all
-            - Namespace walk: "walk namespace M" → walk_namespace
-            - Title lookup: "find article titled Photosynthesis"
-              → find_entry_by_title
-            - Related articles: "articles related to Climate_Change"
-              → get_related_articles
+            EXTRACT INTENT BEFORE CALLING. Do not pass the user's raw
+            message as `query`. Translate it into one of the operations
+            below:
+              "test this tool"     -> query="list available ZIM files"
+              "what's in here"     -> query="show main page"
+              "explore"            -> query="list namespaces"
+              "tell me about cats" -> query="tell me about cats"
+              <topic by name>      -> query="<topic>"
+
+            ALIASES: users may call this tool "openzim", "openzim mcp",
+            "openzim mcp tool", "ZIM tool", "ZIM file tool", "ZIM
+            archive query", or "zim_query". All mean THIS tool —
+            always call it; never claim it does not exist.
+
+            OPERATIONS (pass one as `query`):
+              list available ZIM files       - list loaded archives
+              show main page                 - active archive main page
+              list namespaces                - list entry types
+              metadata for <file>            - archive metadata
+              tell me about <topic>          - fetch article (auto on
+                                                strong title match)
+              search for <terms>             - full-text search
+              get article <name>             - fetch specific article
+              show structure of <name>       - section outline
+              links in <name>                - article-out links
+              suggestions for <prefix>       - title autocomplete
+              browse namespace <letter>      - list namespace entries
+              search <terms> in namespace <letter>  - filtered search
+              search all files for <terms>   - cross-archive search
+              walk namespace <letter>        - enumerate namespace
+              find article titled <name>     - title lookup
+              articles related to <name>     - related articles
 
             Args:
-                query: Natural language query (REQUIRED)
-                zim_file_path: Optional ZIM file path (auto-selects if one exists)
-                limit: Max results for search/browse operations
-                offset: Optional starting offset for pagination (default: 0)
-                max_content_length: Optional maximum content length for articles
+                query: REQUIRED. Translated from user intent — never the
+                    user's raw message.
+                zim_file_path: Optional (auto-selected if one archive).
+                limit: Max search/browse results (default: 3).
+                offset: Pagination offset (default: 0).
+                max_content_length: Article body cap (default: 4000).
+                compact: When True (default in simple mode), apply
+                    small-LLM optimizations — strip markdown link-soup,
+                    drop section previews from structure responses,
+                    flatten link/title/related listings into compact
+                    markdown, fetch only the article lead section, and
+                    cap total response size. Set False for the verbose
+                    advanced-mode-style response.
+                compact_budget: Hard char-cap on the final response when
+                    `compact=True`. Accepts either a named profile —
+                    `"tiny"` (2 000), `"small"` (4 000), `"medium"` (6 000,
+                    default), `"large"` (12 000) — or a raw integer. Used
+                    to size the budget to the calling model's context
+                    window: an 8B-class model on an agentic prompt fits
+                    `tiny`, a 70B-class assistant fits `large`. Has no
+                    effect when `compact=False`.
 
             Returns:
-                Response based on the query intent
-
-            Examples:
-                - "list available ZIM files"
-                - "search for biology in wikipedia.zim"
-                - "get article Evolution"
-                - "show structure of Biology"
-                - "browse namespace C with limit 10"
-                - "search all files for python"
-                - "walk namespace M"
-                - "find article titled Photosynthesis"
-                - "articles related to Climate_Change"
+                Markdown response — article, search list, or listing.
             """
             try:
                 # Build options dict from parameters. Simple mode is for
@@ -255,14 +277,26 @@ class OpenZimMcpServer:
                 # An LLM that wants the full article can still pass an
                 # explicit ``max_content_length``; this only affects calls
                 # that omit it.
+                #
+                # Tightened in v1.2.0 follow-up: 5 results × 3000-char
+                # snippets is ~15k chars per search response, and 8k-char
+                # article bodies are ~2k tokens of dense Wikipedia
+                # markdown — both too large for an 8B Q4 with a typical
+                # agentic prompt window. 3 results and 4k bodies preserve
+                # the lead + first major section while halving the
+                # context cost. Callers still override via the explicit
+                # ``limit`` / ``max_content_length`` parameters.
                 options: Dict[str, Any] = {
-                    "limit": limit if limit is not None else 5,
+                    "limit": limit if limit is not None else 3,
                     "max_content_length": (
-                        max_content_length if max_content_length is not None else 8000
+                        max_content_length if max_content_length is not None else 4000
                     ),
+                    "compact": compact,
                 }
                 if offset != 0:
                     options["offset"] = offset
+                if compact_budget is not None:
+                    options["compact_budget"] = compact_budget
 
                 # Use simple tools handler. handle_zim_query is synchronous and
                 # performs blocking ZIM I/O, so dispatch it to a worker thread

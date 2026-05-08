@@ -192,3 +192,178 @@ class TestFindEntryByTitleToolSanitization:
             "\x00" not in sent_path
         ), f"NUL byte leaked through with cross_file=True: {sent_path!r}"
         assert sent_path == "anyname.zim"
+
+
+class TestTypoTolerantFallback:
+    """v1.2.0 follow-up: when the case-variant fast path AND the libzim
+    suggestion search both come up empty, try a small set of single-edit
+    variants of the input (transposition / single deletion) before
+    returning ``"no results"``. Catches the common LLM typo case
+    (``"Einstien"`` → ``"Einstein"``, ``"Phyton"`` → ``"Python"``) that
+    the suggestion index can't recover from.
+    """
+
+    def test_typo_variants_produces_transposition(self):
+        from openzim_mcp.zim.search import _SearchMixin
+
+        variants = _SearchMixin._typo_variants("Einstien")
+        # The Einstien -> Einstein swap is at position 5-6 (i↔e).
+        assert "Einstein" in variants
+
+    def test_typo_variants_produces_deletions_for_long_titles(self):
+        from openzim_mcp.zim.search import _SearchMixin
+
+        variants = _SearchMixin._typo_variants("Phython")
+        assert "Python" in variants
+
+    def test_typo_variants_skips_deletion_for_short_titles(self):
+        """Deletions on short titles produce too many spurious matches
+        (e.g. "test" -> "tes" matching unrelated 3-char articles).
+        """
+        from openzim_mcp.zim.search import _SearchMixin
+
+        variants = _SearchMixin._typo_variants("test")
+        # Adjacent transpositions only — no deletions for len < 6.
+        assert "tes" not in variants
+        assert "tst" not in variants
+        assert "est" not in variants  # would be a deletion
+
+    def test_typo_variants_skips_no_op_swaps(self):
+        """Swap of identical adjacent chars is a no-op; don't yield it
+        as a variant (it would just probe the original twice).
+        """
+        from openzim_mcp.zim.search import _SearchMixin
+
+        variants = _SearchMixin._typo_variants("Coffee")
+        # The "ff" pair would yield "Coffee" again — skipped.
+        assert variants.count("Coffee") == 0
+
+    @pytest.fixture
+    def server(self, test_config):
+        return OpenZimMcpServer(test_config)
+
+    def test_typo_fallback_resolves_einstien(self, server, monkeypatch):
+        """End-to-end: ``Einstien`` (typo) → fast-path probes find
+        ``Einstein`` via the i↔e transposition variant.
+        """
+        mock_archive = MagicMock()
+        # Fast path: only "Einstein" / "C/Einstein" hits.
+        valid_paths = {"C/Einstein"}
+
+        def has(path):
+            return path in valid_paths
+
+        mock_archive.has_entry_by_path.side_effect = has
+        mock_entry = MagicMock()
+        mock_entry.path = "C/Einstein"
+        mock_entry.title = "Einstein"
+        mock_archive.get_entry_by_path.return_value = mock_entry
+        # Suggestions return nothing (libzim can't recover from this typo).
+        mock_suggest = MagicMock()
+        mock_suggest.getEstimatedMatches.return_value = 0
+        mock_suggest.getResults.return_value = []
+        mock_searcher = MagicMock()
+        mock_searcher.suggest.return_value = mock_suggest
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.SuggestionSearcher",
+            lambda archive: mock_searcher,
+        )
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Einstien", cross_file=False, limit=10
+        )
+        assert result["fuzzy_path_hit"] is True
+        assert len(result["results"]) == 1
+        hit = result["results"][0]
+        assert hit["path"] == "C/Einstein"
+        assert hit["title"] == "Einstein"
+        # Below 0.95 so a real suggestion-top in another file would
+        # outrank a fuzzy hit. ``pytest.approx`` rather than ``==`` so
+        # SonarCloud S1244 (float-equality bug rule) doesn't flag the
+        # comparison; the value here is one we set, not one derived
+        # from arithmetic, so equality is semantically fine.
+        assert hit["score"] == pytest.approx(0.7)
+        assert hit.get("match_type") == "typo_corrected"
+
+    def test_typo_fallback_skipped_when_suggestion_hits(self, server, monkeypatch):
+        """When the suggestion search returns ANY hit, fuzzy fallback
+        does not run — suggestion results have stronger provenance and
+        should always win.
+        """
+        mock_archive = MagicMock()
+        mock_archive.has_entry_by_path.return_value = False
+        mock_entry = MagicMock()
+        mock_entry.path = "C/Some_article"
+        mock_entry.title = "Some article"
+        mock_archive.get_entry_by_path.return_value = mock_entry
+        # Suggestion returns one weak result.
+        mock_suggest = MagicMock()
+        mock_suggest.getEstimatedMatches.return_value = 1
+        mock_suggest.getResults.return_value = ["C/Some_article"]
+        mock_searcher = MagicMock()
+        mock_searcher.suggest.return_value = mock_suggest
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.SuggestionSearcher",
+            lambda archive: mock_searcher,
+        )
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Einstien", cross_file=False, limit=10
+        )
+        assert result["fuzzy_path_hit"] is False
+
+    def test_typo_fallback_skipped_for_short_queries(self, server, monkeypatch):
+        """Queries < 4 chars don't run the fuzzy fallback — too many
+        spurious matches.
+        """
+        mock_archive = MagicMock()
+        mock_archive.has_entry_by_path.return_value = False
+        mock_suggest = MagicMock()
+        mock_suggest.getEstimatedMatches.return_value = 0
+        mock_suggest.getResults.return_value = []
+        mock_searcher = MagicMock()
+        mock_searcher.suggest.return_value = mock_suggest
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.SuggestionSearcher",
+            lambda archive: mock_searcher,
+        )
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Pi", cross_file=False, limit=10
+        )
+        # Empty result and no fuzzy fired.
+        assert result["results"] == []
+        assert result["fuzzy_path_hit"] is False

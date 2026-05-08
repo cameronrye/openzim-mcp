@@ -902,10 +902,13 @@ class TestZimOperations:
             assert isinstance(payload, dict)
             assert payload["total_results"] == 0
             assert payload["results"] == []
-            # The legacy markdown rendering still produces the same text.
-            assert "No search results found" in zim_operations._format_search_text(
-                payload
-            )
+            # The legacy markdown rendering still produces the same text,
+            # plus an actionable next-step hint that names the two common
+            # rescues (suggestions/autocomplete and tell_me_about).
+            rendered = zim_operations._format_search_text(payload)
+            assert 'No search results found for "test"' in rendered
+            assert "suggestions for" in rendered
+            assert "tell me about" in rendered
             assert total == 0
 
     def test_get_entry_content_with_redirect(
