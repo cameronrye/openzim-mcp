@@ -266,17 +266,23 @@ class SimpleToolsHandler:
                 effective_budget = (
                     budget - self._CONTENT_FENCE_OVERHEAD if will_wrap else budget
                 )
+                # Capture pre-cap size to report truncation in footer
+                pre_cap_chars = len(result)
                 if len(result) > effective_budget:
                     self._track("response_truncated")
                 result = self._cap_response_size(result, effective_budget)
+                # Determine if truncation occurred
+                was_truncated = len(result) < pre_cap_chars
                 if will_wrap:
                     result = self._wrap_retrieved_content(result)
-            # ``compact=False`` is the back-compat mode for parsers that
-            # depend on the legacy raw-text output shape; we deliberately
-            # don't wrap there. Callers that want injection defense
-            # should use ``compact=True``.
-            if options.get("compact", False):
-                meta = build_meta(rendered=result)
+
+                # Build footer with truncation state. At simple-mode level,
+                # there's no pagination, so no more_at_offset hint.
+                meta = build_meta(
+                    rendered=result,
+                    truncated=was_truncated,
+                    total_chars=pre_cap_chars if was_truncated else None,
+                )
                 footer = format_footer(
                     meta,
                     footer_enabled=self.zim_operations.config.meta.footer_enabled,

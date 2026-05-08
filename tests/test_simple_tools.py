@@ -1330,7 +1330,7 @@ class TestResponseBudgetCap:
             "show main page", options={"compact": True}
         )
         # The body is capped at 6000 chars; the footer ("> ~N tokens") is
-        # appended after the cap and adds a small fixed overhead (~30 chars).
+        # appended after the cap and adds a small fixed overhead (~70 chars).
         assert len(out_compact) <= 6100
         assert "Response truncated" in out_compact
 
@@ -2844,7 +2844,7 @@ class TestCompactBudgetProfiles:
         assert "Response truncated" in out
         # The body is capped at the tiny budget (2000 chars); the footer
         # ("> ~N tokens") is appended after the cap and adds a small fixed
-        # overhead (~30 chars max).
+        # overhead (~70 chars max).
         assert len(out) <= 2_100, f"wrapped output exceeded 2100 chars: {len(out)}"
         assert h.get_telemetry().get("response_truncated") == 1
 
@@ -2971,4 +2971,33 @@ class TestCompactFooter:
         out = handler.handle_zim_query("show main page", options={"compact": True})
         assert "> ~" not in out, (
             f"footer_enabled=False should suppress footer, but got: {out!r}"
+        )
+
+    def test_compact_footer_reports_truncation_when_capped(self):
+        """When the body exceeds compact_budget and gets capped, the footer should report it.
+
+        The footer should include 'of' and 'chars' indicating the response was
+        truncated (e.g., "~1.2K of 5.5K chars").
+        """
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        # Response larger than the tiny budget (2000 chars)
+        large_content = "Article paragraph. " * 200  # ~3800 chars
+        mock.get_main_page.return_value = large_content
+        mock.config.meta.footer_enabled = True
+        handler = SimpleToolsHandler(mock)
+
+        out = handler.handle_zim_query(
+            "show main page",
+            options={"compact": True, "compact_budget": "tiny"},
+        )
+        last_line = out.rstrip().splitlines()[-1]
+        # Truncated footer should contain both "of" and "chars"
+        assert " of " in last_line, (
+            f"Expected ' of ' in truncated footer, got: {last_line!r}"
+        )
+        assert "chars" in last_line, (
+            f"Expected 'chars' in truncated footer, got: {last_line!r}"
         )
