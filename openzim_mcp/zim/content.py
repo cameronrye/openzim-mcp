@@ -22,6 +22,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
 )
+from openzim_mcp.meta import attach_meta
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -329,7 +330,9 @@ class _ContentMixin:
         # they submitted entries (grouping is a transparent optimisation).
         results.sort(key=lambda r: r["index"])
 
-        return {"results": results, "succeeded": succeeded, "failed": failed}
+        return attach_meta(
+            {"results": results, "succeeded": succeeded, "failed": failed}
+        )
 
     def get_entries(
         self,
@@ -614,8 +617,10 @@ class _ContentMixin:
         cached_meta = self.cache.get(cache_key)
         if cached_meta and (not include_data or cached_meta["size"] > max_size_bytes):
             logger.debug(f"Returning cached binary metadata for: {entry_path}")
-            return self._format_binary_response(
-                cached_meta, include_data, max_size_bytes, data=None
+            return attach_meta(
+                self._format_binary_response(
+                    cached_meta, include_data, max_size_bytes, data=None
+                )
             )
 
         try:
@@ -680,8 +685,10 @@ class _ContentMixin:
                 # Cache invariant metadata for future calls.
                 self.cache.set(cache_key, meta)
 
-                result = self._format_binary_response(
-                    meta, include_data, max_size_bytes, data=encoded_data
+                result = attach_meta(
+                    self._format_binary_response(
+                        meta, include_data, max_size_bytes, data=encoded_data
+                    )
                 )
                 logger.info(
                     f"Retrieved binary entry: {entry_path} "
@@ -808,6 +815,11 @@ class _ContentMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached summary dict for: {entry_path}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(
+                    dict(cached_result),
+                    truncated=bool(cached_result.get("is_truncated")),
+                )
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -816,10 +828,13 @@ class _ContentMixin:
                     archive, entry_path, max_words
                 )
 
-            # Cache the result
+            # Cache the result (pre-_meta so cached payload stays compact)
             self.cache.set(cache_key, result)
             logger.info(f"Extracted summary for: {entry_path}")
-            return result
+            return attach_meta(
+                result,
+                truncated=bool(result.get("is_truncated")),
+            )
 
         except Exception as e:
             logger.error(f"Summary extraction failed for {entry_path}: {e}")
