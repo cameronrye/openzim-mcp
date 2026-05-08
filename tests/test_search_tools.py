@@ -389,6 +389,139 @@ class TestSearchAllLimitAlias:
         assert call.args[1] == 5
 
 
+class TestSearchZimFileDataMeta:
+    """search_zim_file_data must attach a _meta envelope on every return path."""
+
+    @pytest.fixture
+    def zim_ops(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator,
+        openzim_mcp_cache,
+        content_processor,
+    ):
+        from openzim_mcp.zim_operations import ZimOperations
+
+        return ZimOperations(test_config, path_validator, openzim_mcp_cache, content_processor)
+
+    def _zim_file(self, temp_dir):
+        """Create a placeholder .zim file the path validator will accept."""
+        from pathlib import Path
+
+        p = Path(temp_dir) / "test.zim"
+        p.write_bytes(b"")
+        return p
+
+    def test_search_zim_file_data_attaches_meta_fresh(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Fresh computation path returns _meta envelope."""
+        zim_file = self._zim_file(temp_dir)
+
+        fresh_payload = {
+            "query": "climate",
+            "total_results": 3,
+            "offset": 0,
+            "limit": 10,
+            "results": [
+                {"path": "A/Foo", "title": "Foo", "snippet": "snippet text"}
+            ],
+            "pagination": {"has_more": False},
+        }
+
+        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (fresh_payload, 3))
+
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.search_zim_file_data(str(zim_file), "climate", limit=10, offset=0)
+
+        assert "_meta" in result, "fresh path must attach _meta"
+        assert result["_meta"]["tokens_est"] > 0
+        assert result["_meta"]["chars"] > 0
+        assert result["_meta"]["truncated"] is False
+
+    def test_search_zim_file_data_meta_on_zero_results(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Zero-results path still carries _meta."""
+        zim_file = self._zim_file(temp_dir)
+
+        zero_payload = {
+            "query": "xyzzy_no_match",
+            "total_results": 0,
+            "offset": 0,
+            "limit": 10,
+            "results": [],
+            "pagination": {"has_more": False},
+        }
+
+        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.search_zim_file_data(str(zim_file), "xyzzy_no_match", limit=10, offset=0)
+
+        assert "_meta" in result, "zero-results path must attach _meta"
+
+    def test_search_zim_file_data_meta_on_offset_exceeds_total(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Offset-exceeds-total path carries _meta."""
+        zim_file = self._zim_file(temp_dir)
+
+        exceed_payload = {
+            "query": "climate",
+            "total_results": 5,
+            "offset": 100,
+            "limit": 10,
+            "results": [],
+            "pagination": {"has_more": False, "offset_exceeds_total": True},
+        }
+
+        monkeypatch.setattr(
+            zim_ops, "_perform_search", lambda *a, **kw: (exceed_payload, 5)
+        )
+
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.search_zim_file_data(
+                str(zim_file), "climate", limit=10, offset=100
+            )
+
+        assert "_meta" in result, "offset-exceeds-total path must attach _meta"
+
+    def test_search_zim_file_data_meta_on_cached_return(
+        self, zim_ops, temp_dir
+    ):
+        """Cached return path backfills _meta if missing, and always returns _meta."""
+        zim_file = self._zim_file(temp_dir)
+        validated = zim_ops.path_validator.validate_path(str(zim_file))
+        validated = zim_ops.path_validator.validate_zim_file(validated)
+        cache_key = f"search_data:{validated}:climate:10:0"
+
+        # Seed cache with an old-format entry (no _meta)
+        old_payload = {
+            "query": "climate",
+            "total_results": 2,
+            "offset": 0,
+            "limit": 10,
+            "results": [{"path": "A/Bar", "title": "Bar", "snippet": "bar"}],
+            "pagination": {"has_more": False},
+        }
+        zim_ops.cache.set(cache_key, old_payload)
+
+        result = zim_ops.search_zim_file_data(str(zim_file), "climate", limit=10, offset=0)
+
+        assert "_meta" in result, "cached return must backfill _meta"
+        assert result["_meta"]["tokens_est"] > 0
+
+
 class TestInputSanitizationSearch:
     """Test input sanitization in search tools."""
 

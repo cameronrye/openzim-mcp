@@ -25,6 +25,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
 )
+from openzim_mcp.meta import attach_meta
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -209,6 +210,8 @@ class _SearchMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached search dict for query: {query}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(dict(cached_result))
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -223,7 +226,7 @@ class _SearchMixin:
             if total_results > 0:
                 self.cache.set(cache_key, payload)
             logger.debug(f"Search completed: query='{query}', results found")
-            return payload
+            return attach_meta(payload)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
