@@ -590,21 +590,39 @@ class SimpleToolsHandler:
             )
         return text
 
-    # First non-wrapper ``## `` heading marker, used by _lead_with_toc.
-    # ``## Content`` is a wrapper section that ``get_zim_entry`` adds at
-    # the start of every article; the real article H2 sections come
-    # after the article H1, which itself follows the wrapper.
-    #
-    # The character classes ``[ \t]+`` and ``[^\n]+`` are non-empty
-    # but only ``[^\n]+`` greedily consumes the rest of the line; ``$``
-    # under MULTILINE then anchors at end-of-line, so the engine
-    # commits to the longest match in one pass with no backtracking.
-    # Earlier shapes — ``\s+ + .+`` (both accept spaces) and
-    # ``.*? + [ \t]*$`` (lazy + greedy on overlapping char sets) —
-    # were flagged by Sonar S5852 for polynomial worst-case behaviour.
-    # The captured group may include trailing whitespace; callers
-    # already ``.strip()`` it at the use site.
-    _ARTICLE_H2_RE = re.compile(r"^##[ \t]+(?!Content\b)([^\n]+)$", re.MULTILINE)
+    # ``## `` heading marker, used by _lead_with_toc. ``## Content`` is
+    # a wrapper section that ``get_zim_entry`` adds at the start of
+    # every article; real article H2 sections come after the article
+    # H1, which itself follows the wrapper. The wrapper-skip happens
+    # in code (see ``_iter_article_h2`` below) rather than via a
+    # negative-lookahead in the pattern — earlier shapes that combined
+    # ``[ \t]+`` with ``(?!Content\b)`` were flagged by Sonar S5852
+    # because greedy whitespace can backtrack against the lookahead
+    # ("##              Content" with many leading spaces would walk
+    # back the whitespace consumption until the lookahead succeeds at
+    # position N+1, making the regex polynomial). The simpler
+    # match-then-filter form is unambiguously single-pass.
+    _ARTICLE_H2_RE = re.compile(r"^##[ \t]+([^\n]+)$", re.MULTILINE)
+
+    @classmethod
+    def _iter_article_h2(cls, body: str) -> "list[re.Match[str]]":
+        """Yield H2 matches in ``body`` excluding the ``## Content``
+        wrapper. Filtering happens here instead of in the regex so the
+        pattern itself stays trivially backtrack-free.
+        """
+        return [
+            m
+            for m in cls._ARTICLE_H2_RE.finditer(body)
+            if m.group(1).strip() != "Content"
+        ]
+
+    @classmethod
+    def _first_article_h2(cls, body: str) -> "Optional[re.Match[str]]":
+        """First non-wrapper H2 match in ``body``, or None."""
+        for m in cls._ARTICLE_H2_RE.finditer(body):
+            if m.group(1).strip() != "Content":
+                return m
+        return None
 
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:
         """Truncate ``body`` at the first article H2 (lead-section cut)
@@ -642,16 +660,17 @@ class SimpleToolsHandler:
                     sections.append(text)
         except Exception:
             # Backend hiccup. Fall back to whatever H2s we can scan from
-            # the body itself — better than nothing.
+            # the body itself — better than nothing. ``_iter_article_h2``
+            # already filters out the ``## Content`` wrapper.
             sections = [
                 m.group(1).strip()
-                for m in self._ARTICLE_H2_RE.finditer(body)
+                for m in self._iter_article_h2(body)
                 if m.group(1).strip()
             ]
 
         # Cut body at first non-wrapper H2 if one's present in the
         # truncated body — saves the LLM from a mid-paragraph cut.
-        h2_match = self._ARTICLE_H2_RE.search(body)
+        h2_match = self._first_article_h2(body)
         if h2_match:
             body = body[: h2_match.start()].rstrip()
             clean_cut = True
