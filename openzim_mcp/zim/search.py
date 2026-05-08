@@ -16,6 +16,7 @@ import json
 import logging
 import urllib.parse
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
@@ -229,7 +230,35 @@ class _SearchMixin:
                 self.cache.set(cache_key, payload)
             logger.debug(f"Search completed: query='{query}', results found")
             reason = "0_hits" if total_results == 0 else None
-            return attach_meta(payload, reason=reason)
+
+            # Cross-archive name match (Phase A item #4: alt_archive source)
+            # When search yields zero results, suggest other ZIM archives whose
+            # basename contains a query token (length >= 4 chars only).
+            suggestions: List[Dict[str, str]] = []
+            if total_results == 0:
+                try:
+                    files = self.list_zim_files_data()
+                    q_lower = query.lower()
+                    # Tokens of length >= 4 only (avoids matching "in", "the", etc.)
+                    q_tokens = [tok for tok in q_lower.split() if len(tok) >= 4]
+                    for f in files:
+                        file_path_str = str(f.get("path", ""))
+                        if file_path_str == str(validated_path):
+                            continue  # skip current archive
+                        stem = Path(file_path_str).stem  # e.g., "wikipedia_en_all"
+                        if any(tok in stem.lower() for tok in q_tokens):
+                            suggestions.append({"type": "alt_archive", "value": stem})
+                            limit_n = self.config.search.structured_suggestions_limit
+                            if len(suggestions) >= limit_n:
+                                break
+                except Exception as e:
+                    logger.debug(f"alt_archive suggestion build failed: {e}")
+
+            return attach_meta(
+                payload,
+                reason=reason,
+                suggestions=suggestions if suggestions else None,
+            )
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full

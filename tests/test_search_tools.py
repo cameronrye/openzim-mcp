@@ -1,5 +1,6 @@
 """Tests for search_tools module."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -740,3 +741,276 @@ class TestSearchMethodsMeta:
 
         assert result["total_results"] > 0
         assert "reason" not in result["_meta"]
+
+    def test_empty_search_suggests_other_archives_with_query_match(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """When query yields zero results but matches another archive's name, suggest it."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        # Mock _perform_search to return zero results
+        zero_payload = {
+            "query": "wikipedia",
+            "total_results": 0,
+            "offset": 0,
+            "limit": 10,
+            "results": [],
+            "pagination": {"has_more": False},
+        }
+        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+
+        # Mock list_zim_files_data to return two archives
+        other_archive_path = str(temp_dir / "wikipedia_en_all.zim")
+        monkeypatch.setattr(
+            zim_ops,
+            "list_zim_files_data",
+            lambda *a, **kw: [
+                {"path": str(zim_file), "name": "current"},
+                {"path": other_archive_path, "name": "wikipedia"},
+            ],
+        )
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.search_zim_file_data(str(zim_file), "wikipedia", limit=10, offset=0)
+
+        assert result["total_results"] == 0
+        assert "_meta" in result
+        assert "suggestions" in result["_meta"]
+        assert len(result["_meta"]["suggestions"]) > 0
+        # Check that we have an alt_archive suggestion
+        alt_archive_suggestions = [
+            s for s in result["_meta"]["suggestions"] if s.get("type") == "alt_archive"
+        ]
+        assert len(alt_archive_suggestions) > 0
+        assert any(s["value"] == "wikipedia_en_all" for s in alt_archive_suggestions)
+
+    def test_empty_search_suggests_archives_matching_tokens_in_query(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Query tokens >= 4 chars should match archive basenames."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        # Mock _perform_search to return zero results
+        zero_payload = {
+            "query": "photosynthesis process biology",
+            "total_results": 0,
+            "offset": 0,
+            "limit": 10,
+            "results": [],
+            "pagination": {"has_more": False},
+        }
+        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+
+        # Mock list_zim_files_data to return archives, one matching "biology"
+        biology_archive_path = str(temp_dir / "biology_reference.zim")
+        monkeypatch.setattr(
+            zim_ops,
+            "list_zim_files_data",
+            lambda *a, **kw: [
+                {"path": str(zim_file), "name": "current"},
+                {"path": biology_archive_path, "name": "biology"},
+            ],
+        )
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.search_zim_file_data(
+                str(zim_file), "photosynthesis process biology", limit=10, offset=0
+            )
+
+        assert result["total_results"] == 0
+        assert "_meta" in result
+        assert "suggestions" in result["_meta"]
+        # Should match because "biology" token (>= 4 chars) is in "biology_reference"
+        alt_archive_suggestions = [
+            s for s in result["_meta"]["suggestions"] if s.get("type") == "alt_archive"
+        ]
+        assert len(alt_archive_suggestions) > 0
+        assert any(s["value"] == "biology_reference" for s in alt_archive_suggestions)
+
+    def test_empty_search_no_archive_suggestion_when_no_token_matches(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Query tokens that don't match any other archive name should produce no alt_archive."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        # Mock _perform_search to return zero results
+        zero_payload = {
+            "query": "zzzimpossiblequery",
+            "total_results": 0,
+            "offset": 0,
+            "limit": 10,
+            "results": [],
+            "pagination": {"has_more": False},
+        }
+        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+
+        # Mock list_zim_files_data with archives that don't match the query
+        other_archive_path = str(temp_dir / "wikipedia_en.zim")
+        monkeypatch.setattr(
+            zim_ops,
+            "list_zim_files_data",
+            lambda *a, **kw: [
+                {"path": str(zim_file), "name": "current"},
+                {"path": other_archive_path, "name": "wikipedia"},
+            ],
+        )
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.search_zim_file_data(
+                str(zim_file), "zzzimpossiblequery", limit=10, offset=0
+            )
+
+        assert result["total_results"] == 0
+        assert "_meta" in result
+        # Should have no alt_archive suggestions because query doesn't match any archive name
+        suggestions = result["_meta"].get("suggestions", [])
+        alt_archive_suggestions = [
+            s for s in suggestions if s.get("type") == "alt_archive"
+        ]
+        assert len(alt_archive_suggestions) == 0
+
+    def test_empty_search_ignores_short_query_tokens_for_archive_matching(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Query tokens < 4 chars (like 'the', 'in') should not match archives."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        # Mock _perform_search to return zero results
+        zero_payload = {
+            "query": "the in it",  # All tokens < 4 chars
+            "total_results": 0,
+            "offset": 0,
+            "limit": 10,
+            "results": [],
+            "pagination": {"has_more": False},
+        }
+        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+
+        # Mock list_zim_files_data with an archive named "init"
+        init_archive_path = str(temp_dir / "init_guide.zim")
+        monkeypatch.setattr(
+            zim_ops,
+            "list_zim_files_data",
+            lambda *a, **kw: [
+                {"path": str(zim_file), "name": "current"},
+                {"path": init_archive_path, "name": "init"},
+            ],
+        )
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.search_zim_file_data(
+                str(zim_file), "the in it", limit=10, offset=0
+            )
+
+        assert result["total_results"] == 0
+        assert "_meta" in result
+        # Should have no alt_archive suggestions because all tokens are < 4 chars
+        suggestions = result["_meta"].get("suggestions", [])
+        alt_archive_suggestions = [
+            s for s in suggestions if s.get("type") == "alt_archive"
+        ]
+        assert len(alt_archive_suggestions) == 0
+
+    def test_empty_search_respects_suggestions_limit(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """alt_archive suggestions must cap at structured_suggestions_limit."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        # Mock _perform_search to return zero results
+        zero_payload = {
+            "query": "wiki",
+            "total_results": 0,
+            "offset": 0,
+            "limit": 10,
+            "results": [],
+            "pagination": {"has_more": False},
+        }
+        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+
+        # Create many archives matching the query
+        archives = [{"path": str(zim_file), "name": "current"}]
+        for i in range(10):
+            archives.append({
+                "path": str(temp_dir / f"wikipedia_en_{i}.zim"),
+                "name": f"wikipedia_{i}",
+            })
+
+        monkeypatch.setattr(
+            zim_ops,
+            "list_zim_files_data",
+            lambda *a, **kw: archives,
+        )
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.search_zim_file_data(str(zim_file), "wiki", limit=10, offset=0)
+
+        assert result["total_results"] == 0
+        assert "_meta" in result
+        # Check that suggestions are capped at the configured limit
+        limit_n = zim_ops.config.search.structured_suggestions_limit
+        alt_archive_suggestions = [
+            s for s in result["_meta"]["suggestions"] if s.get("type") == "alt_archive"
+        ]
+        assert len(alt_archive_suggestions) <= limit_n
+
+    def test_empty_search_skips_current_archive_in_suggestions(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Current archive should not suggest itself."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        # Mock _perform_search to return zero results
+        zero_payload = {
+            "query": "wikipedia",
+            "total_results": 0,
+            "offset": 0,
+            "limit": 10,
+            "results": [],
+            "pagination": {"has_more": False},
+        }
+        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+
+        # Mock list_zim_files_data with the current archive having a matching name
+        # Current archive stem: "test"
+        # Other archive stem: "wikipedia_en" (matches query)
+        current_path = str(zim_file)
+        other_archive_path = str(temp_dir / "wikipedia_en.zim")
+        monkeypatch.setattr(
+            zim_ops,
+            "list_zim_files_data",
+            lambda *a, **kw: [
+                {"path": current_path, "name": "test"},  # This should NOT be suggested
+                {"path": other_archive_path, "name": "wikipedia"},
+            ],
+        )
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.search_zim_file_data(str(zim_file), "wikipedia", limit=10, offset=0)
+
+        assert result["total_results"] == 0
+        assert "_meta" in result
+        alt_archive_suggestions = [
+            s for s in result["_meta"]["suggestions"] if s.get("type") == "alt_archive"
+        ]
+        # Should suggest wikipedia_en but NOT test.zim
+        assert len(alt_archive_suggestions) > 0
+        assert all(s.get("value") != Path(current_path).stem for s in alt_archive_suggestions)
