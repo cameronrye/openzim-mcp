@@ -142,15 +142,22 @@ Rules:
 
 ## Per-item changes
 
-### #1 — Native query-aware snippets
+### #1 — Query-aware snippets (Python-side implementation)
 
-**Touchpoint:** [`openzim_mcp/zim/content.py:62-72`](../../../openzim_mcp/zim/content.py) (`_get_entry_snippet`).
+**Touchpoints:** [`openzim_mcp/zim/content.py:59-72`](../../../openzim_mcp/zim/content.py) (`_get_entry_snippet`), [`openzim_mcp/content_processor.py:432-459`](../../../openzim_mcp/content_processor.py) (`create_snippet`).
 
-**Behavior change.** The current path decompresses the entry, runs HTML→text, then takes the first 2 paragraphs via `create_snippet` ([`content_processor.py:432-459`](../../../openzim_mcp/content_processor.py)). New behavior: when invoked from a search context with a `SearchIterator`, call `iterator.getSnippet()` to get libzim's query-aware passage with highlighting. Strip `<mark>`/`</mark>` tags before returning.
+**Implementation note.** The libzim 3.x Python binding does **not** expose `SearchIterator::getSnippet()` — the C++ method exists but isn't bound. We implement equivalent behavior in Python. (The C++ method can be revisited in a future phase if the libzim Python binding adds it; behavior contract is identical.)
 
-**Fallback.** When no `SearchIterator` is available (`find_entry_by_title` paths fed by `SuggestionSearcher`, or libzim versions without `getSnippet()`), retain `create_snippet`'s lead-paragraph behavior. Log once at startup if libzim build lacks the snippet API.
+**Behavior change.** The current path decompresses the entry, runs HTML→text, then takes the first 2 paragraphs via `create_snippet`. New behavior:
 
-**Snippet length.** Honor existing `snippet_length` config (3000 chars full, 250 chars compact). libzim returns full-length snippets; we trim to config.
+1. Extend `create_snippet` signature: `create_snippet(content: str, *, query: Optional[str] = None, max_paragraphs: int = 2) -> str`. When `query` is supplied, the function locates the first paragraph that contains any whole-word match for any query term (case-insensitive, diacritic-folded), and returns up to `max_paragraphs` paragraphs starting at that paragraph. When no match is found anywhere in the content, falls back to lead-paragraph behavior (current default).
+2. `_get_entry_snippet` gains a `query` keyword arg, threaded through to `create_snippet`. Search call sites in `search.py:297` and `search.py:715` pass the active query string.
+
+**Fallback.** Code paths that don't have a query (suggestion-based `find_entry_by_title` results) call `_get_entry_snippet(entry)` with no query — yields current lead-paragraph behavior.
+
+**Snippet length.** Honor existing `snippet_length` config (3000 chars full, 250 chars compact). The query-aware path still hard-caps at `snippet_length`.
+
+**Highlighting.** Emit `**term**` markdown bold around each matched query term inside the returned snippet, capped at the first 5 occurrences to avoid bold-spam in dense matches. Strip-safe for downstream `compact` paths (which strip markdown links but preserve `**`).
 
 ### #2 — Tables & infoboxes in compact mode
 
@@ -201,24 +208,26 @@ Rules:
 
 **Failure mode.** If tiktoken initialization fails (rare; sandboxed environments without disk write access for the BPE cache), log a warning at startup and omit `tokens_est` from `_meta` for that session. Other `_meta` fields continue to populate.
 
-### #14 — Damerau-Levenshtein 1 typo fallback
+### #14 — Configurable typo fallback + suggestion surfacing
 
-**Touchpoint:** [`openzim_mcp/zim/search.py:1067-1238`](../../../openzim_mcp/zim/search.py) (`find_entry_by_title`).
+**Touchpoint:** [`openzim_mcp/zim/search.py:1105-1335`](../../../openzim_mcp/zim/search.py) (`_typo_variants`, `_find_entry_typo_fallback`, `find_entry_by_title_data`).
 
-**Algorithm.**
-1. Existing path runs: 5-variant case ladder, then `SuggestionSearcher`. If any result has `score >= 0.7`, return as today.
-2. New fallback engages only when (a) no result clears 0.7 AND (b) `len(query) >= FUZZY_TITLE_MIN_QUERY_LEN` (default 4).
-3. Generate D-L-1 variants of `query` over alphabet `[a-z0-9 \-]`: insertions, deletions, substitutions, adjacent transpositions. Bounded to ~7 × len(query), deduped, lowercased.
-4. Re-run `SuggestionSearcher` for each variant, collect all results.
-5. Apply score penalty: `final_score = suggestion_score * FUZZY_TITLE_SCORE_PENALTY` (default 0.85). Ensures exact matches always rank above fuzzy.
-6. Return the top result (or top N up to `limit`).
+**Existing implementation.** The codebase already has a typo-fallback path: [`_typo_variants`](../../../openzim_mcp/zim/search.py#L1105) generates adjacent-transpositions and single-character deletions (intentionally narrower than full Damerau-Levenshtein 1 — the existing comment at line 1116 explains insertions/substitutions explode the search space and produce too many false matches against direct path lookup). [`_find_entry_typo_fallback`](../../../openzim_mcp/zim/search.py#L1151) runs each variant through the case-variant fast path, returning the first hit with a hardcoded score of 0.7. Triggered only when both fast path and `SuggestionSearcher` come up empty.
 
-**Cost bound.** ~7 × len(query) variants × 1 ms per `SuggestionSearcher` call → ≤ 30 ms cold path for typical 5–10 char queries. Cached via existing path-mapping cache for repeat misses.
+**Behavior changes (Phase A).**
+
+1. Replace the hardcoded `0.7` score with `config.search.fuzzy_title_score_penalty` (default `0.85`). Score-as-multiplier: `final_score = 1.0 * penalty` for typo-corrected hits. Ensures exact matches at score 1.0 always outrank fuzzy hits, matching the v1 ordering invariant.
+2. Replace the hardcoded `len(title) < 4` length gate (line 1163) with `config.search.fuzzy_title_min_query_len` (default `4`).
+3. Change the trigger condition: today's path runs typo fallback only when `aggregate_results` is empty; new condition runs it whenever no existing result has `score >= 0.7`. This catches the case where SuggestionSearcher returned a poor match but didn't return zero matches.
+4. Surface fuzzy candidates into `_meta.suggestions[]` even when a fuzzy hit is returned (typed `alt_spelling`, value = the variant text that matched). Capped at `STRUCTURED_SUGGESTIONS_LIMIT` (default 5).
+5. The variant generator (`_typo_variants`) is unchanged in Phase A — its current pruning is the right call against the case-variant fast path. Broadening to full D-L-1 is deferred to Phase D's planner work, where SuggestionSearcher-rank-based filtering can absorb the broader variant set safely.
+
+**Cost bound.** Unchanged from current implementation (≤ 30 ms cold path). The added `_meta.suggestions[]` surfacing is O(n) over the variant list and adds < 1 ms.
 
 **Edge cases.**
-- Query length < 4 → skip fallback (variants would over-match).
-- Query already produced a high-confidence match → skip fallback (don't burn cost on the fast path).
-- Variant generates an exact title match → still penalized by 0.85 multiplier; the user sees `score: 0.85` instead of `1.0` so they know it was a fuzzy hit.
+- Query length < `fuzzy_title_min_query_len` → no fuzzy fallback, no suggestion surfacing.
+- Real high-score result (≥ 0.7) returned → fuzzy fallback skipped, but the suggestion-search-derived alt-spellings can still appear in `_meta.suggestions[]` if any low-rank suggestion candidates were generated.
+- Variant matches an exact filed title → score is `1.0 × penalty = 0.85`, surfaced as `match_type: "typo_corrected"` (existing field, preserved).
 
 ---
 
@@ -259,16 +268,17 @@ All env-var names follow the existing `OPENZIM_MCP_<group>__<name>` pattern.
 
 ### Unit tests
 
-New test files (matching existing test layout):
-- `tests/unit/test_meta.py` — `tokens_est`, `build_meta`, `format_footer`, edge cases (empty, very long, unicode).
-- `tests/unit/test_content_processor_infobox.py` — `extract_infobox` against fixture HTML for Wikipedia, Wikiquote, Wikivoyage.
-- `tests/unit/test_content_processor_tables.py` — `replace_oversized_tables` threshold behavior, multi-table ordering, attr preservation.
-- `tests/unit/test_search_fuzzy.py` — `_fuzzy_title_candidates` correctness, dedup, alphabet coverage; integration test for `find_entry_by_title("Photosythesis")` against fixture archive.
+New test files (flat `tests/` layout matches existing convention):
+- `tests/test_meta.py` — `tokens_est`, `build_meta`, `format_footer`, edge cases (empty, very long, unicode).
+- `tests/test_content_processor_infobox.py` — `extract_infobox` against fixture HTML for Wikipedia-shaped, Wikiquote-shaped, and infobox-free pages.
+- `tests/test_content_processor_tables.py` — `replace_oversized_tables` threshold behavior, multi-table ordering, attr preservation.
+- `tests/test_create_snippet_query_aware.py` — query-matching, paragraph selection, highlight cap, fallback to lead paragraphs when no match.
 
 Updated existing tests:
-- All `test_search_*.py` files: add assertions for `_meta` shape on returns.
-- `test_content_extraction.py`: add assertions for `_meta` on entry returns.
+- `test_find_entry_by_title.py` and `test_find_entry_by_title_quality.py`: add assertions for new score (0.85, was 0.7), configurable threshold, and `_meta.suggestions[]` surfacing.
+- `test_search_tools.py`, `test_search_all.py`: add assertions for `_meta` shape on dict returns.
 - `test_simple_tools.py`: add assertions for footer format and content.
+- `test_content_processor.py`: add assertions for `extract_infobox` integration into `process_html` pipeline.
 
 ### Integration tests
 
