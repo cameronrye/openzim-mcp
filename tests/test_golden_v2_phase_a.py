@@ -22,19 +22,28 @@ REGENERATE = os.environ.get("REGENERATE_GOLDEN", "").lower() in ("1", "true", "y
 
 
 def _assert_golden(name: str, body: str) -> None:
-    """Assert ``body`` matches the saved golden, or regenerate when REGENERATE=1."""
+    """Assert ``body`` matches the saved golden, or regenerate when REGENERATE=1.
+
+    Both sides are normalized to ``\\n`` line endings so the test passes on
+    Windows checkouts where ``core.autocrlf=true`` rewrote the golden files.
+    """
     path = GOLDEN_DIR / name
     if REGENERATE:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body)
+        # Write with explicit LF newlines so regenerating on any platform
+        # produces the same on-disk bytes.
+        path.write_text(body, newline="\n")
         return
     if not path.exists():
         pytest.skip(
             f"golden file {name} not found; "
             f"run with REGENERATE_GOLDEN=1 to create it."
         )
-    expected = path.read_text()
-    assert body == expected, (
+    # Read in binary mode to bypass platform-specific newline translation,
+    # then normalize CRLF→LF before comparing.
+    expected = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    body_normalized = body.replace("\r\n", "\n")
+    assert body_normalized == expected, (
         f"golden mismatch for {name}; "
         f"if intentional, regenerate with: "
         f"REGENERATE_GOLDEN=1 uv run pytest tests/test_golden_v2_phase_a.py"

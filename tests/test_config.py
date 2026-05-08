@@ -409,6 +409,6 @@ def test_content_config_table_fields():
 
 def test_meta_env_override(monkeypatch):
     monkeypatch.setenv("OPENZIM_MCP_META__FOOTER_ENABLED", "false")
-    monkeypatch.setenv("OPENZIM_MCP_ALLOWED_DIRECTORIES", f'["{TMP_DIR}"]')
+    monkeypatch.setenv("OPENZIM_MCP_ALLOWED_DIRECTORIES", json.dumps([TMP_DIR]))
     cfg = OpenZimMcpConfig()
     assert cfg.meta.footer_enabled is False
