@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 from . import compact_renderers
 from .exceptions import RegexTimeoutError
 from .intent_parser import IntentParser, safe_regex_sub
+from .meta import build_meta, format_footer
 from .security import sanitize_context_for_error
 from .zim_operations import ZimOperations
 
@@ -274,6 +275,14 @@ class SimpleToolsHandler:
             # depend on the legacy raw-text output shape; we deliberately
             # don't wrap there. Callers that want injection defense
             # should use ``compact=True``.
+            if options.get("compact", False):
+                meta = build_meta(rendered=result)
+                footer = format_footer(
+                    meta,
+                    footer_enabled=self.zim_operations.config.meta.footer_enabled,
+                )
+                if footer:
+                    result = result + "\n\n" + footer
             return result
 
         except Exception as e:
