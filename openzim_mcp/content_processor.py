@@ -49,6 +49,45 @@ def _slugify_heading(text: str) -> str:
     return text.strip("-")
 
 
+def _fold(text: str) -> str:
+    """Lowercase + strip diacritics."""
+    nf = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nf if not unicodedata.combining(c)).lower()
+
+
+def _split_query_terms(query: str) -> list:
+    """Split a query string into individual terms; drop punctuation."""
+    return [t for t in re.split(r"\W+", _fold(query)) if t]
+
+
+def _word_in(folded_paragraph: str, term: str) -> bool:
+    """Whole-word match of `term` in already-folded paragraph text."""
+    return bool(re.search(rf"\b{re.escape(term)}\b", folded_paragraph))
+
+
+def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
+    """Wrap the first `max_hits` occurrences of any query term in **bold**.
+
+    Case-insensitive, preserves original casing of the matched substring.
+    """
+    terms = [t for t in _split_query_terms(query) if len(t) >= 3]
+    if not terms:
+        return text
+    pattern = re.compile(
+        r"\b(" + "|".join(re.escape(t) for t in terms) + r")\b",
+        flags=re.IGNORECASE,
+    )
+    hits = [0]
+
+    def repl(m):
+        if hits[0] >= max_hits:
+            return m.group(0)
+        hits[0] += 1
+        return f"**{m.group(0)}**"
+
+    return pattern.sub(repl, text)
+
+
 def resolve_heading_id(heading: Tag) -> Tuple[str, str]:
     """Return (id, source) for a heading, falling back to anchors and slugs.
 
@@ -429,32 +468,57 @@ class ContentProcessor:
             soup = BeautifulSoup(html_content, HTML_PARSER)
             return str(soup.get_text().strip())
 
-    def create_snippet(self, content: str, max_paragraphs: int = 2) -> str:
-        """
-        Create a snippet from content.
+    def create_snippet(
+        self,
+        content: str,
+        *,
+        query: Optional[str] = None,
+        max_paragraphs: int = 2,
+    ) -> str:
+        """Create a snippet from content, optionally query-aware.
 
-        Args:
-            content: Full content text
-            max_paragraphs: Maximum number of paragraphs to include
+        When `query` is supplied, locate the first paragraph that contains a
+        whole-word match for any term in the query (case-insensitive,
+        diacritic-folded) and start the snippet there. Otherwise, take the
+        leading paragraphs (legacy behavior).
 
-        Returns:
-            Content snippet
+        Up to 5 occurrences of any matched term inside the returned slice are
+        wrapped in `**bold**` for visibility.
         """
         if not content:
             return ""
 
-        # Split into paragraphs and take first few
         paragraphs = content.split("\n\n")
-        if len(paragraphs) > max_paragraphs:
-            snippet_text = " ".join(paragraphs[:max_paragraphs])
-        else:
-            snippet_text = content
+        start_idx = 0
+
+        if query:
+            terms = [t for t in _split_query_terms(query) if len(t) >= 3]
+            if terms:
+                folded_paragraphs = [_fold(p) for p in paragraphs]
+                for i, p in enumerate(folded_paragraphs):
+                    if any(_word_in(p, t) for t in terms):
+                        start_idx = i
+                        break
+
+        selected = paragraphs[start_idx : start_idx + max_paragraphs]
+        snippet_text = " ".join(selected) if len(selected) > 1 else (
+            selected[0] if selected else ""
+        )
 
         # Truncate if too long. Reserve 3 chars for the trailing "..." so the
         # final string respects snippet_length rather than overshooting it.
         if len(snippet_text) > self.snippet_length:
             cap = max(self.snippet_length - 3, 0)
             snippet_text = snippet_text[:cap].rstrip() + "..."
+
+        if query:
+            snippet_text = _highlight_terms(snippet_text, query, max_hits=5)
+            # Re-check length after bold markers are inserted: they may push the
+            # string over snippet_length. Hard-truncate if so, preserving the
+            # trailing "..." sentinel so callers see a consistent format.
+            if len(snippet_text) > self.snippet_length:
+                cap = max(self.snippet_length - 3, 0)
+                snippet_text = snippet_text[:cap].rstrip() + "..."
 
         return snippet_text
 

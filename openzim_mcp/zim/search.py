@@ -143,7 +143,9 @@ class _SearchMixin:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
         # Resolve via the content mixin; declared here for type checking.
-        def _get_entry_snippet(self, entry: Any) -> str:
+        def _get_entry_snippet(
+            self, entry: Any, query: Optional[str] = None
+        ) -> str:
             """Resolve via ``_ContentMixin`` on the concrete coordinator."""
 
         # Resolve via the namespace mixin; declared here for type checking.
@@ -297,7 +299,7 @@ class _SearchMixin:
                 title = entry.title or "Untitled"
 
                 # Get content snippet
-                snippet = self._get_entry_snippet(entry)
+                snippet = self._get_entry_snippet(entry, query=query)
 
                 results.append({"path": entry_id, "title": title, "snippet": snippet})
             except Exception as e:
@@ -543,7 +545,7 @@ class _SearchMixin:
                 f"{filter_text}, but offset {offset} exceeds total results."
             ), scan.filtered_count
 
-        results = self._build_filtered_results(page, content_type, offset)
+        results = self._build_filtered_results(page, content_type, offset, query=query)
         result_text = _format_filtered_response(
             query, filter_text, results, scan, total_results, offset, limit
         )
@@ -709,13 +711,14 @@ class _SearchMixin:
         page: List[Tuple[str, Any, str, str]],
         content_type: Optional[str],
         offset: int,
+        query: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Format each materialised entry into the response result dict."""
         results: List[Dict[str, Any]] = []
         for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
             try:
                 title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(entry)
+                snippet = self._get_entry_snippet(entry, query=query)
                 if not content_type:
                     try:
                         content_mime = entry.get_item().mimetype or ""

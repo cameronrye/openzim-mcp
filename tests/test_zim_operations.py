@@ -169,7 +169,9 @@ class TestZimOperations:
 
             assert "Found 1 matches" in result
             assert "Test Article" in result
-            assert "Test content" in result
+            # "Test" may be bold-highlighted since it's a query term; check
+            # that the content word appears somewhere in the snippet.
+            assert "content" in result
 
     def test_get_zim_entry_invalid_path(self, zim_operations: ZimOperations):
         """Test get entry with invalid file path."""

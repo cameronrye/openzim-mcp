@@ -57,15 +57,15 @@ class _ContentMixin:
         ) -> Tuple[Any, str]:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
-    def _get_entry_snippet(self, entry: Any) -> str:
-        """Get content snippet for search result."""
+    def _get_entry_snippet(self, entry: Any, query: Optional[str] = None) -> str:
+        """Get content snippet for search result, optionally query-aware."""
         try:
             item = entry.get_item()
             if item.mimetype.startswith("text/"):
                 content = self.content_processor.process_mime_content(
                     bytes(item.content), item.mimetype
                 )
-                return self.content_processor.create_snippet(content)
+                return self.content_processor.create_snippet(content, query=query)
             else:
                 return f"(Unsupported content type: {item.mimetype})"
         except Exception as e:
