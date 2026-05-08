@@ -479,8 +479,15 @@ class SimpleToolsHandler:
     # that's 15k chars of snippet alone — a small LLM only needs
     # enough preview to rank, not the full lead. 250 chars is one
     # short paragraph and enough to evaluate relevance.
+    # The reluctant quantifier ``.+?`` matches at least one char so
+    # Sonar S6019 (reluctant-quantifier-with-zero-matches) can't fire.
+    # The lookahead's ``\Z`` alternative covers the end-of-input case
+    # where neither delimiter is present (rare in production — the
+    # rendered search response always includes a ``\n---\n`` footer —
+    # but the explicit ``\Z`` keeps the regex correct on malformed or
+    # synthetic input).
     _SEARCH_SNIPPETS_RE = re.compile(
-        r"(Snippet: )(.*?)(?=\n\n## |\n---\n|\Z)",
+        r"(Snippet: )(.+?)(?=\n\n## |\n---\n|\Z)",
         re.DOTALL,
     )
 
@@ -588,16 +595,16 @@ class SimpleToolsHandler:
     # the start of every article; the real article H2 sections come
     # after the article H1, which itself follows the wrapper.
     #
-    # ``[ \t]+`` and ``\S`` are disjoint character classes — the
-    # leading whitespace and the heading-text capture can't both match
-    # the same character, so the engine has no ambiguity to backtrack
-    # over (Sonar S5852 / polynomial backtracking). Original pattern
-    # used ``\s+`` and ``.+`` which both accept space chars on lines
-    # like ``##  Content``; the engine could split that boundary
-    # multiple ways before the negative lookahead resolved.
-    # ``[ \t]*$`` similarly partitions trailing whitespace away from
-    # the captured group so the heading text is clean.
-    _ARTICLE_H2_RE = re.compile(r"^##[ \t]+(?!Content\b)(\S.*?)[ \t]*$", re.MULTILINE)
+    # The character classes ``[ \t]+`` and ``[^\n]+`` are non-empty
+    # but only ``[^\n]+`` greedily consumes the rest of the line; ``$``
+    # under MULTILINE then anchors at end-of-line, so the engine
+    # commits to the longest match in one pass with no backtracking.
+    # Earlier shapes — ``\s+ + .+`` (both accept spaces) and
+    # ``.*? + [ \t]*$`` (lazy + greedy on overlapping char sets) —
+    # were flagged by Sonar S5852 for polynomial worst-case behaviour.
+    # The captured group may include trailing whitespace; callers
+    # already ``.strip()`` it at the use site.
+    _ARTICLE_H2_RE = re.compile(r"^##[ \t]+(?!Content\b)([^\n]+)$", re.MULTILINE)
 
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:
         """Truncate ``body`` at the first article H2 (lead-section cut)
