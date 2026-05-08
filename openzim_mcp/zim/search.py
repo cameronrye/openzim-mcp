@@ -228,7 +228,8 @@ class _SearchMixin:
             if total_results > 0:
                 self.cache.set(cache_key, payload)
             logger.debug(f"Search completed: query='{query}', results found")
-            return attach_meta(payload)
+            reason = "0_hits" if total_results == 0 else None
+            return attach_meta(payload, reason=reason)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -1337,6 +1338,22 @@ class _SearchMixin:
         # otherwise preserve per-file rank order.
         aggregate_results.sort(key=lambda r: -r["score"])
 
+        # Build _meta.suggestions[] from typo variants when the fuzzy path
+        # is eligible (fast path missed and query is long enough). These are
+        # candidate spellings the caller can surface as "did you mean?" hints.
+        suggestions: List[Dict[str, str]] = []
+        limit_n = self.config.search.structured_suggestions_limit
+        if (
+            not fast_path_hit
+            and len(title) >= self.config.search.fuzzy_title_min_query_len
+        ):
+            for variant in self._typo_variants(title):
+                suggestions.append({"type": "alt_spelling", "value": variant})
+                if len(suggestions) >= limit_n:
+                    break
+
+        reason = None if aggregate_results else "0_hits"
+
         return attach_meta(
             {
                 "query": title,
@@ -1344,7 +1361,9 @@ class _SearchMixin:
                 "fast_path_hit": fast_path_hit,
                 "fuzzy_path_hit": fuzzy_path_hit,
                 "files_searched": len(files),
-            }
+            },
+            suggestions=suggestions if suggestions else None,
+            reason=reason,
         )
 
     def find_entry_by_title(

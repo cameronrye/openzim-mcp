@@ -504,3 +504,151 @@ class TestTypoTolerantFallback:
         assert all(
             r.get("match_type") != "typo_corrected" for r in result["results"]
         )
+
+
+class TestMetaSuggestionsAndReason:
+    """Phase A items #4 + #14: _meta.suggestions[] and _meta.reason codes."""
+
+    @pytest.fixture
+    def server(self, test_config):
+        return OpenZimMcpServer(test_config)
+
+    def _mock_empty_archive(self, server, monkeypatch):
+        """Set up mocks so fast path + suggestions both miss, typo fallback runs."""
+        mock_archive = MagicMock()
+        mock_archive.has_entry_by_path.return_value = False
+        mock_suggest = MagicMock()
+        mock_suggest.getEstimatedMatches.return_value = 0
+        mock_suggest.getResults.return_value = []
+        mock_searcher = MagicMock()
+        mock_searcher.suggest.return_value = mock_suggest
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.SuggestionSearcher",
+            lambda archive: mock_searcher,
+        )
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+    def test_fuzzy_candidates_appear_in_meta_suggestions(
+        self, server, monkeypatch
+    ):
+        """When fuzzy fallback eligibility is met (no fast path, query long
+        enough), _meta.suggestions[] contains alt_spelling entries derived
+        from the typo variant generator.
+        """
+        self._mock_empty_archive(server, monkeypatch)
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Einstien", cross_file=False, limit=10
+        )
+        # "Einstien" is 8 chars — above the default fuzzy_title_min_query_len (4)
+        suggestions = result.get("_meta", {}).get("suggestions", [])
+        spelling_alts = [s for s in suggestions if s.get("type") == "alt_spelling"]
+        assert spelling_alts, "expected typo variants as alt_spelling suggestions"
+        # Each suggestion must have both required keys
+        for s in spelling_alts:
+            assert "type" in s
+            assert "value" in s
+
+    def test_suggestions_capped_at_structured_suggestions_limit(
+        self, server, monkeypatch
+    ):
+        """_meta.suggestions[] must not exceed structured_suggestions_limit."""
+        self._mock_empty_archive(server, monkeypatch)
+
+        # Use a long title that generates many transposition variants
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Photosynthesis", cross_file=False, limit=10
+        )
+        suggestions = result.get("_meta", {}).get("suggestions", [])
+        limit_n = server.zim_operations.config.search.structured_suggestions_limit
+        assert len(suggestions) <= limit_n
+
+    def test_no_suggestions_when_fast_path_hits(self, server, monkeypatch):
+        """When the fast path succeeds, suggestions should be absent (None /
+        not set) — no fuzzy lookup was needed.
+        """
+        mock_archive = MagicMock()
+        mock_archive.has_entry_by_path.return_value = True
+        mock_entry = MagicMock()
+        mock_entry.path = "C/Einstein"
+        mock_entry.title = "Einstein"
+        mock_archive.get_entry_by_path.return_value = mock_entry
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Einstein", cross_file=False, limit=10
+        )
+        assert result["results"], "expected a hit on the fast path"
+        # fast_path_hit means no fuzzy → no suggestions
+        assert result.get("_meta", {}).get("suggestions") is None
+
+    def test_find_entry_meta_reason_on_zero_results(self, server, monkeypatch):
+        """When no results found, _meta.reason should be '0_hits'."""
+        self._mock_empty_archive(server, monkeypatch)
+
+        # Use a query short enough to skip typo fallback but still long enough
+        # for suggestion search — still returns empty.
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "zzzimpossiblequery", cross_file=False, limit=10
+        )
+        assert result["results"] == []
+        assert result["_meta"].get("reason") == "0_hits"
+
+    def test_find_entry_meta_reason_absent_on_hits(self, server, monkeypatch):
+        """When results found, _meta.reason should be absent (None → omitted)."""
+        mock_archive = MagicMock()
+        mock_archive.has_entry_by_path.return_value = True
+        mock_entry = MagicMock()
+        mock_entry.path = "C/Einstein"
+        mock_entry.title = "Einstein"
+        mock_archive.get_entry_by_path.return_value = mock_entry
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Einstein", cross_file=False, limit=10
+        )
+        assert result["results"], "expected a hit"
+        assert "reason" not in result["_meta"]
+
+    def test_no_suggestions_when_query_too_short(self, server, monkeypatch):
+        """Queries below fuzzy_title_min_query_len produce no alt_spelling
+        suggestions even when all paths miss.
+        """
+        self._mock_empty_archive(server, monkeypatch)
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Pi", cross_file=False, limit=10
+        )
+        suggestions = result.get("_meta", {}).get("suggestions", [])
+        spelling_alts = [s for s in suggestions if s.get("type") == "alt_spelling"]
+        assert spelling_alts == [], "short query should not produce alt_spelling suggestions"

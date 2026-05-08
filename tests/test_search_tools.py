@@ -673,3 +673,70 @@ class TestSearchMethodsMeta:
         result = zim_ops.search_all_data("climate")
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
+
+    # --- search_zim_file_data _meta.reason ---
+
+    def test_empty_search_meta_reason_is_0_hits(self, zim_ops, temp_dir, monkeypatch):
+        """Search returning zero results should set _meta.reason='0_hits'."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        query_obj = MagicMock()
+        search_obj = MagicMock()
+        search_obj.getEstimatedMatches.return_value = 0
+        mock_searcher = MagicMock()
+        mock_searcher.search.return_value = search_obj
+        mock_query = MagicMock(return_value=query_obj)
+        query_obj.set_query.return_value = query_obj
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            with patch(
+                "openzim_mcp.zim.search._zim_ops_mod.Query", return_value=query_obj
+            ):
+                with patch(
+                    "openzim_mcp.zim.search._zim_ops_mod.Searcher",
+                    return_value=mock_searcher,
+                ):
+                    mock_archive.return_value.__enter__.return_value = MagicMock()
+                    result = zim_ops.search_zim_file_data(
+                        str(zim_file), "zzzimpossiblequery"
+                    )
+
+        assert result["total_results"] == 0
+        assert result["_meta"].get("reason") == "0_hits"
+
+    def test_non_empty_search_meta_no_reason(self, zim_ops, temp_dir, monkeypatch):
+        """Search returning hits should omit _meta.reason."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        query_obj = MagicMock()
+        query_obj.set_query.return_value = query_obj
+
+        mock_entry = MagicMock()
+        mock_entry.title = "Climate"
+
+        mock_archive_obj = MagicMock()
+        mock_archive_obj.get_entry_by_path.return_value = mock_entry
+
+        search_obj = MagicMock()
+        search_obj.getEstimatedMatches.return_value = 1
+        search_obj.getResults.return_value = ["C/Climate"]
+        mock_searcher = MagicMock()
+        mock_searcher.search.return_value = search_obj
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            with patch(
+                "openzim_mcp.zim.search._zim_ops_mod.Query", return_value=query_obj
+            ):
+                with patch(
+                    "openzim_mcp.zim.search._zim_ops_mod.Searcher",
+                    return_value=mock_searcher,
+                ):
+                    mock_archive.return_value.__enter__.return_value = mock_archive_obj
+                    result = zim_ops.search_zim_file_data(str(zim_file), "climate")
+
+        assert result["total_results"] > 0
+        assert "reason" not in result["_meta"]
