@@ -1508,8 +1508,11 @@ class TestSimpleModeWrapperDefaults:
     def test_zim_query_caps_max_content_length_when_unspecified(
         self, test_config: OpenZimMcpConfig
     ):
-        """Calling ``zim_query`` without ``max_content_length`` passes 8000 to
+        """Calling ``zim_query`` without ``max_content_length`` passes 4000 to
         the handler — not None, and not the 100 000-char ContentConfig default.
+
+        4000 / 3 are the v1.2.0-tightened simple-mode defaults; an 8B Q4 with
+        a typical agentic prompt window can't afford the original 8000 / 5.
         """
         simple_config = test_config.model_copy(update={"tool_mode": "simple"})
         server = OpenZimMcpServer(simple_config)
@@ -1525,8 +1528,8 @@ class TestSimpleModeWrapperDefaults:
         tool_fn = server.mcp._tool_manager._tools["zim_query"].fn
         asyncio.run(tool_fn(query="search for evolution"))
 
-        assert captured["options"]["max_content_length"] == 8000
-        assert captured["options"]["limit"] == 5
+        assert captured["options"]["max_content_length"] == 4000
+        assert captured["options"]["limit"] == 3
         assert "offset" not in captured["options"]  # default 0 is suppressed
 
     def test_zim_query_caller_overrides_take_precedence(
@@ -1560,3 +1563,46 @@ class TestSimpleModeWrapperDefaults:
         assert captured["options"]["max_content_length"] == 50000
         assert captured["options"]["limit"] == 20
         assert captured["options"]["offset"] == 10
+
+    def test_zim_query_compact_default_true(self, test_config: OpenZimMcpConfig):
+        """The simple-mode wrapper defaults ``compact=True``, applying the
+        v1.2.0 small-LLM optimizations (link-soup stripping, structure-
+        preview drop, lead-section-only fetch, etc.). The flag reaches the
+        handler via ``options`` so each intent can opt in to compact
+        rendering.
+        """
+        simple_config = test_config.model_copy(update={"tool_mode": "simple"})
+        server = OpenZimMcpServer(simple_config)
+        captured: dict = {}
+
+        def fake_handle_zim_query(query, zim_file_path, options):
+            captured["options"] = options
+            return "ok"
+
+        assert server.simple_tools_handler is not None
+        server.simple_tools_handler.handle_zim_query = fake_handle_zim_query
+
+        tool_fn = server.mcp._tool_manager._tools["zim_query"].fn
+        asyncio.run(tool_fn(query="search for evolution"))
+        assert captured["options"]["compact"] is True
+
+    def test_zim_query_compact_can_be_disabled(self, test_config: OpenZimMcpConfig):
+        """A larger model that wants the verbose advanced-mode-style
+        response from a single call can pass ``compact=False`` to opt out
+        of every per-call trimming behavior in one shot. The flag is
+        forwarded to the handler unchanged.
+        """
+        simple_config = test_config.model_copy(update={"tool_mode": "simple"})
+        server = OpenZimMcpServer(simple_config)
+        captured: dict = {}
+
+        def fake_handle_zim_query(query, zim_file_path, options):
+            captured["options"] = options
+            return "ok"
+
+        assert server.simple_tools_handler is not None
+        server.simple_tools_handler.handle_zim_query = fake_handle_zim_query
+
+        tool_fn = server.mcp._tool_manager._tools["zim_query"].fn
+        asyncio.run(tool_fn(query="tell me about Photosynthesis", compact=False))
+        assert captured["options"]["compact"] is False

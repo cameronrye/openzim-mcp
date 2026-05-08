@@ -221,6 +221,15 @@ def _build_health_report(server: "OpenZimMcpServer") -> Dict[str, Any]:
             "warnings": warnings,
         }
 
+        # Surface simple-mode heuristic-branch counters so the operator
+        # can see, in aggregate, which fallback paths are firing — which
+        # makes the bare-topic gate / meta-detection / hallucinated-path
+        # thresholds tunable from real traffic instead of guesses.
+        # Counters are process-local; restarts reset them.
+        simple_handler = getattr(server, "simple_tools_handler", None)
+        if simple_handler is not None and hasattr(simple_handler, "get_telemetry"):
+            health_info["simple_tools_telemetry"] = simple_handler.get_telemetry()
+
         accessible_dirs = 0
         total_zim_files = 0
         for directory in server.config.allowed_directories:
