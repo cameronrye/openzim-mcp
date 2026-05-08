@@ -13,7 +13,7 @@ import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from . import compact_renderers
 from .exceptions import RegexTimeoutError
@@ -1104,7 +1104,7 @@ class SimpleToolsHandler:
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ):
+    ) -> Union[str, "_HandlerResult"]:
         """Route a search-intent query to the appropriate backend call.
 
         In ``compact=True`` mode, uses the structured ``search_zim_file_data``

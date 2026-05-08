@@ -403,7 +403,9 @@ class TestSearchZimFileDataMeta:
     ):
         from openzim_mcp.zim_operations import ZimOperations
 
-        return ZimOperations(test_config, path_validator, openzim_mcp_cache, content_processor)
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
 
     def _zim_file(self, temp_dir):
         """Create a placeholder .zim file the path validator will accept."""
@@ -424,19 +426,21 @@ class TestSearchZimFileDataMeta:
             "total_results": 3,
             "offset": 0,
             "limit": 10,
-            "results": [
-                {"path": "A/Foo", "title": "Foo", "snippet": "snippet text"}
-            ],
+            "results": [{"path": "A/Foo", "title": "Foo", "snippet": "snippet text"}],
             "pagination": {"has_more": False},
         }
 
-        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (fresh_payload, 3))
+        monkeypatch.setattr(
+            zim_ops, "_perform_search", lambda *a, **kw: (fresh_payload, 3)
+        )
 
         from unittest.mock import MagicMock, patch
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.return_value = MagicMock()
-            result = zim_ops.search_zim_file_data(str(zim_file), "climate", limit=10, offset=0)
+            result = zim_ops.search_zim_file_data(
+                str(zim_file), "climate", limit=10, offset=0
+            )
 
         assert "_meta" in result, "fresh path must attach _meta"
         assert result["_meta"]["tokens_est"] > 0
@@ -458,13 +462,17 @@ class TestSearchZimFileDataMeta:
             "pagination": {"has_more": False},
         }
 
-        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+        monkeypatch.setattr(
+            zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
+        )
 
         from unittest.mock import MagicMock, patch
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.return_value = MagicMock()
-            result = zim_ops.search_zim_file_data(str(zim_file), "xyzzy_no_match", limit=10, offset=0)
+            result = zim_ops.search_zim_file_data(
+                str(zim_file), "xyzzy_no_match", limit=10, offset=0
+            )
 
         assert "_meta" in result, "zero-results path must attach _meta"
 
@@ -497,9 +505,7 @@ class TestSearchZimFileDataMeta:
 
         assert "_meta" in result, "offset-exceeds-total path must attach _meta"
 
-    def test_search_zim_file_data_meta_on_cached_return(
-        self, zim_ops, temp_dir
-    ):
+    def test_search_zim_file_data_meta_on_cached_return(self, zim_ops, temp_dir):
         """Cached return path backfills _meta if missing, and always returns _meta."""
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
@@ -517,7 +523,9 @@ class TestSearchZimFileDataMeta:
         }
         zim_ops.cache.set(cache_key, old_payload)
 
-        result = zim_ops.search_zim_file_data(str(zim_file), "climate", limit=10, offset=0)
+        result = zim_ops.search_zim_file_data(
+            str(zim_file), "climate", limit=10, offset=0
+        )
 
         assert "_meta" in result, "cached return must backfill _meta"
         assert result["_meta"]["tokens_est"] > 0
@@ -627,7 +635,11 @@ class TestSearchMethodsMeta:
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
         cache_key = f"suggestions_data:{validated}:climate:10"
-        old = {"partial_query": "climate", "suggestions": [{"title": "Climate"}], "count": 1}
+        old = {
+            "partial_query": "climate",
+            "suggestions": [{"title": "Climate"}],
+            "count": 1,
+        }
         zim_ops.cache.set(cache_key, old)
 
         result = zim_ops.get_search_suggestions_data(str(zim_file), "climate")
@@ -645,9 +657,7 @@ class TestSearchMethodsMeta:
         # Stub all fallback paths to avoid MagicMock objects leaking into
         # aggregate_results (which would break attach_meta's json.dumps).
         monkeypatch.setattr(zim_ops, "_find_entry_fast_path", lambda *a, **kw: None)
-        monkeypatch.setattr(
-            zim_ops, "_find_entry_typo_fallback", lambda *a, **kw: None
-        )
+        monkeypatch.setattr(zim_ops, "_find_entry_typo_fallback", lambda *a, **kw: None)
 
         suggestion_search = MagicMock()
         suggestion_search.getEstimatedMatches.return_value = 0
@@ -688,7 +698,6 @@ class TestSearchMethodsMeta:
         search_obj.getEstimatedMatches.return_value = 0
         mock_searcher = MagicMock()
         mock_searcher.search.return_value = search_obj
-        mock_query = MagicMock(return_value=query_obj)
         query_obj.set_query.return_value = query_obj
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
@@ -759,7 +768,9 @@ class TestSearchMethodsMeta:
             "results": [],
             "pagination": {"has_more": False},
         }
-        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+        monkeypatch.setattr(
+            zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
+        )
 
         # Mock list_zim_files_data to return two archives
         other_archive_path = str(temp_dir / "wikipedia_en_all.zim")
@@ -774,7 +785,9 @@ class TestSearchMethodsMeta:
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.return_value = MagicMock()
-            result = zim_ops.search_zim_file_data(str(zim_file), "wikipedia", limit=10, offset=0)
+            result = zim_ops.search_zim_file_data(
+                str(zim_file), "wikipedia", limit=10, offset=0
+            )
 
         assert result["total_results"] == 0
         assert "_meta" in result
@@ -804,7 +817,9 @@ class TestSearchMethodsMeta:
             "results": [],
             "pagination": {"has_more": False},
         }
-        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+        monkeypatch.setattr(
+            zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
+        )
 
         # Mock list_zim_files_data to return archives, one matching "biology"
         biology_archive_path = str(temp_dir / "biology_reference.zim")
@@ -850,7 +865,9 @@ class TestSearchMethodsMeta:
             "results": [],
             "pagination": {"has_more": False},
         }
-        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+        monkeypatch.setattr(
+            zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
+        )
 
         # Mock list_zim_files_data with archives that don't match the query
         other_archive_path = str(temp_dir / "wikipedia_en.zim")
@@ -895,7 +912,9 @@ class TestSearchMethodsMeta:
             "results": [],
             "pagination": {"has_more": False},
         }
-        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+        monkeypatch.setattr(
+            zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
+        )
 
         # Mock list_zim_files_data with an archive named "init"
         init_archive_path = str(temp_dir / "init_guide.zim")
@@ -940,15 +959,19 @@ class TestSearchMethodsMeta:
             "results": [],
             "pagination": {"has_more": False},
         }
-        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+        monkeypatch.setattr(
+            zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
+        )
 
         # Create many archives matching the query
         archives = [{"path": str(zim_file), "name": "current"}]
         for i in range(10):
-            archives.append({
-                "path": str(temp_dir / f"wikipedia_en_{i}.zim"),
-                "name": f"wikipedia_{i}",
-            })
+            archives.append(
+                {
+                    "path": str(temp_dir / f"wikipedia_en_{i}.zim"),
+                    "name": f"wikipedia_{i}",
+                }
+            )
 
         monkeypatch.setattr(
             zim_ops,
@@ -958,7 +981,9 @@ class TestSearchMethodsMeta:
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.return_value = MagicMock()
-            result = zim_ops.search_zim_file_data(str(zim_file), "wiki", limit=10, offset=0)
+            result = zim_ops.search_zim_file_data(
+                str(zim_file), "wiki", limit=10, offset=0
+            )
 
         assert result["total_results"] == 0
         assert "_meta" in result
@@ -986,7 +1011,9 @@ class TestSearchMethodsMeta:
             "results": [],
             "pagination": {"has_more": False},
         }
-        monkeypatch.setattr(zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0))
+        monkeypatch.setattr(
+            zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
+        )
 
         # Mock list_zim_files_data with the current archive having a matching name
         # Current archive stem: "test"
@@ -1004,7 +1031,9 @@ class TestSearchMethodsMeta:
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.return_value = MagicMock()
-            result = zim_ops.search_zim_file_data(str(zim_file), "wikipedia", limit=10, offset=0)
+            result = zim_ops.search_zim_file_data(
+                str(zim_file), "wikipedia", limit=10, offset=0
+            )
 
         assert result["total_results"] == 0
         assert "_meta" in result
@@ -1013,4 +1042,6 @@ class TestSearchMethodsMeta:
         ]
         # Should suggest wikipedia_en but NOT test.zim
         assert len(alt_archive_suggestions) > 0
-        assert all(s.get("value") != Path(current_path).stem for s in alt_archive_suggestions)
+        assert all(
+            s.get("value") != Path(current_path).stem for s in alt_archive_suggestions
+        )

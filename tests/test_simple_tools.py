@@ -1289,7 +1289,9 @@ class TestCompactSearchSnippetTruncation:
             "total_results": 1,
             "offset": 0,
             "limit": 5,
-            "results": [{"path": "Biology", "title": "Biology article", "snippet": "x"}],
+            "results": [
+                {"path": "Biology", "title": "Biology article", "snippet": "x"}
+            ],
             "pagination": {"has_more": False},
             "_meta": {"tokens_est": 10, "chars": 100, "truncated": False},
         }
@@ -2967,29 +2969,27 @@ class TestCompactFooter:
         handler = self._make_handler()
         out = handler.handle_zim_query("show main page", options={"compact": True})
         last_line = out.rstrip().splitlines()[-1]
-        assert last_line.startswith("> "), (
-            f"Expected footer starting with '> ', got: {last_line!r}"
-        )
-        assert "tokens" in last_line, (
-            f"Expected 'tokens' in footer, got: {last_line!r}"
-        )
+        assert last_line.startswith(
+            "> "
+        ), f"Expected footer starting with '> ', got: {last_line!r}"
+        assert "tokens" in last_line, f"Expected 'tokens' in footer, got: {last_line!r}"
 
     def test_non_compact_response_omits_footer(self):
         """compact=False omits the footer for back-compat."""
         handler = self._make_handler()
         out = handler.handle_zim_query("show main page", options={"compact": False})
         last_line = out.rstrip().splitlines()[-1]
-        assert not last_line.startswith("> ~"), (
-            f"compact=False response should not have footer, got last line: {last_line!r}"
-        )
+        assert not last_line.startswith(
+            "> ~"
+        ), f"compact=False response should not have footer, got last line: {last_line!r}"
 
     def test_compact_footer_disabled_via_config(self):
         """When footer_enabled=False, no footer even in compact mode."""
         handler = self._make_handler(footer_enabled=False)
         out = handler.handle_zim_query("show main page", options={"compact": True})
-        assert "> ~" not in out, (
-            f"footer_enabled=False should suppress footer, but got: {out!r}"
-        )
+        assert (
+            "> ~" not in out
+        ), f"footer_enabled=False should suppress footer, but got: {out!r}"
 
     def test_compact_footer_reports_truncation_when_capped(self):
         """When the body exceeds compact_budget and gets capped, the footer should report it.
@@ -3013,12 +3013,12 @@ class TestCompactFooter:
         )
         last_line = out.rstrip().splitlines()[-1]
         # Truncated footer should contain both "of" and "chars"
-        assert " of " in last_line, (
-            f"Expected ' of ' in truncated footer, got: {last_line!r}"
-        )
-        assert "chars" in last_line, (
-            f"Expected 'chars' in truncated footer, got: {last_line!r}"
-        )
+        assert (
+            " of " in last_line
+        ), f"Expected ' of ' in truncated footer, got: {last_line!r}"
+        assert (
+            "chars" in last_line
+        ), f"Expected 'chars' in truncated footer, got: {last_line!r}"
 
     def test_compact_empty_search_uses_footer_not_legacy_prose(self):
         """compact=True + zero results → footer-driven recovery; no legacy prose.
@@ -3051,22 +3051,20 @@ class TestCompactFooter:
             },
         }
         handler = SimpleToolsHandler(mock)
-        out = handler.handle_zim_query(
-            'search for "xyzzy"', options={"compact": True}
-        )
+        out = handler.handle_zim_query('search for "xyzzy"', options={"compact": True})
         # Legacy prose must NOT appear.
-        assert "**Try one of these:**" not in out, (
-            "compact+empty should not render legacy prose block"
-        )
+        assert (
+            "**Try one of these:**" not in out
+        ), "compact+empty should not render legacy prose block"
         # Footer line must be present and start with the empty-result marker.
         last_line = out.rstrip().splitlines()[-1]
-        assert last_line.startswith("> No results."), (
-            f"Expected footer starting with '> No results.', got: {last_line!r}"
-        )
+        assert last_line.startswith(
+            "> No results."
+        ), f"Expected footer starting with '> No results.', got: {last_line!r}"
         # Suggestion value from _meta must appear in the footer.
-        assert "xyz" in last_line, (
-            f"Expected suggestion 'xyz' in footer, got: {last_line!r}"
-        )
+        assert (
+            "xyz" in last_line
+        ), f"Expected suggestion 'xyz' in footer, got: {last_line!r}"
 
     def test_non_compact_empty_search_keeps_legacy_prose(self):
         """compact=False + zero results → legacy prose is preserved byte-identical.
@@ -3089,13 +3087,11 @@ class TestCompactFooter:
             "- A shorter or differently-cased query"
         )
         handler = SimpleToolsHandler(mock)
-        out = handler.handle_zim_query(
-            'search for "xyzzy"', options={"compact": False}
-        )
+        out = handler.handle_zim_query('search for "xyzzy"', options={"compact": False})
         # Legacy prose must be present in non-compact mode.
-        assert "**Try one of these:**" in out, (
-            "compact=False should preserve the legacy prose recovery block"
-        )
+        assert (
+            "**Try one of these:**" in out
+        ), "compact=False should preserve the legacy prose recovery block"
         # search_zim_file (string path) must have been called, not the dict variant.
         mock.search_zim_file.assert_called_once()
 
@@ -3134,9 +3130,9 @@ class TestCompactFlagPropagation:
             options={"compact": True},
         )
         _args, kwargs = mock.get_zim_entry.call_args
-        assert kwargs.get("compact") is True, (
-            "compact=True must be forwarded to get_zim_entry"
-        )
+        assert (
+            kwargs.get("compact") is True
+        ), "compact=True must be forwarded to get_zim_entry"
 
     def test_get_article_compact_false_passes_compact(self):
         """_handle_get_article must pass compact=False when not in compact mode."""
@@ -3147,9 +3143,9 @@ class TestCompactFlagPropagation:
             options={"compact": False},
         )
         _args, kwargs = mock.get_zim_entry.call_args
-        assert kwargs.get("compact") is False, (
-            "compact=False must be forwarded to get_zim_entry"
-        )
+        assert (
+            kwargs.get("compact") is False
+        ), "compact=False must be forwarded to get_zim_entry"
 
     def test_tell_me_about_compact_true_passes_compact(self):
         """_handle_tell_me_about must pass compact=True when article is fetched."""
@@ -3180,9 +3176,9 @@ class TestCompactFlagPropagation:
         )
         assert mock.get_zim_entry.called, "get_zim_entry should be called"
         _args, kwargs = mock.get_zim_entry.call_args
-        assert kwargs.get("compact") is True, (
-            "compact=True must be forwarded from tell_me_about to get_zim_entry"
-        )
+        assert (
+            kwargs.get("compact") is True
+        ), "compact=True must be forwarded from tell_me_about to get_zim_entry"
 
     def test_main_page_compact_true_passes_compact(self):
         """_handle_main_page must pass compact=True to get_main_page."""
@@ -3192,9 +3188,7 @@ class TestCompactFlagPropagation:
             zim_file_path="/test/wiki.zim",
             options={"compact": True},
         )
-        mock.get_main_page.assert_called_once_with(
-            "/test/wiki.zim", compact=True
-        )
+        mock.get_main_page.assert_called_once_with("/test/wiki.zim", compact=True)
 
     def test_compact_infobox_end_to_end(self):
         """Simulate the full compact path: simple_tools receives HTML with an

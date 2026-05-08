@@ -417,9 +417,7 @@ class TestTypoTolerantFallback:
         expected_score = server.zim_operations.config.search.fuzzy_title_score_penalty
         assert fuzzy_results[0]["score"] == pytest.approx(expected_score)
 
-    def test_fuzzy_match_score_overridable_via_config(
-        self, test_config, monkeypatch
-    ):
+    def test_fuzzy_match_score_overridable_via_config(self, test_config, monkeypatch):
         """Setting fuzzy_title_score_penalty=0.5 produces score=0.5."""
         # Create a config with custom fuzzy_title_score_penalty
         test_config.search.fuzzy_title_score_penalty = 0.5
@@ -501,9 +499,7 @@ class TestTypoTolerantFallback:
             "/zim/test.zim", "Einst", cross_file=False, limit=10
         )
         # No fuzzy results because query length (5) < fuzzy_title_min_query_len (6)
-        assert all(
-            r.get("match_type") != "typo_corrected" for r in result["results"]
-        )
+        assert all(r.get("match_type") != "typo_corrected" for r in result["results"])
 
 
 class TestMetaSuggestionsAndReason:
@@ -538,9 +534,7 @@ class TestMetaSuggestionsAndReason:
             "/zim/test.zim"
         )
 
-    def test_fuzzy_candidates_appear_in_meta_suggestions(
-        self, server, monkeypatch
-    ):
+    def test_fuzzy_candidates_appear_in_meta_suggestions(self, server, monkeypatch):
         """When fuzzy fallback eligibility is met (no fast path, query long
         enough), _meta.suggestions[] contains alt_spelling entries derived
         from the typo variant generator.
@@ -651,4 +645,6 @@ class TestMetaSuggestionsAndReason:
         )
         suggestions = result.get("_meta", {}).get("suggestions", [])
         spelling_alts = [s for s in suggestions if s.get("type") == "alt_spelling"]
-        assert spelling_alts == [], "short query should not produce alt_spelling suggestions"
+        assert (
+            spelling_alts == []
+        ), "short query should not produce alt_spelling suggestions"

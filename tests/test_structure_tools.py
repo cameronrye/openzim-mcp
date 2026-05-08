@@ -558,9 +558,7 @@ class TestStructureDataMethodsMeta:
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
 
-    def test_get_article_structure_data_cached_backfills_meta(
-        self, zim_ops, temp_dir
-    ):
+    def test_get_article_structure_data_cached_backfills_meta(self, zim_ops, temp_dir):
         """Cached entry without _meta gets backfilled on read."""
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
@@ -578,7 +576,6 @@ class TestStructureDataMethodsMeta:
     ):
         """extract_article_links_data result carries _meta."""
         zim_file = self._zim_file(temp_dir)
-        from openzim_mcp.zim.structure import _StructureMixin
 
         fake_extraction = {
             "title": "Foo",
@@ -612,9 +609,7 @@ class TestStructureDataMethodsMeta:
 
         from unittest.mock import MagicMock, patch
 
-        with patch(
-            "openzim_mcp.zim_operations.zim_archive"
-        ) as mock_archive:
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.return_value = MagicMock()
             result = zim_ops.extract_article_links_data(str(zim_file), "C/Foo")
 
@@ -639,9 +634,7 @@ class TestStructureDataMethodsMeta:
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
 
-    def test_get_table_of_contents_data_cached_backfills_meta(
-        self, zim_ops, temp_dir
-    ):
+    def test_get_table_of_contents_data_cached_backfills_meta(self, zim_ops, temp_dir):
         """Cached TOC entry without _meta gets backfilled on read."""
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))

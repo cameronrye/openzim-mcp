@@ -536,7 +536,9 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
 
         try:
             with _zim_ops_shim.zim_archive(validated_path) as archive:
-                result, content_ok = self._get_main_page_content(archive, compact=compact)
+                result, content_ok = self._get_main_page_content(
+                    archive, compact=compact
+                )
 
             # Don't cache error sentinels: a transient failure (e.g. MIME
             # processing error) should not be locked in for the TTL.

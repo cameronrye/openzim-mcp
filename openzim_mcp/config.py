@@ -9,7 +9,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .defaults import CACHE, CONTENT, META, RATE_LIMIT, SEARCH, VALID_TOOL_MODES
+from .defaults import CACHE, CONTENT, META, SEARCH, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
 from .rate_limiter import RateLimitConfig
 

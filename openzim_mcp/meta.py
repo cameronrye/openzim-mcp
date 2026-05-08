@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 
 # Lazy-loaded tokenizer; module-level cache means the first request pays
 # the initialisation cost; subsequent requests are millions of tokens/sec.
-_encoder = None
+_encoder: Any = None
 _encoder_init_failed = False
 
 
-def _get_encoder():
+def _get_encoder() -> Any:
     global _encoder, _encoder_init_failed
     if _encoder is not None or _encoder_init_failed:
         return _encoder

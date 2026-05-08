@@ -903,7 +903,12 @@ class _ContentMixin:
         )
 
     def _extract_entry_summary_data(
-        self, archive: Archive, entry_path: str, max_words: int, *, compact: bool = False
+        self,
+        archive: Archive,
+        entry_path: str,
+        max_words: int,
+        *,
+        compact: bool = False,
     ) -> Dict[str, Any]:
         """Extract summary from article content as a dict."""
         try:

@@ -502,13 +502,13 @@ class TestExtractHtmlLinksFiltering:
 def test_html_to_plain_text_compact_extracts_infobox():
     proc = ContentProcessor()
     html = (
-        '<div>'
+        "<div>"
         '<table class="infobox">'
-        '<tr><th>Born</th><td>1879</td></tr>'
-        '<tr><th>Died</th><td>1955</td></tr>'
-        '</table>'
-        '<p>Einstein was a physicist.</p>'
-        '</div>'
+        "<tr><th>Born</th><td>1879</td></tr>"
+        "<tr><th>Died</th><td>1955</td></tr>"
+        "</table>"
+        "<p>Einstein was a physicist.</p>"
+        "</div>"
     )
     out = proc.html_to_plain_text(html, compact=True)
     assert "Born" in out
@@ -521,7 +521,6 @@ def test_html_to_plain_text_compact_extracts_infobox():
 def test_html_to_plain_text_non_compact_preserves_legacy():
     proc = ContentProcessor()
     html = '<table class="infobox"><tr><th>K</th><td>V</td></tr></table><p>Body</p>'
-    out_compact = proc.html_to_plain_text(html, compact=True)
     out_default = proc.html_to_plain_text(html)
     assert "K" in out_default and "V" in out_default
     assert "Body" in out_default

@@ -170,10 +170,14 @@ class TestGetEntriesDataMeta:
     """get_entries_data must attach a _meta envelope on the single return path."""
 
     @pytest.fixture
-    def zim_ops(self, test_config, path_validator, openzim_mcp_cache, content_processor):
+    def zim_ops(
+        self, test_config, path_validator, openzim_mcp_cache, content_processor
+    ):
         from openzim_mcp.zim_operations import ZimOperations
 
-        return ZimOperations(test_config, path_validator, openzim_mcp_cache, content_processor)
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
 
     def _zim_file(self, temp_dir):
         from pathlib import Path

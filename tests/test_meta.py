@@ -1,7 +1,8 @@
 """Tests for the openzim_mcp.meta module."""
 
 import pytest
-from openzim_mcp.meta import tokens_est
+
+from openzim_mcp.meta import attach_meta, build_meta, format_footer, tokens_est
 
 
 def test_tokens_est_basic():
@@ -25,9 +26,6 @@ def test_tokens_est_long_string_scales_linearly():
     long = tokens_est("Hello, this is a sample sentence. " * 100)
     # Linear scaling within ±5%
     assert long == pytest.approx(short * 10, rel=0.05)
-
-
-from openzim_mcp.meta import build_meta
 
 
 def test_build_meta_basic_dict():
@@ -74,9 +72,6 @@ def test_build_meta_pads_token_count_for_envelope():
     meta = build_meta(rendered=rendered)
     raw_tokens = tokens_est(rendered)
     assert meta["tokens_est"] >= raw_tokens
-
-
-from openzim_mcp.meta import format_footer
 
 
 def test_footer_basic():
@@ -129,15 +124,10 @@ def test_footer_caps_visible_suggestions_at_three():
         "chars": 200,
         "truncated": False,
         "reason": "0_hits",
-        "suggestions": [
-            {"type": "alt_spelling", "value": f"alt{i}"} for i in range(7)
-        ],
+        "suggestions": [{"type": "alt_spelling", "value": f"alt{i}"} for i in range(7)],
     }
     footer = format_footer(meta, footer_enabled=True)
     assert footer.count("·") <= 3
-
-
-from openzim_mcp.meta import attach_meta
 
 
 def test_attach_meta_adds_meta_key():

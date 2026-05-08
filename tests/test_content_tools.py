@@ -224,10 +224,14 @@ class TestGetBinaryEntryDataMeta:
     """get_binary_entry_data must attach _meta on every return path."""
 
     @pytest.fixture
-    def zim_ops(self, test_config, path_validator, openzim_mcp_cache, content_processor):
+    def zim_ops(
+        self, test_config, path_validator, openzim_mcp_cache, content_processor
+    ):
         from openzim_mcp.zim_operations import ZimOperations
 
-        return ZimOperations(test_config, path_validator, openzim_mcp_cache, content_processor)
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
 
     def _zim_file(self, temp_dir):
         from pathlib import Path
@@ -236,7 +240,9 @@ class TestGetBinaryEntryDataMeta:
         p.write_bytes(b"")
         return p
 
-    def test_get_binary_entry_data_attaches_meta_fresh(self, zim_ops, temp_dir, monkeypatch):
+    def test_get_binary_entry_data_attaches_meta_fresh(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
         """Fresh path (archive opened) should attach _meta."""
         from unittest.mock import MagicMock, patch
 
@@ -268,21 +274,22 @@ class TestGetBinaryEntryDataMeta:
 
     def test_get_binary_entry_data_attaches_meta_cached(self, zim_ops, temp_dir):
         """Cached metadata path should also attach _meta."""
-        from pathlib import Path
-
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
 
         # Seed the cache with binary metadata so the short-circuit path fires.
         cache_key = f"binary_meta:{validated}:I/test.png"
-        zim_ops.cache.set(cache_key, {
-            "path": "I/test.png",
-            "title": "Test Image",
-            "mime_type": "image/png",
-            "size": 10,
-            "size_human": "10 B",
-        })
+        zim_ops.cache.set(
+            cache_key,
+            {
+                "path": "I/test.png",
+                "title": "Test Image",
+                "mime_type": "image/png",
+                "size": 10,
+                "size_human": "10 B",
+            },
+        )
 
         result = zim_ops.get_binary_entry_data(
             str(zim_file), "I/test.png", include_data=False
@@ -290,7 +297,9 @@ class TestGetBinaryEntryDataMeta:
         assert "_meta" in result, "cached path must attach _meta"
         assert result["_meta"]["tokens_est"] > 0
 
-    def test_get_binary_entry_data_meta_truncated_when_oversized(self, zim_ops, temp_dir):
+    def test_get_binary_entry_data_meta_truncated_when_oversized(
+        self, zim_ops, temp_dir
+    ):
         """When include_data=True but binary exceeds max_size_bytes, _meta.truncated must be True."""
         from unittest.mock import MagicMock, patch
 
@@ -319,8 +328,12 @@ class TestGetBinaryEntryDataMeta:
             )
 
         assert "_meta" in result, "fresh path must attach _meta"
-        assert result["truncated"] is True, "payload truncated should be True for oversized binary"
-        assert result["_meta"]["truncated"] is True, "_meta.truncated must be True when binary exceeds max_size_bytes"
+        assert (
+            result["truncated"] is True
+        ), "payload truncated should be True for oversized binary"
+        assert (
+            result["_meta"]["truncated"] is True
+        ), "_meta.truncated must be True when binary exceeds max_size_bytes"
         assert result["data"] is None, "data should be None when truncated"
 
 
@@ -328,10 +341,14 @@ class TestGetEntrySummaryDataMeta:
     """get_entry_summary_data must attach _meta on every return path."""
 
     @pytest.fixture
-    def zim_ops(self, test_config, path_validator, openzim_mcp_cache, content_processor):
+    def zim_ops(
+        self, test_config, path_validator, openzim_mcp_cache, content_processor
+    ):
         from openzim_mcp.zim_operations import ZimOperations
 
-        return ZimOperations(test_config, path_validator, openzim_mcp_cache, content_processor)
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
 
     def _zim_file(self, temp_dir):
         from pathlib import Path
@@ -340,7 +357,9 @@ class TestGetEntrySummaryDataMeta:
         p.write_bytes(b"")
         return p
 
-    def test_get_entry_summary_data_attaches_meta_fresh(self, zim_ops, temp_dir, monkeypatch):
+    def test_get_entry_summary_data_attaches_meta_fresh(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
         """Fresh computation path should attach _meta."""
         from unittest.mock import MagicMock, patch
 
@@ -371,8 +390,6 @@ class TestGetEntrySummaryDataMeta:
 
     def test_get_entry_summary_data_attaches_meta_cached(self, zim_ops, temp_dir):
         """Cached result path should also carry _meta."""
-        from pathlib import Path
-
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
@@ -392,7 +409,9 @@ class TestGetEntrySummaryDataMeta:
         assert "_meta" in result, "cached path must attach _meta"
         assert result["_meta"]["tokens_est"] > 0
 
-    def test_get_entry_summary_data_meta_truncated_flag(self, zim_ops, temp_dir, monkeypatch):
+    def test_get_entry_summary_data_meta_truncated_flag(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
         """When is_truncated=True, _meta.truncated should reflect that."""
         from unittest.mock import MagicMock, patch
 

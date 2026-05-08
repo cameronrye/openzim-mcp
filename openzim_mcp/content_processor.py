@@ -79,9 +79,9 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     )
     hits = [0]
 
-    def repl(m):
+    def repl(m: re.Match[str]) -> str:
         if hits[0] >= max_hits:
-            return m.group(0)
+            return str(m.group(0))
         hits[0] += 1
         return f"**{m.group(0)}**"
 
@@ -514,9 +514,7 @@ class ContentProcessor:
                 kv_rows = self.extract_infobox(soup)
                 if kv_rows:
                     infobox_md = (
-                        "\n".join(
-                            f"**{r['label']}:** {r['value']}" for r in kv_rows
-                        )
+                        "\n".join(f"**{r['label']}:** {r['value']}" for r in kv_rows)
                         + "\n\n"
                     )
                 self.replace_oversized_tables(soup)
@@ -535,9 +533,7 @@ class ContentProcessor:
             # Fallback: return raw text content
             return str(parsed.soup_for_reading.get_text().strip())
 
-    def html_to_plain_text(
-        self, html_content: str, *, compact: bool = False
-    ) -> str:
+    def html_to_plain_text(self, html_content: str, *, compact: bool = False) -> str:
         """Convert HTML to clean plain text.
 
         Args:
@@ -566,9 +562,7 @@ class ContentProcessor:
                 kv_rows = self.extract_infobox(soup)
                 if kv_rows:
                     infobox_md = (
-                        "\n".join(
-                            f"**{r['label']}:** {r['value']}" for r in kv_rows
-                        )
+                        "\n".join(f"**{r['label']}:** {r['value']}" for r in kv_rows)
                         + "\n\n"
                     )
                 self.replace_oversized_tables(soup)
@@ -621,8 +615,10 @@ class ContentProcessor:
                         break
 
         selected = paragraphs[start_idx : start_idx + max_paragraphs]
-        snippet_text = " ".join(selected) if len(selected) > 1 else (
-            selected[0] if selected else ""
+        snippet_text = (
+            " ".join(selected)
+            if len(selected) > 1
+            else (selected[0] if selected else "")
         )
 
         # Truncate if too long. Reserve 3 chars for the trailing "..." so the

@@ -144,9 +144,7 @@ class _SearchMixin:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
         # Resolve via the content mixin; declared here for type checking.
-        def _get_entry_snippet(
-            self, entry: Any, query: Optional[str] = None
-        ) -> str:
+        def _get_entry_snippet(self, entry: Any, query: Optional[str] = None) -> str:
             """Resolve via ``_ContentMixin`` on the concrete coordinator."""
 
         # Resolve via the namespace mixin; declared here for type checking.
@@ -1278,7 +1276,6 @@ class _SearchMixin:
                     # Fallback: libzim suggestion search (title-indexed).
                     # Note: ``Archive.suggest()`` does not exist; the public
                     # API is ``SuggestionSearcher(archive).suggest(text)``.
-                    pre_suggestion_count = len(aggregate_results)
                     try:
                         suggestion_search = _zim_ops_mod.SuggestionSearcher(
                             archive
