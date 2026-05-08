@@ -16,31 +16,40 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded tokenizer; module-level cache means the first request pays
-# the initialisation cost; subsequent requests are millions of tokens/sec.
-# A single sentinel tracks three states:
-#   _encoder is None and not _ENCODER_PROBED  → never tried
-#   _encoder is not None                     → loaded successfully
-#   _encoder is None and _ENCODER_PROBED    → tried and failed; don't retry
-_encoder: Any = None
-_ENCODER_PROBED = False
+
+class _EncoderCache:
+    """Lazy tokenizer holder. Module-level cache so the first request pays
+    the init cost; subsequent requests are millions of tokens/sec.
+
+    Two attributes track three states:
+      * ``encoder is None`` and ``not probed``   → never tried
+      * ``encoder is not None``                  → loaded successfully
+      * ``encoder is None`` and ``probed``       → tried and failed; don't retry
+
+    Encapsulating the state on a class instead of two module globals
+    makes the read/write paths obvious to static analyzers (CodeQL's
+    ``py/unused-global-variable`` doesn't follow through ``global``
+    declarations into function bodies).
+    """
+
+    encoder: Any = None
+    probed: bool = False
 
 
 def _get_encoder() -> Any:
-    global _encoder, _ENCODER_PROBED
-    if _ENCODER_PROBED:
-        return _encoder
+    if _EncoderCache.probed:
+        return _EncoderCache.encoder
     try:
         import tiktoken
 
-        _encoder = tiktoken.get_encoding("cl100k_base")
+        _EncoderCache.encoder = tiktoken.get_encoding("cl100k_base")
     except Exception as e:  # pragma: no cover — defensive; sandboxed envs
         logger.warning(
             "tiktoken init failed; tokens_est will return 0 for this session: %s", e
         )
     finally:
-        _ENCODER_PROBED = True
-    return _encoder
+        _EncoderCache.probed = True
+    return _EncoderCache.encoder
 
 
 def tokens_est(rendered: str) -> int:
