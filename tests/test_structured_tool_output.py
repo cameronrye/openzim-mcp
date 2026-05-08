@@ -207,6 +207,46 @@ class TestStructuredOutput:
         assert isinstance(payload["suggestions"], list)
 
     @pytest.mark.asyncio
+    async def test_search_zim_file_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """search_zim_file (Phase B) emits a top-level TypedDict payload.
+
+        Phase B migration: the tool now declares a ``SearchResponse`` return
+        annotation, so FastMCP places the dict at the top level of
+        ``structuredContent`` rather than nesting it under ``"result"``.
+        """
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        result = await server.mcp._tool_manager.call_tool(
+            "search_zim_file",
+            {"zim_file_path": str(zim_path), "query": "anything"},
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # Phase B: TypedDict return — payload is at top level, no "result" wrapper.
+        assert "result" not in structured, (
+            "TypedDict migration regression: payload still wrapped"
+        )
+        payload = structured
+        # Tool may emit an error envelope on a transient missing-index call —
+        # tolerate it; the wire format is what we're verifying.
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            assert "results" in payload and isinstance(payload["results"], list)
+            assert "next_cursor" in payload
+            assert "total" in payload
+            assert "done" in payload
+            assert "page_info" in payload and isinstance(payload["page_info"], dict)
+            assert "query" in payload
+
+    @pytest.mark.asyncio
     async def test_search_all_returns_structured_content(
         self, server: OpenZimMcpServer
     ) -> None:

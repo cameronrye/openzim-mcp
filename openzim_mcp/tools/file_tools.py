@@ -1,7 +1,7 @@
 """File listing tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, cast
 
 from ..constants import INPUT_LIMIT_QUERY
 from ..exceptions import OpenZimMcpRateLimitError
@@ -41,14 +41,17 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("default")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="list ZIM files",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="list ZIM files",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="list ZIM files",
+                            error=e,
+                            context="Listing available ZIM files",
+                        ),
                         context="Listing available ZIM files",
                     ),
-                    context="Listing available ZIM files",
                 )
 
             # Strip control characters and cap length, matching the
@@ -67,12 +70,15 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error listing ZIM files: {e}")
-            return tool_error(
-                operation="list ZIM files",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="list ZIM files",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="list ZIM files",
+                        error=e,
+                        context="Scanning allowed directories for ZIM files",
+                    ),
                     context="Scanning allowed directories for ZIM files",
                 ),
-                context="Scanning allowed directories for ZIM files",
             )

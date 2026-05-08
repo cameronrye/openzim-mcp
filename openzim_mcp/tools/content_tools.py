@@ -1,7 +1,7 @@
 """Content retrieval tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from ..constants import (
     INPUT_LIMIT_ENTRY_PATH,
@@ -153,14 +153,17 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
                 for _ in entries or []:
                     server.rate_limiter.check_rate_limit("get_zim_entries")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="batch get entries",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="batch get entries",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="batch get entries",
+                            error=e,
+                            context=f"Batch size: {batch_size}",
+                        ),
                         context=f"Batch size: {batch_size}",
                     ),
-                    context=f"Batch size: {batch_size}",
                 )
 
             # Normalise each entry into a {zim_file_path, entry_path} dict,
@@ -196,12 +199,15 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error in get_zim_entries: {e}")
-            return tool_error(
-                operation="batch get entries",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="batch get entries",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="batch get entries",
+                        error=e,
+                        context=f"Batch size: {batch_size}",
+                    ),
                     context=f"Batch size: {batch_size}",
                 ),
-                context=f"Batch size: {batch_size}",
             )

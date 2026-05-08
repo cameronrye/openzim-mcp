@@ -1,7 +1,7 @@
 """Article structure and content analysis tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH, INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
@@ -54,14 +54,17 @@ def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="get article structure",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="get article structure",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="get article structure",
+                            error=e,
+                            context=f"Entry: {entry_path}",
+                        ),
                         context=f"Entry: {entry_path}",
                     ),
-                    context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -73,14 +76,17 @@ def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error getting article structure: {e}")
-            return tool_error(
-                operation="get article structure",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="get article structure",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get article structure",
+                        error=e,
+                        context=f"File: {zim_file_path}, Entry: {entry_path}",
+                    ),
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
-                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
 
@@ -121,14 +127,17 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="extract article links",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="extract article links",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="extract article links",
+                            error=e,
+                            context=f"Entry: {entry_path}",
+                        ),
                         context=f"Entry: {entry_path}",
                     ),
-                    context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -144,14 +153,17 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error extracting article links: {e}")
-            return tool_error(
-                operation="extract article links",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="extract article links",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="extract article links",
+                        error=e,
+                        context=f"File: {zim_file_path}, Entry: {entry_path}",
+                    ),
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
-                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
 
@@ -192,31 +204,37 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_entry")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="get entry summary",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="get entry summary",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="get entry summary",
+                            error=e,
+                            context=f"Entry: {entry_path}",
+                        ),
                         context=f"Entry: {entry_path}",
                     ),
-                    context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
             entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
 
             if max_words < 1 or max_words > 1000:
-                return tool_error(
-                    operation="get entry summary",
-                    message=(
-                        "**Parameter Validation Error**\n\n"
-                        f"**Issue**: max_words must be between 1 and 1000 "
-                        f"(provided: {max_words})\n\n"
-                        "**Troubleshooting**: Adjust max_words to a value within "
-                        "the valid range.\n"
-                        "**Example**: Use `max_words=200` for a typical summary."
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
+                        operation="get entry summary",
+                        message=(
+                            "**Parameter Validation Error**\n\n"
+                            f"**Issue**: max_words must be between 1 and 1000 "
+                            f"(provided: {max_words})\n\n"
+                            "**Troubleshooting**: Adjust max_words to a value within "
+                            "the valid range.\n"
+                            "**Example**: Use `max_words=200` for a typical summary."
+                        ),
+                        context=f"Entry: {entry_path}, max_words: {max_words}",
                     ),
-                    context=f"Entry: {entry_path}, max_words: {max_words}",
                 )
 
             return await server.async_zim_operations.get_entry_summary_data(
@@ -225,14 +243,17 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error getting entry summary: {e}")
-            return tool_error(
-                operation="get entry summary",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="get entry summary",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get entry summary",
+                        error=e,
+                        context=f"File: {zim_file_path}, Entry: {entry_path}",
+                    ),
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
-                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
 
@@ -281,14 +302,17 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="get table of contents",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="get table of contents",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="get table of contents",
+                            error=e,
+                            context=f"Entry: {entry_path}",
+                        ),
                         context=f"Entry: {entry_path}",
                     ),
-                    context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -300,14 +324,17 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error getting table of contents: {e}")
-            return tool_error(
-                operation="get table of contents",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="get table of contents",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get table of contents",
+                        error=e,
+                        context=f"File: {zim_file_path}, Entry: {entry_path}",
+                    ),
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
-                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
 
@@ -356,31 +383,39 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_binary_entry")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="retrieve binary entry",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="retrieve binary entry",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="retrieve binary entry",
+                            error=e,
+                            context=f"Entry: {entry_path}",
+                        ),
                         context=f"Entry: {entry_path}",
                     ),
-                    context=f"Entry: {entry_path}",
                 )
 
             if max_size_bytes is not None and (
                 max_size_bytes < 1 or max_size_bytes > _MAX_BINARY_LIMIT
             ):
-                return tool_error(
-                    operation="retrieve binary entry",
-                    message=(
-                        "**Parameter Validation Error**\n\n"
-                        f"**Issue**: max_size_bytes must be between 1 and "
-                        f"{_MAX_BINARY_LIMIT} bytes (100 MB), got "
-                        f"{max_size_bytes}.\n"
-                        "**Tip**: For larger entries, retrieve the entry in "
-                        "chunks via repeated calls or use include_data=False to "
-                        "fetch metadata only."
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
+                        operation="retrieve binary entry",
+                        message=(
+                            "**Parameter Validation Error**\n\n"
+                            f"**Issue**: max_size_bytes must be between 1 and "
+                            f"{_MAX_BINARY_LIMIT} bytes (100 MB), got "
+                            f"{max_size_bytes}.\n"
+                            "**Tip**: For larger entries, retrieve the entry in "
+                            "chunks via repeated calls or use include_data=False to "
+                            "fetch metadata only."
+                        ),
+                        context=(
+                            f"Entry: {entry_path}, max_size_bytes: {max_size_bytes}"
+                        ),
                     ),
-                    context=f"Entry: {entry_path}, max_size_bytes: {max_size_bytes}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -392,14 +427,17 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error retrieving binary entry: {e}")
-            return tool_error(
-                operation="retrieve binary entry",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="retrieve binary entry",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="retrieve binary entry",
+                        error=e,
+                        context=f"File: {zim_file_path}, Entry: {entry_path}",
+                    ),
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
-                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
 
@@ -436,14 +474,17 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_related_articles")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="get related articles",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="get related articles",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="get related articles",
+                            error=e,
+                            context=f"Entry: {entry_path}",
+                        ),
                         context=f"Entry: {entry_path}",
                     ),
-                    context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -457,12 +498,15 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error in get_related_articles: {e}")
-            return tool_error(
-                operation="get related articles",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="get related articles",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get related articles",
+                        error=e,
+                        context=f"File: {zim_file_path}, Entry: {entry_path}",
+                    ),
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
-                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )

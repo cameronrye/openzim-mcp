@@ -1,7 +1,7 @@
 """Metadata and namespace listing tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, cast
 
 from ..constants import INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
@@ -41,14 +41,17 @@ def register_metadata_tools(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_metadata")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="get ZIM metadata",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="get ZIM metadata",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="get ZIM metadata",
+                            error=e,
+                            context=f"File: {zim_file_path}",
+                        ),
                         context=f"File: {zim_file_path}",
                     ),
-                    context=f"File: {zim_file_path}",
                 )
 
             # Sanitize inputs
@@ -61,14 +64,17 @@ def register_metadata_tools(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error getting ZIM metadata: {e}")
-            return tool_error(
-                operation="get ZIM metadata",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="get ZIM metadata",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get ZIM metadata",
+                        error=e,
+                        context=f"File: {zim_file_path}",
+                    ),
                     context=f"File: {zim_file_path}",
                 ),
-                context=f"File: {zim_file_path}",
             )
 
     @server.mcp.tool()
@@ -124,14 +130,17 @@ def register_metadata_tools(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_metadata")
             except OpenZimMcpRateLimitError as e:
-                return tool_error(
-                    operation="list namespaces",
-                    message=server._create_enhanced_error_message(
+                return cast(
+                    Dict[str, Any],
+                    tool_error(
                         operation="list namespaces",
-                        error=e,
+                        message=server._create_enhanced_error_message(
+                            operation="list namespaces",
+                            error=e,
+                            context=f"File: {zim_file_path}",
+                        ),
                         context=f"File: {zim_file_path}",
                     ),
-                    context=f"File: {zim_file_path}",
                 )
 
             # Sanitize inputs
@@ -142,12 +151,15 @@ def register_metadata_tools(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error listing namespaces: {e}")
-            return tool_error(
-                operation="list namespaces",
-                message=server._create_enhanced_error_message(
+            return cast(
+                Dict[str, Any],
+                tool_error(
                     operation="list namespaces",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="list namespaces",
+                        error=e,
+                        context=f"File: {zim_file_path}",
+                    ),
                     context=f"File: {zim_file_path}",
                 ),
-                context=f"File: {zim_file_path}",
             )

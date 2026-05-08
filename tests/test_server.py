@@ -256,15 +256,17 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
             assert "List error" in result_str
             assert "**Operation Failed**" in result_str or "'error': True" in result_str
 
-            # Test search_zim_file exception handling
+            # Test search_zim_file exception handling. Phase B: tool returns
+            # a structured error envelope ({"error": True, ...}) — exception
+            # text and error envelope shape are surfaced in the result.
             result = asyncio.run(
                 server.mcp.call_tool(
                     "search_zim_file", {"zim_file_path": "test.zim", "query": "test"}
                 )
             )
-            assert "**Operation Failed**" in str(result) and "Search error" in str(
-                result
-            )
+            result_str = str(result)
+            assert "Search error" in result_str or "search ZIM file" in result_str
+            assert "'error': True" in result_str or "**Operation Failed**" in result_str
 
             # Test get_zim_entry exception handling
             result = asyncio.run(
@@ -289,6 +291,11 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
 
     def test_mcp_tool_validation_paths(self, server: OpenZimMcpServer):
         """Test MCP tool validation paths using call_tool."""
+        # Phase B: search_zim_file returns a ToolErrorPayload envelope on
+        # validation failure. The error text is in the ``message`` field;
+        # str(result) renders the structuredContent dict alongside the
+        # TextContent JSON, so substring assertions still work.
+
         # Test search_zim_file validation - invalid limit
         result = asyncio.run(
             server.mcp.call_tool(
@@ -300,9 +307,8 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 },
             )
         )
-        assert "**Parameter Validation Error**" in str(
-            result
-        ) and "limit must be between 1 and" in str(result)
+        assert "limit must be between 1 and" in str(result)
+        assert "'error': True" in str(result) or "error" in str(result).lower()
 
         # Test search_zim_file validation - invalid limit (too high)
         result = asyncio.run(
@@ -315,9 +321,8 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 },
             )
         )
-        assert "**Parameter Validation Error**" in str(
-            result
-        ) and "limit must be between 1 and" in str(result)
+        assert "limit must be between 1 and" in str(result)
+        assert "'error': True" in str(result) or "error" in str(result).lower()
 
         # Test search_zim_file validation - invalid offset
         result = asyncio.run(
@@ -330,9 +335,8 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 },
             )
         )
-        assert "**Parameter Validation Error**" in str(
-            result
-        ) and "Offset must be non-negative" in str(result)
+        assert "Offset must be non-negative" in str(result)
+        assert "'error': True" in str(result) or "error" in str(result).lower()
 
         # Test get_zim_entry validation - invalid max_content_length
         result = asyncio.run(

@@ -17,7 +17,7 @@ import logging
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
+    from openzim_mcp.tool_schemas import SearchResponse
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ class _SearchMixin:
         query: str,
         limit: Optional[int] = None,
         offset: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> "SearchResponse":
         """Structured variant of ``search_zim_file``.
 
         Returns the raw search payload as a Python dict so MCP tool functions
@@ -205,15 +206,15 @@ class _SearchMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"search_data:{validated_path}:{query}:{limit}:{offset}"
+        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old shape)
+        # don't leak through after the upgrade.
+        cache_key = f"search_v2b:{validated_path}:{query}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached search dict for query: {query}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
-            return cached_result  # type: ignore[no-any-return]
+            return cast("SearchResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -252,10 +253,13 @@ class _SearchMixin:
                 except Exception as e:
                     logger.debug(f"alt_archive suggestion build failed: {e}")
 
-            return attach_meta(
-                payload,
-                reason=reason,
-                suggestions=suggestions if suggestions else None,
+            return cast(
+                "SearchResponse",
+                attach_meta(
+                    payload,
+                    reason=reason,
+                    suggestions=suggestions if suggestions else None,
+                ),
             )
 
         except OpenZimMcpArchiveError:
@@ -276,59 +280,57 @@ class _SearchMixin:
             to decide whether the response is safe to cache. The payload
             shape is documented on ``search_zim_file_data``.
         """
-        # Create searcher and execute search
+        from openzim_mcp.pagination import Cursor
+
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
         search = searcher.search(query_obj)
 
-        # Get total results
         total_results = search.getEstimatedMatches()
 
         if total_results == 0:
             return (
                 {
                     "query": query,
-                    "total_results": 0,
-                    "offset": offset,
-                    "limit": limit,
                     "results": [],
-                    "pagination": {"has_more": False},
+                    "next_cursor": None,
+                    "total": 0,
+                    "done": True,
+                    "page_info": {
+                        "offset": offset,
+                        "limit": limit,
+                        "returned_count": 0,
+                    },
                 },
                 0,
             )
 
-        # Guard against offset exceeding total results (would produce negative count)
         if offset >= total_results:
             return (
                 {
                     "query": query,
-                    "total_results": total_results,
-                    "offset": offset,
-                    "limit": limit,
                     "results": [],
-                    "pagination": {
-                        "has_more": False,
-                        "offset_exceeds_total": True,
+                    "next_cursor": None,
+                    "total": total_results,
+                    "done": True,
+                    "page_info": {
+                        "offset": offset,
+                        "limit": limit,
+                        "returned_count": 0,
                     },
                 },
                 total_results,
             )
 
         result_count = min(limit, total_results - offset)
-
-        # Get search results
         result_entries = list(search.getResults(offset, result_count))
 
-        # Collect search results
         results: List[Dict[str, Any]] = []
         for i, entry_id in enumerate(result_entries):
             try:
                 entry = archive.get_entry_by_path(entry_id)
                 title = entry.title or "Untitled"
-
-                # Get content snippet
                 snippet = self._get_entry_snippet(entry, query=query)
-
                 results.append({"path": entry_id, "title": title, "snippet": snippet})
             except Exception as e:
                 logger.warning(f"Error processing search result {entry_id}: {e}")
@@ -340,47 +342,46 @@ class _SearchMixin:
                     }
                 )
 
-        has_more = (offset + len(results)) < total_results
-        pagination: Dict[str, Any] = {
-            "has_more": has_more,
-            "showing_start": offset + 1,
-            "showing_end": offset + len(results),
-        }
-        if has_more:
-            next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
-                offset, limit, total_results, query
+        returned_count = len(results)
+        last_index = offset + returned_count
+        done = last_index >= total_results
+        next_cursor: Optional[str] = None
+        if not done:
+            next_cursor = Cursor.encode(
+                tool="search_zim_file",
+                state={"o": last_index, "l": limit, "q": query},
             )
-            # Partial-page case: has_more can be True (offset+len(results)
-            # < total_results) while offset+limit >= total_results, in which
-            # case create_next_cursor returns None. Omit the cursor key in
-            # that case — the caller falls back to the offset hint.
-            if next_cursor is not None:
-                pagination["next_cursor"] = next_cursor
 
         return (
             {
                 "query": query,
-                "total_results": total_results,
-                "offset": offset,
-                "limit": limit,
                 "results": results,
-                "pagination": pagination,
+                "next_cursor": next_cursor,
+                "total": total_results,
+                "done": done,
+                "page_info": {
+                    "offset": offset,
+                    "limit": limit,
+                    "returned_count": returned_count,
+                },
             },
             total_results,
         )
 
-    def _format_search_text(self, payload: Dict[str, Any]) -> str:
+    def _format_search_text(self, payload: "SearchResponse") -> str:
         """Render a structured search payload as the legacy markdown text.
 
         Mirrors the original ``_perform_search`` output exactly so callers
         (and tests) that consume the rendered text keep working unchanged.
         """
         query = payload["query"]
-        total_results = payload["total_results"]
-        offset = payload["offset"]
-        limit = payload["limit"]
+        total_results = payload["total"] or 0
+        page_info = payload["page_info"]
+        offset = page_info["offset"]
+        limit = page_info["limit"]
         results = payload["results"]
-        pagination = payload.get("pagination", {})
+        done = payload["done"]
+        next_cursor = payload.get("next_cursor")
 
         if total_results == 0:
             # Append actionable next-step hints so an LLM caller knows
@@ -400,7 +401,9 @@ class _SearchMixin:
                 f"- A shorter or differently-cased query"
             )
 
-        if pagination.get("offset_exceeds_total"):
+        # Phase B: ``offset_exceeds_total`` is no longer surfaced as a flag —
+        # detect via ``total < offset`` plus an empty results list.
+        if not results and offset >= total_results:
             return (
                 f'Found {total_results} matches for "{query}", '
                 f"but offset {offset} exceeds total results."
@@ -419,10 +422,9 @@ class _SearchMixin:
         # Compact one-liner footer — see the matching comment in the simple
         # search renderer above for rationale.
         result_text += "---\n"
-        has_more = pagination.get("has_more", False)
-        if has_more:
+        if not done:
             next_offset = offset + limit
-            if pagination.get("next_cursor") is None:
+            if next_cursor is None:
                 # Filtered/limited path that doesn't know the next-page
                 # boundary precisely; advance by what we actually returned.
                 next_offset = offset + len(results)
@@ -1612,12 +1614,18 @@ class _SearchMixin:
                 continue
             try:
                 payload = self.search_zim_file_data(path, query, limit_per_file, 0)
+                # Task 6: search_all shape migration. ``total_results`` was
+                # renamed to ``total`` in Phase B, but this aggregator's
+                # response shape is rewritten by Task 6 — read both keys for
+                # the transitional window so search_all's ``has_hits`` flag
+                # still works while Task 5 lands.
+                _total = payload.get("total", payload.get("total_results", 0))
                 per_file.append(
                     {
                         "zim_file_path": path,
                         "name": file_info.get("name"),
                         "result": payload,
-                        "has_hits": payload.get("total_results", 0) > 0,
+                        "has_hits": (_total or 0) > 0,
                     }
                 )
             except Exception as e:

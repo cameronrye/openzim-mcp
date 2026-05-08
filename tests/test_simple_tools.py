@@ -1284,15 +1284,16 @@ class TestCompactSearchSnippetTruncation:
             "Showing 1-1 of 1 (end of results)\n"
         )
         # In compact mode _handle_search calls search_zim_file_data + _format_search_text
+        # Phase B shape: top-level total/done/page_info, no nested pagination block.
         mock.search_zim_file_data.return_value = {
             "query": "biology",
-            "total_results": 1,
-            "offset": 0,
-            "limit": 5,
             "results": [
                 {"path": "Biology", "title": "Biology article", "snippet": "x"}
             ],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 1,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 1},
             "_meta": {"tokens_est": 10, "chars": 100, "truncated": False},
         }
         mock._format_search_text.return_value = rendered
@@ -3037,11 +3038,11 @@ class TestCompactFooter:
         # search_zim_file_data returns zero results with suggestions in _meta
         mock.search_zim_file_data.return_value = {
             "query": "xyzzy",
-            "total_results": 0,
-            "offset": 0,
-            "limit": 5,
             "results": [],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 0},
             "_meta": {
                 "tokens_est": 5,
                 "chars": 20,

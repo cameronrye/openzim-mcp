@@ -293,9 +293,12 @@ class TestZimOperations:
 
         assert isinstance(data, dict)
         assert data["query"] == "no_match"
-        assert data["total_results"] == 0
+        # Phase B: top-level total/done/page_info; pagination block removed.
+        assert data["total"] == 0
         assert data["results"] == []
-        assert data["pagination"]["has_more"] is False
+        assert data["done"] is True
+        assert data["next_cursor"] is None
+        assert data["page_info"]["returned_count"] == 0
 
     def test_get_zim_metadata(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test ZIM metadata retrieval."""
@@ -902,8 +905,11 @@ class TestZimOperations:
         ):
             payload, total = zim_operations._perform_search(mock_archive, "test", 10, 0)
             assert isinstance(payload, dict)
-            assert payload["total_results"] == 0
+            # Phase B: total replaces total_results; pagination block removed.
+            assert payload["total"] == 0
             assert payload["results"] == []
+            assert payload["done"] is True
+            assert payload["next_cursor"] is None
             # The legacy markdown rendering still produces the same text,
             # plus an actionable next-step hint that names the two common
             # rescues (suggestions/autocomplete and tell_me_about).

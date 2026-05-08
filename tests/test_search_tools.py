@@ -7,8 +7,8 @@ import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.exceptions import OpenZimMcpRateLimitError
+from openzim_mcp.pagination import Cursor
 from openzim_mcp.server import OpenZimMcpServer
-from openzim_mcp.zim_operations import PaginationCursor
 
 
 def _get_tool_fn(server: OpenZimMcpServer, name: str):
@@ -74,13 +74,19 @@ class TestSearchZimFileTool:
     async def test_search_limit_out_of_range_returns_error(
         self, server: OpenZimMcpServer, bad_limit: int
     ):
-        """Out-of-range limits hit the registered tool's validator."""
+        """Out-of-range limits hit the registered tool's validator.
+
+        Phase B: tool returns a ``ToolErrorPayload`` envelope rather than a
+        markdown string.
+        """
         server.rate_limiter.check_rate_limit = MagicMock()
         search_zim_file = _get_tool_fn(server, "search_zim_file")
         result = await search_zim_file(
             zim_file_path="/path/to/file.zim", query="x", limit=bad_limit, offset=0
         )
-        assert "must be between 1 and 100" in result
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "must be between 1 and 100" in result.get("message", "")
 
     def test_search_offset_validation_negative(self):
         """Test that negative offset returns validation error."""
@@ -118,44 +124,62 @@ class TestSearchZimFileTool:
 
 
 class TestSearchCursor:
-    """The opaque cursor token round-trips through search_zim_file."""
+    """The opaque cursor token round-trips through search_zim_file.
+
+    Phase B: cursors are tool-bound (``t="search_zim_file"``) and decoded via
+    ``openzim_mcp.pagination.Cursor``. The tool now hits ``search_zim_file_data``
+    (structured) rather than the legacy text path; on cursor errors the tool
+    returns a ``ToolErrorPayload`` envelope (``{"error": True, ...}``) instead
+    of a markdown string.
+    """
 
     @pytest.fixture
     def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
-        """Create a server with search_zim_file stubbed to a passthrough."""
+        """Create a server with search_zim_file_data stubbed to a passthrough."""
         srv = OpenZimMcpServer(test_config)
-        srv.async_zim_operations.search_zim_file = AsyncMock(return_value="ok")
+        srv.async_zim_operations.search_zim_file_data = AsyncMock(
+            return_value={
+                "query": "diabetes",
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 0, "returned_count": 0},
+            }
+        )
         srv.rate_limiter.check_rate_limit = MagicMock()
         return srv
 
-    def test_pagination_cursor_round_trip(self):
+    def test_cursor_round_trip(self):
         """Encode -> decode preserves offset, limit, and query."""
-        token = PaginationCursor.create_next_cursor(
-            current_offset=0, limit=5, total=100, query="diabetes"
+        token = Cursor.encode(
+            tool="search_zim_file", state={"o": 5, "l": 5, "q": "diabetes"}
         )
-        assert token is not None
-        decoded = PaginationCursor.decode(token)
-        assert decoded == {"o": 5, "l": 5, "q": "diabetes"}
+        decoded = Cursor.decode(token, expected_tool="search_zim_file")
+        assert decoded["s"]["o"] == 5
+        assert decoded["s"]["l"] == 5
+        assert decoded["s"]["q"] == "diabetes"
+        assert decoded["t"] == "search_zim_file"
 
-    def test_pagination_cursor_decode_rejects_garbage(self):
+    def test_cursor_decode_rejects_garbage(self):
         """Malformed base64 surfaces as ValueError."""
         with pytest.raises(ValueError):
-            PaginationCursor.decode("not-base64-!!!")
+            Cursor.decode("not-base64-!!!", expected_tool="search_zim_file")
 
-    def test_pagination_cursor_decode_rejects_missing_fields(self):
-        """A token decoding to a dict without offset/limit is rejected."""
+    def test_cursor_decode_rejects_missing_fields(self):
+        """A token decoding to a dict without v/t/s is rejected."""
         import base64
         import json
 
         bad = base64.urlsafe_b64encode(json.dumps({"only": 1}).encode()).decode()
         with pytest.raises(ValueError, match="missing required fields"):
-            PaginationCursor.decode(bad)
+            Cursor.decode(bad, expected_tool="search_zim_file")
 
     @pytest.mark.asyncio
     async def test_cursor_overrides_offset_and_limit(self, server: OpenZimMcpServer):
         """`cursor` overrides explicit offset/limit when both are present."""
-        token = PaginationCursor.create_next_cursor(
-            current_offset=10, limit=7, total=100, query="diabetes"
+        token = Cursor.encode(
+            tool="search_zim_file", state={"o": 17, "l": 7, "q": "diabetes"}
         )
 
         fn = _get_tool_fn(server, "search_zim_file")
@@ -167,7 +191,7 @@ class TestSearchCursor:
             cursor=token,
         )
 
-        call = server.async_zim_operations.search_zim_file.await_args
+        call = server.async_zim_operations.search_zim_file_data.await_args
         # signature: (zim_file_path, query, limit, offset)
         assert call.args[2] == 7  # limit from cursor
         assert call.args[3] == 17  # next-page offset from cursor
@@ -176,29 +200,30 @@ class TestSearchCursor:
     async def test_invalid_cursor_returns_validation_error(
         self, server: OpenZimMcpServer
     ):
-        """Malformed cursor surfaces as a parameter-validation message."""
+        """Malformed cursor surfaces as a structured error envelope."""
         fn = _get_tool_fn(server, "search_zim_file")
         result = await fn(
             zim_file_path="/path/to/file.zim",
             query="diabetes",
             cursor="!!!not-a-cursor!!!",
         )
-        assert "Parameter Validation Error" in result
-        assert "cursor" in result.lower()
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "cursor" in result.get("message", "").lower()
         # The operations layer should not have been called.
-        server.async_zim_operations.search_zim_file.assert_not_awaited()
+        server.async_zim_operations.search_zim_file_data.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_cursor_alone_supplies_query(self, server: OpenZimMcpServer):
         """A cursor alone is sufficient — the encoded query is reused."""
-        token = PaginationCursor.create_next_cursor(
-            current_offset=0, limit=2, total=100, query="diabetes"
+        token = Cursor.encode(
+            tool="search_zim_file", state={"o": 2, "l": 2, "q": "diabetes"}
         )
 
         fn = _get_tool_fn(server, "search_zim_file")
         await fn(zim_file_path="/path/to/file.zim", cursor=token)
 
-        call = server.async_zim_operations.search_zim_file.await_args
+        call = server.async_zim_operations.search_zim_file_data.await_args
         # signature: (zim_file_path, query, limit, offset)
         assert call.args[1] == "diabetes"
         assert call.args[2] == 2
@@ -211,19 +236,21 @@ class TestSearchCursor:
         """Without a cursor, an explicit query is still required."""
         fn = _get_tool_fn(server, "search_zim_file")
         result = await fn(zim_file_path="/path/to/file.zim")
-        assert "Parameter Validation Error" in result
-        assert "query" in result.lower()
-        server.async_zim_operations.search_zim_file.assert_not_awaited()
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "query" in result.get("message", "").lower()
+        server.async_zim_operations.search_zim_file_data.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_matching_cursor_query_proceeds(self, server: OpenZimMcpServer):
         """When `query` matches the cursor's encoded query, the call proceeds.
 
-        The mismatch rejection must not fire on equal queries — pagination
-        with an explicit (matching) `query` is a normal pattern.
+        Phase B: cursor's ``q`` always wins, so even a "matching" explicit
+        query just gets overridden silently. The flow proceeds without
+        error.
         """
-        token = PaginationCursor.create_next_cursor(
-            current_offset=0, limit=5, total=100, query="diabetes"
+        token = Cursor.encode(
+            tool="search_zim_file", state={"o": 5, "l": 5, "q": "diabetes"}
         )
 
         fn = _get_tool_fn(server, "search_zim_file")
@@ -233,39 +260,64 @@ class TestSearchCursor:
             cursor=token,
         )
 
-        call = server.async_zim_operations.search_zim_file.await_args
+        call = server.async_zim_operations.search_zim_file_data.await_args
         # signature: (zim_file_path, query, limit, offset)
         assert call.args[1] == "diabetes"
         assert call.args[2] == 5
         assert call.args[3] == 5
 
     @pytest.mark.asyncio
-    async def test_mismatched_cursor_query_returns_validation_error(
+    async def test_cursor_q_wins_over_explicit_query(
         self, server: OpenZimMcpServer
     ):
-        """Reject when the cursor's embedded query differs from `query`.
+        """When cursor encodes q='diabetes', an explicit query='insulin' is
+        silently overridden.
 
-        Cursors encode the query they were paired with; mixing them with a
-        different ``query`` argument is almost always an LLM cycling cursors
-        across turns, and would otherwise return the wrong page of the wrong
-        query — silent data corruption. Reject loudly instead.
+        Phase B: cursor wins on conflict per response-contract spec, so a
+        caller that supplies a *different* explicit query alongside a cursor
+        sees the cursor's ``q`` field reach the operations layer — not their
+        own argument. Pinning this here so a future refactor that flips the
+        precedence is caught by the regression suite.
         """
-        token = PaginationCursor.create_next_cursor(
-            current_offset=0, limit=5, total=100, query="cursor-query"
+        token = Cursor.encode(
+            tool="search_zim_file", state={"o": 5, "l": 5, "q": "diabetes"}
+        )
+
+        fn = _get_tool_fn(server, "search_zim_file")
+        await fn(
+            zim_file_path="/path/to/file.zim",
+            query="insulin",  # different from cursor's q
+            cursor=token,
+        )
+
+        call = server.async_zim_operations.search_zim_file_data.await_args
+        # signature: (zim_file_path, query, limit, offset). Cursor's q
+        # ("diabetes") must override the caller's explicit query ("insulin").
+        assert call.args[1] == "diabetes"
+
+    @pytest.mark.asyncio
+    async def test_cross_tool_cursor_returns_error(self, server: OpenZimMcpServer):
+        """A cursor issued by another tool returns CursorMismatchError envelope.
+
+        Phase B replaces the v1 query-mismatch rejection with a tool-binding
+        check (``t`` field). A cursor minted for ``browse_namespace`` cannot
+        be redeemed against ``search_zim_file``.
+        """
+        token = Cursor.encode(
+            tool="browse_namespace", state={"o": 0, "l": 5, "ns": "C"}
         )
 
         fn = _get_tool_fn(server, "search_zim_file")
         result = await fn(
             zim_file_path="/path/to/file.zim",
-            query="explicit-query",
+            query="diabetes",
             cursor=token,
         )
 
-        assert "Parameter Validation Error" in result
-        assert "cursor" in result.lower()
-        assert "query" in result.lower()
-        # The operations layer must not be called when the inputs conflict.
-        server.async_zim_operations.search_zim_file.assert_not_awaited()
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        # The operations layer must not be called on cross-tool cursor reuse.
+        server.async_zim_operations.search_zim_file_data.assert_not_awaited()
 
 
 class TestSearchPaginationFooterFormat:
@@ -423,11 +475,11 @@ class TestSearchZimFileDataMeta:
 
         fresh_payload = {
             "query": "climate",
-            "total_results": 3,
-            "offset": 0,
-            "limit": 10,
             "results": [{"path": "A/Foo", "title": "Foo", "snippet": "snippet text"}],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 3,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 1},
         }
 
         monkeypatch.setattr(
@@ -446,6 +498,8 @@ class TestSearchZimFileDataMeta:
         assert result["_meta"]["tokens_est"] > 0
         assert result["_meta"]["chars"] > 0
         assert result["_meta"]["truncated"] is False
+        # Guard-rail: page_info.returned_count tracks len(results).
+        assert result["page_info"]["returned_count"] == len(result["results"])
 
     def test_search_zim_file_data_meta_on_zero_results(
         self, zim_ops, temp_dir, monkeypatch
@@ -455,11 +509,11 @@ class TestSearchZimFileDataMeta:
 
         zero_payload = {
             "query": "xyzzy_no_match",
-            "total_results": 0,
-            "offset": 0,
-            "limit": 10,
             "results": [],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
         }
 
         monkeypatch.setattr(
@@ -479,16 +533,21 @@ class TestSearchZimFileDataMeta:
     def test_search_zim_file_data_meta_on_offset_exceeds_total(
         self, zim_ops, temp_dir, monkeypatch
     ):
-        """Offset-exceeds-total path carries _meta."""
+        """Offset-exceeds-total path carries _meta.
+
+        Phase B: ``offset_exceeds_total`` is no longer surfaced as a flag —
+        callers detect it from ``total < offset`` and an empty ``results``
+        list.
+        """
         zim_file = self._zim_file(temp_dir)
 
         exceed_payload = {
             "query": "climate",
-            "total_results": 5,
-            "offset": 100,
-            "limit": 10,
             "results": [],
-            "pagination": {"has_more": False, "offset_exceeds_total": True},
+            "next_cursor": None,
+            "total": 5,
+            "done": True,
+            "page_info": {"offset": 100, "limit": 10, "returned_count": 0},
         }
 
         monkeypatch.setattr(
@@ -504,22 +563,26 @@ class TestSearchZimFileDataMeta:
             )
 
         assert "_meta" in result, "offset-exceeds-total path must attach _meta"
+        # offset_exceeds_total is replaced by total < offset + empty results.
+        assert result["total"] < result["page_info"]["offset"]
+        assert result["results"] == []
 
     def test_search_zim_file_data_meta_on_cached_return(self, zim_ops, temp_dir):
         """Cached return path backfills _meta if missing, and always returns _meta."""
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
-        cache_key = f"search_data:{validated}:climate:10:0"
+        # Phase B: cache key bumped to ``search_v2b:`` to avoid old-shape leakthrough.
+        cache_key = f"search_v2b:{validated}:climate:10:0"
 
-        # Seed cache with an old-format entry (no _meta)
+        # Seed cache with a Phase B-shape entry without _meta to verify backfill.
         old_payload = {
             "query": "climate",
-            "total_results": 2,
-            "offset": 0,
-            "limit": 10,
             "results": [{"path": "A/Bar", "title": "Bar", "snippet": "bar"}],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 2,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 1},
         }
         zim_ops.cache.set(cache_key, old_payload)
 
@@ -713,7 +776,7 @@ class TestSearchMethodsMeta:
                         str(zim_file), "zzzimpossiblequery"
                     )
 
-        assert result["total_results"] == 0
+        assert result["total"] == 0
         assert result["_meta"].get("reason") == "0_hits"
 
     def test_non_empty_search_meta_no_reason(self, zim_ops, temp_dir, monkeypatch):
@@ -748,7 +811,7 @@ class TestSearchMethodsMeta:
                     mock_archive.return_value.__enter__.return_value = mock_archive_obj
                     result = zim_ops.search_zim_file_data(str(zim_file), "climate")
 
-        assert result["total_results"] > 0
+        assert result["total"] > 0
         assert "reason" not in result["_meta"]
 
     def test_empty_search_suggests_other_archives_with_query_match(
@@ -762,11 +825,11 @@ class TestSearchMethodsMeta:
         # Mock _perform_search to return zero results
         zero_payload = {
             "query": "wikipedia",
-            "total_results": 0,
-            "offset": 0,
-            "limit": 10,
             "results": [],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
         }
         monkeypatch.setattr(
             zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
@@ -789,7 +852,7 @@ class TestSearchMethodsMeta:
                 str(zim_file), "wikipedia", limit=10, offset=0
             )
 
-        assert result["total_results"] == 0
+        assert result["total"] == 0
         assert "_meta" in result
         assert "suggestions" in result["_meta"]
         assert len(result["_meta"]["suggestions"]) > 0
@@ -811,11 +874,11 @@ class TestSearchMethodsMeta:
         # Mock _perform_search to return zero results
         zero_payload = {
             "query": "photosynthesis process biology",
-            "total_results": 0,
-            "offset": 0,
-            "limit": 10,
             "results": [],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
         }
         monkeypatch.setattr(
             zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
@@ -838,7 +901,7 @@ class TestSearchMethodsMeta:
                 str(zim_file), "photosynthesis process biology", limit=10, offset=0
             )
 
-        assert result["total_results"] == 0
+        assert result["total"] == 0
         assert "_meta" in result
         assert "suggestions" in result["_meta"]
         # Should match because "biology" token (>= 4 chars) is in "biology_reference"
@@ -859,11 +922,11 @@ class TestSearchMethodsMeta:
         # Mock _perform_search to return zero results
         zero_payload = {
             "query": "zzzimpossiblequery",
-            "total_results": 0,
-            "offset": 0,
-            "limit": 10,
             "results": [],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
         }
         monkeypatch.setattr(
             zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
@@ -886,7 +949,7 @@ class TestSearchMethodsMeta:
                 str(zim_file), "zzzimpossiblequery", limit=10, offset=0
             )
 
-        assert result["total_results"] == 0
+        assert result["total"] == 0
         assert "_meta" in result
         # Should have no alt_archive suggestions because query doesn't match any archive name
         suggestions = result["_meta"].get("suggestions", [])
@@ -906,11 +969,11 @@ class TestSearchMethodsMeta:
         # Mock _perform_search to return zero results
         zero_payload = {
             "query": "the in it",  # All tokens < 4 chars
-            "total_results": 0,
-            "offset": 0,
-            "limit": 10,
             "results": [],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
         }
         monkeypatch.setattr(
             zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
@@ -933,7 +996,7 @@ class TestSearchMethodsMeta:
                 str(zim_file), "the in it", limit=10, offset=0
             )
 
-        assert result["total_results"] == 0
+        assert result["total"] == 0
         assert "_meta" in result
         # Should have no alt_archive suggestions because all tokens are < 4 chars
         suggestions = result["_meta"].get("suggestions", [])
@@ -953,11 +1016,11 @@ class TestSearchMethodsMeta:
         # Mock _perform_search to return zero results
         zero_payload = {
             "query": "wiki",
-            "total_results": 0,
-            "offset": 0,
-            "limit": 10,
             "results": [],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
         }
         monkeypatch.setattr(
             zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
@@ -985,7 +1048,7 @@ class TestSearchMethodsMeta:
                 str(zim_file), "wiki", limit=10, offset=0
             )
 
-        assert result["total_results"] == 0
+        assert result["total"] == 0
         assert "_meta" in result
         # Check that suggestions are capped at the configured limit
         limit_n = zim_ops.config.search.structured_suggestions_limit
@@ -1005,11 +1068,11 @@ class TestSearchMethodsMeta:
         # Mock _perform_search to return zero results
         zero_payload = {
             "query": "wikipedia",
-            "total_results": 0,
-            "offset": 0,
-            "limit": 10,
             "results": [],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
         }
         monkeypatch.setattr(
             zim_ops, "_perform_search", lambda *a, **kw: (zero_payload, 0)
@@ -1035,7 +1098,7 @@ class TestSearchMethodsMeta:
                 str(zim_file), "wikipedia", limit=10, offset=0
             )
 
-        assert result["total_results"] == 0
+        assert result["total"] == 0
         assert "_meta" in result
         alt_archive_suggestions = [
             s for s in result["_meta"]["suggestions"] if s.get("type") == "alt_archive"

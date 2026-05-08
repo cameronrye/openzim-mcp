@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, cast
 
 from ..constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
 from ..responses import tool_error
@@ -251,14 +251,17 @@ def _build_health_report(server: "OpenZimMcpServer") -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Error getting server health: {e}")
-        return tool_error(
-            operation="get server health",
-            message=server._create_enhanced_error_message(
+        return cast(
+            Dict[str, Any],
+            tool_error(
                 operation="get server health",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get server health",
+                    error=e,
+                    context="Checking server health and performance metrics",
+                ),
                 context="Checking server health and performance metrics",
             ),
-            context="Checking server health and performance metrics",
         )
 
 
@@ -322,12 +325,15 @@ def _build_configuration_report(server: "OpenZimMcpServer") -> Dict[str, Any]:
         return result
     except Exception as e:
         logger.error(f"Error getting server configuration: {e}")
-        return tool_error(
-            operation="get server configuration",
-            message=server._create_enhanced_error_message(
+        return cast(
+            Dict[str, Any],
+            tool_error(
                 operation="get server configuration",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get server configuration",
+                    error=e,
+                    context="Configuration diagnostics",
+                ),
                 context="Configuration diagnostics",
             ),
-            context="Configuration diagnostics",
         )

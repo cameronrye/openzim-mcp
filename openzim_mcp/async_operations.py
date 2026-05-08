@@ -8,9 +8,12 @@ the event loop during I/O-bound operations.
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from .zim_operations import ZimOperations
+
+if TYPE_CHECKING:
+    from .tool_schemas import SearchResponse
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,22 @@ class AsyncZimOperations:
         """
         return await asyncio.to_thread(
             self._ops.search_zim_file, zim_file_path, query, limit, offset
+        )
+
+    async def search_zim_file_data(
+        self,
+        zim_file_path: str,
+        query: str,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> "SearchResponse":
+        """Structured variant of ``search_zim_file`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.search_zim_file_data,
+            zim_file_path,
+            query,
+            limit,
+            offset,
         )
 
     async def get_zim_entry(

@@ -1129,7 +1129,8 @@ class SimpleToolsHandler:
             payload = self.zim_operations.search_zim_file_data(
                 zim_file_path, search_query, limit, offset
             )
-            if payload.get("total_results", 0) == 0:
+            # Phase B: ``total`` replaces ``total_results``.
+            if payload.get("total", 0) == 0:
                 # Let handle_zim_query's footer step render the structured
                 # suggestion footer (format_footer empty-result variant).
                 meta = payload.get("_meta", {})
