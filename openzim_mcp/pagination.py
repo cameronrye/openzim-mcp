@@ -11,6 +11,7 @@ of a JSON object:
   raises ``CursorMismatchError`` instead of silently misbehaving).
 * ``s`` carries the per-tool paging state — offset/limit/query for search,
   scan_at for walk_namespace, etc.
+* Cross-tool reuse raises ``CursorMismatchError`` (a ``ValueError`` subclass).
 
 Decode failures and tool mismatches both subclass ``ValueError`` so a single
 except-clause in tool wrappers catches both.
@@ -20,9 +21,30 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import Any, Dict
+from typing import TypedDict, cast
 
 CURRENT_VERSION = 1
+
+
+class CursorState(TypedDict, total=False):
+    """Tool-specific state inside a cursor payload."""
+
+    o: int          # offset (search, browse, links)
+    l: int          # limit
+    q: str          # query (search, search_all per-file)
+    ns: str         # namespace (browse_namespace)
+    scan_at: int    # entry id (walk_namespace — replaces today's int cursor)
+    ep: str         # entry path (extract_article_links)
+    k: str          # kind: "internal" | "external" | "media"
+    ct: str         # content_type (search_with_filters)
+
+
+class CursorPayload(TypedDict):
+    """Full cursor payload: version, tool name, and tool-specific state."""
+
+    v: int                       # cursor version, currently 1
+    t: str                       # tool name (e.g., "browse_namespace")
+    s: CursorState               # tool-specific state
 
 
 class CursorMismatchError(ValueError):
@@ -33,7 +55,7 @@ class Cursor:
     """Encode/decode opaque pagination cursors."""
 
     @staticmethod
-    def encode(*, tool: str, state: Dict[str, Any], version: int = CURRENT_VERSION) -> str:
+    def encode(*, tool: str, state: "CursorState", version: int = CURRENT_VERSION) -> str:
         """Encode a cursor payload as URL-safe base64 JSON.
 
         Args:
@@ -44,12 +66,12 @@ class Cursor:
         Returns:
             URL-safe base64 string suitable for ``next_cursor`` in a tool response.
         """
-        payload: Dict[str, Any] = {"v": version, "t": tool, "s": state}
+        payload: CursorPayload = {"v": version, "t": tool, "s": state}
         raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
 
     @staticmethod
-    def decode(token: str, *, expected_tool: str) -> Dict[str, Any]:
+    def decode(token: str, *, expected_tool: str) -> "CursorPayload":
         """Decode a cursor and verify it was issued by ``expected_tool``.
 
         Args:
@@ -87,4 +109,4 @@ class Cursor:
             raise CursorMismatchError(
                 f"Cursor was issued by '{payload['t']}', cannot be used by '{expected_tool}'"
             )
-        return payload
+        return cast("CursorPayload", payload)

@@ -88,8 +88,8 @@ class TestCursorMalformed:
         assert decoded["s"]["ns"] == "C"
 
 
-class TestCursorEmptyState:
-    def test_empty_state_dict_allowed(self) -> None:
+class TestCursorWalkNamespaceState:
+    def test_walk_namespace_state_roundtrip(self) -> None:
         token = Cursor.encode(tool="walk_namespace", state={"scan_at": 0, "l": 200})
         decoded = Cursor.decode(token, expected_tool="walk_namespace")
         assert decoded["s"]["scan_at"] == 0
