@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0](https://github.com/cameronrye/openzim-mcp/compare/v1.3.0...v1.4.0) (2026-05-08)
+
+
+### Features
+
+* **v2:** Phase A — quality wins ([#1](https://github.com/cameronrye/openzim-mcp/issues/1), [#2](https://github.com/cameronrye/openzim-mcp/issues/2), [#4](https://github.com/cameronrye/openzim-mcp/issues/4), [#5](https://github.com/cameronrye/openzim-mcp/issues/5), [#14](https://github.com/cameronrye/openzim-mcp/issues/14)) ([#108](https://github.com/cameronrye/openzim-mcp/issues/108)) ([669c0a9](https://github.com/cameronrye/openzim-mcp/commit/669c0a995cb342ceb7b18f4d2e90880559f673f1))
+
 ## [2.0.0a1] — 2026-05-08
 
 > First v2 pre-release. Phase A of the multi-phase v2 effort. All changes additive at the tool-signature layer; small compact-mode prose change for empty search results (see Changed below).
