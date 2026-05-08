@@ -290,6 +290,39 @@ class TestGetBinaryEntryDataMeta:
         assert "_meta" in result, "cached path must attach _meta"
         assert result["_meta"]["tokens_est"] > 0
 
+    def test_get_binary_entry_data_meta_truncated_when_oversized(self, zim_ops, temp_dir):
+        """When include_data=True but binary exceeds max_size_bytes, _meta.truncated must be True."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        # Create a mock binary item that is oversized (100 bytes)
+        mock_item = MagicMock()
+        mock_item.size = 100
+        mock_item.mimetype = "application/pdf"
+        mock_item.content = b"x" * 100  # 100 bytes
+
+        mock_entry = MagicMock()
+        mock_entry.is_redirect = False
+        mock_entry.title = "Large PDF"
+        mock_entry.path = "I/document.pdf"
+        mock_entry.get_item.return_value = mock_item
+
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.return_value = mock_entry
+
+        # Call with max_size_bytes=50, so the 100-byte item will be truncated
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_ctx:
+            mock_ctx.return_value.__enter__.return_value = mock_archive
+            result = zim_ops.get_binary_entry_data(
+                str(zim_file), "I/document.pdf", max_size_bytes=50, include_data=True
+            )
+
+        assert "_meta" in result, "fresh path must attach _meta"
+        assert result["truncated"] is True, "payload truncated should be True for oversized binary"
+        assert result["_meta"]["truncated"] is True, "_meta.truncated must be True when binary exceeds max_size_bytes"
+        assert result["data"] is None, "data should be None when truncated"
+
 
 class TestGetEntrySummaryDataMeta:
     """get_entry_summary_data must attach _meta on every return path."""

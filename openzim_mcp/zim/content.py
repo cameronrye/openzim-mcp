@@ -617,11 +617,10 @@ class _ContentMixin:
         cached_meta = self.cache.get(cache_key)
         if cached_meta and (not include_data or cached_meta["size"] > max_size_bytes):
             logger.debug(f"Returning cached binary metadata for: {entry_path}")
-            return attach_meta(
-                self._format_binary_response(
-                    cached_meta, include_data, max_size_bytes, data=None
-                )
+            payload = self._format_binary_response(
+                cached_meta, include_data, max_size_bytes, data=None
             )
+            return attach_meta(payload, truncated=payload.get("truncated", False))
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -685,11 +684,10 @@ class _ContentMixin:
                 # Cache invariant metadata for future calls.
                 self.cache.set(cache_key, meta)
 
-                result = attach_meta(
-                    self._format_binary_response(
-                        meta, include_data, max_size_bytes, data=encoded_data
-                    )
+                payload = self._format_binary_response(
+                    meta, include_data, max_size_bytes, data=encoded_data
                 )
+                result = attach_meta(payload, truncated=payload.get("truncated", False))
                 logger.info(
                     f"Retrieved binary entry: {entry_path} "
                     f"({meta['mime_type']}, {self._format_size(content_size)})"
