@@ -593,16 +593,23 @@ class SimpleToolsHandler:
     # ``## `` heading marker, used by _lead_with_toc. ``## Content`` is
     # a wrapper section that ``get_zim_entry`` adds at the start of
     # every article; real article H2 sections come after the article
-    # H1, which itself follows the wrapper. The wrapper-skip happens
-    # in code (see ``_iter_article_h2`` below) rather than via a
-    # negative-lookahead in the pattern — earlier shapes that combined
-    # ``[ \t]+`` with ``(?!Content\b)`` were flagged by Sonar S5852
-    # because greedy whitespace can backtrack against the lookahead
-    # ("##              Content" with many leading spaces would walk
-    # back the whitespace consumption until the lookahead succeeds at
-    # position N+1, making the regex polynomial). The simpler
-    # match-then-filter form is unambiguously single-pass.
-    _ARTICLE_H2_RE = re.compile(r"^##[ \t]+([^\n]+)$", re.MULTILINE)
+    # H1, which itself follows the wrapper.
+    #
+    # Wrapper-skip happens in code (``_iter_article_h2`` /
+    # ``_first_article_h2`` below) rather than via a regex lookahead —
+    # earlier shapes that combined ``[ \t]+`` with ``(?!Content\b)``
+    # were flagged by Sonar S5852 because greedy whitespace can
+    # backtrack against the lookahead.
+    #
+    # The capture is anchored with ``\S`` so its first char is
+    # mutually exclusive with the leading ``[ \t]+`` — the engine
+    # has no ambiguity over where the whitespace ends and the
+    # heading text begins. ``[^\n]*`` then runs to end-of-line under
+    # MULTILINE in a single greedy pass with no backtracking. An
+    # earlier form ``[^\n]+`` overlapped with ``[ \t]+`` on space
+    # chars, which Sonar's analyzer treated as polynomial-backtracking
+    # risk even though the actual run never backtracks.
+    _ARTICLE_H2_RE = re.compile(r"^##[ \t]+(\S[^\n]*)$", re.MULTILINE)
 
     @classmethod
     def _iter_article_h2(cls, body: str) -> "list[re.Match[str]]":
