@@ -1309,7 +1309,7 @@ class TestZimOperations:
         validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
 
         # Test get_zim_entry cache hit (lines 283-284)
-        cache_key = f"entry:{validated_path}:A/Test:1000:0"
+        cache_key = f"entry:{validated_path}:A/Test:1000:0:compact=False"
         zim_operations.cache.set(cache_key, "cached entry content")
 
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)

@@ -670,13 +670,18 @@ class ContentProcessor:
             f"body content, only showing first {max_length:,}] ..."
         )
 
-    def process_mime_content(self, content_bytes: bytes, mime_type: str) -> str:
+    def process_mime_content(
+        self, content_bytes: bytes, mime_type: str, *, compact: bool = False
+    ) -> str:
         """
         Process content based on MIME type.
 
         Args:
             content_bytes: Raw content bytes
             mime_type: MIME type of the content
+            compact: When True, forward to ``html_to_plain_text`` with
+                ``compact=True`` so infobox extraction and oversized-table
+                replacement run. Defaults to False (v1.2.0-compatible).
 
         Returns:
             Processed text content
@@ -686,7 +691,7 @@ class ContentProcessor:
             raw_content = content_bytes.decode("utf-8", errors="replace")
 
             if mime_type.startswith("text/html"):
-                return self.html_to_plain_text(raw_content)
+                return self.html_to_plain_text(raw_content, compact=compact)
             elif mime_type.startswith("text/"):
                 return raw_content.strip()
             elif mime_type.startswith("image/"):

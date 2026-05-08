@@ -734,7 +734,9 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
-        return self.zim_operations.get_main_page(zim_file_path)
+        return self.zim_operations.get_main_page(
+            zim_file_path, compact=options.get("compact", False)
+        )
 
     def _handle_list_namespaces(
         self,
@@ -823,7 +825,10 @@ class SimpleToolsHandler:
                 "'summarize \"C/Evolution\"'"
             )
         return self.zim_operations.get_entry_summary(
-            zim_file_path, entry_path, options.get("max_words", 200)
+            zim_file_path,
+            entry_path,
+            options.get("max_words", 200),
+            compact=options.get("compact", False),
         )
 
     def _handle_get_section(
@@ -1054,6 +1059,7 @@ class SimpleToolsHandler:
             entry_path,
             options.get("max_content_length"),
             options.get("content_offset", 0),
+            compact=options.get("compact", False),
         )
 
     def _handle_search(
@@ -1157,7 +1163,11 @@ class SimpleToolsHandler:
 
         try:
             article_body = self.zim_operations.get_zim_entry(
-                zim_file_path, top_path, max_content_length, 0
+                zim_file_path,
+                top_path,
+                max_content_length,
+                0,
+                compact=options.get("compact", False),
             )
         except Exception as e:
             # Article fetch failed — degrade gracefully to plain search.
@@ -1420,7 +1430,9 @@ class SimpleToolsHandler:
             {"zim_file_path": zim_file_path, "entry_path": p} for p in entry_paths
         ]
         return self.zim_operations.get_entries(
-            entries, options.get("max_content_length")
+            entries,
+            options.get("max_content_length"),
+            compact=options.get("compact", False),
         )
 
     _INTENT_HANDLERS = {

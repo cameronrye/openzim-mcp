@@ -78,6 +78,8 @@ class _ContentMixin:
         entry_path: str,
         max_content_length: Optional[int] = None,
         content_offset: int = 0,
+        *,
+        compact: bool = False,
     ) -> str:
         """Get detailed content of a ZIM entry with smart retrieval.
 
@@ -122,7 +124,7 @@ class _ContentMixin:
         # entirely, which is the whole point of caching here.
         cache_key = (
             f"entry:{validated_path}:{entry_path}:"
-            f"{max_content_length}:{content_offset}"
+            f"{max_content_length}:{content_offset}:compact={compact}"
         )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
@@ -137,6 +139,7 @@ class _ContentMixin:
                     entry_path,
                     max_content_length,
                     content_offset,
+                    compact=compact,
                 )
         except OpenZimMcpArchiveError:
             # Re-raise OpenZimMcpArchiveError with enhanced guidance messages
@@ -156,6 +159,8 @@ class _ContentMixin:
         entry_path: str,
         max_content_length: int,
         content_offset: int = 0,
+        *,
+        compact: bool = False,
     ) -> str:
         """Retrieve and format a single entry against an already-open archive.
 
@@ -174,7 +179,7 @@ class _ContentMixin:
         # entry within the same ZIM file was previously cached.
         cache_key = (
             f"entry:{validated_path}:{entry_path}:"
-            f"{max_content_length}:{content_offset}"
+            f"{max_content_length}:{content_offset}:compact={compact}"
         )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
@@ -187,6 +192,7 @@ class _ContentMixin:
             max_content_length,
             validated_path,
             content_offset,
+            compact=compact,
         )
 
         # Only cache successful content retrieval. If process_mime_content
@@ -201,6 +207,8 @@ class _ContentMixin:
         self,
         entries: List[Dict[str, str]],
         max_content_length: Optional[int] = None,
+        *,
+        compact: bool = False,
     ) -> Dict[str, Any]:
         """Structured variant of ``get_entries``.
 
@@ -288,6 +296,7 @@ class _ContentMixin:
                                 entry_path,
                                 max_content_length,
                                 0,
+                                compact=compact,
                             )
                             results.append(
                                 {
@@ -338,6 +347,8 @@ class _ContentMixin:
         self,
         entries: List[Dict[str, str]],
         max_content_length: Optional[int] = None,
+        *,
+        compact: bool = False,
     ) -> str:
         """Legacy JSON-string variant of ``get_entries_data``.
 
@@ -349,6 +360,8 @@ class _ContentMixin:
         Args:
             entries: list of ``{"zim_file_path", "entry_path"}`` dicts.
             max_content_length: per-entry max content length.
+            compact: When True, forward compact rendering to each entry
+                (infobox extraction, oversized-table replacement).
 
         Returns:
             JSON string ``{"results": [...], "succeeded": N, "failed": N}``.
@@ -357,7 +370,7 @@ class _ContentMixin:
             OpenZimMcpValidationError: empty list or > MAX_BATCH_SIZE.
         """
         return json.dumps(
-            self.get_entries_data(entries, max_content_length),
+            self.get_entries_data(entries, max_content_length, compact=compact),
             ensure_ascii=False,
         )
 
@@ -368,6 +381,8 @@ class _ContentMixin:
         max_content_length: int,
         validated_path: Path,
         content_offset: int = 0,
+        *,
+        compact: bool = False,
     ) -> Tuple[str, bool]:
         """Get the actual entry content with smart retrieval.
 
@@ -397,6 +412,7 @@ class _ContentMixin:
                     entry_path,
                     max_content_length,
                     content_offset,
+                    compact=compact,
                 )
                 return result, content_ok
             except Exception as e:
@@ -408,7 +424,12 @@ class _ContentMixin:
         try:
             logger.debug(f"Attempting direct entry access: {entry_path}")
             result, content_ok, resolved_path = self._get_entry_content_direct(
-                archive, entry_path, entry_path, max_content_length, content_offset
+                archive,
+                entry_path,
+                entry_path,
+                max_content_length,
+                content_offset,
+                compact=compact,
             )
             # Cache the *resolved* path so a follow-up request for the same
             # redirect entry skips the redirect chain entirely. Path mapping
@@ -436,6 +457,7 @@ class _ContentMixin:
                         entry_path,
                         max_content_length,
                         content_offset,
+                        compact=compact,
                     )
                     # Cache the resolved path (which may differ from
                     # ``actual_path`` if the search hit a redirect stub).
@@ -476,6 +498,8 @@ class _ContentMixin:
         requested_path: str,
         max_content_length: int,
         content_offset: int = 0,
+        *,
+        compact: bool = False,
     ) -> Tuple[str, bool, str]:
         """Get entry content using the actual path from the ZIM file.
 
@@ -533,7 +557,7 @@ class _ContentMixin:
 
             # Process content based on MIME type
             content = self.content_processor.process_mime_content(
-                bytes(item.content), mime_type
+                bytes(item.content), mime_type, compact=compact
             )
 
         except Exception as e:
@@ -784,6 +808,8 @@ class _ContentMixin:
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
+        *,
+        compact: bool = False,
     ) -> Dict[str, Any]:
         """Structured variant of ``get_entry_summary``.
 
@@ -809,7 +835,9 @@ class _ContentMixin:
 
         # Cache key distinct from the legacy string cache so old persisted
         # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"summary_data:{validated_path}:{entry_path}:{max_words}"
+        cache_key = (
+            f"summary_data:{validated_path}:{entry_path}:{max_words}:compact={compact}"
+        )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached summary dict for: {entry_path}")
@@ -823,7 +851,7 @@ class _ContentMixin:
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 result = self._extract_entry_summary_data(
-                    archive, entry_path, max_words
+                    archive, entry_path, max_words, compact=compact
                 )
 
             # Cache the result (pre-_meta so cached payload stays compact)
@@ -843,6 +871,8 @@ class _ContentMixin:
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
+        *,
+        compact: bool = False,
     ) -> str:
         """Legacy JSON-string variant of ``get_entry_summary_data``.
 
@@ -865,13 +895,15 @@ class _ContentMixin:
             OpenZimMcpArchiveError: If summary extraction fails
         """
         return json.dumps(
-            self.get_entry_summary_data(zim_file_path, entry_path, max_words),
+            self.get_entry_summary_data(
+                zim_file_path, entry_path, max_words, compact=compact
+            ),
             indent=2,
             ensure_ascii=False,
         )
 
     def _extract_entry_summary_data(
-        self, archive: Archive, entry_path: str, max_words: int
+        self, archive: Archive, entry_path: str, max_words: int, *, compact: bool = False
     ) -> Dict[str, Any]:
         """Extract summary from article content as a dict."""
         try:
@@ -892,7 +924,9 @@ class _ContentMixin:
             }
 
             if mime_type.startswith("text/html"):
-                summary_data.update(self._extract_html_summary(raw_content, max_words))
+                summary_data.update(
+                    self._extract_html_summary(raw_content, max_words, compact=compact)
+                )
             elif mime_type.startswith("text/"):
                 # For plain text, take first N words
                 plain_text = raw_content.strip()
@@ -917,7 +951,7 @@ class _ContentMixin:
             ) from e
 
     def _extract_html_summary(  # NOSONAR(python:S3776)
-        self, html_content: str, max_words: int
+        self, html_content: str, max_words: int, *, compact: bool = False
     ) -> Dict[str, Any]:
         """Extract summary from HTML content.
 
@@ -1014,7 +1048,9 @@ class _ContentMixin:
                 result["word_count"] = len(words)
         else:
             # Fallback: use html2text to get any text
-            plain_text = self.content_processor.html_to_plain_text(html_content)
+            plain_text = self.content_processor.html_to_plain_text(
+                html_content, compact=compact
+            )
             words = plain_text.split()
 
             if len(words) > max_words:

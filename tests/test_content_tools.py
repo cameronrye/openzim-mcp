@@ -385,7 +385,7 @@ class TestGetEntrySummaryDataMeta:
             "word_count": 2,
             "is_truncated": False,
         }
-        cache_key = f"summary_data:{validated}:A/Cached:200"
+        cache_key = f"summary_data:{validated}:A/Cached:200:compact=False"
         zim_ops.cache.set(cache_key, old_summary)
 
         result = zim_ops.get_entry_summary_data(str(zim_file), "A/Cached")

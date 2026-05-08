@@ -58,3 +58,28 @@ def test_extract_infobox_capped_at_kv_limit():
     soup = BeautifulSoup(html, "html.parser")
     rows = proc.extract_infobox(soup, kv_limit=30)
     assert len(rows) == 30
+
+
+# ---------------------------------------------------------------------------
+# process_mime_content + html_to_plain_text compact propagation
+# ---------------------------------------------------------------------------
+
+
+def test_process_mime_content_compact_extracts_infobox(processor):
+    """process_mime_content(compact=True) should surface KV pairs from an
+    infobox and not produce pipe-table syntax for them."""
+    html = WIKI_INFOBOX_HTML.encode("utf-8")
+    result = processor.process_mime_content(html, "text/html", compact=True)
+    assert "**Born:**" in result
+    assert "**Died:**" in result
+    # Infobox table itself must be gone — no pipe-soup
+    assert "|" not in result
+
+
+def test_process_mime_content_non_compact_no_kv_extraction(processor):
+    """process_mime_content(compact=False) should NOT extract KV pairs —
+    backward compat for callers that don't opt in."""
+    html = WIKI_INFOBOX_HTML.encode("utf-8")
+    result = processor.process_mime_content(html, "text/html", compact=False)
+    # No bold KV prefix expected in default mode
+    assert "**Born:**" not in result

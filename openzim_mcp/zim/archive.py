@@ -506,7 +506,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
 
         return metadata
 
-    def get_main_page(self, zim_file_path: str) -> str:
+    def get_main_page(self, zim_file_path: str, *, compact: bool = False) -> str:
         """Get the main page entry from W namespace.
 
         Args:
@@ -524,7 +524,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
         # Check cache
-        cache_key = f"main_page:{validated_path}"
+        cache_key = f"main_page:{validated_path}:compact={compact}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached main page for: {validated_path}")
@@ -536,7 +536,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
 
         try:
             with _zim_ops_shim.zim_archive(validated_path) as archive:
-                result, content_ok = self._get_main_page_content(archive)
+                result, content_ok = self._get_main_page_content(archive, compact=compact)
 
             # Don't cache error sentinels: a transient failure (e.g. MIME
             # processing error) should not be locked in for the TTL.
@@ -550,7 +550,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             raise OpenZimMcpArchiveError(f"Main page retrieval failed: {e}") from e
 
     def _get_main_page_content(  # NOSONAR(python:S3776)
-        self, archive: Archive
+        self, archive: Archive, *, compact: bool = False
     ) -> Tuple[str, bool]:
         """Get main page content from archive.
 
@@ -598,7 +598,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                 try:
                     item = main_entry.get_item()
                     content = self.content_processor.process_mime_content(
-                        bytes(item.content), item.mimetype
+                        bytes(item.content), item.mimetype, compact=compact
                     )
 
                     # Truncate content for main page display
@@ -641,7 +641,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                         try:
                             item = entry.get_item()
                             content = self.content_processor.process_mime_content(
-                                bytes(item.content), item.mimetype
+                                bytes(item.content), item.mimetype, compact=compact
                             )
                             content = self.content_processor.truncate_content(
                                 content, DEFAULT_MAIN_PAGE_TRUNCATION

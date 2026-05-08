@@ -1764,7 +1764,7 @@ class TestZimPathHallucinationHandling:
         )
         # Backend received the resolved full path, not the bare name.
         mock_zim_operations.get_main_page.assert_called_once_with(
-            "/var/lib/zim/wikipedia_en_all_maxi.zim"
+            "/var/lib/zim/wikipedia_en_all_maxi.zim", compact=False
         )
 
     def test_bare_filename_with_no_match_triggers_auto_select(
@@ -1778,7 +1778,7 @@ class TestZimPathHallucinationHandling:
         # The hallucinated name was discarded; auto-select supplied
         # the real path.
         mock_zim_operations.get_main_page.assert_called_once_with(
-            "/var/lib/zim/wikipedia_en_all_maxi.zim"
+            "/var/lib/zim/wikipedia_en_all_maxi.zim", compact=False
         )
 
     def test_slashed_path_is_trusted_even_when_unknown(
@@ -1791,7 +1791,9 @@ class TestZimPathHallucinationHandling:
         """
         explicit = "/some/other/wikipedia.zim"
         handler.handle_zim_query("show main page", zim_file_path=explicit)
-        mock_zim_operations.get_main_page.assert_called_once_with(explicit)
+        mock_zim_operations.get_main_page.assert_called_once_with(
+            explicit, compact=False
+        )
 
     def test_slashed_path_matching_full_path_is_used_verbatim(
         self, handler, mock_zim_operations
@@ -1799,7 +1801,7 @@ class TestZimPathHallucinationHandling:
         """A slashed path that matches a real file is honored exactly."""
         real = "/var/lib/zim/wikipedia_en_all_maxi.zim"
         handler.handle_zim_query("show main page", zim_file_path=real)
-        mock_zim_operations.get_main_page.assert_called_once_with(real)
+        mock_zim_operations.get_main_page.assert_called_once_with(real, compact=False)
 
     def test_bare_filename_no_match_no_auto_select(self):
         """When the candidate doesn't match anything AND auto-select
@@ -1820,7 +1822,7 @@ class TestZimPathHallucinationHandling:
         handler = SimpleToolsHandler(mock)
         handler.handle_zim_query("show main page", zim_file_path="ghost.zim")
         # No resolve, no auto-select → original bare name reaches backend.
-        mock.get_main_page.assert_called_once_with("ghost.zim")
+        mock.get_main_page.assert_called_once_with("ghost.zim", compact=False)
 
     def test_resolver_basename_match_doesnt_mask_later_exact_match(self):
         """If the listing contains both a basename match (different dir)
@@ -3001,3 +3003,129 @@ class TestCompactFooter:
         assert "chars" in last_line, (
             f"Expected 'chars' in truncated footer, got: {last_line!r}"
         )
+
+
+class TestCompactFlagPropagation:
+    """Verify that compact=True reaches get_zim_entry / get_main_page via
+    the simple-mode handler chain.
+
+    These tests do NOT open a real ZIM archive — they mock ZimOperations and
+    assert that the correct keyword argument is forwarded end-to-end.
+    """
+
+    INFOBOX_ARTICLE = (
+        "# Albert Einstein\n\n"
+        "**Born:** 14 March 1879\n\n"
+        "Albert Einstein was a theoretical physicist.\n"
+    )
+
+    def _make_handler(self, zim_path="/test/wiki.zim"):
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": zim_path}]
+        mock.get_zim_entry.return_value = self.INFOBOX_ARTICLE
+        mock.get_main_page.return_value = self.INFOBOX_ARTICLE
+        mock.get_entry_summary.return_value = '{"summary": "A physicist."}'
+        mock.config.meta.footer_enabled = False
+        return SimpleToolsHandler(mock), mock
+
+    def test_get_article_compact_true_passes_compact(self):
+        """_handle_get_article must pass compact=True to get_zim_entry."""
+        handler, mock = self._make_handler()
+        handler.handle_zim_query(
+            "get article Einstein",
+            zim_file_path="/test/wiki.zim",
+            options={"compact": True},
+        )
+        _args, kwargs = mock.get_zim_entry.call_args
+        assert kwargs.get("compact") is True, (
+            "compact=True must be forwarded to get_zim_entry"
+        )
+
+    def test_get_article_compact_false_passes_compact(self):
+        """_handle_get_article must pass compact=False when not in compact mode."""
+        handler, mock = self._make_handler()
+        handler.handle_zim_query(
+            "get article Einstein",
+            zim_file_path="/test/wiki.zim",
+            options={"compact": False},
+        )
+        _args, kwargs = mock.get_zim_entry.call_args
+        assert kwargs.get("compact") is False, (
+            "compact=False must be forwarded to get_zim_entry"
+        )
+
+    def test_tell_me_about_compact_true_passes_compact(self):
+        """_handle_tell_me_about must pass compact=True when article is fetched."""
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/test/wiki.zim"}]
+        # search_zim_file_data returns a dict with "results" list; the top hit
+        # must be a strong title match so the handler proceeds to fetch the article.
+        mock.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "title": "Albert Einstein",
+                    "path": "A/Albert_Einstein",
+                    "score": 100,
+                }
+            ]
+        }
+        mock.get_zim_entry.return_value = self.INFOBOX_ARTICLE
+        mock.get_article_structure_data.return_value = {"sections": []}
+        mock.config.meta.footer_enabled = False
+
+        handler = SimpleToolsHandler(mock)
+        handler.handle_zim_query(
+            "tell me about Albert Einstein",
+            zim_file_path="/test/wiki.zim",
+            options={"compact": True},
+        )
+        assert mock.get_zim_entry.called, "get_zim_entry should be called"
+        _args, kwargs = mock.get_zim_entry.call_args
+        assert kwargs.get("compact") is True, (
+            "compact=True must be forwarded from tell_me_about to get_zim_entry"
+        )
+
+    def test_main_page_compact_true_passes_compact(self):
+        """_handle_main_page must pass compact=True to get_main_page."""
+        handler, mock = self._make_handler()
+        handler.handle_zim_query(
+            "show main page",
+            zim_file_path="/test/wiki.zim",
+            options={"compact": True},
+        )
+        mock.get_main_page.assert_called_once_with(
+            "/test/wiki.zim", compact=True
+        )
+
+    def test_compact_infobox_end_to_end(self):
+        """Simulate the full compact path: simple_tools receives HTML with an
+        infobox via a mock get_zim_entry; the result should contain KV pairs
+        (not pipe-table syntax).
+
+        This test drives ContentProcessor directly (no archive open) to prove
+        the plumbing: compact=True passed to get_zim_entry arrives at
+        html_to_plain_text and triggers infobox extraction.
+        """
+        from openzim_mcp.content_processor import ContentProcessor
+
+        infobox_html = (
+            "<html><body>"
+            '<table class="infobox vcard">'
+            "<tr><th>Born</th><td>14 March 1879</td></tr>"
+            "<tr><th>Died</th><td>18 April 1955</td></tr>"
+            "</table>"
+            "<p>Albert Einstein was a theoretical physicist.</p>"
+            "</body></html>"
+        )
+        proc = ContentProcessor()
+        result = proc.process_mime_content(
+            infobox_html.encode("utf-8"), "text/html", compact=True
+        )
+        assert "**Born:**" in result, "compact=True should produce KV-extracted infobox"
+        assert "**Died:**" in result
+        # Infobox table should not appear as pipe-soup
+        assert "|" not in result, "compact infobox should not produce pipe-table syntax"
