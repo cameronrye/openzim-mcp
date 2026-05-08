@@ -587,7 +587,17 @@ class SimpleToolsHandler:
     # ``## Content`` is a wrapper section that ``get_zim_entry`` adds at
     # the start of every article; the real article H2 sections come
     # after the article H1, which itself follows the wrapper.
-    _ARTICLE_H2_RE = re.compile(r"^##\s+(?!Content\b)(.+)$", re.MULTILINE)
+    #
+    # ``[ \t]+`` and ``\S`` are disjoint character classes — the
+    # leading whitespace and the heading-text capture can't both match
+    # the same character, so the engine has no ambiguity to backtrack
+    # over (Sonar S5852 / polynomial backtracking). Original pattern
+    # used ``\s+`` and ``.+`` which both accept space chars on lines
+    # like ``##  Content``; the engine could split that boundary
+    # multiple ways before the negative lookahead resolved.
+    # ``[ \t]*$`` similarly partitions trailing whitespace away from
+    # the captured group so the heading text is clean.
+    _ARTICLE_H2_RE = re.compile(r"^##[ \t]+(?!Content\b)(\S.*?)[ \t]*$", re.MULTILINE)
 
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:
         """Truncate ``body`` at the first article H2 (lead-section cut)

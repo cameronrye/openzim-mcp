@@ -289,8 +289,11 @@ class TestTypoTolerantFallback:
         assert hit["path"] == "C/Einstein"
         assert hit["title"] == "Einstein"
         # Below 0.95 so a real suggestion-top in another file would
-        # outrank a fuzzy hit.
-        assert hit["score"] == 0.7
+        # outrank a fuzzy hit. ``pytest.approx`` rather than ``==`` so
+        # SonarCloud S1244 (float-equality bug rule) doesn't flag the
+        # comparison; the value here is one we set, not one derived
+        # from arithmetic, so equality is semantically fine.
+        assert hit["score"] == pytest.approx(0.7)
         assert hit.get("match_type") == "typo_corrected"
 
     def test_typo_fallback_skipped_when_suggestion_hits(self, server, monkeypatch):
