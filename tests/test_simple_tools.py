@@ -1264,13 +1264,18 @@ class TestCompactSearchSnippetTruncation:
     def test_truncation_runs_in_compact_search_path(self):
         """End-to-end: compact mode applies snippet truncation to a
         rendered search response.
+
+        In compact mode _handle_search now uses search_zim_file_data (the
+        dict variant) for non-empty results, then renders via
+        _format_search_text.  The test mocks both so the truncation path
+        still exercises the cap + snippet logic.
         """
         from unittest.mock import MagicMock
 
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         long_body = "y" * 2000
-        mock.search_zim_file.return_value = (
+        rendered = (
             'Found 1 matches for "biology", showing 1-1:\n\n'
             "## 1. Biology article\n"
             "Path: Biology\n"
@@ -1278,6 +1283,17 @@ class TestCompactSearchSnippetTruncation:
             "---\n"
             "Showing 1-1 of 1 (end of results)\n"
         )
+        # In compact mode _handle_search calls search_zim_file_data + _format_search_text
+        mock.search_zim_file_data.return_value = {
+            "query": "biology",
+            "total_results": 1,
+            "offset": 0,
+            "limit": 5,
+            "results": [{"path": "Biology", "title": "Biology article", "snippet": "x"}],
+            "pagination": {"has_more": False},
+            "_meta": {"tokens_est": 10, "chars": 100, "truncated": False},
+        }
+        mock._format_search_text.return_value = rendered
         handler = SimpleToolsHandler(mock)
         out = handler.handle_zim_query("search for biology", options={"compact": True})
         assert long_body not in out
@@ -3003,6 +3019,85 @@ class TestCompactFooter:
         assert "chars" in last_line, (
             f"Expected 'chars' in truncated footer, got: {last_line!r}"
         )
+
+    def test_compact_empty_search_uses_footer_not_legacy_prose(self):
+        """compact=True + zero results → footer-driven recovery; no legacy prose.
+
+        When _handle_search finds zero results in compact mode it returns a
+        _HandlerResult with reason='0_hits' and suggestions from _meta.
+        handle_zim_query's footer step then renders the empty-result
+        suggestion footer (``> No results. Try: …``) instead of the old
+        ``**Try one of these:**`` prose block.
+        """
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = True
+        # search_zim_file_data returns zero results with suggestions in _meta
+        mock.search_zim_file_data.return_value = {
+            "query": "xyzzy",
+            "total_results": 0,
+            "offset": 0,
+            "limit": 5,
+            "results": [],
+            "pagination": {"has_more": False},
+            "_meta": {
+                "tokens_est": 5,
+                "chars": 20,
+                "truncated": False,
+                "reason": "0_hits",
+                "suggestions": [{"type": "alt_spelling", "value": "xyz"}],
+            },
+        }
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query(
+            'search for "xyzzy"', options={"compact": True}
+        )
+        # Legacy prose must NOT appear.
+        assert "**Try one of these:**" not in out, (
+            "compact+empty should not render legacy prose block"
+        )
+        # Footer line must be present and start with the empty-result marker.
+        last_line = out.rstrip().splitlines()[-1]
+        assert last_line.startswith("> No results."), (
+            f"Expected footer starting with '> No results.', got: {last_line!r}"
+        )
+        # Suggestion value from _meta must appear in the footer.
+        assert "xyz" in last_line, (
+            f"Expected suggestion 'xyz' in footer, got: {last_line!r}"
+        )
+
+    def test_non_compact_empty_search_keeps_legacy_prose(self):
+        """compact=False + zero results → legacy prose is preserved byte-identical.
+
+        The non-compact path still calls search_zim_file (the string
+        variant) so existing callers that parse the prose block are
+        unaffected.
+        """
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = True
+        # search_zim_file (legacy string path) returns the legacy prose
+        mock.search_zim_file.return_value = (
+            'No search results found for "xyzzy".\n\n'
+            "**Try one of these:**\n"
+            "- `suggestions for xyzzy` — autocomplete to catch typos or partial names\n"
+            "- `tell me about xyzzy` — structured topic lookup with auto article fetch\n"
+            "- A shorter or differently-cased query"
+        )
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query(
+            'search for "xyzzy"', options={"compact": False}
+        )
+        # Legacy prose must be present in non-compact mode.
+        assert "**Try one of these:**" in out, (
+            "compact=False should preserve the legacy prose recovery block"
+        )
+        # search_zim_file (string path) must have been called, not the dict variant.
+        mock.search_zim_file.assert_called_once()
 
 
 class TestCompactFlagPropagation:

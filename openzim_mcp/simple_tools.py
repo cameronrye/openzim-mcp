@@ -12,7 +12,8 @@ re-exported here for backward-compatibility with existing imports.
 import logging
 import re
 from collections import Counter
-from typing import Any, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 from . import compact_renderers
 from .exceptions import RegexTimeoutError
@@ -22,6 +23,24 @@ from .security import sanitize_context_for_error
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _HandlerResult:
+    """Structured return value from an intent handler.
+
+    Most handlers return a plain ``str``; handlers that need to pass
+    structured ``_meta`` fields (e.g. ``reason``, ``suggestions``) up to
+    ``handle_zim_query``'s footer-building logic return this instead.
+
+    ``handle_zim_query`` detects the type at runtime and unpacks the fields
+    before the footer step — existing handlers that return strings are
+    completely unaffected.
+    """
+
+    body: str
+    reason: Optional[str] = None
+    suggestions: Optional[List[Dict[str, str]]] = field(default=None)
 
 
 class SimpleToolsHandler:
@@ -226,7 +245,17 @@ class SimpleToolsHandler:
             handler = self._INTENT_HANDLERS.get(
                 intent, SimpleToolsHandler._handle_search
             )
-            result = handler(self, query, zim_file_path, params, options)
+            raw = handler(self, query, zim_file_path, params, options)
+            # Unpack structured handler results; plain string handlers are
+            # unaffected — they return a ``str`` as before.
+            if isinstance(raw, _HandlerResult):
+                result = raw.body
+                handler_reason: Optional[str] = raw.reason
+                handler_suggestions: Optional[List[Dict[str, str]]] = raw.suggestions
+            else:
+                result = raw
+                handler_reason = None
+                handler_suggestions = None
             if options.get("compact", False) and intent in self._TEXT_HEAVY_INTENTS:
                 # Strip markdown link-soup ([text](href "tooltip") -> text)
                 # from article-body and search-snippet responses. Wikipedia
@@ -278,10 +307,17 @@ class SimpleToolsHandler:
 
                 # Build footer with truncation state. At simple-mode level,
                 # there's no pagination, so no more_at_offset hint.
+                # ``handler_reason`` / ``handler_suggestions`` are non-None
+                # only when the handler returned a ``_HandlerResult``
+                # (currently: compact + zero-result search).  When set,
+                # ``format_footer`` renders the empty-result suggestion
+                # variant instead of the token-count variant.
                 meta = build_meta(
                     rendered=result,
                     truncated=was_truncated,
                     total_chars=pre_cap_chars if was_truncated else None,
+                    reason=handler_reason,
+                    suggestions=handler_suggestions,
                 )
                 footer = format_footer(
                     meta,
@@ -1068,12 +1104,47 @@ class SimpleToolsHandler:
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ):
+        """Route a search-intent query to the appropriate backend call.
+
+        In ``compact=True`` mode, uses the structured ``search_zim_file_data``
+        variant so we can inspect the payload before rendering.  When the
+        payload has zero results, returns a ``_HandlerResult`` whose
+        ``reason`` / ``suggestions`` fields are plumbed into the
+        ``handle_zim_query`` footer step — the footer then renders the
+        empty-result suggestion variant (``> No results. Try: …``) instead
+        of the legacy prose block ("**Try one of these:**").
+
+        In ``compact=False`` mode, delegates straight to the legacy
+        ``search_zim_file`` string surface so existing callers see no change.
+        """
+        search_query = params.get("query", query)
+        limit = options.get("limit")
+        offset = options.get("offset", 0)
+
+        if options.get("compact", False):
+            # Use the dict variant so we can inspect _meta.suggestions on
+            # empty results and surface them via the footer instead of the
+            # legacy prose block.
+            payload = self.zim_operations.search_zim_file_data(
+                zim_file_path, search_query, limit, offset
+            )
+            if payload.get("total_results", 0) == 0:
+                # Let handle_zim_query's footer step render the structured
+                # suggestion footer (format_footer empty-result variant).
+                meta = payload.get("_meta", {})
+                return _HandlerResult(
+                    body=f'No results for "{search_query}".',
+                    reason=meta.get("reason", "0_hits"),
+                    suggestions=meta.get("suggestions"),
+                )
+            # Non-empty results: render via the legacy text formatter so the
+            # markdown shape is identical to the non-compact path.
+            return self.zim_operations._format_search_text(payload)
+
+        # compact=False: unchanged legacy path.
         return self.zim_operations.search_zim_file(
-            zim_file_path,
-            params.get("query", query),
-            options.get("limit"),
-            options.get("offset", 0),
+            zim_file_path, search_query, limit, offset
         )
 
     def _handle_tell_me_about(
