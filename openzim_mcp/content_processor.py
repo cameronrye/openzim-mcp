@@ -484,6 +484,35 @@ class ContentProcessor:
         """
         return ParsedHTML(html_content)
 
+    def _render_soup_to_text(self, soup: BeautifulSoup, *, compact: bool) -> str:
+        """Render a BeautifulSoup tree to clean plain text.
+
+        Strips ``UNWANTED_HTML_SELECTORS``, optionally extracts infoboxes
+        and replaces oversized tables when ``compact=True``, then runs
+        ``html2text`` and collapses excess blank lines. Mutates the
+        provided soup; callers that need to preserve the original tree
+        should pass a copy.
+        """
+        for selector in UNWANTED_HTML_SELECTORS:
+            for element in soup.select(selector):
+                element.decompose()
+
+        infobox_md = ""
+        if compact:
+            kv_rows = self.extract_infobox(soup)
+            if kv_rows:
+                infobox_md = (
+                    "\n".join(f"**{r['label']}:** {r['value']}" for r in kv_rows)
+                    + "\n\n"
+                )
+            self.replace_oversized_tables(soup)
+
+        # Per-call HTML2Text so concurrent callers don't corrupt each
+        # other's parser state.
+        text = self._create_html_converter().handle(str(soup))
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return (infobox_md + text).strip()
+
     def html_to_plain_text_from_parsed(
         self, parsed: ParsedHTML, *, compact: bool = False
     ) -> str:
@@ -501,33 +530,7 @@ class ContentProcessor:
             Converted plain text
         """
         try:
-            # Get a copy since we modify the soup
-            soup = parsed.soup
-
-            # Remove unwanted elements
-            for selector in UNWANTED_HTML_SELECTORS:
-                for element in soup.select(selector):
-                    element.decompose()
-
-            infobox_md = ""
-            if compact:
-                kv_rows = self.extract_infobox(soup)
-                if kv_rows:
-                    infobox_md = (
-                        "\n".join(f"**{r['label']}:** {r['value']}" for r in kv_rows)
-                        + "\n\n"
-                    )
-                self.replace_oversized_tables(soup)
-
-            # Convert to text using a per-call ``HTML2Text`` so concurrent
-            # callers cannot corrupt each other's parser state.
-            text = self._create_html_converter().handle(str(soup))
-
-            # Clean up excess empty lines
-            text = re.sub(r"\n{3,}", "\n\n", text)
-
-            return (infobox_md + text).strip()
-
+            return self._render_soup_to_text(parsed.soup, compact=compact)
         except Exception as e:
             logger.warning(f"Error converting HTML to text: {e}")
             # Fallback: return raw text content
@@ -547,35 +550,9 @@ class ContentProcessor:
         """
         if not html_content:
             return ""
-
         try:
-            # Parse HTML with BeautifulSoup
             soup = BeautifulSoup(html_content, HTML_PARSER)
-
-            # Remove unwanted elements
-            for selector in UNWANTED_HTML_SELECTORS:
-                for element in soup.select(selector):
-                    element.decompose()
-
-            infobox_md = ""
-            if compact:
-                kv_rows = self.extract_infobox(soup)
-                if kv_rows:
-                    infobox_md = (
-                        "\n".join(f"**{r['label']}:** {r['value']}" for r in kv_rows)
-                        + "\n\n"
-                    )
-                self.replace_oversized_tables(soup)
-
-            # Convert to text using a per-call ``HTML2Text`` so concurrent
-            # callers cannot corrupt each other's parser state.
-            text = self._create_html_converter().handle(str(soup))
-
-            # Clean up excess empty lines
-            text = re.sub(r"\n{3,}", "\n\n", text)
-
-            return (infobox_md + text).strip()
-
+            return self._render_soup_to_text(soup, compact=compact)
         except Exception as e:
             logger.warning(f"Error converting HTML to text: {e}")
             # Fallback: return raw text content

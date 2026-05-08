@@ -18,13 +18,17 @@ logger = logging.getLogger(__name__)
 
 # Lazy-loaded tokenizer; module-level cache means the first request pays
 # the initialisation cost; subsequent requests are millions of tokens/sec.
+# A single sentinel tracks three states:
+#   _encoder is None and not _ENCODER_PROBED  → never tried
+#   _encoder is not None                     → loaded successfully
+#   _encoder is None and _ENCODER_PROBED    → tried and failed; don't retry
 _encoder: Any = None
-_encoder_init_failed = False
+_ENCODER_PROBED = False
 
 
 def _get_encoder() -> Any:
-    global _encoder, _encoder_init_failed
-    if _encoder is not None or _encoder_init_failed:
+    global _encoder, _ENCODER_PROBED
+    if _ENCODER_PROBED:
         return _encoder
     try:
         import tiktoken
@@ -34,7 +38,8 @@ def _get_encoder() -> Any:
         logger.warning(
             "tiktoken init failed; tokens_est will return 0 for this session: %s", e
         )
-        _encoder_init_failed = True
+    finally:
+        _ENCODER_PROBED = True
     return _encoder
 
 

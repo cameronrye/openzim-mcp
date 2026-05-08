@@ -150,6 +150,65 @@ def _ctx(value):
     return _C()
 
 
+def _patch_path_validator(server, validated_path: str = "/zim/test.zim") -> None:
+    """Stub the server's path validator to return a fixed path.
+
+    Used by every fuzzy-/suggestion-mock test so the validator never
+    actually touches the filesystem.
+    """
+    server.zim_operations.path_validator = MagicMock()
+    server.zim_operations.path_validator.validate_path.return_value = validated_path
+    server.zim_operations.path_validator.validate_zim_file.return_value = validated_path
+
+
+def _mock_archive_and_suggester(
+    monkeypatch,
+    *,
+    valid_paths: set | None = None,
+    entry_path: str | None = None,
+    entry_title: str | None = None,
+    suggestion_results: list | None = None,
+):
+    """Install mocks for ``zim_archive`` and ``SuggestionSearcher``.
+
+    ``valid_paths``: paths for which ``has_entry_by_path`` returns True.
+        ``None`` means no path matches (fast-path will miss).
+    ``entry_path`` / ``entry_title``: the entry returned by
+        ``get_entry_by_path`` when called on a valid path.
+    ``suggestion_results``: paths the suggestion searcher should return
+        (also drives ``getEstimatedMatches``). Default ``None`` → empty
+        (suggestions miss entirely).
+
+    Returns the ``mock_archive`` so a caller can attach extra behaviour
+    (e.g., tweak ``has_entry_by_path`` to a custom predicate).
+    """
+    mock_archive = MagicMock()
+    if valid_paths is None:
+        mock_archive.has_entry_by_path.return_value = False
+    else:
+        mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
+    if entry_path is not None:
+        mock_entry = MagicMock()
+        mock_entry.path = entry_path
+        mock_entry.title = entry_title or entry_path
+        mock_archive.get_entry_by_path.return_value = mock_entry
+    results = suggestion_results or []
+    mock_suggest = MagicMock()
+    mock_suggest.getEstimatedMatches.return_value = len(results)
+    mock_suggest.getResults.return_value = results
+    mock_searcher = MagicMock()
+    mock_searcher.suggest.return_value = mock_suggest
+    monkeypatch.setattr(
+        "openzim_mcp.zim_operations.SuggestionSearcher",
+        lambda archive: mock_searcher,
+    )
+    monkeypatch.setattr(
+        "openzim_mcp.zim_operations.zim_archive",
+        lambda *a, **kw: _ctx(mock_archive),
+    )
+    return mock_archive
+
+
 class TestFindEntryByTitleToolSanitization:
     """Sanitization tests for the registered MCP tool wrapper."""
 
@@ -246,39 +305,13 @@ class TestTypoTolerantFallback:
         """End-to-end: ``Einstien`` (typo) → fast-path probes find
         ``Einstein`` via the i↔e transposition variant.
         """
-        mock_archive = MagicMock()
-        # Fast path: only "Einstein" / "C/Einstein" hits.
-        valid_paths = {"C/Einstein"}
-
-        def has(path):
-            return path in valid_paths
-
-        mock_archive.has_entry_by_path.side_effect = has
-        mock_entry = MagicMock()
-        mock_entry.path = "C/Einstein"
-        mock_entry.title = "Einstein"
-        mock_archive.get_entry_by_path.return_value = mock_entry
-        # Suggestions return nothing (libzim can't recover from this typo).
-        mock_suggest = MagicMock()
-        mock_suggest.getEstimatedMatches.return_value = 0
-        mock_suggest.getResults.return_value = []
-        mock_searcher = MagicMock()
-        mock_searcher.suggest.return_value = mock_suggest
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.SuggestionSearcher",
-            lambda archive: mock_searcher,
+        _mock_archive_and_suggester(
+            monkeypatch,
+            valid_paths={"C/Einstein"},
+            entry_path="C/Einstein",
+            entry_title="Einstein",
         )
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Einstien", cross_file=False, limit=10
@@ -304,33 +337,13 @@ class TestTypoTolerantFallback:
         does not run — suggestion results have stronger provenance and
         should always win.
         """
-        mock_archive = MagicMock()
-        mock_archive.has_entry_by_path.return_value = False
-        mock_entry = MagicMock()
-        mock_entry.path = "C/Some_article"
-        mock_entry.title = "Some article"
-        mock_archive.get_entry_by_path.return_value = mock_entry
-        # Suggestion returns one weak result.
-        mock_suggest = MagicMock()
-        mock_suggest.getEstimatedMatches.return_value = 1
-        mock_suggest.getResults.return_value = ["C/Some_article"]
-        mock_searcher = MagicMock()
-        mock_searcher.suggest.return_value = mock_suggest
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.SuggestionSearcher",
-            lambda archive: mock_searcher,
+        _mock_archive_and_suggester(
+            monkeypatch,
+            entry_path="C/Some_article",
+            entry_title="Some article",
+            suggestion_results=["C/Some_article"],
         )
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Einstien", cross_file=False, limit=10
@@ -341,28 +354,8 @@ class TestTypoTolerantFallback:
         """Queries < 4 chars don't run the fuzzy fallback — too many
         spurious matches.
         """
-        mock_archive = MagicMock()
-        mock_archive.has_entry_by_path.return_value = False
-        mock_suggest = MagicMock()
-        mock_suggest.getEstimatedMatches.return_value = 0
-        mock_suggest.getResults.return_value = []
-        mock_searcher = MagicMock()
-        mock_searcher.suggest.return_value = mock_suggest
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.SuggestionSearcher",
-            lambda archive: mock_searcher,
-        )
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _mock_archive_and_suggester(monkeypatch)
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Pi", cross_file=False, limit=10
@@ -375,37 +368,13 @@ class TestTypoTolerantFallback:
         """A typo-corrected hit should score equal to
         fuzzy_title_score_penalty (default 0.85).
         """
-        mock_archive = MagicMock()
-        valid_paths = {"C/Einstein"}
-
-        def has(path):
-            return path in valid_paths
-
-        mock_archive.has_entry_by_path.side_effect = has
-        mock_entry = MagicMock()
-        mock_entry.path = "C/Einstein"
-        mock_entry.title = "Einstein"
-        mock_archive.get_entry_by_path.return_value = mock_entry
-        mock_suggest = MagicMock()
-        mock_suggest.getEstimatedMatches.return_value = 0
-        mock_suggest.getResults.return_value = []
-        mock_searcher = MagicMock()
-        mock_searcher.suggest.return_value = mock_suggest
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.SuggestionSearcher",
-            lambda archive: mock_searcher,
+        _mock_archive_and_suggester(
+            monkeypatch,
+            valid_paths={"C/Einstein"},
+            entry_path="C/Einstein",
+            entry_title="Einstein",
         )
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Einstien", cross_file=False, limit=10
@@ -419,41 +388,15 @@ class TestTypoTolerantFallback:
 
     def test_fuzzy_match_score_overridable_via_config(self, test_config, monkeypatch):
         """Setting fuzzy_title_score_penalty=0.5 produces score=0.5."""
-        # Create a config with custom fuzzy_title_score_penalty
         test_config.search.fuzzy_title_score_penalty = 0.5
         server = OpenZimMcpServer(test_config)
-
-        mock_archive = MagicMock()
-        valid_paths = {"C/Einstein"}
-
-        def has(path):
-            return path in valid_paths
-
-        mock_archive.has_entry_by_path.side_effect = has
-        mock_entry = MagicMock()
-        mock_entry.path = "C/Einstein"
-        mock_entry.title = "Einstein"
-        mock_archive.get_entry_by_path.return_value = mock_entry
-        mock_suggest = MagicMock()
-        mock_suggest.getEstimatedMatches.return_value = 0
-        mock_suggest.getResults.return_value = []
-        mock_searcher = MagicMock()
-        mock_searcher.suggest.return_value = mock_suggest
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.SuggestionSearcher",
-            lambda archive: mock_searcher,
+        _mock_archive_and_suggester(
+            monkeypatch,
+            valid_paths={"C/Einstein"},
+            entry_path="C/Einstein",
+            entry_title="Einstein",
         )
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Einstien", cross_file=False, limit=10
@@ -468,32 +411,10 @@ class TestTypoTolerantFallback:
         """With fuzzy_title_min_query_len=6, a 5-char query should not
         trigger fuzzy fallback.
         """
-        # Create a config with custom fuzzy_title_min_query_len
         test_config.search.fuzzy_title_min_query_len = 6
         server = OpenZimMcpServer(test_config)
-
-        mock_archive = MagicMock()
-        mock_archive.has_entry_by_path.return_value = False
-        mock_suggest = MagicMock()
-        mock_suggest.getEstimatedMatches.return_value = 0
-        mock_suggest.getResults.return_value = []
-        mock_searcher = MagicMock()
-        mock_searcher.suggest.return_value = mock_suggest
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.SuggestionSearcher",
-            lambda archive: mock_searcher,
-        )
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _mock_archive_and_suggester(monkeypatch)
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Einst", cross_file=False, limit=10
@@ -509,37 +430,13 @@ class TestMetaSuggestionsAndReason:
     def server(self, test_config):
         return OpenZimMcpServer(test_config)
 
-    def _mock_empty_archive(self, server, monkeypatch):
-        """Set up mocks so fast path + suggestions both miss, typo fallback runs."""
-        mock_archive = MagicMock()
-        mock_archive.has_entry_by_path.return_value = False
-        mock_suggest = MagicMock()
-        mock_suggest.getEstimatedMatches.return_value = 0
-        mock_suggest.getResults.return_value = []
-        mock_searcher = MagicMock()
-        mock_searcher.suggest.return_value = mock_suggest
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.SuggestionSearcher",
-            lambda archive: mock_searcher,
-        )
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
-
     def test_fuzzy_candidates_appear_in_meta_suggestions(self, server, monkeypatch):
         """When fuzzy fallback eligibility is met (no fast path, query long
         enough), _meta.suggestions[] contains alt_spelling entries derived
         from the typo variant generator.
         """
-        self._mock_empty_archive(server, monkeypatch)
+        _mock_archive_and_suggester(monkeypatch)
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Einstien", cross_file=False, limit=10
@@ -557,7 +454,8 @@ class TestMetaSuggestionsAndReason:
         self, server, monkeypatch
     ):
         """_meta.suggestions[] must not exceed structured_suggestions_limit."""
-        self._mock_empty_archive(server, monkeypatch)
+        _mock_archive_and_suggester(monkeypatch)
+        _patch_path_validator(server)
 
         # Use a long title that generates many transposition variants
         result = server.zim_operations.find_entry_by_title_data(
@@ -571,23 +469,14 @@ class TestMetaSuggestionsAndReason:
         """When the fast path succeeds, suggestions should be absent (None /
         not set) — no fuzzy lookup was needed.
         """
-        mock_archive = MagicMock()
+        mock_archive = _mock_archive_and_suggester(
+            monkeypatch,
+            entry_path="C/Einstein",
+            entry_title="Einstein",
+        )
+        # All paths hit (fast path always succeeds)
         mock_archive.has_entry_by_path.return_value = True
-        mock_entry = MagicMock()
-        mock_entry.path = "C/Einstein"
-        mock_entry.title = "Einstein"
-        mock_archive.get_entry_by_path.return_value = mock_entry
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Einstein", cross_file=False, limit=10
@@ -598,7 +487,8 @@ class TestMetaSuggestionsAndReason:
 
     def test_find_entry_meta_reason_on_zero_results(self, server, monkeypatch):
         """When no results found, _meta.reason should be '0_hits'."""
-        self._mock_empty_archive(server, monkeypatch)
+        _mock_archive_and_suggester(monkeypatch)
+        _patch_path_validator(server)
 
         # Use a query short enough to skip typo fallback but still long enough
         # for suggestion search — still returns empty.
@@ -610,23 +500,14 @@ class TestMetaSuggestionsAndReason:
 
     def test_find_entry_meta_reason_absent_on_hits(self, server, monkeypatch):
         """When results found, _meta.reason should be absent (None → omitted)."""
-        mock_archive = MagicMock()
+        mock_archive = _mock_archive_and_suggester(
+            monkeypatch,
+            entry_path="C/Einstein",
+            entry_title="Einstein",
+        )
+        # All paths hit (fast path always succeeds)
         mock_archive.has_entry_by_path.return_value = True
-        mock_entry = MagicMock()
-        mock_entry.path = "C/Einstein"
-        mock_entry.title = "Einstein"
-        mock_archive.get_entry_by_path.return_value = mock_entry
-        monkeypatch.setattr(
-            "openzim_mcp.zim_operations.zim_archive",
-            lambda *a, **kw: _ctx(mock_archive),
-        )
-        server.zim_operations.path_validator = MagicMock()
-        server.zim_operations.path_validator.validate_path.return_value = (
-            "/zim/test.zim"
-        )
-        server.zim_operations.path_validator.validate_zim_file.return_value = (
-            "/zim/test.zim"
-        )
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Einstein", cross_file=False, limit=10
@@ -638,7 +519,8 @@ class TestMetaSuggestionsAndReason:
         """Queries below fuzzy_title_min_query_len produce no alt_spelling
         suggestions even when all paths miss.
         """
-        self._mock_empty_archive(server, monkeypatch)
+        _mock_archive_and_suggester(monkeypatch)
+        _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Pi", cross_file=False, limit=10

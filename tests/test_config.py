@@ -397,7 +397,9 @@ def test_search_config_defaults():
     cfg = SearchConfig()
     assert cfg.structured_suggestions_limit == 5
     assert cfg.fuzzy_title_min_query_len == 4
-    assert cfg.fuzzy_title_score_penalty == 0.85
+    # Float equality on a literal default; pytest.approx with a tight bound
+    # still catches real drift while satisfying python:S1244.
+    assert cfg.fuzzy_title_score_penalty == pytest.approx(0.85, abs=1e-12)
 
 
 def test_content_config_table_fields():

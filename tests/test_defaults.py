@@ -273,7 +273,9 @@ def test_search_defaults():
 
     assert SEARCH.STRUCTURED_SUGGESTIONS_LIMIT == 5
     assert SEARCH.FUZZY_TITLE_MIN_QUERY_LEN == 4
-    assert SEARCH.FUZZY_TITLE_SCORE_PENALTY == 0.85
+    # Float equality on a literal default; pytest.approx with a tight bound
+    # still catches real drift while satisfying python:S1244.
+    assert SEARCH.FUZZY_TITLE_SCORE_PENALTY == pytest.approx(0.85, abs=1e-12)
 
 
 def test_content_defaults_table_extras():
