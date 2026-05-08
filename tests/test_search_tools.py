@@ -556,3 +556,120 @@ class TestInputSanitizationSearch:
         long_query = "z" * 1000
         with pytest.raises(OpenZimMcpValidationError):
             sanitize_input(long_query, INPUT_LIMIT_QUERY)
+
+
+# ---------------------------------------------------------------------------
+# Phase-A _meta envelope smoke tests — search.py methods
+# ---------------------------------------------------------------------------
+
+
+class TestSearchMethodsMeta:
+    """_meta is attached on every return path of the three search *_data
+    methods: get_search_suggestions_data, find_entry_by_title_data,
+    search_all_data.
+    """
+
+    @pytest.fixture
+    def zim_ops(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator,
+        openzim_mcp_cache,
+        content_processor,
+    ):
+        from openzim_mcp.zim_operations import ZimOperations
+
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def _zim_file(self, temp_dir):
+        from pathlib import Path
+
+        p = Path(temp_dir) / "test.zim"
+        p.write_bytes(b"")
+        return p
+
+    # --- get_search_suggestions_data ---
+
+    def test_suggestions_short_query_attaches_meta(self, zim_ops, temp_dir):
+        """Short-query early-return path carries _meta."""
+        zim_file = self._zim_file(temp_dir)
+        result = zim_ops.get_search_suggestions_data(str(zim_file), "a")
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_suggestions_fresh_attaches_meta(self, zim_ops, temp_dir, monkeypatch):
+        """Fresh computation path carries _meta."""
+        zim_file = self._zim_file(temp_dir)
+        monkeypatch.setattr(
+            zim_ops,
+            "_generate_search_suggestions",
+            lambda *a, **kw: {
+                "partial_query": "cli",
+                "suggestions": [{"title": "Climate"}],
+                "count": 1,
+            },
+        )
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_search_suggestions_data(str(zim_file), "cli")
+
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_suggestions_cached_backfills_meta(self, zim_ops, temp_dir):
+        """Cached suggestions without _meta get backfilled on read."""
+        zim_file = self._zim_file(temp_dir)
+        validated = zim_ops.path_validator.validate_path(str(zim_file))
+        validated = zim_ops.path_validator.validate_zim_file(validated)
+        cache_key = f"suggestions_data:{validated}:climate:10"
+        old = {"partial_query": "climate", "suggestions": [{"title": "Climate"}], "count": 1}
+        zim_ops.cache.set(cache_key, old)
+
+        result = zim_ops.get_search_suggestions_data(str(zim_file), "climate")
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    # --- find_entry_by_title_data ---
+
+    def test_find_entry_by_title_attaches_meta(self, zim_ops, temp_dir, monkeypatch):
+        """find_entry_by_title_data result carries _meta."""
+        zim_file = self._zim_file(temp_dir)
+        from unittest.mock import MagicMock, patch
+
+        mock_archive_obj = MagicMock()
+        # Stub all fallback paths to avoid MagicMock objects leaking into
+        # aggregate_results (which would break attach_meta's json.dumps).
+        monkeypatch.setattr(zim_ops, "_find_entry_fast_path", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            zim_ops, "_find_entry_typo_fallback", lambda *a, **kw: None
+        )
+
+        suggestion_search = MagicMock()
+        suggestion_search.getEstimatedMatches.return_value = 0
+        suggestion_searcher_instance = MagicMock()
+        suggestion_searcher_instance.suggest.return_value = suggestion_search
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            with patch(
+                "openzim_mcp.zim.search._zim_ops_mod.SuggestionSearcher",
+                return_value=suggestion_searcher_instance,
+            ):
+                mock_archive.return_value.__enter__.return_value = mock_archive_obj
+                result = zim_ops.find_entry_by_title_data(str(zim_file), "Climate")
+
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    # --- search_all_data ---
+
+    def test_search_all_data_attaches_meta(self, zim_ops, temp_dir, monkeypatch):
+        """search_all_data carries _meta even with no ZIM files."""
+        # list_zim_files_data returns empty list → per_file stays empty
+        monkeypatch.setattr(zim_ops, "list_zim_files_data", lambda *a, **kw: [])
+        result = zim_ops.search_all_data("climate")
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1

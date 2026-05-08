@@ -764,7 +764,9 @@ class _SearchMixin:
         if limit < 1 or limit > 50:
             raise OpenZimMcpValidationError("Limit must be between 1 and 50")
         if not partial_query or len(partial_query.strip()) < 2:
-            return {"suggestions": [], "message": "Query too short for suggestions"}
+            return attach_meta(
+                {"suggestions": [], "message": "Query too short for suggestions"}
+            )
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
@@ -776,6 +778,8 @@ class _SearchMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached suggestions dict for: {partial_query}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(dict(cached_result))
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -795,7 +799,7 @@ class _SearchMixin:
             if count_for_gate > 0:
                 self.cache.set(cache_key, result)
             logger.info(f"Generated {actual_count} suggestions for: {partial_query}")
-            return result
+            return attach_meta(result)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -1329,13 +1333,15 @@ class _SearchMixin:
         # otherwise preserve per-file rank order.
         aggregate_results.sort(key=lambda r: -r["score"])
 
-        return {
-            "query": title,
-            "results": aggregate_results[:limit],
-            "fast_path_hit": fast_path_hit,
-            "fuzzy_path_hit": fuzzy_path_hit,
-            "files_searched": len(files),
-        }
+        return attach_meta(
+            {
+                "query": title,
+                "results": aggregate_results[:limit],
+                "fast_path_hit": fast_path_hit,
+                "fuzzy_path_hit": fuzzy_path_hit,
+                "files_searched": len(files),
+            }
+        )
 
     def find_entry_by_title(
         self,
@@ -1575,14 +1581,18 @@ class _SearchMixin:
                     }
                 )
 
-        return {
-            "query": query,
-            "files_searched": len(files),
-            "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
-            "files_searched_successfully": sum(1 for r in per_file if "result" in r),
-            "files_failed": sum(1 for r in per_file if "error" in r),
-            "per_file": per_file,
-        }
+        return attach_meta(
+            {
+                "query": query,
+                "files_searched": len(files),
+                "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
+                "files_searched_successfully": sum(
+                    1 for r in per_file if "result" in r
+                ),
+                "files_failed": sum(1 for r in per_file if "error" in r),
+                "per_file": per_file,
+            }
+        )
 
     def search_all(
         self,

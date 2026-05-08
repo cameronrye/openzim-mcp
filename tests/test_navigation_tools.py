@@ -604,3 +604,124 @@ class TestWalkNamespaceLimitValidation:
         assert isinstance(result, dict)
         assert "entries" in result
         advanced_server.async_zim_operations.walk_namespace_data.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Phase-A _meta envelope smoke tests
+# ---------------------------------------------------------------------------
+
+
+class TestNamespaceDataMethodsMeta:
+    """Verify that _meta is attached on every return path of the three
+    namespace *_data methods (list_namespaces_data, browse_namespace_data,
+    walk_namespace_data).
+    """
+
+    @pytest.fixture
+    def zim_ops(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator,
+        openzim_mcp_cache,
+        content_processor,
+    ):
+        from openzim_mcp.zim_operations import ZimOperations
+
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def _zim_file(self, temp_dir):
+        from pathlib import Path
+
+        p = Path(temp_dir) / "test.zim"
+        p.write_bytes(b"")
+        return p
+
+    def test_list_namespaces_data_fresh_attaches_meta(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Fresh path attaches _meta envelope."""
+        zim_file = self._zim_file(temp_dir)
+        fake_ns = {
+            "total_entries": 10,
+            "sampled_entries": 10,
+            "has_new_namespace_scheme": False,
+            "is_total_authoritative": True,
+            "discovery_method": "full_iteration",
+            "namespaces": {},
+        }
+        monkeypatch.setattr(
+            zim_ops, "_list_archive_namespaces", lambda *a, **kw: fake_ns
+        )
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.list_namespaces_data(str(zim_file))
+
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_list_namespaces_data_cached_backfills_meta(self, zim_ops, temp_dir):
+        """Cached entry without _meta gets backfilled on read."""
+        zim_file = self._zim_file(temp_dir)
+        validated = zim_ops.path_validator.validate_path(str(zim_file))
+        validated = zim_ops.path_validator.validate_zim_file(validated)
+        cache_key = f"namespaces_data:{validated}"
+        old = {"total_entries": 5, "namespaces": {}}
+        zim_ops.cache.set(cache_key, old)
+
+        result = zim_ops.list_namespaces_data(str(zim_file))
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_browse_namespace_data_fresh_attaches_meta(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """browse_namespace_data fresh path attaches _meta."""
+        zim_file = self._zim_file(temp_dir)
+        fake_result = {"entries": [], "namespace": "C", "total": 0}
+        monkeypatch.setattr(
+            zim_ops,
+            "_browse_namespace_entries",
+            lambda *a, **kw: fake_result,
+        )
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.browse_namespace_data(str(zim_file), "C")
+
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_browse_namespace_data_cached_backfills_meta(self, zim_ops, temp_dir):
+        """Cached browse entry without _meta gets backfilled on read."""
+        zim_file = self._zim_file(temp_dir)
+        validated = zim_ops.path_validator.validate_path(str(zim_file))
+        validated = zim_ops.path_validator.validate_zim_file(validated)
+        cache_key = f"browse_ns_data:{validated}:C:50:0"
+        old = {"entries": [], "namespace": "C"}
+        zim_ops.cache.set(cache_key, old)
+
+        result = zim_ops.browse_namespace_data(str(zim_file), "C")
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_walk_namespace_data_attaches_meta(self, zim_ops, temp_dir, monkeypatch):
+        """walk_namespace_data attaches _meta on the main return path."""
+        zim_file = self._zim_file(temp_dir)
+        from unittest.mock import MagicMock, patch
+
+        mock_archive_obj = MagicMock()
+        mock_archive_obj.has_new_namespace_scheme = False
+        mock_archive_obj.entry_count = 0
+        # _get_entry_by_id is never called for empty archive
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = mock_archive_obj
+            result = zim_ops.walk_namespace_data(str(zim_file), "C", cursor=0, limit=10)
+
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1

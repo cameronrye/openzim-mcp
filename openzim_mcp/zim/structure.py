@@ -19,6 +19,7 @@ from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.exceptions import OpenZimMcpArchiveError, OpenZimMcpValidationError
+from openzim_mcp.meta import attach_meta
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -68,6 +69,8 @@ class _StructureMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached structure dict for: {entry_path}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(dict(cached_result))
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -77,7 +80,7 @@ class _StructureMixin:
             # Cache the result
             self.cache.set(cache_key, result)
             logger.info(f"Extracted structure for: {entry_path}")
-            return result
+            return attach_meta(result)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -234,7 +237,7 @@ class _StructureMixin:
                 f"Extracted links for: {entry_path} "
                 f"(limit={limit}, offset={offset}, kind={kind})"
             )
-            return result
+            return attach_meta(result)
 
         except OpenZimMcpValidationError:
             raise
@@ -418,6 +421,8 @@ class _StructureMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached TOC dict for: {entry_path}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(dict(cached_result))
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -427,7 +432,7 @@ class _StructureMixin:
             # Cache the result
             self.cache.set(cache_key, result)
             logger.info(f"Extracted TOC for: {entry_path}")
-            return result
+            return attach_meta(result)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -688,7 +693,7 @@ class _StructureMixin:
             result["outbound_results"] = []
             result["outbound_error"] = str(e)
 
-        return result
+        return attach_meta(result)
 
     @staticmethod
     def _resolve_outbound_titles(

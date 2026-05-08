@@ -47,6 +47,7 @@ from openzim_mcp.exceptions import (
     ArchiveOpenTimeoutError,
     OpenZimMcpArchiveError,
 )
+from openzim_mcp.meta import attach_meta
 from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
 from openzim_mcp.zim.content import _ContentMixin
@@ -335,12 +336,14 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             (per-file dicts with name/path/directory/size/size_bytes/modified).
         """
         files = self.list_zim_files_data(name_filter=name_filter)
-        return {
-            "count": len(files),
-            "directories_count": len(self.config.allowed_directories),
-            "name_filter": name_filter or "",
-            "files": files,
-        }
+        return attach_meta(
+            {
+                "count": len(files),
+                "directories_count": len(self.config.allowed_directories),
+                "name_filter": name_filter or "",
+                "files": files,
+            }
+        )
 
     def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories.
@@ -390,6 +393,8 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached metadata dict for: {validated_path}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(dict(cached_result))
             return cached_result  # type: ignore[no-any-return]
 
         # Late-bound lookup so test patches against
@@ -403,7 +408,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             # Cache the result
             self.cache.set(cache_key, metadata)
             logger.info(f"Retrieved metadata for: {validated_path}")
-            return metadata
+            return attach_meta(metadata)
 
         except Exception as e:
             logger.error(f"Metadata retrieval failed for {validated_path}: {e}")

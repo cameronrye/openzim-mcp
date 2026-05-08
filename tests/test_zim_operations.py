@@ -1322,7 +1322,8 @@ class TestZimOperations:
         zim_operations.cache.set(cache_key, {"cached": "namespaces"})
 
         result = zim_operations.list_namespaces_data(str(zim_file))
-        assert result == {"cached": "namespaces"}
+        assert result["cached"] == "namespaces"
+        assert "_meta" in result
 
         # Test browse_namespace_data cache hit. browse_namespace now
         # delegates to browse_namespace_data, which caches dicts under a
@@ -1332,7 +1333,8 @@ class TestZimOperations:
         zim_operations.cache.set(cache_key, {"cached": "browse"})
 
         result = zim_operations.browse_namespace_data(str(zim_file), "A")
-        assert result == {"cached": "browse"}
+        assert result["cached"] == "browse"
+        assert "_meta" in result
 
         # Test get_article_structure_data cache hit. get_article_structure now
         # delegates to get_article_structure_data, which caches dicts under a
@@ -1342,7 +1344,8 @@ class TestZimOperations:
         zim_operations.cache.set(cache_key, {"cached": "structure"})
 
         result = zim_operations.get_article_structure_data(str(zim_file), "A/Test")
-        assert result == {"cached": "structure"}
+        assert result["cached"] == "structure"
+        assert "_meta" in result
 
         # Test extract_article_links_data cache hit. extract_article_links_data
         # caches the parsed extraction (full lists) under a stable
