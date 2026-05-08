@@ -381,3 +381,34 @@ def test_rate_limit_config_per_operation_limits_default_empty():
 
     cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
     assert cfg.rate_limit.per_operation_limits == {}
+
+
+def test_meta_config_defaults():
+    from openzim_mcp.config import MetaConfig
+
+    cfg = MetaConfig()
+    assert cfg.footer_enabled is True
+    assert cfg.tokenizer_encoding == "cl100k_base"
+
+
+def test_search_config_defaults():
+    from openzim_mcp.config import SearchConfig
+
+    cfg = SearchConfig()
+    assert cfg.structured_suggestions_limit == 5
+    assert cfg.fuzzy_title_min_query_len == 4
+    assert cfg.fuzzy_title_score_penalty == 0.85
+
+
+def test_content_config_table_fields():
+    cfg = ContentConfig()
+    assert cfg.table_row_threshold == 8
+    assert cfg.table_char_threshold == 600
+    assert cfg.infobox_kv_limit == 30
+
+
+def test_meta_env_override(monkeypatch):
+    monkeypatch.setenv("OPENZIM_MCP_META__FOOTER_ENABLED", "false")
+    monkeypatch.setenv("OPENZIM_MCP_ALLOWED_DIRECTORIES", f'["{TMP_DIR}"]')
+    cfg = OpenZimMcpConfig()
+    assert cfg.meta.footer_enabled is False
