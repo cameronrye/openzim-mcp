@@ -450,19 +450,29 @@ class SimpleToolsHandler:
         return cls._CONTENT_FENCE_OPEN + text + cls._CONTENT_FENCE_CLOSE
 
     # ``[text](href "tooltip")`` and ``[text](href)`` markdown link
-    # syntax. Handles backslash-escaped parens inside the URL — Wikipedia
-    # exports use ``[derivatives](Derivative_\(chemistry\)
+    # syntax. Handles backslash-escaped parens inside the URL —
+    # Wikipedia exports use ``[derivatives](Derivative_\(chemistry\)
     # "Derivative \(chemistry\)")`` for parenthesized disambiguation
     # suffixes, and a naive ``[^)]*`` parser stops at the first ``\)``
-    # leaving link debris in the stripped output. ``(?:\\.|[^()\n])*``
-    # treats any backslash-escaped char as one URL token. The first
-    # capture is the visible text; the replacement uses \1 to keep just
-    # that. Compiled once at class definition time.
-    _MARKDOWN_LINK_RE = re.compile(r"\[([^\[\]]*?)\]\((?:\\.|[^()\n])*\)")
+    # leaving link debris in the stripped output.
+    #
+    # The URL alternation ``(?:[^()\n\\]|\\.)*`` is split so each
+    # character belongs to *exactly one* branch — ``\`` is excluded
+    # from the negated class and is the *only* way into the
+    # ``\\.`` (escape-sequence) branch. The earlier ``(?:\\.|[^()\n])*``
+    # had overlap (``\`` could match either branch via 1-char or 2-char
+    # consumption), which CodeQL py/redos flagged because the engine
+    # could explore 2^n combinations on inputs like
+    # ``[a](\\\\\\\\\\\\\\\\…`` before failing. The disjoint form is
+    # semantically identical for well-formed input but unambiguous to
+    # the engine. ``safe_regex_sub`` still wraps the .sub() call as
+    # belt-and-suspenders defense-in-depth.
+    _MARKDOWN_LINK_RE = re.compile(r"\[([^\[\]]*?)\]\((?:[^()\n\\]|\\.)*\)")
     # ``![alt](src)`` image syntax — drop entirely; alt text is rarely
     # informative in Wikipedia exports and the URL is just a media-asset
-    # path that's not callable from a small-LLM tool response.
-    _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\[\]]*?\]\((?:\\.|[^()\n])*\)")
+    # path that's not callable from a small-LLM tool response. Same
+    # disjoint-alternation rewrite as the link regex above.
+    _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\[\]]*?\]\((?:[^()\n\\]|\\.)*\)")
 
     # Per-snippet cap inside search responses. Search snippets default
     # to 3000 chars (the ContentConfig.snippet_length). For 5 results
@@ -1136,11 +1146,19 @@ class SimpleToolsHandler:
         copy them verbatim. Capped at 5 candidates — beyond that the
         list itself becomes hard to skim.
         """
+        # Wrap the long subtitle in parens so the implicit-string
+        # concatenation is unambiguous to readers (and to CodeQL's
+        # py/implicit-string-concatenation-in-list rule, which flags
+        # adjacency-concat in list literals as a likely missing-comma
+        # bug). The two-line break is for line-length only.
+        subtitle = (
+            "_Several archive articles strong-match this topic. "
+            "Pick one explicitly:_"
+        )
         lines = [
             f'**Multiple articles match "{topic}"** — which one did you mean?',
             "",
-            "_Several archive articles strong-match this topic. Pick one "
-            "explicitly:_",
+            subtitle,
             "",
         ]
         for i, c in enumerate(candidates[:5], 1):
