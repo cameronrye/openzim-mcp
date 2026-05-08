@@ -1157,8 +1157,7 @@ class _SearchMixin:
 
         return variants
 
-    @classmethod
-    def _find_entry_typo_fallback(cls, archive: Any, title: str) -> Optional[Any]:
+    def _find_entry_typo_fallback(self, archive: Any, title: str) -> Optional[Any]:
         """Try typo-corrected variants of ``title`` against the fast path.
 
         Runs only when the case-variant fast path AND the libzim
@@ -1166,14 +1165,14 @@ class _SearchMixin:
         last-resort try-this-before-giving-up step. Returns the first
         Entry whose case-variant fast path hits any single-edit variant.
 
-        Length-gated at >= 4 characters: short queries like ``"DNA"`` or
-        ``"Pi"`` get too many spurious adjacent-swap collisions to be
-        worth the lookup cost.
+        Length-gated via config.search.fuzzy_title_min_query_len (default >= 4):
+        short queries like ``"DNA"`` or ``"Pi"`` get too many spurious
+        adjacent-swap collisions to be worth the lookup cost.
         """
-        if len(title) < 4:
+        if len(title) < self.config.search.fuzzy_title_min_query_len:
             return None
-        for variant in cls._typo_variants(title):
-            entry = cls._find_entry_fast_path(archive, variant)
+        for variant in self._typo_variants(title):
+            entry = self._find_entry_fast_path(archive, variant)
             if entry is not None:
                 return entry
         return None
@@ -1302,26 +1301,28 @@ class _SearchMixin:
                         )
 
                     # Typo-tolerant fallback: when both fast path AND
-                    # the libzim suggestion index came up empty, try a
-                    # small set of single-edit variants of the input
+                    # the libzim suggestion index came up empty, OR when
+                    # the suggestions only yielded weak results (score < 0.7),
+                    # try a small set of single-edit variants of the input
                     # (transposition / single deletion). Runs only as a
                     # last resort because the false-match rate isn't
                     # zero — we don't want it competing with real hits.
-                    if (
-                        not fast_path_hit
-                        and len(aggregate_results) == pre_suggestion_count
-                    ):
+                    already_has_strong = any(
+                        r.get("score", 0.0) >= 0.7 for r in aggregate_results
+                    )
+                    if not fast_path_hit and not already_has_strong:
                         typo_entry = self._find_entry_typo_fallback(archive, title)
                         if typo_entry is not None:
                             aggregate_results.append(
                                 {
                                     "path": typo_entry.path,
                                     "title": typo_entry.title or title,
+                                    # Score set from config (default 0.85).
                                     # Below 0.95 (suggestion-rank top) and
                                     # well below 1.0 (exact match) so a
                                     # fuzzy hit never silently outranks a
                                     # legitimate result from another file.
-                                    "score": 0.7,
+                                    "score": self.config.search.fuzzy_title_score_penalty,
                                     "zim_file": file_path,
                                     "match_type": "typo_corrected",
                                 }

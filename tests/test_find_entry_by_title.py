@@ -293,7 +293,10 @@ class TestTypoTolerantFallback:
         # SonarCloud S1244 (float-equality bug rule) doesn't flag the
         # comparison; the value here is one we set, not one derived
         # from arithmetic, so equality is semantically fine.
-        assert hit["score"] == pytest.approx(0.7)
+        # Uses config.search.fuzzy_title_score_penalty (default 0.85).
+        assert hit["score"] == pytest.approx(
+            server.zim_operations.config.search.fuzzy_title_score_penalty
+        )
         assert hit.get("match_type") == "typo_corrected"
 
     def test_typo_fallback_skipped_when_suggestion_hits(self, server, monkeypatch):
@@ -367,3 +370,137 @@ class TestTypoTolerantFallback:
         # Empty result and no fuzzy fired.
         assert result["results"] == []
         assert result["fuzzy_path_hit"] is False
+
+    def test_fuzzy_match_score_uses_default_penalty(self, server, monkeypatch):
+        """A typo-corrected hit should score equal to
+        fuzzy_title_score_penalty (default 0.85).
+        """
+        mock_archive = MagicMock()
+        valid_paths = {"C/Einstein"}
+
+        def has(path):
+            return path in valid_paths
+
+        mock_archive.has_entry_by_path.side_effect = has
+        mock_entry = MagicMock()
+        mock_entry.path = "C/Einstein"
+        mock_entry.title = "Einstein"
+        mock_archive.get_entry_by_path.return_value = mock_entry
+        mock_suggest = MagicMock()
+        mock_suggest.getEstimatedMatches.return_value = 0
+        mock_suggest.getResults.return_value = []
+        mock_searcher = MagicMock()
+        mock_searcher.suggest.return_value = mock_suggest
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.SuggestionSearcher",
+            lambda archive: mock_searcher,
+        )
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Einstien", cross_file=False, limit=10
+        )
+        fuzzy_results = [
+            r for r in result["results"] if r.get("match_type") == "typo_corrected"
+        ]
+        assert len(fuzzy_results) > 0
+        expected_score = server.zim_operations.config.search.fuzzy_title_score_penalty
+        assert fuzzy_results[0]["score"] == pytest.approx(expected_score)
+
+    def test_fuzzy_match_score_overridable_via_config(
+        self, test_config, monkeypatch
+    ):
+        """Setting fuzzy_title_score_penalty=0.5 produces score=0.5."""
+        # Create a config with custom fuzzy_title_score_penalty
+        test_config.search.fuzzy_title_score_penalty = 0.5
+        server = OpenZimMcpServer(test_config)
+
+        mock_archive = MagicMock()
+        valid_paths = {"C/Einstein"}
+
+        def has(path):
+            return path in valid_paths
+
+        mock_archive.has_entry_by_path.side_effect = has
+        mock_entry = MagicMock()
+        mock_entry.path = "C/Einstein"
+        mock_entry.title = "Einstein"
+        mock_archive.get_entry_by_path.return_value = mock_entry
+        mock_suggest = MagicMock()
+        mock_suggest.getEstimatedMatches.return_value = 0
+        mock_suggest.getResults.return_value = []
+        mock_searcher = MagicMock()
+        mock_searcher.suggest.return_value = mock_suggest
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.SuggestionSearcher",
+            lambda archive: mock_searcher,
+        )
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Einstien", cross_file=False, limit=10
+        )
+        fuzzy_results = [
+            r for r in result["results"] if r.get("match_type") == "typo_corrected"
+        ]
+        assert len(fuzzy_results) > 0
+        assert fuzzy_results[0]["score"] == pytest.approx(0.5)
+
+    def test_fuzzy_min_length_gates_short_queries(self, test_config, monkeypatch):
+        """With fuzzy_title_min_query_len=6, a 5-char query should not
+        trigger fuzzy fallback.
+        """
+        # Create a config with custom fuzzy_title_min_query_len
+        test_config.search.fuzzy_title_min_query_len = 6
+        server = OpenZimMcpServer(test_config)
+
+        mock_archive = MagicMock()
+        mock_archive.has_entry_by_path.return_value = False
+        mock_suggest = MagicMock()
+        mock_suggest.getEstimatedMatches.return_value = 0
+        mock_suggest.getResults.return_value = []
+        mock_searcher = MagicMock()
+        mock_searcher.suggest.return_value = mock_suggest
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.SuggestionSearcher",
+            lambda archive: mock_searcher,
+        )
+        monkeypatch.setattr(
+            "openzim_mcp.zim_operations.zim_archive",
+            lambda *a, **kw: _ctx(mock_archive),
+        )
+        server.zim_operations.path_validator = MagicMock()
+        server.zim_operations.path_validator.validate_path.return_value = (
+            "/zim/test.zim"
+        )
+        server.zim_operations.path_validator.validate_zim_file.return_value = (
+            "/zim/test.zim"
+        )
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "Einst", cross_file=False, limit=10
+        )
+        # No fuzzy results because query length (5) < fuzzy_title_min_query_len (6)
+        assert all(
+            r.get("match_type") != "typo_corrected" for r in result["results"]
+        )
