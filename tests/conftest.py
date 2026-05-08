@@ -241,6 +241,9 @@ def test_config_with_zim_data(
     )
 
 
+from tests.conftest_v2_fixtures import v2_phase_a_zim  # noqa: F401, E402
+
+
 def pytest_configure(config):
     """Configure pytest with custom markers."""
     config.addinivalue_line("markers", "integration: mark test as integration test")
