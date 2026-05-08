@@ -259,3 +259,24 @@ class TestRateLimitCosts:
         """Test that binary entry has the highest cost."""
         max_cost = max(RATE_LIMIT_COSTS.values())
         assert RATE_LIMIT_COSTS["get_binary_entry"] == max_cost
+
+
+def test_meta_defaults():
+    from openzim_mcp.defaults import META
+
+    assert META.FOOTER_ENABLED is True
+    assert META.TOKENIZER_ENCODING == "cl100k_base"
+
+
+def test_search_defaults():
+    from openzim_mcp.defaults import SEARCH
+
+    assert SEARCH.STRUCTURED_SUGGESTIONS_LIMIT == 5
+    assert SEARCH.FUZZY_TITLE_MIN_QUERY_LEN == 4
+    assert SEARCH.FUZZY_TITLE_SCORE_PENALTY == 0.85
+
+
+def test_content_defaults_table_extras():
+    assert CONTENT.TABLE_ROW_THRESHOLD == 8
+    assert CONTENT.TABLE_CHAR_THRESHOLD == 600
+    assert CONTENT.INFOBOX_KV_LIMIT == 30
