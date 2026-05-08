@@ -91,9 +91,9 @@ class PaginationCursor:
     @staticmethod
     def _encode(offset: int, limit: int, query: Optional[str] = None) -> str:
         """Encode pagination state into a base64 cursor token (legacy shape)."""
-        from openzim_mcp.pagination import Cursor
+        from openzim_mcp.pagination import Cursor, CursorState
 
-        state: dict[str, Any] = {"o": offset, "l": limit}
+        state: CursorState = {"o": offset, "l": limit}
         if query:
             state["q"] = query
         return Cursor.encode(tool="legacy", state=state)
