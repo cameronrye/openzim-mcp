@@ -47,6 +47,7 @@ dependencies = [
     "mcp[cli]>=1.27.0",
     "pydantic>=2.13.3",
     "pydantic-settings>=2.14.0",
+    "tiktoken>=0.7.0",
 ]
 
 [project.urls]

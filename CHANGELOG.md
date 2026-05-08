@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a1] — 2026-05-08
+
+> First v2 pre-release. Phase A of the multi-phase v2 effort. All changes additive at the tool-signature layer; small compact-mode prose change for empty search results (see Changed below).
+
+### Added
+
+* **meta:** every dict-returning tool now includes a `_meta` envelope (`tokens_est`, `chars`, `truncated`, `more_at_offset`, `total_chars`, `suggestions`, `reason`). `tokens_est` uses tiktoken `cl100k_base` with a 5% pad. (#5)
+* **simple:** compact-mode responses gain a one-line markdown blockquote footer (`> ~4.2K tokens · ...`). Set `OPENZIM_MCP_META__FOOTER_ENABLED=false` to suppress. (#5)
+* **content:** in compact mode, `.infobox` / `.vcard` tables emit a Markdown KV list prepended to the body. (#2)
+* **content:** in compact mode, tables exceeding row or character thresholds are replaced with `[Table N: ...]` placeholders. (#2)
+* **search:** every search response is query-aware — snippets contain the actual matched passage (with `**bold**` highlights, capped at 5 hits) rather than the article lead. (#1)
+* **search:** `_meta.suggestions[]` surfaces typo variants (`alt_spelling`) and other-archive candidates (`alt_archive`) for empty / low-confidence searches. (#4)
+* **search:** `find_entry_by_title` fuzzy fallback now triggers whenever no result clears 0.7 (previously only on zero hits). Score and length-gate are configurable via `OPENZIM_MCP_SEARCH__FUZZY_TITLE_*`. (#14)
+
+### Changed
+
+* **simple:** compact-mode empty-result prose now renders via the new footer + structured suggestions instead of the v1.2.0 paragraph. The information is one-for-one; the format is more model-readable. `compact=False` paths retain byte-identical v1.2.0 behavior. (#4)
+* **search:** `find_entry_by_title` typo-corrected hits now score `0.85` (was hardcoded `0.7`) by default. (#14)
+
+### Dependencies
+
+* Added `tiktoken>=0.7.0` to core dependencies.
+
 ## [1.3.0](https://github.com/cameronrye/openzim-mcp/compare/v1.2.0...v1.3.0) (2026-05-08)
 
 

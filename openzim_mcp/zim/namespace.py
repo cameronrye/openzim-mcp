@@ -25,6 +25,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
 )
+from openzim_mcp.meta import attach_meta
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -84,6 +85,8 @@ class _NamespaceMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespaces dict for: {validated_path}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(dict(cached_result))
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -92,7 +95,7 @@ class _NamespaceMixin:
 
             self.cache.set(cache_key, result)
             logger.info(f"Listed namespaces for: {validated_path}")
-            return result
+            return attach_meta(result)
 
         except Exception as e:
             logger.error(f"Namespace listing failed for {validated_path}: {e}")
@@ -505,6 +508,8 @@ class _NamespaceMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespace browse dict for: {namespace}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(dict(cached_result))
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -522,7 +527,7 @@ class _NamespaceMixin:
             logger.info(
                 f"Browsed namespace {namespace}: {limit} entries from offset {offset}"
             )
-            return result
+            return attach_meta(result)
 
         except Exception as e:
             logger.error(f"Namespace browsing failed for {namespace}: {e}")
@@ -981,25 +986,29 @@ class _NamespaceMixin:
                 # dedicated walker so callers see real metadata entries
                 # instead of zero matches after a full archive scan.
                 if has_new_scheme and namespace == "M":
-                    return self._walk_new_scheme_metadata(
-                        archive, cursor, limit, archive_entry_count
+                    return attach_meta(
+                        self._walk_new_scheme_metadata(
+                            archive, cursor, limit, archive_entry_count
+                        )
                     )
                 # Other-than-C namespaces in new-scheme aren't on the
                 # iterable surface; short-circuit so callers don't pay the
                 # full-archive scan to discover that.
                 if has_new_scheme and namespace != "C":
-                    return self._build_walk_result(
-                        namespace=namespace,
-                        cursor=cursor,
-                        limit=limit,
-                        entries=[],
-                        scanned_count=0,
-                        scanned_through_id=None,
-                        done=True,
-                        next_cursor=None,
-                        archive_entry_count=archive_entry_count,
-                        total_in_namespace=0,
-                        total_in_namespace_is_lower_bound=False,
+                    return attach_meta(
+                        self._build_walk_result(
+                            namespace=namespace,
+                            cursor=cursor,
+                            limit=limit,
+                            entries=[],
+                            scanned_count=0,
+                            scanned_through_id=None,
+                            done=True,
+                            next_cursor=None,
+                            archive_entry_count=archive_entry_count,
+                            total_in_namespace=0,
+                            total_in_namespace_is_lower_bound=False,
+                        )
                     )
 
                 entries: List[Dict[str, Any]] = []
@@ -1046,18 +1055,20 @@ class _NamespaceMixin:
                     total_in_namespace = None
                     is_lower_bound = None
 
-                return self._build_walk_result(
-                    namespace=namespace,
-                    cursor=cursor,
-                    limit=limit,
-                    entries=entries,
-                    scanned_count=entry_id - cursor,
-                    scanned_through_id=scanned_through_id,
-                    done=done,
-                    next_cursor=next_cursor,
-                    archive_entry_count=archive_entry_count,
-                    total_in_namespace=total_in_namespace,
-                    total_in_namespace_is_lower_bound=is_lower_bound,
+                return attach_meta(
+                    self._build_walk_result(
+                        namespace=namespace,
+                        cursor=cursor,
+                        limit=limit,
+                        entries=entries,
+                        scanned_count=entry_id - cursor,
+                        scanned_through_id=scanned_through_id,
+                        done=done,
+                        next_cursor=next_cursor,
+                        archive_entry_count=archive_entry_count,
+                        total_in_namespace=total_in_namespace,
+                        total_in_namespace_is_lower_bound=is_lower_bound,
+                    )
                 )
         except OpenZimMcpArchiveError:
             raise

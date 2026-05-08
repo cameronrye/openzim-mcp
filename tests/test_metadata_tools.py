@@ -163,3 +163,64 @@ class TestInputSanitizationMetadata:
         long_path = "x" * 2000
         with pytest.raises(OpenZimMcpValidationError):
             sanitize_input(long_path, INPUT_LIMIT_FILE_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Phase-A _meta envelope smoke tests — archive.py get_zim_metadata_data
+# ---------------------------------------------------------------------------
+
+
+class TestGetZimMetadataDataMeta:
+    """get_zim_metadata_data must attach a _meta envelope on every return path."""
+
+    @pytest.fixture
+    def zim_ops(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator,
+        openzim_mcp_cache,
+        content_processor,
+    ):
+        from openzim_mcp.zim_operations import ZimOperations
+
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def _zim_file(self, temp_dir):
+        from pathlib import Path
+
+        p = Path(temp_dir) / "test.zim"
+        p.write_bytes(b"")
+        return p
+
+    def test_get_zim_metadata_data_fresh_attaches_meta(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Fresh path attaches _meta envelope."""
+        zim_file = self._zim_file(temp_dir)
+        fake_meta = {"title": "Test", "language": "eng", "description": "A test ZIM"}
+        monkeypatch.setattr(
+            zim_ops, "_extract_zim_metadata", lambda *a, **kw: fake_meta
+        )
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_zim_metadata_data(str(zim_file))
+
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_get_zim_metadata_data_cached_backfills_meta(self, zim_ops, temp_dir):
+        """Cached entry without _meta is backfilled on read."""
+        zim_file = self._zim_file(temp_dir)
+        validated = zim_ops.path_validator.validate_path(str(zim_file))
+        validated = zim_ops.path_validator.validate_zim_file(validated)
+        cache_key = f"metadata_data:{validated}"
+        old = {"title": "Test", "language": "eng"}
+        zim_ops.cache.set(cache_key, old)
+
+        result = zim_ops.get_zim_metadata_data(str(zim_file))
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1

@@ -47,6 +47,10 @@ class ContentDefaults:
     # depth and guards against pathological data or cycles libzim itself
     # does not detect.
     MAX_REDIRECT_DEPTH: int = 10
+    # Phase A item #2 — table & infobox handling in compact mode.
+    TABLE_ROW_THRESHOLD: int = 8
+    TABLE_CHAR_THRESHOLD: int = 600
+    INFOBOX_KV_LIMIT: int = 30
 
 
 @dataclass(frozen=True)
@@ -119,6 +123,23 @@ class BatchDefaults:
     MAX_SIZE: int = 50  # max entries per get_zim_entries call
 
 
+@dataclass(frozen=True)
+class MetaDefaults:
+    """Default values for the response `_meta` envelope (Phase A item #5)."""
+
+    FOOTER_ENABLED: bool = True
+    TOKENIZER_ENCODING: str = "cl100k_base"
+
+
+@dataclass(frozen=True)
+class SearchDefaults:
+    """Default values for search-side knobs (Phase A items #4, #14)."""
+
+    STRUCTURED_SUGGESTIONS_LIMIT: int = 5
+    FUZZY_TITLE_MIN_QUERY_LEN: int = 4
+    FUZZY_TITLE_SCORE_PENALTY: float = 0.85
+
+
 # Instantiate defaults for easy access
 CACHE = CacheDefaults()
 CONTENT = ContentDefaults()
@@ -129,6 +150,8 @@ SERVER = ServerDefaults()
 CACHE_PERFORMANCE = CachePerformanceThresholds()
 NAMESPACE_SAMPLING = NamespaceSamplingDefaults()
 BATCH = BatchDefaults()
+META = MetaDefaults()
+SEARCH = SearchDefaults()
 
 # Tool mode constants
 TOOL_MODE_ADVANCED = "advanced"

@@ -112,6 +112,72 @@ zim_query("links in Photosynthesis", options={"compact": False})
 - ReDoS protection: the markdown link-strip and snippet-truncation regexes now run through the same threading-based timeout wrapper used by the intent parser, so an adversarial unclosed `[text](URL` cannot cause catastrophic backtracking.
 - The compact rendering layer moved to its own module (`openzim_mcp.compact_renderers`) — `simple_tools.py` is now focused on intent dispatch.
 
+## What's new in v2.0.0a1
+
+> First v2 pre-release. Phase A of the multi-phase v2 effort. All changes additive at the tool-signature layer; small compact-mode prose change for empty search results.
+
+### Response metadata (`_meta` envelope)
+
+Every dict-returning tool now includes a `_meta` key:
+
+```json
+{
+  "tokens_est": 4283,
+  "chars": 17034,
+  "truncated": true,
+  "more_at_offset": 17000,
+  "total_chars": 87421,
+  "suggestions": [
+    {"type": "alt_spelling", "value": "Photosynthesis"}
+  ],
+  "reason": "0_hits"
+}
+```
+
+`tokens_est` is a `tiktoken cl100k_base` estimate plus a 5% pad. Use it for context budgeting; it's accurate to ±10% across common tokenizers. `suggestions` and `reason` are present only on empty / low-confidence results.
+
+### Compact-mode prose footer
+
+Simple-mode responses end with a single-line markdown blockquote:
+
+```
+> ~4.2K tokens · 17K of 87K chars · pass `offset=17000` for more
+```
+
+Empty results render the suggestions inline:
+
+```
+> No results. Try: `suggestions for Photosynthesis` · `search photosynthesis chlorophyll` · or try ZIM `wikipedia_en_all`
+```
+
+Set `OPENZIM_MCP_META__FOOTER_ENABLED=false` to suppress.
+
+### Compact-mode infobox & table handling
+
+In `compact=True` (the simple-mode default):
+
+- Wikipedia-style `.infobox` / `.vcard` tables become a Markdown KV list prepended to the body. Capped at 30 rows; configurable via `OPENZIM_MCP_CONTENT__INFOBOX_KV_LIMIT`.
+- Tables with more than 8 rows or 600 characters of text become a placeholder: `[Table N: 47 rows × 6 cols — pass compact=False to expand]`. Thresholds configurable via `OPENZIM_MCP_CONTENT__TABLE_ROW_THRESHOLD` and `OPENZIM_MCP_CONTENT__TABLE_CHAR_THRESHOLD`.
+
+`compact=False` retains v1.2.0 byte-identical behavior.
+
+### Typo-tolerant title lookup
+
+`find_entry_by_title` falls back to single-edit variants (transposition, single-character deletion) when neither direct path lookup nor the libzim suggestion index returns a high-confidence match. Fuzzy-corrected hits score `0.85` (configurable via `OPENZIM_MCP_SEARCH__FUZZY_TITLE_SCORE_PENALTY`) to ensure exact matches always rank higher. The minimum query length to trigger the fallback is 4 characters (`OPENZIM_MCP_SEARCH__FUZZY_TITLE_MIN_QUERY_LEN`).
+
+### v2 Phase A env vars
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `OPENZIM_MCP_META__FOOTER_ENABLED` | `true` | Append prose footer in compact mode |
+| `OPENZIM_MCP_META__TOKENIZER_ENCODING` | `cl100k_base` | tiktoken encoding for `tokens_est` |
+| `OPENZIM_MCP_SEARCH__STRUCTURED_SUGGESTIONS_LIMIT` | `5` | Cap on `_meta.suggestions[]` length |
+| `OPENZIM_MCP_SEARCH__FUZZY_TITLE_MIN_QUERY_LEN` | `4` | Minimum query length for fuzzy fallback |
+| `OPENZIM_MCP_SEARCH__FUZZY_TITLE_SCORE_PENALTY` | `0.85` | Score multiplier for fuzzy hits |
+| `OPENZIM_MCP_CONTENT__TABLE_ROW_THRESHOLD` | `8` | Replace tables with more rows in compact mode |
+| `OPENZIM_MCP_CONTENT__TABLE_CHAR_THRESHOLD` | `600` | Replace tables with more chars in compact mode |
+| `OPENZIM_MCP_CONTENT__INFOBOX_KV_LIMIT` | `30` | Cap on infobox rows extracted |
+
 ## What's new in v1.1.0
 
 ### Structured tool output

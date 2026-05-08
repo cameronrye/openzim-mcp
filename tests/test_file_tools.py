@@ -121,3 +121,33 @@ class TestListZimFilesTool:
         with pytest.raises(Exception) as exc_info:
             await server.async_zim_operations.list_zim_files()
         assert "Test error" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Phase-A _meta envelope smoke tests — archive.py list_zim_files_summary_data
+# ---------------------------------------------------------------------------
+
+
+class TestListZimFilesSummaryDataMeta:
+    """list_zim_files_summary_data must attach a _meta envelope."""
+
+    @pytest.fixture
+    def zim_ops(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator,
+        openzim_mcp_cache,
+        content_processor,
+    ):
+        from openzim_mcp.zim_operations import ZimOperations
+
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def test_list_zim_files_summary_data_attaches_meta(self, zim_ops, monkeypatch):
+        """list_zim_files_summary_data result carries _meta."""
+        monkeypatch.setattr(zim_ops, "list_zim_files_data", lambda *a, **kw: [])
+        result = zim_ops.list_zim_files_summary_data()
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1

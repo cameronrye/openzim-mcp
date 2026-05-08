@@ -169,7 +169,9 @@ class TestZimOperations:
 
             assert "Found 1 matches" in result
             assert "Test Article" in result
-            assert "Test content" in result
+            # "Test" may be bold-highlighted since it's a query term; check
+            # that the content word appears somewhere in the snippet.
+            assert "content" in result
 
     def test_get_zim_entry_invalid_path(self, zim_operations: ZimOperations):
         """Test get entry with invalid file path."""
@@ -1307,7 +1309,7 @@ class TestZimOperations:
         validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
 
         # Test get_zim_entry cache hit (lines 283-284)
-        cache_key = f"entry:{validated_path}:A/Test:1000:0"
+        cache_key = f"entry:{validated_path}:A/Test:1000:0:compact=False"
         zim_operations.cache.set(cache_key, "cached entry content")
 
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
@@ -1322,7 +1324,8 @@ class TestZimOperations:
         zim_operations.cache.set(cache_key, {"cached": "namespaces"})
 
         result = zim_operations.list_namespaces_data(str(zim_file))
-        assert result == {"cached": "namespaces"}
+        assert result["cached"] == "namespaces"
+        assert "_meta" in result
 
         # Test browse_namespace_data cache hit. browse_namespace now
         # delegates to browse_namespace_data, which caches dicts under a
@@ -1332,7 +1335,8 @@ class TestZimOperations:
         zim_operations.cache.set(cache_key, {"cached": "browse"})
 
         result = zim_operations.browse_namespace_data(str(zim_file), "A")
-        assert result == {"cached": "browse"}
+        assert result["cached"] == "browse"
+        assert "_meta" in result
 
         # Test get_article_structure_data cache hit. get_article_structure now
         # delegates to get_article_structure_data, which caches dicts under a
@@ -1342,7 +1346,8 @@ class TestZimOperations:
         zim_operations.cache.set(cache_key, {"cached": "structure"})
 
         result = zim_operations.get_article_structure_data(str(zim_file), "A/Test")
-        assert result == {"cached": "structure"}
+        assert result["cached"] == "structure"
+        assert "_meta" in result
 
         # Test extract_article_links_data cache hit. extract_article_links_data
         # caches the parsed extraction (full lists) under a stable

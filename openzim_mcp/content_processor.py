@@ -49,6 +49,45 @@ def _slugify_heading(text: str) -> str:
     return text.strip("-")
 
 
+def _fold(text: str) -> str:
+    """Lowercase + strip diacritics."""
+    nf = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nf if not unicodedata.combining(c)).lower()
+
+
+def _split_query_terms(query: str) -> list:
+    """Split a query string into individual terms; drop punctuation."""
+    return [t for t in re.split(r"\W+", _fold(query)) if t]
+
+
+def _word_in(folded_paragraph: str, term: str) -> bool:
+    """Whole-word match of `term` in already-folded paragraph text."""
+    return bool(re.search(rf"\b{re.escape(term)}\b", folded_paragraph))
+
+
+def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
+    """Wrap the first `max_hits` occurrences of any query term in **bold**.
+
+    Case-insensitive, preserves original casing of the matched substring.
+    """
+    terms = [t for t in _split_query_terms(query) if len(t) >= 3]
+    if not terms:
+        return text
+    pattern = re.compile(
+        r"\b(" + "|".join(re.escape(t) for t in terms) + r")\b",
+        flags=re.IGNORECASE,
+    )
+    hits = [0]
+
+    def repl(m: re.Match[str]) -> str:
+        if hits[0] >= max_hits:
+            return str(m.group(0))
+        hits[0] += 1
+        return f"**{m.group(0)}**"
+
+    return pattern.sub(repl, text)
+
+
 def resolve_heading_id(heading: Tag) -> Tuple[str, str]:
     """Return (id, source) for a heading, falling back to anchors and slugs.
 
@@ -312,14 +351,38 @@ class ContentProcessor:
     _HTML_UNICODE_SNOB = True  # Use Unicode instead of ASCII
     _HTML_BODY_WIDTH = 0  # No line wrapping
 
-    def __init__(self, snippet_length: int = DEFAULT_SNIPPET_LENGTH):
+    # CSS selectors tried in order when searching for the article infobox.
+    # The first match wins and is removed from soup before html2text renders.
+    INFOBOX_SELECTORS = [
+        "table.infobox",
+        "table.vcard",
+        ".infobox",
+        ".vcard",
+    ]
+
+    def __init__(
+        self,
+        snippet_length: int = DEFAULT_SNIPPET_LENGTH,
+        *,
+        table_row_threshold: int = 8,
+        table_char_threshold: int = 600,
+        infobox_kv_limit: int = 30,
+    ):
         """
         Initialize content processor.
 
         Args:
             snippet_length: Maximum length for content snippets
+            table_row_threshold: Tables with more rows than this are replaced
+                in compact mode.
+            table_char_threshold: Tables with more characters than this are
+                replaced in compact mode.
+            infobox_kv_limit: Maximum KV pairs returned by extract_infobox.
         """
         self.snippet_length = snippet_length
+        self._table_row_threshold = table_row_threshold
+        self._table_char_threshold = table_char_threshold
+        self._infobox_kv_limit = infobox_kv_limit
         logger.debug(
             f"ContentProcessor initialized with snippet_length={snippet_length}"
         )
@@ -337,6 +400,69 @@ class ContentProcessor:
         converter.unicode_snob = self._HTML_UNICODE_SNOB
         converter.body_width = self._HTML_BODY_WIDTH
         return converter
+
+    def extract_infobox(
+        self, soup: BeautifulSoup, *, kv_limit: Optional[int] = None
+    ) -> List[Dict[str, str]]:
+        """Extract the first matching infobox from ``soup`` as a list of KV rows.
+
+        Returns ``[{"label": str, "value": str}]``. Mutates ``soup`` to remove
+        the extracted infobox so it doesn't get pipe-soup'd by html2text
+        downstream.
+        """
+        if kv_limit is None:
+            kv_limit = self._infobox_kv_limit
+        for selector in self.INFOBOX_SELECTORS:
+            node = soup.select_one(selector)
+            if node is None:
+                continue
+            rows: List[Dict[str, str]] = []
+            for tr in node.select("tr"):
+                th = tr.find("th")
+                td = tr.find("td")
+                if th and td:
+                    label = " ".join(th.get_text().split())
+                    value = " ".join(td.get_text().split())
+                    if label and value:
+                        rows.append({"label": label, "value": value})
+                        if len(rows) >= kv_limit:
+                            break
+            node.decompose()
+            return rows
+        return []
+
+    def replace_oversized_tables(
+        self,
+        soup: BeautifulSoup,
+        *,
+        row_threshold: Optional[int] = None,
+        char_threshold: Optional[int] = None,
+    ) -> None:
+        """Replace oversized ``<table>`` elements with a placeholder paragraph.
+
+        Tables with more rows than ``row_threshold`` OR more text characters
+        than ``char_threshold`` are replaced in document order with a
+        ``[Table N: M rows × P cols — pass compact=False to expand]`` paragraph.
+        """
+        if row_threshold is None:
+            row_threshold = self._table_row_threshold
+        if char_threshold is None:
+            char_threshold = self._table_char_threshold
+        for index, table in enumerate(soup.find_all("table"), start=1):
+            rows = table.find_all("tr")
+            text = table.get_text()
+            if len(rows) <= row_threshold and len(text) <= char_threshold:
+                continue
+            cols = max(
+                (len(row.find_all(["th", "td"])) for row in rows),
+                default=0,
+            )
+            placeholder = soup.new_tag("p")
+            placeholder.string = (
+                f"[Table {index}: {len(rows)} rows × {cols} cols — "
+                f"pass compact=False to expand]"
+            )
+            table.replace_with(placeholder)
 
     def parse_html(self, html_content: str) -> ParsedHTML:
         """Parse HTML content once for reuse across multiple operations.
@@ -358,103 +484,134 @@ class ContentProcessor:
         """
         return ParsedHTML(html_content)
 
-    def html_to_plain_text_from_parsed(self, parsed: ParsedHTML) -> str:
+    def _render_soup_to_text(self, soup: BeautifulSoup, *, compact: bool) -> str:
+        """Render a BeautifulSoup tree to clean plain text.
+
+        Strips ``UNWANTED_HTML_SELECTORS``, optionally extracts infoboxes
+        and replaces oversized tables when ``compact=True``, then runs
+        ``html2text`` and collapses excess blank lines. Mutates the
+        provided soup; callers that need to preserve the original tree
+        should pass a copy.
+        """
+        for selector in UNWANTED_HTML_SELECTORS:
+            for element in soup.select(selector):
+                element.decompose()
+
+        infobox_md = ""
+        if compact:
+            kv_rows = self.extract_infobox(soup)
+            if kv_rows:
+                infobox_md = (
+                    "\n".join(f"**{r['label']}:** {r['value']}" for r in kv_rows)
+                    + "\n\n"
+                )
+            self.replace_oversized_tables(soup)
+
+        # Per-call HTML2Text so concurrent callers don't corrupt each
+        # other's parser state.
+        text = self._create_html_converter().handle(str(soup))
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return (infobox_md + text).strip()
+
+    def html_to_plain_text_from_parsed(
+        self, parsed: ParsedHTML, *, compact: bool = False
+    ) -> str:
         """Convert pre-parsed HTML to clean plain text.
 
         More efficient when used with parse_html() for multiple operations.
 
         Args:
             parsed: Pre-parsed HTML container
+            compact: When True, extract infoboxes and replace oversized tables
+                with placeholders before rendering. Defaults to False, which
+                preserves byte-identical v1.2.0 behavior.
 
         Returns:
             Converted plain text
         """
         try:
-            # Get a copy since we modify the soup
-            soup = parsed.soup
-
-            # Remove unwanted elements
-            for selector in UNWANTED_HTML_SELECTORS:
-                for element in soup.select(selector):
-                    element.decompose()
-
-            # Convert to text using a per-call ``HTML2Text`` so concurrent
-            # callers cannot corrupt each other's parser state.
-            text = self._create_html_converter().handle(str(soup))
-
-            # Clean up excess empty lines
-            text = re.sub(r"\n{3,}", "\n\n", text)
-
-            return text.strip()
-
+            return self._render_soup_to_text(parsed.soup, compact=compact)
         except Exception as e:
             logger.warning(f"Error converting HTML to text: {e}")
             # Fallback: return raw text content
             return str(parsed.soup_for_reading.get_text().strip())
 
-    def html_to_plain_text(self, html_content: str) -> str:
-        """
-        Convert HTML to clean plain text.
+    def html_to_plain_text(self, html_content: str, *, compact: bool = False) -> str:
+        """Convert HTML to clean plain text.
 
         Args:
             html_content: HTML content to convert
+            compact: When True, extract infoboxes and replace oversized tables
+                with placeholders before rendering. Defaults to False, which
+                preserves byte-identical v1.2.0 behavior.
 
         Returns:
             Converted plain text
         """
         if not html_content:
             return ""
-
         try:
-            # Parse HTML with BeautifulSoup
             soup = BeautifulSoup(html_content, HTML_PARSER)
-
-            # Remove unwanted elements
-            for selector in UNWANTED_HTML_SELECTORS:
-                for element in soup.select(selector):
-                    element.decompose()
-
-            # Convert to text using a per-call ``HTML2Text`` so concurrent
-            # callers cannot corrupt each other's parser state.
-            text = self._create_html_converter().handle(str(soup))
-
-            # Clean up excess empty lines
-            text = re.sub(r"\n{3,}", "\n\n", text)
-
-            return text.strip()
-
+            return self._render_soup_to_text(soup, compact=compact)
         except Exception as e:
             logger.warning(f"Error converting HTML to text: {e}")
             # Fallback: return raw text content
             soup = BeautifulSoup(html_content, HTML_PARSER)
             return str(soup.get_text().strip())
 
-    def create_snippet(self, content: str, max_paragraphs: int = 2) -> str:
-        """
-        Create a snippet from content.
+    def create_snippet(
+        self,
+        content: str,
+        *,
+        query: Optional[str] = None,
+        max_paragraphs: int = 2,
+    ) -> str:
+        """Create a snippet from content, optionally query-aware.
 
-        Args:
-            content: Full content text
-            max_paragraphs: Maximum number of paragraphs to include
+        When `query` is supplied, locate the first paragraph that contains a
+        whole-word match for any term in the query (case-insensitive,
+        diacritic-folded) and start the snippet there. Otherwise, take the
+        leading paragraphs (legacy behavior).
 
-        Returns:
-            Content snippet
+        Up to 5 occurrences of any matched term inside the returned slice are
+        wrapped in `**bold**` for visibility.
         """
         if not content:
             return ""
 
-        # Split into paragraphs and take first few
         paragraphs = content.split("\n\n")
-        if len(paragraphs) > max_paragraphs:
-            snippet_text = " ".join(paragraphs[:max_paragraphs])
-        else:
-            snippet_text = content
+        start_idx = 0
+
+        if query:
+            terms = [t for t in _split_query_terms(query) if len(t) >= 3]
+            if terms:
+                folded_paragraphs = [_fold(p) for p in paragraphs]
+                for i, p in enumerate(folded_paragraphs):
+                    if any(_word_in(p, t) for t in terms):
+                        start_idx = i
+                        break
+
+        selected = paragraphs[start_idx : start_idx + max_paragraphs]
+        snippet_text = (
+            " ".join(selected)
+            if len(selected) > 1
+            else (selected[0] if selected else "")
+        )
 
         # Truncate if too long. Reserve 3 chars for the trailing "..." so the
         # final string respects snippet_length rather than overshooting it.
         if len(snippet_text) > self.snippet_length:
             cap = max(self.snippet_length - 3, 0)
             snippet_text = snippet_text[:cap].rstrip() + "..."
+
+        if query:
+            snippet_text = _highlight_terms(snippet_text, query, max_hits=5)
+            # Re-check length after bold markers are inserted: they may push the
+            # string over snippet_length. Hard-truncate if so, preserving the
+            # trailing "..." sentinel so callers see a consistent format.
+            if len(snippet_text) > self.snippet_length:
+                cap = max(self.snippet_length - 3, 0)
+                snippet_text = snippet_text[:cap].rstrip() + "..."
 
         return snippet_text
 
@@ -486,13 +643,18 @@ class ContentProcessor:
             f"body content, only showing first {max_length:,}] ..."
         )
 
-    def process_mime_content(self, content_bytes: bytes, mime_type: str) -> str:
+    def process_mime_content(
+        self, content_bytes: bytes, mime_type: str, *, compact: bool = False
+    ) -> str:
         """
         Process content based on MIME type.
 
         Args:
             content_bytes: Raw content bytes
             mime_type: MIME type of the content
+            compact: When True, forward to ``html_to_plain_text`` with
+                ``compact=True`` so infobox extraction and oversized-table
+                replacement run. Defaults to False (v1.2.0-compatible).
 
         Returns:
             Processed text content
@@ -502,7 +664,7 @@ class ContentProcessor:
             raw_content = content_bytes.decode("utf-8", errors="replace")
 
             if mime_type.startswith("text/html"):
-                return self.html_to_plain_text(raw_content)
+                return self.html_to_plain_text(raw_content, compact=compact)
             elif mime_type.startswith("text/"):
                 return raw_content.strip()
             elif mime_type.startswith("image/"):

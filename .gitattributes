@@ -1,0 +1,4 @@
+# Force LF line endings for golden snapshot files so Windows checkouts
+# with core.autocrlf=true don't rewrite them and break byte-comparison
+# tests in tests/test_golden_v2_phase_a.py.
+tests/golden/*.txt text eol=lf

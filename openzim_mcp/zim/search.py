@@ -16,6 +16,7 @@ import json
 import logging
 import urllib.parse
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
@@ -25,6 +26,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
 )
+from openzim_mcp.meta import attach_meta
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -142,7 +144,7 @@ class _SearchMixin:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
         # Resolve via the content mixin; declared here for type checking.
-        def _get_entry_snippet(self, entry: Any) -> str:
+        def _get_entry_snippet(self, entry: Any, query: Optional[str] = None) -> str:
             """Resolve via ``_ContentMixin`` on the concrete coordinator."""
 
         # Resolve via the namespace mixin; declared here for type checking.
@@ -209,6 +211,8 @@ class _SearchMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached search dict for query: {query}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(dict(cached_result))
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -223,7 +227,36 @@ class _SearchMixin:
             if total_results > 0:
                 self.cache.set(cache_key, payload)
             logger.debug(f"Search completed: query='{query}', results found")
-            return payload
+            reason = "0_hits" if total_results == 0 else None
+
+            # Cross-archive name match (Phase A item #4: alt_archive source)
+            # When search yields zero results, suggest other ZIM archives whose
+            # basename contains a query token (length >= 4 chars only).
+            suggestions: List[Dict[str, str]] = []
+            if total_results == 0:
+                try:
+                    files = self.list_zim_files_data()
+                    q_lower = query.lower()
+                    # Tokens of length >= 4 only (avoids matching "in", "the", etc.)
+                    q_tokens = [tok for tok in q_lower.split() if len(tok) >= 4]
+                    for f in files:
+                        file_path_str = str(f.get("path", ""))
+                        if file_path_str == str(validated_path):
+                            continue  # skip current archive
+                        stem = Path(file_path_str).stem  # e.g., "wikipedia_en_all"
+                        if any(tok in stem.lower() for tok in q_tokens):
+                            suggestions.append({"type": "alt_archive", "value": stem})
+                            limit_n = self.config.search.structured_suggestions_limit
+                            if len(suggestions) >= limit_n:
+                                break
+                except Exception as e:
+                    logger.debug(f"alt_archive suggestion build failed: {e}")
+
+            return attach_meta(
+                payload,
+                reason=reason,
+                suggestions=suggestions if suggestions else None,
+            )
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -294,7 +327,7 @@ class _SearchMixin:
                 title = entry.title or "Untitled"
 
                 # Get content snippet
-                snippet = self._get_entry_snippet(entry)
+                snippet = self._get_entry_snippet(entry, query=query)
 
                 results.append({"path": entry_id, "title": title, "snippet": snippet})
             except Exception as e:
@@ -540,7 +573,7 @@ class _SearchMixin:
                 f"{filter_text}, but offset {offset} exceeds total results."
             ), scan.filtered_count
 
-        results = self._build_filtered_results(page, content_type, offset)
+        results = self._build_filtered_results(page, content_type, offset, query=query)
         result_text = _format_filtered_response(
             query, filter_text, results, scan, total_results, offset, limit
         )
@@ -706,13 +739,14 @@ class _SearchMixin:
         page: List[Tuple[str, Any, str, str]],
         content_type: Optional[str],
         offset: int,
+        query: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Format each materialised entry into the response result dict."""
         results: List[Dict[str, Any]] = []
         for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
             try:
                 title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(entry)
+                snippet = self._get_entry_snippet(entry, query=query)
                 if not content_type:
                     try:
                         content_mime = entry.get_item().mimetype or ""
@@ -761,7 +795,9 @@ class _SearchMixin:
         if limit < 1 or limit > 50:
             raise OpenZimMcpValidationError("Limit must be between 1 and 50")
         if not partial_query or len(partial_query.strip()) < 2:
-            return {"suggestions": [], "message": "Query too short for suggestions"}
+            return attach_meta(
+                {"suggestions": [], "message": "Query too short for suggestions"}
+            )
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
@@ -773,6 +809,8 @@ class _SearchMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached suggestions dict for: {partial_query}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(dict(cached_result))
             return cached_result  # type: ignore[no-any-return]
 
         try:
@@ -792,7 +830,7 @@ class _SearchMixin:
             if count_for_gate > 0:
                 self.cache.set(cache_key, result)
             logger.info(f"Generated {actual_count} suggestions for: {partial_query}")
-            return result
+            return attach_meta(result)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -1147,8 +1185,7 @@ class _SearchMixin:
 
         return variants
 
-    @classmethod
-    def _find_entry_typo_fallback(cls, archive: Any, title: str) -> Optional[Any]:
+    def _find_entry_typo_fallback(self, archive: Any, title: str) -> Optional[Any]:
         """Try typo-corrected variants of ``title`` against the fast path.
 
         Runs only when the case-variant fast path AND the libzim
@@ -1156,14 +1193,14 @@ class _SearchMixin:
         last-resort try-this-before-giving-up step. Returns the first
         Entry whose case-variant fast path hits any single-edit variant.
 
-        Length-gated at >= 4 characters: short queries like ``"DNA"`` or
-        ``"Pi"`` get too many spurious adjacent-swap collisions to be
-        worth the lookup cost.
+        Length-gated via config.search.fuzzy_title_min_query_len (default >= 4):
+        short queries like ``"DNA"`` or ``"Pi"`` get too many spurious
+        adjacent-swap collisions to be worth the lookup cost.
         """
-        if len(title) < 4:
+        if len(title) < self.config.search.fuzzy_title_min_query_len:
             return None
-        for variant in cls._typo_variants(title):
-            entry = cls._find_entry_fast_path(archive, variant)
+        for variant in self._typo_variants(title):
+            entry = self._find_entry_fast_path(archive, variant)
             if entry is not None:
                 return entry
         return None
@@ -1239,7 +1276,6 @@ class _SearchMixin:
                     # Fallback: libzim suggestion search (title-indexed).
                     # Note: ``Archive.suggest()`` does not exist; the public
                     # API is ``SuggestionSearcher(archive).suggest(text)``.
-                    pre_suggestion_count = len(aggregate_results)
                     try:
                         suggestion_search = _zim_ops_mod.SuggestionSearcher(
                             archive
@@ -1292,26 +1328,28 @@ class _SearchMixin:
                         )
 
                     # Typo-tolerant fallback: when both fast path AND
-                    # the libzim suggestion index came up empty, try a
-                    # small set of single-edit variants of the input
+                    # the libzim suggestion index came up empty, OR when
+                    # the suggestions only yielded weak results (score < 0.7),
+                    # try a small set of single-edit variants of the input
                     # (transposition / single deletion). Runs only as a
                     # last resort because the false-match rate isn't
                     # zero — we don't want it competing with real hits.
-                    if (
-                        not fast_path_hit
-                        and len(aggregate_results) == pre_suggestion_count
-                    ):
+                    already_has_strong = any(
+                        r.get("score", 0.0) >= 0.7 for r in aggregate_results
+                    )
+                    if not fast_path_hit and not already_has_strong:
                         typo_entry = self._find_entry_typo_fallback(archive, title)
                         if typo_entry is not None:
                             aggregate_results.append(
                                 {
                                     "path": typo_entry.path,
                                     "title": typo_entry.title or title,
+                                    # Score set from config (default 0.85).
                                     # Below 0.95 (suggestion-rank top) and
                                     # well below 1.0 (exact match) so a
                                     # fuzzy hit never silently outranks a
                                     # legitimate result from another file.
-                                    "score": 0.7,
+                                    "score": self.config.search.fuzzy_title_score_penalty,
                                     "zim_file": file_path,
                                     "match_type": "typo_corrected",
                                 }
@@ -1326,13 +1364,33 @@ class _SearchMixin:
         # otherwise preserve per-file rank order.
         aggregate_results.sort(key=lambda r: -r["score"])
 
-        return {
-            "query": title,
-            "results": aggregate_results[:limit],
-            "fast_path_hit": fast_path_hit,
-            "fuzzy_path_hit": fuzzy_path_hit,
-            "files_searched": len(files),
-        }
+        # Build _meta.suggestions[] from typo variants when the fuzzy path
+        # is eligible (fast path missed and query is long enough). These are
+        # candidate spellings the caller can surface as "did you mean?" hints.
+        suggestions: List[Dict[str, str]] = []
+        limit_n = self.config.search.structured_suggestions_limit
+        if (
+            not fast_path_hit
+            and len(title) >= self.config.search.fuzzy_title_min_query_len
+        ):
+            for variant in self._typo_variants(title):
+                suggestions.append({"type": "alt_spelling", "value": variant})
+                if len(suggestions) >= limit_n:
+                    break
+
+        reason = None if aggregate_results else "0_hits"
+
+        return attach_meta(
+            {
+                "query": title,
+                "results": aggregate_results[:limit],
+                "fast_path_hit": fast_path_hit,
+                "fuzzy_path_hit": fuzzy_path_hit,
+                "files_searched": len(files),
+            },
+            suggestions=suggestions if suggestions else None,
+            reason=reason,
+        )
 
     def find_entry_by_title(
         self,
@@ -1572,14 +1630,18 @@ class _SearchMixin:
                     }
                 )
 
-        return {
-            "query": query,
-            "files_searched": len(files),
-            "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
-            "files_searched_successfully": sum(1 for r in per_file if "result" in r),
-            "files_failed": sum(1 for r in per_file if "error" in r),
-            "per_file": per_file,
-        }
+        return attach_meta(
+            {
+                "query": query,
+                "files_searched": len(files),
+                "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
+                "files_searched_successfully": sum(
+                    1 for r in per_file if "result" in r
+                ),
+                "files_failed": sum(1 for r in per_file if "error" in r),
+                "per_file": per_file,
+            }
+        )
 
     def search_all(
         self,
