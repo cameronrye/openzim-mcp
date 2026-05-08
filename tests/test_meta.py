@@ -1,0 +1,159 @@
+"""Tests for the openzim_mcp.meta module."""
+
+import pytest
+from openzim_mcp.meta import tokens_est
+
+
+def test_tokens_est_basic():
+    # tiktoken cl100k_base encodes "hello world" as 2 tokens
+    assert tokens_est("hello world") == pytest.approx(2, abs=1)
+
+
+def test_tokens_est_empty():
+    assert tokens_est("") == 0
+
+
+def test_tokens_est_unicode():
+    # Multi-byte characters tokenize predictably with cl100k_base
+    n = tokens_est("こんにちは世界")
+    assert n > 0
+    assert n < 50
+
+
+def test_tokens_est_long_string_scales_linearly():
+    short = tokens_est("Hello, this is a sample sentence. " * 10)
+    long = tokens_est("Hello, this is a sample sentence. " * 100)
+    # Linear scaling within ±5%
+    assert long == pytest.approx(short * 10, rel=0.05)
+
+
+from openzim_mcp.meta import build_meta
+
+
+def test_build_meta_basic_dict():
+    meta = build_meta(rendered='{"results": []}')
+    assert meta["chars"] == len('{"results": []}')
+    assert meta["tokens_est"] >= 1
+    assert meta["truncated"] is False
+    assert "more_at_offset" not in meta
+    assert "suggestions" not in meta
+
+
+def test_build_meta_truncated():
+    meta = build_meta(
+        rendered="X" * 100,
+        total_chars=10_000,
+        current_offset=0,
+        truncated=True,
+    )
+    assert meta["truncated"] is True
+    assert meta["more_at_offset"] == 100
+    assert meta["total_chars"] == 10_000
+
+
+def test_build_meta_with_suggestions():
+    meta = build_meta(
+        rendered="No results found.",
+        suggestions=[
+            {"type": "alt_spelling", "value": "Photosynthesis"},
+            {"type": "alt_archive", "value": "wikipedia_en_all"},
+        ],
+        reason="0_hits",
+    )
+    assert meta["suggestions"][0]["type"] == "alt_spelling"
+    assert meta["reason"] == "0_hits"
+
+
+def test_build_meta_omits_empty_suggestions():
+    meta = build_meta(rendered="content", suggestions=[])
+    assert "suggestions" not in meta
+
+
+def test_build_meta_pads_token_count_for_envelope():
+    rendered = "X" * 1000
+    meta = build_meta(rendered=rendered)
+    raw_tokens = tokens_est(rendered)
+    assert meta["tokens_est"] >= raw_tokens
+
+
+from openzim_mcp.meta import format_footer
+
+
+def test_footer_basic():
+    meta = {"tokens_est": 4283, "chars": 17034, "truncated": False}
+    footer = format_footer(meta, footer_enabled=True)
+    assert footer.startswith("> ")
+    assert "~4.3K tokens" in footer
+    assert "more" not in footer
+    assert "chars" not in footer
+
+
+def test_footer_truncated():
+    meta = {
+        "tokens_est": 4283,
+        "chars": 17034,
+        "truncated": True,
+        "more_at_offset": 17034,
+        "total_chars": 87421,
+    }
+    footer = format_footer(meta, footer_enabled=True)
+    assert "17K of 87K chars" in footer
+    assert "offset=17034" in footer
+
+
+def test_footer_empty_results():
+    meta = {
+        "tokens_est": 50,
+        "chars": 200,
+        "truncated": False,
+        "reason": "0_hits",
+        "suggestions": [
+            {"type": "alt_spelling", "value": "Photosynthesis"},
+            {"type": "alt_archive", "value": "wikipedia_en_all"},
+        ],
+    }
+    footer = format_footer(meta, footer_enabled=True)
+    assert footer.startswith("> No results.")
+    assert "Photosynthesis" in footer
+    assert "wikipedia_en_all" in footer
+
+
+def test_footer_disabled():
+    meta = {"tokens_est": 100, "chars": 400, "truncated": False}
+    assert format_footer(meta, footer_enabled=False) == ""
+
+
+def test_footer_caps_visible_suggestions_at_three():
+    meta = {
+        "tokens_est": 50,
+        "chars": 200,
+        "truncated": False,
+        "reason": "0_hits",
+        "suggestions": [
+            {"type": "alt_spelling", "value": f"alt{i}"} for i in range(7)
+        ],
+    }
+    footer = format_footer(meta, footer_enabled=True)
+    assert footer.count("·") <= 3
+
+
+from openzim_mcp.meta import attach_meta
+
+
+def test_attach_meta_adds_meta_key():
+    payload = {"results": [{"path": "A/Foo"}], "total": 1}
+    out = attach_meta(payload)
+    assert "_meta" in out
+    assert out["_meta"]["chars"] > 0
+    assert out["_meta"]["tokens_est"] >= 1
+    # Original keys preserved
+    assert out["results"] == [{"path": "A/Foo"}]
+    assert out["total"] == 1
+
+
+def test_attach_meta_excludes_existing_meta_from_render():
+    """If payload already has _meta, the rendered form for token estimation should exclude it."""
+    payload = {"results": [], "_meta": {"old": "data"}}
+    out = attach_meta(payload)
+    # _meta is overwritten, not nested
+    assert "old" not in out["_meta"]
