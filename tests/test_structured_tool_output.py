@@ -65,15 +65,48 @@ class TestStructuredOutput:
             structured, dict
         ), f"structured payload should be dict, got {type(structured)}"
 
-        # FastMCP wraps generic ``Dict[str, Any]`` return types under a
-        # ``"result"`` key (see ``_try_create_model_and_schema`` in
-        # ``mcp.server.fastmcp.utilities.func_metadata``). TypedDict /
-        # Pydantic returns would land at the top level instead. The pilot
-        # uses ``Dict[str, Any]`` so the payload sits one level down.
+        # FastMCP wraps Union return annotations
+        # (``Union[ListNamespacesResponse, ToolErrorPayload]``) in a
+        # uniform ``{"result": ...}`` envelope (see spec § FastMCP
+        # wrapping). Tolerate the wrapper; assert the inner shape.
         payload = structured["result"] if "result" in structured else structured
         assert isinstance(payload, dict)
+        # list_namespaces is the one list-shaped result that does NOT
+        # carry the PaginatedResponse contract — it returns a
+        # dict-of-summaries instead. Top-level keys are stable.
         assert "namespaces" in payload
         assert isinstance(payload["namespaces"], dict)
+        for key in (
+            "total_entries",
+            "sampled_entries",
+            "has_new_namespace_scheme",
+            "is_total_authoritative",
+            "discovery_method",
+        ):
+            assert key in payload, f"missing top-level key: {key}"
+        # Phase B contract keys MUST NOT leak onto this non-paginated
+        # response — protect against an accidental
+        # PaginatedResponse-style migration.
+        for forbidden in ("results", "next_cursor", "done", "page_info"):
+            assert forbidden not in payload, (
+                f"non-paginated list_namespaces unexpectedly carries "
+                f"contract key: {forbidden}"
+            )
+        # Per-namespace summaries declare ``total`` (renamed from the
+        # legacy ``count`` in v2 Phase B) and ``is_authoritative``.
+        for ns_letter, summary in payload["namespaces"].items():
+            assert isinstance(
+                summary, dict
+            ), f"namespaces[{ns_letter}] should be dict"
+            assert (
+                "total" in summary
+            ), f"namespaces[{ns_letter}] missing renamed 'total' field"
+            assert (
+                "count" not in summary
+            ), f"namespaces[{ns_letter}] still carries legacy 'count' field"
+            assert (
+                "is_authoritative" in summary
+            ), f"namespaces[{ns_letter}] missing 'is_authoritative'"
 
     @pytest.mark.asyncio
     async def test_get_zim_metadata_returns_structured_content(

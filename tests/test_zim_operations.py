@@ -1330,10 +1330,12 @@ class TestZimOperations:
 
         # Test list_namespaces_data cache hit (lines 584-585).
         # list_namespaces now delegates to list_namespaces_data, which caches
-        # dicts under a `namespaces_data:` key. Exercise the cache hit path
-        # against the dict-returning entry point directly so we test the
-        # cache layer without an extra json.dumps round trip.
-        cache_key = f"namespaces_data:{validated_path}"
+        # dicts under a `namespaces_data:v2:` key (v2 marker added with the
+        # per-namespace ``count`` -> ``total`` rename so v1.x cached responses
+        # don't leak through). Exercise the cache hit path against the
+        # dict-returning entry point directly so we test the cache layer
+        # without an extra json.dumps round trip.
+        cache_key = f"namespaces_data:v2:{validated_path}"
         zim_operations.cache.set(cache_key, {"cached": "namespaces"})
 
         result = zim_operations.list_namespaces_data(str(zim_file))

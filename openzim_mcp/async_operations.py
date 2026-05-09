@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .tool_schemas import (
         BrowseNamespaceResponse,
         FindEntryResponse,
+        ListNamespacesResponse,
         SearchAllResponse,
         SearchResponse,
         SearchSuggestionsResponse,
@@ -219,7 +220,9 @@ class AsyncZimOperations:
         """
         return await asyncio.to_thread(self._ops.list_namespaces, zim_file_path)
 
-    async def list_namespaces_data(self, zim_file_path: str) -> dict:
+    async def list_namespaces_data(
+        self, zim_file_path: str
+    ) -> "ListNamespacesResponse":
         """Structured variant of ``list_namespaces`` (async)."""
         return await asyncio.to_thread(self._ops.list_namespaces_data, zim_file_path)
 

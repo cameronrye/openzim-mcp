@@ -83,11 +83,11 @@ class TestListNamespacesNewScheme:
             "F" not in result["namespaces"]
         ), "first-letter bucket 'F' must not appear for new-scheme archives"
         # 'M' may legitimately exist via metadata_keys, but its source must be
-        # metadata not first-letter parsing of main.html — count must be > 1
+        # metadata not first-letter parsing of main.html — total must be > 1
         # because metadata_keys yields several entries.
         if "M" in result["namespaces"]:
             assert (
-                result["namespaces"]["M"]["count"] > 1
+                result["namespaces"]["M"]["total"] > 1
             ), "'M' must come from metadata_keys, not first-letter of main.html"
 
     def test_content_namespace_present(
@@ -100,7 +100,7 @@ class TestListNamespacesNewScheme:
         result = json.loads(ops_for_zim_data.list_namespaces(str(zim)))
         assert "C" in result["namespaces"], "C namespace must exist for new-scheme"
         assert (
-            result["namespaces"]["C"]["count"] >= 2
+            result["namespaces"]["C"]["total"] >= 2
         ), "C must contain favicon.png and main.html"
 
     def test_metadata_namespace_from_metadata_keys(
@@ -117,7 +117,7 @@ class TestListNamespacesNewScheme:
         assert (
             "M" in result["namespaces"]
         ), "M must be discovered via metadata_keys for new-scheme"
-        assert result["namespaces"]["M"]["count"] >= 10
+        assert result["namespaces"]["M"]["total"] >= 10
 
 
 class TestListNamespacesOldScheme:
@@ -132,8 +132,8 @@ class TestListNamespacesOldScheme:
         zim = _require(basic_test_zim_files["withns"])
         result = json.loads(ops_for_zim_data.list_namespaces(str(zim)))
         assert {"-", "A", "I", "M", "X"} <= set(result["namespaces"].keys())
-        assert result["namespaces"]["M"]["count"] == 12
-        assert result["namespaces"]["A"]["count"] == 1
+        assert result["namespaces"]["M"]["total"] == 12
+        assert result["namespaces"]["A"]["total"] == 1
 
 
 class TestBrowseNamespaceNewScheme:

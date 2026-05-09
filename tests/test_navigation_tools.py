@@ -981,7 +981,8 @@ class TestNamespaceDataMethodsMeta:
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
-        cache_key = f"namespaces_data:{validated}"
+        # Phase B v2 cache key (count -> total rename).
+        cache_key = f"namespaces_data:v2:{validated}"
         old = {"total_entries": 5, "namespaces": {}}
         zim_ops.cache.set(cache_key, old)
 

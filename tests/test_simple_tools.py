@@ -1616,16 +1616,16 @@ class TestCompactMarkdownRenderingForJsonIntents:
                 "discovery_method": "sampling",
                 "namespaces": {
                     "C": {
-                        "count": 27199903,
+                        "total": 27199903,
                         "description": "User content entries",
                     },
-                    "M": {"count": 13, "description": "ZIM metadata"},
+                    "M": {"total": 13, "description": "ZIM metadata"},
                 },
             }
         )
         out = h.handle_zim_query("list namespaces", options={"compact": True})
         mock.list_namespaces_data.assert_called_once()
-        # Sorted by count descending; C comes first.
+        # Sorted by total descending; C comes first.
         c_idx = out.find("**`C`**")
         m_idx = out.find("**`M`**")
         assert c_idx >= 0 and m_idx >= 0 and c_idx < m_idx
@@ -2428,12 +2428,12 @@ class TestCompactRenderersModule:
                 "is_total_authoritative": False,
                 "discovery_method": "scan",
                 "namespaces": {
-                    "C": {"count": 26_000_000, "description": "Content"},
-                    "M": {"count": 100, "description": "Metadata"},
+                    "C": {"total": 26_000_000, "description": "Content"},
+                    "M": {"total": 100, "description": "Metadata"},
                 },
             }
         )
-        # Sorted by count: C should come before M.
+        # Sorted by total: C should come before M.
         c_idx = out.find("**`C`**")
         m_idx = out.find("**`M`**")
         assert c_idx >= 0 and m_idx >= 0 and c_idx < m_idx

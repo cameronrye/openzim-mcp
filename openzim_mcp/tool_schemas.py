@@ -95,8 +95,27 @@ class RelatedArticle(TypedDict):
 
 
 class NamespaceSummary(TypedDict):
+    # Per-namespace count. ``total`` replaces the legacy ``count`` field
+    # so this aligns with the Phase B canonical naming used elsewhere
+    # (PaginatedResponse.total, etc.). For full-iteration buckets it is
+    # exact; for sampled buckets it is the projected estimate
+    # (``estimated_total``).
     total: int
+    # True when the bucket was discovered exhaustively (full iteration,
+    # or a deterministic source like ``archive.metadata_keys`` /
+    # canonical-probes-only). False when the bucket's ``total`` was
+    # extrapolated from random sampling.
     is_authoritative: bool
+    # Diagnostic fields surfaced for callers that want to reason about
+    # the discovery method. ``description`` and ``sample_entries`` come
+    # from every namespace; ``sampled_count`` / ``probed_count`` /
+    # ``estimated_total`` are populated whether discovery was full or
+    # sampled (sampled-only namespaces just zero the unused half).
+    description: NotRequired[str]
+    sample_entries: NotRequired[list[dict[str, str]]]
+    sampled_count: NotRequired[int]
+    probed_count: NotRequired[int]
+    estimated_total: NotRequired[int]
 
 
 # ---------- list-returning tool responses ----------

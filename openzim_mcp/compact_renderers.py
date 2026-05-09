@@ -229,8 +229,13 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_namespaces(data: Dict[str, Any]) -> str:
-    """Render a list_namespaces payload as a compact namespace table."""
+def render_namespaces(data: Mapping[str, Any]) -> str:
+    """Render a list_namespaces payload as a compact namespace table.
+
+    Accepts ``Mapping`` rather than ``Dict`` so the typed
+    ``ListNamespacesResponse`` TypedDict from the v2 Phase B migration
+    flows through without an explicit ``cast`` at call sites.
+    """
     if not isinstance(data, dict):
         return json.dumps(data)
     total_entries = data.get("total_entries", 0)
@@ -245,15 +250,16 @@ def render_namespaces(data: Dict[str, Any]) -> str:
         "",
     ]
     # Sort by entry count (descending) so the most populous
-    # namespaces — usually C — surface first.
+    # namespaces — usually C — surface first. Phase B v2: per-namespace
+    # count moved from ``count`` to ``total``.
     items = sorted(
         namespaces.items(),
-        key=lambda kv: (-(kv[1].get("count", 0) if isinstance(kv[1], dict) else 0)),
+        key=lambda kv: (-(kv[1].get("total", 0) if isinstance(kv[1], dict) else 0)),
     )
     for ns, info in items:
         if not isinstance(info, dict):
             continue
-        count = info.get("count", 0)
+        count = info.get("total", 0)
         desc = info.get("description") or ""
         lines.append(f"- **`{ns}`** — {count:,} entries: {desc}")
     return "\n".join(lines)

@@ -32,7 +32,11 @@ if TYPE_CHECKING:
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
-    from openzim_mcp.tool_schemas import BrowseNamespaceResponse, WalkNamespaceResponse
+    from openzim_mcp.tool_schemas import (
+        BrowseNamespaceResponse,
+        ListNamespacesResponse,
+        WalkNamespaceResponse,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +68,20 @@ class _NamespaceMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
-    def list_namespaces_data(self, zim_file_path: str) -> Dict[str, Any]:
+    def list_namespaces_data(self, zim_file_path: str) -> "ListNamespacesResponse":
         """Structured variant of ``list_namespaces``.
 
         Returns the same payload as ``list_namespaces`` but as a Python
         dict, so MCP tool functions can hand it straight to FastMCP's
         structured-output path without the json.dumps + re-parse round
         trip the legacy string variant required.
+
+        Phase B v2: this is the one list-shaped result that does NOT carry
+        the PaginatedResponse contract — it returns a dict-of-summaries,
+        not a list. Top-level keys are ``total_entries`` /
+        ``sampled_entries`` / ``has_new_namespace_scheme`` /
+        ``is_total_authoritative`` / ``discovery_method`` / ``namespaces``
+        plus the universal ``_meta`` envelope.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -80,15 +91,15 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"namespaces_data:{validated_path}"
+        # Cache key bumped to v2 so v1.x cached responses (per-namespace
+        # ``count`` field) don't leak through after the rename to ``total``.
+        cache_key = f"namespaces_data:v2:{validated_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespaces dict for: {validated_path}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
-            return cached_result  # type: ignore[no-any-return]
+            return cast("ListNamespacesResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -96,7 +107,7 @@ class _NamespaceMixin:
 
             self.cache.set(cache_key, result)
             logger.info(f"Listed namespaces for: {validated_path}")
-            return attach_meta(result)
+            return cast("ListNamespacesResponse", attach_meta(result))
 
         except Exception as e:
             logger.error(f"Namespace listing failed for {validated_path}: {e}")
@@ -183,8 +194,11 @@ class _NamespaceMixin:
             return
         if not keys:
             return
+        # ``metadata_keys`` is an exhaustive enumeration of M, so the
+        # bucket is authoritative — we know the total without sampling.
         ns_info = {
-            "count": len(keys),
+            "total": len(keys),
+            "is_authoritative": True,
             "description": _NAMESPACE_DESCRIPTIONS["M"],
             "sample_entries": [{"path": f"M/{k}", "title": k} for k in keys[:5]],
             "sampled_count": len(keys),
@@ -219,8 +233,14 @@ class _NamespaceMixin:
                 probes.append(("W/favicon", "favicon"))
         if not probes:
             return
+        # Probed-only buckets are authoritative existence proofs but the
+        # ``total`` is a lower bound — we know these specific paths exist
+        # but not how many other W entries the archive holds. We mark
+        # ``is_authoritative=False`` to reflect that the count is not the
+        # whole namespace, just confirmed canonical paths.
         namespaces["W"] = {
-            "count": len(probes),
+            "total": len(probes),
+            "is_authoritative": False,
             "description": _NAMESPACE_DESCRIPTIONS["W"],
             "sample_entries": [{"path": p, "title": t} for p, t in probes],
             "sampled_count": 0,
@@ -255,7 +275,15 @@ class _NamespaceMixin:
             ns_info = namespaces.setdefault(
                 namespace,
                 {
-                    "count": 0,
+                    # ``total`` is the per-namespace count (renamed from
+                    # ``count`` in v2 Phase B for consistency with
+                    # PaginatedResponse.total). For full-iteration buckets
+                    # this is exact; for sampled buckets it is overwritten
+                    # with the projected estimate during finalisation.
+                    "total": 0,
+                    # Set during finalisation: True for full iteration,
+                    # False for sampled / probed-only buckets.
+                    "is_authoritative": False,
                     "description": _NAMESPACE_DESCRIPTIONS.get(
                         namespace, f"Namespace '{namespace}'"
                     ),
@@ -268,7 +296,7 @@ class _NamespaceMixin:
                 ns_info["_probed_count"] += 1
             else:
                 ns_info["_sampled_count"] += 1
-            ns_info["count"] += 1
+            ns_info["total"] += 1
             if len(ns_info["sample_entries"]) < 5:
                 ns_info["sample_entries"].append({"path": path, "title": title or path})
 
@@ -292,8 +320,11 @@ class _NamespaceMixin:
     def _finalise_full_iteration(namespaces: Dict[str, Dict[str, Any]]) -> None:
         """Collapse internal counters into the public shape after full scan."""
         for ns_info in namespaces.values():
-            ns_info["sampled_count"] = ns_info["count"]
-            ns_info["estimated_total"] = ns_info["count"]
+            # Full iteration enumerates every entry — the bucket's total
+            # is exact and the bucket is authoritative.
+            ns_info["sampled_count"] = ns_info["total"]
+            ns_info["estimated_total"] = ns_info["total"]
+            ns_info["is_authoritative"] = True
             ns_info.pop("_probed_count", None)
             ns_info.pop("_sampled_count", None)
 
@@ -374,7 +405,9 @@ class _NamespaceMixin:
             ns_info["sampled_count"] = sampled
             ns_info["probed_count"] = probed
             ns_info["estimated_total"] = estimated_total
-            ns_info["count"] = estimated_total
+            ns_info["total"] = estimated_total
+            # Sampling-derived counts are projections, not exact totals.
+            ns_info["is_authoritative"] = False
             ns_info.pop("_probed_count", None)
             ns_info.pop("_sampled_count", None)
 
