@@ -131,6 +131,37 @@ class TestStructuredOutput:
         assert "entry_count" in payload
 
     @pytest.mark.asyncio
+    async def test_get_main_page_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """get_main_page emits a real dict at structuredContent.result (FastMCP Union wrap)."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+
+        result = await server.mcp._tool_manager.call_tool(
+            "get_main_page",
+            {"zim_file_path": str(zim_path)},
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # FastMCP wraps Union returns in a uniform {"result": ...} envelope
+        # (see spec § FastMCP wrapping). Accept the wrapper; assert inner shape.
+        payload = structured["result"] if "result" in structured else structured
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            # Tolerate both: archive with main page (non-empty path/title/content)
+            # and archive without (empty path, textual notice in content).
+            assert "path" in payload
+            assert "title" in payload
+            assert "content" in payload
+
+    @pytest.mark.asyncio
     async def test_list_zim_files_returns_structured_content(
         self, server: OpenZimMcpServer
     ) -> None:
@@ -453,6 +484,54 @@ class TestStructuredOutput:
             assert payload["done"] is True
             assert payload["total"] == len(payload["results"])
             assert "page_info" in payload
+
+    @pytest.mark.asyncio
+    async def test_get_zim_entry_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """get_zim_entry emits a real dict at structuredContent.result (FastMCP Union wrap)."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+
+        # Resolve a real entry path via find_entry_by_title so we get a
+        # non-error response to assert the success-branch shape against.
+        find_result = await server.mcp._tool_manager.call_tool(
+            "find_entry_by_title",
+            {"zim_file_path": str(zim_path), "title": ""},
+            convert_result=True,
+        )
+        assert isinstance(find_result, tuple)
+        _, find_structured = find_result
+        find_payload = (
+            find_structured["result"]
+            if "result" in find_structured
+            else find_structured
+        )
+        entries = find_payload.get("results", [])
+        if not entries:
+            pytest.skip("No entries found in test ZIM to exercise get_zim_entry")
+        entry_path = entries[0]["path"]
+
+        result = await server.mcp._tool_manager.call_tool(
+            "get_zim_entry",
+            {"zim_file_path": str(zim_path), "entry_path": entry_path},
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # FastMCP wraps Union returns in a uniform {"result": ...} envelope
+        # (see spec § FastMCP wrapping). Accept the wrapper; assert inner shape.
+        payload = structured["result"] if "result" in structured else structured
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            assert "path" in payload
+            assert "title" in payload
+            assert "content" in payload
 
     @pytest.mark.asyncio
     async def test_get_article_structure_returns_structured_content(
