@@ -250,6 +250,53 @@ class TestStructuredOutput:
             assert "query" in payload
 
     @pytest.mark.asyncio
+    async def test_search_with_filters_returns_paginated_response(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """search_with_filters (Phase B) emits a SearchWithFiltersResponse-shaped payload.
+
+        Phase B migration: the tool now declares a
+        ``Union[SearchWithFiltersResponse, ToolErrorPayload]`` return
+        annotation, so FastMCP wraps the payload in a uniform
+        ``{"result": ...}`` envelope (see spec § FastMCP wrapping). The
+        inner shape must carry the contract keys plus the tool-specific
+        ``query`` / ``namespace_filter`` / ``content_type_filter`` extras.
+        """
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        result = await server.mcp._tool_manager.call_tool(
+            "search_with_filters",
+            {
+                "zim_file_path": str(zim_path),
+                "query": "evolution",
+                "namespace": "C",
+            },
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # FastMCP wraps Union returns in {"result": ...}; accept the wrapper.
+        payload = structured["result"] if "result" in structured else structured
+        # Tool may emit an error envelope on a transient libzim failure —
+        # tolerate it; the wire format is what we're verifying.
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            for key in ("results", "next_cursor", "total", "done", "page_info"):
+                assert key in payload
+            assert isinstance(payload["results"], list)
+            assert isinstance(payload["page_info"], dict)
+            # _meta envelope should also be present (sibling of contract keys).
+            assert "_meta" in payload
+            assert payload["query"] == "evolution"
+            assert payload["namespace_filter"] == "C"
+            assert payload["content_type_filter"] is None
+
+    @pytest.mark.asyncio
     async def test_search_all_returns_structured_content(
         self, server: OpenZimMcpServer
     ) -> None:

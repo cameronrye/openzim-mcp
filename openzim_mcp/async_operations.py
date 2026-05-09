@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 from .zim_operations import ZimOperations
 
 if TYPE_CHECKING:
-    from .tool_schemas import SearchAllResponse, SearchResponse
+    from .tool_schemas import (
+        SearchAllResponse,
+        SearchResponse,
+        SearchWithFiltersResponse,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +266,7 @@ class AsyncZimOperations:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> str:
-        """Search with filters (async).
+        """Search with filters (async, legacy markdown surface).
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -273,10 +277,30 @@ class AsyncZimOperations:
             offset: Starting offset
 
         Returns:
-            Search results as JSON string
+            Search results as markdown text
         """
         return await asyncio.to_thread(
             self._ops.search_with_filters,
+            zim_file_path,
+            query,
+            namespace,
+            content_type,
+            limit,
+            offset,
+        )
+
+    async def search_with_filters_data(
+        self,
+        zim_file_path: str,
+        query: str,
+        namespace: Optional[str] = None,
+        content_type: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> "SearchWithFiltersResponse":
+        """Structured variant of ``search_with_filters`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.search_with_filters_data,
             zim_file_path,
             query,
             namespace,
