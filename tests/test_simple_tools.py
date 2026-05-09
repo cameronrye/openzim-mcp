@@ -1674,35 +1674,58 @@ class TestCompactLinksResponse:
     def mock_zim_operations(self):
         mock = Mock()
         mock.list_zim_files_data.return_value = [{"path": "/zim/test.zim"}]
-        mock.extract_article_links_data.return_value = {
-            "title": "Photosynthesis",
-            "path": "Photosynthesis",
-            "internal_links": [
-                {"url": "Carbohydrate", "text": "carbohydrates", "type": "internal"},
-                {"url": "Phytoplankton", "text": "phytoplankton", "type": "internal"},
-            ],
-            "external_links": [
-                {"url": "https://example.com/x", "text": "example", "type": "external"},
-            ],
-            "media_links": [
-                {
-                    "url": "./_assets_/img.png",
-                    "type": "image",
-                    "alt": "",
-                    "title": "",
+
+        # v2 Phase B: extract_article_links_data returns ONE category
+        # per call. The compact path issues two calls (internal +
+        # external); return different payloads based on the ``kind``.
+        def _per_kind(*args, **kwargs):
+            kind = kwargs.get("kind") or (args[4] if len(args) > 4 else "internal")
+            base = {
+                "title": "Photosynthesis",
+                "path": "Photosynthesis",
+                "content_type": "text/html",
+                "next_cursor": "OPAQUE",
+                "done": False,
+                "category_totals": {
+                    "internal": 1988,
+                    "external": 401,
+                    "media": 25,
                 },
-            ],
-            "total_internal_links": 1988,
-            "total_external_links": 401,
-            "total_media_links": 25,
-            "total_links": 2414,
-            "pagination": {
-                "offset": 0,
-                "limit": 20,
-                "kind": None,
-                "has_more": True,
-            },
-        }
+            }
+            if kind == "external":
+                return {
+                    **base,
+                    "kind": "external",
+                    "results": [
+                        {
+                            "url": "https://example.com/x",
+                            "text": "example",
+                            "type": "external",
+                        },
+                    ],
+                    "total": 401,
+                    "page_info": {"offset": 0, "limit": 20, "returned_count": 1},
+                }
+            return {
+                **base,
+                "kind": "internal",
+                "results": [
+                    {
+                        "url": "Carbohydrate",
+                        "text": "carbohydrates",
+                        "type": "internal",
+                    },
+                    {
+                        "url": "Phytoplankton",
+                        "text": "phytoplankton",
+                        "type": "internal",
+                    },
+                ],
+                "total": 1988,
+                "page_info": {"offset": 0, "limit": 20, "returned_count": 2},
+            }
+
+        mock.extract_article_links_data.side_effect = _per_kind
         mock.extract_article_links.return_value = (
             '{"title":"Photosynthesis","internal_links":[...legacy verbose...]}'
         )
@@ -1715,15 +1738,26 @@ class TestCompactLinksResponse:
     def test_compact_renders_flat_markdown_list(self, handler, mock_zim_operations):
         """Compact mode hits the structured-data path with a tight
         default limit (20) and renders a flat ``- text -> path`` list.
+
+        v2 Phase B: ``extract_article_links_data`` returns ONE kind
+        per call, so the compact path issues two calls (internal +
+        external).
         """
         result = handler.handle_zim_query(
             "links in Photosynthesis",
             zim_file_path="/zim/test.zim",
             options={"compact": True, "limit": 20},
         )
-        mock_zim_operations.extract_article_links_data.assert_called_once()
-        args, kwargs = mock_zim_operations.extract_article_links_data.call_args
-        assert kwargs.get("limit") == 20
+        # Two calls — one per category.
+        assert mock_zim_operations.extract_article_links_data.call_count == 2
+        kinds_called = {
+            call.kwargs.get("kind")
+            for call in mock_zim_operations.extract_article_links_data.call_args_list
+        }
+        assert kinds_called == {"internal", "external"}
+        # All calls used the requested limit.
+        for call in mock_zim_operations.extract_article_links_data.call_args_list:
+            assert call.kwargs.get("limit") == 20
 
         # Header names the article and the per-category counts include
         # the full totals so the LLM knows what's been paged in.

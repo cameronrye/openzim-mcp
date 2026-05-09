@@ -13,19 +13,21 @@ without changes.
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
 from openzim_mcp.exceptions import OpenZimMcpArchiveError, OpenZimMcpValidationError
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.pagination import Cursor
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
+    from openzim_mcp.tool_schemas import LinksResponse
 
 logger = logging.getLogger(__name__)
 
@@ -174,33 +176,32 @@ class _StructureMixin:
         entry_path: str,
         limit: int = 100,
         offset: int = 0,
-        kind: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Structured variant of ``extract_article_links``.
+        kind: str = "internal",
+    ) -> "LinksResponse":
+        """Structured variant of ``extract_article_links``. v2 Phase B contract.
 
         Returns the result dict directly (not a JSON string) so MCP tools
         can hand it straight to FastMCP's structured-content path.
 
-        Heavy articles (e.g. Wikipedia "Evolution") carry hundreds of links;
-        the unbounded variant routinely overflowed MCP response budgets. This
-        method paginates per category (internal / external / media) and
-        always reports the full ``total_*_links`` so callers can size their
-        next request.
+        v2 Phase B: ``kind`` is required-with-default. Each call returns
+        exactly one category in ``results``; ``category_totals`` reports
+        the full counts for all three categories so callers can size
+        their next request. To enumerate all three categories, issue
+        three calls with different ``kind`` values.
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'C/Some_Article'
-            limit: Max items per category in the response (1-500, default 100).
-            offset: Starting offset within each category (default 0).
-            kind: Optional filter — ``"internal"``, ``"external"``, or
-                ``"media"``. When set, the other categories are returned as
-                empty lists; their totals are still reported.
+            limit: Max items per page (1-500, default 100).
+            offset: Starting offset within the requested category (default 0).
+            kind: Which category to return — ``"internal"`` (default),
+                ``"external"``, or ``"media"``.
 
         Returns:
-            Dict with ``internal_links``, ``external_links``, ``media_links``
-            (paged subsets), ``total_*_links`` (full counts), and a
-            ``pagination`` block (``offset``, ``limit``, ``has_more``,
-            ``kind``).
+            ``LinksResponse``: ``results`` (paged subset of one category),
+            top-level contract keys (``next_cursor``, ``total``, ``done``,
+            ``page_info``), plus ``title``, ``path``, ``content_type``,
+            ``kind``, and ``category_totals`` (full counts per category).
 
         Raises:
             OpenZimMcpValidationError: limit/offset/kind out of range.
@@ -218,9 +219,9 @@ class _StructureMixin:
             raise OpenZimMcpValidationError(
                 f"offset must be non-negative (provided: {offset})"
             )
-        if kind is not None and kind not in {"internal", "external", "media"}:
+        if kind not in {"internal", "external", "media"}:
             raise OpenZimMcpValidationError(
-                f"kind must be one of internal/external/media or omitted "
+                f"kind must be one of 'internal', 'external', 'media' "
                 f"(provided: {kind!r})"
             )
 
@@ -232,12 +233,61 @@ class _StructureMixin:
             extraction = self._get_or_load_link_extraction(
                 str(validated_path), entry_path
             )
-            result = self._render_paged_links(extraction, limit, offset, kind)
+
+            full_internal: List[Any] = extraction["internal"]
+            full_external: List[Any] = extraction["external"]
+            full_media: List[Any] = extraction["media"]
+            by_kind = {
+                "internal": full_internal,
+                "external": full_external,
+                "media": full_media,
+            }
+            full_list = by_kind[kind]
+            total_for_kind = len(full_list)
+            page = full_list[offset : offset + limit]
+            returned_count = len(page)
+            last_index = offset + returned_count
+            done = last_index >= total_for_kind
+            next_cursor: Optional[str] = None
+            if not done:
+                next_cursor = Cursor.encode(
+                    tool="extract_article_links",
+                    state={
+                        "o": last_index,
+                        "l": limit,
+                        "ep": entry_path,
+                        "k": kind,
+                    },
+                )
+
+            payload: Dict[str, Any] = {
+                "title": extraction["title"],
+                "path": extraction["path"],
+                "content_type": extraction["content_type"],
+                "kind": kind,
+                "results": page,
+                "next_cursor": next_cursor,
+                "total": total_for_kind,
+                "done": done,
+                "page_info": {
+                    "offset": offset,
+                    "limit": limit,
+                    "returned_count": returned_count,
+                },
+                "category_totals": {
+                    "internal": len(full_internal),
+                    "external": len(full_external),
+                    "media": len(full_media),
+                },
+            }
+            if extraction.get("message"):
+                payload["message"] = extraction["message"]
+
             logger.info(
                 f"Extracted links for: {entry_path} "
                 f"(limit={limit}, offset={offset}, kind={kind})"
             )
-            return attach_meta(result)
+            return cast("LinksResponse", attach_meta(payload))
 
         except OpenZimMcpValidationError:
             raise
@@ -255,23 +305,23 @@ class _StructureMixin:
         entry_path: str,
         limit: int = 100,
         offset: int = 0,
-        kind: Optional[str] = None,
+        kind: str = "internal",
     ) -> str:
         """Legacy JSON-string variant of ``extract_article_links_data``.
 
-        Extract internal and external links from an article, with pagination.
+        Extract links of one category from an article, with pagination.
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'C/Some_Article'
-            limit: Max items per category in the response (1-500, default 100).
-            offset: Starting offset within each category (default 0).
-            kind: Optional filter — ``"internal"``, ``"external"``, or
-                ``"media"``.
+            limit: Max items per page (1-500, default 100).
+            offset: Starting offset within the requested category (default 0).
+            kind: Which category — ``"internal"`` (default), ``"external"``,
+                or ``"media"``.
 
         Returns:
-            JSON string containing extracted links, totals, and pagination
-            metadata.
+            JSON string containing the v2 Phase B ``LinksResponse`` payload
+            (single-category ``results`` plus pagination contract).
 
         Raises:
             OpenZimMcpValidationError: limit/offset/kind out of range.
@@ -349,55 +399,6 @@ class _StructureMixin:
         except Exception as e:
             logger.error(f"Error extracting links for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(f"Failed to extract article links: {e}") from e
-
-    @staticmethod
-    def _render_paged_links(
-        extraction: Dict[str, Any],
-        limit: int,
-        offset: int,
-        kind: Optional[str],
-    ) -> Dict[str, Any]:
-        """Slice cached extraction into a paged response dict."""
-        full_internal: List[Any] = extraction["internal"]
-        full_external: List[Any] = extraction["external"]
-        full_media: List[Any] = extraction["media"]
-
-        def _page(full: List[Any], include: bool) -> Tuple[List[Any], bool]:
-            if not include:
-                return [], False
-            end = offset + limit
-            page = full[offset:end]
-            return page, end < len(full)
-
-        internal_page, internal_more = _page(full_internal, kind in (None, "internal"))
-        external_page, external_more = _page(full_external, kind in (None, "external"))
-        media_page, media_more = _page(full_media, kind in (None, "media"))
-
-        links_data: Dict[str, Any] = {
-            "title": extraction["title"],
-            "path": extraction["path"],
-            "content_type": extraction["content_type"],
-            "internal_links": internal_page,
-            "external_links": external_page,
-            "media_links": media_page,
-            "total_internal_links": len(full_internal),
-            "total_external_links": len(full_external),
-            "total_media_links": len(full_media),
-            "total_links": (len(full_internal) + len(full_external) + len(full_media)),
-            "pagination": {
-                "offset": offset,
-                "limit": limit,
-                "kind": kind,
-                "has_more": internal_more or external_more or media_more,
-                "has_more_internal": internal_more,
-                "has_more_external": external_more,
-                "has_more_media": media_more,
-            },
-        }
-        if extraction.get("message"):
-            links_data["message"] = extraction["message"]
-
-        return links_data
 
     def get_table_of_contents_data(
         self, zim_file_path: str, entry_path: str
@@ -646,8 +647,14 @@ class _StructureMixin:
         try:
             # Use the dict-returning extract_article_links_data so we don't
             # round-trip through json.dumps + json.loads just to walk the
-            # outbound link graph.
-            links_data = self.extract_article_links_data(validated_str, entry_path)
+            # outbound link graph. v2 Phase B: ask for the internal bucket
+            # explicitly; ``results`` carries the internal links.
+            links_data = self.extract_article_links_data(
+                validated_str,
+                entry_path,
+                limit=500,
+                kind="internal",
+            )
             # extract_article_links_data resolves redirects internally and
             # stores the post-redirect entry path in ``links_data["path"]``.
             # Resolve relative links against THAT path, not the caller-supplied
@@ -657,7 +664,7 @@ class _StructureMixin:
             resolved_source = links_data.get("path") or entry_path
             seen: set[str] = set()
             outbound: List[Dict[str, Any]] = []
-            for link in links_data.get("internal_links", []):
+            for link in links_data.get("results", []):
                 target = self._resolve_link_to_entry_path(
                     link.get("url", ""), resolved_source
                 )

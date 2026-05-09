@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .tool_schemas import (
         BrowseNamespaceResponse,
         FindEntryResponse,
+        LinksResponse,
         ListNamespacesResponse,
         SearchAllResponse,
         SearchResponse,
@@ -384,16 +385,16 @@ class AsyncZimOperations:
         entry_path: str,
         limit: int = 100,
         offset: int = 0,
-        kind: Optional[str] = None,
+        kind: str = "internal",
     ) -> str:
         """Extract links from an article (async, paginated).
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Path to the entry
-            limit: Max items per category (1-500)
-            offset: Starting offset within each category
-            kind: Optional filter — "internal", "external", or "media"
+            limit: Max items per page (1-500)
+            offset: Starting offset within the requested category
+            kind: Which category — "internal" (default), "external", or "media"
 
         Returns:
             Links as JSON string
@@ -413,8 +414,8 @@ class AsyncZimOperations:
         entry_path: str,
         limit: int = 100,
         offset: int = 0,
-        kind: Optional[str] = None,
-    ) -> dict:
+        kind: str = "internal",
+    ) -> "LinksResponse":
         """Structured variant of ``extract_article_links`` (async, paginated)."""
         return await asyncio.to_thread(
             self._ops.extract_article_links_data,

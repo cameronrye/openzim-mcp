@@ -4,9 +4,13 @@ Background: large articles can carry hundreds-to-thousands of internal/external
 links. Without pagination, ``extract_article_links`` returns the full set in
 one response and risks blowing the MCP response token budget. The fix adds
 ``limit``, ``offset``, and ``kind`` parameters and surfaces ``has_more``.
+
+v2 Phase B: ``kind`` is required-with-default (``"internal"``); response
+returns a single ``results`` list per call. ``category_totals`` reports
+all three counts. Pagination uses the canonical
+``next_cursor``/``done``/``page_info`` contract.
 """
 
-import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -79,13 +83,12 @@ def big_links_html() -> str:
 class TestExtractArticleLinksPagination:
     """Pagination contract for extract_article_links."""
 
-    def test_default_caps_internal_links(
+    def test_default_kind_is_internal_and_category_totals_all_present(
         self, ops_with_synthetic_archive, temp_dir, big_links_html
     ):
-        """Default response must report full totals even when paged.
-
-        The default page size protects the response budget; the caller can
-        still see ``total_*_links`` to decide whether to fetch more.
+        """Default response returns the internal bucket; ``category_totals``
+        reports counts for all three categories regardless of the requested
+        ``kind``.
         """
         zim = temp_dir / "test.zim"
         zim.touch()
@@ -94,37 +97,40 @@ class TestExtractArticleLinksPagination:
             mock_archive_ctx.return_value.__enter__.return_value = (
                 _patch_archive_with_html(big_links_html)
             )
-            raw = ops_with_synthetic_archive.extract_article_links(str(zim), "Test")
-        data = json.loads(raw)
-        # Default limit is 100 per category, so 50 fits and 30 fits and 20 fits.
-        # Switch to a clearly oversize fixture for the cap assertion below.
-        assert "internal_links" in data
-        # Total counts must report the *real* total, even if links are paged.
-        assert data["total_internal_links"] == 50
-        assert data["total_external_links"] == 30
-        assert data["total_media_links"] == 20
+            data = ops_with_synthetic_archive.extract_article_links_data(
+                str(zim), "Test"
+            )
+        assert data["kind"] == "internal"
+        assert "results" in data
+        # Default limit is 100, so all 50 internal fit in one page.
+        assert len(data["results"]) == 50
+        assert data["total"] == 50
+        assert data["done"] is True
+        # Category totals report ALL three counts even though only one
+        # category is in `results`.
+        assert data["category_totals"]["internal"] == 50
+        assert data["category_totals"]["external"] == 30
+        assert data["category_totals"]["media"] == 20
 
-    def test_limit_truncates_with_has_more(
+    def test_limit_truncates_with_next_cursor(
         self, ops_with_synthetic_archive, temp_dir, big_links_html
     ):
-        """limit=10 returns 10 internal links and signals has_more=True."""
+        """limit=10 returns 10 internal links and signals not done with cursor."""
         zim = temp_dir / "test.zim"
         zim.touch()
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive_ctx:
             mock_archive_ctx.return_value.__enter__.return_value = (
                 _patch_archive_with_html(big_links_html)
             )
-            raw = ops_with_synthetic_archive.extract_article_links(
-                str(zim), "Test", limit=10
+            data = ops_with_synthetic_archive.extract_article_links_data(
+                str(zim), "Test", limit=10, kind="internal"
             )
-        data = json.loads(raw)
-        assert len(data["internal_links"]) == 10
-        assert data["pagination"]["has_more"] is True
-        assert data["pagination"]["limit"] == 10
-        assert data["pagination"]["offset"] == 0
-        # Externals and media share the same limit cap
-        assert len(data["external_links"]) == 10
-        assert len(data["media_links"]) == 10
+        assert len(data["results"]) == 10
+        assert data["done"] is False
+        assert data["next_cursor"] is not None
+        assert data["page_info"]["limit"] == 10
+        assert data["page_info"]["offset"] == 0
+        assert data["page_info"]["returned_count"] == 10
 
     def test_offset_skips_prefix(
         self, ops_with_synthetic_archive, temp_dir, big_links_html
@@ -136,52 +142,72 @@ class TestExtractArticleLinksPagination:
             mock_archive_ctx.return_value.__enter__.return_value = (
                 _patch_archive_with_html(big_links_html)
             )
-            raw = ops_with_synthetic_archive.extract_article_links(
-                str(zim), "Test", limit=5, offset=20
+            data = ops_with_synthetic_archive.extract_article_links_data(
+                str(zim), "Test", limit=5, offset=20, kind="internal"
             )
-        data = json.loads(raw)
-        assert len(data["internal_links"]) == 5
+        assert len(data["results"]) == 5
         # The first link in the paged window points to Page_20 (links emitted
         # in source order).
         assert any(
             "Page_20" in (link.get("url") or link.get("href", ""))
-            for link in data["internal_links"]
-        ), data["internal_links"][:3]
+            for link in data["results"]
+        ), data["results"][:3]
 
-    def test_kind_internal_only_excludes_external(
+    def test_kind_internal_returns_only_internal(
         self, ops_with_synthetic_archive, temp_dir, big_links_html
     ):
-        """kind='internal' returns only internal_links; external/media empty."""
+        """kind='internal' returns only the internal category in `results`."""
         zim = temp_dir / "test.zim"
         zim.touch()
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive_ctx:
             mock_archive_ctx.return_value.__enter__.return_value = (
                 _patch_archive_with_html(big_links_html)
             )
-            raw = ops_with_synthetic_archive.extract_article_links(
+            data = ops_with_synthetic_archive.extract_article_links_data(
                 str(zim), "Test", limit=200, kind="internal"
             )
-        data = json.loads(raw)
-        assert len(data["internal_links"]) == 50
-        assert data["external_links"] == []
-        assert data["media_links"] == []
+        assert data["kind"] == "internal"
+        assert len(data["results"]) == 50
+        assert data["total"] == 50
+        assert data["category_totals"]["external"] == 30
+        assert data["category_totals"]["media"] == 20
 
     def test_kind_external_only(
         self, ops_with_synthetic_archive, temp_dir, big_links_html
     ):
-        """kind='external' must isolate the external bucket."""
+        """kind='external' returns only external links in `results`."""
         zim = temp_dir / "test.zim"
         zim.touch()
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive_ctx:
             mock_archive_ctx.return_value.__enter__.return_value = (
                 _patch_archive_with_html(big_links_html)
             )
-            raw = ops_with_synthetic_archive.extract_article_links(
+            data = ops_with_synthetic_archive.extract_article_links_data(
                 str(zim), "Test", limit=200, kind="external"
             )
-        data = json.loads(raw)
-        assert data["internal_links"] == []
-        assert len(data["external_links"]) == 30
+        assert data["kind"] == "external"
+        assert len(data["results"]) == 30
+        assert data["total"] == 30
+        # Category totals still expose the other categories' counts.
+        assert data["category_totals"]["internal"] == 50
+        assert data["category_totals"]["media"] == 20
+
+    def test_kind_media_only(
+        self, ops_with_synthetic_archive, temp_dir, big_links_html
+    ):
+        """kind='media' returns only media links in `results`."""
+        zim = temp_dir / "test.zim"
+        zim.touch()
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive_ctx:
+            mock_archive_ctx.return_value.__enter__.return_value = (
+                _patch_archive_with_html(big_links_html)
+            )
+            data = ops_with_synthetic_archive.extract_article_links_data(
+                str(zim), "Test", limit=200, kind="media"
+            )
+        assert data["kind"] == "media"
+        assert len(data["results"]) == 20
+        assert data["total"] == 20
 
     def test_invalid_limit_rejected(self, ops_with_synthetic_archive, temp_dir):
         """Reject limit < 1 or > 500 with a validation error."""
@@ -190,9 +216,11 @@ class TestExtractArticleLinksPagination:
         zim = temp_dir / "test.zim"
         zim.touch()
         with pytest.raises(OpenZimMcpValidationError):
-            ops_with_synthetic_archive.extract_article_links(str(zim), "Test", limit=0)
+            ops_with_synthetic_archive.extract_article_links_data(
+                str(zim), "Test", limit=0
+            )
         with pytest.raises(OpenZimMcpValidationError):
-            ops_with_synthetic_archive.extract_article_links(
+            ops_with_synthetic_archive.extract_article_links_data(
                 str(zim), "Test", limit=501
             )
 
@@ -203,6 +231,6 @@ class TestExtractArticleLinksPagination:
         zim = temp_dir / "test.zim"
         zim.touch()
         with pytest.raises(OpenZimMcpValidationError):
-            ops_with_synthetic_archive.extract_article_links(
+            ops_with_synthetic_archive.extract_article_links_data(
                 str(zim), "Test", kind="bogus"
             )

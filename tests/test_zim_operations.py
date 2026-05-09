@@ -2308,14 +2308,24 @@ class TestZimOperations:
             mock_archive_instance.get_entry_by_path.return_value = mock_entry
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
-            result = zim_operations.extract_article_links(
-                str(zim_file), "C/Test_Article"
+            # v2 Phase B: each call returns a single category in `results`.
+            internal_raw = zim_operations.extract_article_links(
+                str(zim_file), "C/Test_Article", kind="internal"
+            )
+            external_raw = zim_operations.extract_article_links(
+                str(zim_file), "C/Test_Article", kind="external"
+            )
+            media_raw = zim_operations.extract_article_links(
+                str(zim_file), "C/Test_Article", kind="media"
             )
 
-            assert "internal_links" in result
-            assert "external_links" in result
-            assert "media_links" in result
-            assert "total_links" in result
+            assert '"kind": "internal"' in internal_raw
+            assert '"kind": "external"' in external_raw
+            assert '"kind": "media"' in media_raw
+            # `category_totals` echoes counts for all three categories.
+            for raw in (internal_raw, external_raw, media_raw):
+                assert '"category_totals"' in raw
+                assert '"results"' in raw
 
 
 class TestZimOperationsUtilityFunctions:

@@ -14,7 +14,7 @@ keeps each renderer trivially unit-testable in isolation.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
 
 def compact_structure_payload(payload: Dict[str, Any]) -> str:
@@ -54,27 +54,36 @@ def compact_structure_payload(payload: Dict[str, Any]) -> str:
     return json.dumps(compact)
 
 
-def render_links(data: Dict[str, Any]) -> str:
-    """Render a links payload as a flat markdown list.
+def render_links(
+    internal_data: Mapping[str, Any],
+    external_data: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Render a v2 Phase B links payload as a flat markdown list.
 
-    The legacy ``extract_article_links`` JSON shape allocates ~150
-    chars per link (object with url/text/title/type fields). On a
-    Wikipedia-scale article that's ~36k chars of response. The
-    compact variant uses ``- text -> path`` per link, drops media
+    v2 Phase B contract delivers a single category per
+    ``extract_article_links_data`` call, so the compact view fetches
+    internal + external separately and stitches them here. ``title``,
+    ``path``, and ``category_totals`` are read from ``internal_data``
+    (both responses share them). ``external_data`` may be omitted for
+    callers that only want the internal block.
+
+    The compact variant uses ``- text -> path`` per link, drops media
     items entirely (rarely useful for navigation), and surfaces the
     full counts in a header so the caller can request more via
     ``offset`` if they need them.
     """
-    if not isinstance(data, dict):
-        return json.dumps(data)
+    if not isinstance(internal_data, dict):
+        return json.dumps(internal_data)
 
-    title = data.get("title") or ""
-    path = data.get("path") or ""
-    internal = data.get("internal_links") or []
-    external = data.get("external_links") or []
-    total_int = data.get("total_internal_links", len(internal))
-    total_ext = data.get("total_external_links", len(external))
-    pagination = data.get("pagination") or {}
+    title = internal_data.get("title") or ""
+    path = internal_data.get("path") or ""
+    internal = internal_data.get("results") or []
+    external = (
+        external_data.get("results") if isinstance(external_data, dict) else []
+    ) or []
+    category_totals = internal_data.get("category_totals") or {}
+    total_int = category_totals.get("internal", len(internal))
+    total_ext = category_totals.get("external", len(external))
 
     lines = []
     if title or path:
@@ -99,9 +108,13 @@ def render_links(data: Dict[str, Any]) -> str:
         lines.extend(_fmt_one(link) for link in external if isinstance(link, dict))
         lines.append("")
 
-    if pagination.get("has_more"):
-        offset = pagination.get("offset", 0)
-        limit = pagination.get("limit", len(internal) + len(external))
+    has_more = (not internal_data.get("done", True)) or (
+        external_data is not None and not external_data.get("done", True)
+    )
+    if has_more:
+        page_info = internal_data.get("page_info") or {}
+        offset = page_info.get("offset", 0)
+        limit = page_info.get("limit", len(internal) + len(external))
         lines.append(
             f"---\nMore links available — pass `offset={offset + limit}` "
             f"for the next page."

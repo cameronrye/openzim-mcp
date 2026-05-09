@@ -1,12 +1,13 @@
 """Article structure and content analysis tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH, INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
-from ..responses import tool_error
+from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
+from ..tool_schemas import LinksResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -97,47 +98,83 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         limit: int = 100,
         offset: int = 0,
-        kind: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Extract internal and external links from an article (paginated).
+        kind: str = "internal",
+        cursor: Optional[str] = None,
+    ) -> Union[LinksResponse, ToolErrorPayload]:
+        """Extract one category of links from an article (paginated).
 
-        Heavy articles (e.g. Wikipedia "Evolution") carry hundreds of links;
-        the response is paged per category to fit within MCP token budgets.
-        ``total_internal_links`` / ``total_external_links`` /
-        ``total_media_links`` always report the full counts so callers can
-        request the next page.
+        v2 BREAKING: each call returns a single category in ``results``.
+        ``kind`` is required-with-default (``"internal"``). To enumerate
+        every category, issue three calls with ``kind="internal"``,
+        ``kind="external"``, and ``kind="media"``. ``category_totals``
+        echoes counts for all three so callers can plan their fetches.
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'C/Some_Article'
-            limit: Max items per category in the response (1-500, default 100).
-            offset: Starting offset within each category (default 0).
-            kind: Optional filter — ``"internal"``, ``"external"``, or
-                ``"media"``. When set, the other categories are returned as
-                empty lists; their totals are still reported.
+            limit: Max items per page (1-500, default 100).
+            offset: Starting offset within the requested category (default 0).
+            kind: Which category — ``"internal"`` (default), ``"external"``,
+                or ``"media"``.
+            cursor: Opaque pagination token from a previous result's
+                ``next_cursor`` field. ``None`` starts from ``offset``.
 
         Returns:
-            Dict with paged links plus per-category totals and a
-            ``pagination`` block (``offset``, ``limit``, ``has_more``,
-            ``has_more_internal``, ``has_more_external``, ``has_more_media``,
-            ``kind``). On failure, returns a ``{"error": True, ...}``
-            envelope (see ``responses.tool_error``).
+            ``LinksResponse``-shaped dict on success (Phase B contract:
+            top-level ``results`` / ``next_cursor`` / ``total`` / ``done``
+            / ``page_info`` plus ``title`` / ``path`` / ``content_type`` /
+            ``kind`` / ``category_totals``); ``ToolErrorPayload`` envelope
+            on failure.
         """
         try:
+            # Phase B: cursor wins on conflict per response-contract spec.
+            if cursor is not None:
+                from ..pagination import Cursor, CursorMismatchError
+
+                try:
+                    decoded = Cursor.decode(
+                        cursor, expected_tool="extract_article_links"
+                    )
+                except CursorMismatchError as e:
+                    return tool_error(
+                        operation="extract article links",
+                        message=str(e),
+                        context="Tool: extract_article_links, cursor=<truncated>",
+                    )
+                except ValueError as e:
+                    return tool_error(
+                        operation="extract article links",
+                        message=f"Invalid pagination cursor: {e}",
+                        context="Tool: extract_article_links",
+                    )
+                state = decoded["s"]
+                offset = state["o"]
+                limit = state.get("l", limit)
+                entry_path = state.get("ep", entry_path)
+                kind = state.get("k", kind)
+
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="extract article links",
+                    message=server._create_enhanced_error_message(
                         operation="extract article links",
-                        message=server._create_enhanced_error_message(
-                            operation="extract article links",
-                            error=e,
-                            context=f"Entry: {entry_path}",
-                        ),
+                        error=e,
                         context=f"Entry: {entry_path}",
                     ),
+                    context=f"Entry: {entry_path}",
+                )
+
+            if kind not in ("internal", "external", "media"):
+                return tool_error(
+                    operation="extract article links",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: kind must be one of 'internal', "
+                        f"'external', 'media' (provided: {kind!r})"
+                    ),
+                    context=f"Entry: {entry_path}, kind: {kind!r}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -153,17 +190,14 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error extracting article links: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="extract article links",
+                message=server._create_enhanced_error_message(
                     operation="extract article links",
-                    message=server._create_enhanced_error_message(
-                        operation="extract article links",
-                        error=e,
-                        context=f"File: {zim_file_path}, Entry: {entry_path}",
-                    ),
+                    error=e,
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
+                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
 

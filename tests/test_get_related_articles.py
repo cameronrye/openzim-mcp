@@ -67,14 +67,15 @@ class TestGetRelatedArticles:
         """
         server.zim_operations.extract_article_links_data = MagicMock(
             return_value={
-                "internal_links": [
+                "kind": "internal",
+                "results": [
                     # Bare relative href — resolves to "C/Linked_A".
                     {"url": "Linked_A", "text": "Linked A"},
                     {"url": "Linked_B", "text": "Linked B"},
                     {"url": "Linked_A", "text": "Linked A"},  # dup
                     # Anchor-only — should be ignored.
                     {"url": "#section", "text": "anchor"},
-                ]
+                ],
             }
         )
 
@@ -145,7 +146,8 @@ class TestGetRelatedArticles:
         server.zim_operations.extract_article_links_data = MagicMock(
             return_value={
                 "path": "C/Source",
-                "internal_links": [
+                "kind": "internal",
+                "results": [
                     # Anchor text differs from the target's actual title.
                     {"url": "Animal", "text": "Animalia"},
                 ],
@@ -200,7 +202,8 @@ class TestGetRelatedArticles:
         server.zim_operations.extract_article_links_data = MagicMock(
             return_value={
                 "path": "C/Source",
-                "internal_links": [
+                "kind": "internal",
+                "results": [
                     {"url": "Animal", "text": "Animalia"},
                 ],
             }
@@ -248,7 +251,8 @@ class TestGetRelatedArticles:
         server.zim_operations.extract_article_links_data = MagicMock(
             return_value={
                 "path": "C/Source",
-                "internal_links": [
+                "kind": "internal",
+                "results": [
                     {"url": "Missing_Article", "text": "see Missing"},
                 ],
             }

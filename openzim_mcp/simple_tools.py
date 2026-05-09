@@ -993,10 +993,16 @@ class SimpleToolsHandler:
             # ``- text -> path`` per link, dropping the per-link object
             # shape entirely. Drops the response from ~36k to ~2k chars.
             limit = options.get("limit") or 20
-            data = self.zim_operations.extract_article_links_data(
-                zim_file_path, entry_path, limit=limit, offset=0
+            # v2 Phase B: extract_article_links_data returns one category
+            # per call. The compact view shows internal + external; fetch
+            # both and pass merged data to the renderer.
+            internal = self.zim_operations.extract_article_links_data(
+                zim_file_path, entry_path, limit=limit, offset=0, kind="internal"
             )
-            return compact_renderers.render_links(data)
+            external = self.zim_operations.extract_article_links_data(
+                zim_file_path, entry_path, limit=limit, offset=0, kind="external"
+            )
+            return compact_renderers.render_links(internal, external)
         return self.zim_operations.extract_article_links(zim_file_path, entry_path)
 
     def _handle_binary(

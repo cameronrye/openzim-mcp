@@ -483,7 +483,12 @@ class TestStructuredOutput:
         if payload.get("error") is True:
             assert "operation" in payload
         else:
-            assert "internal_links" in payload
+            # v2 Phase B contract: single category per call.
+            assert "results" in payload
+            assert "kind" in payload and payload["kind"] == "internal"
+            assert "category_totals" in payload
+            for k in ("internal", "external", "media"):
+                assert k in payload["category_totals"]
 
     @pytest.mark.asyncio
     async def test_get_entry_summary_returns_structured_content(

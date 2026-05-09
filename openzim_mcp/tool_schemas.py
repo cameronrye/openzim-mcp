@@ -75,8 +75,20 @@ class WalkEntry(TypedDict):
 
 
 class LinkItem(TypedDict):
-    target: str
-    label: str
+    """One extracted link record. Shape varies slightly per category:
+
+    Internal/external entries carry ``url``, ``text``, ``title``, ``type``,
+    and (for external links) ``domain``. Media entries carry ``url``,
+    ``type``, ``alt``, and ``title``. All fields except ``url`` and ``type``
+    are ``NotRequired`` because they're absent on at least one category.
+    """
+
+    url: str
+    type: NotRequired[str]
+    text: NotRequired[str]
+    title: NotRequired[str]
+    domain: NotRequired[str]
+    alt: NotRequired[str]
 
 
 class FileSummary(TypedDict):
@@ -230,6 +242,8 @@ class LinksResponse(TypedDict):
     content_type: str
     kind: str
     category_totals: dict[str, int]
+    # Set when content_type is non-HTML; explains why results is empty.
+    message: NotRequired[str]
 
 
 class ListZimFilesResponse(TypedDict):

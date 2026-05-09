@@ -343,7 +343,18 @@ class TestStructureToolsDirectInvocation:
     ):
         """Test invoking extract_article_links tool handler directly."""
         advanced_server.async_zim_operations.extract_article_links_data = AsyncMock(
-            return_value={"internal_links": [], "external_links": []}
+            return_value={
+                "title": "Article",
+                "path": "C/Article",
+                "content_type": "text/html",
+                "kind": "internal",
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 100, "returned_count": 0},
+                "category_totals": {"internal": 0, "external": 0, "media": 0},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -354,7 +365,9 @@ class TestStructureToolsDirectInvocation:
                 entry_path="C/Article",
             )
             assert isinstance(result, dict)
-            assert "internal_links" in result
+            assert "results" in result
+            assert result["kind"] == "internal"
+            assert "category_totals" in result
 
     @pytest.mark.asyncio
     async def test_extract_article_links_with_exception(
@@ -591,21 +604,6 @@ class TestStructureDataMethodsMeta:
             "_get_or_load_link_extraction",
             lambda *a, **kw: fake_extraction,
         )
-        monkeypatch.setattr(
-            zim_ops,
-            "_render_paged_links",
-            lambda *a, **kw: {
-                "title": "Foo",
-                "path": "C/Foo",
-                "internal_links": [],
-                "external_links": [],
-                "media_links": [],
-                "total_internal_links": 0,
-                "total_external_links": 0,
-                "total_media_links": 0,
-                "pagination": {"offset": 0, "limit": 100, "has_more": False},
-            },
-        )
 
         from unittest.mock import MagicMock, patch
 
@@ -615,6 +613,16 @@ class TestStructureDataMethodsMeta:
 
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
+        # v2 Phase B contract: single category in `results`, full
+        # category_totals echoed.
+        assert result["kind"] == "internal"
+        assert result["results"] == []
+        assert result["category_totals"] == {
+            "internal": 0,
+            "external": 0,
+            "media": 0,
+        }
+        assert result["done"] is True
 
     def test_get_table_of_contents_data_fresh_attaches_meta(
         self, zim_ops, temp_dir, monkeypatch
@@ -658,9 +666,9 @@ class TestStructureDataMethodsMeta:
             "extract_article_links_data",
             lambda *a, **kw: {
                 "path": "C/Foo",
-                "internal_links": [],
-                "external_links": [],
-                "media_links": [],
+                "kind": "internal",
+                "results": [],
+                "category_totals": {"internal": 0, "external": 0, "media": 0},
             },
         )
         result = zim_ops.get_related_articles_data(str(zim_file), "C/Foo")
