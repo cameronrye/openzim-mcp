@@ -1,13 +1,13 @@
 """Search tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
+from typing import TYPE_CHECKING, Optional, Union
 
 from ..constants import INPUT_LIMIT_FILE_PATH, INPUT_LIMIT_QUERY
 from ..exceptions import OpenZimMcpRateLimitError
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
-from ..tool_schemas import SearchAllResponse, SearchResponse
+from ..tool_schemas import FindEntryResponse, SearchAllResponse, SearchResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -232,7 +232,7 @@ def _register_find_entry_by_title(server: "OpenZimMcpServer") -> None:
         title: str,
         cross_file: bool = False,
         limit: int = 10,
-    ) -> Dict[str, Any]:
+    ) -> Union[FindEntryResponse, ToolErrorPayload]:
         """Resolve a title to one or more entry paths.
 
         Cheaper than full-text search when the caller knows the article title.
@@ -247,26 +247,26 @@ def _register_find_entry_by_title(server: "OpenZimMcpServer") -> None:
             limit: Max results to return (1-50, default: 10)
 
         Returns:
-            Dict with keys: query, results (list of {path, title, score,
-            zim_file}), fast_path_hit (bool), files_searched (int). On
-            failure, returns a ``{"error": True, ...}`` envelope (see
-            ``responses.tool_error``).
+            ``FindEntryResponse``-shaped dict on success (Phase B contract:
+            top-level ``results`` / ``next_cursor`` / ``total`` / ``done`` /
+            ``page_info`` plus ``query`` / ``fast_path_hit`` /
+            ``fuzzy_path_hit`` / ``files_searched`` extras);
+            ``ToolErrorPayload`` envelope on failure. ``find_entry_by_title``
+            is non-paginated: ``done`` is always ``True`` and
+            ``next_cursor`` is always ``None``.
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("find_entry_by_title")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="find entry by title",
+                    message=server._create_enhanced_error_message(
                         operation="find entry by title",
-                        message=server._create_enhanced_error_message(
-                            operation="find entry by title",
-                            error=e,
-                            context=f"Title: '{title}'",
-                        ),
+                        error=e,
                         context=f"Title: '{title}'",
                     ),
+                    context=f"Title: '{title}'",
                 )
 
             title = sanitize_input(title, INPUT_LIMIT_QUERY)
@@ -281,15 +281,12 @@ def _register_find_entry_by_title(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error in find_entry_by_title: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="find entry by title",
+                message=server._create_enhanced_error_message(
                     operation="find entry by title",
-                    message=server._create_enhanced_error_message(
-                        operation="find entry by title",
-                        error=e,
-                        context=f"File: {zim_file_path}, Title: '{title}'",
-                    ),
+                    error=e,
                     context=f"File: {zim_file_path}, Title: '{title}'",
                 ),
+                context=f"File: {zim_file_path}, Title: '{title}'",
             )

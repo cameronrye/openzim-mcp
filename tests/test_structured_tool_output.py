@@ -138,6 +138,13 @@ class TestStructuredOutput:
         assert "results" in payload and isinstance(payload["results"], list)
         assert "query" in payload
         assert "files_searched" in payload
+        # Phase B contract keys (non-paginated tool, but contract still applies).
+        assert payload["next_cursor"] is None
+        assert payload["done"] is True
+        assert payload["total"] == len(payload["results"])
+        assert payload["page_info"]["offset"] == 0
+        assert payload["page_info"]["limit"] == 10
+        assert payload["page_info"]["returned_count"] == len(payload["results"])
 
     @pytest.mark.asyncio
     async def test_browse_namespace_returns_structured_content(

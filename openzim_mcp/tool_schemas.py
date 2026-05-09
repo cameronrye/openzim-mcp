@@ -157,6 +157,7 @@ class FindEntryResponse(TypedDict):
     _meta: MetaEnvelope
     query: str
     fast_path_hit: bool
+    fuzzy_path_hit: bool
     files_searched: int
 
 

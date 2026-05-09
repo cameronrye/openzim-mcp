@@ -14,6 +14,7 @@ from .zim_operations import ZimOperations
 
 if TYPE_CHECKING:
     from .tool_schemas import (
+        FindEntryResponse,
         SearchAllResponse,
         SearchResponse,
         SearchWithFiltersResponse,
@@ -579,7 +580,7 @@ class AsyncZimOperations:
         title: str,
         cross_file: bool = False,
         limit: int = 10,
-    ) -> dict:
+    ) -> "FindEntryResponse":
         """Structured variant of ``find_entry_by_title`` (async)."""
         return await asyncio.to_thread(
             self._ops.find_entry_by_title_data,

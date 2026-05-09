@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
     from openzim_mcp.tool_schemas import (
+        FindEntryResponse,
         SearchAllResponse,
         SearchResponse,
         SearchWithFiltersResponse,
@@ -1446,7 +1447,7 @@ class _SearchMixin:
         title: str,
         cross_file: bool = False,
         limit: int = 10,
-    ) -> Dict[str, Any]:
+    ) -> "FindEntryResponse":
         """Structured variant of ``find_entry_by_title``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
@@ -1615,16 +1616,33 @@ class _SearchMixin:
 
         reason = None if aggregate_results else "0_hits"
 
-        return attach_meta(
-            {
-                "query": title,
-                "results": aggregate_results[:limit],
-                "fast_path_hit": fast_path_hit,
-                "fuzzy_path_hit": fuzzy_path_hit,
-                "files_searched": len(files),
+        # Trim to limit and build the contract envelope. ``find_entry_by_title``
+        # is non-paginated (no cursor input, no offset), but the v2 Phase B
+        # contract still applies for uniformity: ``next_cursor=None``,
+        # ``done=True``, ``total=len(results)``, ``page_info.offset=0``.
+        trimmed_results = aggregate_results[:limit]
+        payload: Dict[str, Any] = {
+            "query": title,
+            "results": trimmed_results,
+            "next_cursor": None,
+            "total": len(trimmed_results),
+            "done": True,
+            "page_info": {
+                "offset": 0,
+                "limit": limit,
+                "returned_count": len(trimmed_results),
             },
-            suggestions=suggestions if suggestions else None,
-            reason=reason,
+            "fast_path_hit": fast_path_hit,
+            "fuzzy_path_hit": fuzzy_path_hit,
+            "files_searched": len(files),
+        }
+        return cast(
+            "FindEntryResponse",
+            attach_meta(
+                payload,
+                suggestions=suggestions if suggestions else None,
+                reason=reason,
+            ),
         )
 
     def find_entry_by_title(

@@ -14,7 +14,7 @@ keeps each renderer trivially unit-testable in isolation.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 
 def compact_structure_payload(payload: Dict[str, Any]) -> str:
@@ -112,7 +112,7 @@ def render_links(data: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_find_by_title(data: Dict[str, Any], title: str) -> str:
+def render_find_by_title(data: Mapping[str, Any], title: str) -> str:
     """Render a find_by_title payload as a compact markdown list.
 
     Saves the LLM from parsing nested JSON to extract the path it
