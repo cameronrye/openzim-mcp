@@ -190,13 +190,13 @@ def test_get_search_suggestions_does_not_cache_on_error(
     validated_path = zim_operations.path_validator.validate_path(str(zim_file))
     validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
     # The legacy ``suggestions:`` key was retired in favour of the
-    # dict-shaped ``suggestions_data:`` cache. Neither key should hold a
+    # dict-shaped ``suggestions_data:v2b:`` cache. Neither key should hold a
     # sentinel response when generation raised.
     assert (
         zim_operations.cache.get(f"suggestions:{validated_path}:warmup:10") is None
     ), "legacy suggestion cache key should not hold an errored response"
     assert (
-        zim_operations.cache.get(f"suggestions_data:{validated_path}:warmup:10") is None
+        zim_operations.cache.get(f"suggestions_data:v2b:{validated_path}:warmup:10") is None
     ), "errored suggestion response should not be cached"
 
 

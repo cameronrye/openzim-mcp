@@ -697,7 +697,7 @@ class TestSearchMethodsMeta:
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
-        cache_key = f"suggestions_data:{validated}:climate:10"
+        cache_key = f"suggestions_data:v2b:{validated}:climate:10"
         old = {
             "partial_query": "climate",
             "suggestions": [{"title": "Climate"}],

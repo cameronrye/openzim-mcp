@@ -1330,12 +1330,12 @@ class TestZimOperations:
 
         # Test list_namespaces_data cache hit (lines 584-585).
         # list_namespaces now delegates to list_namespaces_data, which caches
-        # dicts under a `namespaces_data:v2:` key (v2 marker added with the
-        # per-namespace ``count`` -> ``total`` rename so v1.x cached responses
+        # dicts under a `namespaces_data:v2b:` key (v2b marker added with the
+        # Phase B ``entry_count`` -> ``total`` rename so v1.x cached responses
         # don't leak through). Exercise the cache hit path against the
         # dict-returning entry point directly so we test the cache layer
         # without an extra json.dumps round trip.
-        cache_key = f"namespaces_data:v2:{validated_path}"
+        cache_key = f"namespaces_data:v2b:{validated_path}"
         zim_operations.cache.set(cache_key, {"cached": "namespaces"})
 
         result = zim_operations.list_namespaces_data(str(zim_file))
@@ -1366,11 +1366,11 @@ class TestZimOperations:
 
         # Test extract_article_links_data cache hit. extract_article_links_data
         # caches the parsed extraction (full lists) under a stable
-        # ``links_full:`` key so different paginated requests share one parse;
+        # ``links_full:v2b:`` key so different paginated requests share one parse;
         # the response is rendered fresh per call, so the hit assertion checks
         # the post-render dict carries the cached title/path metadata rather
         # than asserting raw equality.
-        cache_key = f"links_full:{validated_path}:A/Test"
+        cache_key = f"links_full:v2b:{validated_path}:A/Test"
         zim_operations.cache.set(
             cache_key,
             {
