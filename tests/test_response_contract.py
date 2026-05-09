@@ -197,7 +197,7 @@ class TestContractShape:
             pytest.skip("ZIM testing-suite small.zim not available")
         result = await server.mcp._tool_manager.call_tool(
             "get_zim_entries",
-            {"zim_file_path": str(zim_path), "entry_paths": ["C/Berlin", "C/Paris"]},
+            {"zim_file_path": str(zim_path), "entries": ["C/Berlin", "C/Paris"]},
             convert_result=True,
         )
         _, structured = result
