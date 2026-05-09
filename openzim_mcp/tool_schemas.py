@@ -326,9 +326,12 @@ class EntrySummaryResponse(TypedDict):
 class TableOfContentsResponse(TypedDict):
     title: str
     path: str
+    content_type: NotRequired[str]
     toc: list[dict[str, Any]]
     heading_count: int
     max_depth: int
+    # Set when content_type is non-HTML; explains why toc is empty.
+    message: NotRequired[str]
     _meta: MetaEnvelope
 
 

@@ -7,7 +7,7 @@ from ..constants import INPUT_LIMIT_ENTRY_PATH, INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
-from ..tool_schemas import LinksResponse
+from ..tool_schemas import LinksResponse, TableOfContentsResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -296,7 +296,7 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
     async def get_table_of_contents(
         zim_file_path: str,
         entry_path: str,
-    ) -> Dict[str, Any]:
+    ) -> Union[TableOfContentsResponse, ToolErrorPayload]:
         """Extract a hierarchical table of contents from an article.
 
         Returns a structured TOC tree based on heading levels (h1-h6),
@@ -336,17 +336,14 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="get table of contents",
+                    message=server._create_enhanced_error_message(
                         operation="get table of contents",
-                        message=server._create_enhanced_error_message(
-                            operation="get table of contents",
-                            error=e,
-                            context=f"Entry: {entry_path}",
-                        ),
+                        error=e,
                         context=f"Entry: {entry_path}",
                     ),
+                    context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -358,17 +355,14 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error getting table of contents: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="get table of contents",
+                message=server._create_enhanced_error_message(
                     operation="get table of contents",
-                    message=server._create_enhanced_error_message(
-                        operation="get table of contents",
-                        error=e,
-                        context=f"File: {zim_file_path}, Entry: {entry_path}",
-                    ),
+                    error=e,
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
+                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
 

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
-    from openzim_mcp.tool_schemas import LinksResponse
+    from openzim_mcp.tool_schemas import LinksResponse, TableOfContentsResponse
 
 logger = logging.getLogger(__name__)
 
@@ -402,7 +402,7 @@ class _StructureMixin:
 
     def get_table_of_contents_data(
         self, zim_file_path: str, entry_path: str
-    ) -> Dict[str, Any]:
+    ) -> "TableOfContentsResponse":
         """Structured variant of ``get_table_of_contents``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
@@ -424,7 +424,7 @@ class _StructureMixin:
             logger.debug(f"Returning cached TOC dict for: {entry_path}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
-            return cached_result  # type: ignore[no-any-return]
+            return cast("TableOfContentsResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -433,7 +433,7 @@ class _StructureMixin:
             # Cache the result
             self.cache.set(cache_key, result)
             logger.info(f"Extracted TOC for: {entry_path}")
-            return attach_meta(result)
+            return cast("TableOfContentsResponse", attach_meta(result))
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
