@@ -1006,8 +1006,6 @@ class TestNamespaceDataMethodsMeta:
             "offset": 0,
             "limit": 50,
             "returned_count": 0,
-            "has_more": False,
-            "next_cursor": None,
             "sampling_based": False,
             "discovery_method": "full_iteration",
             "is_total_authoritative": True,

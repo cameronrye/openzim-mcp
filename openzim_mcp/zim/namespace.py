@@ -545,7 +545,7 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
-        # shape: entries/total_in_namespace/has_more/...) don't leak through
+        # shape: entries/total_in_namespace/...) don't leak through
         # after the upgrade.
         cache_key = f"browse_ns_data:v2b:{validated_path}:{namespace}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
@@ -566,7 +566,7 @@ class _NamespaceMixin:
                 )
 
             # ``_browse_namespace_entries`` still returns the legacy inner
-            # shape (entries / total_in_namespace / has_more / ...). Adapt
+            # shape (entries / total_in_namespace / is_total_authoritative / ...). Adapt
             # to the v2 Phase B contract here so internal callers and tests
             # that target the helper aren't forced through the rename.
             entries = raw.get("entries", [])
