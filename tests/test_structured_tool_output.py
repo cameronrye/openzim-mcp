@@ -431,9 +431,16 @@ class TestStructuredOutput:
         if payload.get("error") is True:
             assert "operation" in payload
         else:
+            # v2 Phase B contract: the success envelope carries the
+            # canonical list-shaped keys plus the tool-specific
+            # succeeded/failed counters.
             assert "results" in payload
             assert "succeeded" in payload
             assert "failed" in payload
+            assert payload["next_cursor"] is None
+            assert payload["done"] is True
+            assert payload["total"] == len(payload["results"])
+            assert "page_info" in payload
 
     @pytest.mark.asyncio
     async def test_get_article_structure_returns_structured_content(

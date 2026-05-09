@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
     from openzim_mcp.tool_schemas import (
+        BatchEntryResponse,
         BinaryEntryResponse,
         EntryResponse,
         EntrySummaryResponse,
@@ -485,7 +486,7 @@ class _ContentMixin:
         max_content_length: Optional[int] = None,
         *,
         compact: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> "BatchEntryResponse":
         """Structured variant of ``get_entries``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
@@ -495,12 +496,23 @@ class _ContentMixin:
         Each result carries the input ``index`` so callers can correlate
         responses with their original request order.
 
+        v2 Phase B contract: the response carries the canonical pagination
+        keys (``results`` / ``next_cursor`` / ``total`` / ``done`` /
+        ``page_info``) plus the tool-specific ``succeeded`` / ``failed``
+        counters. Batch fetch is non-paginated — every requested entry is
+        attempted, so ``next_cursor`` is always ``None`` and ``done`` is
+        always ``True``. The contract is applied for uniformity with the
+        other list-shaped responses.
+
         Args:
             entries: list of ``{"zim_file_path", "entry_path"}`` dicts.
             max_content_length: per-entry max content length.
 
         Returns:
-            Dict ``{"results": [...], "succeeded": N, "failed": N}``.
+            ``BatchEntryResponse``-shaped dict carrying ``results``,
+            ``next_cursor`` (always ``None``), ``total``, ``done`` (always
+            ``True``), ``page_info``, ``succeeded``, ``failed``, plus
+            ``_meta``.
 
         Raises:
             OpenZimMcpValidationError: empty list or > MAX_BATCH_SIZE.
@@ -615,9 +627,20 @@ class _ContentMixin:
         # they submitted entries (grouping is a transparent optimisation).
         results.sort(key=lambda r: r["index"])
 
-        return attach_meta(
-            {"results": results, "succeeded": succeeded, "failed": failed}
-        )
+        payload: Dict[str, Any] = {
+            "results": results,
+            "next_cursor": None,
+            "total": len(results),
+            "done": True,
+            "page_info": {
+                "offset": 0,
+                "limit": len(entries),
+                "returned_count": len(results),
+            },
+            "succeeded": succeeded,
+            "failed": failed,
+        }
+        return cast("BatchEntryResponse", attach_meta(payload))
 
     def get_entries(
         self,

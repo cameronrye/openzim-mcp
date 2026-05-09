@@ -271,7 +271,9 @@ class RelatedArticlesResponse(TypedDict):
 
 
 class _BatchEntryItem(TypedDict):
-    path: str
+    index: int
+    zim_file_path: str
+    entry_path: str
     success: bool
     content: NotRequired[str]
     error: NotRequired[str]

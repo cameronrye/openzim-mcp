@@ -1,7 +1,7 @@
 """Content retrieval tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from ..constants import (
     INPUT_LIMIT_ENTRY_PATH,
@@ -10,7 +10,7 @@ from ..constants import (
 from ..exceptions import OpenZimMcpRateLimitError
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
-from ..tool_schemas import EntryResponse
+from ..tool_schemas import BatchEntryResponse, EntryResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -122,7 +122,7 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
         entries: List[Any],
         zim_file_path: Optional[str] = None,
         max_content_length: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> Union[BatchEntryResponse, ToolErrorPayload]:
         """Fetch multiple ZIM entries in one call.
 
         Pairs naturally with HTTP transport, where round-trip cost matters.
@@ -145,10 +145,14 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
             max_content_length: per-entry max content length.
 
         Returns:
-            Dict ``{"results": [...], "succeeded": N, "failed": N}``. Each
-            result includes ``index``, ``success``, and either ``content`` or
-            ``error``. On failure, returns a ``{"error": True, ...}`` envelope
-            (see ``responses.tool_error``).
+            ``BatchEntryResponse``-shaped dict carrying ``results``,
+            ``next_cursor`` (always ``None``), ``total``, ``done`` (always
+            ``True``), ``page_info``, plus the tool-specific ``succeeded``
+            and ``failed`` counters and the ``_meta`` envelope. Each result
+            includes ``index``, ``zim_file_path``, ``entry_path``,
+            ``success``, and either ``content`` or ``error``. On failure,
+            returns a ``ToolErrorPayload`` envelope (see
+            ``responses.tool_error``).
 
         Notes:
             Rate limit is charged per entry, not per batch (anti-bypass).
@@ -175,17 +179,14 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
                 for _ in entries or []:
                     server.rate_limiter.check_rate_limit("get_zim_entries")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="batch get entries",
+                    message=server._create_enhanced_error_message(
                         operation="batch get entries",
-                        message=server._create_enhanced_error_message(
-                            operation="batch get entries",
-                            error=e,
-                            context=f"Batch size: {batch_size}",
-                        ),
+                        error=e,
                         context=f"Batch size: {batch_size}",
                     ),
+                    context=f"Batch size: {batch_size}",
                 )
 
             # Normalise each entry into a {zim_file_path, entry_path} dict,
@@ -221,15 +222,12 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error in get_zim_entries: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="batch get entries",
+                message=server._create_enhanced_error_message(
                     operation="batch get entries",
-                    message=server._create_enhanced_error_message(
-                        operation="batch get entries",
-                        error=e,
-                        context=f"Batch size: {batch_size}",
-                    ),
+                    error=e,
                     context=f"Batch size: {batch_size}",
                 ),
+                context=f"Batch size: {batch_size}",
             )

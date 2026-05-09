@@ -15,6 +15,7 @@ from .zim_operations import ZimOperations
 if TYPE_CHECKING:
     from .tool_schemas import (
         ArticleStructureResponse,
+        BatchEntryResponse,
         BinaryEntryResponse,
         BrowseNamespaceResponse,
         EntryResponse,
@@ -199,7 +200,7 @@ class AsyncZimOperations:
         self,
         entries: List[Dict[str, str]],
         max_content_length: Optional[int] = None,
-    ) -> dict:
+    ) -> "BatchEntryResponse":
         """Structured variant of ``get_entries`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_entries_data,

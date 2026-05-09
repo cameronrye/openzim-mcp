@@ -45,7 +45,15 @@ async def test_get_zim_entries_tool_passes_through(
     """Calling the registered tool function delegates to async_zim_operations."""
     server = OpenZimMcpServer(test_config)
     server.async_zim_operations.get_entries_data = AsyncMock(
-        return_value={"results": [], "succeeded": 0, "failed": 0}
+        return_value={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 1, "returned_count": 0},
+            "succeeded": 0,
+            "failed": 0,
+        }
     )
     server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -59,6 +67,10 @@ async def test_get_zim_entries_tool_passes_through(
     )
     assert isinstance(result, dict)
     assert result["succeeded"] == 0
+    # Contract keys are present on the success path.
+    assert result["next_cursor"] is None
+    assert result["done"] is True
+    assert result["total"] == 0
     server.async_zim_operations.get_entries_data.assert_awaited_once()
 
 
@@ -69,7 +81,15 @@ async def test_get_zim_entries_tool_sanitizes_inputs(
     """Per-entry paths go through sanitize_input before delegation."""
     server = OpenZimMcpServer(test_config)
     server.async_zim_operations.get_entries_data = AsyncMock(
-        return_value={"results": [], "succeeded": 0, "failed": 0}
+        return_value={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 1, "returned_count": 0},
+            "succeeded": 0,
+            "failed": 0,
+        }
     )
     server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -145,7 +165,15 @@ async def test_get_zim_entries_tool_accepts_string_paths_with_default_archive(
     server = OpenZimMcpServer(test_config)
     server.rate_limiter.check_rate_limit = MagicMock()
     server.async_zim_operations.get_entries_data = AsyncMock(
-        return_value={"results": [], "succeeded": 0, "failed": 0}
+        return_value={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 2, "returned_count": 0},
+            "succeeded": 0,
+            "failed": 0,
+        }
     )
 
     tool = server.mcp._tool_manager._tools["get_zim_entries"]
@@ -208,6 +236,15 @@ class TestGetEntriesDataMeta:
         assert result["_meta"]["tokens_est"] > 0
         assert result["_meta"]["chars"] > 0
         assert result["_meta"]["truncated"] is False
+        # v2 Phase B contract: list-shaped response carries the canonical
+        # pagination keys. Batch fetch is non-paginated, so next_cursor is
+        # None and done is True.
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == len(result["results"])
+        assert result["page_info"]["offset"] == 0
+        assert result["page_info"]["limit"] == 1
+        assert result["page_info"]["returned_count"] == len(result["results"])
 
     def test_get_entries_data_attaches_meta_on_validation_failure(
         self, zim_ops, temp_dir
@@ -217,6 +254,13 @@ class TestGetEntriesDataMeta:
             entries=[{"zim_file_path": "/no/such/file.zim", "entry_path": "A/X"}]
         )
         assert "_meta" in result, "validation-failure path must attach _meta"
+        # Contract keys still emitted on the validation-failure path.
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == 1
+        # Per-entry failure surfaces in `failed`, not in `succeeded`.
+        assert result["failed"] == 1
+        assert result["succeeded"] == 0
 
 
 @pytest.mark.asyncio
@@ -227,7 +271,15 @@ async def test_get_zim_entries_tool_coerces_non_string_non_dict_entries(
     server = OpenZimMcpServer(test_config)
     server.rate_limiter.check_rate_limit = MagicMock()
     server.async_zim_operations.get_entries_data = AsyncMock(
-        return_value={"results": [], "succeeded": 0, "failed": 0}
+        return_value={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 3, "returned_count": 0},
+            "succeeded": 0,
+            "failed": 0,
+        }
     )
 
     tool = server.mcp._tool_manager._tools["get_zim_entries"]
