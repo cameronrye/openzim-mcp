@@ -594,7 +594,15 @@ class TestStructuredOutput:
         if payload.get("error") is True:
             assert "operation" in payload
         else:
-            assert "outbound_results" in payload
+            # v2 Phase B contract: top-level results / next_cursor / total /
+            # done / page_info plus tool-specific entry_path.
+            assert "results" in payload
+            assert "outbound_results" not in payload
+            assert payload["next_cursor"] is None
+            assert payload["done"] is True
+            assert payload["total"] == len(payload["results"])
+            assert payload["page_info"]["limit"] >= 1
+            assert "entry_path" in payload
 
     @pytest.mark.asyncio
     async def test_get_server_health_returns_structured_content(

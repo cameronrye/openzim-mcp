@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from openzim_mcp.tool_schemas import (
         ArticleStructureResponse,
         LinksResponse,
+        RelatedArticlesResponse,
         TableOfContentsResponse,
     )
 
@@ -617,11 +618,19 @@ class _StructureMixin:
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-    ) -> Dict[str, Any]:
+    ) -> "RelatedArticlesResponse":
         """Structured variant of ``get_related_articles``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
         can hand it straight to FastMCP's structured-content path.
+
+        v2 Phase B contract: the response carries ``results`` /
+        ``next_cursor`` / ``total`` / ``done`` / ``page_info`` plus the
+        tool-specific ``entry_path``. This tool is non-paginated, so
+        ``next_cursor`` is always ``None`` and ``done`` is always ``True``.
+        The contract is applied for uniformity and anticipates Phase E's
+        inbound-link feature where ``direction`` becomes a parameter and
+        ``results`` covers either side.
 
         Each outbound result carries:
 
@@ -646,7 +655,8 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_zim_file(validated_path)
         validated_str = str(validated_path)
 
-        result: Dict[str, Any] = {"entry_path": entry_path}
+        outbound: List[Dict[str, Any]] = []
+        outbound_error: Optional[str] = None
 
         try:
             # Use the dict-returning extract_article_links_data so we don't
@@ -667,7 +677,6 @@ class _StructureMixin:
             # dirname produces non-existent paths.
             resolved_source = links_data.get("path") or entry_path
             seen: set[str] = set()
-            outbound: List[Dict[str, Any]] = []
             for link in links_data.get("results", []):
                 target = self._resolve_link_to_entry_path(
                     link.get("url", ""), resolved_source
@@ -692,7 +701,6 @@ class _StructureMixin:
                 if len(outbound) >= limit:
                     break
             self._resolve_outbound_titles(validated_str, outbound)
-            result["outbound_results"] = outbound
         except OpenZimMcpArchiveError as e:
             # Partial-success contract: an archive- or extraction-level
             # failure surfaces as an empty result with an error string,
@@ -701,10 +709,23 @@ class _StructureMixin:
             # so they propagate up to the tool layer and become real
             # tool_error envelopes instead of fake successes.
             logger.debug(f"get_related_articles outbound failed: {e}")
-            result["outbound_results"] = []
-            result["outbound_error"] = str(e)
+            outbound_error = str(e)
 
-        return attach_meta(result)
+        payload: Dict[str, Any] = {
+            "entry_path": entry_path,
+            "results": outbound,
+            "next_cursor": None,
+            "total": len(outbound),
+            "done": True,
+            "page_info": {
+                "offset": 0,
+                "limit": limit,
+                "returned_count": len(outbound),
+            },
+        }
+        if outbound_error is not None:
+            payload["outbound_error"] = outbound_error
+        return cast("RelatedArticlesResponse", attach_meta(payload))
 
     @staticmethod
     def _resolve_outbound_titles(

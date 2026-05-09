@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         FindEntryResponse,
         LinksResponse,
         ListNamespacesResponse,
+        RelatedArticlesResponse,
         SearchAllResponse,
         SearchResponse,
         SearchSuggestionsResponse,
@@ -619,7 +620,7 @@ class AsyncZimOperations:
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-    ) -> dict:
+    ) -> "RelatedArticlesResponse":
         """Structured variant of ``get_related_articles`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_related_articles_data,

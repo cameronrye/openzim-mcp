@@ -11,6 +11,7 @@ from ..tool_schemas import (
     ArticleStructureResponse,
     BinaryEntryResponse,
     LinksResponse,
+    RelatedArticlesResponse,
     TableOfContentsResponse,
 )
 
@@ -465,7 +466,7 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-    ) -> Dict[str, Any]:
+    ) -> Union[RelatedArticlesResponse, ToolErrorPayload]:
         """Find articles related to entry_path via outbound links.
 
         Composes extract_article_links and deduplicates internal links,
@@ -473,36 +474,40 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
         removed — it required a bounded full-archive scan that was too
         expensive for interactive use; reach for full-text search instead.)
 
+        v2 BREAKING: ``outbound_results`` renamed to ``results``.
+        Anticipates Phase E inbound-link feature where ``direction`` becomes
+        a parameter; the ``results`` field then covers either side.
+
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Source entry, e.g. 'C/Some_Article'
             limit: Max results (1-100, default: 10)
 
         Returns:
-            Dict with ``entry_path`` and ``outbound_results`` (a list of
-            ``{path, title, link_text}`` records). ``title`` is the linked
-            entry's actual archive title (resolved by archive lookup;
-            falls back to ``path`` when the entry is missing). ``link_text``
-            is the original anchor text from the source article — useful
-            when the source article links to the target with a different
-            display string. On failure, returns a ``{"error": True, ...}``
-            envelope (see ``responses.tool_error``).
+            ``RelatedArticlesResponse``-shaped dict on success (Phase B
+            contract: top-level ``results`` / ``next_cursor`` / ``total``
+            / ``done`` / ``page_info`` plus tool-specific ``entry_path``;
+            ``outbound_error`` set on partial-success). ``results`` is a
+            list of ``{path, title, link_text}`` records. ``title`` is the
+            linked entry's actual archive title (resolved by archive
+            lookup; falls back to ``path`` when the entry is missing).
+            ``link_text`` is the original anchor text from the source
+            article — useful when the source links to the target with a
+            different display string. On failure, returns a
+            ``ToolErrorPayload`` envelope (see ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("get_related_articles")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="get related articles",
+                    message=server._create_enhanced_error_message(
                         operation="get related articles",
-                        message=server._create_enhanced_error_message(
-                            operation="get related articles",
-                            error=e,
-                            context=f"Entry: {entry_path}",
-                        ),
+                        error=e,
                         context=f"Entry: {entry_path}",
                     ),
+                    context=f"Entry: {entry_path}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -516,15 +521,12 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error in get_related_articles: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="get related articles",
+                message=server._create_enhanced_error_message(
                     operation="get related articles",
-                    message=server._create_enhanced_error_message(
-                        operation="get related articles",
-                        error=e,
-                        context=f"File: {zim_file_path}, Entry: {entry_path}",
-                    ),
+                    error=e,
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
+                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )

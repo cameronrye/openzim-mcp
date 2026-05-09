@@ -159,19 +159,20 @@ def render_find_by_title(data: Mapping[str, Any], title: str) -> str:
     return "\n".join(lines)
 
 
-def render_related(data: Dict[str, Any], entry_path: str) -> str:
+def render_related(data: Mapping[str, Any], entry_path: str) -> str:
     """Render a get_related_articles payload as a compact list."""
     if not isinstance(data, dict):
         return json.dumps(data)
-    # The data shape is ``{entry_path, outbound_results: [{path,
-    # title, link_text}], outbound_error?}``. Errors surface as the
-    # backend's textual reason — preserve that for diagnosability.
+    # v2 Phase B contract shape: ``{entry_path, results: [{path,
+    # title, link_text}], next_cursor, total, done, page_info,
+    # outbound_error?}``. Errors surface as the backend's textual
+    # reason — preserve that for diagnosability.
     if data.get("outbound_error"):
         return (
             f'**Could not extract related articles for "{entry_path}"**\n\n'
             f"{data['outbound_error']}"
         )
-    outbound = data.get("outbound_results") or []
+    outbound = data.get("results") or []
     if not outbound:
         return (
             f'No outbound article links found for "{entry_path}".\n\n'

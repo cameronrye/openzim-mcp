@@ -792,7 +792,7 @@ Composes `extract_article_links` and deduplicates internal links, returning up t
 - `limit` (integer, default: 10, range: 1–100): Max results
 
 **Returns:**
-JSON with `outbound_results`.
+JSON with `results`.
 
 ### get_entry_summary - Get a concise article summary
 

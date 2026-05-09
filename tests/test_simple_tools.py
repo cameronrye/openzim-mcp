@@ -698,7 +698,7 @@ class TestSimpleToolsOptionsPassthrough:
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         zim_ops = MagicMock()
-        zim_ops.get_related_articles.return_value = '{"outbound_results": []}'
+        zim_ops.get_related_articles.return_value = '{"results": []}'
         zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         handler = SimpleToolsHandler(zim_ops)
 
@@ -1536,7 +1536,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         h, mock = self._handler_with_data(
             get_related_articles_data={
                 "entry_path": "Photosynthesis",
-                "outbound_results": [
+                "results": [
                     {
                         "path": "Carbohydrate",
                         "title": "Carbohydrate",
@@ -1563,7 +1563,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         h, _ = self._handler_with_data(
             get_related_articles_data={
                 "entry_path": "Bad_Article",
-                "outbound_results": [],
+                "results": [],
                 "outbound_error": "Failed to extract: Entry not found",
             }
         )
@@ -1641,7 +1641,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.find_entry_by_title.return_value = '{"results": []}'
-        mock.get_related_articles.return_value = '{"outbound_results": []}'
+        mock.get_related_articles.return_value = '{"results": []}'
         mock.walk_namespace.return_value = '{"entries": []}'
         mock.list_namespaces.return_value = '{"namespaces": {}}'
         h = SimpleToolsHandler(mock)

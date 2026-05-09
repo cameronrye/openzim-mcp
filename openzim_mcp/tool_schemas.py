@@ -265,6 +265,9 @@ class RelatedArticlesResponse(TypedDict):
     page_info: PageInfo
     _meta: MetaEnvelope
     entry_path: str
+    # Set on partial-success when archive- or extraction-level failure
+    # downgrades the response to an empty list with a textual reason.
+    outbound_error: NotRequired[str]
 
 
 class _BatchEntryItem(TypedDict):
