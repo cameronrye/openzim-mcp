@@ -11,7 +11,6 @@ from typing import get_type_hints
 
 from openzim_mcp import tool_schemas as ts
 
-
 # Every list-returning response TypedDict must declare these five keys
 # plus _meta. The interpretation of each is documented in the spec.
 CONTRACT_KEYS = {"results", "next_cursor", "total", "done", "page_info", "_meta"}
@@ -28,8 +27,15 @@ def test_page_info_has_required_fields() -> None:
 
 def test_meta_envelope_has_phase_a_fields() -> None:
     hints = get_type_hints(ts.MetaEnvelope)
-    for key in ("tokens_est", "chars", "truncated", "more_at_offset", "total_chars",
-                "suggestions", "reason"):
+    for key in (
+        "tokens_est",
+        "chars",
+        "truncated",
+        "more_at_offset",
+        "total_chars",
+        "suggestions",
+        "reason",
+    ):
         assert key in hints, f"MetaEnvelope missing {key}"
 
 

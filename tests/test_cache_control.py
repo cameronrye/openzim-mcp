@@ -196,7 +196,8 @@ def test_get_search_suggestions_does_not_cache_on_error(
         zim_operations.cache.get(f"suggestions:{validated_path}:warmup:10") is None
     ), "legacy suggestion cache key should not hold an errored response"
     assert (
-        zim_operations.cache.get(f"suggestions_data:v2b:{validated_path}:warmup:10") is None
+        zim_operations.cache.get(f"suggestions_data:v2b:{validated_path}:warmup:10")
+        is None
     ), "errored suggestion response should not be cached"
 
 

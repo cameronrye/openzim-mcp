@@ -267,9 +267,7 @@ class TestSearchCursor:
         assert call.args[3] == 5
 
     @pytest.mark.asyncio
-    async def test_cursor_q_wins_over_explicit_query(
-        self, server: OpenZimMcpServer
-    ):
+    async def test_cursor_q_wins_over_explicit_query(self, server: OpenZimMcpServer):
         """When cursor encodes q='diabetes', an explicit query='insulin' is
         silently overridden.
 

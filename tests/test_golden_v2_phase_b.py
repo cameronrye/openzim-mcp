@@ -78,9 +78,7 @@ def _strip_volatile(d: Any) -> Any:
     path embedded in find_entry_by_title results).
     """
     if isinstance(d, dict):
-        return {
-            k: _strip_volatile(v) for k, v in d.items() if k not in _VOLATILE_KEYS
-        }
+        return {k: _strip_volatile(v) for k, v in d.items() if k not in _VOLATILE_KEYS}
     if isinstance(d, list):
         return [_strip_volatile(x) for x in d]
     return d
@@ -105,7 +103,9 @@ def _capture_or_compare(name: str, payload: dict, *, capture_mode: bool) -> None
     path = GOLDENS_DIR / f"{name}.json"
     if capture_mode or not path.exists():
         path.write_text(
-            json.dumps(_strip_volatile(payload), indent=2, ensure_ascii=False, sort_keys=True),
+            json.dumps(
+                _strip_volatile(payload), indent=2, ensure_ascii=False, sort_keys=True
+            ),
             newline="\n",
         )
         return
@@ -175,9 +175,7 @@ def test_golden_browse_a_namespace(
     zim_ops: ZimOperations, zim_path: str, capture_mode: bool
 ) -> None:
     """browse_namespace_data — first 10 entries in namespace A."""
-    payload = zim_ops.browse_namespace_data(
-        zim_path, namespace="A", limit=10, offset=0
-    )
+    payload = zim_ops.browse_namespace_data(zim_path, namespace="A", limit=10, offset=0)
     _capture_or_compare("browse_A_10", dict(payload), capture_mode=capture_mode)
 
 

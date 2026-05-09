@@ -95,9 +95,7 @@ class TestStructuredOutput:
         # Per-namespace summaries declare ``total`` (renamed from the
         # legacy ``count`` in v2 Phase B) and ``is_authoritative``.
         for ns_letter, summary in payload["namespaces"].items():
-            assert isinstance(
-                summary, dict
-            ), f"namespaces[{ns_letter}] should be dict"
+            assert isinstance(summary, dict), f"namespaces[{ns_letter}] should be dict"
             assert (
                 "total" in summary
             ), f"namespaces[{ns_letter}] missing renamed 'total' field"

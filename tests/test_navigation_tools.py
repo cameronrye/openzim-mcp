@@ -382,9 +382,7 @@ class TestNavigationToolsDirectInvocation:
                 "query": "test query",
                 "namespace_filter": None,
                 "content_type_filter": None,
-                "results": [
-                    {"path": "C/Result1", "title": "Result 1", "snippet": ""}
-                ],
+                "results": [{"path": "C/Result1", "title": "Result 1", "snippet": ""}],
                 "next_cursor": None,
                 "total": 1,
                 "done": True,
@@ -486,9 +484,7 @@ class TestNavigationToolsDirectInvocation:
             assert isinstance(result, dict)
             assert result.get("error") is True
             message = result.get("message", "")
-            assert "**" in message and (
-                "Error" in message or "Operation" in message
-            )
+            assert "**" in message and ("Error" in message or "Operation" in message)
 
     @pytest.mark.asyncio
     async def test_search_with_filters_returns_paginated_response(
@@ -581,9 +577,7 @@ class TestNavigationToolsDirectInvocation:
         assert called_args[5] == 50  # offset
 
     @pytest.mark.asyncio
-    async def test_search_with_filters_cursor_mismatch(
-        self, advanced_server, temp_dir
-    ):
+    async def test_search_with_filters_cursor_mismatch(self, advanced_server, temp_dir):
         """A cursor issued by a different tool is rejected."""
         from openzim_mcp.pagination import Cursor
 
@@ -601,9 +595,9 @@ class TestNavigationToolsDirectInvocation:
         )
         assert isinstance(result, dict)
         assert result.get("error") is True
-        assert "search_zim_file" in result.get("message", "") or "cannot be used" in result.get(
+        assert "search_zim_file" in result.get(
             "message", ""
-        )
+        ) or "cannot be used" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_tool_invocation(
@@ -878,9 +872,7 @@ class TestWalkNamespaceLimitValidation:
 
         captured: dict = {}
 
-        async def _fake_walk(
-            zim_file_path, namespace, cursor_state=None, limit=200
-        ):
+        async def _fake_walk(zim_file_path, namespace, cursor_state=None, limit=200):
             captured["cursor_state"] = cursor_state
             captured["limit"] = limit
             return {

@@ -1579,9 +1579,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         # renderer reads these directly.
         from openzim_mcp.pagination import Cursor
 
-        next_cursor = Cursor.encode(
-            tool="walk_namespace", state={"scan_at": 3, "l": 3}
-        )
+        next_cursor = Cursor.encode(tool="walk_namespace", state={"scan_at": 3, "l": 3})
         h, mock = self._handler_with_data(
             walk_namespace_data={
                 "namespace": "C",

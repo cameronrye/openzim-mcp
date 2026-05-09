@@ -603,9 +603,7 @@ class _SearchMixin:
         )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
-            logger.debug(
-                f"Returning cached filtered search dict for query: {query}"
-            )
+            logger.debug(f"Returning cached filtered search dict for query: {query}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
             return cast("SearchWithFiltersResponse", cached_result)
@@ -640,8 +638,7 @@ class _SearchMixin:
         # Surface that via ``page_info.total_is_lower_bound`` so the contract
         # ``total`` stays honest.
         done = (
-            last_index >= scan.filtered_count
-            and not scan.total_filtered_is_lower_bound
+            last_index >= scan.filtered_count and not scan.total_filtered_is_lower_bound
         )
         next_cursor: Optional[str] = None
         if not done:
@@ -751,9 +748,7 @@ class _SearchMixin:
             try:
                 title = entry.title or "Untitled"
                 snippet = self._get_entry_snippet(entry, query=query)
-                results.append(
-                    {"path": entry_id, "title": title, "snippet": snippet}
-                )
+                results.append({"path": entry_id, "title": title, "snippet": snippet})
             except Exception as e:
                 logger.warning(
                     f"Error processing filtered search result {entry_id}: {e}"
@@ -1063,9 +1058,7 @@ class _SearchMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                raw = self._generate_search_suggestions(
-                    archive, partial_query, limit
-                )
+                raw = self._generate_search_suggestions(archive, partial_query, limit)
 
             # ``_generate_search_suggestions`` returns the legacy
             # {partial_query, suggestions, count} shape. Adapt to the

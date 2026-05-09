@@ -12,7 +12,9 @@ from openzim_mcp.pagination import Cursor, CursorMismatchError
 
 class TestCursorRoundTrip:
     def test_encode_decode_roundtrip_minimal(self) -> None:
-        token = Cursor.encode(tool="browse_namespace", state={"o": 50, "l": 50, "ns": "C"})
+        token = Cursor.encode(
+            tool="browse_namespace", state={"o": 50, "l": 50, "ns": "C"}
+        )
         assert isinstance(token, str)
         decoded = Cursor.decode(token, expected_tool="browse_namespace")
         assert decoded["v"] == 1
@@ -20,29 +22,39 @@ class TestCursorRoundTrip:
         assert decoded["s"] == {"o": 50, "l": 50, "ns": "C"}
 
     def test_encode_produces_urlsafe_base64(self) -> None:
-        token = Cursor.encode(tool="search_zim_file", state={"o": 0, "l": 20, "q": "berlin"})
+        token = Cursor.encode(
+            tool="search_zim_file", state={"o": 0, "l": 20, "q": "berlin"}
+        )
         assert "+" not in token
         assert "/" not in token
 
     def test_encode_unicode_state(self) -> None:
-        token = Cursor.encode(tool="search_zim_file", state={"o": 0, "l": 20, "q": "café"})
+        token = Cursor.encode(
+            tool="search_zim_file", state={"o": 0, "l": 20, "q": "café"}
+        )
         decoded = Cursor.decode(token, expected_tool="search_zim_file")
         assert decoded["s"]["q"] == "café"
 
 
 class TestCursorVersioning:
     def test_default_version_is_one(self) -> None:
-        token = Cursor.encode(tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"})
+        token = Cursor.encode(
+            tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"}
+        )
         decoded = Cursor.decode(token, expected_tool="browse_namespace")
         assert decoded["v"] == 1
 
     def test_explicit_version_passes_through(self) -> None:
-        token = Cursor.encode(tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"}, version=1)
+        token = Cursor.encode(
+            tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"}, version=1
+        )
         decoded = Cursor.decode(token, expected_tool="browse_namespace")
         assert decoded["v"] == 1
 
     def test_unknown_version_rejected(self) -> None:
-        raw = json.dumps({"v": 2, "t": "browse_namespace", "s": {"o": 0, "l": 50, "ns": "C"}})
+        raw = json.dumps(
+            {"v": 2, "t": "browse_namespace", "s": {"o": 0, "l": 50, "ns": "C"}}
+        )
         token = base64.urlsafe_b64encode(raw.encode()).decode()
         with pytest.raises(ValueError, match="Unsupported cursor version"):
             Cursor.decode(token, expected_tool="browse_namespace")
@@ -82,7 +94,9 @@ class TestCursorMalformed:
             Cursor.decode(token, expected_tool="browse_namespace")
 
     def test_decode_tolerates_missing_padding(self) -> None:
-        token = Cursor.encode(tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"})
+        token = Cursor.encode(
+            tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"}
+        )
         stripped = token.rstrip("=")
         decoded = Cursor.decode(stripped, expected_tool="browse_namespace")
         assert decoded["s"]["ns"] == "C"

@@ -68,9 +68,7 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
                 from ..pagination import Cursor, CursorMismatchError
 
                 try:
-                    decoded = Cursor.decode(
-                        cursor, expected_tool="browse_namespace"
-                    )
+                    decoded = Cursor.decode(cursor, expected_tool="browse_namespace")
                 except CursorMismatchError as e:
                     return tool_error(
                         operation="browse namespace",
@@ -210,9 +208,7 @@ def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
                 from ..pagination import Cursor, CursorMismatchError
 
                 try:
-                    decoded = Cursor.decode(
-                        cursor, expected_tool="walk_namespace"
-                    )
+                    decoded = Cursor.decode(cursor, expected_tool="walk_namespace")
                 except CursorMismatchError as e:
                     return tool_error(
                         operation="walk namespace",
@@ -283,8 +279,7 @@ def _register_walk_namespace(server: "OpenZimMcpServer") -> None:
                     ),
                 ),
                 context=(
-                    f"File: {zim_file_path}, Namespace: {namespace}, "
-                    f"Limit: {limit}"
+                    f"File: {zim_file_path}, Namespace: {namespace}, " f"Limit: {limit}"
                 ),
             )
 
@@ -329,9 +324,7 @@ def _register_search_with_filters(server: "OpenZimMcpServer") -> None:
                 from ..pagination import Cursor, CursorMismatchError
 
                 try:
-                    decoded = Cursor.decode(
-                        cursor, expected_tool="search_with_filters"
-                    )
+                    decoded = Cursor.decode(cursor, expected_tool="search_with_filters")
                 except CursorMismatchError as e:
                     return tool_error(
                         operation="search with filters",

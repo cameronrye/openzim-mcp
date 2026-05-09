@@ -423,9 +423,7 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
                         "chunks via repeated calls or use include_data=False to "
                         "fetch metadata only."
                     ),
-                    context=(
-                        f"Entry: {entry_path}, max_size_bytes: {max_size_bytes}"
-                    ),
+                    context=(f"Entry: {entry_path}, max_size_bytes: {max_size_bytes}"),
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)

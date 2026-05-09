@@ -112,10 +112,6 @@ def test_paged_requests_share_one_html_parse(ops_with_cache, temp_dir, big_links
     assert len(first["results"]) == 10
     assert len(second["results"]) == 10
     # Pages are distinct slices.
-    first_urls = {
-        link.get("url") or link.get("href") for link in first["results"]
-    }
-    second_urls = {
-        link.get("url") or link.get("href") for link in second["results"]
-    }
+    first_urls = {link.get("url") or link.get("href") for link in first["results"]}
+    second_urls = {link.get("url") or link.get("href") for link in second["results"]}
     assert first_urls.isdisjoint(second_urls), (first_urls, second_urls)

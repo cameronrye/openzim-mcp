@@ -23,27 +23,21 @@ class TestWalkNamespace:
         with pytest.raises(
             OpenZimMcpValidationError, match="limit must be between 1 and 500"
         ):
-            server.zim_operations.walk_namespace(
-                "/path/to/file.zim", "C", limit=0
-            )
+            server.zim_operations.walk_namespace("/path/to/file.zim", "C", limit=0)
 
     def test_walk_namespace_limit_validation_high(self, server: OpenZimMcpServer):
         """Test that limit > 500 raises OpenZimMcpValidationError."""
         with pytest.raises(
             OpenZimMcpValidationError, match="limit must be between 1 and 500"
         ):
-            server.zim_operations.walk_namespace(
-                "/path/to/file.zim", "C", limit=10000
-            )
+            server.zim_operations.walk_namespace("/path/to/file.zim", "C", limit=10000)
 
     def test_walk_namespace_raises_validation_error_for_bad_limit(
         self, server: OpenZimMcpServer
     ):
         """Mirror the explicit acceptance test from the fix plan (Task 6.4)."""
         with pytest.raises(OpenZimMcpValidationError):
-            server.zim_operations.walk_namespace(
-                "/path/to/file.zim", "A", limit=10000
-            )
+            server.zim_operations.walk_namespace("/path/to/file.zim", "A", limit=10000)
 
     def test_walk_namespace_lowercase_namespace_normalized(
         self, server: OpenZimMcpServer, monkeypatch

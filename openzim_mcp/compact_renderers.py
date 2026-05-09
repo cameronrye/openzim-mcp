@@ -222,9 +222,7 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
             f"(archive total: {archive_total:,})"
         )
     else:
-        header = (
-            f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned}"
-        )
+        header = f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned}"
     lines = [header, ""]
     for e in entries:
         if not isinstance(e, dict):

@@ -29,22 +29,22 @@ CURRENT_VERSION = 1
 class CursorState(TypedDict, total=False):
     """Tool-specific state inside a cursor payload."""
 
-    o: int          # offset (search, browse, links)
+    o: int  # offset (search, browse, links)
     l: int  # noqa: E741 — single-letter wire-format key, kept short to keep cursors small
-    q: str          # query (search, search_all per-file)
-    ns: str         # namespace (browse_namespace)
-    scan_at: int    # entry id (walk_namespace — replaces today's int cursor)
-    ep: str         # entry path (extract_article_links)
-    k: str          # kind: "internal" | "external" | "media"
-    ct: str         # content_type (search_with_filters)
+    q: str  # query (search, search_all per-file)
+    ns: str  # namespace (browse_namespace)
+    scan_at: int  # entry id (walk_namespace — replaces today's int cursor)
+    ep: str  # entry path (extract_article_links)
+    k: str  # kind: "internal" | "external" | "media"
+    ct: str  # content_type (search_with_filters)
 
 
 class CursorPayload(TypedDict):
     """Full cursor payload: version, tool name, and tool-specific state."""
 
-    v: int                       # cursor version, currently 1
-    t: str                       # tool name (e.g., "browse_namespace")
-    s: CursorState               # tool-specific state
+    v: int  # cursor version, currently 1
+    t: str  # tool name (e.g., "browse_namespace")
+    s: CursorState  # tool-specific state
 
 
 class CursorMismatchError(ValueError):
@@ -55,7 +55,9 @@ class Cursor:
     """Encode/decode opaque pagination cursors."""
 
     @staticmethod
-    def encode(*, tool: str, state: "CursorState", version: int = CURRENT_VERSION) -> str:
+    def encode(
+        *, tool: str, state: "CursorState", version: int = CURRENT_VERSION
+    ) -> str:
         """Encode a cursor payload as URL-safe base64 JSON.
 
         Args:
@@ -96,7 +98,9 @@ class Cursor:
         if not isinstance(payload, dict):
             raise ValueError("Invalid pagination cursor: payload must be an object")
         if "v" not in payload or "t" not in payload or "s" not in payload:
-            raise ValueError("Invalid pagination cursor: missing required fields (v, t, s)")
+            raise ValueError(
+                "Invalid pagination cursor: missing required fields (v, t, s)"
+            )
         if payload["v"] != CURRENT_VERSION:
             raise ValueError(
                 f"Unsupported cursor version: got v={payload['v']}, expected v={CURRENT_VERSION}"

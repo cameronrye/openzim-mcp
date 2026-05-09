@@ -12,7 +12,6 @@ import pytest
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
 
-
 CONTRACT_KEYS = ("results", "next_cursor", "total", "done", "page_info", "_meta")
 PAGE_INFO_KEYS = ("offset", "limit", "returned_count")
 
@@ -21,21 +20,25 @@ def _assert_contract(payload: dict) -> None:
     """Assert payload carries the five contract keys + _meta + page_info subkeys."""
     for key in CONTRACT_KEYS:
         assert key in payload, f"contract key missing: {key}"
-    assert isinstance(payload["results"], list), f"results must be list, got {type(payload['results'])}"
+    assert isinstance(
+        payload["results"], list
+    ), f"results must be list, got {type(payload['results'])}"
     assert isinstance(payload["done"], bool)
     assert payload["next_cursor"] is None or isinstance(payload["next_cursor"], str)
     assert payload["total"] is None or isinstance(payload["total"], int)
     pi = payload["page_info"]
     for key in PAGE_INFO_KEYS:
         assert key in pi, f"page_info missing key: {key}"
-    assert pi["returned_count"] == len(payload["results"]), (
-        f"page_info.returned_count={pi['returned_count']} != len(results)={len(payload['results'])}"
-    )
+    assert pi["returned_count"] == len(
+        payload["results"]
+    ), f"page_info.returned_count={pi['returned_count']} != len(results)={len(payload['results'])}"
     # done <-> next_cursor co-vary (redundant by design)
     if payload["done"]:
         assert payload["next_cursor"] is None, "done=True must imply next_cursor=None"
     else:
-        assert payload["next_cursor"] is not None, "done=False must imply next_cursor!=None"
+        assert (
+            payload["next_cursor"] is not None
+        ), "done=False must imply next_cursor!=None"
 
 
 @pytest.fixture
@@ -46,7 +49,9 @@ def server(test_config_with_zim_data: OpenZimMcpConfig) -> OpenZimMcpServer:
 class TestContractShape:
     @pytest.mark.asyncio
     async def test_search_zim_file_contract(self, server, basic_test_zim_files):
-        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get("withns")
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
         if zim_path is None:
             pytest.skip("ZIM testing-suite small.zim not available")
         result = await server.mcp._tool_manager.call_tool(
@@ -57,18 +62,24 @@ class TestContractShape:
         _, structured = result
         payload = structured["result"] if "result" in structured else structured
         if payload.get("error") is True:
-            pytest.skip(f"search_zim_file returned error envelope: {payload.get('details') or payload.get('operation')}")
+            pytest.skip(
+                f"search_zim_file returned error envelope: {payload.get('details') or payload.get('operation')}"
+            )
         _assert_contract(payload)
 
     @pytest.mark.asyncio
     async def test_search_all_contract_top_level(self, server):
         result = await server.mcp._tool_manager.call_tool(
-            "search_all", {"query": "evolution"}, convert_result=True,
+            "search_all",
+            {"query": "evolution"},
+            convert_result=True,
         )
         _, structured = result
         payload = structured["result"] if "result" in structured else structured
         if payload.get("error") is True:
-            pytest.skip(f"search_all returned error envelope: {payload.get('details') or payload.get('operation')}")
+            pytest.skip(
+                f"search_all returned error envelope: {payload.get('details') or payload.get('operation')}"
+            )
         _assert_contract(payload)
         # search_all top-level is always done=True
         assert payload["done"] is True
@@ -81,7 +92,9 @@ class TestContractShape:
 
     @pytest.mark.asyncio
     async def test_find_entry_by_title_contract(self, server, basic_test_zim_files):
-        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get("withns")
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
         if zim_path is None:
             pytest.skip("ZIM testing-suite small.zim not available")
         result = await server.mcp._tool_manager.call_tool(
@@ -96,7 +109,9 @@ class TestContractShape:
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_contract(self, server, basic_test_zim_files):
-        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get("withns")
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
         if zim_path is None:
             pytest.skip("ZIM testing-suite small.zim not available")
         result = await server.mcp._tool_manager.call_tool(
@@ -107,13 +122,17 @@ class TestContractShape:
         _, structured = result
         payload = structured["result"] if "result" in structured else structured
         if payload.get("error") is True:
-            pytest.skip(f"get_search_suggestions returned error envelope: {payload.get('details') or payload.get('operation')}")
+            pytest.skip(
+                f"get_search_suggestions returned error envelope: {payload.get('details') or payload.get('operation')}"
+            )
         _assert_contract(payload)
         assert payload["done"] is True
 
     @pytest.mark.asyncio
     async def test_browse_namespace_contract(self, server, basic_test_zim_files):
-        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get("withns")
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
         if zim_path is None:
             pytest.skip("ZIM testing-suite small.zim not available")
         result = await server.mcp._tool_manager.call_tool(
@@ -127,7 +146,9 @@ class TestContractShape:
 
     @pytest.mark.asyncio
     async def test_walk_namespace_contract(self, server, basic_test_zim_files):
-        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get("withns")
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
         if zim_path is None:
             pytest.skip("ZIM testing-suite small.zim not available")
         result = await server.mcp._tool_manager.call_tool(
@@ -142,22 +163,33 @@ class TestContractShape:
 
     @pytest.mark.asyncio
     async def test_extract_article_links_contract(self, server, basic_test_zim_files):
-        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get("withns")
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
         if zim_path is None:
             pytest.skip("ZIM testing-suite small.zim not available")
         # Find any article and extract links from it.
         find = await server.mcp._tool_manager.call_tool(
-            "find_entry_by_title", {"zim_file_path": str(zim_path), "title": "Berlin"},
+            "find_entry_by_title",
+            {"zim_file_path": str(zim_path), "title": "Berlin"},
             convert_result=True,
         )
         _, find_structured = find
-        find_payload = find_structured["result"] if "result" in find_structured else find_structured
+        find_payload = (
+            find_structured["result"]
+            if "result" in find_structured
+            else find_structured
+        )
         if not find_payload["results"]:
             pytest.skip("No fixture article to test against")
         entry_path = find_payload["results"][0]["path"]
         result = await server.mcp._tool_manager.call_tool(
             "extract_article_links",
-            {"zim_file_path": str(zim_path), "entry_path": entry_path, "kind": "internal"},
+            {
+                "zim_file_path": str(zim_path),
+                "entry_path": entry_path,
+                "kind": "internal",
+            },
             convert_result=True,
         )
         _, structured = result
@@ -170,7 +202,9 @@ class TestContractShape:
     @pytest.mark.asyncio
     async def test_list_zim_files_contract(self, server):
         result = await server.mcp._tool_manager.call_tool(
-            "list_zim_files", {}, convert_result=True,
+            "list_zim_files",
+            {},
+            convert_result=True,
         )
         _, structured = result
         payload = structured["result"] if "result" in structured else structured
@@ -179,15 +213,22 @@ class TestContractShape:
 
     @pytest.mark.asyncio
     async def test_get_related_articles_contract(self, server, basic_test_zim_files):
-        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get("withns")
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
         if zim_path is None:
             pytest.skip("ZIM testing-suite small.zim not available")
         find = await server.mcp._tool_manager.call_tool(
-            "find_entry_by_title", {"zim_file_path": str(zim_path), "title": "Berlin"},
+            "find_entry_by_title",
+            {"zim_file_path": str(zim_path), "title": "Berlin"},
             convert_result=True,
         )
         _, find_structured = find
-        find_payload = find_structured["result"] if "result" in find_structured else find_structured
+        find_payload = (
+            find_structured["result"]
+            if "result" in find_structured
+            else find_structured
+        )
         if not find_payload["results"]:
             pytest.skip("No fixture article to test against")
         entry_path = find_payload["results"][0]["path"]
@@ -203,7 +244,9 @@ class TestContractShape:
 
     @pytest.mark.asyncio
     async def test_get_zim_entries_contract(self, server, basic_test_zim_files):
-        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get("withns")
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
         if zim_path is None:
             pytest.skip("ZIM testing-suite small.zim not available")
         result = await server.mcp._tool_manager.call_tool(
