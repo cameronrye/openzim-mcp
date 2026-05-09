@@ -226,6 +226,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
         original_list_summary_method = server.zim_operations.list_zim_files_summary_data
         original_search_method = server.zim_operations.search_zim_file
         original_entry_method = server.zim_operations.get_zim_entry
+        original_entry_data_method = server.zim_operations.get_zim_entry_data
 
         try:
             # Set up mocks that will cause exceptions
@@ -242,6 +243,11 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
                 side_effect=Exception("Search error")
             )
             server.zim_operations.get_zim_entry = MagicMock(
+                side_effect=Exception("Entry error")
+            )
+            # The migrated MCP tool routes through ``get_zim_entry_data``,
+            # so mock it too to keep this test provider-agnostic.
+            server.zim_operations.get_zim_entry_data = MagicMock(
                 side_effect=Exception("Entry error")
             )
 
@@ -268,16 +274,18 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
             assert "Search error" in result_str or "search ZIM file" in result_str
             assert "'error': True" in result_str or "**Operation Failed**" in result_str
 
-            # Test get_zim_entry exception handling
+            # Test get_zim_entry exception handling. Phase B: returns a
+            # structured error envelope ({"error": True, ...}); error text
+            # and envelope shape are surfaced in the result.
             result = asyncio.run(
                 server.mcp.call_tool(
                     "get_zim_entry",
                     {"zim_file_path": "test.zim", "entry_path": "A/Test"},
                 )
             )
-            assert "**Operation Failed**" in str(result) and "Entry error" in str(
-                result
-            )
+            result_str = str(result)
+            assert "Entry error" in result_str or "get ZIM entry" in result_str
+            assert "'error': True" in result_str or "**Operation Failed**" in result_str
 
         finally:
             # Restore original methods
@@ -288,6 +296,7 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
             )
             server.zim_operations.search_zim_file = original_search_method
             server.zim_operations.get_zim_entry = original_entry_method
+            server.zim_operations.get_zim_entry_data = original_entry_data_method
 
     def test_mcp_tool_validation_paths(self, server: OpenZimMcpServer):
         """Test MCP tool validation paths using call_tool."""

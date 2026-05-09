@@ -55,7 +55,7 @@ from openzim_mcp.zim.search import _SearchMixin
 from openzim_mcp.zim.structure import _StructureMixin
 
 if TYPE_CHECKING:
-    from openzim_mcp.tool_schemas import ZimMetadataResponse
+    from openzim_mcp.tool_schemas import EntryResponse, ZimMetadataResponse
 
 __all__ = [
     "ARCHIVE_OPEN_TIMEOUT",
@@ -678,6 +678,174 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         except Exception as e:
             logger.error(f"Error getting main page: {e}")
             return f"# Main Page\n\nError retrieving main page: {e}", False
+
+    def get_main_page_data(
+        self, zim_file_path: str, *, compact: bool = False
+    ) -> "EntryResponse":
+        """Structured variant of ``get_main_page``.
+
+        Returns the entry dict directly (path/title/content/content_type)
+        so MCP tools can hand it to FastMCP's structured-content path.
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If main page retrieval fails
+        """
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Cache key distinct from the legacy text cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"main_page_data:{validated_path}:compact={compact}"
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Returning cached main page dict for: {validated_path}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(
+                    dict(cached_result),
+                    truncated=bool(cached_result.get("_truncated")),
+                )
+            return cast("EntryResponse", cached_result)
+
+        # Late-bound lookup so test patches against
+        # ``openzim_mcp.zim_operations.zim_archive`` apply here too.
+        import openzim_mcp.zim_operations as _zim_ops_shim
+
+        try:
+            with _zim_ops_shim.zim_archive(validated_path) as archive:
+                payload, content_ok = self._get_main_page_data_content(
+                    archive, compact=compact
+                )
+        except Exception as e:
+            logger.error(f"Main page retrieval failed for {validated_path}: {e}")
+            raise OpenZimMcpArchiveError(f"Main page retrieval failed: {e}") from e
+
+        if content_ok:
+            self.cache.set(cache_key, dict(payload))
+        truncated = bool(payload.pop("_truncated", False))
+        total_chars = payload.pop("_total_chars", None)
+        logger.info(f"Retrieved main page data for: {validated_path}")
+        return cast(
+            "EntryResponse",
+            attach_meta(
+                payload,
+                truncated=truncated,
+                total_chars=total_chars,
+            ),
+        )
+
+    def _get_main_page_data_content(  # NOSONAR(python:S3776)
+        self, archive: Archive, *, compact: bool = False
+    ) -> Tuple[Dict[str, Any], bool]:
+        """Build the main-page dict payload from an open archive.
+
+        Mirrors ``_get_main_page_content`` but emits a structured dict
+        rather than formatted markdown. Same redirect-handling and
+        fallback-paths logic.
+
+        Returns:
+            ``(payload, content_ok)`` — ``content_ok`` is False when MIME
+            processing raised; the caller must skip caching it.
+        """
+
+        def _follow_redirect(entry: Any) -> Any:
+            seen: set[str] = set()
+            for _ in range(MAX_REDIRECT_DEPTH):
+                if not getattr(entry, "is_redirect", False):
+                    return entry
+                if entry.path in seen:
+                    raise OpenZimMcpArchiveError(
+                        f"Redirect cycle detected at {entry.path}"
+                    )
+                seen.add(entry.path)
+                entry = entry.get_redirect_entry()
+            if getattr(entry, "is_redirect", False):
+                raise OpenZimMcpArchiveError(
+                    f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
+                    f"in main-page lookup"
+                )
+            return entry
+
+        def _build(entry_obj: Any) -> Tuple[Dict[str, Any], bool]:
+            title = entry_obj.title or "Main Page"
+            path = entry_obj.path
+            try:
+                item = entry_obj.get_item()
+                mime_type = item.mimetype or ""
+                content = self.content_processor.process_mime_content(
+                    bytes(item.content), mime_type, compact=compact
+                )
+                total_length = len(content)
+                truncated_content = self.content_processor.truncate_content(
+                    content, DEFAULT_MAIN_PAGE_TRUNCATION
+                )
+                was_truncated = len(truncated_content) < total_length
+                payload: Dict[str, Any] = {
+                    "path": path,
+                    "title": title,
+                    "content": truncated_content,
+                }
+                if mime_type:
+                    payload["content_type"] = mime_type
+                if was_truncated:
+                    payload["_truncated"] = True
+                    payload["_total_chars"] = total_length
+                return payload, True
+            except Exception as e:
+                logger.warning(f"Error getting main page content: {e}")
+                return (
+                    {
+                        "path": path,
+                        "title": title,
+                        "content": f"(Error retrieving content: {e})",
+                    },
+                    False,
+                )
+
+        try:
+            if hasattr(archive, "main_entry") and archive.main_entry:
+                main_entry = _follow_redirect(archive.main_entry)
+                return _build(main_entry)
+
+            # Fallback: try common main page paths. Entry-zero is NOT a
+            # candidate (libzim's internal ordering doesn't map to the
+            # ZIM main-page pointer), so we only probe named paths.
+            main_page_paths = ["W/mainPage", "A/Main_Page", "A/index"]
+            for path in main_page_paths:
+                try:
+                    entry = archive.get_entry_by_path(path)
+                    if entry:
+                        entry = _follow_redirect(entry)
+                        payload, ok = _build(entry)
+                        if ok:
+                            return payload, True
+                except Exception:  # nosec B112 - intentional fallback
+                    continue
+
+            # No main page found — structural property of the archive,
+            # safe to cache.
+            return (
+                {
+                    "path": "",
+                    "title": "Main Page",
+                    "content": (
+                        "No main page found in this ZIM file. "
+                        "The archive may not have a designated main page entry."
+                    ),
+                },
+                True,
+            )
+
+        except Exception as e:
+            logger.error(f"Error getting main page: {e}")
+            return (
+                {
+                    "path": "",
+                    "title": "Main Page",
+                    "content": f"Error retrieving main page: {e}",
+                },
+                False,
+            )
 
     def _resolve_entry_with_fallback(
         self, archive: Archive, entry_path: str

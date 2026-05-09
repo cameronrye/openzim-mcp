@@ -7,7 +7,7 @@ from ..constants import INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
-from ..tool_schemas import ListNamespacesResponse, ZimMetadataResponse
+from ..tool_schemas import EntryResponse, ListNamespacesResponse, ZimMetadataResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -77,23 +77,34 @@ def register_metadata_tools(server: "OpenZimMcpServer") -> None:
             )
 
     @server.mcp.tool()
-    async def get_main_page(zim_file_path: str) -> str:
+    async def get_main_page(
+        zim_file_path: str,
+    ) -> Union[EntryResponse, ToolErrorPayload]:
         """Get the main page entry from W namespace.
 
         Args:
             zim_file_path: Path to the ZIM file
 
         Returns:
-            Main page content or information about main page
+            ``EntryResponse``-shaped dict with ``path``, ``title``,
+            ``content``, optionally ``content_type``, plus the ``_meta``
+            envelope. When the archive has no designated main page, the
+            response carries an empty ``path`` and a textual notice in
+            ``content``. On failure, returns a ``ToolErrorPayload``
+            envelope (see ``responses.tool_error``).
         """
         try:
             # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("get_entry")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get main page",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get main page",
+                        error=e,
+                        context=f"File: {zim_file_path}",
+                    ),
                     context=f"File: {zim_file_path}",
                 )
 
@@ -101,13 +112,17 @@ def register_metadata_tools(server: "OpenZimMcpServer") -> None:
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
 
             # Use async operations
-            return await server.async_zim_operations.get_main_page(zim_file_path)
+            return await server.async_zim_operations.get_main_page_data(zim_file_path)
 
         except Exception as e:
             logger.error(f"Error getting main page: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get main page",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get main page",
+                    error=e,
+                    context=f"File: {zim_file_path}",
+                ),
                 context=f"File: {zim_file_path}",
             )
 

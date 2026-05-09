@@ -17,6 +17,8 @@ if TYPE_CHECKING:
         ArticleStructureResponse,
         BinaryEntryResponse,
         BrowseNamespaceResponse,
+        EntryResponse,
+        EntrySummaryResponse,
         FindEntryResponse,
         LinksResponse,
         ListNamespacesResponse,
@@ -157,6 +159,22 @@ class AsyncZimOperations:
             content_offset,
         )
 
+    async def get_zim_entry_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        max_content_length: Optional[int] = None,
+        content_offset: int = 0,
+    ) -> "EntryResponse":
+        """Structured variant of ``get_zim_entry`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_zim_entry_data,
+            zim_file_path,
+            entry_path,
+            max_content_length,
+            content_offset,
+        )
+
     async def get_entries(
         self,
         entries: List[Dict[str, str]],
@@ -214,6 +232,10 @@ class AsyncZimOperations:
             Main page content
         """
         return await asyncio.to_thread(self._ops.get_main_page, zim_file_path)
+
+    async def get_main_page_data(self, zim_file_path: str) -> "EntryResponse":
+        """Structured variant of ``get_main_page`` (async)."""
+        return await asyncio.to_thread(self._ops.get_main_page_data, zim_file_path)
 
     async def list_namespaces(self, zim_file_path: str) -> str:
         """List all namespaces in a ZIM file (async).
@@ -456,7 +478,7 @@ class AsyncZimOperations:
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
-    ) -> dict:
+    ) -> "EntrySummaryResponse":
         """Structured variant of ``get_entry_summary`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_entry_summary_data, zim_file_path, entry_path, max_words

@@ -315,6 +315,15 @@ class EntryResponse(TypedDict):
     title: str
     content: str
     content_type: NotRequired[str]
+    # ``requested_path`` is set when the resolved entry differs from the
+    # requested path (redirect or fallback search); callers can use it to
+    # confirm what they asked for vs. what they got.
+    requested_path: NotRequired[str]
+    # ``content_offset`` and ``total_chars`` are populated when the caller
+    # passed a non-zero offset, so they can page through long articles
+    # without re-fetching the prefix.
+    content_offset: NotRequired[int]
+    total_chars: NotRequired[int]
     _meta: MetaEnvelope
 
 
@@ -323,6 +332,12 @@ class EntrySummaryResponse(TypedDict):
     title: str
     summary: str
     word_count: NotRequired[int]
+    # ``content_type`` and ``is_truncated`` are always emitted by the
+    # current implementation; declared NotRequired so future code paths
+    # that omit them (e.g. errors short-circuited before extraction)
+    # remain schema-conformant.
+    content_type: NotRequired[str]
+    is_truncated: NotRequired[bool]
     _meta: MetaEnvelope
 
 

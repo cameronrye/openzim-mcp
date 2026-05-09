@@ -1,15 +1,16 @@
 """Content retrieval tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from ..constants import (
     INPUT_LIMIT_ENTRY_PATH,
     INPUT_LIMIT_FILE_PATH,
 )
 from ..exceptions import OpenZimMcpRateLimitError
-from ..responses import tool_error
+from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
+from ..tool_schemas import EntryResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -30,7 +31,7 @@ def _register_get_zim_entry(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         max_content_length: Optional[int] = None,
         content_offset: int = 0,
-    ) -> str:
+    ) -> Union[EntryResponse, ToolErrorPayload]:
         """Get detailed content of a specific entry in a ZIM file.
 
         Args:
@@ -42,16 +43,24 @@ def _register_get_zim_entry(server: "OpenZimMcpServer") -> None:
                 without re-fetching the prefix each time.
 
         Returns:
-            Entry content text
+            ``EntryResponse``-shaped dict with ``path``, ``title``,
+            ``content``, optionally ``content_type``/``requested_path``/
+            ``content_offset``/``total_chars``, plus the ``_meta``
+            envelope. On failure, returns a ``ToolErrorPayload`` envelope
+            (see ``responses.tool_error``).
         """
         try:
             # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("get_entry")
             except OpenZimMcpRateLimitError as e:
-                return server._create_enhanced_error_message(
+                return tool_error(
                     operation="get ZIM entry",
-                    error=e,
+                    message=server._create_enhanced_error_message(
+                        operation="get ZIM entry",
+                        error=e,
+                        context=f"Entry: {entry_path}",
+                    ),
                     context=f"Entry: {entry_path}",
                 )
 
@@ -61,35 +70,48 @@ def _register_get_zim_entry(server: "OpenZimMcpServer") -> None:
 
             # Validate parameters
             if max_content_length is not None and max_content_length < 100:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: max_content_length must be at least 100 characters "
-                    f"(provided: {max_content_length})\n\n"
-                    "**Troubleshooting**: Increase the max_content_length parameter "
-                    "or omit it to use the default.\n"
-                    "**Example**: Use `max_content_length=500` for a short preview, "
-                    "`5000` for longer content, or omit for default."
+                return tool_error(
+                    operation="get ZIM entry",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: max_content_length must be at least 100 "
+                        f"characters (provided: {max_content_length})\n\n"
+                        "**Troubleshooting**: Increase the max_content_length "
+                        "parameter or omit it to use the default.\n"
+                        "**Example**: Use `max_content_length=500` for a short "
+                        "preview, `5000` for longer content, or omit for default."
+                    ),
+                    context=f"Entry: {entry_path}",
                 )
 
             if content_offset < 0:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: content_offset must be non-negative "
-                    f"(provided: {content_offset})\n\n"
-                    "**Troubleshooting**: Use 0 to read from the start, or a "
-                    "positive integer to skip that many leading characters."
+                return tool_error(
+                    operation="get ZIM entry",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: content_offset must be non-negative "
+                        f"(provided: {content_offset})\n\n"
+                        "**Troubleshooting**: Use 0 to read from the start, "
+                        "or a positive integer to skip that many leading "
+                        "characters."
+                    ),
+                    context=f"Entry: {entry_path}",
                 )
 
             # Use async operations to avoid blocking
-            return await server.async_zim_operations.get_zim_entry(
+            return await server.async_zim_operations.get_zim_entry_data(
                 zim_file_path, entry_path, max_content_length, content_offset
             )
 
         except Exception as e:
             logger.error(f"Error getting ZIM entry: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error(
                 operation="get ZIM entry",
-                error=e,
+                message=server._create_enhanced_error_message(
+                    operation="get ZIM entry",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}",
+                ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
