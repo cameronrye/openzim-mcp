@@ -12,8 +12,6 @@ Layout:
 
 * ``zim_archive`` — context manager that opens an archive with a timeout
   and surfaces a consistent error type.
-* ``PaginationCursor`` — base64-encoded pagination tokens used across the
-  search/browse surfaces.
 * ``ZimOperations`` — coordinator class that mixes in
   ``_SearchMixin``/``_ContentMixin``/``_StructureMixin``/``_NamespaceMixin``
   for the bulk of the surface. Methods that don't fit a single domain
@@ -65,7 +63,6 @@ __all__ = [
     "ARCHIVE_OPEN_TIMEOUT",
     "Archive",
     "MAX_REDIRECT_DEPTH",
-    "PaginationCursor",
     "Query",
     "Searcher",
     "SuggestionSearcher",
@@ -80,73 +77,6 @@ ARCHIVE_OPEN_TIMEOUT = 30.0
 # Maximum redirect chain length before bailing out. See
 # ``ContentDefaults.MAX_REDIRECT_DEPTH`` in ``defaults.py``.
 MAX_REDIRECT_DEPTH = CONTENT.MAX_REDIRECT_DEPTH
-
-
-class PaginationCursor:
-    """Compatibility shim over ``openzim_mcp.pagination.Cursor``.
-
-    v1.x callers used ``PaginationCursor.create_next_cursor`` and
-    ``PaginationCursor.decode`` with no tool identity. v2 Phase B migrates
-    each caller to ``openzim_mcp.pagination.Cursor`` (tool-bound). Until
-    every caller has been migrated, this shim emits cursors with
-    ``t="legacy"`` and a permissive decoder that accepts both legacy
-    cursors and the new Phase B cursors.
-
-    Removed at the end of Phase B (see plan Task 22).
-    """
-
-    @staticmethod
-    def _encode(offset: int, limit: int, query: Optional[str] = None) -> str:
-        """Encode pagination state into a base64 cursor token (legacy shape)."""
-        from openzim_mcp.pagination import Cursor, CursorState
-
-        state: CursorState = {"o": offset, "l": limit}
-        if query:
-            state["q"] = query
-        return Cursor.encode(tool="legacy", state=state)
-
-    @staticmethod
-    def create_next_cursor(
-        current_offset: int, limit: int, total: int, query: Optional[str] = None
-    ) -> Optional[str]:
-        next_offset = current_offset + limit
-        if next_offset >= total:
-            return None
-        return PaginationCursor._encode(next_offset, limit, query)
-
-    @staticmethod
-    def decode(token: str) -> dict[str, Any]:
-        """Decode a legacy (or new) cursor into the legacy ``{o, l, q?}`` shape.
-
-        Tolerates both v1 cursors (raw JSON without the v/t/s envelope) and
-        v2 cursors (tool-bound, versioned). Raises ``ValueError`` on malformed
-        tokens.
-        """
-        import base64
-        import json
-
-        try:
-            padded = token + "=" * (-len(token) % 4)
-            raw = base64.urlsafe_b64decode(padded.encode()).decode()
-            data = json.loads(raw)
-        except Exception as e:
-            raise ValueError(f"Invalid pagination cursor: {e}") from e
-        if not isinstance(data, dict):
-            raise ValueError("Cursor must decode to a JSON object")
-        # v2 envelope: {v, t, s} — return s as the legacy shape.
-        if "s" in data and "v" in data and "t" in data:
-            inner = data["s"]
-            if not isinstance(inner, dict) or "o" not in inner or "l" not in inner:
-                raise ValueError("Cursor missing required fields ('o', 'l')")
-            if not isinstance(inner["o"], int) or not isinstance(inner["l"], int):
-                raise ValueError("Cursor offset and limit must be integers")
-            return inner
-        # v1 raw shape.
-        if "o" not in data or "l" not in data:
-            raise ValueError("Cursor missing required fields ('o', 'l')")
-        if not isinstance(data["o"], int) or not isinstance(data["l"], int):
-            raise ValueError("Cursor offset and limit must be integers")
-        return data
 
 
 logger = logging.getLogger(__name__)

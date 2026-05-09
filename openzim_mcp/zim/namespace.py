@@ -3,9 +3,9 @@
 This mixin handles namespace listing, browsing, and walking — anything
 that surfaces or iterates over the archive's namespace structure.
 
-``zim_archive`` and ``PaginationCursor`` are accessed through
-``openzim_mcp.zim_operations`` so existing test patches against the
-shim's symbols continue to work without changes.
+``zim_archive`` is accessed through ``openzim_mcp.zim_operations`` so
+existing test patches against the shim's symbols continue to work
+without changes.
 """
 
 import contextlib
@@ -700,16 +700,9 @@ class _NamespaceMixin:
                 logger.warning(f"Error processing entry {entry_path}: {e}")
                 continue
 
-        # Build result with pagination cursor. Base has_more on the slice
-        # bounds, not on len(entries) — entries can be shorter than the page
-        # when individual entries fail to load, and we don't want to advertise
-        # a non-existent next page in that case.
-        has_more = end_idx < total_in_namespace
-        next_cursor = None
-        if has_more:
-            next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
-                offset, limit, total_in_namespace
-            )
+        # ``next_cursor`` and ``has_more`` are intentionally omitted here.
+        # ``browse_namespace_data`` (the sole caller) rebuilds both fields
+        # itself using ``Cursor.encode(tool="browse_namespace", ...)``.
 
         # When the sample hits NAMESPACE_MAX_ENTRIES, total_in_namespace is a
         # sample-bound, not the true count. has_more=False just means the sample
@@ -731,8 +724,6 @@ class _NamespaceMixin:
             "offset": offset,
             "limit": limit,
             "returned_count": len(entries),
-            "has_more": has_more,
-            "next_cursor": next_cursor,
             "entries": entries,
             "sampling_based": not full_iteration,
             "discovery_method": "full_iteration" if full_iteration else "sampling",
