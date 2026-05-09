@@ -13,9 +13,11 @@
 Standardize the wire format of every list-returning tool in [`openzim_mcp`](../../../openzim_mcp/) so that smaller, less capable LLMs see one consistent response shape regardless of which tool they call. Phase B does this in two coordinated breaking changes:
 
 1. **Standard pagination contract** — every list-returning tool returns a `PaginatedResponse[T]`-shaped object with the same five contract keys (`results`, `next_cursor`, `total`, `done`, `page_info`) regardless of whether the tool actually paginates.
-2. **TypedDict return types** — every dict-returning tool migrates from `Dict[str, Any]` (which FastMCP wraps in a generic `{"result": ...}` envelope with no schema) to a TypedDict that produces a real output schema and lands the payload at the top level of `structuredContent`.
+2. **TypedDict return types** — every dict-returning tool migrates from `Dict[str, Any]` (which FastMCP wraps in a generic `{"result": ...}` envelope with no schema) to a `Union[<SuccessResponse>, ToolErrorPayload]` annotation that produces a real output schema. Because the annotation is a `Union` (the error envelope is in-band), FastMCP wraps the payload in a single uniform `{"result": ...}` envelope on the wire — but the inner content now carries a real schema (`anyOf: [<SuccessTypedDict>, ToolErrorPayload]`). This is one consistent extra layer for every migrated tool, far better than v1's mixed schema-less wrapping.
 
 These ship as one bundled PR off `v2-phase-b` because they're entangled: the pagination contract requires real schemas to be useful, and the schema migration requires a consistent shape to be tractable.
+
+> **Note on FastMCP wrapping:** FastMCP's `func_metadata` (`mcp.server.fastmcp.utilities.func_metadata._try_create_model_and_schema`) wraps every non-single-TypedDict return type — including every `Union[<SuccessResponse>, ToolErrorPayload]` annotation — in a top-level `{"result": ...}` envelope on the wire. Phase B accepts this uniform wrapper deliberately: it's better than v1's schema-less wrapping because the inner content now carries a real schema (`anyOf: [<SuccessTypedDict>, ToolErrorPayload]`), and uniformity ("always look in `result`") is friendlier to small clients than a mixed-shape contract. Tests should assert against `structured["result"]` (or the wrapper-tolerant equivalent `structured.get("result", structured)` — see the helper pattern in [`tests/test_structured_tool_output.py`](../../../tests/test_structured_tool_output.py)).
 
 ## Non-goals
 
@@ -520,7 +522,7 @@ These tools return non-list payloads and get TypedDict migrations only — no `P
 | `count` | list_zim_files | `total` |
 | `total_internal_links` / `total_external_links` / `total_media_links` | extract_article_links | `category_totals` |
 | `internal_links` / `external_links` / `media_links` (parallel lists) | extract_article_links | `results` (single category per call) |
-| FastMCP `{"result": ...}` outer wrapper | every dict-returning tool | top-level payload (via TypedDict return type) |
+| FastMCP `{"result": ...}` outer wrapper | every dict-returning tool | uniform `{"result": ...}` wrapper around a real-schema TypedDict (FastMCP wraps `Union` returns; we keep the wrapper but the inner shape now has a real schema — see [Note on FastMCP wrapping](#goal)) |
 
 The Phase A `_meta` envelope and all its keys are unchanged.
 
@@ -576,7 +578,7 @@ Phase B introduces no new env vars or config knobs. The existing `OPENZIM_MCP_*`
 
 ### Extended test files
 
-- `tests/test_structured_tool_output.py` — extend to every dict-returning tool (today covers two pilots). Each tool asserts (a) `convert_result=True` returns a tuple (TypedDict path), (b) the structured payload is at the **top level** (no `result` wrapper), (c) the payload conforms to its declared TypedDict.
+- `tests/test_structured_tool_output.py` — extend to every dict-returning tool (today covers two pilots). Each tool asserts (a) `convert_result=True` returns a tuple (TypedDict path), (b) the structured payload is at `structuredContent.result` and conforms to its declared TypedDict (FastMCP wraps `Union[<SuccessResponse>, ToolErrorPayload]` returns in a single uniform envelope — see [Note on FastMCP wrapping](#goal)), (c) the inner payload exposes the contract keys for paged tools.
 - `tests/test_search_tools.py`, `tests/test_navigation_tools.py`, `tests/test_metadata_tools.py`, `tests/test_structure_tools.py`, `tests/test_walk_namespace.py`, `tests/test_extract_article_links_pagination.py`, `tests/test_search_all.py` — update key assertions to new contract; remove assertions on removed keys.
 - `tests/test_simple_tools.py` — verify compact-mode footer reads from the new shape (no `pagination` nested lookups).
 
@@ -605,7 +607,7 @@ All under existing tool latency by 2-3 orders of magnitude. No measurable regres
 Phase B is shippable as `v2.0.0a2` when:
 
 1. Every list-returning tool returns the five contract keys (`results`, `next_cursor`, `total`, `done`, `page_info`) with semantics matching this spec.
-2. Every dict-returning tool's MCP registration uses a TypedDict return annotation; `tests/test_structured_tool_output.py` asserts top-level payload (no `{"result": ...}` wrapper) for every migrated tool.
+2. Every dict-returning tool's MCP registration uses a `Union[<SuccessTypedDict>, ToolErrorPayload]` return annotation; `tests/test_structured_tool_output.py` asserts the structured payload conforms to its declared TypedDict (whether or not FastMCP applies a `{"result": ...}` wrapper around `Union` returns — with the chosen `Union` annotation, the wrapper is present and uniform across all migrated tools; see [Note on FastMCP wrapping](#goal)).
 3. Every paged tool accepts both `cursor` and `offset` as input; `cursor` wins on conflict; invalid cursors produce `tool_error`.
 4. Cursor tool-binding works: passing a wrong-tool cursor produces a clear error.
 5. `extract_article_links` requires `kind` (default `"internal"`) and emits `category_totals`.

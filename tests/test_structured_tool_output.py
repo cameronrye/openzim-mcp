@@ -210,11 +210,15 @@ class TestStructuredOutput:
     async def test_search_zim_file_returns_structured_content(
         self, server: OpenZimMcpServer, basic_test_zim_files
     ) -> None:
-        """search_zim_file (Phase B) emits a top-level TypedDict payload.
+        """search_zim_file (Phase B) emits a SearchResponse-shaped payload.
 
-        Phase B migration: the tool now declares a ``SearchResponse`` return
-        annotation, so FastMCP places the dict at the top level of
-        ``structuredContent`` rather than nesting it under ``"result"``.
+        Phase B migration: the tool now declares a
+        ``Union[SearchResponse, ToolErrorPayload]`` return annotation, so
+        FastMCP wraps the payload in a single uniform ``{"result": ...}``
+        envelope (see spec § FastMCP wrapping — Union returns flow through
+        ``_try_create_model_and_schema``'s ``wrap_output=True`` path). The
+        inner shape carries a real ``anyOf`` schema and is the contract
+        we assert against.
         """
         zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
             "withns"
@@ -229,11 +233,10 @@ class TestStructuredOutput:
         assert isinstance(result, tuple)
         _, structured = result
         assert isinstance(structured, dict)
-        # Phase B: TypedDict return — payload is at top level, no "result" wrapper.
-        assert "result" not in structured, (
-            "TypedDict migration regression: payload still wrapped"
-        )
-        payload = structured
+        # FastMCP wraps Union returns in a uniform {"result": ...} envelope
+        # (see spec § FastMCP wrapping). Accept that wrapper; assert the
+        # inner shape.
+        payload = structured["result"] if "result" in structured else structured
         # Tool may emit an error envelope on a transient missing-index call —
         # tolerate it; the wire format is what we're verifying.
         if payload.get("error") is True:
@@ -258,12 +261,14 @@ class TestStructuredOutput:
         Phase B contract-shape).
 
         Note on the ``"result"`` wrapper: FastMCP wraps Union return
-        annotations (``Union[SearchAllResponse, ToolErrorPayload]``) under
-        a generic ``{"result": ...}`` envelope because ``Union`` falls
-        through ``_try_create_model_and_schema``'s wrap path. A
-        TypedDict-only return would land at the top level, but the spec
-        keeps the ``Union`` for the error-as-data envelope. We tolerate
-        the wrapper — what matters is the inner shape.
+        annotations (``Union[SearchAllResponse, ToolErrorPayload]``) in a
+        uniform ``{"result": ...}`` envelope because ``Union`` flows
+        through ``_try_create_model_and_schema``'s ``wrap_output=True``
+        path. Per spec § FastMCP wrapping, Phase B accepts this uniform
+        wrapper deliberately (the inner content carries a real
+        ``anyOf: [SearchAllResponse, ToolErrorPayload]`` schema). Tests
+        assert against ``structured["result"]`` (or the wrapper-tolerant
+        equivalent) — what matters is the inner shape.
         """
         result = await server.mcp._tool_manager.call_tool(
             "search_all", {"query": "evolution"}, convert_result=True
