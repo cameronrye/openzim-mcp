@@ -1,7 +1,5 @@
 {
   "_meta": {
-    "chars": 280,
-    "tokens_est": 100,
     "truncated": false
   },
   "category_totals": {
@@ -12,7 +10,6 @@
   "content_type": "text/html",
   "done": true,
   "kind": "internal",
-  "next_cursor": null,
   "page_info": {
     "limit": 100,
     "offset": 0,

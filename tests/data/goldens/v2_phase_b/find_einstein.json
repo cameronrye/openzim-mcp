@@ -1,14 +1,11 @@
 {
   "_meta": {
-    "chars": 398,
-    "tokens_est": 162,
     "truncated": false
   },
   "done": true,
   "fast_path_hit": true,
   "files_searched": 1,
   "fuzzy_path_hit": false,
-  "next_cursor": null,
   "page_info": {
     "limit": 10,
     "offset": 0,
@@ -19,8 +16,7 @@
     {
       "path": "A/Einstein",
       "score": 1.0,
-      "title": "Einstein",
-      "zim_file": "/private/var/folders/53/yj9nrj8n4wbb2kr2hv9zlx0r0000gn/T/pytest-of-cameron/pytest-124/v2-golden0/v2_phase_a.zim"
+      "title": "Einstein"
     }
   ],
   "total": 1

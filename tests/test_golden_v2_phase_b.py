@@ -17,9 +17,12 @@ Notes
 -----
 * ``_strip_volatile`` removes keys whose values change across runs or environments:
   ``tokens_est``, ``chars`` (depend on rendered content length),
-  ``path``, ``directory``, ``size_bytes``, ``modified``, ``size``
-  (environment-specific file-system metadata), and ``next_cursor``
-  (encodes archive identity which can vary between tmp paths).
+  ``directory``, ``size_bytes``, ``modified``, ``size``
+  (environment-specific file-system metadata), ``next_cursor``
+  (encodes archive identity which can vary between tmp paths), and
+  ``zim_file`` (absolute filesystem path in find_entry_by_title results).
+  ZIM entry ``path`` values (e.g. ``A/Einstein``) are part of the contract
+  and are intentionally retained.
   Stripping these keeps the diff focused on structural contract shape.
 * ``list_zim_files_summary_data`` is intentionally excluded — its output
   contains absolute paths and file-system timestamps that are
@@ -53,7 +56,6 @@ _VOLATILE_KEYS = frozenset(
         "tokens_est",
         "chars",
         # file-system metadata — environment-specific
-        "path",
         "directory",
         "size_bytes",
         "modified",
@@ -70,9 +72,10 @@ def _strip_volatile(d: Any) -> Any:
     """Recursively remove volatile keys from a nested dict/list structure.
 
     Keys removed: ``tokens_est``, ``chars`` (content-length-dependent),
-    ``path``, ``directory``, ``size_bytes``, ``modified``, ``size``
-    (environment-specific fs metadata), and ``next_cursor`` (encodes archive
-    identity derived from tmp paths).
+    ``directory``, ``size_bytes``, ``modified``, ``size``
+    (environment-specific fs metadata), ``next_cursor`` (encodes archive
+    identity derived from tmp paths), and ``zim_file`` (absolute filesystem
+    path embedded in find_entry_by_title results).
     """
     if isinstance(d, dict):
         return {
@@ -102,7 +105,8 @@ def _capture_or_compare(name: str, payload: dict, *, capture_mode: bool) -> None
     path = GOLDENS_DIR / f"{name}.json"
     if capture_mode or not path.exists():
         path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
+            json.dumps(_strip_volatile(payload), indent=2, ensure_ascii=False, sort_keys=True),
+            newline="\n",
         )
         return
     expected = json.loads(path.read_text())
@@ -134,13 +138,13 @@ def zim_ops(v2_phase_a_zim: Path) -> ZimOperations:
     return ZimOperations(config, path_validator, cache, content_processor)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def zim_path(v2_phase_a_zim: Path) -> str:
     """Return the string path to the fixture ZIM file."""
     return str(v2_phase_a_zim)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def capture_mode() -> bool:
     """Return True when the OPENZIM_MCP_CAPTURE_GOLDENS env var is set to '1'."""
     return os.environ.get("OPENZIM_MCP_CAPTURE_GOLDENS") == "1"

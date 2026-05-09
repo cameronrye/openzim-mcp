@@ -1,13 +1,10 @@
 {
   "_meta": {
-    "chars": 219,
-    "tokens_est": 77,
     "truncated": false
   },
   "archive_entry_count": 4,
   "done": true,
   "namespace": "A",
-  "next_cursor": null,
   "page_info": {
     "limit": 10,
     "offset": 0,

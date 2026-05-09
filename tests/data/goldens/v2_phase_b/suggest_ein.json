@@ -1,11 +1,8 @@
 {
   "_meta": {
-    "chars": 218,
-    "tokens_est": 78,
     "truncated": false
   },
   "done": true,
-  "next_cursor": null,
   "page_info": {
     "limit": 5,
     "offset": 0,
