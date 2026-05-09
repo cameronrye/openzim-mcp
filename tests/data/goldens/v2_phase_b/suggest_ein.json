@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "chars": 218,
+    "tokens_est": 78,
+    "truncated": false
+  },
+  "done": true,
+  "next_cursor": null,
+  "page_info": {
+    "limit": 5,
+    "offset": 0,
+    "returned_count": 1
+  },
+  "partial_query": "Ein",
+  "results": [
+    {
+      "path": "A/Einstein",
+      "text": "Einstein",
+      "type": "title_start_match"
+    }
+  ],
+  "total": 1
+}

@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "chars": 219,
+    "tokens_est": 77,
+    "truncated": false
+  },
+  "archive_entry_count": 4,
+  "done": true,
+  "namespace": "A",
+  "next_cursor": null,
+  "page_info": {
+    "limit": 10,
+    "offset": 0,
+    "returned_count": 0
+  },
+  "results": [],
+  "scanned_count": 0,
+  "scanned_through_id": null,
+  "total": null
+}
