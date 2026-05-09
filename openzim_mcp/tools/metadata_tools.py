@@ -1,13 +1,13 @@
 """Metadata and namespace listing tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Union, cast
+from typing import TYPE_CHECKING, Union
 
 from ..constants import INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
-from ..tool_schemas import ListNamespacesResponse
+from ..tool_schemas import ListNamespacesResponse, ZimMetadataResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -24,35 +24,36 @@ def register_metadata_tools(server: "OpenZimMcpServer") -> None:
     """
 
     @server.mcp.tool()
-    async def get_zim_metadata(zim_file_path: str) -> Dict[str, Any]:
+    async def get_zim_metadata(
+        zim_file_path: str,
+    ) -> Union[ZimMetadataResponse, ToolErrorPayload]:
         """Get ZIM file metadata from M namespace entries.
 
         Args:
             zim_file_path: Path to the ZIM file
 
         Returns:
-            Dict with keys: entry_count, all_entry_count, article_count,
-            media_count, and (when available) metadata_entries (a dict of
-            common M-namespace fields like Title, Description, Language,
-            Creator, etc.). On failure, returns a ``{"error": True, ...}``
-            envelope (see ``responses.tool_error``).
+            ``ZimMetadataResponse``-shaped dict with keys ``entry_count``,
+            ``all_entry_count``, ``article_count``, ``media_count``, and
+            (when available) ``metadata_entries`` (a dict of common
+            M-namespace fields like Title, Description, Language, Creator,
+            etc.) plus the universal ``_meta`` envelope. On failure,
+            returns a ``ToolErrorPayload`` envelope (see
+            ``responses.tool_error``).
         """
         try:
             # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("get_metadata")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="get ZIM metadata",
+                    message=server._create_enhanced_error_message(
                         operation="get ZIM metadata",
-                        message=server._create_enhanced_error_message(
-                            operation="get ZIM metadata",
-                            error=e,
-                            context=f"File: {zim_file_path}",
-                        ),
+                        error=e,
                         context=f"File: {zim_file_path}",
                     ),
+                    context=f"File: {zim_file_path}",
                 )
 
             # Sanitize inputs
@@ -65,17 +66,14 @@ def register_metadata_tools(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error getting ZIM metadata: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="get ZIM metadata",
+                message=server._create_enhanced_error_message(
                     operation="get ZIM metadata",
-                    message=server._create_enhanced_error_message(
-                        operation="get ZIM metadata",
-                        error=e,
-                        context=f"File: {zim_file_path}",
-                    ),
+                    error=e,
                     context=f"File: {zim_file_path}",
                 ),
+                context=f"File: {zim_file_path}",
             )
 
     @server.mcp.tool()

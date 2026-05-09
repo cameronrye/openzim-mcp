@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         SearchWithFiltersResponse,
         TableOfContentsResponse,
         WalkNamespaceResponse,
+        ZimMetadataResponse,
     )
 
 logger = logging.getLogger(__name__)
@@ -199,7 +200,7 @@ class AsyncZimOperations:
         """
         return await asyncio.to_thread(self._ops.get_zim_metadata, zim_file_path)
 
-    async def get_zim_metadata_data(self, zim_file_path: str) -> dict:
+    async def get_zim_metadata_data(self, zim_file_path: str) -> "ZimMetadataResponse":
         """Structured variant of ``get_zim_metadata`` (async)."""
         return await asyncio.to_thread(self._ops.get_zim_metadata_data, zim_file_path)
 

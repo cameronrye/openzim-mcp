@@ -26,7 +26,7 @@ import logging
 from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 from libzim.search import (  # type: ignore[import-untyped]
@@ -53,6 +53,9 @@ from openzim_mcp.zim.content import _ContentMixin
 from openzim_mcp.zim.namespace import _NamespaceMixin
 from openzim_mcp.zim.search import _SearchMixin
 from openzim_mcp.zim.structure import _StructureMixin
+
+if TYPE_CHECKING:
+    from openzim_mcp.tool_schemas import ZimMetadataResponse
 
 __all__ = [
     "ARCHIVE_OPEN_TIMEOUT",
@@ -373,7 +376,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         result_text += json.dumps(all_zim_files, indent=2, ensure_ascii=False)
         return result_text
 
-    def get_zim_metadata_data(self, zim_file_path: str) -> Dict[str, Any]:
+    def get_zim_metadata_data(self, zim_file_path: str) -> "ZimMetadataResponse":
         """Structured variant of ``get_zim_metadata``.
 
         Returns the metadata dict directly (not a JSON string) so MCP
@@ -395,7 +398,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             logger.debug(f"Returning cached metadata dict for: {validated_path}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
-            return cached_result  # type: ignore[no-any-return]
+            return cast("ZimMetadataResponse", cached_result)
 
         # Late-bound lookup so test patches against
         # ``openzim_mcp.zim_operations.zim_archive`` apply here too.
@@ -408,7 +411,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             # Cache the result
             self.cache.set(cache_key, metadata)
             logger.info(f"Retrieved metadata for: {validated_path}")
-            return attach_meta(metadata)
+            return cast("ZimMetadataResponse", attach_meta(metadata))
 
         except Exception as e:
             logger.error(f"Metadata retrieval failed for {validated_path}: {e}")
