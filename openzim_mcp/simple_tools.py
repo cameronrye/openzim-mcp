@@ -993,10 +993,16 @@ class SimpleToolsHandler:
             # ``- text -> path`` per link, dropping the per-link object
             # shape entirely. Drops the response from ~36k to ~2k chars.
             limit = options.get("limit") or 20
-            data = self.zim_operations.extract_article_links_data(
-                zim_file_path, entry_path, limit=limit, offset=0
+            # v2 Phase B: extract_article_links_data returns one category
+            # per call. The compact view shows internal + external; fetch
+            # both and pass merged data to the renderer.
+            internal = self.zim_operations.extract_article_links_data(
+                zim_file_path, entry_path, limit=limit, offset=0, kind="internal"
             )
-            return compact_renderers.render_links(data)
+            external = self.zim_operations.extract_article_links_data(
+                zim_file_path, entry_path, limit=limit, offset=0, kind="external"
+            )
+            return compact_renderers.render_links(internal, external)
         return self.zim_operations.extract_article_links(zim_file_path, entry_path)
 
     def _handle_binary(
@@ -1129,7 +1135,8 @@ class SimpleToolsHandler:
             payload = self.zim_operations.search_zim_file_data(
                 zim_file_path, search_query, limit, offset
             )
-            if payload.get("total_results", 0) == 0:
+            # Phase B: ``total`` replaces ``total_results``.
+            if payload.get("total", 0) == 0:
                 # Let handle_zim_query's footer step render the structured
                 # suggestion footer (format_footer empty-result variant).
                 meta = payload.get("_meta", {})
@@ -1391,22 +1398,29 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
-        # ``offset`` semantically maps to ``cursor`` here — a resume token,
-        # not pagination skip — but it's the only general-purpose passthrough
-        # channel so we honour it.
+        # ``offset`` semantically maps to ``scan_at`` here — a resume
+        # entry id, not pagination skip — but it's the only
+        # general-purpose passthrough channel so we honour it. v2 walk
+        # takes the decoded cursor-state dict directly so callers don't
+        # have to round-trip through base64.
+        offset = int(options.get("offset", 0) or 0)
+        limit = options.get("limit", 200)
+        cursor_state: Optional[Dict[str, Any]] = (
+            {"scan_at": offset, "l": limit} if offset > 0 else None
+        )
         if options.get("compact", False):
             data = self.zim_operations.walk_namespace_data(
                 zim_file_path,
                 params.get("namespace", "C"),
-                cursor=options.get("offset", 0),
-                limit=options.get("limit", 200),
+                cursor_state=cursor_state,
+                limit=limit,
             )
             return compact_renderers.render_walk_namespace(data)
         return self.zim_operations.walk_namespace(
             zim_file_path,
             params.get("namespace", "C"),
-            cursor=options.get("offset", 0),
-            limit=options.get("limit", 200),
+            cursor=cursor_state,
+            limit=limit,
         )
 
     def _handle_find_by_title(

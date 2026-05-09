@@ -13,7 +13,7 @@ import base64
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -29,6 +29,12 @@ if TYPE_CHECKING:
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
+    from openzim_mcp.tool_schemas import (
+        BatchEntryResponse,
+        BinaryEntryResponse,
+        EntryResponse,
+        EntrySummaryResponse,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -203,13 +209,284 @@ class _ContentMixin:
         logger.info(f"Retrieved entry: {entry_path}")
         return result
 
+    def get_zim_entry_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        max_content_length: Optional[int] = None,
+        content_offset: int = 0,
+        *,
+        compact: bool = False,
+    ) -> "EntryResponse":
+        """Structured variant of ``get_zim_entry``.
+
+        Returns the entry dict directly (path/title/content/content_type)
+        so MCP tools can hand it to FastMCP's structured-content path.
+        Honours the same smart-retrieval and path-mapping logic as the
+        legacy text variant.
+
+        Args:
+            zim_file_path: Path to the ZIM file
+            entry_path: Entry path, e.g., 'A/Some_Article'
+            max_content_length: Maximum length of content to return
+            content_offset: Character offset to start reading from (default 0)
+
+        Returns:
+            ``EntryResponse``-shaped dict with ``path``, ``title``,
+            ``content``, optionally ``content_type``/``requested_path``/
+            ``content_offset``/``total_chars``, plus ``_meta``.
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If entry retrieval fails
+        """
+        if max_content_length is None:
+            max_content_length = self.config.content.max_content_length
+        if content_offset < 0:
+            content_offset = 0
+
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Cache key distinct from the legacy string cache so old persisted
+        # entries (text payloads) don't collide with the new dict shape.
+        cache_key = (
+            f"entry_data:{validated_path}:{entry_path}:"
+            f"{max_content_length}:{content_offset}:compact={compact}"
+        )
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Returning cached entry dict for: {entry_path}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(
+                    dict(cached_result),
+                    truncated=bool(cached_result.get("_truncated")),
+                )
+            return cast("EntryResponse", cached_result)
+
+        try:
+            with _zim_ops_mod.zim_archive(validated_path) as archive:
+                payload, content_ok = self._get_entry_data_from_archive(
+                    archive,
+                    entry_path,
+                    max_content_length,
+                    validated_path,
+                    content_offset,
+                    compact=compact,
+                )
+        except OpenZimMcpArchiveError:
+            raise
+        except Exception as e:
+            logger.error(f"Entry retrieval failed for {entry_path}: {e}")
+            raise OpenZimMcpArchiveError(
+                f"Entry retrieval failed for '{entry_path}': {e}. "
+                f"This may be due to file access issues or ZIM file corruption. "
+                f"Try using search_zim_file() to verify the file is accessible."
+            ) from e
+
+        # Only cache on success. ``_truncated`` is an internal hint used
+        # to set ``_meta.truncated`` on the cached path; it's stripped
+        # before the dict is returned (and never reaches the wire).
+        if content_ok:
+            self.cache.set(cache_key, dict(payload))
+        truncated = bool(payload.pop("_truncated", False))
+        total_chars = payload.pop("_total_chars", None)
+        logger.info(f"Retrieved entry data: {entry_path}")
+        return cast(
+            "EntryResponse",
+            attach_meta(
+                payload,
+                truncated=truncated,
+                total_chars=total_chars,
+                current_offset=content_offset,
+            ),
+        )
+
+    def _get_entry_data_from_archive(  # NOSONAR(python:S3776)
+        self,
+        archive: Archive,
+        entry_path: str,
+        max_content_length: int,
+        validated_path: Path,
+        content_offset: int = 0,
+        *,
+        compact: bool = False,
+    ) -> Tuple[Dict[str, Any], bool]:
+        """Resolve an entry against an open archive and build its dict payload.
+
+        Mirrors ``_get_entry_content`` but returns a structured dict
+        instead of formatted markdown. Reuses the same smart-retrieval
+        path-mapping cache so a hit on the legacy text path also speeds up
+        the dict path (the cache stores the resolved actual_path, not the
+        body).
+
+        Returns:
+            ``(payload, content_ok)`` — ``content_ok`` is False when MIME
+            processing raised and ``payload["content"]`` is the error
+            sentinel; the caller must not cache the response in that case.
+        """
+        requested_path = entry_path
+        path_cache_key = f"path_mapping:{validated_path}:{entry_path}"
+        cached_actual_path = self.cache.get(path_cache_key)
+
+        # Try cached path mapping first.
+        if cached_actual_path:
+            try:
+                payload, content_ok, _resolved = self._build_entry_payload(
+                    archive,
+                    cached_actual_path,
+                    requested_path,
+                    max_content_length,
+                    content_offset,
+                    compact=compact,
+                )
+                return payload, content_ok
+            except Exception as e:
+                logger.warning(f"Cached path mapping failed: {e}")
+                self.cache.delete(path_cache_key)
+
+        # Direct access first.
+        try:
+            payload, content_ok, resolved_path = self._build_entry_payload(
+                archive,
+                entry_path,
+                requested_path,
+                max_content_length,
+                content_offset,
+                compact=compact,
+            )
+            self.cache.set(path_cache_key, resolved_path)
+            return payload, content_ok
+        except OpenZimMcpArchiveError:
+            raise
+        except Exception as direct_error:
+            logger.debug(f"Direct entry access failed for {entry_path}: {direct_error}")
+            try:
+                actual_path = self._find_entry_by_search(archive, entry_path)
+                if actual_path:
+                    payload, content_ok, resolved_path = self._build_entry_payload(
+                        archive,
+                        actual_path,
+                        requested_path,
+                        max_content_length,
+                        content_offset,
+                        compact=compact,
+                    )
+                    self.cache.set(path_cache_key, resolved_path)
+                    return payload, content_ok
+                raise OpenZimMcpArchiveError(
+                    f"Entry not found: '{entry_path}'. "
+                    f"The entry path may not exist in this ZIM file. "
+                    f"Try using search_zim_file() to find available entries, "
+                    f"or browse_namespace() to explore the file structure."
+                )
+            except OpenZimMcpArchiveError:
+                raise
+            except Exception as search_error:
+                logger.error(
+                    f"Search-based retrieval failed for {entry_path}: "
+                    f"{search_error}"
+                )
+                raise OpenZimMcpArchiveError(
+                    f"Failed to retrieve entry '{entry_path}'. "
+                    f"Direct access failed: {direct_error}. "
+                    f"Search-based fallback failed: {search_error}. "
+                    f"The entry may not exist or the path format may be incorrect. "
+                    f"Try using search_zim_file() to find the correct entry path."
+                ) from search_error
+
+    def _build_entry_payload(  # NOSONAR(python:S3776)
+        self,
+        archive: Archive,
+        actual_path: str,
+        requested_path: str,
+        max_content_length: int,
+        content_offset: int = 0,
+        *,
+        compact: bool = False,
+    ) -> Tuple[Dict[str, Any], bool, str]:
+        """Construct the dict payload for a resolved entry.
+
+        Mirrors ``_get_entry_content_direct`` but emits a structured dict
+        rather than formatted markdown. Resolves redirects with the same
+        cycle/depth checks.
+        """
+        entry = archive.get_entry_by_path(actual_path)
+
+        seen_paths: set[str] = set()
+        depth = 0
+        while entry.is_redirect:
+            if depth >= _zim_ops_mod.MAX_REDIRECT_DEPTH:
+                raise OpenZimMcpArchiveError(
+                    f"Redirect chain too deep (>{_zim_ops_mod.MAX_REDIRECT_DEPTH}) "
+                    f"starting at {actual_path}"
+                )
+            if entry.path in seen_paths:
+                raise OpenZimMcpArchiveError(f"Redirect cycle detected at {entry.path}")
+            seen_paths.add(entry.path)
+            entry = entry.get_redirect_entry()
+            depth += 1
+
+        actual_path = entry.path
+        title = entry.title or "Untitled"
+
+        content = ""
+        content_type = ""
+        content_ok = True
+        try:
+            item = entry.get_item()
+            content_type = item.mimetype or ""
+            content = self.content_processor.process_mime_content(
+                bytes(item.content), content_type, compact=compact
+            )
+        except Exception as e:
+            logger.warning(f"Error getting entry content: {e}")
+            content = f"(Error retrieving content: {e})"
+            content_ok = False
+
+        total_length = len(content)
+        offset_applied = False
+        if content_offset and content_offset > 0:
+            if content_offset >= total_length:
+                content = ""
+            else:
+                content = content[content_offset:]
+            offset_applied = True
+
+        # Truncate post-offset so max_content_length governs the *returned*
+        # slice, matching the legacy text path.
+        truncated_content = self.content_processor.truncate_content(
+            content, max_content_length
+        )
+        was_truncated = len(truncated_content) < len(content)
+        content = truncated_content
+
+        payload: Dict[str, Any] = {
+            "path": actual_path,
+            "title": title,
+            "content": content,
+        }
+        if content_type:
+            payload["content_type"] = content_type
+        if actual_path != requested_path:
+            payload["requested_path"] = requested_path
+        if offset_applied:
+            payload["content_offset"] = content_offset
+            payload["total_chars"] = total_length
+        # Hints stripped before the dict is returned to the caller; they
+        # drive the eventual ``attach_meta`` call.
+        if was_truncated or offset_applied:
+            payload["_truncated"] = was_truncated
+            payload["_total_chars"] = total_length
+        return payload, content_ok, actual_path
+
     def get_entries_data(  # NOSONAR(python:S3776)
         self,
         entries: List[Dict[str, str]],
         max_content_length: Optional[int] = None,
         *,
         compact: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> "BatchEntryResponse":
         """Structured variant of ``get_entries``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
@@ -219,12 +496,23 @@ class _ContentMixin:
         Each result carries the input ``index`` so callers can correlate
         responses with their original request order.
 
+        v2 Phase B contract: the response carries the canonical pagination
+        keys (``results`` / ``next_cursor`` / ``total`` / ``done`` /
+        ``page_info``) plus the tool-specific ``succeeded`` / ``failed``
+        counters. Batch fetch is non-paginated — every requested entry is
+        attempted, so ``next_cursor`` is always ``None`` and ``done`` is
+        always ``True``. The contract is applied for uniformity with the
+        other list-shaped responses.
+
         Args:
             entries: list of ``{"zim_file_path", "entry_path"}`` dicts.
             max_content_length: per-entry max content length.
 
         Returns:
-            Dict ``{"results": [...], "succeeded": N, "failed": N}``.
+            ``BatchEntryResponse``-shaped dict carrying ``results``,
+            ``next_cursor`` (always ``None``), ``total``, ``done`` (always
+            ``True``), ``page_info``, ``succeeded``, ``failed``, plus
+            ``_meta``.
 
         Raises:
             OpenZimMcpValidationError: empty list or > MAX_BATCH_SIZE.
@@ -339,9 +627,20 @@ class _ContentMixin:
         # they submitted entries (grouping is a transparent optimisation).
         results.sort(key=lambda r: r["index"])
 
-        return attach_meta(
-            {"results": results, "succeeded": succeeded, "failed": failed}
-        )
+        payload: Dict[str, Any] = {
+            "results": results,
+            "next_cursor": None,
+            "total": len(results),
+            "done": True,
+            "page_info": {
+                "offset": 0,
+                "limit": len(entries),
+                "returned_count": len(results),
+            },
+            "succeeded": succeeded,
+            "failed": failed,
+        }
+        return cast("BatchEntryResponse", attach_meta(payload))
 
     def get_entries(
         self,
@@ -600,7 +899,7 @@ class _ContentMixin:
         entry_path: str,
         max_size_bytes: Optional[int] = None,
         include_data: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> "BinaryEntryResponse":
         """Structured variant of ``get_binary_entry``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
@@ -644,7 +943,10 @@ class _ContentMixin:
             payload = self._format_binary_response(
                 cached_meta, include_data, max_size_bytes, data=None
             )
-            return attach_meta(payload, truncated=payload.get("truncated", False))
+            return cast(
+                "BinaryEntryResponse",
+                attach_meta(payload, truncated=payload.get("truncated", False)),
+            )
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -711,7 +1013,10 @@ class _ContentMixin:
                 payload = self._format_binary_response(
                     meta, include_data, max_size_bytes, data=encoded_data
                 )
-                result = attach_meta(payload, truncated=payload.get("truncated", False))
+                result = cast(
+                    "BinaryEntryResponse",
+                    attach_meta(payload, truncated=payload.get("truncated", False)),
+                )
                 logger.info(
                     f"Retrieved binary entry: {entry_path} "
                     f"({meta['mime_type']}, {self._format_size(content_size)})"
@@ -810,7 +1115,7 @@ class _ContentMixin:
         max_words: int = 200,
         *,
         compact: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> "EntrySummaryResponse":
         """Structured variant of ``get_entry_summary``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
@@ -846,7 +1151,7 @@ class _ContentMixin:
                     dict(cached_result),
                     truncated=bool(cached_result.get("is_truncated")),
                 )
-            return cached_result  # type: ignore[no-any-return]
+            return cast("EntrySummaryResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -857,9 +1162,12 @@ class _ContentMixin:
             # Cache the result (pre-_meta so cached payload stays compact)
             self.cache.set(cache_key, result)
             logger.info(f"Extracted summary for: {entry_path}")
-            return attach_meta(
-                result,
-                truncated=bool(result.get("is_truncated")),
+            return cast(
+                "EntrySummaryResponse",
+                attach_meta(
+                    result,
+                    truncated=bool(result.get("is_truncated")),
+                ),
             )
 
         except Exception as e:

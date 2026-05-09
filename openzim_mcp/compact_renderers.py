@@ -14,10 +14,10 @@ keeps each renderer trivially unit-testable in isolation.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Mapping, Optional
 
 
-def compact_structure_payload(payload: Dict[str, Any]) -> str:
+def compact_structure_payload(payload: Mapping[str, Any]) -> str:
     """Render a compact JSON view of an article-structure payload.
 
     Drops the per-heading ``preview`` field (~3000 chars each, the
@@ -54,27 +54,36 @@ def compact_structure_payload(payload: Dict[str, Any]) -> str:
     return json.dumps(compact)
 
 
-def render_links(data: Dict[str, Any]) -> str:
-    """Render a links payload as a flat markdown list.
+def render_links(
+    internal_data: Mapping[str, Any],
+    external_data: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Render a v2 Phase B links payload as a flat markdown list.
 
-    The legacy ``extract_article_links`` JSON shape allocates ~150
-    chars per link (object with url/text/title/type fields). On a
-    Wikipedia-scale article that's ~36k chars of response. The
-    compact variant uses ``- text -> path`` per link, drops media
+    v2 Phase B contract delivers a single category per
+    ``extract_article_links_data`` call, so the compact view fetches
+    internal + external separately and stitches them here. ``title``,
+    ``path``, and ``category_totals`` are read from ``internal_data``
+    (both responses share them). ``external_data`` may be omitted for
+    callers that only want the internal block.
+
+    The compact variant uses ``- text -> path`` per link, drops media
     items entirely (rarely useful for navigation), and surfaces the
     full counts in a header so the caller can request more via
     ``offset`` if they need them.
     """
-    if not isinstance(data, dict):
-        return json.dumps(data)
+    if not isinstance(internal_data, dict):
+        return json.dumps(internal_data)
 
-    title = data.get("title") or ""
-    path = data.get("path") or ""
-    internal = data.get("internal_links") or []
-    external = data.get("external_links") or []
-    total_int = data.get("total_internal_links", len(internal))
-    total_ext = data.get("total_external_links", len(external))
-    pagination = data.get("pagination") or {}
+    title = internal_data.get("title") or ""
+    path = internal_data.get("path") or ""
+    internal = internal_data.get("results") or []
+    external = (
+        external_data.get("results") if isinstance(external_data, dict) else []
+    ) or []
+    category_totals = internal_data.get("category_totals") or {}
+    total_int = category_totals.get("internal", len(internal))
+    total_ext = category_totals.get("external", len(external))
 
     lines = []
     if title or path:
@@ -99,9 +108,13 @@ def render_links(data: Dict[str, Any]) -> str:
         lines.extend(_fmt_one(link) for link in external if isinstance(link, dict))
         lines.append("")
 
-    if pagination.get("has_more"):
-        offset = pagination.get("offset", 0)
-        limit = pagination.get("limit", len(internal) + len(external))
+    has_more = (not internal_data.get("done", True)) or (
+        external_data is not None and not external_data.get("done", True)
+    )
+    if has_more:
+        page_info = internal_data.get("page_info") or {}
+        offset = page_info.get("offset", 0)
+        limit = page_info.get("limit", len(internal) + len(external))
         lines.append(
             f"---\nMore links available — pass `offset={offset + limit}` "
             f"for the next page."
@@ -112,7 +125,7 @@ def render_links(data: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_find_by_title(data: Dict[str, Any], title: str) -> str:
+def render_find_by_title(data: Mapping[str, Any], title: str) -> str:
     """Render a find_by_title payload as a compact markdown list.
 
     Saves the LLM from parsing nested JSON to extract the path it
@@ -146,19 +159,20 @@ def render_find_by_title(data: Dict[str, Any], title: str) -> str:
     return "\n".join(lines)
 
 
-def render_related(data: Dict[str, Any], entry_path: str) -> str:
+def render_related(data: Mapping[str, Any], entry_path: str) -> str:
     """Render a get_related_articles payload as a compact list."""
     if not isinstance(data, dict):
         return json.dumps(data)
-    # The data shape is ``{entry_path, outbound_results: [{path,
-    # title, link_text}], outbound_error?}``. Errors surface as the
-    # backend's textual reason — preserve that for diagnosability.
+    # v2 Phase B contract shape: ``{entry_path, results: [{path,
+    # title, link_text}], next_cursor, total, done, page_info,
+    # outbound_error?}``. Errors surface as the backend's textual
+    # reason — preserve that for diagnosability.
     if data.get("outbound_error"):
         return (
             f'**Could not extract related articles for "{entry_path}"**\n\n'
             f"{data['outbound_error']}"
         )
-    outbound = data.get("outbound_results") or []
+    outbound = data.get("results") or []
     if not outbound:
         return (
             f'No outbound article links found for "{entry_path}".\n\n'
@@ -180,24 +194,35 @@ def render_related(data: Dict[str, Any], entry_path: str) -> str:
     return "\n".join(lines)
 
 
-def render_walk_namespace(data: Dict[str, Any]) -> str:
-    """Render a walk_namespace payload as a compact entry list."""
+def render_walk_namespace(data: Mapping[str, Any]) -> str:
+    """Render a walk_namespace payload as a compact entry list.
+
+    Reads the v2 Phase B contract: ``results`` / ``next_cursor`` (opaque
+    str) / ``done`` / ``page_info`` plus walk-specific extras
+    (``archive_entry_count``). ``total`` is always None for walk; the
+    header reports the file-level count from ``archive_entry_count`` to
+    give callers a sense of scale.
+    """
     if not isinstance(data, dict):
         return json.dumps(data)
     ns = data.get("namespace", "?")
-    cursor = data.get("cursor", 0)
     next_cursor = data.get("next_cursor")
-    returned = data.get("returned_count", 0)
-    total = data.get("total_in_namespace") or data.get("total_entries", 0)
-    is_lower_bound = data.get("total_in_namespace_is_lower_bound", False)
-    entries = data.get("entries") or []
+    page_info = data.get("page_info") or {}
+    offset = page_info.get("offset", 0)
+    returned = page_info.get("returned_count", 0)
+    # walk doesn't know per-namespace total mid-scan; surface the
+    # file-level archive count as a scale hint instead.
+    archive_total = data.get("archive_entry_count", 0)
+    entries = data.get("results") or []
     done = data.get("done", False)
 
-    total_str = f"~{total:,}" if is_lower_bound else f"{total:,}"
-    header = (
-        f"# Namespace `{ns}` — entries {cursor + 1}-{cursor + returned} "
-        f"of {total_str}"
-    )
+    if archive_total:
+        header = (
+            f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned} "
+            f"(archive total: {archive_total:,})"
+        )
+    else:
+        header = f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned}"
     lines = [header, ""]
     for e in entries:
         if not isinstance(e, dict):
@@ -210,14 +235,19 @@ def render_walk_namespace(data: Dict[str, Any]) -> str:
             lines.append(f"- `{p}`")
     lines.append("")
     if not done and next_cursor is not None:
-        lines.append(f"---\nPass `offset={next_cursor}` for the next page.")
+        lines.append(f"---\nPass `cursor={next_cursor}` for the next page.")
     else:
         lines.append("---\n_End of namespace._")
     return "\n".join(lines)
 
 
-def render_namespaces(data: Dict[str, Any]) -> str:
-    """Render a list_namespaces payload as a compact namespace table."""
+def render_namespaces(data: Mapping[str, Any]) -> str:
+    """Render a list_namespaces payload as a compact namespace table.
+
+    Accepts ``Mapping`` rather than ``Dict`` so the typed
+    ``ListNamespacesResponse`` TypedDict from the v2 Phase B migration
+    flows through without an explicit ``cast`` at call sites.
+    """
     if not isinstance(data, dict):
         return json.dumps(data)
     total_entries = data.get("total_entries", 0)
@@ -232,15 +262,16 @@ def render_namespaces(data: Dict[str, Any]) -> str:
         "",
     ]
     # Sort by entry count (descending) so the most populous
-    # namespaces — usually C — surface first.
+    # namespaces — usually C — surface first. Phase B v2: per-namespace
+    # count moved from ``count`` to ``total``.
     items = sorted(
         namespaces.items(),
-        key=lambda kv: (-(kv[1].get("count", 0) if isinstance(kv[1], dict) else 0)),
+        key=lambda kv: (-(kv[1].get("total", 0) if isinstance(kv[1], dict) else 0)),
     )
     for ns, info in items:
         if not isinstance(info, dict):
             continue
-        count = info.get("count", 0)
+        count = info.get("total", 0)
         desc = info.get("description") or ""
         lines.append(f"- **`{ns}`** — {count:,} entries: {desc}")
     return "\n".join(lines)

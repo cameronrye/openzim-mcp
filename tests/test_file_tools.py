@@ -36,10 +36,13 @@ class TestListZimFilesToolNameFilter:
         # backend that returns a dict envelope rather than a JSON string.
         server.async_zim_operations.list_zim_files_summary_data = AsyncMock(
             return_value={
-                "count": 0,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 0, "returned_count": 0},
                 "directories_count": 0,
                 "name_filter": "",
-                "files": [],
             }
         )
         server.rate_limiter.check_rate_limit = MagicMock()

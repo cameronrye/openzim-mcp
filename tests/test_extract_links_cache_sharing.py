@@ -6,7 +6,6 @@ Cache the parsed link lists once under a stable key and slice from
 cache for subsequent pages.
 """
 
-import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -97,11 +96,11 @@ def test_paged_requests_share_one_html_parse(ops_with_cache, temp_dir, big_links
         mock_archive_ctx.return_value.__enter__.return_value = _patch_archive_with_html(
             big_links_html
         )
-        first = json.loads(
-            ops_with_cache.extract_article_links(str(zim), "Test", limit=10, offset=0)
+        first = ops_with_cache.extract_article_links_data(
+            str(zim), "Test", limit=10, offset=0, kind="internal"
         )
-        second = json.loads(
-            ops_with_cache.extract_article_links(str(zim), "Test", limit=10, offset=10)
+        second = ops_with_cache.extract_article_links_data(
+            str(zim), "Test", limit=10, offset=10, kind="internal"
         )
 
     # Both pages came from the same parse → only one call.
@@ -110,13 +109,9 @@ def test_paged_requests_share_one_html_parse(ops_with_cache, temp_dir, big_links
         f"re-parsing instead of slicing from cache"
     )
     # And the page contents are correct.
-    assert len(first["internal_links"]) == 10
-    assert len(second["internal_links"]) == 10
+    assert len(first["results"]) == 10
+    assert len(second["results"]) == 10
     # Pages are distinct slices.
-    first_urls = {
-        link.get("url") or link.get("href") for link in first["internal_links"]
-    }
-    second_urls = {
-        link.get("url") or link.get("href") for link in second["internal_links"]
-    }
+    first_urls = {link.get("url") or link.get("href") for link in first["results"]}
+    second_urls = {link.get("url") or link.get("href") for link in second["results"]}
     assert first_urls.isdisjoint(second_urls), (first_urls, second_urls)

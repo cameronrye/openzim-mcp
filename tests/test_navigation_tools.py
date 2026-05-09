@@ -62,7 +62,14 @@ class TestBrowseNamespaceTool:
 
 
 class TestSearchWithFiltersTool:
-    """Test search_with_filters tool functionality."""
+    """Test search_with_filters tool functionality.
+
+    Phase B: ``search_with_filters`` returns a structured
+    ``SearchWithFiltersResponse`` dict (was markdown text). Async-op
+    layer now exposes ``search_with_filters_data`` for the structured
+    path; the legacy markdown ``search_with_filters`` method is retained
+    as a compat surface.
+    """
 
     @pytest.fixture
     def server(self, test_config: OpenZimMcpConfig) -> OpenZimMcpServer:
@@ -71,45 +78,78 @@ class TestSearchWithFiltersTool:
 
     @pytest.mark.asyncio
     async def test_search_with_filters_success(self, server: OpenZimMcpServer):
-        """Test successful filtered search."""
-        server.async_zim_operations.search_with_filters = AsyncMock(
-            return_value='{"results": [{"title": "Article"}]}'
+        """Test successful filtered search returns structured payload."""
+        server.async_zim_operations.search_with_filters_data = AsyncMock(
+            return_value={
+                "query": "query",
+                "namespace_filter": None,
+                "content_type_filter": None,
+                "results": [{"path": "C/Article", "title": "Article", "snippet": ""}],
+                "next_cursor": None,
+                "total": 1,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 10, "returned_count": 1},
+                "_meta": {},
+            }
         )
         server.rate_limiter.check_rate_limit = MagicMock()
 
-        result = await server.async_zim_operations.search_with_filters(
+        result = await server.async_zim_operations.search_with_filters_data(
             "/path/to/file.zim", "query", None, None, 10, 0
         )
 
         assert "results" in result
+        assert result["results"][0]["title"] == "Article"
 
     @pytest.mark.asyncio
     async def test_search_with_filters_with_namespace(self, server: OpenZimMcpServer):
         """Test filtered search with namespace filter."""
-        server.async_zim_operations.search_with_filters = AsyncMock(
-            return_value='{"results": []}'
+        server.async_zim_operations.search_with_filters_data = AsyncMock(
+            return_value={
+                "query": "query",
+                "namespace_filter": "A",
+                "content_type_filter": None,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
+                "_meta": {},
+            }
         )
 
-        result = await server.async_zim_operations.search_with_filters(
+        result = await server.async_zim_operations.search_with_filters_data(
             "/path/to/file.zim", "query", "A", None, 10, 0
         )
 
         assert "results" in result
+        assert result["namespace_filter"] == "A"
 
     @pytest.mark.asyncio
     async def test_search_with_filters_with_content_type(
         self, server: OpenZimMcpServer
     ):
         """Test filtered search with content type filter."""
-        server.async_zim_operations.search_with_filters = AsyncMock(
-            return_value='{"results": []}'
+        server.async_zim_operations.search_with_filters_data = AsyncMock(
+            return_value={
+                "query": "query",
+                "namespace_filter": None,
+                "content_type_filter": "text/html",
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
+                "_meta": {},
+            }
         )
 
-        result = await server.async_zim_operations.search_with_filters(
+        result = await server.async_zim_operations.search_with_filters_data(
             "/path/to/file.zim", "query", None, "text/html", 10, 0
         )
 
         assert "results" in result
+        assert result["content_type_filter"] == "text/html"
 
     # NOTE: search_with_filters validation (limit out of range, negative
     # offset) is exercised end-to-end via the registered MCP tool handler
@@ -129,7 +169,7 @@ class TestGetSearchSuggestionsTool:
     async def test_get_search_suggestions_success(self, server: OpenZimMcpServer):
         """Test successful search suggestions retrieval."""
         server.async_zim_operations.get_search_suggestions = AsyncMock(
-            return_value='{"suggestions": ["Article1", "Article2"]}'
+            return_value='{"results": ["Article1", "Article2"]}'
         )
         server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -137,7 +177,7 @@ class TestGetSearchSuggestionsTool:
             "/path/to/file.zim", "Art", 10
         )
 
-        assert "suggestions" in result
+        assert "results" in result
         server.async_zim_operations.get_search_suggestions.assert_called_once_with(
             "/path/to/file.zim", "Art", 10
         )
@@ -218,7 +258,15 @@ class TestNavigationToolsDirectInvocation:
     async def test_browse_namespace_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking browse_namespace tool handler directly."""
         advanced_server.async_zim_operations.browse_namespace_data = AsyncMock(
-            return_value={"entries": [{"path": "C/Article", "title": "Article"}]}
+            return_value={
+                "namespace": "C",
+                "results": [{"path": "C/Article", "title": "Article"}],
+                "next_cursor": None,
+                "total": 1,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 50, "returned_count": 1},
+                "_meta": {},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -231,7 +279,7 @@ class TestNavigationToolsDirectInvocation:
                 offset=0,
             )
             assert isinstance(result, dict)
-            assert "entries" in result
+            assert "results" in result
 
     @pytest.mark.asyncio
     async def test_browse_namespace_with_invalid_limit(self, advanced_server, temp_dir):
@@ -329,8 +377,18 @@ class TestNavigationToolsDirectInvocation:
     @pytest.mark.asyncio
     async def test_search_with_filters_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking search_with_filters tool handler directly."""
-        advanced_server.async_zim_operations.search_with_filters = AsyncMock(
-            return_value='{"results": [{"title": "Result 1", "path": "C/Result1"}]}'
+        advanced_server.async_zim_operations.search_with_filters_data = AsyncMock(
+            return_value={
+                "query": "test query",
+                "namespace_filter": None,
+                "content_type_filter": None,
+                "results": [{"path": "C/Result1", "title": "Result 1", "snippet": ""}],
+                "next_cursor": None,
+                "total": 1,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 10, "returned_count": 1},
+                "_meta": {},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -340,13 +398,25 @@ class TestNavigationToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 query="test query",
             )
+            assert isinstance(result, dict)
             assert "results" in result
+            assert result["results"][0]["path"] == "C/Result1"
 
     @pytest.mark.asyncio
     async def test_search_with_filters_all_params(self, advanced_server, temp_dir):
         """Test search_with_filters with all parameters."""
-        advanced_server.async_zim_operations.search_with_filters = AsyncMock(
-            return_value='{"results": []}'
+        advanced_server.async_zim_operations.search_with_filters_data = AsyncMock(
+            return_value={
+                "query": "test",
+                "namespace_filter": "C",
+                "content_type_filter": "text/html",
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 10, "limit": 20, "returned_count": 0},
+                "_meta": {},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -360,11 +430,14 @@ class TestNavigationToolsDirectInvocation:
                 limit=20,
                 offset=10,
             )
+            assert isinstance(result, dict)
             assert "results" in result
+            assert result["namespace_filter"] == "C"
+            assert result["content_type_filter"] == "text/html"
 
     @pytest.mark.asyncio
     async def test_search_with_filters_invalid_limit(self, advanced_server, temp_dir):
-        """Test search_with_filters with invalid limit."""
+        """Test search_with_filters with invalid limit returns error envelope."""
         tools = advanced_server.mcp._tool_manager._tools
         if "search_with_filters" in tools:
             tool_handler = tools["search_with_filters"].fn
@@ -375,11 +448,13 @@ class TestNavigationToolsDirectInvocation:
                 query="test",
                 limit=150,
             )
-            assert "must be between 1 and 100" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be between 1 and 100" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_search_with_filters_negative_offset(self, advanced_server, temp_dir):
-        """Test search_with_filters with negative offset."""
+        """Test search_with_filters with negative offset returns error envelope."""
         tools = advanced_server.mcp._tool_manager._tools
         if "search_with_filters" in tools:
             tool_handler = tools["search_with_filters"].fn
@@ -388,12 +463,14 @@ class TestNavigationToolsDirectInvocation:
                 query="test",
                 offset=-5,
             )
-            assert "must be non-negative" in result
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "must be non-negative" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_search_with_filters_with_exception(self, advanced_server, temp_dir):
         """Test search_with_filters when an exception occurs."""
-        advanced_server.async_zim_operations.search_with_filters = AsyncMock(
+        advanced_server.async_zim_operations.search_with_filters_data = AsyncMock(
             side_effect=RuntimeError("Search failed")
         )
 
@@ -404,7 +481,123 @@ class TestNavigationToolsDirectInvocation:
                 zim_file_path=str(temp_dir / "test.zim"),
                 query="test",
             )
-            assert "Error" in result or "error" in result.lower()
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            message = result.get("message", "")
+            assert "**" in message and ("Error" in message or "Operation" in message)
+
+    @pytest.mark.asyncio
+    async def test_search_with_filters_returns_paginated_response(
+        self, advanced_server, temp_dir
+    ):
+        """Smoke test: top-level Phase B contract keys are present."""
+        advanced_server.async_zim_operations.search_with_filters_data = AsyncMock(
+            return_value={
+                "query": "evolution",
+                "namespace_filter": "C",
+                "content_type_filter": None,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
+                "_meta": {},
+            }
+        )
+        tools = advanced_server.mcp._tool_manager._tools
+        if "search_with_filters" not in tools:
+            pytest.skip("search_with_filters tool not registered")
+        tool_handler = tools["search_with_filters"].fn
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            query="evolution",
+            namespace="C",
+        )
+        assert isinstance(result, dict)
+        for key in ("results", "next_cursor", "total", "done", "page_info"):
+            assert key in result
+        assert result["query"] == "evolution"
+        assert result["namespace_filter"] == "C"
+        assert result["content_type_filter"] is None
+
+    @pytest.mark.asyncio
+    async def test_search_with_filters_cursor_round_trip(
+        self, advanced_server, temp_dir
+    ):
+        """Cursor decoding overrides offset/limit/query/namespace/content_type."""
+        from openzim_mcp.pagination import Cursor
+
+        captured: dict = {}
+
+        async def _capture(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return {
+                "query": "evolution",
+                "namespace_filter": "C",
+                "content_type_filter": "text/html",
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 50, "limit": 25, "returned_count": 0},
+                "_meta": {},
+            }
+
+        advanced_server.async_zim_operations.search_with_filters_data = AsyncMock(
+            side_effect=_capture
+        )
+        tools = advanced_server.mcp._tool_manager._tools
+        if "search_with_filters" not in tools:
+            pytest.skip("search_with_filters tool not registered")
+        cursor = Cursor.encode(
+            tool="search_with_filters",
+            state={
+                "o": 50,
+                "l": 25,
+                "q": "evolution",
+                "ns": "C",
+                "ct": "text/html",
+            },
+        )
+        tool_handler = tools["search_with_filters"].fn
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            cursor=cursor,
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is not True
+        # _data should have been called with the cursor-decoded values.
+        # signature: (zim_file_path, query, namespace, content_type, limit, offset)
+        called_args = captured["args"]
+        assert called_args[1] == "evolution"  # query
+        assert called_args[2] == "C"  # namespace
+        assert called_args[3] == "text/html"  # content_type
+        assert called_args[4] == 25  # limit
+        assert called_args[5] == 50  # offset
+
+    @pytest.mark.asyncio
+    async def test_search_with_filters_cursor_mismatch(self, advanced_server, temp_dir):
+        """A cursor issued by a different tool is rejected."""
+        from openzim_mcp.pagination import Cursor
+
+        wrong_cursor = Cursor.encode(
+            tool="search_zim_file",
+            state={"o": 0, "l": 10, "q": "test"},
+        )
+        tools = advanced_server.mcp._tool_manager._tools
+        if "search_with_filters" not in tools:
+            pytest.skip("search_with_filters tool not registered")
+        tool_handler = tools["search_with_filters"].fn
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            cursor=wrong_cursor,
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "search_zim_file" in result.get(
+            "message", ""
+        ) or "cannot be used" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_tool_invocation(
@@ -412,7 +605,21 @@ class TestNavigationToolsDirectInvocation:
     ):
         """Test invoking get_search_suggestions tool handler directly."""
         advanced_server.async_zim_operations.get_search_suggestions_data = AsyncMock(
-            return_value={"suggestions": ["Python", "Python programming"]}
+            return_value={
+                "partial_query": "Pyt",
+                "results": [
+                    {"text": "Python", "path": "C/Python", "type": "title_start_match"},
+                    {
+                        "text": "Python programming",
+                        "path": "C/Python_programming",
+                        "type": "title_start_match",
+                    },
+                ],
+                "next_cursor": None,
+                "total": 2,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 10, "returned_count": 2},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -424,7 +631,11 @@ class TestNavigationToolsDirectInvocation:
                 limit=10,
             )
             assert isinstance(result, dict)
-            assert "suggestions" in result
+            assert "results" in result
+            assert isinstance(result["results"], list)
+            assert result["next_cursor"] is None
+            assert result["done"] is True
+            assert result["total"] == len(result["results"])
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_invalid_limit(
@@ -529,7 +740,7 @@ class TestWalkNamespaceLimitValidation:
         result = await tool_handler(
             zim_file_path=str(temp_dir / "test.zim"),
             namespace="C",
-            cursor=0,
+            cursor=None,
             limit=100000,
         )
         assert isinstance(result, dict)
@@ -552,7 +763,7 @@ class TestWalkNamespaceLimitValidation:
         result = await tool_handler(
             zim_file_path=str(temp_dir / "test.zim"),
             namespace="C",
-            cursor=0,
+            cursor=None,
             limit=0,
         )
         assert isinstance(result, dict)
@@ -561,35 +772,77 @@ class TestWalkNamespaceLimitValidation:
         advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_walk_namespace_rejects_negative_cursor(
+    async def test_walk_namespace_rejects_cross_tool_cursor(
         self, advanced_server, temp_dir
     ):
-        """Negative cursor must produce a validation error."""
+        """A cursor issued by another tool must be rejected before backend access.
+
+        v2 Phase B: cursors are tool-bound. A cursor encoded with
+        ``tool="browse_namespace"`` cannot be used by ``walk_namespace``.
+        """
+        from openzim_mcp.pagination import Cursor
+
         advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
             side_effect=AssertionError(
-                "backend should not be called for invalid cursor"
+                "backend should not be called for cross-tool cursor"
             )
         )
 
         tools = advanced_server.mcp._tool_manager._tools
         assert "walk_namespace" in tools
         tool_handler = tools["walk_namespace"].fn
+        wrong_cursor = Cursor.encode(
+            tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"}
+        )
         result = await tool_handler(
             zim_file_path=str(temp_dir / "test.zim"),
             namespace="C",
-            cursor=-1,
+            cursor=wrong_cursor,
             limit=200,
         )
         assert isinstance(result, dict)
         assert result.get("error") is True
-        assert "must be non-negative" in result.get("message", "")
+        advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_walk_namespace_rejects_malformed_cursor(
+        self, advanced_server, temp_dir
+    ):
+        """A non-base64 / non-JSON cursor must surface a validation error."""
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
+            side_effect=AssertionError(
+                "backend should not be called for malformed cursor"
+            )
+        )
+
+        tools = advanced_server.mcp._tool_manager._tools
+        tool_handler = tools["walk_namespace"].fn
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            namespace="C",
+            cursor="!!!not-base64!!!",
+            limit=200,
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is True
         advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_walk_namespace_accepts_valid_bounds(self, advanced_server, temp_dir):
         """Valid limit/cursor must reach the backend."""
         advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
-            return_value={"entries": [], "next_cursor": 200, "done": False}
+            return_value={
+                "namespace": "C",
+                "results": [],
+                "next_cursor": None,
+                "total": None,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 200, "returned_count": 0},
+                "scanned_count": 0,
+                "scanned_through_id": None,
+                "archive_entry_count": 0,
+                "_meta": {},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -598,12 +851,64 @@ class TestWalkNamespaceLimitValidation:
         result = await tool_handler(
             zim_file_path=str(temp_dir / "test.zim"),
             namespace="C",
-            cursor=0,
+            cursor=None,
             limit=200,
         )
         assert isinstance(result, dict)
-        assert "entries" in result
+        assert "results" in result
         advanced_server.async_zim_operations.walk_namespace_data.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_walk_namespace_decodes_opaque_cursor(
+        self, advanced_server, temp_dir
+    ):
+        """An opaque cursor encoded with t='walk_namespace' decodes to scan_at/limit.
+
+        The decoded ``s.l`` overrides the function-arg ``limit`` (cursor wins
+        on conflict per response-contract spec) and ``s.scan_at`` becomes
+        the starting point for the backend scan.
+        """
+        from openzim_mcp.pagination import Cursor
+
+        captured: dict = {}
+
+        async def _fake_walk(zim_file_path, namespace, cursor_state=None, limit=200):
+            captured["cursor_state"] = cursor_state
+            captured["limit"] = limit
+            return {
+                "namespace": "C",
+                "results": [],
+                "next_cursor": None,
+                "total": None,
+                "done": True,
+                "page_info": {"offset": 42, "limit": 50, "returned_count": 0},
+                "scanned_count": 0,
+                "scanned_through_id": None,
+                "archive_entry_count": 0,
+                "_meta": {},
+            }
+
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
+            side_effect=_fake_walk
+        )
+
+        tools = advanced_server.mcp._tool_manager._tools
+        tool_handler = tools["walk_namespace"].fn
+        good_cursor = Cursor.encode(
+            tool="walk_namespace", state={"scan_at": 42, "l": 50}
+        )
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            namespace="C",
+            cursor=good_cursor,
+            # Function-arg limit must be overridden by the cursor's "l".
+            limit=200,
+        )
+        assert isinstance(result, dict)
+        assert "results" in result
+        # cursor's "l" wins over function-arg limit.
+        assert captured["limit"] == 50
+        assert captured["cursor_state"] == {"scan_at": 42, "l": 50}
 
 
 # ---------------------------------------------------------------------------
@@ -668,7 +973,8 @@ class TestNamespaceDataMethodsMeta:
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
-        cache_key = f"namespaces_data:{validated}"
+        # Phase B v2b cache key (entry_count -> total rename).
+        cache_key = f"namespaces_data:v2b:{validated}"
         old = {"total_entries": 5, "namespaces": {}}
         zim_ops.cache.set(cache_key, old)
 
@@ -681,7 +987,22 @@ class TestNamespaceDataMethodsMeta:
     ):
         """browse_namespace_data fresh path attaches _meta."""
         zim_file = self._zim_file(temp_dir)
-        fake_result = {"entries": [], "namespace": "C", "total": 0}
+        # _browse_namespace_entries still returns the inner shape with
+        # legacy keys (entries/total_in_namespace/...); the contract
+        # rename is performed in browse_namespace_data after this call.
+        fake_result = {
+            "namespace": "C",
+            "entries": [],
+            "total_in_namespace": 0,
+            "total_in_namespace_is_lower_bound": False,
+            "offset": 0,
+            "limit": 50,
+            "returned_count": 0,
+            "sampling_based": False,
+            "discovery_method": "full_iteration",
+            "is_total_authoritative": True,
+            "results_may_be_incomplete": False,
+        }
         monkeypatch.setattr(
             zim_ops,
             "_browse_namespace_entries",
@@ -701,8 +1022,17 @@ class TestNamespaceDataMethodsMeta:
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
-        cache_key = f"browse_ns_data:{validated}:C:50:0"
-        old = {"entries": [], "namespace": "C"}
+        cache_key = f"browse_ns_data:v2b:{validated}:C:50:0"
+        # Cache the *post-rename* contract shape — browse_namespace_data
+        # now caches the structured payload, not the inner legacy dict.
+        old = {
+            "namespace": "C",
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 50, "returned_count": 0},
+        }
         zim_ops.cache.set(cache_key, old)
 
         result = zim_ops.browse_namespace_data(str(zim_file), "C")
@@ -721,7 +1051,9 @@ class TestNamespaceDataMethodsMeta:
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.return_value = mock_archive_obj
-            result = zim_ops.walk_namespace_data(str(zim_file), "C", cursor=0, limit=10)
+            result = zim_ops.walk_namespace_data(
+                str(zim_file), "C", cursor_state=None, limit=10
+            )
 
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1

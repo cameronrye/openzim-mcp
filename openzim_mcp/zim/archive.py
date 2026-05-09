@@ -12,8 +12,6 @@ Layout:
 
 * ``zim_archive`` — context manager that opens an archive with a timeout
   and surfaces a consistent error type.
-* ``PaginationCursor`` — base64-encoded pagination tokens used across the
-  search/browse surfaces.
 * ``ZimOperations`` — coordinator class that mixes in
   ``_SearchMixin``/``_ContentMixin``/``_StructureMixin``/``_NamespaceMixin``
   for the bulk of the surface. Methods that don't fit a single domain
@@ -21,13 +19,12 @@ Layout:
   the class here.
 """
 
-import base64
 import json
 import logging
 from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 from libzim.search import (  # type: ignore[import-untyped]
@@ -55,11 +52,17 @@ from openzim_mcp.zim.namespace import _NamespaceMixin
 from openzim_mcp.zim.search import _SearchMixin
 from openzim_mcp.zim.structure import _StructureMixin
 
+if TYPE_CHECKING:
+    from openzim_mcp.tool_schemas import (
+        EntryResponse,
+        ListZimFilesResponse,
+        ZimMetadataResponse,
+    )
+
 __all__ = [
     "ARCHIVE_OPEN_TIMEOUT",
     "Archive",
     "MAX_REDIRECT_DEPTH",
-    "PaginationCursor",
     "Query",
     "Searcher",
     "SuggestionSearcher",
@@ -74,72 +77,6 @@ ARCHIVE_OPEN_TIMEOUT = 30.0
 # Maximum redirect chain length before bailing out. See
 # ``ContentDefaults.MAX_REDIRECT_DEPTH`` in ``defaults.py``.
 MAX_REDIRECT_DEPTH = CONTENT.MAX_REDIRECT_DEPTH
-
-
-class PaginationCursor:
-    """Utility class for creating and parsing pagination cursors.
-
-    Cursors encode pagination state as base64 tokens, making it easy for
-    clients to continue from where they left off without tracking offset manually.
-    """
-
-    @staticmethod
-    def _encode(offset: int, limit: int, query: Optional[str] = None) -> str:
-        """Encode pagination state into a base64 cursor token."""
-        cursor_data: Dict[str, Any] = {"o": offset, "l": limit}
-        if query:
-            cursor_data["q"] = query
-        json_str = json.dumps(cursor_data, separators=(",", ":"))
-        return base64.urlsafe_b64encode(json_str.encode()).decode()
-
-    @staticmethod
-    def create_next_cursor(
-        current_offset: int, limit: int, total: int, query: Optional[str] = None
-    ) -> Optional[str]:
-        """Create cursor for the next page, or None if no more results.
-
-        Args:
-            current_offset: Current offset position
-            limit: Page size
-            total: Total number of results
-            query: Optional query string
-
-        Returns:
-            Next page cursor or None if at end
-        """
-        next_offset = current_offset + limit
-        if next_offset >= total:
-            return None
-        return PaginationCursor._encode(next_offset, limit, query)
-
-    @staticmethod
-    def decode(token: str) -> Dict[str, Any]:
-        """Decode a base64 cursor token back to its pagination state.
-
-        Args:
-            token: A cursor previously emitted by ``create_next_cursor``.
-
-        Returns:
-            Dict with keys ``o`` (offset, int), ``l`` (limit, int), and
-            optionally ``q`` (query, str).
-
-        Raises:
-            ValueError: If the token isn't valid base64 or doesn't decode to
-                the expected JSON shape. Callers should treat this as a
-                client error (malformed cursor).
-        """
-        try:
-            # Accept urlsafe and standard base64 since some clients normalise.
-            padded = token + "=" * (-len(token) % 4)
-            raw = base64.urlsafe_b64decode(padded.encode()).decode()
-            data = json.loads(raw)
-        except Exception as e:
-            raise ValueError(f"Invalid pagination cursor: {e}") from e
-        if not isinstance(data, dict) or "o" not in data or "l" not in data:
-            raise ValueError("Cursor missing required fields ('o', 'l')")
-        if not isinstance(data["o"], int) or not isinstance(data["l"], int):
-            raise ValueError("Cursor offset and limit must be integers")
-        return data
 
 
 logger = logging.getLogger(__name__)
@@ -305,7 +242,12 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             List of dictionaries containing ZIM file information.
             Each dict has: name, path, directory, size, size_bytes, modified
         """
-        cache_key = "zim_files_list_data"
+        # Cache key bumped to v2b (Phase B) so v1.x cached per-file list
+        # entries don't leak through if the inner shape ever drifts. Today
+        # the per-file dict shape (name/path/directory/size/size_bytes/
+        # modified) is unchanged; the v2b rename happens one layer up in
+        # ``list_zim_files_summary_data`` (files→results, count→total).
+        cache_key = "zim_files_list_data_v2b"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug("Returning cached ZIM files list data")
@@ -322,28 +264,46 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
 
     def list_zim_files_summary_data(
         self, name_filter: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> "ListZimFilesResponse":
         """Structured ``list_zim_files`` payload.
 
-        Wraps :py:meth:`list_zim_files_data` with the count/directories
-        metadata that the legacy markdown-header string variant carries
-        in its prose preamble, so MCP clients consuming the structured
-        output get the same context without reparsing a header.
+        Wraps :py:meth:`list_zim_files_data` with the directories metadata
+        that the legacy markdown-header string variant carries in its
+        prose preamble, so MCP clients consuming the structured output
+        get the same context without reparsing a header.
+
+        v2 Phase B contract: the response carries the canonical pagination
+        keys (``results`` / ``next_cursor`` / ``total`` / ``done`` /
+        ``page_info``) plus the tool-specific ``directories_count`` and
+        ``name_filter`` fields. ``list_zim_files`` is non-paginated — every
+        matching file in the allowed directories is returned in a single
+        call — so ``next_cursor`` is always ``None`` and ``done`` is
+        always ``True``. The contract is applied for uniformity with the
+        other list-shaped responses.
 
         Returns:
-            ``{count, directories_count, name_filter, files}`` where
-            ``files`` is the list ``list_zim_files_data`` already returns
-            (per-file dicts with name/path/directory/size/size_bytes/modified).
+            ``ListZimFilesResponse``-shaped dict carrying ``results`` (the
+            per-file dicts with name/path/directory/size/size_bytes/modified
+            — formerly ``files``), ``next_cursor`` (always ``None``),
+            ``total`` (the count, formerly ``count``), ``done`` (always
+            ``True``), ``page_info``, plus ``directories_count``,
+            ``name_filter``, and the ``_meta`` envelope.
         """
-        files = self.list_zim_files_data(name_filter=name_filter)
-        return attach_meta(
-            {
-                "count": len(files),
-                "directories_count": len(self.config.allowed_directories),
-                "name_filter": name_filter or "",
-                "files": files,
-            }
-        )
+        files_list = self.list_zim_files_data(name_filter=name_filter)
+        payload: Dict[str, Any] = {
+            "name_filter": name_filter or "",
+            "directories_count": len(self.config.allowed_directories),
+            "results": files_list,
+            "next_cursor": None,
+            "total": len(files_list),
+            "done": True,
+            "page_info": {
+                "offset": 0,
+                "limit": len(files_list),
+                "returned_count": len(files_list),
+            },
+        }
+        return cast("ListZimFilesResponse", attach_meta(payload))
 
     def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories.
@@ -373,7 +333,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         result_text += json.dumps(all_zim_files, indent=2, ensure_ascii=False)
         return result_text
 
-    def get_zim_metadata_data(self, zim_file_path: str) -> Dict[str, Any]:
+    def get_zim_metadata_data(self, zim_file_path: str) -> "ZimMetadataResponse":
         """Structured variant of ``get_zim_metadata``.
 
         Returns the metadata dict directly (not a JSON string) so MCP
@@ -395,7 +355,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             logger.debug(f"Returning cached metadata dict for: {validated_path}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
-            return cached_result  # type: ignore[no-any-return]
+            return cast("ZimMetadataResponse", cached_result)
 
         # Late-bound lookup so test patches against
         # ``openzim_mcp.zim_operations.zim_archive`` apply here too.
@@ -408,7 +368,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             # Cache the result
             self.cache.set(cache_key, metadata)
             logger.info(f"Retrieved metadata for: {validated_path}")
-            return attach_meta(metadata)
+            return cast("ZimMetadataResponse", attach_meta(metadata))
 
         except Exception as e:
             logger.error(f"Metadata retrieval failed for {validated_path}: {e}")
@@ -675,6 +635,174 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         except Exception as e:
             logger.error(f"Error getting main page: {e}")
             return f"# Main Page\n\nError retrieving main page: {e}", False
+
+    def get_main_page_data(
+        self, zim_file_path: str, *, compact: bool = False
+    ) -> "EntryResponse":
+        """Structured variant of ``get_main_page``.
+
+        Returns the entry dict directly (path/title/content/content_type)
+        so MCP tools can hand it to FastMCP's structured-content path.
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If main page retrieval fails
+        """
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Cache key distinct from the legacy text cache so old persisted
+        # entries (which hold strings) don't collide with the new dict shape.
+        cache_key = f"main_page_data:{validated_path}:compact={compact}"
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Returning cached main page dict for: {validated_path}")
+            if "_meta" not in cached_result:
+                cached_result = attach_meta(
+                    dict(cached_result),
+                    truncated=bool(cached_result.get("_truncated")),
+                )
+            return cast("EntryResponse", cached_result)
+
+        # Late-bound lookup so test patches against
+        # ``openzim_mcp.zim_operations.zim_archive`` apply here too.
+        import openzim_mcp.zim_operations as _zim_ops_shim
+
+        try:
+            with _zim_ops_shim.zim_archive(validated_path) as archive:
+                payload, content_ok = self._get_main_page_data_content(
+                    archive, compact=compact
+                )
+        except Exception as e:
+            logger.error(f"Main page retrieval failed for {validated_path}: {e}")
+            raise OpenZimMcpArchiveError(f"Main page retrieval failed: {e}") from e
+
+        if content_ok:
+            self.cache.set(cache_key, dict(payload))
+        truncated = bool(payload.pop("_truncated", False))
+        total_chars = payload.pop("_total_chars", None)
+        logger.info(f"Retrieved main page data for: {validated_path}")
+        return cast(
+            "EntryResponse",
+            attach_meta(
+                payload,
+                truncated=truncated,
+                total_chars=total_chars,
+            ),
+        )
+
+    def _get_main_page_data_content(  # NOSONAR(python:S3776)
+        self, archive: Archive, *, compact: bool = False
+    ) -> Tuple[Dict[str, Any], bool]:
+        """Build the main-page dict payload from an open archive.
+
+        Mirrors ``_get_main_page_content`` but emits a structured dict
+        rather than formatted markdown. Same redirect-handling and
+        fallback-paths logic.
+
+        Returns:
+            ``(payload, content_ok)`` — ``content_ok`` is False when MIME
+            processing raised; the caller must skip caching it.
+        """
+
+        def _follow_redirect(entry: Any) -> Any:
+            seen: set[str] = set()
+            for _ in range(MAX_REDIRECT_DEPTH):
+                if not getattr(entry, "is_redirect", False):
+                    return entry
+                if entry.path in seen:
+                    raise OpenZimMcpArchiveError(
+                        f"Redirect cycle detected at {entry.path}"
+                    )
+                seen.add(entry.path)
+                entry = entry.get_redirect_entry()
+            if getattr(entry, "is_redirect", False):
+                raise OpenZimMcpArchiveError(
+                    f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
+                    f"in main-page lookup"
+                )
+            return entry
+
+        def _build(entry_obj: Any) -> Tuple[Dict[str, Any], bool]:
+            title = entry_obj.title or "Main Page"
+            path = entry_obj.path
+            try:
+                item = entry_obj.get_item()
+                mime_type = item.mimetype or ""
+                content = self.content_processor.process_mime_content(
+                    bytes(item.content), mime_type, compact=compact
+                )
+                total_length = len(content)
+                truncated_content = self.content_processor.truncate_content(
+                    content, DEFAULT_MAIN_PAGE_TRUNCATION
+                )
+                was_truncated = len(truncated_content) < total_length
+                payload: Dict[str, Any] = {
+                    "path": path,
+                    "title": title,
+                    "content": truncated_content,
+                }
+                if mime_type:
+                    payload["content_type"] = mime_type
+                if was_truncated:
+                    payload["_truncated"] = True
+                    payload["_total_chars"] = total_length
+                return payload, True
+            except Exception as e:
+                logger.warning(f"Error getting main page content: {e}")
+                return (
+                    {
+                        "path": path,
+                        "title": title,
+                        "content": f"(Error retrieving content: {e})",
+                    },
+                    False,
+                )
+
+        try:
+            if hasattr(archive, "main_entry") and archive.main_entry:
+                main_entry = _follow_redirect(archive.main_entry)
+                return _build(main_entry)
+
+            # Fallback: try common main page paths. Entry-zero is NOT a
+            # candidate (libzim's internal ordering doesn't map to the
+            # ZIM main-page pointer), so we only probe named paths.
+            main_page_paths = ["W/mainPage", "A/Main_Page", "A/index"]
+            for path in main_page_paths:
+                try:
+                    entry = archive.get_entry_by_path(path)
+                    if entry:
+                        entry = _follow_redirect(entry)
+                        payload, ok = _build(entry)
+                        if ok:
+                            return payload, True
+                except Exception:  # nosec B112 - intentional fallback
+                    continue
+
+            # No main page found — structural property of the archive,
+            # safe to cache.
+            return (
+                {
+                    "path": "",
+                    "title": "Main Page",
+                    "content": (
+                        "No main page found in this ZIM file. "
+                        "The archive may not have a designated main page entry."
+                    ),
+                },
+                True,
+            )
+
+        except Exception as e:
+            logger.error(f"Error getting main page: {e}")
+            return (
+                {
+                    "path": "",
+                    "title": "Main Page",
+                    "content": f"Error retrieving main page: {e}",
+                },
+                False,
+            )
 
     def _resolve_entry_with_fallback(
         self, archive: Archive, entry_path: str

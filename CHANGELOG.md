@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a2] — 2026-05-09 (alpha pre-release)
+
+v2 Phase B: response-contract migration. **Wire-format break** for every
+list-returning tool. v1.x users upgrading must update response-shape parsing.
+See [docs/superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md](docs/superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md)
+for the full design.
+
+### Breaking — pagination contract
+
+Every list-returning tool now returns the same five contract keys:
+`results`, `next_cursor`, `total`, `done`, `page_info`.
+
+| Tool | What changed |
+|---|---|
+| `search_zim_file` | `total_results` → `total`; `pagination` block flattened; `next_cursor` at top level; `cursor` accepted as input |
+| `search_all` | `per_file` → `results`; per-archive blocks each carry the new contract via `result` field; cursor lives only at the per-archive level |
+| `search_with_filters` | now returns structured dict (was markdown); same shape as `search_zim_file` plus `namespace_filter`/`content_type_filter` |
+| `find_entry_by_title` | gets the contract; `done=true`, `total=len(results)` always |
+| `get_search_suggestions` | `suggestions` → `results`; `count` removed |
+| `browse_namespace` | `entries` → `results`; `total_in_namespace` → `total`; `total_in_namespace_is_lower_bound` → `page_info.total_is_lower_bound`; `has_more` removed |
+| `walk_namespace` | `cursor` input/output type changes from `int` to opaque `str`; `entries` → `results`; `total` is always `null`; `total_entries` deprecated alias removed |
+| `list_namespaces` | `namespaces[<letter>].entry_count` → `total`; payload at top level (no `result` wrapper) |
+| `extract_article_links` | **`kind` is now required (default `"internal"`)**; single category per call; `internal_links`/`external_links`/`media_links` parallel arrays removed; `category_totals: {internal, external, media}` added |
+| `list_zim_files` | `files` → `results`; `count` → `total` |
+| `get_related_articles` | `outbound_results` → `results`; anticipates Phase E inbound-link feature |
+| `get_zim_entries` (batch) | gets the contract; `done=true`, `total=len(results)` |
+
+### Breaking — TypedDict everywhere
+
+Every dict-returning tool migrated from `Dict[str, Any]` to a per-tool
+TypedDict. FastMCP now emits payloads at the top level of `structuredContent`
+with real schemas. FastMCP continues to wrap `Union[<Response>, ToolErrorPayload]` returns in a `{"result": ...}` envelope at the wire level (this is FastMCP's behavior for any `Union` return type with multiple non-None members). Clients that previously parsed `structuredContent.result` keep working. The TypedDict change ensures the inner payload now carries a real schema instead of `Dict[str, Any]`.
+
+Migrated tools (TypedDict-only, no contract): `get_zim_metadata`,
+`get_zim_entry`, `get_main_page`, `get_entry_summary`,
+`get_table_of_contents`, `get_article_structure`, `get_binary_entry`.
+
+### Cursor format
+
+Cursors are URL-safe base64 JSON: `{v: 1, t: <tool_name>, s: <state>}`.
+**Tool-bound** — a search cursor passed to browse raises a clear error.
+**Versioned** — adding new fields later doesn't break the wire format.
+
+### Compat shim removed
+
+`openzim_mcp.zim.archive.PaginationCursor` (the v1 cursor class) is removed.
+Use `openzim_mcp.pagination.Cursor` instead.
+
+### Other
+
+- New module: `openzim_mcp/pagination.py` — `Cursor.encode/decode`, `CursorMismatchError`.
+- New module: `openzim_mcp/tool_schemas.py` — every per-tool response TypedDict.
+- New tests: `tests/test_pagination_cursor.py`, `tests/test_response_contract.py`, `tests/test_golden_v2_phase_b.py`.
+- The Phase A `_meta` envelope is unchanged in shape and still populates on every response.
+
 ## [2.0.0a1] — 2026-05-08
 
 > First v2 pre-release. Phase A of the multi-phase v2 effort. All changes additive at the tool-signature layer; small compact-mode prose change for empty search results (see Changed below).

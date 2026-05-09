@@ -67,6 +67,13 @@ class TestFindEntryByTitle:
         assert result["fast_path_hit"] is True
         assert len(result["results"]) == 1
         assert result["results"][0]["path"] == "C/Python_(programming_language)"
+        # Phase B contract keys (non-paginated tool, but contract still applies).
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == len(result["results"])
+        assert result["page_info"]["offset"] == 0
+        assert result["page_info"]["limit"] == 10
+        assert result["page_info"]["returned_count"] == len(result["results"])
 
     def test_no_matches_returns_empty(self, server: OpenZimMcpServer, monkeypatch):
         """No matches returns empty results, not an error."""
@@ -104,6 +111,13 @@ class TestFindEntryByTitle:
         assert result["results"] == []
         assert result["fast_path_hit"] is False
         assert result["files_searched"] == 1
+        # Phase B contract keys (non-paginated tool, but contract still applies).
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == 0
+        assert result["page_info"]["offset"] == 0
+        assert result["page_info"]["limit"] == 10
+        assert result["page_info"]["returned_count"] == 0
 
     def test_cross_file_aggregates_and_skips_failures(
         self, server: OpenZimMcpServer, monkeypatch
@@ -137,6 +151,13 @@ class TestFindEntryByTitle:
         assert result["files_searched"] == 2
         assert len(result["results"]) == 1
         assert result["results"][0]["zim_file"] == "/zim/good.zim"
+        # Phase B contract keys (non-paginated tool, but contract still applies).
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == len(result["results"])
+        assert result["page_info"]["offset"] == 0
+        assert result["page_info"]["limit"] == 10
+        assert result["page_info"]["returned_count"] == len(result["results"])
 
 
 def _ctx(value):
@@ -321,6 +342,13 @@ class TestTypoTolerantFallback:
         hit = result["results"][0]
         assert hit["path"] == "C/Einstein"
         assert hit["title"] == "Einstein"
+        # Phase B contract keys (non-paginated tool, but contract still applies).
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == len(result["results"])
+        assert result["page_info"]["offset"] == 0
+        assert result["page_info"]["limit"] == 10
+        assert result["page_info"]["returned_count"] == len(result["results"])
         # Below 0.95 so a real suggestion-top in another file would
         # outrank a fuzzy hit. ``pytest.approx`` rather than ``==`` so
         # SonarCloud S1244 (float-equality bug rule) doesn't flag the
@@ -497,6 +525,13 @@ class TestMetaSuggestionsAndReason:
         )
         assert result["results"] == []
         assert result["_meta"].get("reason") == "0_hits"
+        # Phase B contract keys (non-paginated tool, but contract still applies).
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == 0
+        assert result["page_info"]["offset"] == 0
+        assert result["page_info"]["limit"] == 10
+        assert result["page_info"]["returned_count"] == 0
 
     def test_find_entry_meta_reason_absent_on_hits(self, server, monkeypatch):
         """When results found, _meta.reason should be absent (None → omitted)."""

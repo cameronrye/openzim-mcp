@@ -8,9 +8,31 @@ the event loop during I/O-bound operations.
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .zim_operations import ZimOperations
+
+if TYPE_CHECKING:
+    from .tool_schemas import (
+        ArticleStructureResponse,
+        BatchEntryResponse,
+        BinaryEntryResponse,
+        BrowseNamespaceResponse,
+        EntryResponse,
+        EntrySummaryResponse,
+        FindEntryResponse,
+        LinksResponse,
+        ListNamespacesResponse,
+        ListZimFilesResponse,
+        RelatedArticlesResponse,
+        SearchAllResponse,
+        SearchResponse,
+        SearchSuggestionsResponse,
+        SearchWithFiltersResponse,
+        TableOfContentsResponse,
+        WalkNamespaceResponse,
+        ZimMetadataResponse,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +87,8 @@ class AsyncZimOperations:
 
     async def list_zim_files_summary_data(
         self, name_filter: Optional[str] = None
-    ) -> dict:
-        """Structured variant of ``list_zim_files`` (async).
-
-        Returns the count/directories_count/name_filter/files envelope
-        used by the migrated MCP tool.
-        """
+    ) -> "ListZimFilesResponse":
+        """Structured variant of ``list_zim_files`` (async)."""
         return await asyncio.to_thread(
             self._ops.list_zim_files_summary_data, name_filter=name_filter
         )
@@ -97,6 +115,22 @@ class AsyncZimOperations:
             self._ops.search_zim_file, zim_file_path, query, limit, offset
         )
 
+    async def search_zim_file_data(
+        self,
+        zim_file_path: str,
+        query: str,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> "SearchResponse":
+        """Structured variant of ``search_zim_file`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.search_zim_file_data,
+            zim_file_path,
+            query,
+            limit,
+            offset,
+        )
+
     async def get_zim_entry(
         self,
         zim_file_path: str,
@@ -117,6 +151,22 @@ class AsyncZimOperations:
         """
         return await asyncio.to_thread(
             self._ops.get_zim_entry,
+            zim_file_path,
+            entry_path,
+            max_content_length,
+            content_offset,
+        )
+
+    async def get_zim_entry_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        max_content_length: Optional[int] = None,
+        content_offset: int = 0,
+    ) -> "EntryResponse":
+        """Structured variant of ``get_zim_entry`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_zim_entry_data,
             zim_file_path,
             entry_path,
             max_content_length,
@@ -147,7 +197,7 @@ class AsyncZimOperations:
         self,
         entries: List[Dict[str, str]],
         max_content_length: Optional[int] = None,
-    ) -> dict:
+    ) -> "BatchEntryResponse":
         """Structured variant of ``get_entries`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_entries_data,
@@ -166,7 +216,7 @@ class AsyncZimOperations:
         """
         return await asyncio.to_thread(self._ops.get_zim_metadata, zim_file_path)
 
-    async def get_zim_metadata_data(self, zim_file_path: str) -> dict:
+    async def get_zim_metadata_data(self, zim_file_path: str) -> "ZimMetadataResponse":
         """Structured variant of ``get_zim_metadata`` (async)."""
         return await asyncio.to_thread(self._ops.get_zim_metadata_data, zim_file_path)
 
@@ -181,6 +231,10 @@ class AsyncZimOperations:
         """
         return await asyncio.to_thread(self._ops.get_main_page, zim_file_path)
 
+    async def get_main_page_data(self, zim_file_path: str) -> "EntryResponse":
+        """Structured variant of ``get_main_page`` (async)."""
+        return await asyncio.to_thread(self._ops.get_main_page_data, zim_file_path)
+
     async def list_namespaces(self, zim_file_path: str) -> str:
         """List all namespaces in a ZIM file (async).
 
@@ -192,7 +246,9 @@ class AsyncZimOperations:
         """
         return await asyncio.to_thread(self._ops.list_namespaces, zim_file_path)
 
-    async def list_namespaces_data(self, zim_file_path: str) -> dict:
+    async def list_namespaces_data(
+        self, zim_file_path: str
+    ) -> "ListNamespacesResponse":
         """Structured variant of ``list_namespaces`` (async)."""
         return await asyncio.to_thread(self._ops.list_namespaces_data, zim_file_path)
 
@@ -224,7 +280,7 @@ class AsyncZimOperations:
         namespace: str = "C",
         limit: int = 50,
         offset: int = 0,
-    ) -> dict:
+    ) -> "BrowseNamespaceResponse":
         """Structured variant of ``browse_namespace`` (async)."""
         return await asyncio.to_thread(
             self._ops.browse_namespace_data,
@@ -243,7 +299,7 @@ class AsyncZimOperations:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> str:
-        """Search with filters (async).
+        """Search with filters (async, legacy markdown surface).
 
         Args:
             zim_file_path: Path to the ZIM file
@@ -254,10 +310,30 @@ class AsyncZimOperations:
             offset: Starting offset
 
         Returns:
-            Search results as JSON string
+            Search results as markdown text
         """
         return await asyncio.to_thread(
             self._ops.search_with_filters,
+            zim_file_path,
+            query,
+            namespace,
+            content_type,
+            limit,
+            offset,
+        )
+
+    async def search_with_filters_data(
+        self,
+        zim_file_path: str,
+        query: str,
+        namespace: Optional[str] = None,
+        content_type: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> "SearchWithFiltersResponse":
+        """Structured variant of ``search_with_filters`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.search_with_filters_data,
             zim_file_path,
             query,
             namespace,
@@ -291,7 +367,7 @@ class AsyncZimOperations:
         zim_file_path: str,
         partial_query: str,
         limit: int = 10,
-    ) -> dict:
+    ) -> "SearchSuggestionsResponse":
         """Structured variant of ``get_search_suggestions`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_search_suggestions_data,
@@ -322,7 +398,7 @@ class AsyncZimOperations:
         self,
         zim_file_path: str,
         entry_path: str,
-    ) -> dict:
+    ) -> "ArticleStructureResponse":
         """Structured variant of ``get_article_structure`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_article_structure_data, zim_file_path, entry_path
@@ -334,16 +410,16 @@ class AsyncZimOperations:
         entry_path: str,
         limit: int = 100,
         offset: int = 0,
-        kind: Optional[str] = None,
+        kind: str = "internal",
     ) -> str:
         """Extract links from an article (async, paginated).
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Path to the entry
-            limit: Max items per category (1-500)
-            offset: Starting offset within each category
-            kind: Optional filter — "internal", "external", or "media"
+            limit: Max items per page (1-500)
+            offset: Starting offset within the requested category
+            kind: Which category — "internal" (default), "external", or "media"
 
         Returns:
             Links as JSON string
@@ -363,8 +439,8 @@ class AsyncZimOperations:
         entry_path: str,
         limit: int = 100,
         offset: int = 0,
-        kind: Optional[str] = None,
-    ) -> dict:
+        kind: str = "internal",
+    ) -> "LinksResponse":
         """Structured variant of ``extract_article_links`` (async, paginated)."""
         return await asyncio.to_thread(
             self._ops.extract_article_links_data,
@@ -400,7 +476,7 @@ class AsyncZimOperations:
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
-    ) -> dict:
+    ) -> "EntrySummaryResponse":
         """Structured variant of ``get_entry_summary`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_entry_summary_data, zim_file_path, entry_path, max_words
@@ -428,7 +504,7 @@ class AsyncZimOperations:
         self,
         zim_file_path: str,
         entry_path: str,
-    ) -> dict:
+    ) -> "TableOfContentsResponse":
         """Structured variant of ``get_table_of_contents`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_table_of_contents_data, zim_file_path, entry_path
@@ -466,7 +542,7 @@ class AsyncZimOperations:
         entry_path: str,
         max_size_bytes: Optional[int] = None,
         include_data: bool = True,
-    ) -> dict:
+    ) -> "BinaryEntryResponse":
         """Structured variant of ``get_binary_entry`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_binary_entry_data,
@@ -480,7 +556,7 @@ class AsyncZimOperations:
         self,
         zim_file_path: str,
         namespace: str,
-        cursor: int = 0,
+        cursor: Optional[Dict[str, Any]] = None,
         limit: int = 200,
     ) -> str:
         """Walk all entries in a namespace by ID (async)."""
@@ -492,15 +568,15 @@ class AsyncZimOperations:
         self,
         zim_file_path: str,
         namespace: str,
-        cursor: int = 0,
+        cursor_state: Optional[Dict[str, Any]] = None,
         limit: int = 200,
-    ) -> dict:
+    ) -> "WalkNamespaceResponse":
         """Structured variant of ``walk_namespace`` (async)."""
         return await asyncio.to_thread(
             self._ops.walk_namespace_data,
             zim_file_path,
             namespace,
-            cursor,
+            cursor_state,
             limit,
         )
 
@@ -508,7 +584,9 @@ class AsyncZimOperations:
         """Search across every ZIM file in allowed dirs (async)."""
         return await asyncio.to_thread(self._ops.search_all, query, limit_per_file)
 
-    async def search_all_data(self, query: str, limit_per_file: int = 5) -> dict:
+    async def search_all_data(
+        self, query: str, limit_per_file: int = 5
+    ) -> "SearchAllResponse":
         """Structured variant of ``search_all`` (async)."""
         return await asyncio.to_thread(self._ops.search_all_data, query, limit_per_file)
 
@@ -534,7 +612,7 @@ class AsyncZimOperations:
         title: str,
         cross_file: bool = False,
         limit: int = 10,
-    ) -> dict:
+    ) -> "FindEntryResponse":
         """Structured variant of ``find_entry_by_title`` (async)."""
         return await asyncio.to_thread(
             self._ops.find_entry_by_title_data,
@@ -563,7 +641,7 @@ class AsyncZimOperations:
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-    ) -> dict:
+    ) -> "RelatedArticlesResponse":
         """Structured variant of ``get_related_articles`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_related_articles_data,

@@ -649,13 +649,19 @@ class TestSimpleToolsOptionsPassthrough:
         assert kwargs.get("limit_per_file") == 25
 
     def test_walk_namespace_forwards_options_limit_and_offset(self):
-        """walk_namespace must use options['offset'] as cursor and options['limit']."""
+        """walk_namespace must use options['offset'] as scan_at and options['limit'].
+
+        v2: walk_namespace's ``cursor`` parameter is now a decoded
+        cursor-state dict (``{scan_at, l}``) rather than a raw int.
+        simple_tools maps the legacy ``options['offset']`` passthrough
+        channel to ``scan_at``.
+        """
         from unittest.mock import MagicMock
 
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         zim_ops = MagicMock()
-        zim_ops.walk_namespace.return_value = '{"entries": []}'
+        zim_ops.walk_namespace.return_value = '{"results": []}'
         zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         handler = SimpleToolsHandler(zim_ops)
 
@@ -664,7 +670,8 @@ class TestSimpleToolsOptionsPassthrough:
             options={"limit": 50, "offset": 1234},
         )
         _args, kwargs = zim_ops.walk_namespace.call_args
-        assert kwargs.get("cursor") == 1234
+        # v2: cursor is now the decoded state dict, not a raw int.
+        assert kwargs.get("cursor") == {"scan_at": 1234, "l": 50}
         assert kwargs.get("limit") == 50
 
     def test_find_by_title_forwards_options_limit(self):
@@ -691,7 +698,7 @@ class TestSimpleToolsOptionsPassthrough:
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         zim_ops = MagicMock()
-        zim_ops.get_related_articles.return_value = '{"outbound_results": []}'
+        zim_ops.get_related_articles.return_value = '{"results": []}'
         zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         handler = SimpleToolsHandler(zim_ops)
 
@@ -1284,15 +1291,16 @@ class TestCompactSearchSnippetTruncation:
             "Showing 1-1 of 1 (end of results)\n"
         )
         # In compact mode _handle_search calls search_zim_file_data + _format_search_text
+        # Phase B shape: top-level total/done/page_info, no nested pagination block.
         mock.search_zim_file_data.return_value = {
             "query": "biology",
-            "total_results": 1,
-            "offset": 0,
-            "limit": 5,
             "results": [
                 {"path": "Biology", "title": "Biology article", "snippet": "x"}
             ],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 1,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 1},
             "_meta": {"tokens_est": 10, "chars": 100, "truncated": False},
         }
         mock._format_search_text.return_value = rendered
@@ -1528,7 +1536,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         h, mock = self._handler_with_data(
             get_related_articles_data={
                 "entry_path": "Photosynthesis",
-                "outbound_results": [
+                "results": [
                     {
                         "path": "Carbohydrate",
                         "title": "Carbohydrate",
@@ -1555,7 +1563,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         h, _ = self._handler_with_data(
             get_related_articles_data={
                 "entry_path": "Bad_Article",
-                "outbound_results": [],
+                "results": [],
                 "outbound_error": "Failed to extract: Entry not found",
             }
         )
@@ -1566,29 +1574,35 @@ class TestCompactMarkdownRenderingForJsonIntents:
         assert "Entry not found" in out
 
     def test_walk_namespace_compact_renders_entry_list(self):
+        # v2 Phase B contract: top-level results / next_cursor (opaque str) /
+        # total / done / page_info (offset/limit/returned_count). The compact
+        # renderer reads these directly.
+        from openzim_mcp.pagination import Cursor
+
+        next_cursor = Cursor.encode(tool="walk_namespace", state={"scan_at": 3, "l": 3})
         h, mock = self._handler_with_data(
             walk_namespace_data={
                 "namespace": "C",
-                "cursor": 0,
-                "limit": 3,
-                "returned_count": 3,
-                "next_cursor": 3,
-                "done": False,
-                "total_in_namespace": 27199904,
-                "total_in_namespace_is_lower_bound": False,
-                "entries": [
+                "results": [
                     {"path": "!", "title": "!"},
                     {"path": "Photosynthesis", "title": "Photosynthesis"},
                     {"path": "Cell_(biology)", "title": "Cell (biology)"},
                 ],
+                "next_cursor": next_cursor,
+                "total": None,
+                "done": False,
+                "page_info": {"offset": 0, "limit": 3, "returned_count": 3},
+                "scanned_count": 3,
+                "scanned_through_id": 2,
+                "archive_entry_count": 27199904,
             }
         )
         out = h.handle_zim_query("walk namespace C", options={"compact": True})
         mock.walk_namespace_data.assert_called_once()
         assert "Namespace `C`" in out
-        assert "27,199,904" in out  # total formatted with commas
         assert "Photosynthesis" in out
-        assert "offset=3" in out  # next-cursor pagination hint
+        # Resume hint surfaces the opaque cursor (not a raw int).
+        assert next_cursor in out
         # JSON shape NOT in output.
         assert "{" not in out
 
@@ -1600,16 +1614,16 @@ class TestCompactMarkdownRenderingForJsonIntents:
                 "discovery_method": "sampling",
                 "namespaces": {
                     "C": {
-                        "count": 27199903,
+                        "total": 27199903,
                         "description": "User content entries",
                     },
-                    "M": {"count": 13, "description": "ZIM metadata"},
+                    "M": {"total": 13, "description": "ZIM metadata"},
                 },
             }
         )
         out = h.handle_zim_query("list namespaces", options={"compact": True})
         mock.list_namespaces_data.assert_called_once()
-        # Sorted by count descending; C comes first.
+        # Sorted by total descending; C comes first.
         c_idx = out.find("**`C`**")
         m_idx = out.find("**`M`**")
         assert c_idx >= 0 and m_idx >= 0 and c_idx < m_idx
@@ -1625,7 +1639,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.find_entry_by_title.return_value = '{"results": []}'
-        mock.get_related_articles.return_value = '{"outbound_results": []}'
+        mock.get_related_articles.return_value = '{"results": []}'
         mock.walk_namespace.return_value = '{"entries": []}'
         mock.list_namespaces.return_value = '{"namespaces": {}}'
         h = SimpleToolsHandler(mock)
@@ -1658,35 +1672,58 @@ class TestCompactLinksResponse:
     def mock_zim_operations(self):
         mock = Mock()
         mock.list_zim_files_data.return_value = [{"path": "/zim/test.zim"}]
-        mock.extract_article_links_data.return_value = {
-            "title": "Photosynthesis",
-            "path": "Photosynthesis",
-            "internal_links": [
-                {"url": "Carbohydrate", "text": "carbohydrates", "type": "internal"},
-                {"url": "Phytoplankton", "text": "phytoplankton", "type": "internal"},
-            ],
-            "external_links": [
-                {"url": "https://example.com/x", "text": "example", "type": "external"},
-            ],
-            "media_links": [
-                {
-                    "url": "./_assets_/img.png",
-                    "type": "image",
-                    "alt": "",
-                    "title": "",
+
+        # v2 Phase B: extract_article_links_data returns ONE category
+        # per call. The compact path issues two calls (internal +
+        # external); return different payloads based on the ``kind``.
+        def _per_kind(*args, **kwargs):
+            kind = kwargs.get("kind") or (args[4] if len(args) > 4 else "internal")
+            base = {
+                "title": "Photosynthesis",
+                "path": "Photosynthesis",
+                "content_type": "text/html",
+                "next_cursor": "OPAQUE",
+                "done": False,
+                "category_totals": {
+                    "internal": 1988,
+                    "external": 401,
+                    "media": 25,
                 },
-            ],
-            "total_internal_links": 1988,
-            "total_external_links": 401,
-            "total_media_links": 25,
-            "total_links": 2414,
-            "pagination": {
-                "offset": 0,
-                "limit": 20,
-                "kind": None,
-                "has_more": True,
-            },
-        }
+            }
+            if kind == "external":
+                return {
+                    **base,
+                    "kind": "external",
+                    "results": [
+                        {
+                            "url": "https://example.com/x",
+                            "text": "example",
+                            "type": "external",
+                        },
+                    ],
+                    "total": 401,
+                    "page_info": {"offset": 0, "limit": 20, "returned_count": 1},
+                }
+            return {
+                **base,
+                "kind": "internal",
+                "results": [
+                    {
+                        "url": "Carbohydrate",
+                        "text": "carbohydrates",
+                        "type": "internal",
+                    },
+                    {
+                        "url": "Phytoplankton",
+                        "text": "phytoplankton",
+                        "type": "internal",
+                    },
+                ],
+                "total": 1988,
+                "page_info": {"offset": 0, "limit": 20, "returned_count": 2},
+            }
+
+        mock.extract_article_links_data.side_effect = _per_kind
         mock.extract_article_links.return_value = (
             '{"title":"Photosynthesis","internal_links":[...legacy verbose...]}'
         )
@@ -1699,15 +1736,26 @@ class TestCompactLinksResponse:
     def test_compact_renders_flat_markdown_list(self, handler, mock_zim_operations):
         """Compact mode hits the structured-data path with a tight
         default limit (20) and renders a flat ``- text -> path`` list.
+
+        v2 Phase B: ``extract_article_links_data`` returns ONE kind
+        per call, so the compact path issues two calls (internal +
+        external).
         """
         result = handler.handle_zim_query(
             "links in Photosynthesis",
             zim_file_path="/zim/test.zim",
             options={"compact": True, "limit": 20},
         )
-        mock_zim_operations.extract_article_links_data.assert_called_once()
-        args, kwargs = mock_zim_operations.extract_article_links_data.call_args
-        assert kwargs.get("limit") == 20
+        # Two calls — one per category.
+        assert mock_zim_operations.extract_article_links_data.call_count == 2
+        kinds_called = {
+            call.kwargs.get("kind")
+            for call in mock_zim_operations.extract_article_links_data.call_args_list
+        }
+        assert kinds_called == {"internal", "external"}
+        # All calls used the requested limit.
+        for call in mock_zim_operations.extract_article_links_data.call_args_list:
+            assert call.kwargs.get("limit") == 20
 
         # Header names the article and the per-category counts include
         # the full totals so the LLM knows what's been paged in.
@@ -2376,24 +2424,32 @@ class TestCompactRenderersModule:
 
     def test_render_walk_namespace_smoke(self):
         from openzim_mcp import compact_renderers
+        from openzim_mcp.pagination import Cursor
 
+        next_cursor = Cursor.encode(
+            tool="walk_namespace", state={"scan_at": 100, "l": 2}
+        )
         out = compact_renderers.render_walk_namespace(
             {
                 "namespace": "C",
-                "cursor": 0,
-                "next_cursor": 100,
-                "returned_count": 2,
-                "total_in_namespace": 1234,
-                "entries": [
+                "results": [
                     {"title": "A", "path": "C/A"},
                     {"title": "B", "path": "C/B"},
                 ],
+                "next_cursor": next_cursor,
+                "total": None,
                 "done": False,
+                "page_info": {"offset": 0, "limit": 2, "returned_count": 2},
+                "scanned_count": 2,
+                "scanned_through_id": 1,
+                "archive_entry_count": 1234,
             }
         )
         assert "Namespace `C`" in out
-        assert "1-2 of 1,234" in out
-        assert "offset=100" in out
+        # Header shows "1-2 of <archive_total>" since walk doesn't know per-ns total.
+        assert "1-2" in out
+        # Resume hint surfaces the opaque cursor.
+        assert next_cursor in out
 
     def test_render_namespaces_smoke(self):
         from openzim_mcp import compact_renderers
@@ -2404,12 +2460,12 @@ class TestCompactRenderersModule:
                 "is_total_authoritative": False,
                 "discovery_method": "scan",
                 "namespaces": {
-                    "C": {"count": 26_000_000, "description": "Content"},
-                    "M": {"count": 100, "description": "Metadata"},
+                    "C": {"total": 26_000_000, "description": "Content"},
+                    "M": {"total": 100, "description": "Metadata"},
                 },
             }
         )
-        # Sorted by count: C should come before M.
+        # Sorted by total: C should come before M.
         c_idx = out.find("**`C`**")
         m_idx = out.find("**`M`**")
         assert c_idx >= 0 and m_idx >= 0 and c_idx < m_idx
@@ -3037,11 +3093,11 @@ class TestCompactFooter:
         # search_zim_file_data returns zero results with suggestions in _meta
         mock.search_zim_file_data.return_value = {
             "query": "xyzzy",
-            "total_results": 0,
-            "offset": 0,
-            "limit": 5,
             "results": [],
-            "pagination": {"has_more": False},
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 0},
             "_meta": {
                 "tokens_est": 5,
                 "chars": 20,

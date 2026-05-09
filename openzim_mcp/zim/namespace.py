@@ -3,15 +3,15 @@
 This mixin handles namespace listing, browsing, and walking — anything
 that surfaces or iterates over the archive's namespace structure.
 
-``zim_archive`` and ``PaginationCursor`` are accessed through
-``openzim_mcp.zim_operations`` so existing test patches against the
-shim's symbols continue to work without changes.
+``zim_archive`` is accessed through ``openzim_mcp.zim_operations`` so
+existing test patches against the shim's symbols continue to work
+without changes.
 """
 
 import contextlib
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -32,6 +32,11 @@ if TYPE_CHECKING:
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
+    from openzim_mcp.tool_schemas import (
+        BrowseNamespaceResponse,
+        ListNamespacesResponse,
+        WalkNamespaceResponse,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +68,20 @@ class _NamespaceMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
-    def list_namespaces_data(self, zim_file_path: str) -> Dict[str, Any]:
+    def list_namespaces_data(self, zim_file_path: str) -> "ListNamespacesResponse":
         """Structured variant of ``list_namespaces``.
 
         Returns the same payload as ``list_namespaces`` but as a Python
         dict, so MCP tool functions can hand it straight to FastMCP's
         structured-output path without the json.dumps + re-parse round
         trip the legacy string variant required.
+
+        Phase B v2: this is the one list-shaped result that does NOT carry
+        the PaginatedResponse contract — it returns a dict-of-summaries,
+        not a list. Top-level keys are ``total_entries`` /
+        ``sampled_entries`` / ``has_new_namespace_scheme`` /
+        ``is_total_authoritative`` / ``discovery_method`` / ``namespaces``
+        plus the universal ``_meta`` envelope.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -79,15 +91,15 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"namespaces_data:{validated_path}"
+        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
+        # shape: entry_count key) don't leak through after the rename to ``total``.
+        cache_key = f"namespaces_data:v2b:{validated_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespaces dict for: {validated_path}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
-            return cached_result  # type: ignore[no-any-return]
+            return cast("ListNamespacesResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -95,7 +107,7 @@ class _NamespaceMixin:
 
             self.cache.set(cache_key, result)
             logger.info(f"Listed namespaces for: {validated_path}")
-            return attach_meta(result)
+            return cast("ListNamespacesResponse", attach_meta(result))
 
         except Exception as e:
             logger.error(f"Namespace listing failed for {validated_path}: {e}")
@@ -182,8 +194,11 @@ class _NamespaceMixin:
             return
         if not keys:
             return
+        # ``metadata_keys`` is an exhaustive enumeration of M, so the
+        # bucket is authoritative — we know the total without sampling.
         ns_info = {
-            "count": len(keys),
+            "total": len(keys),
+            "is_authoritative": True,
             "description": _NAMESPACE_DESCRIPTIONS["M"],
             "sample_entries": [{"path": f"M/{k}", "title": k} for k in keys[:5]],
             "sampled_count": len(keys),
@@ -218,8 +233,14 @@ class _NamespaceMixin:
                 probes.append(("W/favicon", "favicon"))
         if not probes:
             return
+        # Probed-only buckets are authoritative existence proofs but the
+        # ``total`` is a lower bound — we know these specific paths exist
+        # but not how many other W entries the archive holds. We mark
+        # ``is_authoritative=False`` to reflect that the count is not the
+        # whole namespace, just confirmed canonical paths.
         namespaces["W"] = {
-            "count": len(probes),
+            "total": len(probes),
+            "is_authoritative": False,
             "description": _NAMESPACE_DESCRIPTIONS["W"],
             "sample_entries": [{"path": p, "title": t} for p, t in probes],
             "sampled_count": 0,
@@ -254,7 +275,15 @@ class _NamespaceMixin:
             ns_info = namespaces.setdefault(
                 namespace,
                 {
-                    "count": 0,
+                    # ``total`` is the per-namespace count (renamed from
+                    # ``count`` in v2 Phase B for consistency with
+                    # PaginatedResponse.total). For full-iteration buckets
+                    # this is exact; for sampled buckets it is overwritten
+                    # with the projected estimate during finalisation.
+                    "total": 0,
+                    # Set during finalisation: True for full iteration,
+                    # False for sampled / probed-only buckets.
+                    "is_authoritative": False,
                     "description": _NAMESPACE_DESCRIPTIONS.get(
                         namespace, f"Namespace '{namespace}'"
                     ),
@@ -267,7 +296,7 @@ class _NamespaceMixin:
                 ns_info["_probed_count"] += 1
             else:
                 ns_info["_sampled_count"] += 1
-            ns_info["count"] += 1
+            ns_info["total"] += 1
             if len(ns_info["sample_entries"]) < 5:
                 ns_info["sample_entries"].append({"path": path, "title": title or path})
 
@@ -291,8 +320,11 @@ class _NamespaceMixin:
     def _finalise_full_iteration(namespaces: Dict[str, Dict[str, Any]]) -> None:
         """Collapse internal counters into the public shape after full scan."""
         for ns_info in namespaces.values():
-            ns_info["sampled_count"] = ns_info["count"]
-            ns_info["estimated_total"] = ns_info["count"]
+            # Full iteration enumerates every entry — the bucket's total
+            # is exact and the bucket is authoritative.
+            ns_info["sampled_count"] = ns_info["total"]
+            ns_info["estimated_total"] = ns_info["total"]
+            ns_info["is_authoritative"] = True
             ns_info.pop("_probed_count", None)
             ns_info.pop("_sampled_count", None)
 
@@ -373,7 +405,9 @@ class _NamespaceMixin:
             ns_info["sampled_count"] = sampled
             ns_info["probed_count"] = probed
             ns_info["estimated_total"] = estimated_total
-            ns_info["count"] = estimated_total
+            ns_info["total"] = estimated_total
+            # Sampling-derived counts are projections, not exact totals.
+            ns_info["is_authoritative"] = False
             ns_info.pop("_probed_count", None)
             ns_info.pop("_sampled_count", None)
 
@@ -469,11 +503,17 @@ class _NamespaceMixin:
 
     def browse_namespace_data(
         self, zim_file_path: str, namespace: str, limit: int = 50, offset: int = 0
-    ) -> Dict[str, Any]:
+    ) -> "BrowseNamespaceResponse":
         """Structured variant of ``browse_namespace``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
         can hand it straight to FastMCP's structured-content path.
+
+        Phase B contract: top-level ``results`` / ``next_cursor`` /
+        ``total`` / ``done`` / ``page_info`` plus the ``namespace`` /
+        ``discovery_method`` / ``sampling_based`` /
+        ``results_may_be_incomplete`` extras. ``next_cursor`` is encoded
+        with ``tool="browse_namespace"`` and state ``{o, l, ns}``.
 
         Raises:
             OpenZimMcpValidationError: If parameter validation fails (limit,
@@ -481,6 +521,8 @@ class _NamespaceMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If browsing fails
         """
+        from openzim_mcp.pagination import Cursor
+
         # Validate parameters. These are caller-input errors, distinct from
         # archive-access failures, so they surface as
         # OpenZimMcpValidationError to let the tool layer render a targeted
@@ -502,19 +544,20 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"browse_ns_data:{validated_path}:{namespace}:{limit}:{offset}"
+        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
+        # shape: entries/total_in_namespace/...) don't leak through
+        # after the upgrade.
+        cache_key = f"browse_ns_data:v2b:{validated_path}:{namespace}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespace browse dict for: {namespace}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
-            return cached_result  # type: ignore[no-any-return]
+            return cast("BrowseNamespaceResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._browse_namespace_entries(
+                raw = self._browse_namespace_entries(
                     archive,
                     namespace,
                     limit,
@@ -522,12 +565,52 @@ class _NamespaceMixin:
                     archive_path=str(validated_path),
                 )
 
-            # Cache the result
-            self.cache.set(cache_key, result)
+            # ``_browse_namespace_entries`` still returns the legacy inner
+            # shape (entries / total_in_namespace / is_total_authoritative / ...). Adapt
+            # to the v2 Phase B contract here so internal callers and tests
+            # that target the helper aren't forced through the rename.
+            entries = raw.get("entries", [])
+            total_in_namespace = raw.get("total_in_namespace", 0)
+            is_total_authoritative = raw.get("is_total_authoritative", True)
+            discovery_method = raw.get("discovery_method", "unknown")
+            sampling_based = raw.get("sampling_based", False)
+            results_may_be_incomplete = raw.get("results_may_be_incomplete", False)
+
+            returned_count = len(entries)
+            last_index = offset + returned_count
+            done = last_index >= total_in_namespace
+            next_cursor: Optional[str] = None
+            if not done:
+                next_cursor = Cursor.encode(
+                    tool="browse_namespace",
+                    state={"o": last_index, "l": limit, "ns": namespace},
+                )
+
+            page_info: Dict[str, Any] = {
+                "offset": offset,
+                "limit": limit,
+                "returned_count": returned_count,
+            }
+            if not is_total_authoritative:
+                page_info["total_is_lower_bound"] = True
+
+            payload: Dict[str, Any] = {
+                "namespace": namespace,
+                "results": entries,
+                "next_cursor": next_cursor,
+                "total": total_in_namespace,
+                "done": done,
+                "page_info": page_info,
+                "discovery_method": discovery_method,
+                "sampling_based": sampling_based,
+                "results_may_be_incomplete": results_may_be_incomplete,
+            }
+
+            self.cache.set(cache_key, payload)
             logger.info(
                 f"Browsed namespace {namespace}: {limit} entries from offset {offset}"
             )
-            return attach_meta(result)
+            return cast("BrowseNamespaceResponse", attach_meta(payload))
 
         except Exception as e:
             logger.error(f"Namespace browsing failed for {namespace}: {e}")
@@ -617,16 +700,9 @@ class _NamespaceMixin:
                 logger.warning(f"Error processing entry {entry_path}: {e}")
                 continue
 
-        # Build result with pagination cursor. Base has_more on the slice
-        # bounds, not on len(entries) — entries can be shorter than the page
-        # when individual entries fail to load, and we don't want to advertise
-        # a non-existent next page in that case.
-        has_more = end_idx < total_in_namespace
-        next_cursor = None
-        if has_more:
-            next_cursor = _zim_ops_mod.PaginationCursor.create_next_cursor(
-                offset, limit, total_in_namespace
-            )
+        # ``next_cursor`` and ``has_more`` are intentionally omitted here.
+        # ``browse_namespace_data`` (the sole caller) rebuilds both fields
+        # itself using ``Cursor.encode(tool="browse_namespace", ...)``.
 
         # When the sample hits NAMESPACE_MAX_ENTRIES, total_in_namespace is a
         # sample-bound, not the true count. has_more=False just means the sample
@@ -648,8 +724,6 @@ class _NamespaceMixin:
             "offset": offset,
             "limit": limit,
             "returned_count": len(entries),
-            "has_more": has_more,
-            "next_cursor": next_cursor,
             "entries": entries,
             "sampling_based": not full_iteration,
             "discovery_method": "full_iteration" if full_iteration else "sampling",
@@ -944,17 +1018,32 @@ class _NamespaceMixin:
         self,
         zim_file_path: str,
         namespace: str,
-        cursor: int = 0,
+        cursor_state: Optional[Dict[str, Any]] = None,
         limit: int = 200,
-    ) -> Dict[str, Any]:
+    ) -> "WalkNamespaceResponse":
         """Structured variant of ``walk_namespace``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
         can hand it straight to FastMCP's structured-content path.
 
+        Phase B contract: top-level ``results`` / ``next_cursor`` (opaque
+        str) / ``total`` (always None — walk doesn't know the per-namespace
+        total mid-scan) / ``done`` / ``page_info`` plus ``namespace`` /
+        ``scanned_count`` / ``scanned_through_id`` / ``archive_entry_count``
+        extras. ``next_cursor`` is encoded with ``tool="walk_namespace"``
+        and state ``{scan_at, l}``.
+
+        ``cursor_state`` carries the decoded ``s`` dict from a v2 cursor.
+        The tool layer is responsible for decoding the opaque wire token;
+        this method works with the decoded shape directly so non-tool
+        callers (legacy ``walk_namespace`` JSON wrapper, simple_tools)
+        don't have to round-trip through base64.
+
         Raises:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
         """
+        from openzim_mcp.pagination import Cursor
+
         # Caller-input validation surfaces as OpenZimMcpValidationError so
         # the tool layer can render a targeted validation message and so
         # other call sites (e.g. simple_tools) can distinguish it from
@@ -963,8 +1052,18 @@ class _NamespaceMixin:
             raise OpenZimMcpValidationError(
                 f"limit must be between 1 and 500 (provided: {limit})"
             )
-        if cursor < 0:
-            cursor = 0
+
+        # Decoded cursor state ``s`` for walk_namespace carries
+        # ``{scan_at: int, l: int}``. Both are optional defensively —
+        # missing/negative ``scan_at`` clamps to 0, missing ``l`` falls
+        # back to the function-arg default.
+        scan_at_raw = (cursor_state or {}).get("scan_at", 0)
+        try:
+            scan_at = int(scan_at_raw)
+        except (TypeError, ValueError):
+            scan_at = 0
+        if scan_at < 0:
+            scan_at = 0
 
         # Canonicalise user input (e.g. "c" -> "C") so the comparison
         # against ``_extract_namespace_from_path`` (canonical form) does
@@ -986,33 +1085,37 @@ class _NamespaceMixin:
                 # dedicated walker so callers see real metadata entries
                 # instead of zero matches after a full archive scan.
                 if has_new_scheme and namespace == "M":
-                    return attach_meta(
-                        self._walk_new_scheme_metadata(
-                            archive, cursor, limit, archive_entry_count
-                        )
+                    return cast(
+                        "WalkNamespaceResponse",
+                        attach_meta(
+                            self._walk_new_scheme_metadata(
+                                archive, scan_at, limit, archive_entry_count
+                            )
+                        ),
                     )
                 # Other-than-C namespaces in new-scheme aren't on the
                 # iterable surface; short-circuit so callers don't pay the
                 # full-archive scan to discover that.
                 if has_new_scheme and namespace != "C":
-                    return attach_meta(
-                        self._build_walk_result(
-                            namespace=namespace,
-                            cursor=cursor,
-                            limit=limit,
-                            entries=[],
-                            scanned_count=0,
-                            scanned_through_id=None,
-                            done=True,
-                            next_cursor=None,
-                            archive_entry_count=archive_entry_count,
-                            total_in_namespace=0,
-                            total_in_namespace_is_lower_bound=False,
-                        )
+                    return cast(
+                        "WalkNamespaceResponse",
+                        attach_meta(
+                            self._build_walk_result(
+                                namespace=namespace,
+                                scan_at=scan_at,
+                                limit=limit,
+                                entries=[],
+                                scanned_count=0,
+                                scanned_through_id=None,
+                                done=True,
+                                next_cursor=None,
+                                archive_entry_count=archive_entry_count,
+                            )
+                        ),
                     )
 
                 entries: List[Dict[str, Any]] = []
-                entry_id = cursor
+                entry_id = scan_at
                 while entry_id < archive_entry_count and len(entries) < limit:
                     try:
                         entry = archive._get_entry_by_id(entry_id)
@@ -1034,41 +1137,32 @@ class _NamespaceMixin:
                     entry_id += 1
 
                 done = entry_id >= archive_entry_count
-                next_cursor = None if done else entry_id
                 # scanned_through_id reflects the last ID we examined regardless
                 # of whether it matched the filter. None if we never entered the
-                # loop (cursor was already past the end).
-                scanned_through_id = entry_id - 1 if entry_id > cursor else None
-
-                # Namespace count is only authoritative for new-scheme C
-                # (iterator emits exactly C). Old-scheme would need a full
-                # archive scan to derive it; report None rather than mislead.
-                # ``is_lower_bound`` is meaningless when the count is None,
-                # so report None there too — saying ``False`` alongside a
-                # null count would read as "this null is the exact count".
-                total_in_namespace: Optional[int]
-                is_lower_bound: Optional[bool]
-                if has_new_scheme:
-                    total_in_namespace = archive_entry_count
-                    is_lower_bound = False
-                else:
-                    total_in_namespace = None
-                    is_lower_bound = None
-
-                return attach_meta(
-                    self._build_walk_result(
-                        namespace=namespace,
-                        cursor=cursor,
-                        limit=limit,
-                        entries=entries,
-                        scanned_count=entry_id - cursor,
-                        scanned_through_id=scanned_through_id,
-                        done=done,
-                        next_cursor=next_cursor,
-                        archive_entry_count=archive_entry_count,
-                        total_in_namespace=total_in_namespace,
-                        total_in_namespace_is_lower_bound=is_lower_bound,
+                # loop (scan_at was already at/past the end).
+                scanned_through_id = entry_id - 1 if entry_id > scan_at else None
+                next_cursor: Optional[str] = None
+                if not done:
+                    next_cursor = Cursor.encode(
+                        tool="walk_namespace",
+                        state={"scan_at": entry_id, "l": limit},
                     )
+
+                return cast(
+                    "WalkNamespaceResponse",
+                    attach_meta(
+                        self._build_walk_result(
+                            namespace=namespace,
+                            scan_at=scan_at,
+                            limit=limit,
+                            entries=entries,
+                            scanned_count=entry_id - scan_at,
+                            scanned_through_id=scanned_through_id,
+                            done=done,
+                            next_cursor=next_cursor,
+                            archive_entry_count=archive_entry_count,
+                        )
+                    ),
                 )
         except OpenZimMcpArchiveError:
             raise
@@ -1079,82 +1173,88 @@ class _NamespaceMixin:
     def _build_walk_result(
         *,
         namespace: str,
-        cursor: int,
+        scan_at: int,
         limit: int,
         entries: List[Dict[str, Any]],
         scanned_count: int,
         scanned_through_id: Optional[int],
         done: bool,
-        next_cursor: Optional[int],
+        next_cursor: Optional[str],
         archive_entry_count: int,
-        total_in_namespace: Optional[int],
-        total_in_namespace_is_lower_bound: Optional[bool],
     ) -> Dict[str, Any]:
-        """Assemble the walk_namespace result dict.
+        """Assemble the walk_namespace v2 contract result dict.
 
-        ``archive_entry_count`` is the file-level entry count.
-        ``total_in_namespace`` is the namespace-specific count (None when
-        not derivable without a full scan, e.g. old-scheme archives).
-        ``total_in_namespace_is_lower_bound`` is False when authoritative,
-        True when sampling-derived, None when ``total_in_namespace`` is
-        also None (no count means no lower-bound semantics).
-        ``total_entries`` is kept as a deprecated alias of
-        ``archive_entry_count`` for v1.1.0 callers; remove in a future major.
+        Five-key contract (``results`` / ``next_cursor`` / ``total`` /
+        ``done`` / ``page_info``) plus walk-specific extras.
+
+        ``total`` is always None: walk_namespace doesn't know the
+        per-namespace total mid-scan. Callers that need a count can use
+        ``browse_namespace`` (sampled) or wait for ``done=True``.
+
+        ``archive_entry_count`` is the file-level entry count, distinct
+        from the (unknown) namespace count.
         """
+        returned_count = len(entries)
         return {
             "namespace": namespace,
-            "cursor": cursor,
-            "limit": limit,
-            "returned_count": len(entries),
-            "scanned_count": scanned_count,
+            "results": entries,
             "next_cursor": next_cursor,
+            "total": None,
             "done": done,
+            "page_info": {
+                "offset": scan_at,
+                "limit": limit,
+                "returned_count": returned_count,
+            },
+            "scanned_count": scanned_count,
             "scanned_through_id": scanned_through_id,
             "archive_entry_count": archive_entry_count,
-            "total_in_namespace": total_in_namespace,
-            "total_in_namespace_is_lower_bound": total_in_namespace_is_lower_bound,
-            "total_entries": archive_entry_count,  # deprecated alias
-            "entries": entries,
         }
 
     @classmethod
     def _walk_new_scheme_metadata(
         cls,
         archive: Archive,
-        cursor: int,
+        scan_at: int,
         limit: int,
         archive_entry_count: int,
     ) -> Dict[str, Any]:
         """Walk M (metadata) entries in a new-scheme archive via metadata_keys."""
+        from openzim_mcp.pagination import Cursor
+
         try:
             keys = list(getattr(archive, "metadata_keys", []) or [])
         except Exception as e:
             logger.debug(f"metadata_keys read failed: {e}")
             keys = []
         total = len(keys)
-        start = cursor
+        start = scan_at
         end = min(start + limit, total)
         entries = [{"path": f"M/{k}", "title": k} for k in keys[start:end]]
         done = end >= total
+        next_cursor: Optional[str] = None
+        if not done:
+            next_cursor = Cursor.encode(
+                tool="walk_namespace",
+                state={"scan_at": end, "l": limit},
+            )
         return cls._build_walk_result(
             namespace="M",
-            cursor=cursor,
+            scan_at=scan_at,
             limit=limit,
             entries=entries,
             scanned_count=end - start,
             scanned_through_id=end - 1 if end > start else None,
             done=done,
-            next_cursor=None if done else end,
+            next_cursor=next_cursor,
             archive_entry_count=archive_entry_count,
-            total_in_namespace=total,
-            total_in_namespace_is_lower_bound=False,
         )
 
     def walk_namespace(
         self,
         zim_file_path: str,
         namespace: str,
-        cursor: int = 0,
+        cursor: Optional[Dict[str, Any]] = None,
         limit: int = 200,
     ) -> str:
         """Legacy JSON-string variant of ``walk_namespace_data``.
@@ -1170,8 +1270,11 @@ class _NamespaceMixin:
         Args:
             zim_file_path: Path to the ZIM file
             namespace: Namespace to walk (C, M, W, X, A, I, etc.)
-            cursor: Entry ID to resume from (default 0; use the value from
-                ``next_cursor`` of the previous call)
+            cursor: Decoded cursor-state dict (e.g.
+                ``{"scan_at": 42, "l": 200}``). ``None`` starts from the
+                beginning. Tool callers should prefer the MCP
+                ``walk_namespace`` tool which accepts an opaque wire
+                cursor and decodes for you.
             limit: Maximum entries to return per page (1–500, default 200)
 
         Returns:
@@ -1182,7 +1285,9 @@ class _NamespaceMixin:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
         """
         return json.dumps(
-            self.walk_namespace_data(zim_file_path, namespace, cursor, limit),
+            self.walk_namespace_data(
+                zim_file_path, namespace, cursor_state=cursor, limit=limit
+            ),
             indent=2,
             ensure_ascii=False,
         )

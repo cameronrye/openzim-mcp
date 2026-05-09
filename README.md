@@ -112,6 +112,51 @@ zim_query("links in Photosynthesis", options={"compact": False})
 - ReDoS protection: the markdown link-strip and snippet-truncation regexes now run through the same threading-based timeout wrapper used by the intent parser, so an adversarial unclosed `[text](URL` cannot cause catastrophic backtracking.
 - The compact rendering layer moved to its own module (`openzim_mcp.compact_renderers`) — `simple_tools.py` is now focused on intent dispatch.
 
+## What's new in v2.0.0a2
+
+> Phase B of the v2 effort. Introduces the shared response contract for all list-returning tools — a wire-format break from v1.x. Clients must be updated before upgrading.
+
+### Response contract (v2)
+
+Every list-returning tool returns the same five contract keys:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `results` | `list[T]` | The page of items. Empty list on zero hits. |
+| `next_cursor` | `str \| null` | Opaque base64-JSON cursor. Pass back as `cursor=` to fetch the next page. `null` on the last page. |
+| `total` | `int \| null` | Total count across all pages. `null` when not knowable mid-scan (e.g., `walk_namespace`). |
+| `done` | `bool` | `true` when no more pages exist. Always co-varies with `next_cursor`: `done=true` ⟺ `next_cursor=null`. |
+| `page_info` | `{offset, limit, returned_count, total_is_lower_bound?}` | Pagination state for this page. |
+
+Plus the Phase A `_meta` envelope as a sibling.
+
+#### Pagination input
+
+Every paged tool accepts `cursor` (preferred) or `offset` (convenience). If
+both are supplied, `cursor` wins.
+
+#### Cursor format
+
+Cursors are URL-safe base64-encoded JSON of `{v: 1, t: <tool_name>, s: <state>}`.
+The cursor is **tool-bound** — passing one tool's cursor to another raises a
+clear error. Cursors are **opaque** — clients should not interpret them.
+
+#### Tools without natural pagination
+
+Tools like `find_entry_by_title`, `get_search_suggestions`, and `list_zim_files`
+return all matches in one call. They still emit the contract: `done=true`,
+`next_cursor=null`, `total=len(results)`.
+
+#### `extract_article_links` requires `kind`
+
+`extract_article_links` returns one category per call (`kind=internal` by
+default). Use `kind=external` or `kind=media` for the other categories.
+Per-category counts surface in `category_totals: {internal, external, media}`.
+
+### Wire-format break note
+
+v2.0.0a2 is a wire-format break from v1.x — see CHANGELOG for the per-tool key renames.
+
 ## What's new in v2.0.0a1
 
 > First v2 pre-release. Phase A of the multi-phase v2 effort. All changes additive at the tool-signature layer; small compact-mode prose change for empty search results.
@@ -792,7 +837,7 @@ Composes `extract_article_links` and deduplicates internal links, returning up t
 - `limit` (integer, default: 10, range: 1–100): Max results
 
 **Returns:**
-JSON with `outbound_results`.
+JSON with `results`.
 
 ### get_entry_summary - Get a concise article summary
 

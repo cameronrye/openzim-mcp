@@ -75,7 +75,10 @@ class TestGetZimEntryTool:
             entry_path="A/Article",
             max_content_length=50,
         )
-        assert "must be at least 100" in result
+        # v2: validation errors return a structured tool_error envelope.
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "must be at least 100" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_get_zim_entry_rate_limit_error(self, server: OpenZimMcpServer):

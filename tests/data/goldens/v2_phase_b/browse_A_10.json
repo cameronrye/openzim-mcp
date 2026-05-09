@@ -1,0 +1,17 @@
+{
+  "_meta": {
+    "truncated": false
+  },
+  "discovery_method": "full_iteration",
+  "done": true,
+  "namespace": "A",
+  "page_info": {
+    "limit": 10,
+    "offset": 0,
+    "returned_count": 0
+  },
+  "results": [],
+  "results_may_be_incomplete": false,
+  "sampling_based": false,
+  "total": 0
+}
