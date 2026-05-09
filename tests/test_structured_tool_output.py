@@ -348,7 +348,7 @@ class TestStructuredOutput:
             assert "query" in payload
 
     @pytest.mark.asyncio
-    async def test_search_with_filters_returns_paginated_response(
+    async def test_search_with_filters_returns_structured_content(
         self, server: OpenZimMcpServer, basic_test_zim_files
     ) -> None:
         """search_with_filters (Phase B) emits a SearchWithFiltersResponse-shaped payload.
