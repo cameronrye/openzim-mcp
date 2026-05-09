@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0](https://github.com/cameronrye/openzim-mcp/compare/v2.0.0...v3.0.0) (2026-05-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **v2:** Phase B — response contract & TypedDict migration ([#111](https://github.com/cameronrye/openzim-mcp/issues/111))
+
+### Features
+
+* **v2:** Phase B — response contract & TypedDict migration ([#111](https://github.com/cameronrye/openzim-mcp/issues/111)) ([6dd862e](https://github.com/cameronrye/openzim-mcp/commit/6dd862e4deeda9527c271bd33aa19651f2dbdad5))
+
 ## [2.0.0a2] — 2026-05-09 (alpha pre-release)
 
 v2 Phase B: response-contract migration. **Wire-format break** for every
