@@ -522,8 +522,9 @@ class TestZimOperations:
 
             assert "namespace" in result
             assert "C" in result
-            assert "entries" in result
-            assert "total_in_namespace" in result
+            # Phase B contract keys (substring check on the JSON-string surface).
+            assert '"results"' in result
+            assert '"total"' in result
 
     def test_browse_namespace_invalid_params(self, zim_operations: ZimOperations):
         """Test namespace browsing with invalid parameters.
@@ -1241,7 +1242,7 @@ class TestZimOperations:
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             result = zim_operations.browse_namespace(str(zim_file), "A")
-            assert 'total_in_namespace": 0' in result
+            assert '"total": 0' in result
 
     def test_search_with_filters_comprehensive(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1343,7 +1344,7 @@ class TestZimOperations:
         # delegates to browse_namespace_data, which caches dicts under a
         # `browse_ns_data:` key. Exercise the cache hit path against the
         # dict-returning entry point directly.
-        cache_key = f"browse_ns_data:{validated_path}:A:50:0"
+        cache_key = f"browse_ns_data:v2b:{validated_path}:A:50:0"
         zim_operations.cache.set(cache_key, {"cached": "browse"})
 
         result = zim_operations.browse_namespace_data(str(zim_file), "A")

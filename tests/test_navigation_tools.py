@@ -258,7 +258,15 @@ class TestNavigationToolsDirectInvocation:
     async def test_browse_namespace_tool_invocation(self, advanced_server, temp_dir):
         """Test invoking browse_namespace tool handler directly."""
         advanced_server.async_zim_operations.browse_namespace_data = AsyncMock(
-            return_value={"entries": [{"path": "C/Article", "title": "Article"}]}
+            return_value={
+                "namespace": "C",
+                "results": [{"path": "C/Article", "title": "Article"}],
+                "next_cursor": None,
+                "total": 1,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 50, "returned_count": 1},
+                "_meta": {},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -271,7 +279,7 @@ class TestNavigationToolsDirectInvocation:
                 offset=0,
             )
             assert isinstance(result, dict)
-            assert "entries" in result
+            assert "results" in result
 
     @pytest.mark.asyncio
     async def test_browse_namespace_with_invalid_limit(self, advanced_server, temp_dir):
@@ -890,7 +898,24 @@ class TestNamespaceDataMethodsMeta:
     ):
         """browse_namespace_data fresh path attaches _meta."""
         zim_file = self._zim_file(temp_dir)
-        fake_result = {"entries": [], "namespace": "C", "total": 0}
+        # _browse_namespace_entries still returns the inner shape with
+        # legacy keys (entries/total_in_namespace/...); the contract
+        # rename is performed in browse_namespace_data after this call.
+        fake_result = {
+            "namespace": "C",
+            "entries": [],
+            "total_in_namespace": 0,
+            "total_in_namespace_is_lower_bound": False,
+            "offset": 0,
+            "limit": 50,
+            "returned_count": 0,
+            "has_more": False,
+            "next_cursor": None,
+            "sampling_based": False,
+            "discovery_method": "full_iteration",
+            "is_total_authoritative": True,
+            "results_may_be_incomplete": False,
+        }
         monkeypatch.setattr(
             zim_ops,
             "_browse_namespace_entries",
@@ -910,8 +935,17 @@ class TestNamespaceDataMethodsMeta:
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
-        cache_key = f"browse_ns_data:{validated}:C:50:0"
-        old = {"entries": [], "namespace": "C"}
+        cache_key = f"browse_ns_data:v2b:{validated}:C:50:0"
+        # Cache the *post-rename* contract shape — browse_namespace_data
+        # now caches the structured payload, not the inner legacy dict.
+        old = {
+            "namespace": "C",
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 50, "returned_count": 0},
+        }
         zim_ops.cache.set(cache_key, old)
 
         result = zim_ops.browse_namespace_data(str(zim_file), "C")

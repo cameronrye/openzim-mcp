@@ -147,7 +147,7 @@ class TestBrowseNamespaceNewScheme:
         """browse_namespace('C') in new-scheme returns every iterable entry."""
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "C", limit=50))
-        paths = {e["path"] for e in result["entries"]}
+        paths = {e["path"] for e in result["results"]}
         assert {"favicon.png", "main.html"} <= paths
 
     def test_browse_F_returns_empty(
@@ -158,7 +158,7 @@ class TestBrowseNamespaceNewScheme:
         """The bogus first-letter bucket 'F' must yield zero entries."""
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "F", limit=50))
-        assert result["entries"] == []
+        assert result["results"] == []
 
     def test_browse_M_returns_metadata_entries(
         self,
@@ -169,7 +169,7 @@ class TestBrowseNamespaceNewScheme:
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "M", limit=50))
         # Should include metadata keys like Title, Language, etc.
-        titles = {e["title"] for e in result["entries"]}
+        titles = {e["title"] for e in result["results"]}
         assert "Title" in titles or any(
             "Title" in t for t in titles
         ), f"expected metadata keys in M, got titles: {titles}"
@@ -186,7 +186,7 @@ class TestBrowseNamespaceOldScheme:
         """Old-scheme browse_namespace('M') still finds M/* metadata entries."""
         zim = _require(basic_test_zim_files["withns"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "M", limit=50))
-        paths = {e["path"] for e in result["entries"]}
+        paths = {e["path"] for e in result["results"]}
         # withns/small.zim has 12 M/* entries
         assert "M/Title" in paths
         assert "M/Language" in paths
@@ -341,13 +341,15 @@ class TestBrowseNamespaceTotalIsAuthoritative:
     ):
         """For new-scheme C, totals come straight from archive.entry_count.
 
-        is_total_authoritative must be True (libzim tells us exactly).
+        Phase B: ``total`` is authoritative when libzim tells us exactly,
+        signalled by the *absence* of ``page_info.total_is_lower_bound``.
         """
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "C", limit=50))
         # nons/small.zim has entry_count=2 (favicon.png, main.html)
-        assert result["total_in_namespace"] == 2
-        assert result["is_total_authoritative"] is True
+        assert result["total"] == 2
+        # Authoritative: total_is_lower_bound is absent or False.
+        assert not result["page_info"].get("total_is_lower_bound", False)
 
     def test_new_scheme_M_total_matches_metadata_keys(
         self,
@@ -358,8 +360,8 @@ class TestBrowseNamespaceTotalIsAuthoritative:
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "M", limit=50))
         # nons/small.zim has 10 metadata_keys
-        assert result["total_in_namespace"] == 10
-        assert result["is_total_authoritative"] is True
+        assert result["total"] == 10
+        assert not result["page_info"].get("total_is_lower_bound", False)
 
 
 class TestExtractNamespaceFromPathSchemeAware:

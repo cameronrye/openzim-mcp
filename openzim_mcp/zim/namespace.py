@@ -11,7 +11,7 @@ shim's symbols continue to work without changes.
 import contextlib
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
+    from openzim_mcp.tool_schemas import BrowseNamespaceResponse
 
 logger = logging.getLogger(__name__)
 
@@ -469,11 +470,17 @@ class _NamespaceMixin:
 
     def browse_namespace_data(
         self, zim_file_path: str, namespace: str, limit: int = 50, offset: int = 0
-    ) -> Dict[str, Any]:
+    ) -> "BrowseNamespaceResponse":
         """Structured variant of ``browse_namespace``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
         can hand it straight to FastMCP's structured-content path.
+
+        Phase B contract: top-level ``results`` / ``next_cursor`` /
+        ``total`` / ``done`` / ``page_info`` plus the ``namespace`` /
+        ``discovery_method`` / ``sampling_based`` /
+        ``results_may_be_incomplete`` extras. ``next_cursor`` is encoded
+        with ``tool="browse_namespace"`` and state ``{o, l, ns}``.
 
         Raises:
             OpenZimMcpValidationError: If parameter validation fails (limit,
@@ -481,6 +488,8 @@ class _NamespaceMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If browsing fails
         """
+        from openzim_mcp.pagination import Cursor
+
         # Validate parameters. These are caller-input errors, distinct from
         # archive-access failures, so they surface as
         # OpenZimMcpValidationError to let the tool layer render a targeted
@@ -502,19 +511,20 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"browse_ns_data:{validated_path}:{namespace}:{limit}:{offset}"
+        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
+        # shape: entries/total_in_namespace/has_more/...) don't leak through
+        # after the upgrade.
+        cache_key = f"browse_ns_data:v2b:{validated_path}:{namespace}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespace browse dict for: {namespace}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
-            return cached_result  # type: ignore[no-any-return]
+            return cast("BrowseNamespaceResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._browse_namespace_entries(
+                raw = self._browse_namespace_entries(
                     archive,
                     namespace,
                     limit,
@@ -522,12 +532,52 @@ class _NamespaceMixin:
                     archive_path=str(validated_path),
                 )
 
-            # Cache the result
-            self.cache.set(cache_key, result)
+            # ``_browse_namespace_entries`` still returns the legacy inner
+            # shape (entries / total_in_namespace / has_more / ...). Adapt
+            # to the v2 Phase B contract here so internal callers and tests
+            # that target the helper aren't forced through the rename.
+            entries = raw.get("entries", [])
+            total_in_namespace = raw.get("total_in_namespace", 0)
+            is_total_authoritative = raw.get("is_total_authoritative", True)
+            discovery_method = raw.get("discovery_method", "unknown")
+            sampling_based = raw.get("sampling_based", False)
+            results_may_be_incomplete = raw.get("results_may_be_incomplete", False)
+
+            returned_count = len(entries)
+            last_index = offset + returned_count
+            done = last_index >= total_in_namespace
+            next_cursor: Optional[str] = None
+            if not done:
+                next_cursor = Cursor.encode(
+                    tool="browse_namespace",
+                    state={"o": last_index, "l": limit, "ns": namespace},
+                )
+
+            page_info: Dict[str, Any] = {
+                "offset": offset,
+                "limit": limit,
+                "returned_count": returned_count,
+            }
+            if not is_total_authoritative:
+                page_info["total_is_lower_bound"] = True
+
+            payload: Dict[str, Any] = {
+                "namespace": namespace,
+                "results": entries,
+                "next_cursor": next_cursor,
+                "total": total_in_namespace,
+                "done": done,
+                "page_info": page_info,
+                "discovery_method": discovery_method,
+                "sampling_based": sampling_based,
+                "results_may_be_incomplete": results_may_be_incomplete,
+            }
+
+            self.cache.set(cache_key, payload)
             logger.info(
                 f"Browsed namespace {namespace}: {limit} entries from offset {offset}"
             )
-            return attach_meta(result)
+            return cast("BrowseNamespaceResponse", attach_meta(payload))
 
         except Exception as e:
             logger.error(f"Namespace browsing failed for {namespace}: {e}")

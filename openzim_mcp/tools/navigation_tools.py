@@ -13,7 +13,11 @@ from ..constants import (
 from ..exceptions import OpenZimMcpRateLimitError
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
-from ..tool_schemas import SearchSuggestionsResponse, SearchWithFiltersResponse
+from ..tool_schemas import (
+    BrowseNamespaceResponse,
+    SearchSuggestionsResponse,
+    SearchWithFiltersResponse,
+)
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -36,7 +40,8 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
         namespace: str,
         limit: int = 50,
         offset: int = 0,
-    ) -> Dict[str, Any]:
+        cursor: Optional[str] = None,
+    ) -> Union[BrowseNamespaceResponse, ToolErrorPayload]:
         """Browse entries in a specific namespace with pagination.
 
         Args:
@@ -44,30 +49,57 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
             namespace: Namespace to browse (C, M, W, X, A, I for old; domains for new)
             limit: Maximum number of entries to return (1-200, default: 50)
             offset: Starting offset for pagination (default: 0)
+            cursor: Opaque pagination token from a previous result's
+                ``next_cursor`` field. When provided, overrides ``offset``,
+                ``limit``, and ``namespace`` with the values encoded in the
+                token (cursor wins on conflict per response-contract spec).
 
         Returns:
-            Dict with keys: namespace, total_in_namespace, offset, limit,
-            returned_count, has_more, next_cursor, entries, sampling_based,
-            discovery_method, is_total_authoritative, results_may_be_incomplete.
-            On failure, returns a ``{"error": True, ...}`` envelope (see
-            ``responses.tool_error``).
+            ``BrowseNamespaceResponse``-shaped dict on success (Phase B
+            contract: top-level ``results`` / ``next_cursor`` / ``total`` /
+            ``done`` / ``page_info`` plus ``namespace`` / ``discovery_method``
+            / ``sampling_based`` / ``results_may_be_incomplete`` extras);
+            ``ToolErrorPayload`` envelope on failure.
         """
         try:
+            # Phase B: cursor wins on conflict per response-contract spec.
+            if cursor is not None:
+                from ..pagination import Cursor, CursorMismatchError
+
+                try:
+                    decoded = Cursor.decode(
+                        cursor, expected_tool="browse_namespace"
+                    )
+                except CursorMismatchError as e:
+                    return tool_error(
+                        operation="browse namespace",
+                        message=str(e),
+                        context="Tool: browse_namespace, cursor=<truncated>",
+                    )
+                except ValueError as e:
+                    return tool_error(
+                        operation="browse namespace",
+                        message=f"Invalid pagination cursor: {e}",
+                        context="Tool: browse_namespace",
+                    )
+                offset = decoded["s"]["o"]
+                if "l" in decoded["s"]:
+                    limit = decoded["s"]["l"]
+                if "ns" in decoded["s"]:
+                    namespace = decoded["s"]["ns"]
+
             # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("browse_namespace")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="browse namespace",
+                    message=server._create_enhanced_error_message(
                         operation="browse namespace",
-                        message=server._create_enhanced_error_message(
-                            operation="browse namespace",
-                            error=e,
-                            context=f"Namespace: {namespace}",
-                        ),
+                        error=e,
                         context=f"Namespace: {namespace}",
                     ),
+                    context=f"Namespace: {namespace}",
                 )
 
             # Sanitize inputs
@@ -78,36 +110,30 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
 
             # Validate parameters
             if limit < 1 or limit > 200:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
-                        operation="browse namespace",
-                        message=(
-                            "**Parameter Validation Error**\n\n"
-                            f"**Issue**: limit must be between 1 and 200 "
-                            f"(provided: {limit})\n\n"
-                            "**Troubleshooting**: Adjust the limit parameter to a "
-                            "value within the valid range.\n"
-                            "**Example**: Use `limit=50` for reasonable pagination."
-                        ),
-                        context=f"Namespace: {namespace}, Limit: {limit}",
+                return tool_error(
+                    operation="browse namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 200 "
+                        f"(provided: {limit})\n\n"
+                        "**Troubleshooting**: Adjust the limit parameter to a "
+                        "value within the valid range.\n"
+                        "**Example**: Use `limit=50` for reasonable pagination."
                     ),
+                    context=f"Namespace: {namespace}, Limit: {limit}",
                 )
             if offset < 0:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
-                        operation="browse namespace",
-                        message=(
-                            "**Parameter Validation Error**\n\n"
-                            f"**Issue**: offset must be non-negative "
-                            f"(provided: {offset})\n\n"
-                            "**Troubleshooting**: Use offset=0 to start from the "
-                            "beginning, or a positive number to skip entries.\n"
-                            "**Example**: Use `offset=50` to skip the first 50 entries."
-                        ),
-                        context=f"Namespace: {namespace}, Offset: {offset}",
+                return tool_error(
+                    operation="browse namespace",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: offset must be non-negative "
+                        f"(provided: {offset})\n\n"
+                        "**Troubleshooting**: Use offset=0 to start from the "
+                        "beginning, or a positive number to skip entries.\n"
+                        "**Example**: Use `offset=50` to skip the first 50 entries."
                     ),
+                    context=f"Namespace: {namespace}, Offset: {offset}",
                 )
 
             # Use async operations
@@ -117,22 +143,19 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error browsing namespace: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="browse namespace",
+                message=server._create_enhanced_error_message(
                     operation="browse namespace",
-                    message=server._create_enhanced_error_message(
-                        operation="browse namespace",
-                        error=e,
-                        context=(
-                            f"File: {zim_file_path}, Namespace: {namespace}, "
-                            f"Limit: {limit}, Offset: {offset}"
-                        ),
-                    ),
+                    error=e,
                     context=(
                         f"File: {zim_file_path}, Namespace: {namespace}, "
                         f"Limit: {limit}, Offset: {offset}"
                     ),
+                ),
+                context=(
+                    f"File: {zim_file_path}, Namespace: {namespace}, "
+                    f"Limit: {limit}, Offset: {offset}"
                 ),
             )
 

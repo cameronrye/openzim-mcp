@@ -14,6 +14,7 @@ from .zim_operations import ZimOperations
 
 if TYPE_CHECKING:
     from .tool_schemas import (
+        BrowseNamespaceResponse,
         FindEntryResponse,
         SearchAllResponse,
         SearchResponse,
@@ -249,7 +250,7 @@ class AsyncZimOperations:
         namespace: str = "C",
         limit: int = 50,
         offset: int = 0,
-    ) -> dict:
+    ) -> "BrowseNamespaceResponse":
         """Structured variant of ``browse_namespace`` (async)."""
         return await asyncio.to_thread(
             self._ops.browse_namespace_data,

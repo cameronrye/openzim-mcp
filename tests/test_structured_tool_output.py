@@ -166,7 +166,13 @@ class TestStructuredOutput:
         assert isinstance(structured, dict)
         payload = structured["result"] if "result" in structured else structured
         assert "namespace" in payload
-        assert "entries" in payload and isinstance(payload["entries"], list)
+        # Phase B contract: results / next_cursor / total / done / page_info.
+        assert "results" in payload and isinstance(payload["results"], list)
+        assert "done" in payload
+        assert "page_info" in payload
+        assert payload["page_info"]["offset"] == 0
+        assert payload["page_info"]["limit"] == 50
+        assert payload["page_info"]["returned_count"] == len(payload["results"])
 
     @pytest.mark.asyncio
     async def test_walk_namespace_returns_structured_content(
