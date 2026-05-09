@@ -242,8 +242,11 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             List of dictionaries containing ZIM file information.
             Each dict has: name, path, directory, size, size_bytes, modified
         """
-        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
-        # shape: files/count keys) don't leak through after the upgrade.
+        # Cache key bumped to v2b (Phase B) so v1.x cached per-file list
+        # entries don't leak through if the inner shape ever drifts. Today
+        # the per-file dict shape (name/path/directory/size/size_bytes/
+        # modified) is unchanged; the v2b rename happens one layer up in
+        # ``list_zim_files_summary_data`` (files→results, count→total).
         cache_key = "zim_files_list_data_v2b"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
