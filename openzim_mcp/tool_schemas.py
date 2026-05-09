@@ -193,7 +193,9 @@ class WalkNamespaceResponse(TypedDict):
     _meta: MetaEnvelope
     namespace: str
     scanned_count: int
-    scanned_through_id: int
+    # ``None`` when the loop never advanced past ``scan_at`` (e.g. the cursor
+    # was already at/past the archive end so no entries were examined).
+    scanned_through_id: Optional[int]
     archive_entry_count: int
 
 

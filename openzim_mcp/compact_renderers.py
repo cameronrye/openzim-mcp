@@ -180,24 +180,37 @@ def render_related(data: Dict[str, Any], entry_path: str) -> str:
     return "\n".join(lines)
 
 
-def render_walk_namespace(data: Dict[str, Any]) -> str:
-    """Render a walk_namespace payload as a compact entry list."""
+def render_walk_namespace(data: Mapping[str, Any]) -> str:
+    """Render a walk_namespace payload as a compact entry list.
+
+    Reads the v2 Phase B contract: ``results`` / ``next_cursor`` (opaque
+    str) / ``done`` / ``page_info`` plus walk-specific extras
+    (``archive_entry_count``). ``total`` is always None for walk; the
+    header reports the file-level count from ``archive_entry_count`` to
+    give callers a sense of scale.
+    """
     if not isinstance(data, dict):
         return json.dumps(data)
     ns = data.get("namespace", "?")
-    cursor = data.get("cursor", 0)
     next_cursor = data.get("next_cursor")
-    returned = data.get("returned_count", 0)
-    total = data.get("total_in_namespace") or data.get("total_entries", 0)
-    is_lower_bound = data.get("total_in_namespace_is_lower_bound", False)
-    entries = data.get("entries") or []
+    page_info = data.get("page_info") or {}
+    offset = page_info.get("offset", 0)
+    returned = page_info.get("returned_count", 0)
+    # walk doesn't know per-namespace total mid-scan; surface the
+    # file-level archive count as a scale hint instead.
+    archive_total = data.get("archive_entry_count", 0)
+    entries = data.get("results") or []
     done = data.get("done", False)
 
-    total_str = f"~{total:,}" if is_lower_bound else f"{total:,}"
-    header = (
-        f"# Namespace `{ns}` — entries {cursor + 1}-{cursor + returned} "
-        f"of {total_str}"
-    )
+    if archive_total:
+        header = (
+            f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned} "
+            f"(archive total: {archive_total:,})"
+        )
+    else:
+        header = (
+            f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned}"
+        )
     lines = [header, ""]
     for e in entries:
         if not isinstance(e, dict):
@@ -210,7 +223,7 @@ def render_walk_namespace(data: Dict[str, Any]) -> str:
             lines.append(f"- `{p}`")
     lines.append("")
     if not done and next_cursor is not None:
-        lines.append(f"---\nPass `offset={next_cursor}` for the next page.")
+        lines.append(f"---\nPass `cursor={next_cursor}` for the next page.")
     else:
         lines.append("---\n_End of namespace._")
     return "\n".join(lines)

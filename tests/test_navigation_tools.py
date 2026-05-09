@@ -746,7 +746,7 @@ class TestWalkNamespaceLimitValidation:
         result = await tool_handler(
             zim_file_path=str(temp_dir / "test.zim"),
             namespace="C",
-            cursor=0,
+            cursor=None,
             limit=100000,
         )
         assert isinstance(result, dict)
@@ -769,7 +769,7 @@ class TestWalkNamespaceLimitValidation:
         result = await tool_handler(
             zim_file_path=str(temp_dir / "test.zim"),
             namespace="C",
-            cursor=0,
+            cursor=None,
             limit=0,
         )
         assert isinstance(result, dict)
@@ -778,35 +778,77 @@ class TestWalkNamespaceLimitValidation:
         advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_walk_namespace_rejects_negative_cursor(
+    async def test_walk_namespace_rejects_cross_tool_cursor(
         self, advanced_server, temp_dir
     ):
-        """Negative cursor must produce a validation error."""
+        """A cursor issued by another tool must be rejected before backend access.
+
+        v2 Phase B: cursors are tool-bound. A cursor encoded with
+        ``tool="browse_namespace"`` cannot be used by ``walk_namespace``.
+        """
+        from openzim_mcp.pagination import Cursor
+
         advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
             side_effect=AssertionError(
-                "backend should not be called for invalid cursor"
+                "backend should not be called for cross-tool cursor"
             )
         )
 
         tools = advanced_server.mcp._tool_manager._tools
         assert "walk_namespace" in tools
         tool_handler = tools["walk_namespace"].fn
+        wrong_cursor = Cursor.encode(
+            tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"}
+        )
         result = await tool_handler(
             zim_file_path=str(temp_dir / "test.zim"),
             namespace="C",
-            cursor=-1,
+            cursor=wrong_cursor,
             limit=200,
         )
         assert isinstance(result, dict)
         assert result.get("error") is True
-        assert "must be non-negative" in result.get("message", "")
+        advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_walk_namespace_rejects_malformed_cursor(
+        self, advanced_server, temp_dir
+    ):
+        """A non-base64 / non-JSON cursor must surface a validation error."""
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
+            side_effect=AssertionError(
+                "backend should not be called for malformed cursor"
+            )
+        )
+
+        tools = advanced_server.mcp._tool_manager._tools
+        tool_handler = tools["walk_namespace"].fn
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            namespace="C",
+            cursor="!!!not-base64!!!",
+            limit=200,
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is True
         advanced_server.async_zim_operations.walk_namespace_data.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_walk_namespace_accepts_valid_bounds(self, advanced_server, temp_dir):
         """Valid limit/cursor must reach the backend."""
         advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
-            return_value={"entries": [], "next_cursor": 200, "done": False}
+            return_value={
+                "namespace": "C",
+                "results": [],
+                "next_cursor": None,
+                "total": None,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 200, "returned_count": 0},
+                "scanned_count": 0,
+                "scanned_through_id": None,
+                "archive_entry_count": 0,
+                "_meta": {},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -815,12 +857,66 @@ class TestWalkNamespaceLimitValidation:
         result = await tool_handler(
             zim_file_path=str(temp_dir / "test.zim"),
             namespace="C",
-            cursor=0,
+            cursor=None,
             limit=200,
         )
         assert isinstance(result, dict)
-        assert "entries" in result
+        assert "results" in result
         advanced_server.async_zim_operations.walk_namespace_data.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_walk_namespace_decodes_opaque_cursor(
+        self, advanced_server, temp_dir
+    ):
+        """An opaque cursor encoded with t='walk_namespace' decodes to scan_at/limit.
+
+        The decoded ``s.l`` overrides the function-arg ``limit`` (cursor wins
+        on conflict per response-contract spec) and ``s.scan_at`` becomes
+        the starting point for the backend scan.
+        """
+        from openzim_mcp.pagination import Cursor
+
+        captured: dict = {}
+
+        async def _fake_walk(
+            zim_file_path, namespace, cursor_state=None, limit=200
+        ):
+            captured["cursor_state"] = cursor_state
+            captured["limit"] = limit
+            return {
+                "namespace": "C",
+                "results": [],
+                "next_cursor": None,
+                "total": None,
+                "done": True,
+                "page_info": {"offset": 42, "limit": 50, "returned_count": 0},
+                "scanned_count": 0,
+                "scanned_through_id": None,
+                "archive_entry_count": 0,
+                "_meta": {},
+            }
+
+        advanced_server.async_zim_operations.walk_namespace_data = AsyncMock(
+            side_effect=_fake_walk
+        )
+
+        tools = advanced_server.mcp._tool_manager._tools
+        tool_handler = tools["walk_namespace"].fn
+        good_cursor = Cursor.encode(
+            tool="walk_namespace", state={"scan_at": 42, "l": 50}
+        )
+        result = await tool_handler(
+            zim_file_path=str(temp_dir / "test.zim"),
+            namespace="C",
+            cursor=good_cursor,
+            # Function-arg limit must be overridden by the cursor's "l".
+            limit=200,
+        )
+        assert isinstance(result, dict)
+        assert "results" in result
+        # cursor's "l" wins over function-arg limit.
+        assert captured["limit"] == 50
+        assert captured["cursor_state"] == {"scan_at": 42, "l": 50}
 
 
 # ---------------------------------------------------------------------------
@@ -964,7 +1060,9 @@ class TestNamespaceDataMethodsMeta:
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
             mock_archive.return_value.__enter__.return_value = mock_archive_obj
-            result = zim_ops.walk_namespace_data(str(zim_file), "C", cursor=0, limit=10)
+            result = zim_ops.walk_namespace_data(
+                str(zim_file), "C", cursor_state=None, limit=10
+            )
 
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1

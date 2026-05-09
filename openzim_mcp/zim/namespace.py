@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
-    from openzim_mcp.tool_schemas import BrowseNamespaceResponse
+    from openzim_mcp.tool_schemas import BrowseNamespaceResponse, WalkNamespaceResponse
 
 logger = logging.getLogger(__name__)
 
@@ -994,17 +994,32 @@ class _NamespaceMixin:
         self,
         zim_file_path: str,
         namespace: str,
-        cursor: int = 0,
+        cursor_state: Optional[Dict[str, Any]] = None,
         limit: int = 200,
-    ) -> Dict[str, Any]:
+    ) -> "WalkNamespaceResponse":
         """Structured variant of ``walk_namespace``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
         can hand it straight to FastMCP's structured-content path.
 
+        Phase B contract: top-level ``results`` / ``next_cursor`` (opaque
+        str) / ``total`` (always None — walk doesn't know the per-namespace
+        total mid-scan) / ``done`` / ``page_info`` plus ``namespace`` /
+        ``scanned_count`` / ``scanned_through_id`` / ``archive_entry_count``
+        extras. ``next_cursor`` is encoded with ``tool="walk_namespace"``
+        and state ``{scan_at, l}``.
+
+        ``cursor_state`` carries the decoded ``s`` dict from a v2 cursor.
+        The tool layer is responsible for decoding the opaque wire token;
+        this method works with the decoded shape directly so non-tool
+        callers (legacy ``walk_namespace`` JSON wrapper, simple_tools)
+        don't have to round-trip through base64.
+
         Raises:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
         """
+        from openzim_mcp.pagination import Cursor
+
         # Caller-input validation surfaces as OpenZimMcpValidationError so
         # the tool layer can render a targeted validation message and so
         # other call sites (e.g. simple_tools) can distinguish it from
@@ -1013,8 +1028,18 @@ class _NamespaceMixin:
             raise OpenZimMcpValidationError(
                 f"limit must be between 1 and 500 (provided: {limit})"
             )
-        if cursor < 0:
-            cursor = 0
+
+        # Decoded cursor state ``s`` for walk_namespace carries
+        # ``{scan_at: int, l: int}``. Both are optional defensively —
+        # missing/negative ``scan_at`` clamps to 0, missing ``l`` falls
+        # back to the function-arg default.
+        scan_at_raw = (cursor_state or {}).get("scan_at", 0)
+        try:
+            scan_at = int(scan_at_raw)
+        except (TypeError, ValueError):
+            scan_at = 0
+        if scan_at < 0:
+            scan_at = 0
 
         # Canonicalise user input (e.g. "c" -> "C") so the comparison
         # against ``_extract_namespace_from_path`` (canonical form) does
@@ -1036,33 +1061,37 @@ class _NamespaceMixin:
                 # dedicated walker so callers see real metadata entries
                 # instead of zero matches after a full archive scan.
                 if has_new_scheme and namespace == "M":
-                    return attach_meta(
-                        self._walk_new_scheme_metadata(
-                            archive, cursor, limit, archive_entry_count
-                        )
+                    return cast(
+                        "WalkNamespaceResponse",
+                        attach_meta(
+                            self._walk_new_scheme_metadata(
+                                archive, scan_at, limit, archive_entry_count
+                            )
+                        ),
                     )
                 # Other-than-C namespaces in new-scheme aren't on the
                 # iterable surface; short-circuit so callers don't pay the
                 # full-archive scan to discover that.
                 if has_new_scheme and namespace != "C":
-                    return attach_meta(
-                        self._build_walk_result(
-                            namespace=namespace,
-                            cursor=cursor,
-                            limit=limit,
-                            entries=[],
-                            scanned_count=0,
-                            scanned_through_id=None,
-                            done=True,
-                            next_cursor=None,
-                            archive_entry_count=archive_entry_count,
-                            total_in_namespace=0,
-                            total_in_namespace_is_lower_bound=False,
-                        )
+                    return cast(
+                        "WalkNamespaceResponse",
+                        attach_meta(
+                            self._build_walk_result(
+                                namespace=namespace,
+                                scan_at=scan_at,
+                                limit=limit,
+                                entries=[],
+                                scanned_count=0,
+                                scanned_through_id=None,
+                                done=True,
+                                next_cursor=None,
+                                archive_entry_count=archive_entry_count,
+                            )
+                        ),
                     )
 
                 entries: List[Dict[str, Any]] = []
-                entry_id = cursor
+                entry_id = scan_at
                 while entry_id < archive_entry_count and len(entries) < limit:
                     try:
                         entry = archive._get_entry_by_id(entry_id)
@@ -1084,41 +1113,32 @@ class _NamespaceMixin:
                     entry_id += 1
 
                 done = entry_id >= archive_entry_count
-                next_cursor = None if done else entry_id
                 # scanned_through_id reflects the last ID we examined regardless
                 # of whether it matched the filter. None if we never entered the
-                # loop (cursor was already past the end).
-                scanned_through_id = entry_id - 1 if entry_id > cursor else None
-
-                # Namespace count is only authoritative for new-scheme C
-                # (iterator emits exactly C). Old-scheme would need a full
-                # archive scan to derive it; report None rather than mislead.
-                # ``is_lower_bound`` is meaningless when the count is None,
-                # so report None there too — saying ``False`` alongside a
-                # null count would read as "this null is the exact count".
-                total_in_namespace: Optional[int]
-                is_lower_bound: Optional[bool]
-                if has_new_scheme:
-                    total_in_namespace = archive_entry_count
-                    is_lower_bound = False
-                else:
-                    total_in_namespace = None
-                    is_lower_bound = None
-
-                return attach_meta(
-                    self._build_walk_result(
-                        namespace=namespace,
-                        cursor=cursor,
-                        limit=limit,
-                        entries=entries,
-                        scanned_count=entry_id - cursor,
-                        scanned_through_id=scanned_through_id,
-                        done=done,
-                        next_cursor=next_cursor,
-                        archive_entry_count=archive_entry_count,
-                        total_in_namespace=total_in_namespace,
-                        total_in_namespace_is_lower_bound=is_lower_bound,
+                # loop (scan_at was already at/past the end).
+                scanned_through_id = entry_id - 1 if entry_id > scan_at else None
+                next_cursor: Optional[str] = None
+                if not done:
+                    next_cursor = Cursor.encode(
+                        tool="walk_namespace",
+                        state={"scan_at": entry_id, "l": limit},
                     )
+
+                return cast(
+                    "WalkNamespaceResponse",
+                    attach_meta(
+                        self._build_walk_result(
+                            namespace=namespace,
+                            scan_at=scan_at,
+                            limit=limit,
+                            entries=entries,
+                            scanned_count=entry_id - scan_at,
+                            scanned_through_id=scanned_through_id,
+                            done=done,
+                            next_cursor=next_cursor,
+                            archive_entry_count=archive_entry_count,
+                        )
+                    ),
                 )
         except OpenZimMcpArchiveError:
             raise
@@ -1129,82 +1149,88 @@ class _NamespaceMixin:
     def _build_walk_result(
         *,
         namespace: str,
-        cursor: int,
+        scan_at: int,
         limit: int,
         entries: List[Dict[str, Any]],
         scanned_count: int,
         scanned_through_id: Optional[int],
         done: bool,
-        next_cursor: Optional[int],
+        next_cursor: Optional[str],
         archive_entry_count: int,
-        total_in_namespace: Optional[int],
-        total_in_namespace_is_lower_bound: Optional[bool],
     ) -> Dict[str, Any]:
-        """Assemble the walk_namespace result dict.
+        """Assemble the walk_namespace v2 contract result dict.
 
-        ``archive_entry_count`` is the file-level entry count.
-        ``total_in_namespace`` is the namespace-specific count (None when
-        not derivable without a full scan, e.g. old-scheme archives).
-        ``total_in_namespace_is_lower_bound`` is False when authoritative,
-        True when sampling-derived, None when ``total_in_namespace`` is
-        also None (no count means no lower-bound semantics).
-        ``total_entries`` is kept as a deprecated alias of
-        ``archive_entry_count`` for v1.1.0 callers; remove in a future major.
+        Five-key contract (``results`` / ``next_cursor`` / ``total`` /
+        ``done`` / ``page_info``) plus walk-specific extras.
+
+        ``total`` is always None: walk_namespace doesn't know the
+        per-namespace total mid-scan. Callers that need a count can use
+        ``browse_namespace`` (sampled) or wait for ``done=True``.
+
+        ``archive_entry_count`` is the file-level entry count, distinct
+        from the (unknown) namespace count.
         """
+        returned_count = len(entries)
         return {
             "namespace": namespace,
-            "cursor": cursor,
-            "limit": limit,
-            "returned_count": len(entries),
-            "scanned_count": scanned_count,
+            "results": entries,
             "next_cursor": next_cursor,
+            "total": None,
             "done": done,
+            "page_info": {
+                "offset": scan_at,
+                "limit": limit,
+                "returned_count": returned_count,
+            },
+            "scanned_count": scanned_count,
             "scanned_through_id": scanned_through_id,
             "archive_entry_count": archive_entry_count,
-            "total_in_namespace": total_in_namespace,
-            "total_in_namespace_is_lower_bound": total_in_namespace_is_lower_bound,
-            "total_entries": archive_entry_count,  # deprecated alias
-            "entries": entries,
         }
 
     @classmethod
     def _walk_new_scheme_metadata(
         cls,
         archive: Archive,
-        cursor: int,
+        scan_at: int,
         limit: int,
         archive_entry_count: int,
     ) -> Dict[str, Any]:
         """Walk M (metadata) entries in a new-scheme archive via metadata_keys."""
+        from openzim_mcp.pagination import Cursor
+
         try:
             keys = list(getattr(archive, "metadata_keys", []) or [])
         except Exception as e:
             logger.debug(f"metadata_keys read failed: {e}")
             keys = []
         total = len(keys)
-        start = cursor
+        start = scan_at
         end = min(start + limit, total)
         entries = [{"path": f"M/{k}", "title": k} for k in keys[start:end]]
         done = end >= total
+        next_cursor: Optional[str] = None
+        if not done:
+            next_cursor = Cursor.encode(
+                tool="walk_namespace",
+                state={"scan_at": end, "l": limit},
+            )
         return cls._build_walk_result(
             namespace="M",
-            cursor=cursor,
+            scan_at=scan_at,
             limit=limit,
             entries=entries,
             scanned_count=end - start,
             scanned_through_id=end - 1 if end > start else None,
             done=done,
-            next_cursor=None if done else end,
+            next_cursor=next_cursor,
             archive_entry_count=archive_entry_count,
-            total_in_namespace=total,
-            total_in_namespace_is_lower_bound=False,
         )
 
     def walk_namespace(
         self,
         zim_file_path: str,
         namespace: str,
-        cursor: int = 0,
+        cursor: Optional[Dict[str, Any]] = None,
         limit: int = 200,
     ) -> str:
         """Legacy JSON-string variant of ``walk_namespace_data``.
@@ -1220,8 +1246,11 @@ class _NamespaceMixin:
         Args:
             zim_file_path: Path to the ZIM file
             namespace: Namespace to walk (C, M, W, X, A, I, etc.)
-            cursor: Entry ID to resume from (default 0; use the value from
-                ``next_cursor`` of the previous call)
+            cursor: Decoded cursor-state dict (e.g.
+                ``{"scan_at": 42, "l": 200}``). ``None`` starts from the
+                beginning. Tool callers should prefer the MCP
+                ``walk_namespace`` tool which accepts an opaque wire
+                cursor and decodes for you.
             limit: Maximum entries to return per page (1–500, default 200)
 
         Returns:
@@ -1232,7 +1261,9 @@ class _NamespaceMixin:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
         """
         return json.dumps(
-            self.walk_namespace_data(zim_file_path, namespace, cursor, limit),
+            self.walk_namespace_data(
+                zim_file_path, namespace, cursor_state=cursor, limit=limit
+            ),
             indent=2,
             ensure_ascii=False,
         )

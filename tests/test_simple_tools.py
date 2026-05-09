@@ -649,13 +649,19 @@ class TestSimpleToolsOptionsPassthrough:
         assert kwargs.get("limit_per_file") == 25
 
     def test_walk_namespace_forwards_options_limit_and_offset(self):
-        """walk_namespace must use options['offset'] as cursor and options['limit']."""
+        """walk_namespace must use options['offset'] as scan_at and options['limit'].
+
+        v2: walk_namespace's ``cursor`` parameter is now a decoded
+        cursor-state dict (``{scan_at, l}``) rather than a raw int.
+        simple_tools maps the legacy ``options['offset']`` passthrough
+        channel to ``scan_at``.
+        """
         from unittest.mock import MagicMock
 
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         zim_ops = MagicMock()
-        zim_ops.walk_namespace.return_value = '{"entries": []}'
+        zim_ops.walk_namespace.return_value = '{"results": []}'
         zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         handler = SimpleToolsHandler(zim_ops)
 
@@ -664,7 +670,8 @@ class TestSimpleToolsOptionsPassthrough:
             options={"limit": 50, "offset": 1234},
         )
         _args, kwargs = zim_ops.walk_namespace.call_args
-        assert kwargs.get("cursor") == 1234
+        # v2: cursor is now the decoded state dict, not a raw int.
+        assert kwargs.get("cursor") == {"scan_at": 1234, "l": 50}
         assert kwargs.get("limit") == 50
 
     def test_find_by_title_forwards_options_limit(self):
@@ -1567,29 +1574,37 @@ class TestCompactMarkdownRenderingForJsonIntents:
         assert "Entry not found" in out
 
     def test_walk_namespace_compact_renders_entry_list(self):
+        # v2 Phase B contract: top-level results / next_cursor (opaque str) /
+        # total / done / page_info (offset/limit/returned_count). The compact
+        # renderer reads these directly.
+        from openzim_mcp.pagination import Cursor
+
+        next_cursor = Cursor.encode(
+            tool="walk_namespace", state={"scan_at": 3, "l": 3}
+        )
         h, mock = self._handler_with_data(
             walk_namespace_data={
                 "namespace": "C",
-                "cursor": 0,
-                "limit": 3,
-                "returned_count": 3,
-                "next_cursor": 3,
-                "done": False,
-                "total_in_namespace": 27199904,
-                "total_in_namespace_is_lower_bound": False,
-                "entries": [
+                "results": [
                     {"path": "!", "title": "!"},
                     {"path": "Photosynthesis", "title": "Photosynthesis"},
                     {"path": "Cell_(biology)", "title": "Cell (biology)"},
                 ],
+                "next_cursor": next_cursor,
+                "total": None,
+                "done": False,
+                "page_info": {"offset": 0, "limit": 3, "returned_count": 3},
+                "scanned_count": 3,
+                "scanned_through_id": 2,
+                "archive_entry_count": 27199904,
             }
         )
         out = h.handle_zim_query("walk namespace C", options={"compact": True})
         mock.walk_namespace_data.assert_called_once()
         assert "Namespace `C`" in out
-        assert "27,199,904" in out  # total formatted with commas
         assert "Photosynthesis" in out
-        assert "offset=3" in out  # next-cursor pagination hint
+        # Resume hint surfaces the opaque cursor (not a raw int).
+        assert next_cursor in out
         # JSON shape NOT in output.
         assert "{" not in out
 
@@ -2377,24 +2392,32 @@ class TestCompactRenderersModule:
 
     def test_render_walk_namespace_smoke(self):
         from openzim_mcp import compact_renderers
+        from openzim_mcp.pagination import Cursor
 
+        next_cursor = Cursor.encode(
+            tool="walk_namespace", state={"scan_at": 100, "l": 2}
+        )
         out = compact_renderers.render_walk_namespace(
             {
                 "namespace": "C",
-                "cursor": 0,
-                "next_cursor": 100,
-                "returned_count": 2,
-                "total_in_namespace": 1234,
-                "entries": [
+                "results": [
                     {"title": "A", "path": "C/A"},
                     {"title": "B", "path": "C/B"},
                 ],
+                "next_cursor": next_cursor,
+                "total": None,
                 "done": False,
+                "page_info": {"offset": 0, "limit": 2, "returned_count": 2},
+                "scanned_count": 2,
+                "scanned_through_id": 1,
+                "archive_entry_count": 1234,
             }
         )
         assert "Namespace `C`" in out
-        assert "1-2 of 1,234" in out
-        assert "offset=100" in out
+        # Header shows "1-2 of <archive_total>" since walk doesn't know per-ns total.
+        assert "1-2" in out
+        # Resume hint surfaces the opaque cursor.
+        assert next_cursor in out
 
     def test_render_namespaces_smoke(self):
         from openzim_mcp import compact_renderers

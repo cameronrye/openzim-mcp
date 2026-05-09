@@ -1392,22 +1392,29 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
-        # ``offset`` semantically maps to ``cursor`` here — a resume token,
-        # not pagination skip — but it's the only general-purpose passthrough
-        # channel so we honour it.
+        # ``offset`` semantically maps to ``scan_at`` here — a resume
+        # entry id, not pagination skip — but it's the only
+        # general-purpose passthrough channel so we honour it. v2 walk
+        # takes the decoded cursor-state dict directly so callers don't
+        # have to round-trip through base64.
+        offset = int(options.get("offset", 0) or 0)
+        limit = options.get("limit", 200)
+        cursor_state: Optional[Dict[str, Any]] = (
+            {"scan_at": offset, "l": limit} if offset > 0 else None
+        )
         if options.get("compact", False):
             data = self.zim_operations.walk_namespace_data(
                 zim_file_path,
                 params.get("namespace", "C"),
-                cursor=options.get("offset", 0),
-                limit=options.get("limit", 200),
+                cursor_state=cursor_state,
+                limit=limit,
             )
             return compact_renderers.render_walk_namespace(data)
         return self.zim_operations.walk_namespace(
             zim_file_path,
             params.get("namespace", "C"),
-            cursor=options.get("offset", 0),
-            limit=options.get("limit", 200),
+            cursor=cursor_state,
+            limit=limit,
         )
 
     def _handle_find_by_title(

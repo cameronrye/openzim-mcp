@@ -8,7 +8,7 @@ the event loop during I/O-bound operations.
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .zim_operations import ZimOperations
 
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         SearchResponse,
         SearchSuggestionsResponse,
         SearchWithFiltersResponse,
+        WalkNamespaceResponse,
     )
 
 logger = logging.getLogger(__name__)
@@ -526,7 +527,7 @@ class AsyncZimOperations:
         self,
         zim_file_path: str,
         namespace: str,
-        cursor: int = 0,
+        cursor: Optional[Dict[str, Any]] = None,
         limit: int = 200,
     ) -> str:
         """Walk all entries in a namespace by ID (async)."""
@@ -538,15 +539,15 @@ class AsyncZimOperations:
         self,
         zim_file_path: str,
         namespace: str,
-        cursor: int = 0,
+        cursor_state: Optional[Dict[str, Any]] = None,
         limit: int = 200,
-    ) -> dict:
+    ) -> "WalkNamespaceResponse":
         """Structured variant of ``walk_namespace`` (async)."""
         return await asyncio.to_thread(
             self._ops.walk_namespace_data,
             zim_file_path,
             namespace,
-            cursor,
+            cursor_state,
             limit,
         )
 

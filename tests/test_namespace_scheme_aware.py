@@ -203,7 +203,7 @@ class TestWalkNamespaceNewScheme:
         """walk_namespace('C') must surface every iterable entry."""
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.walk_namespace(str(zim), "C", limit=500))
-        paths = {e["path"] for e in result["entries"]}
+        paths = {e["path"] for e in result["results"]}
         assert {"favicon.png", "main.html"} <= paths
 
     def test_walk_F_empty(
@@ -214,92 +214,78 @@ class TestWalkNamespaceNewScheme:
         """First-letter bucket 'F' must walk to zero results, done=True."""
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.walk_namespace(str(zim), "F", limit=500))
-        assert result["entries"] == []
+        assert result["results"] == []
         assert result["done"] is True
 
 
 class TestWalkNamespaceTotalInNamespace:
-    """walk_namespace must report a namespace-specific count, not the file total.
+    """walk_namespace v2 contract: ``total`` is always None mid-scan.
 
-    Beta-test feedback: walking an empty namespace returned ``total_entries``
-    equal to the whole archive's entry count, which is misleading. The fix
-    introduces ``total_in_namespace`` (matching browse_namespace) and renames
-    the file-total field to the unambiguous ``archive_entry_count``. The old
-    ``total_entries`` is kept as a deprecated alias of ``archive_entry_count``.
+    Pre-v2 carried a ``total_in_namespace`` field plus a deprecated
+    ``total_entries`` alias. v2 Phase B unifies on the contract's single
+    ``total`` slot and consistently reports None — walk doesn't know the
+    per-namespace total without first finishing the scan, and the file
+    total is exposed separately as ``archive_entry_count``.
     """
 
-    def test_new_scheme_C_total_matches_entry_count(
+    def test_new_scheme_C_total_is_null(
         self,
         ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
-        """New-scheme C: iterator emits only C, so total_in_namespace == entry_count.
+        """walk_namespace must not report a ``total`` — it cannot know it mid-scan.
 
-        The count is authoritative because libzim tells us exactly.
+        ``archive_entry_count`` is still surfaced for the file-level total.
         """
         zim = _require(basic_test_zim_files["nons"])
         result = ops_for_zim_data.walk_namespace_data(str(zim), "C", limit=500)
         # nons/small.zim has entry_count=2 (favicon.png, main.html)
         assert result["archive_entry_count"] == 2
-        assert result["total_in_namespace"] == 2
-        assert result["total_in_namespace_is_lower_bound"] is False
-        # Deprecated alias kept for backward compatibility
-        assert result["total_entries"] == 2
+        assert result["total"] is None
 
-    def test_new_scheme_M_total_matches_metadata_keys(
+    def test_new_scheme_M_archive_entry_count_unchanged(
         self,
         ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
-        """New-scheme M count is len(metadata_keys), not archive.entry_count."""
+        """``archive_entry_count`` mirrors archive.entry_count regardless of namespace."""
         zim = _require(basic_test_zim_files["nons"])
         result = ops_for_zim_data.walk_namespace_data(str(zim), "M", limit=500)
-        # nons/small.zim has 10 metadata_keys, entry_count=2
+        # nons/small.zim has entry_count=2; metadata_keys=10 has nothing to do
+        # with the file's entry_count (and v2 no longer surfaces it as total).
         assert result["archive_entry_count"] == 2
-        assert result["total_in_namespace"] == 10
-        assert result["total_in_namespace_is_lower_bound"] is False
-        # Deprecated alias mirrors archive_entry_count, NOT the namespace count
-        assert result["total_entries"] == 2
+        assert result["total"] is None
 
-    def test_new_scheme_empty_namespace_reports_zero(
+    def test_new_scheme_empty_namespace_reports_no_total(
         self,
         ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
-        """An empty namespace must report 0, not the file total.
+        """An empty namespace must report empty results plus total=None.
 
-        This was the headline beta-test issue: walking namespace ``Z``
-        returned ``total_entries: 5175`` (the whole archive size).
+        Pre-v2 surfaced ``total_in_namespace=0`` here. v2 unifies on a
+        single ``total`` slot that walk always reports as None — empty
+        results plus ``done=True`` already convey the same information.
         """
         zim = _require(basic_test_zim_files["nons"])
         result = ops_for_zim_data.walk_namespace_data(str(zim), "Z", limit=500)
-        assert result["entries"] == []
-        assert result["total_in_namespace"] == 0
-        assert result["total_in_namespace_is_lower_bound"] is False
+        assert result["results"] == []
+        assert result["total"] is None
         # archive_entry_count is still the file total — make this explicit
         assert result["archive_entry_count"] == 2
 
-    def test_old_scheme_total_in_namespace_is_unknown(
+    def test_old_scheme_total_is_null(
         self,
         ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
-        """Old-scheme: count is None because deriving it needs a full scan.
-
-        Reporting an inaccurate number would be misleading; None signals
-        "not derivable" so callers know to fall back to browse_namespace.
-        ``is_lower_bound`` must also be None — saying ``False`` next to a
-        null count would read as "this null is the exact count", which is
-        nonsense.
-        """
+        """Old-scheme: total is None (same as new-scheme; walk never reports total)."""
         zim = _require(basic_test_zim_files["withns"])
         result = ops_for_zim_data.walk_namespace_data(str(zim), "M", limit=10)
         # archive_entry_count is always populated
         assert result["archive_entry_count"] >= 1
-        # Old-scheme: count not derivable without full scan
-        assert result["total_in_namespace"] is None
-        # When the count is unknown, the lower-bound flag is also unknown
-        assert result["total_in_namespace_is_lower_bound"] is None
+        # Walk doesn't know the per-namespace total mid-scan; always None.
+        assert result["total"] is None
 
 
 class TestSearchWithFiltersNewScheme:
