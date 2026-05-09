@@ -7,7 +7,12 @@ from ..constants import INPUT_LIMIT_ENTRY_PATH, INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
-from ..tool_schemas import ArticleStructureResponse, LinksResponse, TableOfContentsResponse
+from ..tool_schemas import (
+    ArticleStructureResponse,
+    BinaryEntryResponse,
+    LinksResponse,
+    TableOfContentsResponse,
+)
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -367,7 +372,7 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         max_size_bytes: Optional[int] = None,
         include_data: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> Union[BinaryEntryResponse, ToolErrorPayload]:
         """Retrieve binary content from a ZIM entry.
 
         This tool returns raw binary content encoded in base64, enabling
@@ -405,38 +410,32 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
             try:
                 server.rate_limiter.check_rate_limit("get_binary_entry")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="retrieve binary entry",
+                    message=server._create_enhanced_error_message(
                         operation="retrieve binary entry",
-                        message=server._create_enhanced_error_message(
-                            operation="retrieve binary entry",
-                            error=e,
-                            context=f"Entry: {entry_path}",
-                        ),
+                        error=e,
                         context=f"Entry: {entry_path}",
                     ),
+                    context=f"Entry: {entry_path}",
                 )
 
             if max_size_bytes is not None and (
                 max_size_bytes < 1 or max_size_bytes > _MAX_BINARY_LIMIT
             ):
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
-                        operation="retrieve binary entry",
-                        message=(
-                            "**Parameter Validation Error**\n\n"
-                            f"**Issue**: max_size_bytes must be between 1 and "
-                            f"{_MAX_BINARY_LIMIT} bytes (100 MB), got "
-                            f"{max_size_bytes}.\n"
-                            "**Tip**: For larger entries, retrieve the entry in "
-                            "chunks via repeated calls or use include_data=False to "
-                            "fetch metadata only."
-                        ),
-                        context=(
-                            f"Entry: {entry_path}, max_size_bytes: {max_size_bytes}"
-                        ),
+                return tool_error(
+                    operation="retrieve binary entry",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: max_size_bytes must be between 1 and "
+                        f"{_MAX_BINARY_LIMIT} bytes (100 MB), got "
+                        f"{max_size_bytes}.\n"
+                        "**Tip**: For larger entries, retrieve the entry in "
+                        "chunks via repeated calls or use include_data=False to "
+                        "fetch metadata only."
+                    ),
+                    context=(
+                        f"Entry: {entry_path}, max_size_bytes: {max_size_bytes}"
                     ),
                 )
 
@@ -449,17 +448,14 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error retrieving binary entry: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="retrieve binary entry",
+                message=server._create_enhanced_error_message(
                     operation="retrieve binary entry",
-                    message=server._create_enhanced_error_message(
-                        operation="retrieve binary entry",
-                        error=e,
-                        context=f"File: {zim_file_path}, Entry: {entry_path}",
-                    ),
+                    error=e,
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
+                context=f"File: {zim_file_path}, Entry: {entry_path}",
             )
 
 

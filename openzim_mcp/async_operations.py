@@ -15,6 +15,7 @@ from .zim_operations import ZimOperations
 if TYPE_CHECKING:
     from .tool_schemas import (
         ArticleStructureResponse,
+        BinaryEntryResponse,
         BrowseNamespaceResponse,
         FindEntryResponse,
         LinksResponse,
@@ -519,7 +520,7 @@ class AsyncZimOperations:
         entry_path: str,
         max_size_bytes: Optional[int] = None,
         include_data: bool = True,
-    ) -> dict:
+    ) -> "BinaryEntryResponse":
         """Structured variant of ``get_binary_entry`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_binary_entry_data,

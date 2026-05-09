@@ -356,4 +356,5 @@ class BinaryEntryResponse(TypedDict):
     encoding: Optional[str]
     truncated: bool
     data: NotRequired[Optional[str]]
+    message: NotRequired[str]
     _meta: MetaEnvelope

@@ -13,7 +13,7 @@ import base64
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
     from openzim_mcp.security import PathValidator
+    from openzim_mcp.tool_schemas import BinaryEntryResponse
 
 logger = logging.getLogger(__name__)
 
@@ -600,7 +601,7 @@ class _ContentMixin:
         entry_path: str,
         max_size_bytes: Optional[int] = None,
         include_data: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> "BinaryEntryResponse":
         """Structured variant of ``get_binary_entry``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
@@ -644,7 +645,10 @@ class _ContentMixin:
             payload = self._format_binary_response(
                 cached_meta, include_data, max_size_bytes, data=None
             )
-            return attach_meta(payload, truncated=payload.get("truncated", False))
+            return cast(
+                "BinaryEntryResponse",
+                attach_meta(payload, truncated=payload.get("truncated", False)),
+            )
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -711,7 +715,10 @@ class _ContentMixin:
                 payload = self._format_binary_response(
                     meta, include_data, max_size_bytes, data=encoded_data
                 )
-                result = attach_meta(payload, truncated=payload.get("truncated", False))
+                result = cast(
+                    "BinaryEntryResponse",
+                    attach_meta(payload, truncated=payload.get("truncated", False)),
+                )
                 logger.info(
                     f"Retrieved binary entry: {entry_path} "
                     f"({meta['mime_type']}, {self._format_size(content_size)})"
