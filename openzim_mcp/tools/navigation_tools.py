@@ -13,7 +13,7 @@ from ..constants import (
 from ..exceptions import OpenZimMcpRateLimitError
 from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
-from ..tool_schemas import SearchWithFiltersResponse
+from ..tool_schemas import SearchSuggestionsResponse, SearchWithFiltersResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -411,38 +411,38 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_search_suggestions(
         zim_file_path: str, partial_query: str, limit: int = 10
-    ) -> Dict[str, Any]:
+    ) -> Union[SearchSuggestionsResponse, ToolErrorPayload]:
         """Get search suggestions and auto-complete for partial queries.
 
         Args:
             zim_file_path: Path to the ZIM file
             partial_query: Partial search query. Must be at least 2 characters
                 after stripping whitespace; shorter queries return an empty
-                suggestion list with an explanatory ``message`` field.
+                results list with the contract envelope (``done=True``,
+                ``total=0``).
             limit: Maximum number of suggestions to return (1-50, default: 10)
 
         Returns:
-            Dict with keys: partial_query, suggestions (list of {text, path,
-            type}), count. For very short queries, returns
-            ``{"suggestions": [], "message": "..."}``. On failure, returns a
-            ``{"error": True, ...}`` envelope (see ``responses.tool_error``).
+            ``SearchSuggestionsResponse``-shaped dict on success (Phase B
+            contract: top-level ``results`` / ``next_cursor`` / ``total`` /
+            ``done`` / ``page_info`` plus ``partial_query`` extra);
+            ``ToolErrorPayload`` envelope on failure. ``get_search_suggestions``
+            is non-paginated: ``done`` is always ``True`` and ``next_cursor``
+            is always ``None``.
         """
         try:
             # Check rate limit
             try:
                 server.rate_limiter.check_rate_limit("suggestions")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="get search suggestions",
+                    message=server._create_enhanced_error_message(
                         operation="get search suggestions",
-                        message=server._create_enhanced_error_message(
-                            operation="get search suggestions",
-                            error=e,
-                            context=f"Query: '{partial_query}'",
-                        ),
+                        error=e,
                         context=f"Query: '{partial_query}'",
                     ),
+                    context=f"Query: '{partial_query}'",
                 )
 
             # Sanitize inputs
@@ -451,20 +451,17 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
 
             # Validate parameters
             if limit < 1 or limit > 50:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
-                        operation="get search suggestions",
-                        message=(
-                            "**Parameter Validation Error**\n\n"
-                            f"**Issue**: limit must be between 1 and 50 "
-                            f"(provided: {limit})\n\n"
-                            "**Troubleshooting**: Adjust the limit parameter to a "
-                            "value within the valid range.\n"
-                            "**Example**: Use `limit=10` for reasonable suggestions."
-                        ),
-                        context=f"Query: '{partial_query}', Limit: {limit}",
+                return tool_error(
+                    operation="get search suggestions",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: limit must be between 1 and 50 "
+                        f"(provided: {limit})\n\n"
+                        "**Troubleshooting**: Adjust the limit parameter to a "
+                        "value within the valid range.\n"
+                        "**Example**: Use `limit=10` for reasonable suggestions."
                     ),
+                    context=f"Query: '{partial_query}', Limit: {limit}",
                 )
 
             # Use async operations
@@ -474,15 +471,12 @@ def _register_get_search_suggestions(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error getting search suggestions: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="get search suggestions",
+                message=server._create_enhanced_error_message(
                     operation="get search suggestions",
-                    message=server._create_enhanced_error_message(
-                        operation="get search suggestions",
-                        error=e,
-                        context=f"File: {zim_file_path}, Query: {partial_query}",
-                    ),
+                    error=e,
                     context=f"File: {zim_file_path}, Query: {partial_query}",
                 ),
+                context=f"File: {zim_file_path}, Query: {partial_query}",
             )

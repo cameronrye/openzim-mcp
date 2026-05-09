@@ -169,7 +169,7 @@ class TestGetSearchSuggestionsTool:
     async def test_get_search_suggestions_success(self, server: OpenZimMcpServer):
         """Test successful search suggestions retrieval."""
         server.async_zim_operations.get_search_suggestions = AsyncMock(
-            return_value='{"suggestions": ["Article1", "Article2"]}'
+            return_value='{"results": ["Article1", "Article2"]}'
         )
         server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -177,7 +177,7 @@ class TestGetSearchSuggestionsTool:
             "/path/to/file.zim", "Art", 10
         )
 
-        assert "suggestions" in result
+        assert "results" in result
         server.async_zim_operations.get_search_suggestions.assert_called_once_with(
             "/path/to/file.zim", "Art", 10
         )
@@ -603,7 +603,21 @@ class TestNavigationToolsDirectInvocation:
     ):
         """Test invoking get_search_suggestions tool handler directly."""
         advanced_server.async_zim_operations.get_search_suggestions_data = AsyncMock(
-            return_value={"suggestions": ["Python", "Python programming"]}
+            return_value={
+                "partial_query": "Pyt",
+                "results": [
+                    {"text": "Python", "path": "C/Python", "type": "title_start_match"},
+                    {
+                        "text": "Python programming",
+                        "path": "C/Python_programming",
+                        "type": "title_start_match",
+                    },
+                ],
+                "next_cursor": None,
+                "total": 2,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 10, "returned_count": 2},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -615,7 +629,11 @@ class TestNavigationToolsDirectInvocation:
                 limit=10,
             )
             assert isinstance(result, dict)
-            assert "suggestions" in result
+            assert "results" in result
+            assert isinstance(result["results"], list)
+            assert result["next_cursor"] is None
+            assert result["done"] is True
+            assert result["total"] == len(result["results"])
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_invalid_limit(

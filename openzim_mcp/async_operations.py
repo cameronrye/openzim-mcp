@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         FindEntryResponse,
         SearchAllResponse,
         SearchResponse,
+        SearchSuggestionsResponse,
         SearchWithFiltersResponse,
     )
 
@@ -335,7 +336,7 @@ class AsyncZimOperations:
         zim_file_path: str,
         partial_query: str,
         limit: int = 10,
-    ) -> dict:
+    ) -> "SearchSuggestionsResponse":
         """Structured variant of ``get_search_suggestions`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_search_suggestions_data,

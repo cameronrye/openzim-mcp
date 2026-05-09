@@ -642,14 +642,20 @@ class TestZimOperations:
                 str(zim_file), "bio", limit=5
             )
 
-            assert "suggestions" in result
+            # Phase B contract: ``suggestions`` was renamed to ``results``
+            # at the top level. The legacy JSON-string variant serializes
+            # the same payload, so the contract keys appear in the string.
+            assert "results" in result
             assert "partial_query" in result
             assert "bio" in result
 
     def test_get_search_suggestions_short_query(self, zim_operations: ZimOperations):
         """Test search suggestions with too short query."""
         result = zim_operations.get_search_suggestions("test.zim", "a", limit=5)
-        assert "Query too short" in result
+        # Phase B contract: short queries return the empty contract envelope
+        # (``done=True``, ``total=0``) instead of a free-form ``message``.
+        assert '"results": []' in result
+        assert '"done": true' in result
 
     def test_get_article_structure(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test article structure extraction."""
@@ -2117,7 +2123,8 @@ class TestZimOperations:
             result = zim_operations.get_search_suggestions(
                 str(zim_file), "test", limit=15
             )
-            assert "suggestions" in result
+            # Phase B contract: top-level key is ``results`` (was ``suggestions``).
+            assert "results" in result
 
     def test_additional_edge_cases_for_coverage(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -2126,9 +2133,11 @@ class TestZimOperations:
         zim_file = temp_dir / "test.zim"
         zim_file.touch()
 
-        # Test search suggestions with short query
+        # Test search suggestions with short query — Phase B drops the
+        # free-form ``message`` and returns the empty contract envelope.
         result = zim_operations.get_search_suggestions(str(zim_file), "a")
-        assert "Query too short for suggestions" in result
+        assert '"results": []' in result
+        assert '"done": true' in result
 
         # Test search suggestions with invalid limit
         with pytest.raises(

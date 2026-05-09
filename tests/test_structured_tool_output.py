@@ -210,8 +210,11 @@ class TestStructuredOutput:
         _, structured = result
         assert isinstance(structured, dict)
         payload = structured["result"] if "result" in structured else structured
-        assert "suggestions" in payload
-        assert isinstance(payload["suggestions"], list)
+        assert "results" in payload
+        assert isinstance(payload["results"], list)
+        assert payload["next_cursor"] is None
+        assert payload["done"] is True
+        assert payload["total"] == len(payload["results"])
 
     @pytest.mark.asyncio
     async def test_search_zim_file_returns_structured_content(

@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         FindEntryResponse,
         SearchAllResponse,
         SearchResponse,
+        SearchSuggestionsResponse,
         SearchWithFiltersResponse,
     )
 
@@ -1016,11 +1017,16 @@ class _SearchMixin:
 
     def get_search_suggestions_data(
         self, zim_file_path: str, partial_query: str, limit: int = 10
-    ) -> Dict[str, Any]:
+    ) -> "SearchSuggestionsResponse":
         """Structured variant of ``get_search_suggestions``.
 
         Returns the result dict directly (not a JSON string) so MCP tools
         can hand it straight to FastMCP's structured-content path.
+
+        ``get_search_suggestions`` is non-paginated (no cursor input,
+        no offset), but the v2 Phase B contract still applies for
+        uniformity: ``next_cursor=None``, ``done=True``,
+        ``total=len(results)``, ``page_info.offset=0``.
 
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
@@ -1031,9 +1037,15 @@ class _SearchMixin:
         if limit < 1 or limit > 50:
             raise OpenZimMcpValidationError("Limit must be between 1 and 50")
         if not partial_query or len(partial_query.strip()) < 2:
-            return attach_meta(
-                {"suggestions": [], "message": "Query too short for suggestions"}
-            )
+            empty_payload: Dict[str, Any] = {
+                "partial_query": partial_query,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": limit, "returned_count": 0},
+            }
+            return cast("SearchSuggestionsResponse", attach_meta(empty_payload))
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
@@ -1047,26 +1059,44 @@ class _SearchMixin:
             logger.debug(f"Returning cached suggestions dict for: {partial_query}")
             if "_meta" not in cached_result:
                 cached_result = attach_meta(dict(cached_result))
-            return cached_result  # type: ignore[no-any-return]
+            return cast("SearchSuggestionsResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._generate_search_suggestions(
+                raw = self._generate_search_suggestions(
                     archive, partial_query, limit
                 )
 
-            # Read the count straight off the dict for accurate logging and
-            # to decide whether the response is worth caching. A cold-cache
-            # request that hits before the libzim title index has warmed up
-            # can return zero suggestions for a query that will produce
-            # results moments later — caching that empty payload locks the
-            # query into "no suggestions" for the full TTL.
-            actual_count = result.get("count", len(result.get("suggestions", [])))
-            count_for_gate = actual_count if isinstance(actual_count, int) else 0
-            if count_for_gate > 0:
-                self.cache.set(cache_key, result)
+            # ``_generate_search_suggestions`` returns the legacy
+            # {partial_query, suggestions, count} shape. Adapt to the
+            # contract here: rename ``suggestions`` → ``results`` at the
+            # top level (the Phase A ``_meta.suggestions[]`` recovery
+            # candidates are unrelated and live inside ``_meta``).
+            suggestions = raw.get("suggestions", [])
+            actual_count = len(suggestions)
+
+            payload: Dict[str, Any] = {
+                "partial_query": partial_query,
+                "results": suggestions,
+                "next_cursor": None,
+                "total": actual_count,
+                "done": True,
+                "page_info": {
+                    "offset": 0,
+                    "limit": limit,
+                    "returned_count": actual_count,
+                },
+            }
+
+            # A cold-cache request that hits before the libzim title index
+            # has warmed up can return zero suggestions for a query that
+            # will produce results moments later — caching that empty
+            # payload locks the query into "no suggestions" for the full
+            # TTL. Only cache non-empty results.
+            if actual_count > 0:
+                self.cache.set(cache_key, payload)
             logger.info(f"Generated {actual_count} suggestions for: {partial_query}")
-            return attach_meta(result)
+            return cast("SearchSuggestionsResponse", attach_meta(payload))
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
