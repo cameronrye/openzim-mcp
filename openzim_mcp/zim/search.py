@@ -27,6 +27,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.responses import tool_error
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -1912,7 +1913,12 @@ class _SearchMixin:
                     {
                         "zim_file_path": path,
                         "name": file_info.get("name"),
-                        "error": str(e),
+                        "has_hits": False,
+                        "result": tool_error(
+                            operation="search_zim_file",
+                            message=str(e),
+                            context=f"File: {path}, Query: '{query}'",
+                        ),
                     }
                 )
 
@@ -1925,9 +1931,11 @@ class _SearchMixin:
                     "files_searched": files_searched,
                     "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
                     "files_searched_successfully": sum(
-                        1 for r in per_file if "result" in r
+                        1 for r in per_file if not r.get("result", {}).get("error")
                     ),
-                    "files_failed": sum(1 for r in per_file if "error" in r),
+                    "files_failed": sum(
+                        1 for r in per_file if r.get("result", {}).get("error") is True
+                    ),
                     "results": per_file,
                     "next_cursor": None,
                     "total": files_searched,

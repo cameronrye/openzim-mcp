@@ -65,7 +65,9 @@ class TestSearchAll:
         assert result["files_searched"] == 2
         assert result["files_with_hits"] == 1
         assert result["files_failed"] == 1
-        assert any("error" in entry for entry in result["results"])
+        # Failure entries carry the error envelope under ``result`` so the
+        # per-file shape stays uniform (every entry has ``result``).
+        assert any(entry["result"].get("error") is True for entry in result["results"])
         # Phase B contract-shape assertions
         assert result["done"] is True
         assert result["next_cursor"] is None

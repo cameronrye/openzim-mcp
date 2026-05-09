@@ -436,6 +436,10 @@ class TestStructuredOutput:
             assert isinstance(
                 inner, dict
             ), f"per_file[].result should be dict, got {type(inner)}"
+            if inner.get("error") is True:
+                # Per-archive search failed (e.g. ZIM lacks FT Xapian index);
+                # the error envelope replaces SearchResponse for that entry.
+                continue
             # inner is itself a SearchResponse — it has its own results list
             assert "results" in inner
             assert "done" in inner

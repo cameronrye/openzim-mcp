@@ -14,7 +14,9 @@ docs/superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md
 
 from __future__ import annotations
 
-from typing import Any, NotRequired, Optional, TypedDict
+from typing import Any, NotRequired, Optional, TypedDict, Union
+
+from openzim_mcp.responses import ToolErrorPayload
 
 # ---------- shared sub-shapes ----------
 
@@ -148,7 +150,11 @@ class _SearchAllPerFile(TypedDict):
     zim_file_path: str
     name: str
     has_hits: bool
-    result: SearchResponse
+    # ``result`` is a ``SearchResponse`` when the per-file search succeeded.
+    # When the per-archive search raised (e.g. ZIM lacks a full-text Xapian
+    # index), it's a ``ToolErrorPayload`` envelope so the wire shape stays
+    # uniform — every entry has ``result``, callers branch on ``error: True``.
+    result: Union[SearchResponse, ToolErrorPayload]
 
 
 class SearchAllResponse(TypedDict):
