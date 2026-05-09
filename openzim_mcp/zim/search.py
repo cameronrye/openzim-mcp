@@ -1051,9 +1051,9 @@ class _SearchMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"suggestions_data:{validated_path}:{partial_query}:{limit}"
+        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
+        # shape: suggestions/count keys) don't leak through after the upgrade.
+        cache_key = f"suggestions_data:v2b:{validated_path}:{partial_query}:{limit}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached suggestions dict for: {partial_query}")

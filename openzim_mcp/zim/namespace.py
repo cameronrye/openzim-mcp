@@ -91,9 +91,9 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key bumped to v2 so v1.x cached responses (per-namespace
-        # ``count`` field) don't leak through after the rename to ``total``.
-        cache_key = f"namespaces_data:v2:{validated_path}"
+        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
+        # shape: entry_count key) don't leak through after the rename to ``total``.
+        cache_key = f"namespaces_data:v2b:{validated_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespaces dict for: {validated_path}")

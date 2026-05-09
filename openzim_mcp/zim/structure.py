@@ -355,7 +355,9 @@ class _StructureMixin:
         dict in-memory; callers paging through results pay the HTML parse
         cost exactly once per (archive, entry) pair instead of once per page.
         """
-        cache_key = f"links_full:{validated_path}:{entry_path}"
+        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
+        # shape: parallel arrays/multi-category) don't leak through after upgrade.
+        cache_key = f"links_full:v2b:{validated_path}:{entry_path}"
         cached = self.cache.get(cache_key)
         if cached is not None:
             logger.debug(f"Returning cached link extraction for: {entry_path}")
