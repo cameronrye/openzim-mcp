@@ -14,6 +14,7 @@ from .zim_operations import ZimOperations
 
 if TYPE_CHECKING:
     from .tool_schemas import (
+        ArticleStructureResponse,
         BrowseNamespaceResponse,
         FindEntryResponse,
         LinksResponse,
@@ -374,7 +375,7 @@ class AsyncZimOperations:
         self,
         zim_file_path: str,
         entry_path: str,
-    ) -> dict:
+    ) -> "ArticleStructureResponse":
         """Structured variant of ``get_article_structure`` (async)."""
         return await asyncio.to_thread(
             self._ops.get_article_structure_data, zim_file_path, entry_path

@@ -17,7 +17,7 @@ import json
 from typing import Any, Dict, Mapping, Optional
 
 
-def compact_structure_payload(payload: Dict[str, Any]) -> str:
+def compact_structure_payload(payload: Mapping[str, Any]) -> str:
     """Render a compact JSON view of an article-structure payload.
 
     Drops the per-heading ``preview`` field (~3000 chars each, the
