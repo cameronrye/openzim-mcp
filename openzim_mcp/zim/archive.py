@@ -55,7 +55,11 @@ from openzim_mcp.zim.search import _SearchMixin
 from openzim_mcp.zim.structure import _StructureMixin
 
 if TYPE_CHECKING:
-    from openzim_mcp.tool_schemas import EntryResponse, ZimMetadataResponse
+    from openzim_mcp.tool_schemas import (
+        EntryResponse,
+        ListZimFilesResponse,
+        ZimMetadataResponse,
+    )
 
 __all__ = [
     "ARCHIVE_OPEN_TIMEOUT",
@@ -325,28 +329,46 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
 
     def list_zim_files_summary_data(
         self, name_filter: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> "ListZimFilesResponse":
         """Structured ``list_zim_files`` payload.
 
-        Wraps :py:meth:`list_zim_files_data` with the count/directories
-        metadata that the legacy markdown-header string variant carries
-        in its prose preamble, so MCP clients consuming the structured
-        output get the same context without reparsing a header.
+        Wraps :py:meth:`list_zim_files_data` with the directories metadata
+        that the legacy markdown-header string variant carries in its
+        prose preamble, so MCP clients consuming the structured output
+        get the same context without reparsing a header.
+
+        v2 Phase B contract: the response carries the canonical pagination
+        keys (``results`` / ``next_cursor`` / ``total`` / ``done`` /
+        ``page_info``) plus the tool-specific ``directories_count`` and
+        ``name_filter`` fields. ``list_zim_files`` is non-paginated — every
+        matching file in the allowed directories is returned in a single
+        call — so ``next_cursor`` is always ``None`` and ``done`` is
+        always ``True``. The contract is applied for uniformity with the
+        other list-shaped responses.
 
         Returns:
-            ``{count, directories_count, name_filter, files}`` where
-            ``files`` is the list ``list_zim_files_data`` already returns
-            (per-file dicts with name/path/directory/size/size_bytes/modified).
+            ``ListZimFilesResponse``-shaped dict carrying ``results`` (the
+            per-file dicts with name/path/directory/size/size_bytes/modified
+            — formerly ``files``), ``next_cursor`` (always ``None``),
+            ``total`` (the count, formerly ``count``), ``done`` (always
+            ``True``), ``page_info``, plus ``directories_count``,
+            ``name_filter``, and the ``_meta`` envelope.
         """
-        files = self.list_zim_files_data(name_filter=name_filter)
-        return attach_meta(
-            {
-                "count": len(files),
-                "directories_count": len(self.config.allowed_directories),
-                "name_filter": name_filter or "",
-                "files": files,
-            }
-        )
+        files_list = self.list_zim_files_data(name_filter=name_filter)
+        payload: Dict[str, Any] = {
+            "name_filter": name_filter or "",
+            "directories_count": len(self.config.allowed_directories),
+            "results": files_list,
+            "next_cursor": None,
+            "total": len(files_list),
+            "done": True,
+            "page_info": {
+                "offset": 0,
+                "limit": len(files_list),
+                "returned_count": len(files_list),
+            },
+        }
+        return cast("ListZimFilesResponse", attach_meta(payload))
 
     def list_zim_files(self, name_filter: Optional[str] = None) -> str:
         """List all ZIM files in allowed directories.

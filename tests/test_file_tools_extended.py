@@ -33,10 +33,13 @@ class TestListZimFilesToolInvocation:
         """Test successful ZIM file listing through tool handler."""
         advanced_server.async_zim_operations.list_zim_files_summary_data = AsyncMock(
             return_value={
-                "count": 1,
+                "results": [{"path": "/test/file.zim", "size": 1024}],
+                "next_cursor": None,
+                "total": 1,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 1, "returned_count": 1},
                 "directories_count": 1,
                 "name_filter": "",
-                "files": [{"path": "/test/file.zim", "size": 1024}],
             }
         )
 
@@ -45,8 +48,11 @@ class TestListZimFilesToolInvocation:
             tool_handler = tools["list_zim_files"].fn
             result = await tool_handler()
             assert isinstance(result, dict)
-            assert result["count"] == 1
-            assert result["files"][0]["path"] == "/test/file.zim"
+            assert result["total"] == 1
+            assert result["results"][0]["path"] == "/test/file.zim"
+            assert result["next_cursor"] is None
+            assert result["done"] is True
+            assert result["page_info"]["returned_count"] == 1
 
     @pytest.mark.asyncio
     async def test_list_zim_files_rate_limit_error(self, advanced_server):
@@ -100,10 +106,13 @@ class TestEmptyZimFilesList:
         """Test list_zim_files when no ZIM files are found."""
         advanced_server.async_zim_operations.list_zim_files_summary_data = AsyncMock(
             return_value={
-                "count": 0,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 0, "returned_count": 0},
                 "directories_count": 1,
                 "name_filter": "",
-                "files": [],
             }
         )
 
@@ -112,5 +121,8 @@ class TestEmptyZimFilesList:
             tool_handler = tools["list_zim_files"].fn
             result = await tool_handler()
             assert isinstance(result, dict)
-            assert result["count"] == 0
-            assert result["files"] == []
+            assert result["total"] == 0
+            assert result["results"] == []
+            assert result["next_cursor"] is None
+            assert result["done"] is True
+            assert result["page_info"]["returned_count"] == 0

@@ -1,12 +1,13 @@
 """File listing tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, cast
+from typing import TYPE_CHECKING, Union
 
 from ..constants import INPUT_LIMIT_QUERY
 from ..exceptions import OpenZimMcpRateLimitError
-from ..responses import tool_error
+from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
+from ..tool_schemas import ListZimFilesResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -23,7 +24,9 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
     """
 
     @server.mcp.tool()
-    async def list_zim_files(name_filter: str = "") -> Dict[str, Any]:
+    async def list_zim_files(
+        name_filter: str = "",
+    ) -> Union[ListZimFilesResponse, ToolErrorPayload]:
         """List all ZIM files in allowed directories.
 
         Args:
@@ -32,26 +35,28 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
                 listings (e.g. "wikipedia", "nginx"). Empty string lists all.
 
         Returns:
-            Dict with keys ``count``, ``directories_count``, ``name_filter``,
-            ``files`` (list of per-file dicts: name, path, directory, size,
-            size_bytes, modified). On failure, returns a ``{"error": True, ...}``
-            envelope (see ``responses.tool_error``).
+            ``ListZimFilesResponse``-shaped dict carrying ``results`` (per-file
+            dicts: name, path, directory, size, size_bytes, modified),
+            ``next_cursor`` (always ``None``), ``total``, ``done`` (always
+            ``True``), ``page_info``, plus the tool-specific
+            ``directories_count`` and ``name_filter`` fields and the ``_meta``
+            envelope. ``list_zim_files`` is non-paginated; the contract keys
+            are present for uniformity with other list-shaped tools. On
+            failure, returns a ``ToolErrorPayload`` envelope (see
+            ``responses.tool_error``).
         """
         try:
             try:
                 server.rate_limiter.check_rate_limit("default")
             except OpenZimMcpRateLimitError as e:
-                return cast(
-                    Dict[str, Any],
-                    tool_error(
+                return tool_error(
+                    operation="list ZIM files",
+                    message=server._create_enhanced_error_message(
                         operation="list ZIM files",
-                        message=server._create_enhanced_error_message(
-                            operation="list ZIM files",
-                            error=e,
-                            context="Listing available ZIM files",
-                        ),
+                        error=e,
                         context="Listing available ZIM files",
                     ),
+                    context="Listing available ZIM files",
                 )
 
             # Strip control characters and cap length, matching the
@@ -70,15 +75,12 @@ def register_file_tools(server: "OpenZimMcpServer") -> None:
 
         except Exception as e:
             logger.error(f"Error listing ZIM files: {e}")
-            return cast(
-                Dict[str, Any],
-                tool_error(
+            return tool_error(
+                operation="list ZIM files",
+                message=server._create_enhanced_error_message(
                     operation="list ZIM files",
-                    message=server._create_enhanced_error_message(
-                        operation="list ZIM files",
-                        error=e,
-                        context="Scanning allowed directories for ZIM files",
-                    ),
+                    error=e,
                     context="Scanning allowed directories for ZIM files",
                 ),
+                context="Scanning allowed directories for ZIM files",
             )

@@ -146,8 +146,20 @@ class TestStructuredOutput:
         _, structured = result
         assert isinstance(structured, dict)
         payload = structured["result"] if "result" in structured else structured
-        assert "files" in payload and isinstance(payload["files"], list)
-        assert "count" in payload
+        # v2 Phase B contract keys (non-paginated, but contract still applies).
+        assert "results" in payload and isinstance(payload["results"], list)
+        assert payload["next_cursor"] is None
+        assert payload["done"] is True
+        assert payload["total"] == len(payload["results"])
+        assert payload["page_info"]["offset"] == 0
+        assert payload["page_info"]["limit"] == len(payload["results"])
+        assert payload["page_info"]["returned_count"] == len(payload["results"])
+        # Tool-specific extras.
+        assert "directories_count" in payload
+        assert "name_filter" in payload
+        # Renamed legacy keys must not leak through.
+        assert "files" not in payload
+        assert "count" not in payload
 
     @pytest.mark.asyncio
     async def test_find_entry_by_title_returns_structured_content(

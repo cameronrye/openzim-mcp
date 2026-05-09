@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         FindEntryResponse,
         LinksResponse,
         ListNamespacesResponse,
+        ListZimFilesResponse,
         RelatedArticlesResponse,
         SearchAllResponse,
         SearchResponse,
@@ -86,12 +87,8 @@ class AsyncZimOperations:
 
     async def list_zim_files_summary_data(
         self, name_filter: Optional[str] = None
-    ) -> dict:
-        """Structured variant of ``list_zim_files`` (async).
-
-        Returns the count/directories_count/name_filter/files envelope
-        used by the migrated MCP tool.
-        """
+    ) -> "ListZimFilesResponse":
+        """Structured variant of ``list_zim_files`` (async)."""
         return await asyncio.to_thread(
             self._ops.list_zim_files_summary_data, name_filter=name_filter
         )
