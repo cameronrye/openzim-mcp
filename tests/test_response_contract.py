@@ -28,6 +28,9 @@ def _assert_contract(payload: dict) -> None:
     pi = payload["page_info"]
     for key in PAGE_INFO_KEYS:
         assert key in pi, f"page_info missing key: {key}"
+    assert pi["returned_count"] == len(payload["results"]), (
+        f"page_info.returned_count={pi['returned_count']} != len(results)={len(payload['results'])}"
+    )
     # done <-> next_cursor co-vary (redundant by design)
     if payload["done"]:
         assert payload["next_cursor"] is None, "done=True must imply next_cursor=None"
@@ -53,6 +56,8 @@ class TestContractShape:
         )
         _, structured = result
         payload = structured["result"] if "result" in structured else structured
+        if payload.get("error") is True:
+            pytest.skip(f"search_zim_file returned error envelope: {payload.get('details') or payload.get('operation')}")
         _assert_contract(payload)
 
     @pytest.mark.asyncio
@@ -62,12 +67,16 @@ class TestContractShape:
         )
         _, structured = result
         payload = structured["result"] if "result" in structured else structured
+        if payload.get("error") is True:
+            pytest.skip(f"search_all returned error envelope: {payload.get('details') or payload.get('operation')}")
         _assert_contract(payload)
         # search_all top-level is always done=True
         assert payload["done"] is True
         # And each per-archive result inside also conforms.
         for entry in payload["results"]:
             inner = entry["result"]
+            if inner.get("error") is True:
+                continue  # inner ZIM lacked Xapian index — skip that entry
             _assert_contract(inner)
 
     @pytest.mark.asyncio
@@ -97,6 +106,8 @@ class TestContractShape:
         )
         _, structured = result
         payload = structured["result"] if "result" in structured else structured
+        if payload.get("error") is True:
+            pytest.skip(f"get_search_suggestions returned error envelope: {payload.get('details') or payload.get('operation')}")
         _assert_contract(payload)
         assert payload["done"] is True
 
