@@ -30,7 +30,7 @@ class CursorState(TypedDict, total=False):
     """Tool-specific state inside a cursor payload."""
 
     o: int          # offset (search, browse, links)
-    l: int          # limit
+    l: int  # noqa: E741 — single-letter wire-format key, kept short to keep cursors small
     q: str          # query (search, search_all per-file)
     ns: str         # namespace (browse_namespace)
     scan_at: int    # entry id (walk_namespace — replaces today's int cursor)
