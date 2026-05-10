@@ -1,4 +1,4 @@
-"""V2 golden-file fixture archive builder."""
+"""V2 golden-file fixture archive builders."""
 
 from pathlib import Path
 
@@ -89,5 +89,77 @@ def v2_phase_a_zim(tmp_path_factory) -> Path:
         for path, title, html in fixtures:
             creator.add_item(_HtmlItem(path, title, html))
         creator.set_mainpath("A/Einstein")
+
+    return out_path
+
+
+@pytest.fixture(scope="module")
+def v2_phase_c_zim(tmp_path_factory) -> Path:
+    """Build a heading-rich ZIM for Phase C golden tests (get_section + synthesize).
+
+    Articles:
+      - A/Berlin: h2 sections geography, climate, history
+      - A/Munich: h2 sections history, culture
+    """
+    from libzim.writer import Creator, Hint, Item, StringProvider
+
+    out_dir = tmp_path_factory.mktemp("v2-phase-c-golden")
+    out_path = out_dir / "v2_phase_c.zim"
+
+    class _HtmlItem(Item):
+        def __init__(self, path, title, html):
+            super().__init__()
+            self._path = path
+            self._title = title
+            self._html = html
+
+        def get_path(self):
+            return self._path
+
+        def get_title(self):
+            return self._title
+
+        def get_mimetype(self):
+            return "text/html"
+
+        def get_contentprovider(self):
+            return StringProvider(self._html)
+
+        def get_hints(self):
+            return {Hint.FRONT_ARTICLE: 1}
+
+    articles = [
+        (
+            "A/Berlin",
+            "Berlin",
+            "<html><body>"
+            "<h1>Berlin</h1>"
+            "<p>Berlin is the capital and largest city of Germany.</p>"
+            "<h2 id='geography'>Geography</h2>"
+            "<p>Berlin lies in northeastern Germany on the river Spree.</p>"
+            "<h2 id='climate'>Climate</h2>"
+            "<p>Berlin has a temperate seasonal climate.</p>"
+            "<h2 id='history'>History</h2>"
+            "<p>The history of Berlin begins in the 13th century.</p>"
+            "</body></html>",
+        ),
+        (
+            "A/Munich",
+            "Munich",
+            "<html><body>"
+            "<h1>Munich</h1>"
+            "<p>Munich is the capital of Bavaria.</p>"
+            "<h2 id='history'>History</h2>"
+            "<p>Munich was founded in 1158.</p>"
+            "<h2 id='culture'>Culture</h2>"
+            "<p>Munich is famous for Oktoberfest.</p>"
+            "</body></html>",
+        ),
+    ]
+
+    with Creator(out_path).config_indexing(True, "eng") as creator:
+        for path, title, html in articles:
+            creator.add_item(_HtmlItem(path, title, html))
+        creator.set_mainpath("A/Berlin")
 
     return out_path

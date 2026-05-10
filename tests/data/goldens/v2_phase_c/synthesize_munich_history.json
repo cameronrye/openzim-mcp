@@ -1,0 +1,29 @@
+{
+  "_meta": {},
+  "answer_markdown": "# **Munich** **Munich** is the capital of Bavaria.\n[cite: v2_phase_c/A/Munich]",
+  "archives_searched": [
+    "v2_phase_c"
+  ],
+  "citations": [
+    {
+      "archive": "v2_phase_c",
+      "cite_id": "v2_phase_c/A/Munich",
+      "entry_path": "A/Munich",
+      "section_id": null,
+      "section_title": null,
+      "title": "Munich"
+    }
+  ],
+  "fallback_used": "xapian_score",
+  "passages": [
+    {
+      "cite_id": "v2_phase_c/A/Munich",
+      "rank": 1,
+      "score": 1.0,
+      "text_markdown": "# **Munich** **Munich** is the capital of Bavaria."
+    }
+  ],
+  "query": "munich history",
+  "total_chars": 78,
+  "total_words": 10
+}
