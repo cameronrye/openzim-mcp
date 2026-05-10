@@ -45,7 +45,15 @@ async def test_get_zim_entries_tool_passes_through(
     """Calling the registered tool function delegates to async_zim_operations."""
     server = OpenZimMcpServer(test_config)
     server.async_zim_operations.get_entries_data = AsyncMock(
-        return_value={"results": [], "succeeded": 0, "failed": 0}
+        return_value={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 1, "returned_count": 0},
+            "succeeded": 0,
+            "failed": 0,
+        }
     )
     server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -59,6 +67,10 @@ async def test_get_zim_entries_tool_passes_through(
     )
     assert isinstance(result, dict)
     assert result["succeeded"] == 0
+    # Contract keys are present on the success path.
+    assert result["next_cursor"] is None
+    assert result["done"] is True
+    assert result["total"] == 0
     server.async_zim_operations.get_entries_data.assert_awaited_once()
 
 
@@ -69,7 +81,15 @@ async def test_get_zim_entries_tool_sanitizes_inputs(
     """Per-entry paths go through sanitize_input before delegation."""
     server = OpenZimMcpServer(test_config)
     server.async_zim_operations.get_entries_data = AsyncMock(
-        return_value={"results": [], "succeeded": 0, "failed": 0}
+        return_value={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 1, "returned_count": 0},
+            "succeeded": 0,
+            "failed": 0,
+        }
     )
     server.rate_limiter.check_rate_limit = MagicMock()
 
@@ -145,7 +165,15 @@ async def test_get_zim_entries_tool_accepts_string_paths_with_default_archive(
     server = OpenZimMcpServer(test_config)
     server.rate_limiter.check_rate_limit = MagicMock()
     server.async_zim_operations.get_entries_data = AsyncMock(
-        return_value={"results": [], "succeeded": 0, "failed": 0}
+        return_value={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 2, "returned_count": 0},
+            "succeeded": 0,
+            "failed": 0,
+        }
     )
 
     tool = server.mcp._tool_manager._tools["get_zim_entries"]
@@ -166,6 +194,75 @@ async def test_get_zim_entries_tool_accepts_string_paths_with_default_archive(
     assert sent_entries[1]["zim_file_path"] == "/ok"
 
 
+class TestGetEntriesDataMeta:
+    """get_entries_data must attach a _meta envelope on the single return path."""
+
+    @pytest.fixture
+    def zim_ops(
+        self, test_config, path_validator, openzim_mcp_cache, content_processor
+    ):
+        from openzim_mcp.zim_operations import ZimOperations
+
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def _zim_file(self, temp_dir):
+        from pathlib import Path
+
+        p = Path(temp_dir) / "test.zim"
+        p.write_bytes(b"")
+        return p
+
+    def test_get_entries_data_attaches_meta(self, zim_ops, temp_dir, monkeypatch):
+        """Batch entry fetch should attach _meta on the normal return path."""
+        zim_file = self._zim_file(temp_dir)
+
+        monkeypatch.setattr(
+            zim_ops,
+            "_get_zim_entry_from_archive",
+            lambda *a, **kw: "article content",
+        )
+
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_entries_data(
+                entries=[{"zim_file_path": str(zim_file), "entry_path": "A/Foo"}]
+            )
+
+        assert "_meta" in result, "get_entries_data must attach _meta"
+        assert result["_meta"]["tokens_est"] > 0
+        assert result["_meta"]["chars"] > 0
+        assert result["_meta"]["truncated"] is False
+        # v2 Phase B contract: list-shaped response carries the canonical
+        # pagination keys. Batch fetch is non-paginated, so next_cursor is
+        # None and done is True.
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == len(result["results"])
+        assert result["page_info"]["offset"] == 0
+        assert result["page_info"]["limit"] == 1
+        assert result["page_info"]["returned_count"] == len(result["results"])
+
+    def test_get_entries_data_attaches_meta_on_validation_failure(
+        self, zim_ops, temp_dir
+    ):
+        """Validation-failure path (entries from bad paths) still returns _meta."""
+        result = zim_ops.get_entries_data(
+            entries=[{"zim_file_path": "/no/such/file.zim", "entry_path": "A/X"}]
+        )
+        assert "_meta" in result, "validation-failure path must attach _meta"
+        # Contract keys still emitted on the validation-failure path.
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == 1
+        # Per-entry failure surfaces in `failed`, not in `succeeded`.
+        assert result["failed"] == 1
+        assert result["succeeded"] == 0
+
+
 @pytest.mark.asyncio
 async def test_get_zim_entries_tool_coerces_non_string_non_dict_entries(
     test_config: OpenZimMcpConfig,
@@ -174,7 +271,15 @@ async def test_get_zim_entries_tool_coerces_non_string_non_dict_entries(
     server = OpenZimMcpServer(test_config)
     server.rate_limiter.check_rate_limit = MagicMock()
     server.async_zim_operations.get_entries_data = AsyncMock(
-        return_value={"results": [], "succeeded": 0, "failed": 0}
+        return_value={
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 3, "returned_count": 0},
+            "succeeded": 0,
+            "failed": 0,
+        }
     )
 
     tool = server.mcp._tool_manager._tools["get_zim_entries"]

@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "truncated": false
+  },
+  "done": true,
+  "fast_path_hit": true,
+  "files_searched": 1,
+  "fuzzy_path_hit": false,
+  "page_info": {
+    "limit": 10,
+    "offset": 0,
+    "returned_count": 1
+  },
+  "query": "Einstein",
+  "results": [
+    {
+      "path": "A/Einstein",
+      "score": 1.0,
+      "title": "Einstein"
+    }
+  ],
+  "total": 1
+}

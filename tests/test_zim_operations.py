@@ -169,7 +169,9 @@ class TestZimOperations:
 
             assert "Found 1 matches" in result
             assert "Test Article" in result
-            assert "Test content" in result
+            # "Test" may be bold-highlighted since it's a query term; check
+            # that the content word appears somewhere in the snippet.
+            assert "content" in result
 
     def test_get_zim_entry_invalid_path(self, zim_operations: ZimOperations):
         """Test get entry with invalid file path."""
@@ -291,9 +293,12 @@ class TestZimOperations:
 
         assert isinstance(data, dict)
         assert data["query"] == "no_match"
-        assert data["total_results"] == 0
+        # Phase B: top-level total/done/page_info; pagination block removed.
+        assert data["total"] == 0
         assert data["results"] == []
-        assert data["pagination"]["has_more"] is False
+        assert data["done"] is True
+        assert data["next_cursor"] is None
+        assert data["page_info"]["returned_count"] == 0
 
     def test_get_zim_metadata(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test ZIM metadata retrieval."""
@@ -517,8 +522,9 @@ class TestZimOperations:
 
             assert "namespace" in result
             assert "C" in result
-            assert "entries" in result
-            assert "total_in_namespace" in result
+            # Phase B contract keys (substring check on the JSON-string surface).
+            assert '"results"' in result
+            assert '"total"' in result
 
     def test_browse_namespace_invalid_params(self, zim_operations: ZimOperations):
         """Test namespace browsing with invalid parameters.
@@ -637,14 +643,20 @@ class TestZimOperations:
                 str(zim_file), "bio", limit=5
             )
 
-            assert "suggestions" in result
+            # Phase B contract: ``suggestions`` was renamed to ``results``
+            # at the top level. The legacy JSON-string variant serializes
+            # the same payload, so the contract keys appear in the string.
+            assert "results" in result
             assert "partial_query" in result
             assert "bio" in result
 
     def test_get_search_suggestions_short_query(self, zim_operations: ZimOperations):
         """Test search suggestions with too short query."""
         result = zim_operations.get_search_suggestions("test.zim", "a", limit=5)
-        assert "Query too short" in result
+        # Phase B contract: short queries return the empty contract envelope
+        # (``done=True``, ``total=0``) instead of a free-form ``message``.
+        assert '"results": []' in result
+        assert '"done": true' in result
 
     def test_get_article_structure(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test article structure extraction."""
@@ -900,8 +912,11 @@ class TestZimOperations:
         ):
             payload, total = zim_operations._perform_search(mock_archive, "test", 10, 0)
             assert isinstance(payload, dict)
-            assert payload["total_results"] == 0
+            # Phase B: total replaces total_results; pagination block removed.
+            assert payload["total"] == 0
             assert payload["results"] == []
+            assert payload["done"] is True
+            assert payload["next_cursor"] is None
             # The legacy markdown rendering still produces the same text,
             # plus an actionable next-step hint that names the two common
             # rescues (suggestions/autocomplete and tell_me_about).
@@ -1227,7 +1242,7 @@ class TestZimOperations:
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
             result = zim_operations.browse_namespace(str(zim_file), "A")
-            assert 'total_in_namespace": 0' in result
+            assert '"total": 0' in result
 
     def test_search_with_filters_comprehensive(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1307,7 +1322,7 @@ class TestZimOperations:
         validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
 
         # Test get_zim_entry cache hit (lines 283-284)
-        cache_key = f"entry:{validated_path}:A/Test:1000:0"
+        cache_key = f"entry:{validated_path}:A/Test:1000:0:compact=False"
         zim_operations.cache.set(cache_key, "cached entry content")
 
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
@@ -1315,24 +1330,28 @@ class TestZimOperations:
 
         # Test list_namespaces_data cache hit (lines 584-585).
         # list_namespaces now delegates to list_namespaces_data, which caches
-        # dicts under a `namespaces_data:` key. Exercise the cache hit path
-        # against the dict-returning entry point directly so we test the
-        # cache layer without an extra json.dumps round trip.
-        cache_key = f"namespaces_data:{validated_path}"
+        # dicts under a `namespaces_data:v2b:` key (v2b marker added with the
+        # Phase B ``entry_count`` -> ``total`` rename so v1.x cached responses
+        # don't leak through). Exercise the cache hit path against the
+        # dict-returning entry point directly so we test the cache layer
+        # without an extra json.dumps round trip.
+        cache_key = f"namespaces_data:v2b:{validated_path}"
         zim_operations.cache.set(cache_key, {"cached": "namespaces"})
 
         result = zim_operations.list_namespaces_data(str(zim_file))
-        assert result == {"cached": "namespaces"}
+        assert result["cached"] == "namespaces"
+        assert "_meta" in result
 
         # Test browse_namespace_data cache hit. browse_namespace now
         # delegates to browse_namespace_data, which caches dicts under a
         # `browse_ns_data:` key. Exercise the cache hit path against the
         # dict-returning entry point directly.
-        cache_key = f"browse_ns_data:{validated_path}:A:50:0"
+        cache_key = f"browse_ns_data:v2b:{validated_path}:A:50:0"
         zim_operations.cache.set(cache_key, {"cached": "browse"})
 
         result = zim_operations.browse_namespace_data(str(zim_file), "A")
-        assert result == {"cached": "browse"}
+        assert result["cached"] == "browse"
+        assert "_meta" in result
 
         # Test get_article_structure_data cache hit. get_article_structure now
         # delegates to get_article_structure_data, which caches dicts under a
@@ -1342,15 +1361,16 @@ class TestZimOperations:
         zim_operations.cache.set(cache_key, {"cached": "structure"})
 
         result = zim_operations.get_article_structure_data(str(zim_file), "A/Test")
-        assert result == {"cached": "structure"}
+        assert result["cached"] == "structure"
+        assert "_meta" in result
 
         # Test extract_article_links_data cache hit. extract_article_links_data
         # caches the parsed extraction (full lists) under a stable
-        # ``links_full:`` key so different paginated requests share one parse;
+        # ``links_full:v2b:`` key so different paginated requests share one parse;
         # the response is rendered fresh per call, so the hit assertion checks
         # the post-render dict carries the cached title/path metadata rather
         # than asserting raw equality.
-        cache_key = f"links_full:{validated_path}:A/Test"
+        cache_key = f"links_full:v2b:{validated_path}:A/Test"
         zim_operations.cache.set(
             cache_key,
             {
@@ -2106,7 +2126,8 @@ class TestZimOperations:
             result = zim_operations.get_search_suggestions(
                 str(zim_file), "test", limit=15
             )
-            assert "suggestions" in result
+            # Phase B contract: top-level key is ``results`` (was ``suggestions``).
+            assert "results" in result
 
     def test_additional_edge_cases_for_coverage(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -2115,9 +2136,11 @@ class TestZimOperations:
         zim_file = temp_dir / "test.zim"
         zim_file.touch()
 
-        # Test search suggestions with short query
+        # Test search suggestions with short query — Phase B drops the
+        # free-form ``message`` and returns the empty contract envelope.
         result = zim_operations.get_search_suggestions(str(zim_file), "a")
-        assert "Query too short for suggestions" in result
+        assert '"results": []' in result
+        assert '"done": true' in result
 
         # Test search suggestions with invalid limit
         with pytest.raises(
@@ -2285,14 +2308,24 @@ class TestZimOperations:
             mock_archive_instance.get_entry_by_path.return_value = mock_entry
             mock_archive.return_value.__enter__.return_value = mock_archive_instance
 
-            result = zim_operations.extract_article_links(
-                str(zim_file), "C/Test_Article"
+            # v2 Phase B: each call returns a single category in `results`.
+            internal_raw = zim_operations.extract_article_links(
+                str(zim_file), "C/Test_Article", kind="internal"
+            )
+            external_raw = zim_operations.extract_article_links(
+                str(zim_file), "C/Test_Article", kind="external"
+            )
+            media_raw = zim_operations.extract_article_links(
+                str(zim_file), "C/Test_Article", kind="media"
             )
 
-            assert "internal_links" in result
-            assert "external_links" in result
-            assert "media_links" in result
-            assert "total_links" in result
+            assert '"kind": "internal"' in internal_raw
+            assert '"kind": "external"' in external_raw
+            assert '"kind": "media"' in media_raw
+            # `category_totals` echoes counts for all three categories.
+            for raw in (internal_raw, external_raw, media_raw):
+                assert '"category_totals"' in raw
+                assert '"results"' in raw
 
 
 class TestZimOperationsUtilityFunctions:

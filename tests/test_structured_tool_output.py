@@ -65,15 +65,46 @@ class TestStructuredOutput:
             structured, dict
         ), f"structured payload should be dict, got {type(structured)}"
 
-        # FastMCP wraps generic ``Dict[str, Any]`` return types under a
-        # ``"result"`` key (see ``_try_create_model_and_schema`` in
-        # ``mcp.server.fastmcp.utilities.func_metadata``). TypedDict /
-        # Pydantic returns would land at the top level instead. The pilot
-        # uses ``Dict[str, Any]`` so the payload sits one level down.
+        # FastMCP wraps Union return annotations
+        # (``Union[ListNamespacesResponse, ToolErrorPayload]``) in a
+        # uniform ``{"result": ...}`` envelope (see spec § FastMCP
+        # wrapping). Tolerate the wrapper; assert the inner shape.
         payload = structured["result"] if "result" in structured else structured
         assert isinstance(payload, dict)
+        # list_namespaces is the one list-shaped result that does NOT
+        # carry the PaginatedResponse contract — it returns a
+        # dict-of-summaries instead. Top-level keys are stable.
         assert "namespaces" in payload
         assert isinstance(payload["namespaces"], dict)
+        for key in (
+            "total_entries",
+            "sampled_entries",
+            "has_new_namespace_scheme",
+            "is_total_authoritative",
+            "discovery_method",
+        ):
+            assert key in payload, f"missing top-level key: {key}"
+        # Phase B contract keys MUST NOT leak onto this non-paginated
+        # response — protect against an accidental
+        # PaginatedResponse-style migration.
+        for forbidden in ("results", "next_cursor", "done", "page_info"):
+            assert forbidden not in payload, (
+                f"non-paginated list_namespaces unexpectedly carries "
+                f"contract key: {forbidden}"
+            )
+        # Per-namespace summaries declare ``total`` (renamed from the
+        # legacy ``count`` in v2 Phase B) and ``is_authoritative``.
+        for ns_letter, summary in payload["namespaces"].items():
+            assert isinstance(summary, dict), f"namespaces[{ns_letter}] should be dict"
+            assert (
+                "total" in summary
+            ), f"namespaces[{ns_letter}] missing renamed 'total' field"
+            assert (
+                "count" not in summary
+            ), f"namespaces[{ns_letter}] still carries legacy 'count' field"
+            assert (
+                "is_authoritative" in summary
+            ), f"namespaces[{ns_letter}] missing 'is_authoritative'"
 
     @pytest.mark.asyncio
     async def test_get_zim_metadata_returns_structured_content(
@@ -98,6 +129,37 @@ class TestStructuredOutput:
         assert "entry_count" in payload
 
     @pytest.mark.asyncio
+    async def test_get_main_page_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """get_main_page emits a real dict at structuredContent.result (FastMCP Union wrap)."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+
+        result = await server.mcp._tool_manager.call_tool(
+            "get_main_page",
+            {"zim_file_path": str(zim_path)},
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # FastMCP wraps Union returns in a uniform {"result": ...} envelope
+        # (see spec § FastMCP wrapping). Accept the wrapper; assert inner shape.
+        payload = structured["result"] if "result" in structured else structured
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            # Tolerate both: archive with main page (non-empty path/title/content)
+            # and archive without (empty path, textual notice in content).
+            assert "path" in payload
+            assert "title" in payload
+            assert "content" in payload
+
+    @pytest.mark.asyncio
     async def test_list_zim_files_returns_structured_content(
         self, server: OpenZimMcpServer
     ) -> None:
@@ -113,8 +175,20 @@ class TestStructuredOutput:
         _, structured = result
         assert isinstance(structured, dict)
         payload = structured["result"] if "result" in structured else structured
-        assert "files" in payload and isinstance(payload["files"], list)
-        assert "count" in payload
+        # v2 Phase B contract keys (non-paginated, but contract still applies).
+        assert "results" in payload and isinstance(payload["results"], list)
+        assert payload["next_cursor"] is None
+        assert payload["done"] is True
+        assert payload["total"] == len(payload["results"])
+        assert payload["page_info"]["offset"] == 0
+        assert payload["page_info"]["limit"] == len(payload["results"])
+        assert payload["page_info"]["returned_count"] == len(payload["results"])
+        # Tool-specific extras.
+        assert "directories_count" in payload
+        assert "name_filter" in payload
+        # Renamed legacy keys must not leak through.
+        assert "files" not in payload
+        assert "count" not in payload
 
     @pytest.mark.asyncio
     async def test_find_entry_by_title_returns_structured_content(
@@ -138,6 +212,13 @@ class TestStructuredOutput:
         assert "results" in payload and isinstance(payload["results"], list)
         assert "query" in payload
         assert "files_searched" in payload
+        # Phase B contract keys (non-paginated tool, but contract still applies).
+        assert payload["next_cursor"] is None
+        assert payload["done"] is True
+        assert payload["total"] == len(payload["results"])
+        assert payload["page_info"]["offset"] == 0
+        assert payload["page_info"]["limit"] == 10
+        assert payload["page_info"]["returned_count"] == len(payload["results"])
 
     @pytest.mark.asyncio
     async def test_browse_namespace_returns_structured_content(
@@ -159,7 +240,13 @@ class TestStructuredOutput:
         assert isinstance(structured, dict)
         payload = structured["result"] if "result" in structured else structured
         assert "namespace" in payload
-        assert "entries" in payload and isinstance(payload["entries"], list)
+        # Phase B contract: results / next_cursor / total / done / page_info.
+        assert "results" in payload and isinstance(payload["results"], list)
+        assert "done" in payload
+        assert "page_info" in payload
+        assert payload["page_info"]["offset"] == 0
+        assert payload["page_info"]["limit"] == 50
+        assert payload["page_info"]["returned_count"] == len(payload["results"])
 
     @pytest.mark.asyncio
     async def test_walk_namespace_returns_structured_content(
@@ -180,9 +267,15 @@ class TestStructuredOutput:
         _, structured = result
         assert isinstance(structured, dict)
         payload = structured["result"] if "result" in structured else structured
-        assert "entries" in payload and isinstance(payload["entries"], list)
+        # Phase B contract: results / next_cursor / total / done / page_info.
+        assert "results" in payload and isinstance(payload["results"], list)
         assert "done" in payload
         assert "namespace" in payload
+        # walk_namespace cannot know the per-namespace total mid-scan.
+        assert payload["total"] is None
+        assert "page_info" in payload
+        assert payload["page_info"]["limit"] == 200
+        assert payload["page_info"]["returned_count"] == len(payload["results"])
 
     @pytest.mark.asyncio
     async def test_get_search_suggestions_returns_structured_content(
@@ -203,8 +296,101 @@ class TestStructuredOutput:
         _, structured = result
         assert isinstance(structured, dict)
         payload = structured["result"] if "result" in structured else structured
-        assert "suggestions" in payload
-        assert isinstance(payload["suggestions"], list)
+        assert "results" in payload
+        assert isinstance(payload["results"], list)
+        assert payload["next_cursor"] is None
+        assert payload["done"] is True
+        assert payload["total"] == len(payload["results"])
+
+    @pytest.mark.asyncio
+    async def test_search_zim_file_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """search_zim_file (Phase B) emits a SearchResponse-shaped payload.
+
+        Phase B migration: the tool now declares a
+        ``Union[SearchResponse, ToolErrorPayload]`` return annotation, so
+        FastMCP wraps the payload in a single uniform ``{"result": ...}``
+        envelope (see spec § FastMCP wrapping — Union returns flow through
+        ``_try_create_model_and_schema``'s ``wrap_output=True`` path). The
+        inner shape carries a real ``anyOf`` schema and is the contract
+        we assert against.
+        """
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        result = await server.mcp._tool_manager.call_tool(
+            "search_zim_file",
+            {"zim_file_path": str(zim_path), "query": "anything"},
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # FastMCP wraps Union returns in a uniform {"result": ...} envelope
+        # (see spec § FastMCP wrapping). Accept that wrapper; assert the
+        # inner shape.
+        payload = structured["result"] if "result" in structured else structured
+        # Tool may emit an error envelope on a transient missing-index call —
+        # tolerate it; the wire format is what we're verifying.
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            assert "results" in payload and isinstance(payload["results"], list)
+            assert "next_cursor" in payload
+            assert "total" in payload
+            assert "done" in payload
+            assert "page_info" in payload and isinstance(payload["page_info"], dict)
+            assert "query" in payload
+
+    @pytest.mark.asyncio
+    async def test_search_with_filters_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """search_with_filters (Phase B) emits a SearchWithFiltersResponse-shaped payload.
+
+        Phase B migration: the tool now declares a
+        ``Union[SearchWithFiltersResponse, ToolErrorPayload]`` return
+        annotation, so FastMCP wraps the payload in a uniform
+        ``{"result": ...}`` envelope (see spec § FastMCP wrapping). The
+        inner shape must carry the contract keys plus the tool-specific
+        ``query`` / ``namespace_filter`` / ``content_type_filter`` extras.
+        """
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        result = await server.mcp._tool_manager.call_tool(
+            "search_with_filters",
+            {
+                "zim_file_path": str(zim_path),
+                "query": "evolution",
+                "namespace": "C",
+            },
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # FastMCP wraps Union returns in {"result": ...}; accept the wrapper.
+        payload = structured["result"] if "result" in structured else structured
+        # Tool may emit an error envelope on a transient libzim failure —
+        # tolerate it; the wire format is what we're verifying.
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            for key in ("results", "next_cursor", "total", "done", "page_info"):
+                assert key in payload
+            assert isinstance(payload["results"], list)
+            assert isinstance(payload["page_info"], dict)
+            # _meta envelope should also be present (sibling of contract keys).
+            assert "_meta" in payload
+            assert payload["query"] == "evolution"
+            assert payload["namespace_filter"] == "C"
+            assert payload["content_type_filter"] is None
 
     @pytest.mark.asyncio
     async def test_search_all_returns_structured_content(
@@ -213,8 +399,19 @@ class TestStructuredOutput:
         """search_all per-file results must be dicts, not stringified markdown.
 
         Catches both wire-format requirements: (a) the tool emits
-        structuredContent at all, and (b) ``per_file[].result`` is itself
-        a real dict (the triple-encoding fix).
+        structuredContent at all, and (b) ``results[].result`` is itself
+        a real ``SearchResponse`` dict (the triple-encoding fix, plus
+        Phase B contract-shape).
+
+        Note on the ``"result"`` wrapper: FastMCP wraps Union return
+        annotations (``Union[SearchAllResponse, ToolErrorPayload]``) in a
+        uniform ``{"result": ...}`` envelope because ``Union`` flows
+        through ``_try_create_model_and_schema``'s ``wrap_output=True``
+        path. Per spec § FastMCP wrapping, Phase B accepts this uniform
+        wrapper deliberately (the inner content carries a real
+        ``anyOf: [SearchAllResponse, ToolErrorPayload]`` schema). Tests
+        assert against ``structured["result"]`` (or the wrapper-tolerant
+        equivalent) — what matters is the inner shape.
         """
         result = await server.mcp._tool_manager.call_tool(
             "search_all", {"query": "evolution"}, convert_result=True
@@ -222,16 +419,31 @@ class TestStructuredOutput:
         assert isinstance(result, tuple)
         _, structured = result
         assert isinstance(structured, dict)
-        # The previous tool migration revealed FastMCP wraps
-        # ``Dict[str, Any]`` returns under a ``"result"`` key. Tolerate that.
         payload = structured["result"] if "result" in structured else structured
-        assert "per_file" in payload
-        for entry in payload.get("per_file", []):
-            if "result" in entry:
-                assert isinstance(
-                    entry["result"], dict
-                ), f"per_file[].result should be dict, got {type(entry['result'])}"
-                assert "results" in entry["result"]
+        # Phase B: results is the renamed per-file list, no longer ``per_file``.
+        assert "per_file" not in payload, (
+            "TypedDict migration regression: top-level still uses legacy "
+            "``per_file`` key — Task 6 renamed it to ``results``."
+        )
+        assert "results" in payload
+        # Top-level Phase B contract keys (always done=True, no cursor —
+        # search_all is fan-out, not paginated at the top level).
+        assert payload["done"] is True
+        assert payload["next_cursor"] is None
+        assert "page_info" in payload
+        for entry in payload["results"]:
+            inner = entry["result"]
+            assert isinstance(
+                inner, dict
+            ), f"per_file[].result should be dict, got {type(inner)}"
+            if inner.get("error") is True:
+                # Per-archive search failed (e.g. ZIM lacks FT Xapian index);
+                # the error envelope replaces SearchResponse for that entry.
+                continue
+            # inner is itself a SearchResponse — it has its own results list
+            assert "results" in inner
+            assert "done" in inner
+            assert "next_cursor" in inner
 
     @pytest.mark.asyncio
     async def test_get_zim_entries_returns_structured_content(
@@ -264,9 +476,68 @@ class TestStructuredOutput:
         if payload.get("error") is True:
             assert "operation" in payload
         else:
+            # v2 Phase B contract: the success envelope carries the
+            # canonical list-shaped keys plus the tool-specific
+            # succeeded/failed counters.
             assert "results" in payload
             assert "succeeded" in payload
             assert "failed" in payload
+            assert payload["next_cursor"] is None
+            assert payload["done"] is True
+            assert payload["total"] == len(payload["results"])
+            assert "page_info" in payload
+
+    @pytest.mark.asyncio
+    async def test_get_zim_entry_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """get_zim_entry emits a real dict at structuredContent.result (FastMCP Union wrap)."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+
+        # Resolve a real entry path via find_entry_by_title so we get a
+        # non-error response to assert the success-branch shape against.
+        find_result = await server.mcp._tool_manager.call_tool(
+            "find_entry_by_title",
+            {"zim_file_path": str(zim_path), "title": "a"},
+            convert_result=True,
+        )
+        assert isinstance(find_result, tuple)
+        _, find_structured = find_result
+        find_payload = (
+            find_structured["result"]
+            if "result" in find_structured
+            else find_structured
+        )
+        if find_payload.get("error") is True:
+            pytest.skip(
+                f"find_entry_by_title returned an error envelope: {find_payload.get('operation')}"
+            )
+        entries = find_payload.get("results", [])
+        if not entries:
+            pytest.skip("No entries found in test ZIM to exercise get_zim_entry")
+        entry_path = entries[0]["path"]
+
+        result = await server.mcp._tool_manager.call_tool(
+            "get_zim_entry",
+            {"zim_file_path": str(zim_path), "entry_path": entry_path},
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # FastMCP wraps Union returns in a uniform {"result": ...} envelope
+        # (see spec § FastMCP wrapping). Accept the wrapper; assert inner shape.
+        payload = structured["result"] if "result" in structured else structured
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            assert "path" in payload
+            assert "title" in payload
+            assert "content" in payload
 
     @pytest.mark.asyncio
     async def test_get_article_structure_returns_structured_content(
@@ -316,7 +587,12 @@ class TestStructuredOutput:
         if payload.get("error") is True:
             assert "operation" in payload
         else:
-            assert "internal_links" in payload
+            # v2 Phase B contract: single category per call.
+            assert "results" in payload
+            assert "kind" in payload and payload["kind"] == "internal"
+            assert "category_totals" in payload
+            for k in ("internal", "external", "media"):
+                assert k in payload["category_totals"]
 
     @pytest.mark.asyncio
     async def test_get_entry_summary_returns_structured_content(
@@ -422,7 +698,15 @@ class TestStructuredOutput:
         if payload.get("error") is True:
             assert "operation" in payload
         else:
-            assert "outbound_results" in payload
+            # v2 Phase B contract: top-level results / next_cursor / total /
+            # done / page_info plus tool-specific entry_path.
+            assert "results" in payload
+            assert "outbound_results" not in payload
+            assert payload["next_cursor"] is None
+            assert payload["done"] is True
+            assert payload["total"] == len(payload["results"])
+            assert payload["page_info"]["limit"] >= 1
+            assert "entry_path" in payload
 
     @pytest.mark.asyncio
     async def test_get_server_health_returns_structured_content(

@@ -8,7 +8,6 @@ shim). The shim re-exports everything below.
 from openzim_mcp.zim.archive import (  # noqa: F401
     ARCHIVE_OPEN_TIMEOUT,
     MAX_REDIRECT_DEPTH,
-    PaginationCursor,
     ZimOperations,
     zim_archive,
 )
@@ -16,7 +15,6 @@ from openzim_mcp.zim.archive import (  # noqa: F401
 __all__ = [
     "ARCHIVE_OPEN_TIMEOUT",
     "MAX_REDIRECT_DEPTH",
-    "PaginationCursor",
     "ZimOperations",
     "zim_archive",
 ]

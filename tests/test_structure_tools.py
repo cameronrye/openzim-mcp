@@ -343,7 +343,18 @@ class TestStructureToolsDirectInvocation:
     ):
         """Test invoking extract_article_links tool handler directly."""
         advanced_server.async_zim_operations.extract_article_links_data = AsyncMock(
-            return_value={"internal_links": [], "external_links": []}
+            return_value={
+                "title": "Article",
+                "path": "C/Article",
+                "content_type": "text/html",
+                "kind": "internal",
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 100, "returned_count": 0},
+                "category_totals": {"internal": 0, "external": 0, "media": 0},
+            }
         )
 
         tools = advanced_server.mcp._tool_manager._tools
@@ -354,7 +365,9 @@ class TestStructureToolsDirectInvocation:
                 entry_path="C/Article",
             )
             assert isinstance(result, dict)
-            assert "internal_links" in result
+            assert "results" in result
+            assert result["kind"] == "internal"
+            assert "category_totals" in result
 
     @pytest.mark.asyncio
     async def test_extract_article_links_with_exception(
@@ -506,3 +519,158 @@ class TestStructureToolsDirectInvocation:
             assert "**" in message and (
                 "Error" in message or "Not Found" in message or "Operation" in message
             )
+
+
+# ---------------------------------------------------------------------------
+# Phase-A _meta envelope smoke tests — structure.py methods
+# ---------------------------------------------------------------------------
+
+
+class TestStructureDataMethodsMeta:
+    """_meta is attached on every return path of the four structure *_data
+    methods: get_article_structure_data, extract_article_links_data,
+    get_table_of_contents_data, get_related_articles_data.
+    """
+
+    @pytest.fixture
+    def zim_ops(
+        self,
+        test_config: OpenZimMcpConfig,
+        path_validator,
+        openzim_mcp_cache,
+        content_processor,
+    ):
+        from openzim_mcp.zim_operations import ZimOperations
+
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def _zim_file(self, temp_dir):
+        from pathlib import Path
+
+        p = Path(temp_dir) / "test.zim"
+        p.write_bytes(b"")
+        return p
+
+    def test_get_article_structure_data_fresh_attaches_meta(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Fresh path carries _meta."""
+        zim_file = self._zim_file(temp_dir)
+        fake = {"title": "Foo", "path": "C/Foo", "headings": [], "word_count": 0}
+        monkeypatch.setattr(
+            zim_ops, "_extract_article_structure_data", lambda *a, **kw: fake
+        )
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_article_structure_data(str(zim_file), "C/Foo")
+
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_get_article_structure_data_cached_backfills_meta(self, zim_ops, temp_dir):
+        """Cached entry without _meta gets backfilled on read."""
+        zim_file = self._zim_file(temp_dir)
+        validated = zim_ops.path_validator.validate_path(str(zim_file))
+        validated = zim_ops.path_validator.validate_zim_file(validated)
+        cache_key = f"structure_data:{validated}:C/Foo"
+        old = {"title": "Foo", "path": "C/Foo", "headings": []}
+        zim_ops.cache.set(cache_key, old)
+
+        result = zim_ops.get_article_structure_data(str(zim_file), "C/Foo")
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_extract_article_links_data_attaches_meta(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """extract_article_links_data result carries _meta."""
+        zim_file = self._zim_file(temp_dir)
+
+        fake_extraction = {
+            "title": "Foo",
+            "path": "C/Foo",
+            "content_type": "text/html",
+            "internal": [],
+            "external": [],
+            "media": [],
+            "message": None,
+        }
+        monkeypatch.setattr(
+            zim_ops,
+            "_get_or_load_link_extraction",
+            lambda *a, **kw: fake_extraction,
+        )
+
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.extract_article_links_data(str(zim_file), "C/Foo")
+
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+        # v2 Phase B contract: single category in `results`, full
+        # category_totals echoed.
+        assert result["kind"] == "internal"
+        assert result["results"] == []
+        assert result["category_totals"] == {
+            "internal": 0,
+            "external": 0,
+            "media": 0,
+        }
+        assert result["done"] is True
+
+    def test_get_table_of_contents_data_fresh_attaches_meta(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """get_table_of_contents_data fresh path carries _meta."""
+        zim_file = self._zim_file(temp_dir)
+        fake = {"title": "Foo", "path": "C/Foo", "toc": [], "heading_count": 0}
+        monkeypatch.setattr(
+            zim_ops, "_extract_table_of_contents_data", lambda *a, **kw: fake
+        )
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_table_of_contents_data(str(zim_file), "C/Foo")
+
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_get_table_of_contents_data_cached_backfills_meta(self, zim_ops, temp_dir):
+        """Cached TOC entry without _meta gets backfilled on read."""
+        zim_file = self._zim_file(temp_dir)
+        validated = zim_ops.path_validator.validate_path(str(zim_file))
+        validated = zim_ops.path_validator.validate_zim_file(validated)
+        cache_key = f"toc_data:{validated}:C/Foo"
+        old = {"title": "Foo", "path": "C/Foo", "toc": []}
+        zim_ops.cache.set(cache_key, old)
+
+        result = zim_ops.get_table_of_contents_data(str(zim_file), "C/Foo")
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1
+
+    def test_get_related_articles_data_attaches_meta(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """get_related_articles_data result carries _meta."""
+        zim_file = self._zim_file(temp_dir)
+        # Stub extract_article_links_data to avoid archive open
+        monkeypatch.setattr(
+            zim_ops,
+            "extract_article_links_data",
+            lambda *a, **kw: {
+                "path": "C/Foo",
+                "kind": "internal",
+                "results": [],
+                "category_totals": {"internal": 0, "external": 0, "media": 0},
+            },
+        )
+        result = zim_ops.get_related_articles_data(str(zim_file), "C/Foo")
+        assert "_meta" in result
+        assert result["_meta"]["tokens_est"] >= 1

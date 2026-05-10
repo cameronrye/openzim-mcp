@@ -59,7 +59,12 @@ class OpenZimMcpServer:
         # Initialize components
         self.path_validator = PathValidator(config.allowed_directories)
         self.cache = OpenZimMcpCache(config.cache)
-        self.content_processor = ContentProcessor(config.content.snippet_length)
+        self.content_processor = ContentProcessor(
+            config.content.snippet_length,
+            table_row_threshold=config.content.table_row_threshold,
+            table_char_threshold=config.content.table_char_threshold,
+            infobox_kv_limit=config.content.infobox_kv_limit,
+        )
         # ``RateLimitConfig`` is unified — ``OpenZimMcpConfig.rate_limit`` is
         # the same model the limiter expects, including ``per_operation_limits``
         # which would otherwise be unreachable from env-var/JSON config.

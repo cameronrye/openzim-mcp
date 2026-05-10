@@ -499,6 +499,45 @@ class TestExtractHtmlLinksFiltering:
         assert scheme_upper not in all_urls
 
 
+def test_html_to_plain_text_compact_extracts_infobox():
+    proc = ContentProcessor()
+    html = (
+        "<div>"
+        '<table class="infobox">'
+        "<tr><th>Born</th><td>1879</td></tr>"
+        "<tr><th>Died</th><td>1955</td></tr>"
+        "</table>"
+        "<p>Einstein was a physicist.</p>"
+        "</div>"
+    )
+    out = proc.html_to_plain_text(html, compact=True)
+    assert "Born" in out
+    assert "1879" in out
+    assert "physicist" in out
+    # No pipe-soup table
+    assert "|" not in out
+
+
+def test_html_to_plain_text_non_compact_preserves_legacy():
+    proc = ContentProcessor()
+    html = '<table class="infobox"><tr><th>K</th><td>V</td></tr></table><p>Body</p>'
+    out_default = proc.html_to_plain_text(html)
+    assert "K" in out_default and "V" in out_default
+    assert "Body" in out_default
+    # Default behavior must be byte-identical to legacy (no compact flag = compact=False)
+    assert out_default == proc.html_to_plain_text(html, compact=False)
+
+
+def test_html_to_plain_text_compact_replaces_large_tables():
+    proc = ContentProcessor()
+    rows = "".join("<tr><td>cell</td></tr>" for _ in range(20))
+    html = f"<div><table>{rows}</table><p>After table.</p></div>"
+    out = proc.html_to_plain_text(html, compact=True)
+    assert "Table 1:" in out
+    assert "compact=False to expand" in out
+    assert "After table." in out
+
+
 class TestResolveHeadingId:
     """Test the four-step heading-id resolution chain.
 

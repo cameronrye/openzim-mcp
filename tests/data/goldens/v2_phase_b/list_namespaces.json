@@ -1,0 +1,65 @@
+{
+  "_meta": {
+    "truncated": false
+  },
+  "discovery_method": "full_iteration",
+  "has_new_namespace_scheme": true,
+  "is_total_authoritative": true,
+  "namespaces": {
+    "C": {
+      "description": "User content entries (articles, main content)",
+      "estimated_total": 4,
+      "is_authoritative": true,
+      "sample_entries": [
+        {
+          "path": "A/Einstein",
+          "title": "Einstein"
+        },
+        {
+          "path": "A/LongArticle",
+          "title": "LongArticle"
+        },
+        {
+          "path": "A/MultiTable",
+          "title": "MultiTable"
+        },
+        {
+          "path": "A/PlainArticle",
+          "title": "PlainArticle"
+        }
+      ],
+      "sampled_count": 4,
+      "total": 4
+    },
+    "M": {
+      "description": "ZIM metadata (title, description, language, etc.)",
+      "estimated_total": 1,
+      "is_authoritative": true,
+      "probed_count": 0,
+      "sample_entries": [
+        {
+          "path": "M/Counter",
+          "title": "Counter"
+        }
+      ],
+      "sampled_count": 1,
+      "total": 1
+    },
+    "W": {
+      "description": "Well-known entries (MainPage, Favicon, navigation)",
+      "estimated_total": 1,
+      "is_authoritative": false,
+      "probed_count": 1,
+      "sample_entries": [
+        {
+          "path": "W/mainPage",
+          "title": "mainPage"
+        }
+      ],
+      "sampled_count": 0,
+      "total": 1
+    }
+  },
+  "sampled_entries": 4,
+  "total_entries": 4
+}

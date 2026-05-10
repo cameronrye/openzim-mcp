@@ -649,13 +649,19 @@ class TestSimpleToolsOptionsPassthrough:
         assert kwargs.get("limit_per_file") == 25
 
     def test_walk_namespace_forwards_options_limit_and_offset(self):
-        """walk_namespace must use options['offset'] as cursor and options['limit']."""
+        """walk_namespace must use options['offset'] as scan_at and options['limit'].
+
+        v2: walk_namespace's ``cursor`` parameter is now a decoded
+        cursor-state dict (``{scan_at, l}``) rather than a raw int.
+        simple_tools maps the legacy ``options['offset']`` passthrough
+        channel to ``scan_at``.
+        """
         from unittest.mock import MagicMock
 
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         zim_ops = MagicMock()
-        zim_ops.walk_namespace.return_value = '{"entries": []}'
+        zim_ops.walk_namespace.return_value = '{"results": []}'
         zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         handler = SimpleToolsHandler(zim_ops)
 
@@ -664,7 +670,8 @@ class TestSimpleToolsOptionsPassthrough:
             options={"limit": 50, "offset": 1234},
         )
         _args, kwargs = zim_ops.walk_namespace.call_args
-        assert kwargs.get("cursor") == 1234
+        # v2: cursor is now the decoded state dict, not a raw int.
+        assert kwargs.get("cursor") == {"scan_at": 1234, "l": 50}
         assert kwargs.get("limit") == 50
 
     def test_find_by_title_forwards_options_limit(self):
@@ -691,7 +698,7 @@ class TestSimpleToolsOptionsPassthrough:
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         zim_ops = MagicMock()
-        zim_ops.get_related_articles.return_value = '{"outbound_results": []}'
+        zim_ops.get_related_articles.return_value = '{"results": []}'
         zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         handler = SimpleToolsHandler(zim_ops)
 
@@ -1040,8 +1047,10 @@ class TestCompactStructureResponse:
         assert (
             len(result) < 1000
         ), f"compact structure should be < 1k chars, got {len(result)}"
-        # And it's still valid JSON with the navigation fields.
-        parsed = json.loads(result)
+        # Strip the one-line footer ("> ~... tokens") before parsing JSON —
+        # the footer is appended after the JSON body in compact mode.
+        json_body = result.split("\n\n>")[0].strip()
+        parsed = json.loads(json_body)
         assert parsed["title"] == "Photosynthesis"
         assert len(parsed["headings"]) == 2
         for h in parsed["headings"]:
@@ -1262,13 +1271,18 @@ class TestCompactSearchSnippetTruncation:
     def test_truncation_runs_in_compact_search_path(self):
         """End-to-end: compact mode applies snippet truncation to a
         rendered search response.
+
+        In compact mode _handle_search now uses search_zim_file_data (the
+        dict variant) for non-empty results, then renders via
+        _format_search_text.  The test mocks both so the truncation path
+        still exercises the cap + snippet logic.
         """
         from unittest.mock import MagicMock
 
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         long_body = "y" * 2000
-        mock.search_zim_file.return_value = (
+        rendered = (
             'Found 1 matches for "biology", showing 1-1:\n\n'
             "## 1. Biology article\n"
             "Path: Biology\n"
@@ -1276,6 +1290,20 @@ class TestCompactSearchSnippetTruncation:
             "---\n"
             "Showing 1-1 of 1 (end of results)\n"
         )
+        # In compact mode _handle_search calls search_zim_file_data + _format_search_text
+        # Phase B shape: top-level total/done/page_info, no nested pagination block.
+        mock.search_zim_file_data.return_value = {
+            "query": "biology",
+            "results": [
+                {"path": "Biology", "title": "Biology article", "snippet": "x"}
+            ],
+            "next_cursor": None,
+            "total": 1,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 1},
+            "_meta": {"tokens_est": 10, "chars": 100, "truncated": False},
+        }
+        mock._format_search_text.return_value = rendered
         handler = SimpleToolsHandler(mock)
         out = handler.handle_zim_query("search for biology", options={"compact": True})
         assert long_body not in out
@@ -1327,7 +1355,9 @@ class TestResponseBudgetCap:
         out_compact = handler.handle_zim_query(
             "show main page", options={"compact": True}
         )
-        assert len(out_compact) <= 6000
+        # The body is capped at 6000 chars; the footer ("> ~N tokens") is
+        # appended after the cap and adds a small fixed overhead (~70 chars).
+        assert len(out_compact) <= 6100
         assert "Response truncated" in out_compact
 
         out_verbose = handler.handle_zim_query(
@@ -1506,7 +1536,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         h, mock = self._handler_with_data(
             get_related_articles_data={
                 "entry_path": "Photosynthesis",
-                "outbound_results": [
+                "results": [
                     {
                         "path": "Carbohydrate",
                         "title": "Carbohydrate",
@@ -1533,7 +1563,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         h, _ = self._handler_with_data(
             get_related_articles_data={
                 "entry_path": "Bad_Article",
-                "outbound_results": [],
+                "results": [],
                 "outbound_error": "Failed to extract: Entry not found",
             }
         )
@@ -1544,29 +1574,35 @@ class TestCompactMarkdownRenderingForJsonIntents:
         assert "Entry not found" in out
 
     def test_walk_namespace_compact_renders_entry_list(self):
+        # v2 Phase B contract: top-level results / next_cursor (opaque str) /
+        # total / done / page_info (offset/limit/returned_count). The compact
+        # renderer reads these directly.
+        from openzim_mcp.pagination import Cursor
+
+        next_cursor = Cursor.encode(tool="walk_namespace", state={"scan_at": 3, "l": 3})
         h, mock = self._handler_with_data(
             walk_namespace_data={
                 "namespace": "C",
-                "cursor": 0,
-                "limit": 3,
-                "returned_count": 3,
-                "next_cursor": 3,
-                "done": False,
-                "total_in_namespace": 27199904,
-                "total_in_namespace_is_lower_bound": False,
-                "entries": [
+                "results": [
                     {"path": "!", "title": "!"},
                     {"path": "Photosynthesis", "title": "Photosynthesis"},
                     {"path": "Cell_(biology)", "title": "Cell (biology)"},
                 ],
+                "next_cursor": next_cursor,
+                "total": None,
+                "done": False,
+                "page_info": {"offset": 0, "limit": 3, "returned_count": 3},
+                "scanned_count": 3,
+                "scanned_through_id": 2,
+                "archive_entry_count": 27199904,
             }
         )
         out = h.handle_zim_query("walk namespace C", options={"compact": True})
         mock.walk_namespace_data.assert_called_once()
         assert "Namespace `C`" in out
-        assert "27,199,904" in out  # total formatted with commas
         assert "Photosynthesis" in out
-        assert "offset=3" in out  # next-cursor pagination hint
+        # Resume hint surfaces the opaque cursor (not a raw int).
+        assert next_cursor in out
         # JSON shape NOT in output.
         assert "{" not in out
 
@@ -1578,16 +1614,16 @@ class TestCompactMarkdownRenderingForJsonIntents:
                 "discovery_method": "sampling",
                 "namespaces": {
                     "C": {
-                        "count": 27199903,
+                        "total": 27199903,
                         "description": "User content entries",
                     },
-                    "M": {"count": 13, "description": "ZIM metadata"},
+                    "M": {"total": 13, "description": "ZIM metadata"},
                 },
             }
         )
         out = h.handle_zim_query("list namespaces", options={"compact": True})
         mock.list_namespaces_data.assert_called_once()
-        # Sorted by count descending; C comes first.
+        # Sorted by total descending; C comes first.
         c_idx = out.find("**`C`**")
         m_idx = out.find("**`M`**")
         assert c_idx >= 0 and m_idx >= 0 and c_idx < m_idx
@@ -1603,7 +1639,7 @@ class TestCompactMarkdownRenderingForJsonIntents:
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.find_entry_by_title.return_value = '{"results": []}'
-        mock.get_related_articles.return_value = '{"outbound_results": []}'
+        mock.get_related_articles.return_value = '{"results": []}'
         mock.walk_namespace.return_value = '{"entries": []}'
         mock.list_namespaces.return_value = '{"namespaces": {}}'
         h = SimpleToolsHandler(mock)
@@ -1636,35 +1672,58 @@ class TestCompactLinksResponse:
     def mock_zim_operations(self):
         mock = Mock()
         mock.list_zim_files_data.return_value = [{"path": "/zim/test.zim"}]
-        mock.extract_article_links_data.return_value = {
-            "title": "Photosynthesis",
-            "path": "Photosynthesis",
-            "internal_links": [
-                {"url": "Carbohydrate", "text": "carbohydrates", "type": "internal"},
-                {"url": "Phytoplankton", "text": "phytoplankton", "type": "internal"},
-            ],
-            "external_links": [
-                {"url": "https://example.com/x", "text": "example", "type": "external"},
-            ],
-            "media_links": [
-                {
-                    "url": "./_assets_/img.png",
-                    "type": "image",
-                    "alt": "",
-                    "title": "",
+
+        # v2 Phase B: extract_article_links_data returns ONE category
+        # per call. The compact path issues two calls (internal +
+        # external); return different payloads based on the ``kind``.
+        def _per_kind(*args, **kwargs):
+            kind = kwargs.get("kind") or (args[4] if len(args) > 4 else "internal")
+            base = {
+                "title": "Photosynthesis",
+                "path": "Photosynthesis",
+                "content_type": "text/html",
+                "next_cursor": "OPAQUE",
+                "done": False,
+                "category_totals": {
+                    "internal": 1988,
+                    "external": 401,
+                    "media": 25,
                 },
-            ],
-            "total_internal_links": 1988,
-            "total_external_links": 401,
-            "total_media_links": 25,
-            "total_links": 2414,
-            "pagination": {
-                "offset": 0,
-                "limit": 20,
-                "kind": None,
-                "has_more": True,
-            },
-        }
+            }
+            if kind == "external":
+                return {
+                    **base,
+                    "kind": "external",
+                    "results": [
+                        {
+                            "url": "https://example.com/x",
+                            "text": "example",
+                            "type": "external",
+                        },
+                    ],
+                    "total": 401,
+                    "page_info": {"offset": 0, "limit": 20, "returned_count": 1},
+                }
+            return {
+                **base,
+                "kind": "internal",
+                "results": [
+                    {
+                        "url": "Carbohydrate",
+                        "text": "carbohydrates",
+                        "type": "internal",
+                    },
+                    {
+                        "url": "Phytoplankton",
+                        "text": "phytoplankton",
+                        "type": "internal",
+                    },
+                ],
+                "total": 1988,
+                "page_info": {"offset": 0, "limit": 20, "returned_count": 2},
+            }
+
+        mock.extract_article_links_data.side_effect = _per_kind
         mock.extract_article_links.return_value = (
             '{"title":"Photosynthesis","internal_links":[...legacy verbose...]}'
         )
@@ -1677,15 +1736,26 @@ class TestCompactLinksResponse:
     def test_compact_renders_flat_markdown_list(self, handler, mock_zim_operations):
         """Compact mode hits the structured-data path with a tight
         default limit (20) and renders a flat ``- text -> path`` list.
+
+        v2 Phase B: ``extract_article_links_data`` returns ONE kind
+        per call, so the compact path issues two calls (internal +
+        external).
         """
         result = handler.handle_zim_query(
             "links in Photosynthesis",
             zim_file_path="/zim/test.zim",
             options={"compact": True, "limit": 20},
         )
-        mock_zim_operations.extract_article_links_data.assert_called_once()
-        args, kwargs = mock_zim_operations.extract_article_links_data.call_args
-        assert kwargs.get("limit") == 20
+        # Two calls — one per category.
+        assert mock_zim_operations.extract_article_links_data.call_count == 2
+        kinds_called = {
+            call.kwargs.get("kind")
+            for call in mock_zim_operations.extract_article_links_data.call_args_list
+        }
+        assert kinds_called == {"internal", "external"}
+        # All calls used the requested limit.
+        for call in mock_zim_operations.extract_article_links_data.call_args_list:
+            assert call.kwargs.get("limit") == 20
 
         # Header names the article and the per-category counts include
         # the full totals so the LLM knows what's been paged in.
@@ -1760,7 +1830,7 @@ class TestZimPathHallucinationHandling:
         )
         # Backend received the resolved full path, not the bare name.
         mock_zim_operations.get_main_page.assert_called_once_with(
-            "/var/lib/zim/wikipedia_en_all_maxi.zim"
+            "/var/lib/zim/wikipedia_en_all_maxi.zim", compact=False
         )
 
     def test_bare_filename_with_no_match_triggers_auto_select(
@@ -1774,7 +1844,7 @@ class TestZimPathHallucinationHandling:
         # The hallucinated name was discarded; auto-select supplied
         # the real path.
         mock_zim_operations.get_main_page.assert_called_once_with(
-            "/var/lib/zim/wikipedia_en_all_maxi.zim"
+            "/var/lib/zim/wikipedia_en_all_maxi.zim", compact=False
         )
 
     def test_slashed_path_is_trusted_even_when_unknown(
@@ -1787,7 +1857,9 @@ class TestZimPathHallucinationHandling:
         """
         explicit = "/some/other/wikipedia.zim"
         handler.handle_zim_query("show main page", zim_file_path=explicit)
-        mock_zim_operations.get_main_page.assert_called_once_with(explicit)
+        mock_zim_operations.get_main_page.assert_called_once_with(
+            explicit, compact=False
+        )
 
     def test_slashed_path_matching_full_path_is_used_verbatim(
         self, handler, mock_zim_operations
@@ -1795,7 +1867,7 @@ class TestZimPathHallucinationHandling:
         """A slashed path that matches a real file is honored exactly."""
         real = "/var/lib/zim/wikipedia_en_all_maxi.zim"
         handler.handle_zim_query("show main page", zim_file_path=real)
-        mock_zim_operations.get_main_page.assert_called_once_with(real)
+        mock_zim_operations.get_main_page.assert_called_once_with(real, compact=False)
 
     def test_bare_filename_no_match_no_auto_select(self):
         """When the candidate doesn't match anything AND auto-select
@@ -1816,7 +1888,7 @@ class TestZimPathHallucinationHandling:
         handler = SimpleToolsHandler(mock)
         handler.handle_zim_query("show main page", zim_file_path="ghost.zim")
         # No resolve, no auto-select → original bare name reaches backend.
-        mock.get_main_page.assert_called_once_with("ghost.zim")
+        mock.get_main_page.assert_called_once_with("ghost.zim", compact=False)
 
     def test_resolver_basename_match_doesnt_mask_later_exact_match(self):
         """If the listing contains both a basename match (different dir)
@@ -2352,24 +2424,32 @@ class TestCompactRenderersModule:
 
     def test_render_walk_namespace_smoke(self):
         from openzim_mcp import compact_renderers
+        from openzim_mcp.pagination import Cursor
 
+        next_cursor = Cursor.encode(
+            tool="walk_namespace", state={"scan_at": 100, "l": 2}
+        )
         out = compact_renderers.render_walk_namespace(
             {
                 "namespace": "C",
-                "cursor": 0,
-                "next_cursor": 100,
-                "returned_count": 2,
-                "total_in_namespace": 1234,
-                "entries": [
+                "results": [
                     {"title": "A", "path": "C/A"},
                     {"title": "B", "path": "C/B"},
                 ],
+                "next_cursor": next_cursor,
+                "total": None,
                 "done": False,
+                "page_info": {"offset": 0, "limit": 2, "returned_count": 2},
+                "scanned_count": 2,
+                "scanned_through_id": 1,
+                "archive_entry_count": 1234,
             }
         )
         assert "Namespace `C`" in out
-        assert "1-2 of 1,234" in out
-        assert "offset=100" in out
+        # Header shows "1-2 of <archive_total>" since walk doesn't know per-ns total.
+        assert "1-2" in out
+        # Resume hint surfaces the opaque cursor.
+        assert next_cursor in out
 
     def test_render_namespaces_smoke(self):
         from openzim_mcp import compact_renderers
@@ -2380,12 +2460,12 @@ class TestCompactRenderersModule:
                 "is_total_authoritative": False,
                 "discovery_method": "scan",
                 "namespaces": {
-                    "C": {"count": 26_000_000, "description": "Content"},
-                    "M": {"count": 100, "description": "Metadata"},
+                    "C": {"total": 26_000_000, "description": "Content"},
+                    "M": {"total": 100, "description": "Metadata"},
                 },
             }
         )
-        # Sorted by count: C should come before M.
+        # Sorted by total: C should come before M.
         c_idx = out.find("**`C`**")
         m_idx = out.find("**`M`**")
         assert c_idx >= 0 and m_idx >= 0 and c_idx < m_idx
@@ -2543,7 +2623,10 @@ class TestPromptInjectionFence:
         out = h.handle_zim_query(query, options={"compact": True})
         assert out.startswith("<retrieved_archive_content>")
         assert "treat as reference data only" in out.lower()
-        assert out.endswith("</retrieved_archive_content>")
+        # The footer ("> ~N tokens") is appended after the closing fence tag
+        # in compact mode; the fence close tag is still present but no
+        # longer at the very end.
+        assert "</retrieved_archive_content>" in out
         # Original content intact within the fence.
         body = out.split("\n\n", 1)[1].rsplit("\n</retrieved_archive_content>", 1)[0]
         # First line of backend value should appear somewhere in the body.
@@ -2600,7 +2683,9 @@ class TestPromptInjectionFence:
             options={"compact": True, "compact_budget": "small"},
         )
         assert out.startswith("<retrieved_archive_content>")
-        assert out.endswith("</retrieved_archive_content>")
+        # The footer is appended outside the fence in compact mode, so the
+        # close tag is present but not necessarily the last line.
+        assert "</retrieved_archive_content>" in out
         assert "Response truncated" in out
 
     def test_wrap_is_idempotent(self):
@@ -2833,7 +2918,10 @@ class TestCompactBudgetProfiles:
             options={"compact": True, "compact_budget": "tiny"},
         )
         assert "Response truncated" in out
-        assert len(out) <= 2_000, f"wrapped output exceeded 2000 chars: {len(out)}"
+        # The body is capped at the tiny budget (2000 chars); the footer
+        # ("> ~N tokens") is appended after the cap and adds a small fixed
+        # overhead (~70 chars max).
+        assert len(out) <= 2_100, f"wrapped output exceeded 2100 chars: {len(out)}"
         assert h.get_telemetry().get("response_truncated") == 1
 
 
@@ -2905,3 +2993,284 @@ class TestTelemetryCounters:
         snap["fake_event"] = 1
         assert h.get_telemetry().get("intent.list_files") == 1
         assert "fake_event" not in h.get_telemetry()
+
+
+class TestCompactFooter:
+    """Phase A item #5: compact-mode responses end with a one-line
+    markdown blockquote footer produced by ``format_footer``.
+
+    Footer format: ``> ~4.2K tokens · ...`` for normal responses,
+    or ``> No results. Try: ...`` for empty-result responses.
+    Footer is suppressed in ``compact=False`` mode and when
+    ``MetaConfig.footer_enabled=False``.  Error responses are never footed.
+    """
+
+    def _make_handler(self, footer_enabled=True, response_text="Article content here."):
+        """Build a ``SimpleToolsHandler`` with a single-file mock backend.
+
+        ``footer_enabled`` is wired directly onto the mock config so
+        the test controls what ``self.zim_operations.config.meta.footer_enabled``
+        returns without needing a real ``OpenZimMcpConfig``.
+        """
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.get_main_page.return_value = response_text
+        mock.config.meta.footer_enabled = footer_enabled
+        return SimpleToolsHandler(mock)
+
+    def test_compact_response_appends_footer(self):
+        """A successful compact-mode response ends with a blockquote footer."""
+        handler = self._make_handler()
+        out = handler.handle_zim_query("show main page", options={"compact": True})
+        last_line = out.rstrip().splitlines()[-1]
+        assert last_line.startswith(
+            "> "
+        ), f"Expected footer starting with '> ', got: {last_line!r}"
+        assert "tokens" in last_line, f"Expected 'tokens' in footer, got: {last_line!r}"
+
+    def test_non_compact_response_omits_footer(self):
+        """compact=False omits the footer for back-compat."""
+        handler = self._make_handler()
+        out = handler.handle_zim_query("show main page", options={"compact": False})
+        last_line = out.rstrip().splitlines()[-1]
+        assert not last_line.startswith(
+            "> ~"
+        ), f"compact=False response should not have footer, got last line: {last_line!r}"
+
+    def test_compact_footer_disabled_via_config(self):
+        """When footer_enabled=False, no footer even in compact mode."""
+        handler = self._make_handler(footer_enabled=False)
+        out = handler.handle_zim_query("show main page", options={"compact": True})
+        assert (
+            "> ~" not in out
+        ), f"footer_enabled=False should suppress footer, but got: {out!r}"
+
+    def test_compact_footer_reports_truncation_when_capped(self):
+        """When the body exceeds compact_budget and gets capped, the footer should report it.
+
+        The footer should include 'of' and 'chars' indicating the response was
+        truncated (e.g., "~1.2K of 5.5K chars").
+        """
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        # Response larger than the tiny budget (2000 chars)
+        large_content = "Article paragraph. " * 200  # ~3800 chars
+        mock.get_main_page.return_value = large_content
+        mock.config.meta.footer_enabled = True
+        handler = SimpleToolsHandler(mock)
+
+        out = handler.handle_zim_query(
+            "show main page",
+            options={"compact": True, "compact_budget": "tiny"},
+        )
+        last_line = out.rstrip().splitlines()[-1]
+        # Truncated footer should contain both "of" and "chars"
+        assert (
+            " of " in last_line
+        ), f"Expected ' of ' in truncated footer, got: {last_line!r}"
+        assert (
+            "chars" in last_line
+        ), f"Expected 'chars' in truncated footer, got: {last_line!r}"
+
+    def test_compact_empty_search_uses_footer_not_legacy_prose(self):
+        """compact=True + zero results → footer-driven recovery; no legacy prose.
+
+        When _handle_search finds zero results in compact mode it returns a
+        _HandlerResult with reason='0_hits' and suggestions from _meta.
+        handle_zim_query's footer step then renders the empty-result
+        suggestion footer (``> No results. Try: …``) instead of the old
+        ``**Try one of these:**`` prose block.
+        """
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = True
+        # search_zim_file_data returns zero results with suggestions in _meta
+        mock.search_zim_file_data.return_value = {
+            "query": "xyzzy",
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 0},
+            "_meta": {
+                "tokens_est": 5,
+                "chars": 20,
+                "truncated": False,
+                "reason": "0_hits",
+                "suggestions": [{"type": "alt_spelling", "value": "xyz"}],
+            },
+        }
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query('search for "xyzzy"', options={"compact": True})
+        # Legacy prose must NOT appear.
+        assert (
+            "**Try one of these:**" not in out
+        ), "compact+empty should not render legacy prose block"
+        # Footer line must be present and start with the empty-result marker.
+        last_line = out.rstrip().splitlines()[-1]
+        assert last_line.startswith(
+            "> No results."
+        ), f"Expected footer starting with '> No results.', got: {last_line!r}"
+        # Suggestion value from _meta must appear in the footer.
+        assert (
+            "xyz" in last_line
+        ), f"Expected suggestion 'xyz' in footer, got: {last_line!r}"
+
+    def test_non_compact_empty_search_keeps_legacy_prose(self):
+        """compact=False + zero results → legacy prose is preserved byte-identical.
+
+        The non-compact path still calls search_zim_file (the string
+        variant) so existing callers that parse the prose block are
+        unaffected.
+        """
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = True
+        # search_zim_file (legacy string path) returns the legacy prose
+        mock.search_zim_file.return_value = (
+            'No search results found for "xyzzy".\n\n'
+            "**Try one of these:**\n"
+            "- `suggestions for xyzzy` — autocomplete to catch typos or partial names\n"
+            "- `tell me about xyzzy` — structured topic lookup with auto article fetch\n"
+            "- A shorter or differently-cased query"
+        )
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query('search for "xyzzy"', options={"compact": False})
+        # Legacy prose must be present in non-compact mode.
+        assert (
+            "**Try one of these:**" in out
+        ), "compact=False should preserve the legacy prose recovery block"
+        # search_zim_file (string path) must have been called, not the dict variant.
+        mock.search_zim_file.assert_called_once()
+
+
+class TestCompactFlagPropagation:
+    """Verify that compact=True reaches get_zim_entry / get_main_page via
+    the simple-mode handler chain.
+
+    These tests do NOT open a real ZIM archive — they mock ZimOperations and
+    assert that the correct keyword argument is forwarded end-to-end.
+    """
+
+    INFOBOX_ARTICLE = (
+        "# Albert Einstein\n\n"
+        "**Born:** 14 March 1879\n\n"
+        "Albert Einstein was a theoretical physicist.\n"
+    )
+
+    def _make_handler(self, zim_path="/test/wiki.zim"):
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": zim_path}]
+        mock.get_zim_entry.return_value = self.INFOBOX_ARTICLE
+        mock.get_main_page.return_value = self.INFOBOX_ARTICLE
+        mock.get_entry_summary.return_value = '{"summary": "A physicist."}'
+        mock.config.meta.footer_enabled = False
+        return SimpleToolsHandler(mock), mock
+
+    def test_get_article_compact_true_passes_compact(self):
+        """_handle_get_article must pass compact=True to get_zim_entry."""
+        handler, mock = self._make_handler()
+        handler.handle_zim_query(
+            "get article Einstein",
+            zim_file_path="/test/wiki.zim",
+            options={"compact": True},
+        )
+        _args, kwargs = mock.get_zim_entry.call_args
+        assert (
+            kwargs.get("compact") is True
+        ), "compact=True must be forwarded to get_zim_entry"
+
+    def test_get_article_compact_false_passes_compact(self):
+        """_handle_get_article must pass compact=False when not in compact mode."""
+        handler, mock = self._make_handler()
+        handler.handle_zim_query(
+            "get article Einstein",
+            zim_file_path="/test/wiki.zim",
+            options={"compact": False},
+        )
+        _args, kwargs = mock.get_zim_entry.call_args
+        assert (
+            kwargs.get("compact") is False
+        ), "compact=False must be forwarded to get_zim_entry"
+
+    def test_tell_me_about_compact_true_passes_compact(self):
+        """_handle_tell_me_about must pass compact=True when article is fetched."""
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/test/wiki.zim"}]
+        # search_zim_file_data returns a dict with "results" list; the top hit
+        # must be a strong title match so the handler proceeds to fetch the article.
+        mock.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "title": "Albert Einstein",
+                    "path": "A/Albert_Einstein",
+                    "score": 100,
+                }
+            ]
+        }
+        mock.get_zim_entry.return_value = self.INFOBOX_ARTICLE
+        mock.get_article_structure_data.return_value = {"sections": []}
+        mock.config.meta.footer_enabled = False
+
+        handler = SimpleToolsHandler(mock)
+        handler.handle_zim_query(
+            "tell me about Albert Einstein",
+            zim_file_path="/test/wiki.zim",
+            options={"compact": True},
+        )
+        assert mock.get_zim_entry.called, "get_zim_entry should be called"
+        _args, kwargs = mock.get_zim_entry.call_args
+        assert (
+            kwargs.get("compact") is True
+        ), "compact=True must be forwarded from tell_me_about to get_zim_entry"
+
+    def test_main_page_compact_true_passes_compact(self):
+        """_handle_main_page must pass compact=True to get_main_page."""
+        handler, mock = self._make_handler()
+        handler.handle_zim_query(
+            "show main page",
+            zim_file_path="/test/wiki.zim",
+            options={"compact": True},
+        )
+        mock.get_main_page.assert_called_once_with("/test/wiki.zim", compact=True)
+
+    def test_compact_infobox_end_to_end(self):
+        """Simulate the full compact path: simple_tools receives HTML with an
+        infobox via a mock get_zim_entry; the result should contain KV pairs
+        (not pipe-table syntax).
+
+        This test drives ContentProcessor directly (no archive open) to prove
+        the plumbing: compact=True passed to get_zim_entry arrives at
+        html_to_plain_text and triggers infobox extraction.
+        """
+        from openzim_mcp.content_processor import ContentProcessor
+
+        infobox_html = (
+            "<html><body>"
+            '<table class="infobox vcard">'
+            "<tr><th>Born</th><td>14 March 1879</td></tr>"
+            "<tr><th>Died</th><td>18 April 1955</td></tr>"
+            "</table>"
+            "<p>Albert Einstein was a theoretical physicist.</p>"
+            "</body></html>"
+        )
+        proc = ContentProcessor()
+        result = proc.process_mime_content(
+            infobox_html.encode("utf-8"), "text/html", compact=True
+        )
+        assert "**Born:**" in result, "compact=True should produce KV-extracted infobox"
+        assert "**Died:**" in result
+        # Infobox table should not appear as pipe-soup
+        assert "|" not in result, "compact infobox should not produce pipe-table syntax"

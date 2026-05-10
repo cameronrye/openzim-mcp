@@ -92,15 +92,22 @@ class TestGetMainPageToolInvocation:
     @pytest.mark.asyncio
     async def test_get_main_page_success(self, server, temp_dir):
         """Test successful main page retrieval through tool handler."""
-        server.async_zim_operations.get_main_page = AsyncMock(
-            return_value="Main page content here"
+        server.async_zim_operations.get_main_page_data = AsyncMock(
+            return_value={
+                "path": "A/Main_Page",
+                "title": "Main Page",
+                "content": "Main page content here",
+                "_meta": {"tokens_est": 5, "chars": 22, "truncated": False},
+            }
         )
 
         tools = server.mcp._tool_manager._tools
         if "get_main_page" in tools:
             tool_handler = tools["get_main_page"].fn
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            assert "Main page content" in result
+            assert isinstance(result, dict)
+            assert result.get("title") == "Main Page"
+            assert "Main page content" in result.get("content", "")
 
     @pytest.mark.asyncio
     async def test_get_main_page_rate_limit_error(self, server, temp_dir):
@@ -113,13 +120,15 @@ class TestGetMainPageToolInvocation:
         if "get_main_page" in tools:
             tool_handler = tools["get_main_page"].fn
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            # Should return error message, not raise
-            assert "Error" in result or "Rate" in result
+            # Should return a structured error envelope, not raise
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert result.get("operation") == "get main page"
 
     @pytest.mark.asyncio
     async def test_get_main_page_generic_exception(self, server, temp_dir):
         """Test generic exception handling in get_main_page."""
-        server.async_zim_operations.get_main_page = AsyncMock(
+        server.async_zim_operations.get_main_page_data = AsyncMock(
             side_effect=RuntimeError("Main page retrieval failed")
         )
 
@@ -127,8 +136,10 @@ class TestGetMainPageToolInvocation:
         if "get_main_page" in tools:
             tool_handler = tools["get_main_page"].fn
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            # Should return error message, not raise
-            assert "Error" in result or "error" in result.lower()
+            # Should return a structured error envelope, not raise
+            assert isinstance(result, dict)
+            assert result.get("error") is True
+            assert "message" in result
 
 
 class TestListNamespacesToolInvocation:
@@ -222,8 +233,13 @@ class TestMetadataToolsInputSanitization:
     @pytest.mark.asyncio
     async def test_get_main_page_input_sanitization(self, server, temp_dir):
         """Test that get_main_page sanitizes file path input."""
-        server.async_zim_operations.get_main_page = AsyncMock(
-            return_value="Main page content"
+        server.async_zim_operations.get_main_page_data = AsyncMock(
+            return_value={
+                "path": "A/Main_Page",
+                "title": "Main Page",
+                "content": "Main page content",
+                "_meta": {"tokens_est": 5, "chars": 18, "truncated": False},
+            }
         )
 
         tools = server.mcp._tool_manager._tools
@@ -231,7 +247,8 @@ class TestMetadataToolsInputSanitization:
             tool_handler = tools["get_main_page"].fn
             # Normal path should work
             result = await tool_handler(zim_file_path=str(temp_dir / "test.zim"))
-            assert "Main page" in result
+            assert isinstance(result, dict)
+            assert "Main page" in result.get("content", "")
 
     @pytest.mark.asyncio
     async def test_list_namespaces_input_sanitization(self, server, temp_dir):

@@ -1,12 +1,20 @@
 """Article structure and content analysis tools for OpenZIM MCP server."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH, INPUT_LIMIT_FILE_PATH
 from ..exceptions import OpenZimMcpRateLimitError
-from ..responses import tool_error
+from ..responses import ToolErrorPayload, tool_error
 from ..security import sanitize_input
+from ..tool_schemas import (
+    ArticleStructureResponse,
+    BinaryEntryResponse,
+    EntrySummaryResponse,
+    LinksResponse,
+    RelatedArticlesResponse,
+    TableOfContentsResponse,
+)
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -33,7 +41,7 @@ def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
     async def get_article_structure(
         zim_file_path: str, entry_path: str
-    ) -> Dict[str, Any]:
+    ) -> Union[ArticleStructureResponse, ToolErrorPayload]:
         """Extract article structure including headings, sections, and key metadata.
 
         Note: depends on heading markup in the source HTML. ZIM builds with
@@ -91,33 +99,61 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         limit: int = 100,
         offset: int = 0,
-        kind: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Extract internal and external links from an article (paginated).
+        kind: str = "internal",
+        cursor: Optional[str] = None,
+    ) -> Union[LinksResponse, ToolErrorPayload]:
+        """Extract one category of links from an article (paginated).
 
-        Heavy articles (e.g. Wikipedia "Evolution") carry hundreds of links;
-        the response is paged per category to fit within MCP token budgets.
-        ``total_internal_links`` / ``total_external_links`` /
-        ``total_media_links`` always report the full counts so callers can
-        request the next page.
+        v2 BREAKING: each call returns a single category in ``results``.
+        ``kind`` is required-with-default (``"internal"``). To enumerate
+        every category, issue three calls with ``kind="internal"``,
+        ``kind="external"``, and ``kind="media"``. ``category_totals``
+        echoes counts for all three so callers can plan their fetches.
 
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'C/Some_Article'
-            limit: Max items per category in the response (1-500, default 100).
-            offset: Starting offset within each category (default 0).
-            kind: Optional filter — ``"internal"``, ``"external"``, or
-                ``"media"``. When set, the other categories are returned as
-                empty lists; their totals are still reported.
+            limit: Max items per page (1-500, default 100).
+            offset: Starting offset within the requested category (default 0).
+            kind: Which category — ``"internal"`` (default), ``"external"``,
+                or ``"media"``.
+            cursor: Opaque pagination token from a previous result's
+                ``next_cursor`` field. ``None`` starts from ``offset``.
 
         Returns:
-            Dict with paged links plus per-category totals and a
-            ``pagination`` block (``offset``, ``limit``, ``has_more``,
-            ``has_more_internal``, ``has_more_external``, ``has_more_media``,
-            ``kind``). On failure, returns a ``{"error": True, ...}``
-            envelope (see ``responses.tool_error``).
+            ``LinksResponse``-shaped dict on success (Phase B contract:
+            top-level ``results`` / ``next_cursor`` / ``total`` / ``done``
+            / ``page_info`` plus ``title`` / ``path`` / ``content_type`` /
+            ``kind`` / ``category_totals``); ``ToolErrorPayload`` envelope
+            on failure.
         """
         try:
+            # Phase B: cursor wins on conflict per response-contract spec.
+            if cursor is not None:
+                from ..pagination import Cursor, CursorMismatchError
+
+                try:
+                    decoded = Cursor.decode(
+                        cursor, expected_tool="extract_article_links"
+                    )
+                except CursorMismatchError as e:
+                    return tool_error(
+                        operation="extract article links",
+                        message=str(e),
+                        context="Tool: extract_article_links, cursor=<truncated>",
+                    )
+                except ValueError as e:
+                    return tool_error(
+                        operation="extract article links",
+                        message=f"Invalid pagination cursor: {e}",
+                        context="Tool: extract_article_links",
+                    )
+                state = decoded["s"]
+                offset = state["o"]
+                limit = state.get("l", limit)
+                entry_path = state.get("ep", entry_path)
+                kind = state.get("k", kind)
+
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
@@ -129,6 +165,17 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
                         context=f"Entry: {entry_path}",
                     ),
                     context=f"Entry: {entry_path}",
+                )
+
+            if kind not in ("internal", "external", "media"):
+                return tool_error(
+                    operation="extract article links",
+                    message=(
+                        "**Parameter Validation Error**\n\n"
+                        f"**Issue**: kind must be one of 'internal', "
+                        f"'external', 'media' (provided: {kind!r})"
+                    ),
+                    context=f"Entry: {entry_path}, kind: {kind!r}",
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -161,7 +208,7 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
-    ) -> Dict[str, Any]:
+    ) -> Union[EntrySummaryResponse, ToolErrorPayload]:
         """Get a concise summary of an article without returning the full content.
 
         This tool extracts the opening paragraph(s) or introduction section,
@@ -174,14 +221,10 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             max_words: Maximum number of words in the summary (default: 200, max: 1000)
 
         Returns:
-            Dict containing:
-            - title: Article title
-            - path: Entry path
-            - summary: Extracted summary text
-            - word_count: Number of words in summary
-            - is_truncated: Whether the summary was truncated
-
-            On failure, returns a ``{"error": True, ...}`` envelope (see
+            ``EntrySummaryResponse``-shaped dict with ``path``, ``title``,
+            ``summary``, optionally ``word_count``/``content_type``/
+            ``is_truncated``, plus the ``_meta`` envelope. On failure,
+            returns a ``ToolErrorPayload`` envelope (see
             ``responses.tool_error``).
 
         Examples:
@@ -241,7 +284,7 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
     async def get_table_of_contents(
         zim_file_path: str,
         entry_path: str,
-    ) -> Dict[str, Any]:
+    ) -> Union[TableOfContentsResponse, ToolErrorPayload]:
         """Extract a hierarchical table of contents from an article.
 
         Returns a structured TOC tree based on heading levels (h1-h6),
@@ -318,7 +361,7 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         max_size_bytes: Optional[int] = None,
         include_data: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> Union[BinaryEntryResponse, ToolErrorPayload]:
         """Retrieve binary content from a ZIM entry.
 
         This tool returns raw binary content encoded in base64, enabling
@@ -380,7 +423,7 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
                         "chunks via repeated calls or use include_data=False to "
                         "fetch metadata only."
                     ),
-                    context=f"Entry: {entry_path}, max_size_bytes: {max_size_bytes}",
+                    context=(f"Entry: {entry_path}, max_size_bytes: {max_size_bytes}"),
                 )
 
             zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
@@ -409,7 +452,7 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         limit: int = 10,
-    ) -> Dict[str, Any]:
+    ) -> Union[RelatedArticlesResponse, ToolErrorPayload]:
         """Find articles related to entry_path via outbound links.
 
         Composes extract_article_links and deduplicates internal links,
@@ -417,20 +460,27 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
         removed — it required a bounded full-archive scan that was too
         expensive for interactive use; reach for full-text search instead.)
 
+        v2 BREAKING: ``outbound_results`` renamed to ``results``.
+        Anticipates Phase E inbound-link feature where ``direction`` becomes
+        a parameter; the ``results`` field then covers either side.
+
         Args:
             zim_file_path: Path to the ZIM file
             entry_path: Source entry, e.g. 'C/Some_Article'
             limit: Max results (1-100, default: 10)
 
         Returns:
-            Dict with ``entry_path`` and ``outbound_results`` (a list of
-            ``{path, title, link_text}`` records). ``title`` is the linked
-            entry's actual archive title (resolved by archive lookup;
-            falls back to ``path`` when the entry is missing). ``link_text``
-            is the original anchor text from the source article — useful
-            when the source article links to the target with a different
-            display string. On failure, returns a ``{"error": True, ...}``
-            envelope (see ``responses.tool_error``).
+            ``RelatedArticlesResponse``-shaped dict on success (Phase B
+            contract: top-level ``results`` / ``next_cursor`` / ``total``
+            / ``done`` / ``page_info`` plus tool-specific ``entry_path``;
+            ``outbound_error`` set on partial-success). ``results`` is a
+            list of ``{path, title, link_text}`` records. ``title`` is the
+            linked entry's actual archive title (resolved by archive
+            lookup; falls back to ``path`` when the entry is missing).
+            ``link_text`` is the original anchor text from the source
+            article — useful when the source links to the target with a
+            different display string. On failure, returns a
+            ``ToolErrorPayload`` envelope (see ``responses.tool_error``).
         """
         try:
             try:

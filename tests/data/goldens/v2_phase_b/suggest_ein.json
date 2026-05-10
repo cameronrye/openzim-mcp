@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "truncated": false
+  },
+  "done": true,
+  "page_info": {
+    "limit": 5,
+    "offset": 0,
+    "returned_count": 1
+  },
+  "partial_query": "Ein",
+  "results": [
+    {
+      "path": "A/Einstein",
+      "text": "Einstein",
+      "type": "title_start_match"
+    }
+  ],
+  "total": 1
+}

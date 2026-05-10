@@ -67,14 +67,15 @@ class TestGetRelatedArticles:
         """
         server.zim_operations.extract_article_links_data = MagicMock(
             return_value={
-                "internal_links": [
+                "kind": "internal",
+                "results": [
                     # Bare relative href — resolves to "C/Linked_A".
                     {"url": "Linked_A", "text": "Linked A"},
                     {"url": "Linked_B", "text": "Linked B"},
                     {"url": "Linked_A", "text": "Linked A"},  # dup
                     # Anchor-only — should be ignored.
                     {"url": "#section", "text": "anchor"},
-                ]
+                ],
             }
         )
 
@@ -82,11 +83,18 @@ class TestGetRelatedArticles:
             "/zim/test.zim", "C/Source", limit=10
         )
         result = json.loads(result_json)
-        assert len(result["outbound_results"]) == 2  # deduped, anchor dropped
-        assert {r["path"] for r in result["outbound_results"]} == {
+        assert len(result["results"]) == 2  # deduped, anchor dropped
+        assert {r["path"] for r in result["results"]} == {
             "C/Linked_A",
             "C/Linked_B",
         }
+        # v2 Phase B contract keys (non-paginated tool, but uniform shape).
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == len(result["results"])
+        assert result["page_info"]["limit"] == 10
+        assert result["page_info"]["offset"] == 0
+        assert result["page_info"]["returned_count"] == len(result["results"])
 
     def test_invalid_limit_raises(self, server: OpenZimMcpServer):
         """An out-of-range limit raises OpenZimMcpValidationError."""
@@ -113,8 +121,13 @@ class TestGetRelatedArticles:
         result = server.zim_operations.get_related_articles_data(
             "/zim/test.zim", "C/Missing", limit=10
         )
-        assert result["outbound_results"] == []
+        assert result["results"] == []
         assert "entry not found" in result["outbound_error"]
+        # Contract keys still present on partial-success.
+        assert result["next_cursor"] is None
+        assert result["done"] is True
+        assert result["total"] == 0
+        assert result["page_info"]["limit"] == 10
 
     def test_unexpected_exception_propagates(self, server: OpenZimMcpServer):
         """Programming errors (e.g. TypeError) must NOT be swallowed.
@@ -145,7 +158,8 @@ class TestGetRelatedArticles:
         server.zim_operations.extract_article_links_data = MagicMock(
             return_value={
                 "path": "C/Source",
-                "internal_links": [
+                "kind": "internal",
+                "results": [
                     # Anchor text differs from the target's actual title.
                     {"url": "Animal", "text": "Animalia"},
                 ],
@@ -163,7 +177,7 @@ class TestGetRelatedArticles:
         result = server.zim_operations.get_related_articles_data(
             "/zim/test.zim", "C/Source", limit=10
         )
-        outbound = result["outbound_results"]
+        outbound = result["results"]
         assert len(outbound) == 1
         assert outbound[0]["path"] == "C/Animal"
         assert outbound[0]["title"] == "Animal"
@@ -200,7 +214,8 @@ class TestGetRelatedArticles:
         server.zim_operations.extract_article_links_data = MagicMock(
             return_value={
                 "path": "C/Source",
-                "internal_links": [
+                "kind": "internal",
+                "results": [
                     {"url": "Animal", "text": "Animalia"},
                 ],
             }
@@ -248,7 +263,8 @@ class TestGetRelatedArticles:
         server.zim_operations.extract_article_links_data = MagicMock(
             return_value={
                 "path": "C/Source",
-                "internal_links": [
+                "kind": "internal",
+                "results": [
                     {"url": "Missing_Article", "text": "see Missing"},
                 ],
             }
@@ -261,7 +277,7 @@ class TestGetRelatedArticles:
         result = server.zim_operations.get_related_articles_data(
             "/zim/test.zim", "C/Source", limit=10
         )
-        outbound = result["outbound_results"]
+        outbound = result["results"]
         assert len(outbound) == 1
         assert outbound[0]["path"] == "C/Missing_Article"
         # No title resolvable -> falls back to the target path

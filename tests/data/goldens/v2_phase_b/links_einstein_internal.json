@@ -1,0 +1,22 @@
+{
+  "_meta": {
+    "truncated": false
+  },
+  "category_totals": {
+    "external": 0,
+    "internal": 0,
+    "media": 0
+  },
+  "content_type": "text/html",
+  "done": true,
+  "kind": "internal",
+  "page_info": {
+    "limit": 100,
+    "offset": 0,
+    "returned_count": 0
+  },
+  "path": "A/Einstein",
+  "results": [],
+  "title": "Einstein",
+  "total": 0
+}

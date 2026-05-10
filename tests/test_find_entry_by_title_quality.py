@@ -92,6 +92,13 @@ class TestFindEntryByTitleCaseInsensitiveFastPath:
         top = out["results"][0]
         assert top["title"].lower() == "climate change"
         assert abs(top["score"] - 1.0) < _SCORE_EPS
+        # Phase B contract keys (non-paginated tool, but contract still applies).
+        assert out["next_cursor"] is None
+        assert out["done"] is True
+        assert out["total"] == len(out["results"])
+        assert out["page_info"]["offset"] == 0
+        assert out["page_info"]["limit"] == 10  # default
+        assert out["page_info"]["returned_count"] == len(out["results"])
 
     def test_uppercase_query_hits_fast_path(
         self,
@@ -128,6 +135,13 @@ class TestFindEntryByTitleScoring:
         )
         scores = [r["score"] for r in out["results"]]
         assert len(scores) >= 2, out
+        # Phase B contract keys (non-paginated tool, but contract still applies).
+        assert out["next_cursor"] is None
+        assert out["done"] is True
+        assert out["total"] == len(out["results"])
+        assert out["page_info"]["offset"] == 0
+        assert out["page_info"]["limit"] == 10
+        assert out["page_info"]["returned_count"] == len(out["results"])
         # Reject the legacy "all hits scored 0.8" bug behaviour. Use a small
         # tolerance window so static analysis doesn't flag float equality.
         all_legacy = all(abs(s - 0.8) < _SCORE_EPS for s in scores)

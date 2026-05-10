@@ -203,12 +203,15 @@ class TestAsyncZimOperations:
     async def test_extract_article_links(
         self, async_ops: AsyncZimOperations, mock_zim_operations: MagicMock
     ):
-        """Test async extract_article_links."""
+        """Test async extract_article_links.
+
+        v2 Phase B: ``kind`` defaults to ``"internal"`` (was ``None``).
+        """
         result = await async_ops.extract_article_links("/path/to/file.zim", "C/Article")
 
         assert result == '{"links": []}'
         mock_zim_operations.extract_article_links.assert_called_once_with(
-            "/path/to/file.zim", "C/Article", 100, 0, None
+            "/path/to/file.zim", "C/Article", 100, 0, "internal"
         )
 
     @pytest.mark.asyncio

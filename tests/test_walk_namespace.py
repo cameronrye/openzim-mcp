@@ -23,27 +23,21 @@ class TestWalkNamespace:
         with pytest.raises(
             OpenZimMcpValidationError, match="limit must be between 1 and 500"
         ):
-            server.zim_operations.walk_namespace(
-                "/path/to/file.zim", "C", cursor=0, limit=0
-            )
+            server.zim_operations.walk_namespace("/path/to/file.zim", "C", limit=0)
 
     def test_walk_namespace_limit_validation_high(self, server: OpenZimMcpServer):
         """Test that limit > 500 raises OpenZimMcpValidationError."""
         with pytest.raises(
             OpenZimMcpValidationError, match="limit must be between 1 and 500"
         ):
-            server.zim_operations.walk_namespace(
-                "/path/to/file.zim", "C", cursor=0, limit=10000
-            )
+            server.zim_operations.walk_namespace("/path/to/file.zim", "C", limit=10000)
 
     def test_walk_namespace_raises_validation_error_for_bad_limit(
         self, server: OpenZimMcpServer
     ):
         """Mirror the explicit acceptance test from the fix plan (Task 6.4)."""
         with pytest.raises(OpenZimMcpValidationError):
-            server.zim_operations.walk_namespace(
-                "/path/to/file.zim", "A", cursor=0, limit=10000
-            )
+            server.zim_operations.walk_namespace("/path/to/file.zim", "A", limit=10000)
 
     def test_walk_namespace_lowercase_namespace_normalized(
         self, server: OpenZimMcpServer, monkeypatch
@@ -80,18 +74,18 @@ class TestWalkNamespace:
         )
 
         result_json = server.zim_operations.walk_namespace(
-            "/path/to/file.zim", "c", cursor=0, limit=10
+            "/path/to/file.zim", "c", limit=10
         )
         result = json.loads(result_json)
-        # Without normalisation, entries=[] silently. With normalisation,
+        # Without normalisation, results=[] silently. With normalisation,
         # the canonical "C" is matched and we surface the entry.
-        assert len(result["entries"]) == 1
-        assert result["entries"][0]["path"] == "C/Foo"
+        assert len(result["results"]) == 1
+        assert result["results"][0]["path"] == "C/Foo"
 
-    def test_walk_namespace_negative_cursor_clamped(
+    def test_walk_namespace_first_page_no_cursor(
         self, server: OpenZimMcpServer, monkeypatch
     ):
-        """Negative cursor is clamped to 0."""
+        """First page with cursor=None walks from scan_at=0 and reports done."""
         # Build a minimal mock archive that the walk loop can iterate.
         mock_archive = MagicMock()
         mock_archive.entry_count = 0
@@ -111,11 +105,14 @@ class TestWalkNamespace:
         )
 
         result_json = server.zim_operations.walk_namespace(
-            "/path/to/file.zim", "C", cursor=-5, limit=10
+            "/path/to/file.zim", "C", limit=10
         )
         result = json.loads(result_json)
-        assert result["cursor"] == 0
+        # New v2 contract: page_info.offset replaces top-level cursor (int).
+        assert result["page_info"]["offset"] == 0
         assert result["done"] is True
+        assert result["next_cursor"] is None
+        assert result["total"] is None  # walk never knows per-namespace total
 
 
 def _ctx(value):

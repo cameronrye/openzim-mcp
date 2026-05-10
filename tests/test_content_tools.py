@@ -75,7 +75,10 @@ class TestGetZimEntryTool:
             entry_path="A/Article",
             max_content_length=50,
         )
-        assert "must be at least 100" in result
+        # v2: validation errors return a structured tool_error envelope.
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert "must be at least 100" in result.get("message", "")
 
     @pytest.mark.asyncio
     async def test_get_zim_entry_rate_limit_error(self, server: OpenZimMcpServer):
@@ -218,3 +221,223 @@ class TestInputSanitization:
         valid_entry = "b" * 100
         sanitized_entry = sanitize_input(valid_entry, INPUT_LIMIT_ENTRY_PATH)
         assert sanitized_entry == valid_entry
+
+
+class TestGetBinaryEntryDataMeta:
+    """get_binary_entry_data must attach _meta on every return path."""
+
+    @pytest.fixture
+    def zim_ops(
+        self, test_config, path_validator, openzim_mcp_cache, content_processor
+    ):
+        from openzim_mcp.zim_operations import ZimOperations
+
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def _zim_file(self, temp_dir):
+        from pathlib import Path
+
+        p = Path(temp_dir) / "test.zim"
+        p.write_bytes(b"")
+        return p
+
+    def test_get_binary_entry_data_attaches_meta_fresh(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Fresh path (archive opened) should attach _meta."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        mock_item = MagicMock()
+        mock_item.size = 5
+        mock_item.mimetype = "image/png"
+        mock_item.content = b"\x89PNG"
+
+        mock_entry = MagicMock()
+        mock_entry.is_redirect = False
+        mock_entry.title = "Test Image"
+        mock_entry.path = "I/test.png"
+        mock_entry.get_item.return_value = mock_item
+
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.return_value = mock_entry
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_ctx:
+            mock_ctx.return_value.__enter__.return_value = mock_archive
+            result = zim_ops.get_binary_entry_data(
+                str(zim_file), "I/test.png", include_data=True
+            )
+
+        assert "_meta" in result, "fresh path must attach _meta"
+        assert result["_meta"]["tokens_est"] > 0
+        assert result["_meta"]["truncated"] is False
+
+    def test_get_binary_entry_data_attaches_meta_cached(self, zim_ops, temp_dir):
+        """Cached metadata path should also attach _meta."""
+        zim_file = self._zim_file(temp_dir)
+        validated = zim_ops.path_validator.validate_path(str(zim_file))
+        validated = zim_ops.path_validator.validate_zim_file(validated)
+
+        # Seed the cache with binary metadata so the short-circuit path fires.
+        cache_key = f"binary_meta:{validated}:I/test.png"
+        zim_ops.cache.set(
+            cache_key,
+            {
+                "path": "I/test.png",
+                "title": "Test Image",
+                "mime_type": "image/png",
+                "size": 10,
+                "size_human": "10 B",
+            },
+        )
+
+        result = zim_ops.get_binary_entry_data(
+            str(zim_file), "I/test.png", include_data=False
+        )
+        assert "_meta" in result, "cached path must attach _meta"
+        assert result["_meta"]["tokens_est"] > 0
+
+    def test_get_binary_entry_data_meta_truncated_when_oversized(
+        self, zim_ops, temp_dir
+    ):
+        """When include_data=True but binary exceeds max_size_bytes, _meta.truncated must be True."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        # Create a mock binary item that is oversized (100 bytes)
+        mock_item = MagicMock()
+        mock_item.size = 100
+        mock_item.mimetype = "application/pdf"
+        mock_item.content = b"x" * 100  # 100 bytes
+
+        mock_entry = MagicMock()
+        mock_entry.is_redirect = False
+        mock_entry.title = "Large PDF"
+        mock_entry.path = "I/document.pdf"
+        mock_entry.get_item.return_value = mock_item
+
+        mock_archive = MagicMock()
+        mock_archive.get_entry_by_path.return_value = mock_entry
+
+        # Call with max_size_bytes=50, so the 100-byte item will be truncated
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_ctx:
+            mock_ctx.return_value.__enter__.return_value = mock_archive
+            result = zim_ops.get_binary_entry_data(
+                str(zim_file), "I/document.pdf", max_size_bytes=50, include_data=True
+            )
+
+        assert "_meta" in result, "fresh path must attach _meta"
+        assert (
+            result["truncated"] is True
+        ), "payload truncated should be True for oversized binary"
+        assert (
+            result["_meta"]["truncated"] is True
+        ), "_meta.truncated must be True when binary exceeds max_size_bytes"
+        assert result["data"] is None, "data should be None when truncated"
+
+
+class TestGetEntrySummaryDataMeta:
+    """get_entry_summary_data must attach _meta on every return path."""
+
+    @pytest.fixture
+    def zim_ops(
+        self, test_config, path_validator, openzim_mcp_cache, content_processor
+    ):
+        from openzim_mcp.zim_operations import ZimOperations
+
+        return ZimOperations(
+            test_config, path_validator, openzim_mcp_cache, content_processor
+        )
+
+    def _zim_file(self, temp_dir):
+        from pathlib import Path
+
+        p = Path(temp_dir) / "test.zim"
+        p.write_bytes(b"")
+        return p
+
+    def test_get_entry_summary_data_attaches_meta_fresh(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Fresh computation path should attach _meta."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        fresh_summary = {
+            "title": "Test Article",
+            "path": "A/Test",
+            "content_type": "text/plain",
+            "summary": "A short summary.",
+            "word_count": 3,
+            "is_truncated": False,
+        }
+
+        monkeypatch.setattr(
+            zim_ops,
+            "_extract_entry_summary_data",
+            lambda *a, **kw: fresh_summary,
+        )
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_ctx:
+            mock_ctx.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_entry_summary_data(str(zim_file), "A/Test")
+
+        assert "_meta" in result, "fresh path must attach _meta"
+        assert result["_meta"]["tokens_est"] > 0
+        assert result["_meta"]["truncated"] is False
+
+    def test_get_entry_summary_data_attaches_meta_cached(self, zim_ops, temp_dir):
+        """Cached result path should also carry _meta."""
+        zim_file = self._zim_file(temp_dir)
+        validated = zim_ops.path_validator.validate_path(str(zim_file))
+        validated = zim_ops.path_validator.validate_zim_file(validated)
+
+        old_summary = {
+            "title": "Cached Article",
+            "path": "A/Cached",
+            "content_type": "text/plain",
+            "summary": "Cached content.",
+            "word_count": 2,
+            "is_truncated": False,
+        }
+        cache_key = f"summary_data:{validated}:A/Cached:200:compact=False"
+        zim_ops.cache.set(cache_key, old_summary)
+
+        result = zim_ops.get_entry_summary_data(str(zim_file), "A/Cached")
+        assert "_meta" in result, "cached path must attach _meta"
+        assert result["_meta"]["tokens_est"] > 0
+
+    def test_get_entry_summary_data_meta_truncated_flag(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """When is_truncated=True, _meta.truncated should reflect that."""
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        truncated_summary = {
+            "title": "Long Article",
+            "path": "A/Long",
+            "content_type": "text/plain",
+            "summary": "First 200 words...",
+            "word_count": 200,
+            "is_truncated": True,
+        }
+
+        monkeypatch.setattr(
+            zim_ops,
+            "_extract_entry_summary_data",
+            lambda *a, **kw: truncated_summary,
+        )
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_ctx:
+            mock_ctx.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_entry_summary_data(str(zim_file), "A/Long")
+
+        assert "_meta" in result
+        assert result["_meta"]["truncated"] is True
