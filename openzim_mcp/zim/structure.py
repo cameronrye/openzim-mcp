@@ -102,24 +102,14 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"structure_data:{validated_path}:{entry_path}"
-        cached_result = self.cache.get(cache_key)
-        if cached_result is not None:
-            logger.debug(f"Returning cached structure dict for: {entry_path}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
-            return cast("ArticleStructureResponse", cached_result)
-
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_article_structure_data(archive, entry_path)
+                result = self._extract_article_structure_data(
+                    archive, entry_path, validated_path=validated_path
+                )
 
-            # Cache the result
-            self.cache.set(cache_key, result)
             logger.info(f"Extracted structure for: {entry_path}")
-            return cast("ArticleStructureResponse", attach_meta(result))
+            return cast("ArticleStructureResponse", result)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -152,55 +142,66 @@ class _StructureMixin:
         )
 
     def _extract_article_structure_data(
-        self, archive: Archive, entry_path: str
-    ) -> Dict[str, Any]:
-        """Extract structure from article content as a dict."""
+        self,
+        archive: Archive,
+        entry_path: str,
+        *,
+        validated_path: "Optional[Path]" = None,
+    ) -> "ArticleStructureResponse":
+        """Extract structure from article content via bundle."""
+        from openzim_mcp.bundle import get_or_build_bundle
+
         try:
-            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
-            title = entry.title or "Untitled"
+            bundle = get_or_build_bundle(
+                archive,
+                entry_path,
+                cache=self.cache,
+                validated_path=validated_path or Path(entry_path),
+                content_processor=self.content_processor,
+            )
 
-            # Get raw content
-            item = entry.get_item()
-            mime_type = item.mimetype or ""
-            raw_content = bytes(item.content).decode("utf-8", errors="replace")
+            md = bundle["rendered_markdown"]
+            PREVIEW_CHARS = 300
 
-            structure: Dict[str, Any] = {
-                "title": title,
-                "path": entry_path,
-                "content_type": mime_type,
-                "headings": [],
-                "sections": [],
-                "metadata": {},
-                "word_count": 0,
-                "character_count": len(raw_content),
-            }
+            headings = [
+                {
+                    "id": s["id"],
+                    "text": s["title"],
+                    "level": s["level"],
+                    "position": i,
+                }
+                for i, s in enumerate(bundle["sections"])
+            ]
+            sections = [
+                {
+                    "title": s["title"],
+                    "level": s["level"],
+                    "content_preview": md[
+                        s["char_start"] : s["char_start"] + PREVIEW_CHARS
+                    ],
+                }
+                for s in bundle["sections"]
+            ]
+            payload: "ArticleStructureResponse" = cast(
+                "ArticleStructureResponse",
+                {
+                    "title": bundle["title"],
+                    "path": bundle["entry_path"],
+                    "content_type": bundle["content_type"],
+                    "headings": headings,
+                    "sections": sections,
+                    "metadata": {},
+                    "word_count": bundle["word_count"],
+                    "character_count": bundle["char_count"],
+                },
+            )
+            return cast(
+                "ArticleStructureResponse",
+                attach_meta(cast(Dict[str, Any], payload)),
+            )
 
-            # Process HTML content for structure
-            if mime_type.startswith(TEXT_HTML_MIME):
-                structure.update(
-                    self.content_processor.extract_html_structure(raw_content)
-                )
-            elif mime_type.startswith("text/"):
-                # For plain text, try to extract basic structure. Re-encode the
-                # already-decoded raw_content rather than re-reading item.content,
-                # which can trigger another full decompression from the archive.
-                plain_text = self.content_processor.process_mime_content(
-                    raw_content.encode("utf-8"), mime_type
-                )
-                structure["word_count"] = len(plain_text.split())
-                structure["sections"] = [
-                    {"title": "Content", "content_preview": plain_text[:500]}
-                ]
-            else:
-                structure["sections"] = [
-                    {
-                        "title": "Non-text content",
-                        "content_preview": f"({mime_type} content)",
-                    }
-                ]
-
-            return structure
-
+        except OpenZimMcpArchiveError:
+            raise
         except Exception as e:
             logger.error(f"Error extracting structure for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(

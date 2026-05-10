@@ -1353,15 +1353,38 @@ class TestZimOperations:
         assert result["cached"] == "browse"
         assert "_meta" in result
 
-        # Test get_article_structure_data cache hit. get_article_structure now
-        # delegates to get_article_structure_data, which caches dicts under a
-        # `structure_data:` key. Exercise the cache hit path against the
-        # dict-returning entry point directly.
-        cache_key = f"structure_data:{validated_path}:A/Test"
-        zim_operations.cache.set(cache_key, {"cached": "structure"})
+        # Phase C: get_article_structure_data no longer has its own cache layer;
+        # caching now happens at the bundle level inside
+        # _extract_article_structure_data. The structure_data: key is gone.
+        # Verify that calling get_article_structure_data with a monkeypatched
+        # inner method still returns the expected payload with _meta.
+        from unittest.mock import MagicMock, patch
 
-        result = zim_operations.get_article_structure_data(str(zim_file), "A/Test")
-        assert result["cached"] == "structure"
+        from openzim_mcp.meta import attach_meta
+
+        fake_structure = attach_meta(
+            {
+                "title": "Cached",
+                "path": "A/Test",
+                "content_type": "text/html",
+                "headings": [],
+                "sections": [],
+                "metadata": {},
+                "word_count": 0,
+                "character_count": 0,
+            }
+        )
+        with (
+            patch.object(
+                zim_operations,
+                "_extract_article_structure_data",
+                return_value=fake_structure,
+            ),
+            patch("openzim_mcp.zim_operations.zim_archive") as mock_archive,
+        ):
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_operations.get_article_structure_data(str(zim_file), "A/Test")
+        assert result["title"] == "Cached"
         assert "_meta" in result
 
         # Test extract_article_links_data cache hit. extract_article_links_data
