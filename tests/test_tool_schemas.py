@@ -76,3 +76,116 @@ def test_non_paginated_responses_do_not_carry_results() -> None:
         leaked = {"results", "next_cursor", "done", "page_info"} & set(hints.keys())
         assert not leaked, f"{cls.__name__} unexpectedly has paginated keys: {leaked}"
         assert "_meta" in hints, f"{cls.__name__} missing _meta envelope"
+
+
+# ---------------------------------------------------------------------------
+# Phase C TypedDicts — structural assertions
+# ---------------------------------------------------------------------------
+
+
+def test_section_meta_has_required_fields() -> None:
+    hints = get_type_hints(ts.SectionMeta)
+    for key in ("id", "title", "level", "char_start", "char_end", "parent_id"):
+        assert key in hints, f"SectionMeta missing {key}"
+
+
+def test_entry_bundle_has_required_fields() -> None:
+    hints = get_type_hints(ts.EntryBundle)
+    for key in (
+        "entry_path",
+        "title",
+        "content_type",
+        "word_count",
+        "char_count",
+        "rendered_markdown",
+        "sections",
+        "links",
+        "infobox",
+    ):
+        assert key in hints, f"EntryBundle missing {key}"
+
+
+def test_link_buckets_has_three_categories() -> None:
+    hints = get_type_hints(ts.LinkBuckets)
+    for key in ("internal", "external", "media"):
+        assert key in hints, f"LinkBuckets missing {key}"
+
+
+def test_infobox_data_shape() -> None:
+    field_hints = get_type_hints(ts.InfoboxField)
+    assert {"label", "value"} <= set(field_hints.keys())
+    data_hints = get_type_hints(ts.InfoboxData)
+    assert "fields" in data_hints
+    assert "title" in data_hints  # NotRequired but get_type_hints surfaces it
+
+
+def test_toc_heading_uses_section_id_not_id() -> None:
+    hints = get_type_hints(ts.TocHeading)
+    assert "section_id" in hints, "TocHeading must use section_id (Phase C rename)"
+    assert "id" not in hints, "TocHeading must not retain the old `id` field"
+    for key in ("text", "level", "id_source", "children"):
+        assert key in hints, f"TocHeading missing {key}"
+
+
+def test_table_of_contents_response_uses_typed_toc() -> None:
+    """Phase C tightens toc from list[dict[str, Any]] to list[TocHeading]."""
+    hints = get_type_hints(ts.TableOfContentsResponse)
+    # The annotation should be list[TocHeading] (or List[TocHeading]).
+    toc_annotation = hints["toc"]
+    # repr captures both new-style and List[]-style.
+    assert "TocHeading" in repr(
+        toc_annotation
+    ), f"TableOfContentsResponse.toc must be list[TocHeading], got {toc_annotation!r}"
+
+
+def test_get_section_response_has_required_fields() -> None:
+    hints = get_type_hints(ts.GetSectionResponse)
+    for key in (
+        "entry_path",
+        "title",
+        "section_id",
+        "section_title",
+        "level",
+        "parent_id",
+        "content_markdown",
+        "char_count",
+        "word_count",
+        "truncated",
+        "_meta",
+    ):
+        assert key in hints, f"GetSectionResponse missing {key}"
+
+
+def test_citation_has_required_fields() -> None:
+    hints = get_type_hints(ts.Citation)
+    for key in (
+        "cite_id",
+        "archive",
+        "entry_path",
+        "title",
+        "section_id",
+        "section_title",
+    ):
+        assert key in hints, f"Citation missing {key}"
+
+
+def test_synthesize_passage_has_required_fields() -> None:
+    hints = get_type_hints(ts.SynthesizePassage)
+    for key in ("cite_id", "text_markdown", "rank", "score"):
+        assert key in hints, f"SynthesizePassage missing {key}"
+
+
+def test_synthesize_response_has_required_fields() -> None:
+    hints = get_type_hints(ts.SynthesizeResponse)
+    for key in (
+        "query",
+        "answer_markdown",
+        "passages",
+        "citations",
+        "archives_searched",
+        "fallback_used",
+        "total_chars",
+        "total_words",
+        "_meta",
+    ):
+        assert key in hints, f"SynthesizeResponse missing {key}"

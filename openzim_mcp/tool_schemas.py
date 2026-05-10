@@ -14,7 +14,7 @@ docs/superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md
 
 from __future__ import annotations
 
-from typing import Any, NotRequired, Optional, TypedDict, Union
+from typing import Any, Literal, NotRequired, Optional, TypedDict, Union
 
 from openzim_mcp.responses import ToolErrorPayload
 
@@ -348,11 +348,30 @@ class EntrySummaryResponse(TypedDict):
     _meta: MetaEnvelope
 
 
+# ---------------------------------------------------------------------------
+# Phase C — TOC heading (replaces list[dict[str, Any]] in TableOfContentsResponse)
+# ---------------------------------------------------------------------------
+
+
+class TocHeading(TypedDict):
+    """One heading in get_table_of_contents output.
+
+    `section_id` is the value to pass to get_section(section_id=...).
+    Renamed from the old `id` field for clarity.
+    """
+
+    section_id: str
+    text: str
+    level: int
+    id_source: str  # "id" | "descendant_anchor" | "preceding_anchor" | "slug"
+    children: list[TocHeading]
+
+
 class TableOfContentsResponse(TypedDict):
     title: str
     path: str
     content_type: NotRequired[str]
-    toc: list[dict[str, Any]]
+    toc: list[TocHeading]
     heading_count: int
     max_depth: int
     # Set when content_type is non-HTML; explains why toc is empty.
@@ -382,4 +401,113 @@ class BinaryEntryResponse(TypedDict):
     truncated: bool
     data: NotRequired[Optional[str]]
     message: NotRequired[str]
+    _meta: MetaEnvelope
+
+
+# ---------------------------------------------------------------------------
+# Phase C — bundle internals
+# ---------------------------------------------------------------------------
+
+
+class SectionMeta(TypedDict):
+    """One section's metadata in an EntryBundle.
+
+    Section IDs come from openzim_mcp.content_processor.resolve_heading_id.
+    char_start / char_end are offsets into EntryBundle.rendered_markdown.
+    """
+
+    id: str
+    title: str
+    level: int
+    char_start: int
+    char_end: int
+    parent_id: NotRequired[Optional[str]]
+
+
+class InfoboxField(TypedDict):
+    label: str
+    value: str
+
+
+class InfoboxData(TypedDict):
+    title: NotRequired[str]
+    fields: list[InfoboxField]
+
+
+class LinkBuckets(TypedDict):
+    internal: list[LinkItem]
+    external: list[LinkItem]
+    media: list[LinkItem]
+
+
+class EntryBundle(TypedDict):
+    """Single-parse intermediate for content-shape tools.
+
+    First touch of an entry produces this bundle; subsequent calls to
+    get_entry_summary, get_table_of_contents, get_article_structure,
+    extract_article_links, and get_section all slice into it without
+    re-parsing the HTML. Stored under cache key
+    'bundle:v2c:{validated_path}:{entry_path}'.
+    """
+
+    entry_path: str
+    title: str
+    content_type: str
+    word_count: int
+    char_count: int
+    rendered_markdown: str
+    sections: list[SectionMeta]
+    links: LinkBuckets
+    infobox: Optional[InfoboxData]
+
+
+# ---------------------------------------------------------------------------
+# Phase C — get_section response
+# ---------------------------------------------------------------------------
+
+
+class GetSectionResponse(TypedDict):
+    entry_path: str
+    title: str
+    section_id: str
+    section_title: str
+    level: int
+    parent_id: Optional[str]
+    content_markdown: str
+    char_count: int
+    word_count: int
+    truncated: bool
+    _meta: MetaEnvelope
+
+
+# ---------------------------------------------------------------------------
+# Phase C — synthesize response
+# ---------------------------------------------------------------------------
+
+
+class Citation(TypedDict):
+    cite_id: str
+    archive: str
+    entry_path: str
+    title: str
+    section_id: Optional[str]
+    section_title: Optional[str]
+
+
+class SynthesizePassage(TypedDict):
+    cite_id: str
+    text_markdown: str
+    rank: int
+    score: float
+
+
+class SynthesizeResponse(TypedDict):
+    query: str
+    answer_markdown: str
+    passages: list[SynthesizePassage]
+    citations: list[Citation]
+    archives_searched: list[str]
+    fallback_used: Literal["xapian_score", "rrf_fusion", "reranker"]
+    total_chars: int
+    total_words: int
     _meta: MetaEnvelope
