@@ -1138,29 +1138,16 @@ class _ContentMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = (
-            f"summary_data:{validated_path}:{entry_path}:{max_words}:compact={compact}"
-        )
-        cached_result = self.cache.get(cache_key)
-        if cached_result is not None:
-            logger.debug(f"Returning cached summary dict for: {entry_path}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(
-                    dict(cached_result),
-                    truncated=bool(cached_result.get("is_truncated")),
-                )
-            return cast("EntrySummaryResponse", cached_result)
-
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 result = self._extract_entry_summary_data(
-                    archive, entry_path, max_words, compact=compact
+                    archive,
+                    entry_path,
+                    max_words,
+                    compact=compact,
+                    validated_path=validated_path,
                 )
 
-            # Cache the result (pre-_meta so cached payload stays compact)
-            self.cache.set(cache_key, result)
             logger.info(f"Extracted summary for: {entry_path}")
             return cast(
                 "EntrySummaryResponse",
@@ -1217,43 +1204,98 @@ class _ContentMixin:
         max_words: int,
         *,
         compact: bool = False,
+        validated_path: Optional[Path] = None,
     ) -> Dict[str, Any]:
-        """Extract summary from article content as a dict."""
-        try:
-            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
+        """Extract summary from article content as a dict.
 
-            title = entry.title or "Untitled"
+        For HTML entries the bundle is used so that parsing is shared with
+        the other Phase C tools.  Non-HTML entries fall back to direct
+        content reading (the bundle stores empty rendered_markdown for them).
+        """
+        from openzim_mcp.bundle import get_or_build_bundle
+
+        try:
+            # Peek at the MIME type first to decide the path.
+            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
             item = entry.get_item()
             mime_type = item.mimetype or ""
-            raw_content = bytes(item.content).decode("utf-8", errors="replace")
-
-            summary_data: Dict[str, Any] = {
-                "title": title,
-                "path": entry_path,
-                "content_type": mime_type,
-                "summary": "",
-                "word_count": 0,
-                "is_truncated": False,
-            }
 
             if mime_type.startswith("text/html"):
-                summary_data.update(
-                    self._extract_html_summary(raw_content, max_words, compact=compact)
+                # HTML path — build (or reuse) the bundle and slice it.
+                if validated_path is None:
+                    # Fall back to re-reading the item when no validated_path
+                    # was supplied (e.g. tests that monkeypatch this method).
+                    raw_content = bytes(item.content).decode("utf-8", errors="replace")
+                    html_result = self._extract_html_summary(
+                        raw_content, max_words, compact=compact
+                    )
+                    return {
+                        "title": entry.title or "Untitled",
+                        "path": entry_path,
+                        "content_type": mime_type,
+                        **html_result,
+                    }
+
+                bundle = get_or_build_bundle(
+                    archive,
+                    entry_path,
+                    cache=self.cache,
+                    validated_path=validated_path,
+                    content_processor=self.content_processor,
                 )
+                md = bundle["rendered_markdown"]
+                if bundle["sections"]:
+                    first = bundle["sections"][0]
+                    summary_md = md[first["char_start"] : first["char_end"]]
+                else:
+                    summary_md = md
+
+                words = summary_md.split()
+                is_truncated = len(words) > max_words
+                if is_truncated:
+                    summary_md = " ".join(words[:max_words])
+
+                return {
+                    "path": bundle["entry_path"],
+                    "title": bundle["title"],
+                    "summary": summary_md,
+                    "word_count": min(len(words), max_words),
+                    "content_type": bundle["content_type"],
+                    "is_truncated": is_truncated,
+                }
+
             elif mime_type.startswith("text/"):
                 # For plain text, take first N words
+                title = entry.title or "Untitled"
+                raw_content = bytes(item.content).decode("utf-8", errors="replace")
                 plain_text = raw_content.strip()
                 words = plain_text.split()
+                summary: str
+                is_trunc: bool
                 if len(words) > max_words:
-                    summary_data["summary"] = " ".join(words[:max_words]) + "..."
-                    summary_data["is_truncated"] = True
+                    summary = " ".join(words[:max_words]) + "..."
+                    is_trunc = True
                 else:
-                    summary_data["summary"] = plain_text
-                summary_data["word_count"] = min(len(words), max_words)
+                    summary = plain_text
+                    is_trunc = False
+                return {
+                    "title": title,
+                    "path": entry_path,
+                    "content_type": mime_type,
+                    "summary": summary,
+                    "word_count": min(len(words), max_words),
+                    "is_truncated": is_trunc,
+                }
             else:
-                summary_data["summary"] = f"(Non-text content: {mime_type})"
-
-            return summary_data
+                title = entry.title or "Untitled"
+                return {
+                    "title": title,
+                    "path": entry_path,
+                    "content_type": mime_type,
+                    "summary": f"(Non-text content: {mime_type})",
+                    "word_count": 0,
+                    "is_truncated": False,
+                }
 
         except OpenZimMcpArchiveError:
             raise
