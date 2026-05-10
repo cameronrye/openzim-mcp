@@ -69,6 +69,8 @@ def test_non_paginated_responses_do_not_carry_results() -> None:
         ts.TableOfContentsResponse,
         ts.ArticleStructureResponse,
         ts.BinaryEntryResponse,
+        ts.GetSectionResponse,
+        ts.SynthesizeResponse,
     ]
     for cls in non_paginated:
         hints = get_type_hints(cls)
