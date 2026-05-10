@@ -545,20 +545,14 @@ class _StructureMixin:
             None,
         )
         if section is None:
-            err = tool_error(
+            return tool_error(
                 operation="section_not_found",
                 message=(
                     f"No section with id={section_id!r} in entry {entry_path!r}. "
                     f"Use get_table_of_contents to list available section IDs."
                 ),
+                extras={"available_section_ids": [s["id"] for s in bundle["sections"]]},
             )
-            # Attach available_section_ids so the model can self-correct.
-            # ToolErrorPayload is a plain dict at runtime; the extra key is
-            # safe even though the TypedDict does not declare it.
-            err["available_section_ids"] = [  # type: ignore[typeddict-unknown-key]
-                s["id"] for s in bundle["sections"]
-            ]
-            return err
 
         body = bundle["rendered_markdown"][section["char_start"] : section["char_end"]]
         cap = (
@@ -587,7 +581,7 @@ class _StructureMixin:
         )
         return cast(
             "GetSectionResponse",
-            attach_meta(cast(Dict[str, Any], payload)),
+            attach_meta(cast(Dict[str, Any], payload), truncated=truncated),
         )
 
     def get_related_articles_data(

@@ -87,6 +87,7 @@ def test_get_section_max_chars_truncates(ops, tmp_path, patched_archive) -> None
 
     assert response["truncated"] is True
     assert len(response["content_markdown"]) <= 20
+    assert response["_meta"]["truncated"] is True
 
 
 def test_get_section_meta_envelope_present(ops, tmp_path, patched_archive) -> None:
