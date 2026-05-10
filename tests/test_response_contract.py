@@ -17,16 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from openzim_mcp.cache import OpenZimMcpCache
-from openzim_mcp.config import (
-    CacheConfig,
-    ContentConfig,
-    LoggingConfig,
-    OpenZimMcpConfig,
-    SynthesizeConfig,
-)
-from openzim_mcp.content_processor import ContentProcessor
-from openzim_mcp.security import PathValidator
+from openzim_mcp.config import OpenZimMcpConfig, SynthesizeConfig
 from openzim_mcp.server import OpenZimMcpServer
 from openzim_mcp.synthesize import synthesize_query
 from openzim_mcp.zim_operations import ZimOperations, zim_archive
@@ -287,18 +278,9 @@ class TestContractShape:
 
 @pytest.fixture(scope="module")
 def _phase_c_zim_ops(v2_phase_c_zim: Path) -> ZimOperations:
-    zim_dir = str(v2_phase_c_zim.parent)
-    config = OpenZimMcpConfig(
-        allowed_directories=[zim_dir],
-        tool_mode="advanced",
-        cache=CacheConfig(enabled=True, max_size=20, ttl_seconds=300),
-        content=ContentConfig(max_content_length=10000, snippet_length=200),
-        logging=LoggingConfig(level="WARNING"),
-    )
-    path_validator = PathValidator(config.allowed_directories)
-    cache = OpenZimMcpCache(config.cache)
-    content_processor = ContentProcessor(snippet_length=config.content.snippet_length)
-    return ZimOperations(config, path_validator, cache, content_processor)
+    from tests.conftest_v2_fixtures import make_zim_ops
+
+    return make_zim_ops(str(v2_phase_c_zim.parent))
 
 
 class TestPhaseCMetaEnvelope:

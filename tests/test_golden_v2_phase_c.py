@@ -15,7 +15,7 @@ Compare against saved goldens (default)::
 
 Notes
 -----
-* Uses the same ``_capture_or_compare`` / ``_strip_volatile`` pattern as Phase B.
+* Uses ``capture_or_compare`` / ``strip_volatile`` from ``conftest_v2_fixtures``.
 * ``v2_phase_c_zim`` is a purpose-built heading-rich fixture (A/Berlin, A/Munich)
   because Phase A's articles have no h2/h3 headings and therefore no section IDs
   for ``get_section`` to slice on.
@@ -29,87 +29,20 @@ Notes
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from openzim_mcp.cache import OpenZimMcpCache
-from openzim_mcp.config import (
-    CacheConfig,
-    ContentConfig,
-    LoggingConfig,
-    OpenZimMcpConfig,
-    SynthesizeConfig,
-)
-from openzim_mcp.content_processor import ContentProcessor
-from openzim_mcp.security import PathValidator
+from openzim_mcp.config import SynthesizeConfig
 from openzim_mcp.synthesize import synthesize_query
 from openzim_mcp.zim_operations import ZimOperations, zim_archive
-
-GOLDENS_DIR = Path(__file__).parent / "data" / "goldens" / "v2_phase_c"
-
-# Keys to strip from snapshots — volatile or environment-specific.
-# Inherits Phase B's full set; no new volatile keys surfaced in Phase C output.
-_VOLATILE_KEYS = frozenset(
-    {
-        # token/char counts depend on rendered snippet text
-        "tokens_est",
-        "chars",
-        # file-system metadata — environment-specific
-        "directory",
-        "size_bytes",
-        "modified",
-        "size",
-        # opaque cursor encodes archive identity (tmp path digest)
-        "next_cursor",
-        # find_entry_by_title_data embeds the absolute zim file path in results
-        "zim_file",
-    }
+from tests.conftest_v2_fixtures import (
+    capture_or_compare,
+    golden_capture_mode,
+    make_zim_ops,
 )
 
-
-def _strip_volatile(d: Any) -> Any:
-    """Recursively remove volatile keys from a nested dict/list structure."""
-    if isinstance(d, dict):
-        return {k: _strip_volatile(v) for k, v in d.items() if k not in _VOLATILE_KEYS}
-    if isinstance(d, list):
-        return [_strip_volatile(x) for x in d]
-    return d
-
-
-def _capture_or_compare(name: str, payload: dict, *, capture_mode: bool) -> None:
-    """Write golden snapshot or assert equality against saved snapshot.
-
-    When ``capture_mode=True`` or the file is absent, the payload is
-    serialised to JSON and written.  Otherwise the saved golden is loaded and
-    ``_strip_volatile(payload)`` must equal ``_strip_volatile(expected)``.
-
-    Args:
-        name: Basename (without extension) of the golden file.
-        payload: The dict returned by the operation under test.
-        capture_mode: When ``True``, always overwrite the file.
-
-    Raises:
-        AssertionError: When the stripped payloads differ in compare mode.
-    """
-    GOLDENS_DIR.mkdir(parents=True, exist_ok=True)
-    path = GOLDENS_DIR / f"{name}.json"
-    if capture_mode or not path.exists():
-        path.write_text(
-            json.dumps(
-                _strip_volatile(payload), indent=2, ensure_ascii=False, sort_keys=True
-            ),
-            newline="\n",
-        )
-        return
-    expected = json.loads(path.read_text())
-    assert _strip_volatile(payload) == _strip_volatile(expected), (
-        f"Golden mismatch for {name}. "
-        "Set OPENZIM_MCP_CAPTURE_GOLDENS=1 to refresh after intentional changes."
-    )
+GOLDENS_DIR = Path(__file__).parent / "data" / "goldens" / "v2_phase_c"
 
 
 # ---------------------------------------------------------------------------
@@ -120,18 +53,7 @@ def _capture_or_compare(name: str, payload: dict, *, capture_mode: bool) -> None
 @pytest.fixture(scope="module")
 def zim_ops_c(v2_phase_c_zim: Path) -> ZimOperations:
     """Construct a ZimOperations instance pointing at the Phase C fixture archive."""
-    zim_dir = str(v2_phase_c_zim.parent)
-    config = OpenZimMcpConfig(
-        allowed_directories=[zim_dir],
-        tool_mode="advanced",
-        cache=CacheConfig(enabled=True, max_size=20, ttl_seconds=300),
-        content=ContentConfig(max_content_length=10000, snippet_length=200),
-        logging=LoggingConfig(level="WARNING"),
-    )
-    path_validator = PathValidator(config.allowed_directories)
-    cache = OpenZimMcpCache(config.cache)
-    content_processor = ContentProcessor(snippet_length=config.content.snippet_length)
-    return ZimOperations(config, path_validator, cache, content_processor)
+    return make_zim_ops(str(v2_phase_c_zim.parent))
 
 
 @pytest.fixture(scope="module")
@@ -143,7 +65,7 @@ def zim_path_c(v2_phase_c_zim: Path) -> str:
 @pytest.fixture(scope="session")
 def capture_mode() -> bool:
     """Return True when the OPENZIM_MCP_CAPTURE_GOLDENS env var is set to '1'."""
-    return os.environ.get("OPENZIM_MCP_CAPTURE_GOLDENS") == "1"
+    return golden_capture_mode()
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +94,9 @@ def test_golden_get_section(
     assert (
         "error" not in payload
     ), f"get_section_data returned an error for {entry_path}#{section_id}: {payload}"
-    _capture_or_compare(golden_name, dict(payload), capture_mode=capture_mode)
+    capture_or_compare(
+        golden_name, dict(payload), capture_mode=capture_mode, goldens_dir=GOLDENS_DIR
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -205,4 +129,6 @@ def test_golden_synthesize(
             content_processor=zim_ops_c.content_processor,
             config=SynthesizeConfig(),
         )
-    _capture_or_compare(golden_name, dict(response), capture_mode=capture_mode)
+    capture_or_compare(
+        golden_name, dict(response), capture_mode=capture_mode, goldens_dir=GOLDENS_DIR
+    )
