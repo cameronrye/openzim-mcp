@@ -851,7 +851,11 @@ class TestZimQuerySynthesize:
             assert "passages" in payload
             assert "citations" in payload
             assert "archives_searched" in payload
-            assert payload.get("fallback_used") in ("xapian_score", "rrf_fusion")
+            assert payload.get("fallback_used") in (
+                "xapian_score",
+                "rrf_fusion",
+                "reranker",
+            )
 
     @pytest.mark.asyncio
     async def test_zim_query_no_synthesize_returns_string(

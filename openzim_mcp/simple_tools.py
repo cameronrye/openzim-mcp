@@ -152,7 +152,16 @@ class SimpleToolsHandler:
         """
         options = options or {}
         if options.get("synthesize"):
-            return self._handle_synthesize_query(query, zim_file_path, options)
+            try:
+                return self._handle_synthesize_query(query, zim_file_path, options)
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in synthesize path: %s", e, exc_info=True
+                )
+                return tool_error(
+                    operation="synthesize_pipeline_error",
+                    message=f"Synthesize pipeline failed: {e}",
+                )
         try:
             # Reject empty / whitespace-only queries upfront. The router
             # would otherwise classify the input as a low-confidence search
