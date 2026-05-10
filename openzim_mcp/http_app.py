@@ -237,13 +237,15 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
         # browser preflight blocks clean session shutdown.
         allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
         # Mcp-Session-Id is sent by streamable-HTTP clients on every request
-        # after initialization to resume a session; MCP-Protocol-Version is
-        # sent on every post-init request per the MCP spec. Without allowing
-        # both, browser CORS preflight rejects all session-resume requests.
+        # after initialization to resume a session; Last-Event-ID is used to
+        # resume interrupted streams; MCP-Protocol-Version is sent on every
+        # post-init request per the MCP spec. Without allowing these, browser
+        # CORS preflight rejects session-resume requests.
         allow_headers=[
             "Authorization",
             "Content-Type",
             "Mcp-Session-Id",
+            "Last-Event-ID",
             "MCP-Protocol-Version",
         ],
         expose_headers=["Mcp-Session-Id"],
