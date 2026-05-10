@@ -9,7 +9,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .defaults import CACHE, CONTENT, META, SEARCH, VALID_TOOL_MODES
+from .defaults import CACHE, CONTENT, VALID_TOOL_MODES
 from .exceptions import OpenZimMcpConfigurationError
 from .rate_limiter import RateLimitConfig
 
@@ -17,10 +17,8 @@ __all__ = [
     "CacheConfig",
     "ContentConfig",
     "LoggingConfig",
-    "MetaConfig",
     "OpenZimMcpConfig",
     "RateLimitConfig",
-    "SearchConfig",
 ]
 
 
@@ -51,30 +49,6 @@ class ContentConfig(BaseModel):
     max_content_length: int = Field(default=CONTENT.MAX_CONTENT_LENGTH, ge=100)
     snippet_length: int = Field(default=CONTENT.SNIPPET_LENGTH, ge=100)
     default_search_limit: int = Field(default=CONTENT.SEARCH_LIMIT, ge=1, le=100)
-    table_row_threshold: int = Field(default=CONTENT.TABLE_ROW_THRESHOLD, ge=1)
-    table_char_threshold: int = Field(default=CONTENT.TABLE_CHAR_THRESHOLD, ge=50)
-    infobox_kv_limit: int = Field(default=CONTENT.INFOBOX_KV_LIMIT, ge=1, le=200)
-
-
-class MetaConfig(BaseModel):
-    """Configuration for the response `_meta` envelope (Phase A item #5)."""
-
-    footer_enabled: bool = Field(default=META.FOOTER_ENABLED)
-    tokenizer_encoding: str = Field(default=META.TOKENIZER_ENCODING)
-
-
-class SearchConfig(BaseModel):
-    """Configuration for search-side knobs (Phase A items #4, #14)."""
-
-    structured_suggestions_limit: int = Field(
-        default=SEARCH.STRUCTURED_SUGGESTIONS_LIMIT, ge=1, le=20
-    )
-    fuzzy_title_min_query_len: int = Field(
-        default=SEARCH.FUZZY_TITLE_MIN_QUERY_LEN, ge=2, le=20
-    )
-    fuzzy_title_score_penalty: float = Field(
-        default=SEARCH.FUZZY_TITLE_SCORE_PENALTY, ge=0.0, le=1.0
-    )
 
 
 class LoggingConfig(BaseModel):
@@ -104,8 +78,6 @@ class OpenZimMcpConfig(BaseSettings):
     content: ContentConfig = Field(default_factory=ContentConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
-    meta: MetaConfig = Field(default_factory=MetaConfig)
-    search: SearchConfig = Field(default_factory=SearchConfig)
 
     # Server settings
     server_name: str = "openzim-mcp"
@@ -229,14 +201,16 @@ class OpenZimMcpConfig(BaseSettings):
         """Reject wildcard '*' in CORS origins (footgun prevention).
 
         Strips each origin before comparing so whitespace-padded variants
-        like ``" * "`` cannot bypass the check.
+        like ``" * "`` cannot bypass the check. Returns the stripped values
+        so exact CORS origin matching is not defeated by accidental padding.
         """
-        if any(origin.strip() == "*" for origin in v):
+        stripped_origins = [origin.strip() for origin in v]
+        if any(origin == "*" for origin in stripped_origins):
             raise OpenZimMcpConfigurationError(
                 "CORS wildcard '*' is not allowed. List origins explicitly "
                 "(e.g. ['http://localhost:5173'])."
             )
-        return v
+        return stripped_origins
 
     @field_validator("allowed_hosts")
     @classmethod
@@ -245,14 +219,16 @@ class OpenZimMcpConfig(BaseSettings):
 
         DNS rebinding protection is the whole point of the allow-list;
         accepting '*' would defeat it. Whitespace-padded variants are
-        normalized before comparison.
+        normalized before comparison and normal host values are returned
+        stripped so Host header exact matching is not defeated by padding.
         """
-        if any(host.strip() == "*" for host in v):
+        stripped_hosts = [host.strip() for host in v]
+        if any(host == "*" for host in stripped_hosts):
             raise OpenZimMcpConfigurationError(
                 "allowed_hosts wildcard '*' is not allowed. List hostnames "
                 "explicitly (e.g. ['mcp.example.com'])."
             )
-        return v
+        return stripped_hosts
 
     def setup_logging(self) -> None:
         """Configure logging based on settings."""
