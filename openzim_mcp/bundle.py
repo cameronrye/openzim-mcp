@@ -133,7 +133,17 @@ def _compute_section_offsets(
 
     md_len = len(rendered_markdown)
     for i, (level, text, char_start, section_id) in enumerate(matches):
-        char_end = matches[i + 1][2] if i + 1 < len(matches) else md_len
+        # char_end extends to the next heading at the SAME OR HIGHER level
+        # (lower number == higher level) — i.e., the next sibling or
+        # ancestor-sibling. This makes a parent's range envelope all its
+        # descendants, satisfying the parent.char_start <= child.char_start
+        # < child.char_end <= parent.char_end invariant.
+        char_end = md_len
+        for j in range(i + 1, len(matches)):
+            if matches[j][0] <= level:
+                char_end = matches[j][2]
+                break
+
         while parent_stack and parent_stack[-1][0] >= level:
             parent_stack.pop()
         parent_id = parent_stack[-1][1] if parent_stack else None

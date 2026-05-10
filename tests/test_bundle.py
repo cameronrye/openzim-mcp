@@ -280,3 +280,45 @@ def test_get_or_build_bundle_different_paths_different_keys(
     assert archive_a.get_entry_by_path.call_count == 1
     assert archive_b.get_entry_by_path.call_count == 1
     assert cache.stats()["misses"] >= 2
+
+
+# ---------------------------------------------------------------------------
+# Bundle invariants from spec § "Invariants"
+# ---------------------------------------------------------------------------
+
+DEEP_NESTED_HTML = """\
+<html><body>
+<h1>Top</h1><p>Top intro.</p>
+<h2>Section A</h2><p>A intro.</p>
+<h3>A.1</h3><p>A.1 body.</p>
+<h3>A.2</h3><p>A.2 body.</p>
+<h2>Section B</h2><p>B intro.</p>
+<h3>B.1</h3><p>B.1 body.</p>
+<h4>B.1.a</h4><p>B.1.a body.</p>
+</body></html>
+"""
+
+
+def test_bundle_parent_child_range_nesting(cp: ContentProcessor) -> None:
+    archive = _make_archive_with_entry(DEEP_NESTED_HTML)
+    bundle = extract_entry_bundle(archive, "A/Test", content_processor=cp)
+    sections = bundle["sections"]
+    by_id = {s["id"]: s for s in sections}
+
+    for s in sections:
+        if s.get("parent_id"):
+            parent = by_id[s["parent_id"]]
+            assert parent["char_start"] <= s["char_start"]
+            assert s["char_end"] <= parent["char_end"]
+            assert parent["level"] < s["level"]
+
+
+def test_bundle_same_level_disjoint(cp: ContentProcessor) -> None:
+    """Two h2s under the same h1 must not overlap each other."""
+    archive = _make_archive_with_entry(DEEP_NESTED_HTML)
+    bundle = extract_entry_bundle(archive, "A/Test", content_processor=cp)
+    sections = bundle["sections"]
+    h2s = [s for s in sections if s["level"] == 2]
+    assert len(h2s) == 2
+    a, b = h2s
+    assert a["char_end"] <= b["char_start"]
