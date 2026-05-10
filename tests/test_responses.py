@@ -39,3 +39,25 @@ class TestToolError:
         """
         payload: ToolErrorPayload = tool_error(operation="x", message="y")
         assert isinstance(payload, dict)
+
+    def test_extras_merged_into_payload(self) -> None:
+        """extras dict keys are merged into the returned payload."""
+        payload = tool_error(
+            operation="section_not_found",
+            message="Not found",
+            extras={"available_section_ids": ["intro", "history"]},
+        )
+        assert payload["error"] is True
+        assert "available_section_ids" in payload
+        assert payload["available_section_ids"] == ["intro", "history"]  # type: ignore[typeddict-item]
+
+    def test_extras_none_does_not_add_keys(self) -> None:
+        """Omitting extras (default None) leaves the payload unaffected."""
+        payload = tool_error(operation="x", message="y")
+        # Only the three base keys (and no extras) should be present.
+        assert set(payload.keys()) == {"error", "operation", "message"}
+
+    def test_extras_empty_dict_does_not_add_keys(self) -> None:
+        """An empty extras dict does not add any keys to the payload."""
+        payload = tool_error(operation="x", message="y", extras={})
+        assert set(payload.keys()) == {"error", "operation", "message"}

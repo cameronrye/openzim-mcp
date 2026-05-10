@@ -8,11 +8,12 @@ the event loop during I/O-bound operations.
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from .zim_operations import ZimOperations
 
 if TYPE_CHECKING:
+    from .responses import ToolErrorPayload
     from .tool_schemas import (
         ArticleStructureResponse,
         BatchEntryResponse,
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
         EntryResponse,
         EntrySummaryResponse,
         FindEntryResponse,
+        GetSectionResponse,
         LinksResponse,
         ListNamespacesResponse,
         ListZimFilesResponse,
@@ -648,4 +650,20 @@ class AsyncZimOperations:
             zim_file_path,
             entry_path,
             limit,
+        )
+
+    async def get_section_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        section_id: str,
+        max_chars: Optional[int] = None,
+    ) -> "Union[GetSectionResponse, ToolErrorPayload]":
+        """Structured variant of ``get_section`` (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_section_data,
+            zim_file_path,
+            entry_path,
+            section_id,
+            max_chars=max_chars,
         )

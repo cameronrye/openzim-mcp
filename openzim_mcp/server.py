@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
 
@@ -19,12 +19,14 @@ from .error_messages import (
 )
 from .exceptions import OpenZimMcpConfigurationError
 from .rate_limiter import RateLimiter
+from .responses import ToolErrorPayload
 from .security import (
     PathValidator,
     redact_paths_in_message,
     sanitize_context_for_error,
 )
 from .simple_tools import SimpleToolsHandler
+from .tool_schemas import SynthesizeResponse
 from .tools import register_all_tools
 from .zim_operations import ZimOperations
 
@@ -209,7 +211,8 @@ class OpenZimMcpServer:
             max_content_length: Optional[int] = None,
             compact: bool = True,
             compact_budget: Optional[Any] = None,
-        ) -> str:
+            synthesize: bool = False,
+        ) -> Union[str, SynthesizeResponse, ToolErrorPayload]:
             """Query ZIM archives using natural language.
 
             Single intelligent tool — parses your query, detects intent,
@@ -270,9 +273,17 @@ class OpenZimMcpServer:
                     window: an 8B-class model on an agentic prompt fits
                     `tiny`, a 70B-class assistant fits `large`. Has no
                     effect when `compact=False`.
+                synthesize: When True, bypass intent classification and
+                    run the synthesize pipeline — multi-archive Xapian
+                    search, RRF fusion, passage extraction, section
+                    attribution, and citation rendering. Returns a
+                    SynthesizeResponse dict instead of markdown text.
+                    Defaults to False (legacy markdown path unchanged).
 
             Returns:
-                Markdown response — article, search list, or listing.
+                Markdown string (synthesize=False) or SynthesizeResponse
+                dict (synthesize=True) with answer_markdown, passages,
+                citations, and archives_searched.
             """
             try:
                 # Build options dict from parameters. Simple mode is for
@@ -297,6 +308,7 @@ class OpenZimMcpServer:
                         max_content_length if max_content_length is not None else 4000
                     ),
                     "compact": compact,
+                    "synthesize": synthesize,
                 }
                 if offset != 0:
                     options["offset"] = offset

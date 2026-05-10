@@ -13,14 +13,19 @@ without changes.
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
-from openzim_mcp.exceptions import OpenZimMcpArchiveError, OpenZimMcpValidationError
+from openzim_mcp.exceptions import (
+    OpenZimMcpArchiveError,
+    OpenZimMcpFileNotFoundError,
+    OpenZimMcpValidationError,
+)
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.pagination import Cursor
+from openzim_mcp.responses import ToolErrorPayload, tool_error
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -29,6 +34,7 @@ if TYPE_CHECKING:
     from openzim_mcp.security import PathValidator
     from openzim_mcp.tool_schemas import (
         ArticleStructureResponse,
+        GetSectionResponse,
         LinksResponse,
         RelatedArticlesResponse,
         SectionMeta,
@@ -486,6 +492,97 @@ class _StructureMixin:
             raise OpenZimMcpArchiveError(
                 f"Failed to extract table of contents: {e}"
             ) from e
+
+    def get_section_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        section_id: str,
+        *,
+        max_chars: "Optional[int]" = None,
+    ) -> "Union[GetSectionResponse, ToolErrorPayload]":
+        """Public entry point for the get_section tool.
+
+        Returns the typed response or a ToolErrorPayload on
+        file-not-found / entry-not-found / section-not-found.
+        """
+        try:
+            validated_path = self.path_validator.validate_path(zim_file_path)
+            validated_path = self.path_validator.validate_zim_file(validated_path)
+            with _zim_ops_mod.zim_archive(validated_path) as archive:
+                return self._get_section_data(
+                    archive, validated_path, entry_path, section_id, max_chars
+                )
+        except OpenZimMcpFileNotFoundError as e:
+            return tool_error(operation="file_not_found", message=str(e))
+        except OpenZimMcpArchiveError as e:
+            return tool_error(operation="entry_not_found", message=str(e))
+
+    def _get_section_data(
+        self,
+        archive: Archive,
+        validated_path: Path,
+        entry_path: str,
+        section_id: str,
+        max_chars: "Optional[int]",
+    ) -> "Union[GetSectionResponse, ToolErrorPayload]":
+        """Build the bundle, find the section by id, and return GetSectionResponse.
+
+        Returns a ToolErrorPayload if the section_id is not found in the bundle.
+        """
+        from openzim_mcp.bundle import get_or_build_bundle
+
+        bundle = get_or_build_bundle(
+            archive,
+            entry_path,
+            cache=self.cache,
+            validated_path=validated_path,
+            content_processor=self.content_processor,
+        )
+
+        section = next(
+            (s for s in bundle["sections"] if s["id"] == section_id),
+            None,
+        )
+        if section is None:
+            return tool_error(
+                operation="section_not_found",
+                message=(
+                    f"No section with id={section_id!r} in entry {entry_path!r}. "
+                    f"Use get_table_of_contents to list available section IDs."
+                ),
+                extras={"available_section_ids": [s["id"] for s in bundle["sections"]]},
+            )
+
+        body = bundle["rendered_markdown"][section["char_start"] : section["char_end"]]
+        cap = (
+            max_chars
+            if max_chars is not None
+            else self.config.content.max_content_length
+        )
+        truncated = len(body) > cap
+        if truncated:
+            body = body[:cap]
+
+        payload: "GetSectionResponse" = cast(
+            "GetSectionResponse",
+            {
+                "entry_path": bundle["entry_path"],
+                "title": bundle["title"],
+                "section_id": section["id"],
+                "section_title": section["title"],
+                "level": section["level"],
+                "parent_id": section.get("parent_id"),
+                "content_markdown": body,
+                "char_count": len(body),
+                "word_count": len(body.split()),
+                "truncated": truncated,
+            },
+        )
+        return cast(
+            "GetSectionResponse",
+            attach_meta(cast(Dict[str, Any], payload), truncated=truncated),
+        )
 
     def get_related_articles_data(
         self,

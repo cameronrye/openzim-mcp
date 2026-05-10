@@ -3,14 +3,24 @@
 Phase B (#3) standardizes pagination across all list-returning tools. This
 file is the single source of truth for "did we keep the contract?" Each
 test calls a real tool against the bundled fixtures and asserts the shape.
+
+Phase C note
+------------
+``get_section`` and ``synthesize`` are NOT list-paginated tools and are
+therefore exempt from ``_assert_contract``.  They still carry ``_meta`` —
+see ``TestPhaseCMetaEnvelope`` below.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.config import OpenZimMcpConfig, SynthesizeConfig
 from openzim_mcp.server import OpenZimMcpServer
+from openzim_mcp.synthesize import synthesize_query
+from openzim_mcp.zim_operations import ZimOperations, zim_archive
 
 CONTRACT_KEYS = ("results", "next_cursor", "total", "done", "page_info", "_meta")
 PAGE_INFO_KEYS = ("offset", "limit", "returned_count")
@@ -258,3 +268,45 @@ class TestContractShape:
         payload = structured["result"] if "result" in structured else structured
         _assert_contract(payload)
         assert payload["done"] is True
+
+
+# ---------------------------------------------------------------------------
+# Phase C: non-paginated tools are exempt from _assert_contract but must
+# still carry _meta.  Tests use the heading-rich v2_phase_c_zim fixture.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def _phase_c_zim_ops(v2_phase_c_zim: Path) -> ZimOperations:
+    from tests.conftest_v2_fixtures import make_zim_ops
+
+    return make_zim_ops(str(v2_phase_c_zim.parent))
+
+
+class TestPhaseCMetaEnvelope:
+    """get_section and synthesize are exempt from the list-pagination contract
+    but must still carry a _meta dict."""
+
+    def test_get_section_response_carries_meta_envelope(
+        self, _phase_c_zim_ops: ZimOperations, v2_phase_c_zim: Path
+    ) -> None:
+        response = _phase_c_zim_ops.get_section_data(
+            str(v2_phase_c_zim), "A/Berlin", section_id="geography"
+        )
+        assert "_meta" in response, "get_section response missing _meta"
+        assert isinstance(response["_meta"], dict)
+
+    def test_synthesize_response_carries_meta_envelope(
+        self, _phase_c_zim_ops: ZimOperations, v2_phase_c_zim: Path
+    ) -> None:
+        with zim_archive(v2_phase_c_zim) as archive:
+            response = synthesize_query(
+                "berlin geography",
+                archives=[(archive, v2_phase_c_zim)],
+                search_handler=_phase_c_zim_ops,
+                cache=_phase_c_zim_ops.cache,
+                content_processor=_phase_c_zim_ops.content_processor,
+                config=SynthesizeConfig(),
+            )
+        assert "_meta" in response, "synthesize response missing _meta"
+        assert isinstance(response["_meta"], dict)

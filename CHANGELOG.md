@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a4] — 2026-05-10 (alpha pre-release)
+
+v2 Phase C, part 2: completes the retrieval-primitives phase. Adds the
+`get_section` tool (#7) and the `zim_query(synthesize=True)` mode (#10)
+on top of the EntryBundle infrastructure that shipped in v2.0.0a3.
+**No wire-format breaks** — both new surfaces are additive.
+
+### #7 — New tool `get_section`
+
+```
+get_section(zim_file_path, entry_path, section_id, *, max_chars=None)
+  → Union[GetSectionResponse, ToolErrorPayload]
+```
+
+Returns a single section's body (~500-1500 tokens — small-model sweet
+spot per parent-document-retrieval research) plus full metadata.
+`section_id` values come from `get_table_of_contents`
+(`TocHeading.section_id`). On miss, returns
+`tool_error("section_not_found", extras={"available_section_ids": [...]
+})` so the model can self-correct.
+
+The data layer slices `EntryBundle.rendered_markdown[char_start:char_end]`
+where the bundle's section ranges include subsections (a parent heading's
+`char_end` extends to the next heading at the same or higher level).
+Parent sections therefore return the full subtree body. `max_chars`
+truncates the body and sets `truncated=True` plus `_meta.truncated=True`
+in the envelope for budget-aware clients.
+
+### #10 — New `zim_query(synthesize=True)` mode
+
+```python
+{
+    "query": str,
+    "answer_markdown": str,        # passages + inline [cite: ...] markers
+    "passages": list[SynthesizePassage],
+    "citations": list[Citation],
+    "archives_searched": list[str],
+    "fallback_used": Literal["xapian_score", "rrf_fusion", "reranker"],
+    "total_chars": int,
+    "total_words": int,
+    "_meta": MetaEnvelope,
+}
+```
+
+Pure retrieval + concatenation; no LLM generation. The seven-stage
+pipeline (in `openzim_mcp/synthesize.py`):
+
+1. **Per-archive search** — Xapian top-K hits (`search_top_k` helper
+   on `ZimOperations`).
+2. **RRF fusion** — Reciprocal Rank Fusion (k=60) when multiple archives
+   are searched; identity passthrough for single-archive
+   (`fallback_used="xapian_score"` vs `"rrf_fusion"`).
+3. **Identity rerank** — placeholder for Phase D's cross-encoder.
+4. **Passage extraction** — libzim snippets rendered to markdown.
+5. **Section attribution** — best-effort lookup via `EntryBundle`;
+   passages get `cite_id = "{archive}/{entry_path}#{section_id}"`
+   when the snippet text is found in a section's char range. Bundle
+   build failures keep the cite_id at entry level.
+6. **Budget enforcement** — `output_char_budget` truncates the last
+   passage; subsequent passages are dropped.
+7. **Render + citations** — passages joined with `\n\n` and inline
+   `[cite: ...]` markers; structured `Citation` list deduplicated by
+   `cite_id`.
+
+Zero hits returns an empty response with `_meta.reason="0_hits"`.
+
+### Other
+
+- Extended `tool_error()` with an `extras: Optional[Dict[str, Any]]`
+  kwarg so error payloads can carry self-correction hints (e.g. the
+  `available_section_ids` list above) without `# type: ignore` at
+  call sites.
+- New tests: `tests/test_get_section.py` (4),
+  `tests/test_synthesize.py` (~20 unit + 3 end-to-end),
+  `tests/test_golden_v2_phase_c.py` (3 `get_section` + 3 `synthesize`
+  snapshots, deterministic via the new `v2_phase_c_zim` heading-rich
+  fixture). `test_response_contract` exempts both new tools from the
+  list-pagination contract while still asserting `_meta` is present.
+- The Phase A `_meta` envelope continues to attach on every response.
+  `_meta.truncated` is now correctly forwarded by `get_section_data`
+  on truncation (was a hidden gap in earlier scaffolding).
+
 ## [2.0.0a3] — 2026-05-10 (alpha pre-release)
 
 v2 Phase C, part 1: EntryBundle infrastructure and the four-tool collapse.

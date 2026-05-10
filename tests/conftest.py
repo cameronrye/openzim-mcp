@@ -241,7 +241,10 @@ def test_config_with_zim_data(
     )
 
 
-from tests.conftest_v2_fixtures import v2_phase_a_zim  # noqa: F401, E402
+from tests.conftest_v2_fixtures import (  # noqa: F401, E402
+    v2_phase_a_zim,
+    v2_phase_c_zim,
+)
 
 
 def pytest_configure(config):

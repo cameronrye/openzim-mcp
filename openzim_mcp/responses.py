@@ -8,7 +8,7 @@ helpers in this module standardize the shapes used for error responses
 so every tool emits a recognisable envelope on failure.
 """
 
-from typing import NotRequired, Optional, TypedDict
+from typing import Any, Dict, NotRequired, Optional, TypedDict
 
 
 class ToolErrorPayload(TypedDict):
@@ -31,6 +31,7 @@ def tool_error(
     operation: str,
     message: str,
     context: Optional[str] = None,
+    extras: Optional[Dict[str, Any]] = None,
 ) -> ToolErrorPayload:
     """Build a structured error payload for a failed tool invocation.
 
@@ -40,6 +41,12 @@ def tool_error(
         message: The user-facing error text — typically the markdown blob
             produced by ``_create_enhanced_error_message``.
         context: Optional contextual hint (file path, query, etc.).
+        extras: Optional dict of additional keys to merge into the payload.
+            Useful for attaching self-correction hints (e.g.
+            ``available_section_ids``) without a ``# type: ignore`` at
+            every call site. The extra keys are intentional runtime
+            extensions; ``ToolErrorPayload`` stays narrow in its TypedDict
+            declaration.
 
     Returns:
         A ``ToolErrorPayload`` envelope ready to be returned from an MCP
@@ -52,4 +59,6 @@ def tool_error(
     }
     if context is not None:
         payload["context"] = context
+    if extras:
+        payload.update(extras)  # type: ignore[typeddict-item]
     return payload
