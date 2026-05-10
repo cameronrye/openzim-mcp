@@ -432,16 +432,3 @@ These land as the first commits on `v2-phase-c`, before any feature code, so the
 | `zim_query` becoming structured-only | Phase F |
 | Sub-section pagination of mega-sections | Revisit only if tests surface real pain |
 | Archive-nickname citation format | Out — verbose-but-stable basenames are sufficient |
-
----
-
-## Spec self-review checklist
-
-(Removed after approval; tracked in the implementation plan.)
-
-- [ ] No "TBD" or unfilled placeholders.
-- [ ] `EntryBundle` invariants are testable as written.
-- [ ] `synthesize` pipeline stages are independently testable.
-- [ ] No contradictions between "Decisions captured" table and downstream sections.
-- [ ] Wire-format changes match what's in the testing section.
-- [ ] All four collapsed tools' wire-format-unchanged claim is verifiable against Phase B's test suite.
