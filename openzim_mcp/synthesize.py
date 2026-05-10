@@ -72,7 +72,7 @@ def _rrf_fuse(
 
 
 def _per_archive_search(
-    archive: "Archive",
+    archive: Archive,
     *,
     search_handler: Any,  # SearchToolsHandler — typed loosely to avoid circular import
     query: str,
@@ -94,7 +94,7 @@ def _extract_passages(
     hits: list[dict],
     *,
     archive_name: str,
-    content_processor: "ContentProcessor",
+    content_processor: ContentProcessor,
 ) -> list[SynthesizePassage]:
     """Convert hit dicts into SynthesizePassage entries.
 
@@ -284,17 +284,17 @@ def _build_citations(
 def synthesize_query(
     query: str,
     *,
-    archives: list[tuple["Archive", "Path"]],  # (archive, validated_path) pairs
+    archives: list[tuple[Archive, Path]],  # (archive, validated_path) pairs
     search_handler: Any,
-    cache: "OpenZimMcpCache",
-    content_processor: "ContentProcessor",
-    config: "SynthesizeConfig",
+    cache: OpenZimMcpCache,
+    content_processor: ContentProcessor,
+    config: SynthesizeConfig,
 ) -> SynthesizeResponse:
     """Run the synthesize pipeline end-to-end."""
     # Stage 1: per-archive search
     per_archive_hits: list[list[dict]] = []
     archives_searched: list[str] = []
-    archive_by_name: dict[str, tuple["Archive", "Path"]] = {}
+    archive_by_name: dict[str, tuple[Archive, Path]] = {}
     for archive, validated_path in archives:
         archive_name = validated_path.stem
         archives_searched.append(archive_name)
@@ -370,7 +370,7 @@ def synthesize_query(
         p["rank"] = i
 
     # Stage 5: section attribution
-    archive_for_path: dict[str, tuple["Archive", "Path"]] = {}
+    archive_for_path: dict[str, tuple[Archive, Path]] = {}
     for archive_name, hit in top_hits:
         archive_for_path[hit["path"]] = archive_by_name[archive_name]
 

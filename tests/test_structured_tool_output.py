@@ -793,11 +793,8 @@ def simple_server(test_config_with_zim_data: OpenZimMcpConfig) -> OpenZimMcpServ
 
     zim_query is only registered in simple mode, so synthesize integration
     tests need a separate server fixture with tool_mode='simple'.
+    Pydantic models are immutable, so rebuild rather than copy-and-patch.
     """
-    import copy
-
-    cfg = copy.copy(test_config_with_zim_data)
-    # Pydantic models are immutable; rebuild with tool_mode='simple'.
     cfg = OpenZimMcpConfig(
         allowed_directories=test_config_with_zim_data.allowed_directories,
         tool_mode="simple",
