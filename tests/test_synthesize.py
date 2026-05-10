@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from openzim_mcp.synthesize import _rrf_fuse
+from openzim_mcp.tool_schemas import SynthesizePassage
 
 
 def test_rrf_fuse_single_ranking_preserves_order() -> None:
@@ -127,3 +130,112 @@ def test_synthesize_query_signature_exists() -> None:
     assert {"query", "archives", "cache", "content_processor", "config"} <= set(
         sig.parameters
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 19: section attribution stage
+# ---------------------------------------------------------------------------
+
+
+def test_attribute_sections_adds_section_id_when_match_in_first_section() -> None:
+    """Passage text found in section 0 → cite_id gets #<section_id>."""
+    from openzim_mcp.synthesize import _attribute_sections
+
+    bundle = {
+        "rendered_markdown": "# Berlin\n\nIntro paragraph.\n\n## Geography\n\nGeography text here.\n",
+        "sections": [
+            {
+                "id": "berlin",
+                "title": "Berlin",
+                "level": 1,
+                "char_start": 0,
+                "char_end": 38,
+                "parent_id": None,
+            },
+            {
+                "id": "geography",
+                "title": "Geography",
+                "level": 2,
+                "char_start": 38,
+                "char_end": 75,
+                "parent_id": "berlin",
+            },
+        ],
+    }
+    passages = [
+        cast(
+            SynthesizePassage,
+            {
+                "cite_id": "wiki/A/Berlin",
+                "text_markdown": "Geography text here.",
+                "rank": 1,
+                "score": 0.9,
+            },
+        ),
+    ]
+    bundle_lookup = lambda path: bundle if path == "A/Berlin" else None
+
+    attributed = _attribute_sections(
+        passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
+    )
+    assert attributed[0]["cite_id"] == "wiki/A/Berlin#geography"
+
+
+def test_attribute_sections_drops_section_on_bundle_failure() -> None:
+    """Bundle build fails → cite_id stays at entry level; passage not dropped."""
+    from openzim_mcp.synthesize import _attribute_sections
+
+    def bundle_lookup(path: str) -> None:
+        raise RuntimeError("simulated archive read failure")
+
+    passages = [
+        cast(
+            SynthesizePassage,
+            {
+                "cite_id": "wiki/A/Berlin",
+                "text_markdown": "Anything",
+                "rank": 1,
+                "score": 0.5,
+            },
+        ),
+    ]
+    attributed = _attribute_sections(
+        passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
+    )
+    assert len(attributed) == 1
+    assert attributed[0]["cite_id"] == "wiki/A/Berlin"  # unchanged
+
+
+def test_attribute_sections_no_match_keeps_entry_level() -> None:
+    """Passage text not located in any section → cite_id stays at entry level."""
+    from openzim_mcp.synthesize import _attribute_sections
+
+    bundle = {
+        "rendered_markdown": "Whole article body here.",
+        "sections": [
+            {
+                "id": "intro",
+                "title": "Intro",
+                "level": 1,
+                "char_start": 0,
+                "char_end": 24,
+                "parent_id": None,
+            },
+        ],
+    }
+    bundle_lookup = lambda path: bundle
+    passages = [
+        cast(
+            SynthesizePassage,
+            {
+                "cite_id": "wiki/A/Berlin",
+                "text_markdown": "totally unrelated string",
+                "rank": 1,
+                "score": 0.1,
+            },
+        ),
+    ]
+    attributed = _attribute_sections(
+        passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
+    )
+    assert attributed[0]["cite_id"] == "wiki/A/Berlin"

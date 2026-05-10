@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -120,6 +120,63 @@ def _extract_passages(
             )
         )
     return passages
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 5: section attribution
+# ---------------------------------------------------------------------------
+
+
+def _attribute_sections(
+    passages: list[SynthesizePassage],
+    *,
+    bundle_lookup: Callable[[str], Any],
+    hit_paths: list[str],
+) -> list[SynthesizePassage]:
+    """For each passage, find its containing section in the bundle and append #section_id.
+
+    On bundle-build failure for an entry, leave the cite_id at entry level
+    (no #section suffix). The passage is never dropped — section attribution
+    is best-effort.
+    """
+    attributed: list[SynthesizePassage] = []
+    for passage, hit_path in zip(passages, hit_paths):
+        new_cite_id = passage["cite_id"]
+        try:
+            bundle = bundle_lookup(hit_path)
+        except Exception as e:
+            logger.info(
+                "Bundle build failed for %s during synthesize attribution: %s",
+                hit_path,
+                e,
+            )
+            attributed.append(passage)
+            continue
+
+        if bundle is None:
+            attributed.append(passage)
+            continue
+
+        md = bundle.get("rendered_markdown", "")
+        passage_text = passage["text_markdown"]
+        if not passage_text or not md:
+            attributed.append(passage)
+            continue
+
+        pos = md.find(passage_text)
+        if pos < 0:
+            attributed.append(passage)
+            continue
+
+        for section in bundle.get("sections", []):
+            if section["char_start"] <= pos < section["char_end"]:
+                new_cite_id = f"{passage['cite_id']}#{section['id']}"
+                break
+
+        new_passage = dict(passage)
+        new_passage["cite_id"] = new_cite_id
+        attributed.append(cast(SynthesizePassage, new_passage))
+    return attributed
 
 
 # ---------------------------------------------------------------------------
