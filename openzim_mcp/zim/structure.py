@@ -31,13 +31,45 @@ if TYPE_CHECKING:
         ArticleStructureResponse,
         LinksResponse,
         RelatedArticlesResponse,
+        SectionMeta,
         TableOfContentsResponse,
+        TocHeading,
     )
 
 logger = logging.getLogger(__name__)
 
 # MIME type that drives the HTML-aware structure/links code paths.
 TEXT_HTML_MIME = "text/html"
+
+
+def _sections_to_toc_tree(sections: "List[SectionMeta]") -> "List[TocHeading]":
+    """Build a hierarchical TOC tree from a flat SectionMeta list.
+
+    Uses a stack to nest headings by level. Each TocHeading has the
+    Phase C field name ``section_id`` (renamed from the old ``id``).
+    """
+    root: "List[TocHeading]" = []
+    stack: "List[Tuple[int, List[TocHeading]]]" = [(0, root)]
+
+    for s in sections:
+        node: "TocHeading" = cast(
+            "TocHeading",
+            {
+                "section_id": s["id"],
+                "text": s["title"],
+                "level": s["level"],
+                "children": [],
+            },
+        )
+        while stack and stack[-1][0] >= s["level"]:
+            stack.pop()
+        if stack:
+            stack[-1][1].append(node)
+        else:
+            root.append(node)
+        stack.append((s["level"], node["children"]))
+
+    return root
 
 
 class _StructureMixin:
@@ -70,24 +102,14 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"structure_data:{validated_path}:{entry_path}"
-        cached_result = self.cache.get(cache_key)
-        if cached_result is not None:
-            logger.debug(f"Returning cached structure dict for: {entry_path}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
-            return cast("ArticleStructureResponse", cached_result)
-
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_article_structure_data(archive, entry_path)
+                result = self._extract_article_structure_data(
+                    archive, entry_path, validated_path=validated_path
+                )
 
-            # Cache the result
-            self.cache.set(cache_key, result)
             logger.info(f"Extracted structure for: {entry_path}")
-            return cast("ArticleStructureResponse", attach_meta(result))
+            return cast("ArticleStructureResponse", result)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -120,55 +142,66 @@ class _StructureMixin:
         )
 
     def _extract_article_structure_data(
-        self, archive: Archive, entry_path: str
-    ) -> Dict[str, Any]:
-        """Extract structure from article content as a dict."""
+        self,
+        archive: Archive,
+        entry_path: str,
+        *,
+        validated_path: "Optional[Path]" = None,
+    ) -> "ArticleStructureResponse":
+        """Extract structure from article content via bundle."""
+        from openzim_mcp.bundle import get_or_build_bundle
+
         try:
-            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
-            title = entry.title or "Untitled"
+            bundle = get_or_build_bundle(
+                archive,
+                entry_path,
+                cache=self.cache,
+                validated_path=validated_path or Path(entry_path),
+                content_processor=self.content_processor,
+            )
 
-            # Get raw content
-            item = entry.get_item()
-            mime_type = item.mimetype or ""
-            raw_content = bytes(item.content).decode("utf-8", errors="replace")
+            md = bundle["rendered_markdown"]
+            PREVIEW_CHARS = 300
 
-            structure: Dict[str, Any] = {
-                "title": title,
-                "path": entry_path,
-                "content_type": mime_type,
-                "headings": [],
-                "sections": [],
-                "metadata": {},
-                "word_count": 0,
-                "character_count": len(raw_content),
-            }
+            headings = [
+                {
+                    "id": s["id"],
+                    "text": s["title"],
+                    "level": s["level"],
+                    "position": i,
+                }
+                for i, s in enumerate(bundle["sections"])
+            ]
+            sections = [
+                {
+                    "title": s["title"],
+                    "level": s["level"],
+                    "content_preview": md[
+                        s["char_start"] : s["char_start"] + PREVIEW_CHARS
+                    ],
+                }
+                for s in bundle["sections"]
+            ]
+            payload: "ArticleStructureResponse" = cast(
+                "ArticleStructureResponse",
+                {
+                    "title": bundle["title"],
+                    "path": bundle["entry_path"],
+                    "content_type": bundle["content_type"],
+                    "headings": headings,
+                    "sections": sections,
+                    "metadata": {},
+                    "word_count": bundle["word_count"],
+                    "character_count": bundle["char_count"],
+                },
+            )
+            return cast(
+                "ArticleStructureResponse",
+                attach_meta(cast(Dict[str, Any], payload)),
+            )
 
-            # Process HTML content for structure
-            if mime_type.startswith(TEXT_HTML_MIME):
-                structure.update(
-                    self.content_processor.extract_html_structure(raw_content)
-                )
-            elif mime_type.startswith("text/"):
-                # For plain text, try to extract basic structure. Re-encode the
-                # already-decoded raw_content rather than re-reading item.content,
-                # which can trigger another full decompression from the archive.
-                plain_text = self.content_processor.process_mime_content(
-                    raw_content.encode("utf-8"), mime_type
-                )
-                structure["word_count"] = len(plain_text.split())
-                structure["sections"] = [
-                    {"title": "Content", "content_preview": plain_text[:500]}
-                ]
-            else:
-                structure["sections"] = [
-                    {
-                        "title": "Non-text content",
-                        "content_preview": f"({mime_type} content)",
-                    }
-                ]
-
-            return structure
-
+        except OpenZimMcpArchiveError:
+            raise
         except Exception as e:
             logger.error(f"Error extracting structure for {entry_path}: {e}")
             raise OpenZimMcpArchiveError(
@@ -235,21 +268,22 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
         try:
-            extraction = self._get_or_load_link_extraction(
-                str(validated_path), entry_path
-            )
+            from openzim_mcp.bundle import get_or_build_bundle
 
-            full_internal: List[Any] = extraction["internal"]
-            full_external: List[Any] = extraction["external"]
-            full_media: List[Any] = extraction["media"]
-            by_kind = {
-                "internal": full_internal,
-                "external": full_external,
-                "media": full_media,
-            }
-            full_list = by_kind[kind]
-            total_for_kind = len(full_list)
-            page = full_list[offset : offset + limit]
+            with _zim_ops_mod.zim_archive(validated_path) as archive:
+                bundle = get_or_build_bundle(
+                    archive,
+                    entry_path,
+                    cache=self.cache,
+                    validated_path=validated_path,
+                    content_processor=self.content_processor,
+                )
+
+            all_links_for_kind: List[Any] = cast(
+                "List[Any]", bundle["links"][kind]  # type: ignore[literal-required]
+            )
+            total_for_kind = len(all_links_for_kind)
+            page = all_links_for_kind[offset : offset + limit]
             returned_count = len(page)
             last_index = offset + returned_count
             done = last_index >= total_for_kind
@@ -266,9 +300,9 @@ class _StructureMixin:
                 )
 
             payload: Dict[str, Any] = {
-                "title": extraction["title"],
-                "path": extraction["path"],
-                "content_type": extraction["content_type"],
+                "title": bundle["title"],
+                "path": bundle["entry_path"],
+                "content_type": bundle["content_type"],
                 "kind": kind,
                 "results": page,
                 "next_cursor": next_cursor,
@@ -280,13 +314,11 @@ class _StructureMixin:
                     "returned_count": returned_count,
                 },
                 "category_totals": {
-                    "internal": len(full_internal),
-                    "external": len(full_external),
-                    "media": len(full_media),
+                    "internal": len(bundle["links"]["internal"]),
+                    "external": len(bundle["links"]["external"]),
+                    "media": len(bundle["links"]["media"]),
                 },
             }
-            if extraction.get("message"):
-                payload["message"] = extraction["message"]
 
             logger.info(
                 f"Extracted links for: {entry_path} "
@@ -345,68 +377,6 @@ class _StructureMixin:
             ensure_ascii=False,
         )
 
-    def _get_or_load_link_extraction(
-        self, validated_path: str, entry_path: str
-    ) -> Dict[str, Any]:
-        """Return the parsed extraction (cached) for ``(file, entry)``.
-
-        The extraction dict carries the *full* internal/external/media lists
-        plus title/path/mime/message metadata. Pagination slices from this
-        dict in-memory; callers paging through results pay the HTML parse
-        cost exactly once per (archive, entry) pair instead of once per page.
-        """
-        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
-        # shape: parallel arrays/multi-category) don't leak through after upgrade.
-        cache_key = f"links_full:v2b:{validated_path}:{entry_path}"
-        cached = self.cache.get(cache_key)
-        if cached is not None:
-            logger.debug(f"Returning cached link extraction for: {entry_path}")
-            return cached  # type: ignore[no-any-return]
-
-        with _zim_ops_mod.zim_archive(Path(validated_path)) as archive:
-            extraction = self._load_link_extraction(archive, entry_path)
-        self.cache.set(cache_key, extraction)
-        return extraction
-
-    def _load_link_extraction(
-        self, archive: Archive, entry_path: str
-    ) -> Dict[str, Any]:
-        """Resolve the entry and parse all links once, returning the full lists."""
-        try:
-            entry, resolved_path = self._resolve_entry_with_fallback(
-                archive, entry_path
-            )
-            title = entry.title or "Untitled"
-            item = entry.get_item()
-            mime_type = item.mimetype or ""
-            raw_content = bytes(item.content).decode("utf-8", errors="replace")
-
-            full_internal: List[Any] = []
-            full_external: List[Any] = []
-            full_media: List[Any] = []
-            message: Optional[str] = None
-
-            if mime_type.startswith(TEXT_HTML_MIME):
-                parsed = self.content_processor.extract_html_links(raw_content)
-                full_internal = parsed.get("internal_links", []) or []
-                full_external = parsed.get("external_links", []) or []
-                full_media = parsed.get("media_links", []) or []
-            else:
-                message = f"Link extraction not supported for {mime_type}"
-
-            return {
-                "title": title,
-                "path": resolved_path,
-                "content_type": mime_type,
-                "internal": full_internal,
-                "external": full_external,
-                "media": full_media,
-                "message": message,
-            }
-        except Exception as e:
-            logger.error(f"Error extracting links for {entry_path}: {e}")
-            raise OpenZimMcpArchiveError(f"Failed to extract article links: {e}") from e
-
     def get_table_of_contents_data(
         self, zim_file_path: str, entry_path: str
     ) -> "TableOfContentsResponse":
@@ -423,24 +393,14 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
-        # Cache key distinct from the legacy string cache so old persisted
-        # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"toc_data:{validated_path}:{entry_path}"
-        cached_result = self.cache.get(cache_key)
-        if cached_result is not None:
-            logger.debug(f"Returning cached TOC dict for: {entry_path}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
-            return cast("TableOfContentsResponse", cached_result)
-
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                result = self._extract_table_of_contents_data(archive, entry_path)
+                result = self._extract_table_of_contents_data(
+                    archive, entry_path, validated_path=validated_path
+                )
 
-            # Cache the result
-            self.cache.set(cache_key, result)
             logger.info(f"Extracted TOC for: {entry_path}")
-            return cast("TableOfContentsResponse", attach_meta(result))
+            return cast("TableOfContentsResponse", result)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -476,35 +436,48 @@ class _StructureMixin:
         )
 
     def _extract_table_of_contents_data(
-        self, archive: Archive, entry_path: str
-    ) -> Dict[str, Any]:
-        """Extract hierarchical table of contents from article as a dict."""
+        self,
+        archive: Archive,
+        entry_path: str,
+        *,
+        validated_path: "Optional[Path]" = None,
+    ) -> "TableOfContentsResponse":
+        """Extract hierarchical table of contents from article via bundle."""
+        from openzim_mcp.bundle import get_or_build_bundle
+
         try:
-            entry, entry_path = self._resolve_entry_with_fallback(archive, entry_path)
+            bundle = get_or_build_bundle(
+                archive,
+                entry_path,
+                cache=self.cache,
+                validated_path=validated_path or Path(entry_path),
+                content_processor=self.content_processor,
+            )
 
-            title = entry.title or "Untitled"
-            item = entry.get_item()
-            mime_type = item.mimetype or ""
-
-            toc_data: Dict[str, Any] = {
-                "title": title,
-                "path": entry_path,
-                "content_type": mime_type,
-                "toc": [],
-                "heading_count": 0,
-                "max_depth": 0,
-            }
-
-            if not mime_type.startswith(TEXT_HTML_MIME):
-                toc_data["message"] = (
-                    f"TOC extraction requires HTML content, got: {mime_type}"
+            payload: "TableOfContentsResponse" = cast(
+                "TableOfContentsResponse",
+                {
+                    "title": bundle["title"],
+                    "path": bundle["entry_path"],
+                    "content_type": bundle["content_type"],
+                    "toc": _sections_to_toc_tree(bundle["sections"]),
+                    "heading_count": len(bundle["sections"]),
+                    "max_depth": max(
+                        (s["level"] for s in bundle["sections"]), default=0
+                    ),
+                },
+            )
+            if not bundle["content_type"].startswith("text/html"):
+                payload["message"] = (
+                    f"TOC extraction requires HTML content, "
+                    f"got: {bundle['content_type']}"
                 )
-                return toc_data
-
-            raw_content = bytes(item.content).decode("utf-8", errors="replace")
-            toc_data.update(self._build_hierarchical_toc(raw_content))
-
-            return toc_data
+            elif not bundle["sections"]:
+                payload["message"] = "No headings found in article"
+            return cast(
+                "TableOfContentsResponse",
+                attach_meta(cast(Dict[str, Any], payload)),
+            )
 
         except OpenZimMcpArchiveError:
             raise
@@ -513,107 +486,6 @@ class _StructureMixin:
             raise OpenZimMcpArchiveError(
                 f"Failed to extract table of contents: {e}"
             ) from e
-
-    def _build_hierarchical_toc(self, html_content: str) -> Dict[str, Any]:
-        """Build a hierarchical table of contents from HTML headings.
-
-        Returns a tree structure where each node has:
-        - level: heading level (1-6)
-        - text: heading text
-        - id: heading id attribute (for anchor links)
-        - children: nested headings
-
-        Errors propagate to the caller so a transient parse failure is not
-        cached as a permanent ``{"error": "..."}`` blob for the full TTL.
-        ``get_table_of_contents`` translates the exception into a user-facing
-        ``TOC extraction failed`` error response.
-        """
-        from bs4 import BeautifulSoup, Tag
-
-        result: Dict[str, Any] = {
-            "toc": [],
-            "heading_count": 0,
-            "max_depth": 0,
-        }
-
-        soup = BeautifulSoup(html_content, "html.parser")
-
-        # Remove unwanted elements
-        for selector in ["script", "style", "nav", ".mw-editsection"]:
-            for element in soup.select(selector):
-                element.decompose()
-
-        # Find all headings in order
-        headings: List[Dict[str, Any]] = []
-        from openzim_mcp.content_processor import resolve_heading_id
-
-        for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
-            if isinstance(heading, Tag):
-                level = int(heading.name[1])
-                text = heading.get_text().strip()
-                anchor_id, id_source = resolve_heading_id(heading)
-
-                if text:  # Skip empty headings
-                    headings.append(
-                        {
-                            "level": level,
-                            "text": text,
-                            "id": anchor_id,
-                            "id_source": id_source,
-                            "children": [],
-                        }
-                    )
-
-        if not headings:
-            result["message"] = "No headings found in article"
-            return result
-
-        result["heading_count"] = len(headings)
-        result["max_depth"] = max(h["level"] for h in headings)
-
-        # Build hierarchical tree
-        result["toc"] = self._headings_to_tree(headings)
-
-        return result
-
-    def _headings_to_tree(self, headings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Convert flat list of headings to hierarchical tree structure.
-
-        Uses a stack-based approach to properly nest headings based on level.
-        """
-        if not headings:
-            return []
-
-        # Create root nodes list
-        root: List[Dict[str, Any]] = []
-        # Stack to track parent nodes at each level
-        stack: List[tuple[int, List[Dict[str, Any]]]] = [(0, root)]
-
-        for heading in headings:
-            level = heading["level"]
-            node = {
-                "level": level,
-                "text": heading["text"],
-                "id": heading["id"],
-                "id_source": heading.get("id_source", "none"),
-                "children": [],
-            }
-
-            # Pop stack until we find a parent with lower level
-            while stack and stack[-1][0] >= level:
-                stack.pop()
-
-            # Add to appropriate parent
-            if stack:
-                parent_list = stack[-1][1]
-                parent_list.append(node)
-            else:
-                root.append(node)
-
-            # Push this node's children list onto stack
-            stack.append((level, node["children"]))
-
-        return root
 
     def get_related_articles_data(
         self,

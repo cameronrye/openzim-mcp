@@ -21,6 +21,7 @@ __all__ = [
     "OpenZimMcpConfig",
     "RateLimitConfig",
     "SearchConfig",
+    "SynthesizeConfig",
 ]
 
 
@@ -77,6 +78,26 @@ class SearchConfig(BaseModel):
     )
 
 
+class SynthesizeConfig(BaseModel):
+    """Phase C: tunables for `zim_query(synthesize=True)`.
+
+    All knobs are advisory — the synthesize pipeline obeys these as
+    soft budgets (e.g., output_char_budget truncates the *last* passage
+    rather than refusing to include it).
+    """
+
+    top_n: int = Field(default=5, ge=1, le=50, description="Final passages returned.")
+    per_archive_k: int = Field(
+        default=10, ge=1, le=100, description="Top-K from each archive before fusion."
+    )
+    output_char_budget: int = Field(
+        default=4800,
+        ge=500,
+        le=20000,
+        description="Soft cap on answer_markdown chars (~1200 tokens).",
+    )
+
+
 class LoggingConfig(BaseModel):
     """Logging configuration."""
 
@@ -106,6 +127,7 @@ class OpenZimMcpConfig(BaseSettings):
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     meta: MetaConfig = Field(default_factory=MetaConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    synthesize: SynthesizeConfig = Field(default_factory=SynthesizeConfig)
 
     # Server settings
     server_name: str = "openzim-mcp"

@@ -557,8 +557,22 @@ class TestStructureDataMethodsMeta:
         self, zim_ops, temp_dir, monkeypatch
     ):
         """Fresh path carries _meta."""
+        from openzim_mcp.meta import attach_meta
+
         zim_file = self._zim_file(temp_dir)
-        fake = {"title": "Foo", "path": "C/Foo", "headings": [], "word_count": 0}
+        # _extract_article_structure_data now calls attach_meta internally
+        fake = attach_meta(
+            {
+                "title": "Foo",
+                "path": "C/Foo",
+                "content_type": "text/html",
+                "headings": [],
+                "sections": [],
+                "metadata": {},
+                "word_count": 0,
+                "character_count": 0,
+            }
+        )
         monkeypatch.setattr(
             zim_ops, "_extract_article_structure_data", lambda *a, **kw: fake
         )
@@ -571,16 +585,35 @@ class TestStructureDataMethodsMeta:
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
 
-    def test_get_article_structure_data_cached_backfills_meta(self, zim_ops, temp_dir):
-        """Cached entry without _meta gets backfilled on read."""
-        zim_file = self._zim_file(temp_dir)
-        validated = zim_ops.path_validator.validate_path(str(zim_file))
-        validated = zim_ops.path_validator.validate_zim_file(validated)
-        cache_key = f"structure_data:{validated}:C/Foo"
-        old = {"title": "Foo", "path": "C/Foo", "headings": []}
-        zim_ops.cache.set(cache_key, old)
+    def test_get_article_structure_data_cached_backfills_meta(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Bundle cache hit path carries _meta (bundle cache is the only cache)."""
+        from openzim_mcp.meta import attach_meta
 
-        result = zim_ops.get_article_structure_data(str(zim_file), "C/Foo")
+        zim_file = self._zim_file(temp_dir)
+        # _extract_article_structure_data now calls attach_meta internally
+        fake = attach_meta(
+            {
+                "title": "Foo",
+                "path": "C/Foo",
+                "content_type": "text/html",
+                "headings": [],
+                "sections": [],
+                "metadata": {},
+                "word_count": 0,
+                "character_count": 0,
+            }
+        )
+        monkeypatch.setattr(
+            zim_ops, "_extract_article_structure_data", lambda *a, **kw: fake
+        )
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_article_structure_data(str(zim_file), "C/Foo")
+
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
 
@@ -588,26 +621,28 @@ class TestStructureDataMethodsMeta:
         self, zim_ops, temp_dir, monkeypatch
     ):
         """extract_article_links_data result carries _meta."""
-        zim_file = self._zim_file(temp_dir)
-
-        fake_extraction = {
-            "title": "Foo",
-            "path": "C/Foo",
-            "content_type": "text/html",
-            "internal": [],
-            "external": [],
-            "media": [],
-            "message": None,
-        }
-        monkeypatch.setattr(
-            zim_ops,
-            "_get_or_load_link_extraction",
-            lambda *a, **kw: fake_extraction,
-        )
-
         from unittest.mock import MagicMock, patch
 
-        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+        from openzim_mcp.tool_schemas import EntryBundle
+
+        zim_file = self._zim_file(temp_dir)
+
+        fake_bundle: EntryBundle = {  # type: ignore[typeddict-item]
+            "entry_path": "C/Foo",
+            "title": "Foo",
+            "content_type": "text/html",
+            "word_count": 0,
+            "char_count": 0,
+            "rendered_markdown": "",
+            "sections": [],
+            "links": {"internal": [], "external": [], "media": []},
+            "infobox": None,
+        }
+
+        with (
+            patch("openzim_mcp.bundle.get_or_build_bundle", return_value=fake_bundle),
+            patch("openzim_mcp.zim_operations.zim_archive") as mock_archive,
+        ):
             mock_archive.return_value.__enter__.return_value = MagicMock()
             result = zim_ops.extract_article_links_data(str(zim_file), "C/Foo")
 
@@ -627,9 +662,21 @@ class TestStructureDataMethodsMeta:
     def test_get_table_of_contents_data_fresh_attaches_meta(
         self, zim_ops, temp_dir, monkeypatch
     ):
-        """get_table_of_contents_data fresh path carries _meta."""
+        """get_table_of_contents_data result carries _meta."""
+        from openzim_mcp.meta import attach_meta
+
         zim_file = self._zim_file(temp_dir)
-        fake = {"title": "Foo", "path": "C/Foo", "toc": [], "heading_count": 0}
+        # _extract_table_of_contents_data now calls attach_meta internally
+        fake = attach_meta(
+            {
+                "title": "Foo",
+                "path": "C/Foo",
+                "toc": [],
+                "heading_count": 0,
+                "max_depth": 0,
+                "content_type": "text/html",
+            }
+        )
         monkeypatch.setattr(
             zim_ops, "_extract_table_of_contents_data", lambda *a, **kw: fake
         )
@@ -642,16 +689,35 @@ class TestStructureDataMethodsMeta:
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
 
-    def test_get_table_of_contents_data_cached_backfills_meta(self, zim_ops, temp_dir):
-        """Cached TOC entry without _meta gets backfilled on read."""
-        zim_file = self._zim_file(temp_dir)
-        validated = zim_ops.path_validator.validate_path(str(zim_file))
-        validated = zim_ops.path_validator.validate_zim_file(validated)
-        cache_key = f"toc_data:{validated}:C/Foo"
-        old = {"title": "Foo", "path": "C/Foo", "toc": []}
-        zim_ops.cache.set(cache_key, old)
+    def test_get_table_of_contents_data_bundle_caches_result(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Bundle-level caching: second call re-uses the cached bundle."""
+        from openzim_mcp.meta import attach_meta
 
-        result = zim_ops.get_table_of_contents_data(str(zim_file), "C/Foo")
+        zim_file = self._zim_file(temp_dir)
+
+        def counting_extract(*a, **kw):
+            return attach_meta(
+                {
+                    "title": "Foo",
+                    "path": "C/Foo",
+                    "toc": [],
+                    "heading_count": 0,
+                    "max_depth": 0,
+                    "content_type": "text/html",
+                }
+            )
+
+        monkeypatch.setattr(
+            zim_ops, "_extract_table_of_contents_data", counting_extract
+        )
+        from unittest.mock import MagicMock, patch
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            mock_archive.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_table_of_contents_data(str(zim_file), "C/Foo")
+
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
 

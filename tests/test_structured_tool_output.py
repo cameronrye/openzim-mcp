@@ -17,8 +17,17 @@ tool is migrated its assertion will fail, which is the desired signal.
 
 import pytest
 
-from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.cache import OpenZimMcpCache
+from openzim_mcp.config import (
+    CacheConfig,
+    ContentConfig,
+    LoggingConfig,
+    OpenZimMcpConfig,
+)
+from openzim_mcp.content_processor import ContentProcessor
+from openzim_mcp.security import PathValidator
 from openzim_mcp.server import OpenZimMcpServer
+from openzim_mcp.zim_operations import ZimOperations
 
 
 @pytest.fixture
@@ -737,3 +746,50 @@ class TestStructuredOutput:
         payload = structured["result"] if "result" in structured else structured
         assert "configuration" in payload
         assert "diagnostics" in payload
+
+
+def test_phase_c_bundle_shared_across_four_tools(v2_phase_a_zim) -> None:
+    """All four collapsed tools share one EntryBundle per entry.
+
+    First call to any tool builds the bundle; the other three calls hit
+    the bundle cache. Load-bearing perf assertion for Phase C #11 -- if
+    it ever fails, someone re-introduced per-tool parsing.
+    """
+    zim_dir = str(v2_phase_a_zim.parent)
+    config = OpenZimMcpConfig(
+        allowed_directories=[zim_dir],
+        tool_mode="advanced",
+        cache=CacheConfig(enabled=True, max_size=50, ttl_seconds=300),
+        content=ContentConfig(max_content_length=10000, snippet_length=200),
+        logging=LoggingConfig(level="WARNING"),
+    )
+    path_validator = PathValidator(config.allowed_directories)
+    cache = OpenZimMcpCache(config.cache, enable_background_cleanup=False)
+    content_processor = ContentProcessor(snippet_length=config.content.snippet_length)
+    ops = ZimOperations(config, path_validator, cache, content_processor)
+
+    zim_path = str(v2_phase_a_zim)
+    entry = "A/Einstein"
+
+    # Call all four collapsed tools on the same entry.
+    ops.get_entry_summary_data(zim_path, entry, max_words=200)
+    ops.get_table_of_contents_data(zim_path, entry)
+    ops.get_article_structure_data(zim_path, entry)
+    ops.extract_article_links_data(zim_path, entry, kind="internal", limit=50)
+
+    # Exactly one bundle key must exist in cache for this entry.
+    bundle_keys = [
+        k for k in cache._cache.keys() if k.startswith("bundle:v2c:") and entry in k
+    ]
+    assert (
+        len(bundle_keys) == 1
+    ), f"Expected 1 shared bundle key, found {len(bundle_keys)}: {bundle_keys}"
+
+    # Legacy per-tool prefixes must be absent -- only the shared bundle is used.
+    legacy_prefixes = ("summary_data:", "toc_data:", "structure_data:", "links_full:")
+    for k in cache._cache.keys():
+        for prefix in legacy_prefixes:
+            assert not k.startswith(prefix), (
+                f"Legacy cache prefix {prefix!r} still in use; "
+                f"expected only bundle:v2c:"
+            )

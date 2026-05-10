@@ -391,13 +391,22 @@ class TestGetEntrySummaryDataMeta:
         assert result["_meta"]["tokens_est"] > 0
         assert result["_meta"]["truncated"] is False
 
-    def test_get_entry_summary_data_attaches_meta_cached(self, zim_ops, temp_dir):
-        """Cached result path should also carry _meta."""
-        zim_file = self._zim_file(temp_dir)
-        validated = zim_ops.path_validator.validate_path(str(zim_file))
-        validated = zim_ops.path_validator.validate_zim_file(validated)
+    def test_get_entry_summary_data_attaches_meta_cached(
+        self, zim_ops, temp_dir, monkeypatch
+    ):
+        """Bundle-cached result path should carry _meta.
 
-        old_summary = {
+        The legacy ``summary_data:`` cache key is no longer used; the bundle
+        (``bundle:v2c:``) is the cache for HTML entries.  This test verifies
+        that when ``_extract_entry_summary_data`` returns a pre-built dict
+        (simulating a bundle cache hit), ``get_entry_summary_data`` still
+        attaches ``_meta``.
+        """
+        from unittest.mock import MagicMock, patch
+
+        zim_file = self._zim_file(temp_dir)
+
+        cached_summary = {
             "title": "Cached Article",
             "path": "A/Cached",
             "content_type": "text/plain",
@@ -405,11 +414,18 @@ class TestGetEntrySummaryDataMeta:
             "word_count": 2,
             "is_truncated": False,
         }
-        cache_key = f"summary_data:{validated}:A/Cached:200:compact=False"
-        zim_ops.cache.set(cache_key, old_summary)
 
-        result = zim_ops.get_entry_summary_data(str(zim_file), "A/Cached")
-        assert "_meta" in result, "cached path must attach _meta"
+        monkeypatch.setattr(
+            zim_ops,
+            "_extract_entry_summary_data",
+            lambda *a, **kw: cached_summary,
+        )
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_ctx:
+            mock_ctx.return_value.__enter__.return_value = MagicMock()
+            result = zim_ops.get_entry_summary_data(str(zim_file), "A/Cached")
+
+        assert "_meta" in result, "bundle-cached path must attach _meta"
         assert result["_meta"]["tokens_est"] > 0
 
     def test_get_entry_summary_data_meta_truncated_flag(

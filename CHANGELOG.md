@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a3] — 2026-05-10 (alpha pre-release)
+
+v2 Phase C, part 1: EntryBundle infrastructure and the four-tool collapse.
+**One wire-format break** (TOC heading field rename). Phase C's other two
+items — #7 `get_section` and #10 `synthesize` mode — are deferred to a
+later alpha; their TypedDicts ship in this release as forward-declared
+contract surface.
+
+### #11 EntryBundle (internal — collapses four tools)
+
+First touch of an entry runs ONE HTML parse → produces a single
+`EntryBundle` value cached at `bundle:v2c:{validated_path}:{entry_path}`.
+The four content-shape tools `get_entry_summary`, `get_table_of_contents`,
+`get_article_structure`, and `extract_article_links` collapse from
+independent HTML re-parsers to thin slicers over the bundle. First touch
+parses HTML once; subsequent calls (across all four tools, in any order)
+hit the bundle cache.
+
+Removed legacy per-tool cache prefixes: `summary_data:`, `toc_data:`,
+`structure_data:`, `links_full:v2b:`. Wire formats unchanged for
+`get_entry_summary`, `get_article_structure`, `extract_article_links`.
+
+### Breaking — `get_table_of_contents`
+
+| Field | Before | After |
+|---|---|---|
+| TOC heading identifier | `heading["id"]` | `heading["section_id"]` |
+| TOC list element type | `dict[str, Any]` | `TocHeading` TypedDict |
+
+The value is unchanged (still `resolve_heading_id()`'s output with slug
+fallback). The new field name is what `get_section(section_id=...)` will
+consume in the next alpha. The old `id_source` field is dropped
+(debugging-only, not a contract surface).
+
+### Forward-declared TypedDicts (no behavior yet)
+
+The following TypedDicts ship in `openzim_mcp/tool_schemas.py` as part of
+this release so a4's implementation tasks don't have to re-litigate the
+contract surface. They aren't returned by any tool yet.
+
+- `GetSectionResponse` — for #7 `get_section` (a4)
+- `SynthesizeResponse`, `Citation`, `SynthesizePassage` — for #10
+  synthesize mode on `zim_query` (a4)
+- `EntryBundle`, `SectionMeta`, `InfoboxField`, `InfoboxData`,
+  `LinkBuckets` — bundle internals (already used by the four-tool collapse)
+- `TocHeading` — already used (wire format)
+
+### Configuration
+
+`OpenZimMcpConfig.synthesize` block added with defaults `top_n=5`,
+`per_archive_k=10`, `output_char_budget=4800`. Inert until `synthesize`
+mode ships.
+
+### Other
+
+- New module: `openzim_mcp/bundle.py` — `extract_entry_bundle`,
+  `get_or_build_bundle`.
+- New tests: `tests/test_bundle.py` (15 tests covering bundle
+  determinism, parent/child range nesting, eviction-rebuild identity).
+- Cross-tool shared-bundle assertion in `tests/test_structured_tool_output.py`
+  guards the "one parse per entry across all four tools" invariant.
+- Housekeeping: removed stale `[[tool.mypy.overrides]] module = ['libzim']`
+  from `pyproject.toml`. Added GitHub labels `v2`, `v2-phase-a/b/c`;
+  applied `v2`/`v2-phase-b` retroactively to PR #111.
+
+### Deferred to a later alpha
+
+- **#7 `get_section`** — section-level retrieval by `section_id`. The
+  `GetSectionResponse` TypedDict ships now; the data layer and tool
+  registration land in a4.
+- **#10 `synthesize`** — `zim_query(synthesize=True)` mode. The
+  `SynthesizeResponse`/`Citation`/`SynthesizePassage` TypedDicts and
+  `SynthesizeConfig` ship now; the pipeline (`openzim_mcp/synthesize.py`,
+  per-archive search, RRF fusion, passage extraction, section attribution,
+  citation rendering, budget enforcement) lands in a4.
+
 ## [2.0.0a2] — 2026-05-09 (alpha pre-release)
 
 v2 Phase B: response-contract migration. **Wire-format break** for every
