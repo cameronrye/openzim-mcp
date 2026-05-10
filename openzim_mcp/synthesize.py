@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import SynthesizeConfig
     from openzim_mcp.content_processor import ContentProcessor
 
-from openzim_mcp.tool_schemas import SynthesizeResponse
+from openzim_mcp.tool_schemas import SynthesizePassage, SynthesizeResponse
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,44 @@ def _per_archive_search(
     Hit shape: {"path": str, "snippet": str, "score": float}.
     """
     return cast(list[dict], search_handler.search_top_k(archive, query, k=k))
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 4: passage extraction
+# ---------------------------------------------------------------------------
+
+
+def _extract_passages(
+    hits: list[dict],
+    *,
+    archive_name: str,
+    content_processor: "ContentProcessor",
+) -> list[SynthesizePassage]:
+    """Convert hit dicts into SynthesizePassage entries.
+
+    Each hit's snippet (potentially HTML from libzim.getSnippet) is
+    rendered to markdown. cite_id is the entry-level form
+    f"{archive_name}/{path}" — the "#section_id" suffix is added by
+    Stage 5 (_attribute_sections) once the bundle is consulted.
+    """
+    passages: list[SynthesizePassage] = []
+    for rank, hit in enumerate(hits, start=1):
+        snippet = hit.get("snippet") or ""
+        text = content_processor.html_to_plain_text(snippet) if snippet else ""
+        text = text.strip()
+        cite_id = f"{archive_name}/{hit['path']}"
+        passages.append(
+            cast(
+                SynthesizePassage,
+                {
+                    "cite_id": cite_id,
+                    "text_markdown": text,
+                    "rank": rank,
+                    "score": float(hit.get("score", 0.0)),
+                },
+            )
+        )
+    return passages
 
 
 # ---------------------------------------------------------------------------

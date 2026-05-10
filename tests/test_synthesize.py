@@ -76,6 +76,47 @@ def test_per_archive_search_single_archive() -> None:
     assert results[0]["path"] == "A/Berlin"
 
 
+# ---------------------------------------------------------------------------
+# Task 18: passage extraction stage
+# ---------------------------------------------------------------------------
+
+
+def test_extract_passages_renders_markdown_from_snippets() -> None:
+    """libzim snippets may come back as HTML; passages contain markdown."""
+    from openzim_mcp.synthesize import _extract_passages
+
+    hits = [
+        {"path": "A/Berlin", "snippet": "<p>Berlin is the capital.</p>", "score": 0.9},
+        {"path": "A/Munich", "snippet": "<p>Munich is in Bavaria.</p>", "score": 0.7},
+    ]
+    cp = MagicMock()
+    cp.html_to_plain_text.side_effect = lambda html: html.replace("<p>", "").replace(
+        "</p>", ""
+    )
+
+    passages = _extract_passages(
+        hits, archive_name="wikipedia_en_simple", content_processor=cp
+    )
+    assert len(passages) == 2
+    assert passages[0]["rank"] == 1
+    assert passages[0]["text_markdown"] == "Berlin is the capital."
+    assert passages[0]["cite_id"] == "wikipedia_en_simple/A/Berlin"  # no #section yet
+    assert passages[0]["score"] == 0.9
+
+
+def test_extract_passages_preserves_rank_order() -> None:
+    from openzim_mcp.synthesize import _extract_passages
+
+    hits = [
+        {"path": f"A/Doc{i}", "snippet": f"<p>doc {i}</p>", "score": 1.0 - 0.1 * i}
+        for i in range(5)
+    ]
+    cp = MagicMock()
+    cp.html_to_plain_text.side_effect = lambda html: html
+    passages = _extract_passages(hits, archive_name="test", content_processor=cp)
+    assert [p["rank"] for p in passages] == [1, 2, 3, 4, 5]
+
+
 def test_synthesize_query_signature_exists() -> None:
     """synthesize_query is callable; signature stable from this task on."""
     import inspect
