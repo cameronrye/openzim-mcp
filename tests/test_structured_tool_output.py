@@ -15,6 +15,8 @@ Tests are added per-tool as each migration completes. Until a given
 tool is migrated its assertion will fail, which is the desired signal.
 """
 
+from pathlib import Path
+
 import pytest
 
 from openzim_mcp.cache import OpenZimMcpCache
@@ -34,6 +36,25 @@ from openzim_mcp.zim_operations import ZimOperations
 def server(test_config_with_zim_data: OpenZimMcpConfig) -> OpenZimMcpServer:
     """Server bound to the ZIM testing-suite dir so tools have real archives to call."""
     return OpenZimMcpServer(test_config_with_zim_data)
+
+
+@pytest.fixture
+def phase_c_server(v2_phase_c_zim: Path, temp_dir: Path) -> OpenZimMcpServer:
+    """Server bound to the v2 Phase C heading-rich fixture dir.
+
+    get_section integration tests need an archive with known h2 sections —
+    A/Berlin has 'geography', 'climate', 'history'. basic_test_zim_files'
+    nons/withns small.zim lack heading-rich articles, and nons/small.zim
+    doesn't carry A/-prefixed paths at all.
+    """
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(temp_dir), str(v2_phase_c_zim.parent)],
+        tool_mode="advanced",
+        cache=CacheConfig(enabled=True, max_size=10, ttl_seconds=60),
+        content=ContentConfig(max_content_length=1000, snippet_length=100),
+        logging=LoggingConfig(level="DEBUG"),
+    )
+    return OpenZimMcpServer(cfg)
 
 
 class TestStructuredOutput:
@@ -749,20 +770,21 @@ class TestStructuredOutput:
 
     @pytest.mark.asyncio
     async def test_get_section_returns_structured_content(
-        self, server: OpenZimMcpServer, basic_test_zim_files
+        self, phase_c_server: OpenZimMcpServer, v2_phase_c_zim: Path
     ) -> None:
-        """get_section must emit a GetSectionResponse dict for a valid section_id."""
-        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
-            "withns"
-        )
-        if zim_path is None:
-            pytest.skip("ZIM testing-suite small.zim not available")
-        result = await server.mcp._tool_manager.call_tool(
+        """get_section must emit a GetSectionResponse dict for a valid section_id.
+
+        Uses the Phase C heading-rich fixture (A/Berlin#geography) — the
+        zim-testing-suite small.zim variants don't carry a heading-rich
+        article suitable for slicing, and nons/small.zim has no A/* paths
+        at all (its entries are favicon.png + main.html).
+        """
+        result = await phase_c_server.mcp._tool_manager.call_tool(
             "get_section",
             {
-                "zim_file_path": str(zim_path),
-                "entry_path": "A/Main_Page",
-                "section_id": "introduction",
+                "zim_file_path": str(v2_phase_c_zim),
+                "entry_path": "A/Berlin",
+                "section_id": "geography",
             },
             convert_result=True,
         )
@@ -780,10 +802,8 @@ class TestStructuredOutput:
             f"{payload.get('operation')!r} — {payload.get('message')!r}"
         )
         # Exact value assertions — not just presence.
-        assert payload["section_id"] == "introduction"
-        assert payload["section_title"] and isinstance(
-            payload["section_title"], str
-        ), f"section_title should be a non-empty string, got: {payload.get('section_title')!r}"
+        assert payload["section_id"] == "geography"
+        assert payload["section_title"] == "Geography"
         assert "_meta" in payload
 
 
