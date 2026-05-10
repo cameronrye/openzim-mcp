@@ -12,14 +12,20 @@ re-exported here for backward-compatibility with existing imports.
 import logging
 import re
 from collections import Counter
+from contextlib import ExitStack
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+import openzim_mcp.zim_operations as _zim_ops_mod
 
 from . import compact_renderers
 from .exceptions import RegexTimeoutError
 from .intent_parser import IntentParser, safe_regex_sub
 from .meta import build_meta, format_footer
+from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
+from .tool_schemas import SynthesizeResponse
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
@@ -129,7 +135,7 @@ class SimpleToolsHandler:
         query: str,
         zim_file_path: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
-    ) -> str:
+    ) -> Union[str, SynthesizeResponse, ToolErrorPayload]:
         """Handle a natural language query about ZIM file content.
 
         This is the main intelligent tool that routes queries to appropriate
@@ -141,8 +147,12 @@ class SimpleToolsHandler:
             options: Optional dict with advanced options (limit, offset, etc.)
 
         Returns:
-            Response string with results
+            Markdown string (synthesize=False) or SynthesizeResponse
+            (synthesize=True) or ToolErrorPayload on error.
         """
+        options = options or {}
+        if options.get("synthesize"):
+            return self._handle_synthesize_query(query, zim_file_path, options)
         try:
             # Reject empty / whitespace-only queries upfront. The router
             # would otherwise classify the input as a low-confidence search
@@ -174,7 +184,6 @@ class SimpleToolsHandler:
             if self._is_meta_only_query(query):
                 self._track("meta_only_guidance")
                 return self._meta_query_guidance()
-            options = options or {}
             intent, params, confidence = self.intent_parser.parse_intent(query)
             logger.info(
                 f"Parsed intent: {intent}, params: {params}, "
@@ -1542,6 +1551,91 @@ class SimpleToolsHandler:
         "get_zim_entries": _handle_get_zim_entries,
         "get_section": _handle_get_section,
     }
+
+    def _handle_synthesize_query(
+        self,
+        query: str,
+        zim_file_path: Optional[str],
+        options: Dict[str, Any],
+    ) -> Union[SynthesizeResponse, ToolErrorPayload]:
+        """Phase C: dispatch query to the synthesize pipeline.
+
+        Opens archives using ExitStack (clean lifecycle, no leaks), calls
+        synthesize_query, and returns a SynthesizeResponse or ToolErrorPayload.
+
+        Archive resolution:
+          - If zim_file_path is provided, validate and open that single archive.
+          - Otherwise, discover all ZIM files via list_zim_files_data() and
+            open all of them (multi-archive RRF fusion path).
+
+        search_handler is self.zim_operations — ZimOperations has search_top_k
+        directly, satisfying the synthesize pipeline's duck-typed interface.
+        """
+        from openzim_mcp.synthesize import synthesize_query
+
+        # Resolve the set of archive paths to open.
+        archives_to_open: list[Path] = []
+        if zim_file_path:
+            try:
+                validated = self.zim_operations.path_validator.validate_path(
+                    zim_file_path
+                )
+                validated = self.zim_operations.path_validator.validate_zim_file(
+                    validated
+                )
+                archives_to_open = [validated]
+            except Exception as e:
+                return tool_error(
+                    operation="invalid_path",
+                    message=f"Invalid ZIM file path: {e}",
+                )
+        else:
+            try:
+                file_entries = self.zim_operations.list_zim_files_data()
+                archives_to_open = [
+                    Path(str(entry["path"]))
+                    for entry in file_entries
+                    if entry.get("path")
+                ]
+            except Exception as e:
+                logger.warning("list_zim_files_data failed in synthesize: %s", e)
+                archives_to_open = []
+
+        if not archives_to_open:
+            return tool_error(
+                operation="no_archives_available",
+                message=(
+                    "No ZIM archives are available. "
+                    "Specify a zim_file_path or configure allowed_directories."
+                ),
+            )
+
+        with ExitStack() as stack:
+            archives: list = []
+            for vp in archives_to_open:
+                try:
+                    archive = stack.enter_context(_zim_ops_mod.zim_archive(vp))
+                    archives.append((archive, vp))
+                except Exception as e:
+                    logger.warning(
+                        "Could not open archive %s for synthesize: %s", vp, e
+                    )
+                    continue
+
+            if not archives:
+                return tool_error(
+                    operation="no_archives_available",
+                    message="No ZIM archives could be opened for synthesize.",
+                )
+
+            return synthesize_query(
+                query,
+                archives=archives,
+                search_handler=self.zim_operations,
+                cache=self.zim_operations.cache,
+                content_processor=self.zim_operations.content_processor,
+                config=self.zim_operations.config.synthesize,
+            )
 
     def _resolve_zim_path(self, candidate: str) -> Optional[str]:
         """Try to resolve ``candidate`` to a real ZIM file's full path.

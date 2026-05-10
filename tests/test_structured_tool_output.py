@@ -787,6 +787,101 @@ class TestStructuredOutput:
         assert "_meta" in payload
 
 
+@pytest.fixture
+def simple_server(test_config_with_zim_data: OpenZimMcpConfig) -> OpenZimMcpServer:
+    """Simple-mode server bound to the ZIM testing-suite dir.
+
+    zim_query is only registered in simple mode, so synthesize integration
+    tests need a separate server fixture with tool_mode='simple'.
+    """
+    import copy
+
+    cfg = copy.copy(test_config_with_zim_data)
+    # Pydantic models are immutable; rebuild with tool_mode='simple'.
+    cfg = OpenZimMcpConfig(
+        allowed_directories=test_config_with_zim_data.allowed_directories,
+        tool_mode="simple",
+        cache=test_config_with_zim_data.cache,
+        content=test_config_with_zim_data.content,
+        logging=test_config_with_zim_data.logging,
+    )
+    return OpenZimMcpServer(cfg)
+
+
+class TestZimQuerySynthesize:
+    """Integration tests for zim_query synthesize=True wire format."""
+
+    @pytest.mark.asyncio
+    async def test_zim_query_synthesize_returns_structured_response(
+        self, simple_server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """synthesize=True returns SynthesizeResponse via structuredContent."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+
+        result = await simple_server.mcp._tool_manager.call_tool(
+            "zim_query",
+            {
+                "query": "berlin geography",
+                "zim_file_path": str(zim_path),
+                "synthesize": True,
+            },
+            convert_result=True,
+        )
+
+        # Union return type triggers FastMCP's structured-content path.
+        assert isinstance(result, tuple), (
+            "zim_query with synthesize=True must return a tuple — "
+            "the Union return annotation has not landed."
+        )
+        _, structured = result
+        assert isinstance(structured, dict)
+        # FastMCP wraps Union returns in a {"result": ...} envelope.
+        payload = structured.get("result", structured)
+        assert isinstance(payload, dict)
+        # SynthesizeResponse or ToolErrorPayload — accept either for wire-format
+        # correctness; a ToolErrorPayload (e.g. no FT index) is still structured.
+        if payload.get("error") is True:
+            assert "operation" in payload
+        else:
+            assert "answer_markdown" in payload
+            assert "passages" in payload
+            assert "citations" in payload
+            assert "archives_searched" in payload
+            assert payload.get("fallback_used") in ("xapian_score", "rrf_fusion")
+
+    @pytest.mark.asyncio
+    async def test_zim_query_no_synthesize_returns_string(
+        self, simple_server: OpenZimMcpServer
+    ) -> None:
+        """synthesize=False (default) keeps returning the markdown string path."""
+        result = await simple_server.mcp._tool_manager.call_tool(
+            "zim_query",
+            {"query": "list available ZIM files"},
+            convert_result=True,
+        )
+        # A plain str return does NOT produce a tuple — FastMCP returns the
+        # bare list of TextContent blocks. This verifies the legacy path is intact.
+        # When the Union return annotation is active, FastMCP may wrap even
+        # strings — accept both: a tuple whose text element is non-empty, or
+        # a list with at least one text item.
+        if isinstance(result, tuple):
+            _, structured = result
+            # structured may be None or a dict wrapping the string
+            # The unstructured part must contain text.
+            unstructured, _ = result
+            assert (
+                unstructured
+            ), "zim_query markdown path should produce non-empty content"
+        else:
+            # Legacy: bare list of TextContent
+            assert result, "zim_query markdown path should produce non-empty content"
+            assert result[0].text, "first TextContent block should be non-empty"
+
+
 def test_phase_c_bundle_shared_across_four_tools(v2_phase_a_zim) -> None:
     """All four collapsed tools share one EntryBundle per entry.
 
