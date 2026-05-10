@@ -111,12 +111,12 @@ def test_bundle_links_categorized(cp: ContentProcessor) -> None:
     archive = _make_archive_with_entry(SAMPLE_HTML)
     bundle = extract_entry_bundle(archive, "A/Berlin", content_processor=cp)
     links = bundle["links"]
-    # Spree is internal (relative href)
-    assert any(li["href"] == "A/Spree_River" for li in links["internal"])
+    # Spree is internal (relative url)
+    assert any(li["url"] == "A/Spree_River" for li in links["internal"])
     # External link
-    assert any("wikipedia.org" in li["href"] for li in links["external"])
+    assert any("wikipedia.org" in li["url"] for li in links["external"])
     # Media link
-    assert any(li["href"] == "berlin.jpg" for li in links["media"])
+    assert any(li["url"] == "berlin.jpg" for li in links["media"])
 
 
 def test_bundle_is_deterministic(cp: ContentProcessor) -> None:

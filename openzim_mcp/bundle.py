@@ -75,27 +75,22 @@ def _extract_infobox(
 
 
 def _build_link_buckets(links_dict: Dict[str, Any]) -> LinkBuckets:
-    """Convert extract_html_links() output into LinkBuckets with 'href' keys.
+    """Convert extract_html_links() output into LinkBuckets.
 
     extract_html_links returns {'internal_links': [...], 'external_links': [...],
-    'media_links': [...]} where each item has 'url'. We remap 'url' → 'href' so
-    callers can use li['href'] uniformly across all buckets.
+    'media_links': [...]} where each item already matches the LinkItem
+    TypedDict (carrying 'url', 'type', and category-specific NotRequired
+    fields). The bundle exposes these as-is so downstream consumers
+    (extract_article_links, etc.) can pass bundle["links"][kind] straight
+    into LinksResponse.results without re-mapping.
     """
-
-    def _remap(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        result = []
-        for item in items:
-            remapped = dict(item)
-            if "url" in remapped:
-                remapped["href"] = remapped.pop("url")
-            result.append(remapped)
-        return result
-
-    internal = _remap(links_dict.get("internal_links", []))
-    external = _remap(links_dict.get("external_links", []))
-    media = _remap(links_dict.get("media_links", []))
     return cast(
-        "LinkBuckets", {"internal": internal, "external": external, "media": media}
+        "LinkBuckets",
+        {
+            "internal": list(links_dict.get("internal_links", [])),
+            "external": list(links_dict.get("external_links", [])),
+            "media": list(links_dict.get("media_links", [])),
+        },
     )
 
 
