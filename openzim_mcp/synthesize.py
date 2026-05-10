@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import SynthesizeConfig
     from openzim_mcp.content_processor import ContentProcessor
 
+from openzim_mcp.bundle import get_or_build_bundle
 from openzim_mcp.tool_schemas import Citation, SynthesizePassage, SynthesizeResponse
 
 logger = logging.getLogger(__name__)
@@ -276,7 +277,7 @@ def _build_citations(
 
 
 # ---------------------------------------------------------------------------
-# synthesize_query — main entry point (skeleton; stages added in Tasks 18-21)
+# synthesize_query — main entry point
 # ---------------------------------------------------------------------------
 
 
@@ -289,14 +290,16 @@ def synthesize_query(
     content_processor: "ContentProcessor",
     config: "SynthesizeConfig",
 ) -> SynthesizeResponse:
-    """Run the synthesize pipeline. Stages added incrementally in Tasks 18-21."""
+    """Run the synthesize pipeline end-to-end."""
     # Stage 1: per-archive search
-    per_archive_results: list[list[dict]] = []
+    per_archive_hits: list[list[dict]] = []
     archives_searched: list[str] = []
+    archive_by_name: dict[str, tuple["Archive", "Path"]] = {}
     for archive, validated_path in archives:
         archive_name = validated_path.stem
         archives_searched.append(archive_name)
-        per_archive_results.append(
+        archive_by_name[archive_name] = (archive, validated_path)
+        per_archive_hits.append(
             _per_archive_search(
                 archive,
                 search_handler=search_handler,
@@ -305,19 +308,127 @@ def synthesize_query(
             )
         )
 
-    # Subsequent stages added in Tasks 18-21 below this line.
-    # For now, return a minimal SynthesizeResponse so the module imports cleanly.
+    hit_to_archive: dict[tuple[str, str], dict] = {}
+    for archive_name, hits in zip(archives_searched, per_archive_hits):
+        for hit in hits:
+            hit_to_archive[(archive_name, hit["path"])] = hit
+
+    # Stage 2-3: fuse + (identity) rerank
+    is_multi = len(archives) > 1
+    top_hits: list[tuple[str, dict]] = []
+    if is_multi:
+        per_archive_rankings = [
+            [(hit["path"], hit["score"]) for hit in hits] for hits in per_archive_hits
+        ]
+        fused = _rrf_fuse(per_archive_rankings, k=60)[: config.top_n]
+        fallback_used: str = "rrf_fusion"
+        for path, fused_score in fused:
+            for archive_name in archives_searched:
+                if (archive_name, path) in hit_to_archive:
+                    h = dict(hit_to_archive[(archive_name, path)])
+                    h["score"] = fused_score
+                    top_hits.append((archive_name, h))
+                    break
+    else:
+        archive_name = archives_searched[0] if archives_searched else "unknown"
+        top_hits = (
+            [(archive_name, hit) for hit in per_archive_hits[0][: config.top_n]]
+            if per_archive_hits
+            else []
+        )
+        fallback_used = "xapian_score"
+
+    # Zero hits short-circuit
+    if not top_hits:
+        return cast(
+            "SynthesizeResponse",
+            {
+                "query": query,
+                "answer_markdown": "",
+                "passages": [],
+                "citations": [],
+                "archives_searched": archives_searched,
+                "fallback_used": fallback_used,
+                "total_chars": 0,
+                "total_words": 0,
+                "_meta": {"reason": "0_hits"},
+            },
+        )
+
+    # Stage 4: passage extraction
+    all_passages: list[SynthesizePassage] = []
+    all_paths: list[str] = []
+    for archive_name, hit in top_hits:
+        passages = _extract_passages(
+            [hit],
+            archive_name=archive_name,
+            content_processor=content_processor,
+        )
+        all_passages.extend(passages)
+        all_paths.append(hit["path"])
+    for i, p in enumerate(all_passages, start=1):
+        p["rank"] = i
+
+    # Stage 5: section attribution
+    archive_for_path: dict[str, tuple["Archive", "Path"]] = {}
+    for archive_name, hit in top_hits:
+        archive_for_path[hit["path"]] = archive_by_name[archive_name]
+
+    def bundle_lookup(entry_path: str) -> Any:
+        pair = archive_for_path.get(entry_path)
+        if pair is None:
+            return None
+        archive_val, validated_path = pair
+        return get_or_build_bundle(
+            archive_val,
+            entry_path,
+            cache=cache,
+            validated_path=validated_path,
+            content_processor=content_processor,
+        )
+
+    attributed = _attribute_sections(
+        all_passages,
+        bundle_lookup=bundle_lookup,
+        hit_paths=all_paths,
+    )
+
+    # Stage 7: budget enforcement
+    capped = _enforce_budget(attributed, char_budget=config.output_char_budget)
+
+    # Stage 6: render + build citations
+    answer_md = _render_answer(capped)
+
+    archive_titles: dict[str, str] = {}
+    section_titles: dict[tuple[str, str], str] = {}
+    for archive_name, hit in top_hits:
+        try:
+            b = bundle_lookup(hit["path"])
+        except Exception:
+            continue
+        if b is None:
+            continue
+        archive_titles[hit["path"]] = b["title"]
+        for s in b["sections"]:
+            section_titles[(hit["path"], s["id"])] = s["title"]
+
+    citations = _build_citations(
+        capped,
+        archive_titles=archive_titles,
+        section_titles=section_titles,
+    )
+
     return cast(
         "SynthesizeResponse",
         {
             "query": query,
-            "answer_markdown": "",
-            "passages": [],
-            "citations": [],
+            "answer_markdown": answer_md,
+            "passages": capped,
+            "citations": citations,
             "archives_searched": archives_searched,
-            "fallback_used": "xapian_score" if len(archives) == 1 else "rrf_fusion",
-            "total_chars": 0,
-            "total_words": 0,
+            "fallback_used": fallback_used,
+            "total_chars": len(answer_md),
+            "total_words": len(answer_md.split()),
             "_meta": {},
         },
     )

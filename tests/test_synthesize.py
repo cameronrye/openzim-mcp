@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
-from typing import cast
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
+from openzim_mcp.config import SynthesizeConfig
 from openzim_mcp.synthesize import _rrf_fuse
 from openzim_mcp.tool_schemas import SynthesizePassage
+
+
+@pytest.fixture
+def cp() -> Any:
+    """A content_processor mock that passes HTML through unchanged."""
+    from unittest.mock import MagicMock
+
+    mock_cp = MagicMock()
+    mock_cp.html_to_plain_text.side_effect = lambda html: html
+    return mock_cp
 
 
 def test_rrf_fuse_single_ranking_preserves_order() -> None:
@@ -349,3 +361,124 @@ def test_build_citations_dedupes_by_entry() -> None:
     assert berlin_geo["section_id"] == "geography"
     assert berlin_geo["entry_path"] == "A/Berlin"
     assert berlin_geo["archive"] == "wiki"
+
+
+# ---------------------------------------------------------------------------
+# Task 21: end-to-end synthesize_query tests
+# ---------------------------------------------------------------------------
+
+
+def test_synthesize_query_zero_hits_returns_empty_with_reason(
+    cp: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.synthesize import synthesize_query
+
+    archive = MagicMock()
+    archive.basename = "test"
+    cache = MagicMock()
+    config = SynthesizeConfig()
+
+    search_handler = MagicMock()
+    search_handler.search_top_k.return_value = []  # zero hits
+
+    response = synthesize_query(
+        "no results query",
+        archives=[(archive, Path("test.zim"))],
+        search_handler=search_handler,
+        cache=cache,
+        content_processor=cp,
+        config=config,
+    )
+    assert response["passages"] == []
+    assert response["citations"] == []
+    assert response["answer_markdown"] == ""
+    assert response["_meta"].get("reason") == "0_hits"
+
+
+def test_synthesize_query_single_archive_uses_xapian_score_fallback(
+    cp: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.synthesize import synthesize_query
+
+    archive = MagicMock()
+    cache = MagicMock()
+    config = SynthesizeConfig()
+
+    search_handler = MagicMock()
+    search_handler.search_top_k.return_value = [
+        {"path": "A/Berlin", "snippet": "<p>Berlin info</p>", "score": 0.9},
+    ]
+
+    monkey_bundle = {
+        "entry_path": "A/Berlin",
+        "title": "Berlin",
+        "content_type": "text/html",
+        "word_count": 1,
+        "char_count": 100,
+        "rendered_markdown": "Berlin info\n",
+        "sections": [
+            {
+                "id": "berlin",
+                "title": "Berlin",
+                "level": 1,
+                "char_start": 0,
+                "char_end": 12,
+                "parent_id": None,
+            }
+        ],
+        "links": {"internal": [], "external": [], "media": []},
+        "infobox": None,
+    }
+
+    monkeypatch.setattr(
+        "openzim_mcp.synthesize.get_or_build_bundle",
+        lambda archive, path, **kwargs: monkey_bundle,
+    )
+
+    response = synthesize_query(
+        "berlin",
+        archives=[(archive, Path("test.zim"))],
+        search_handler=search_handler,
+        cache=cache,
+        content_processor=cp,
+        config=config,
+    )
+    assert response["fallback_used"] == "xapian_score"
+    assert response["archives_searched"] == ["test"]
+
+
+def test_synthesize_query_multi_archive_uses_rrf_fusion(
+    cp: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.synthesize import synthesize_query
+
+    a1 = MagicMock()
+    a2 = MagicMock()
+    search_handler = MagicMock()
+    search_handler.search_top_k.side_effect = [
+        [{"path": "A/Berlin", "snippet": "", "score": 0.9}],
+        [{"path": "A/Berlin", "snippet": "", "score": 0.5}],  # both archives have it
+    ]
+    cache = MagicMock()
+
+    monkeypatch.setattr(
+        "openzim_mcp.synthesize.get_or_build_bundle",
+        lambda archive, path, **kwargs: None,
+    )
+
+    response = synthesize_query(
+        "berlin",
+        archives=[(a1, Path("wiki1.zim")), (a2, Path("wiki2.zim"))],
+        search_handler=search_handler,
+        cache=cache,
+        content_processor=cp,
+        config=SynthesizeConfig(),
+    )
+    assert response["fallback_used"] == "rrf_fusion"
+    assert sorted(response["archives_searched"]) == ["wiki1", "wiki2"]
