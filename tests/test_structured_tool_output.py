@@ -751,7 +751,7 @@ class TestStructuredOutput:
     async def test_get_section_returns_structured_content(
         self, server: OpenZimMcpServer, basic_test_zim_files
     ) -> None:
-        """get_section must emit a structured dict envelope."""
+        """get_section must emit a GetSectionResponse dict for a valid section_id."""
         zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
             "withns"
         )
@@ -772,18 +772,19 @@ class TestStructuredOutput:
         # FastMCP wraps Union returns in a uniform {"result": ...} envelope.
         # Accept the wrapper; assert the inner shape.
         payload = structured.get("result", structured)
-        # Tool returns either a GetSectionResponse or a ToolErrorPayload
-        # (section_not_found when the archive lacks that section_id).
-        # Both paths carry the wire-format contract — the structured
-        # content must be a real dict, not a JSON string.
         assert isinstance(payload, dict)
-        if payload.get("error") is True:
-            # section_not_found or entry-missing — check ToolErrorPayload shape.
-            assert "operation" in payload
-        else:
-            assert "section_id" in payload
-            assert "section_title" in payload
-            assert "_meta" in payload
+        # A valid section_id on an existing entry MUST return GetSectionResponse,
+        # not ToolErrorPayload. A ToolErrorPayload here is a regression.
+        assert payload.get("error") is not True, (
+            f"get_section returned ToolErrorPayload for a valid section_id: "
+            f"{payload.get('operation')!r} — {payload.get('message')!r}"
+        )
+        # Exact value assertions — not just presence.
+        assert payload["section_id"] == "introduction"
+        assert payload["section_title"] and isinstance(
+            payload["section_title"], str
+        ), f"section_title should be a non-empty string, got: {payload.get('section_title')!r}"
+        assert "_meta" in payload
 
 
 def test_phase_c_bundle_shared_across_four_tools(v2_phase_a_zim) -> None:
