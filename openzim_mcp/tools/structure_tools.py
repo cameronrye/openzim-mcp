@@ -521,6 +521,8 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
 
 
 def _register_get_section(server: "OpenZimMcpServer") -> None:
+    _op = "get section"
+
     @server.mcp.tool()
     async def get_section(
         zim_file_path: str,
@@ -552,9 +554,9 @@ def _register_get_section(server: "OpenZimMcpServer") -> None:
                 server.rate_limiter.check_rate_limit("get_structure")
             except OpenZimMcpRateLimitError as e:
                 return tool_error(
-                    operation="get section",
+                    operation=_op,
                     message=server._create_enhanced_error_message(
-                        operation="get section",
+                        operation=_op,
                         error=e,
                         context=f"Entry: {entry_path}, section_id: {section_id}",
                     ),
@@ -574,9 +576,9 @@ def _register_get_section(server: "OpenZimMcpServer") -> None:
         except Exception as e:
             logger.error(f"Error in get_section: {e}")
             return tool_error(
-                operation="get section",
+                operation=_op,
                 message=server._create_enhanced_error_message(
-                    operation="get section",
+                    operation=_op,
                     error=e,
                     context=f"File: {zim_file_path}, Entry: {entry_path}, "
                     f"section_id: {section_id}",

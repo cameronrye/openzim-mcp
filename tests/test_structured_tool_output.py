@@ -867,13 +867,10 @@ class TestZimQuerySynthesize:
         # A plain str return does NOT produce a tuple — FastMCP returns the
         # bare list of TextContent blocks. This verifies the legacy path is intact.
         # When the Union return annotation is active, FastMCP may wrap even
-        # strings — accept both: a tuple whose text element is non-empty, or
+        # strings — accept both: a tuple whose first element is non-empty, or
         # a list with at least one text item.
         if isinstance(result, tuple):
-            _, structured = result
-            # structured may be None or a dict wrapping the string
-            # The unstructured part must contain text.
-            unstructured, _ = result
+            unstructured = result[0]
             assert (
                 unstructured
             ), "zim_query markdown path should produce non-empty content"

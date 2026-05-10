@@ -281,17 +281,14 @@ def _build_citations(
 # ---------------------------------------------------------------------------
 
 
-def synthesize_query(
-    query: str,
+def _do_per_archive_search(
+    archives: list[tuple[Archive, Path]],
     *,
-    archives: list[tuple[Archive, Path]],  # (archive, validated_path) pairs
     search_handler: Any,
-    cache: OpenZimMcpCache,
-    content_processor: ContentProcessor,
-    config: SynthesizeConfig,
-) -> SynthesizeResponse:
-    """Run the synthesize pipeline end-to-end."""
-    # Stage 1: per-archive search
+    query: str,
+    k: int,
+) -> tuple[list[list[dict]], list[str], dict[str, tuple[Archive, Path]]]:
+    """Stage 1: run per-archive Xapian search for every archive in the list."""
     per_archive_hits: list[list[dict]] = []
     archives_searched: list[str] = []
     archive_by_name: dict[str, tuple[Archive, Path]] = {}
@@ -301,78 +298,73 @@ def synthesize_query(
         archive_by_name[archive_name] = (archive, validated_path)
         per_archive_hits.append(
             _per_archive_search(
-                archive,
-                search_handler=search_handler,
-                query=query,
-                k=config.per_archive_k,
+                archive, search_handler=search_handler, query=query, k=k
             )
         )
+    return per_archive_hits, archives_searched, archive_by_name
 
-    hit_to_archive: dict[tuple[str, str], dict] = {}
-    for archive_name, hits in zip(archives_searched, per_archive_hits):
-        for hit in hits:
-            hit_to_archive[(archive_name, hit["path"])] = hit
 
-    # Stage 2-3: fuse + (identity) rerank
-    is_multi = len(archives) > 1
+def _select_top_hits(
+    per_archive_hits: list[list[dict]],
+    archives_searched: list[str],
+    *,
+    top_n: int,
+) -> tuple[list[tuple[str, dict]], str]:
+    """Stages 2–3: fuse (RRF for multi-archive, identity for single) + rerank.
+
+    Returns ``(top_hits, fallback_used)`` where ``top_hits`` is a list of
+    ``(archive_name, hit)`` tuples and ``fallback_used`` is
+    ``"rrf_fusion"`` or ``"xapian_score"``.
+    """
+    if len(per_archive_hits) > 1:
+        return _select_top_hits_multi(per_archive_hits, archives_searched, top_n=top_n)
+    archive_name = archives_searched[0] if archives_searched else "unknown"
+    top_hits = (
+        [(archive_name, hit) for hit in per_archive_hits[0][:top_n]]
+        if per_archive_hits
+        else []
+    )
+    return top_hits, "xapian_score"
+
+
+def _select_top_hits_multi(
+    per_archive_hits: list[list[dict]],
+    archives_searched: list[str],
+    *,
+    top_n: int,
+) -> tuple[list[tuple[str, dict]], str]:
+    """Multi-archive RRF fusion path of :func:`_select_top_hits`."""
+    hit_to_archive: dict[tuple[str, str], dict] = {
+        (archive_name, hit["path"]): hit
+        for archive_name, hits in zip(archives_searched, per_archive_hits)
+        for hit in hits
+    }
+    rankings = [
+        [(hit["path"], hit["score"]) for hit in hits] for hits in per_archive_hits
+    ]
+    fused = _rrf_fuse(rankings, k=60)[:top_n]
     top_hits: list[tuple[str, dict]] = []
-    if is_multi:
-        per_archive_rankings = [
-            [(hit["path"], hit["score"]) for hit in hits] for hits in per_archive_hits
-        ]
-        fused = _rrf_fuse(per_archive_rankings, k=60)[: config.top_n]
-        fallback_used: str = "rrf_fusion"
-        for path, fused_score in fused:
-            for archive_name in archives_searched:
-                if (archive_name, path) in hit_to_archive:
-                    h = dict(hit_to_archive[(archive_name, path)])
-                    h["score"] = fused_score
-                    top_hits.append((archive_name, h))
-                    break
-    else:
-        archive_name = archives_searched[0] if archives_searched else "unknown"
-        top_hits = (
-            [(archive_name, hit) for hit in per_archive_hits[0][: config.top_n]]
-            if per_archive_hits
-            else []
-        )
-        fallback_used = "xapian_score"
+    for path, fused_score in fused:
+        for archive_name in archives_searched:
+            if (archive_name, path) in hit_to_archive:
+                h = dict(hit_to_archive[(archive_name, path)])
+                h["score"] = fused_score
+                top_hits.append((archive_name, h))
+                break
+    return top_hits, "rrf_fusion"
 
-    # Zero hits short-circuit
-    if not top_hits:
-        return cast(
-            "SynthesizeResponse",
-            {
-                "query": query,
-                "answer_markdown": "",
-                "passages": [],
-                "citations": [],
-                "archives_searched": archives_searched,
-                "fallback_used": fallback_used,
-                "total_chars": 0,
-                "total_words": 0,
-                "_meta": {"reason": "0_hits"},
-            },
-        )
 
-    # Stage 4: passage extraction
-    all_passages: list[SynthesizePassage] = []
-    all_paths: list[str] = []
-    for archive_name, hit in top_hits:
-        passages = _extract_passages(
-            [hit],
-            archive_name=archive_name,
-            content_processor=content_processor,
-        )
-        all_passages.extend(passages)
-        all_paths.append(hit["path"])
-    for i, p in enumerate(all_passages, start=1):
-        p["rank"] = i
-
-    # Stage 5: section attribution
-    archive_for_path: dict[str, tuple[Archive, Path]] = {}
-    for archive_name, hit in top_hits:
-        archive_for_path[hit["path"]] = archive_by_name[archive_name]
+def _make_bundle_lookup(
+    top_hits: list[tuple[str, dict]],
+    archive_by_name: dict[str, tuple[Archive, Path]],
+    *,
+    cache: OpenZimMcpCache,
+    content_processor: ContentProcessor,
+) -> Callable[[str], Any]:
+    """Build a path→bundle closure used by attribution and citation lookups."""
+    archive_for_path: dict[str, tuple[Archive, Path]] = {
+        hit["path"]: archive_by_name[archive_name] for archive_name, hit in top_hits
+    }
 
     def bundle_lookup(entry_path: str) -> Any:
         pair = archive_for_path.get(entry_path)
@@ -387,21 +379,44 @@ def synthesize_query(
             content_processor=content_processor,
         )
 
-    attributed = _attribute_sections(
-        all_passages,
-        bundle_lookup=bundle_lookup,
-        hit_paths=all_paths,
-    )
+    return bundle_lookup
 
-    # Stage 7: budget enforcement
-    capped = _enforce_budget(attributed, char_budget=config.output_char_budget)
 
-    # Stage 6: render + build citations
-    answer_md = _render_answer(capped)
+def _extract_passages_for_top_hits(
+    top_hits: list[tuple[str, dict]],
+    *,
+    content_processor: ContentProcessor,
+) -> tuple[list[SynthesizePassage], list[str]]:
+    """Stage 4: extract per-hit passages and renumber rank globally."""
+    all_passages: list[SynthesizePassage] = []
+    all_paths: list[str] = []
+    for archive_name, hit in top_hits:
+        all_passages.extend(
+            _extract_passages(
+                [hit],
+                archive_name=archive_name,
+                content_processor=content_processor,
+            )
+        )
+        all_paths.append(hit["path"])
+    for i, p in enumerate(all_passages, start=1):
+        p["rank"] = i
+    return all_passages, all_paths
 
+
+def _build_section_lookups(
+    top_hits: list[tuple[str, dict]],
+    bundle_lookup: Callable[[str], Any],
+) -> tuple[dict[str, str], dict[tuple[str, str], str]]:
+    """Per-(entry, section) title maps used by :func:`_build_citations`.
+
+    Bundle build failures are swallowed at info level by the caller pattern
+    (the bundle is best-effort); on failure the entry is skipped and its
+    citations stay at entry level.
+    """
     archive_titles: dict[str, str] = {}
     section_titles: dict[tuple[str, str], str] = {}
-    for archive_name, hit in top_hits:
+    for _, hit in top_hits:
         try:
             b = bundle_lookup(hit["path"])
         except Exception:
@@ -411,13 +426,68 @@ def synthesize_query(
         archive_titles[hit["path"]] = b["title"]
         for s in b["sections"]:
             section_titles[(hit["path"], s["id"])] = s["title"]
+    return archive_titles, section_titles
 
-    citations = _build_citations(
-        capped,
-        archive_titles=archive_titles,
-        section_titles=section_titles,
+
+def _zero_hits_response(
+    query: str, archives_searched: list[str], fallback_used: str
+) -> SynthesizeResponse:
+    return cast(
+        "SynthesizeResponse",
+        {
+            "query": query,
+            "answer_markdown": "",
+            "passages": [],
+            "citations": [],
+            "archives_searched": archives_searched,
+            "fallback_used": fallback_used,
+            "total_chars": 0,
+            "total_words": 0,
+            "_meta": {"reason": "0_hits"},
+        },
     )
 
+
+def synthesize_query(
+    query: str,
+    *,
+    archives: list[tuple[Archive, Path]],  # (archive, validated_path) pairs
+    search_handler: Any,
+    cache: OpenZimMcpCache,
+    content_processor: ContentProcessor,
+    config: SynthesizeConfig,
+) -> SynthesizeResponse:
+    """Run the synthesize pipeline end-to-end."""
+    per_archive_hits, archives_searched, archive_by_name = _do_per_archive_search(
+        archives,
+        search_handler=search_handler,
+        query=query,
+        k=config.per_archive_k,
+    )
+    top_hits, fallback_used = _select_top_hits(
+        per_archive_hits, archives_searched, top_n=config.top_n
+    )
+    if not top_hits:
+        return _zero_hits_response(query, archives_searched, fallback_used)
+
+    all_passages, all_paths = _extract_passages_for_top_hits(
+        top_hits, content_processor=content_processor
+    )
+    bundle_lookup = _make_bundle_lookup(
+        top_hits,
+        archive_by_name,
+        cache=cache,
+        content_processor=content_processor,
+    )
+    attributed = _attribute_sections(
+        all_passages, bundle_lookup=bundle_lookup, hit_paths=all_paths
+    )
+    capped = _enforce_budget(attributed, char_budget=config.output_char_budget)
+    answer_md = _render_answer(capped)
+    archive_titles, section_titles = _build_section_lookups(top_hits, bundle_lookup)
+    citations = _build_citations(
+        capped, archive_titles=archive_titles, section_titles=section_titles
+    )
     return cast(
         "SynthesizeResponse",
         {

@@ -22,6 +22,19 @@ def cp() -> Any:
     return mock_cp
 
 
+def _passage(cite_id: str, text: str, rank: int, score: float) -> SynthesizePassage:
+    """Build a SynthesizePassage TypedDict for tests; keeps fixtures terse."""
+    return cast(
+        SynthesizePassage,
+        {
+            "cite_id": cite_id,
+            "text_markdown": text,
+            "rank": rank,
+            "score": score,
+        },
+    )
+
+
 def test_rrf_fuse_single_ranking_preserves_order() -> None:
     """One ranking → output is the same order, with k-decayed scores."""
     rankings = [
@@ -116,7 +129,7 @@ def test_extract_passages_renders_markdown_from_snippets() -> None:
     assert passages[0]["rank"] == 1
     assert passages[0]["text_markdown"] == "Berlin is the capital."
     assert passages[0]["cite_id"] == "wikipedia_en_simple/A/Berlin"  # no #section yet
-    assert passages[0]["score"] == 0.9
+    assert passages[0]["score"] == pytest.approx(0.9)
 
 
 def test_extract_passages_preserves_rank_order() -> None:
@@ -174,17 +187,7 @@ def test_attribute_sections_adds_section_id_when_match_in_first_section() -> Non
             },
         ],
     }
-    passages = [
-        cast(
-            SynthesizePassage,
-            {
-                "cite_id": "wiki/A/Berlin",
-                "text_markdown": "Geography text here.",
-                "rank": 1,
-                "score": 0.9,
-            },
-        ),
-    ]
+    passages = [_passage("wiki/A/Berlin", "Geography text here.", 1, 0.9)]
 
     def bundle_lookup(path: str) -> dict | None:
         return bundle if path == "A/Berlin" else None
@@ -202,17 +205,7 @@ def test_attribute_sections_drops_section_on_bundle_failure() -> None:
     def bundle_lookup(path: str) -> None:
         raise RuntimeError("simulated archive read failure")
 
-    passages = [
-        cast(
-            SynthesizePassage,
-            {
-                "cite_id": "wiki/A/Berlin",
-                "text_markdown": "Anything",
-                "rank": 1,
-                "score": 0.5,
-            },
-        ),
-    ]
+    passages = [_passage("wiki/A/Berlin", "Anything", 1, 0.5)]
     attributed = _attribute_sections(
         passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
     )
@@ -241,17 +234,7 @@ def test_attribute_sections_no_match_keeps_entry_level() -> None:
     def bundle_lookup(path: str) -> dict:
         return bundle
 
-    passages = [
-        cast(
-            SynthesizePassage,
-            {
-                "cite_id": "wiki/A/Berlin",
-                "text_markdown": "totally unrelated string",
-                "rank": 1,
-                "score": 0.1,
-            },
-        ),
-    ]
+    passages = [_passage("wiki/A/Berlin", "totally unrelated string", 1, 0.1)]
     attributed = _attribute_sections(
         passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
     )
@@ -267,24 +250,8 @@ def test_render_answer_joins_passages_with_citations() -> None:
     from openzim_mcp.synthesize import _render_answer
 
     passages = [
-        cast(
-            "SynthesizePassage",
-            {
-                "cite_id": "wiki/A/Berlin#geography",
-                "text_markdown": "Berlin is mostly flat.",
-                "rank": 1,
-                "score": 0.9,
-            },
-        ),
-        cast(
-            "SynthesizePassage",
-            {
-                "cite_id": "wiki/A/Berlin#climate",
-                "text_markdown": "Climate is humid continental.",
-                "rank": 2,
-                "score": 0.7,
-            },
-        ),
+        _passage("wiki/A/Berlin#geography", "Berlin is mostly flat.", 1, 0.9),
+        _passage("wiki/A/Berlin#climate", "Climate is humid continental.", 2, 0.7),
     ]
     md = _render_answer(passages)
     assert "Berlin is mostly flat." in md
@@ -297,14 +264,8 @@ def test_enforce_budget_truncates_last_passage() -> None:
     from openzim_mcp.synthesize import _enforce_budget
 
     passages = [
-        cast(
-            "SynthesizePassage",
-            {"cite_id": "x/y", "text_markdown": "A" * 50, "rank": 1, "score": 1.0},
-        ),
-        cast(
-            "SynthesizePassage",
-            {"cite_id": "x/y", "text_markdown": "B" * 50, "rank": 2, "score": 0.9},
-        ),
+        _passage("x/y", "A" * 50, 1, 1.0),
+        _passage("x/y", "B" * 50, 2, 0.9),
     ]
     capped = _enforce_budget(passages, char_budget=70)
     # First passage is 50 chars; budget allows 70. Second passage truncates to 20.
@@ -317,33 +278,9 @@ def test_build_citations_dedupes_by_entry() -> None:
     from openzim_mcp.synthesize import _build_citations
 
     passages = [
-        cast(
-            "SynthesizePassage",
-            {
-                "cite_id": "wiki/A/Berlin#geography",
-                "text_markdown": "",
-                "rank": 1,
-                "score": 0.9,
-            },
-        ),
-        cast(
-            "SynthesizePassage",
-            {
-                "cite_id": "wiki/A/Berlin#climate",
-                "text_markdown": "",
-                "rank": 2,
-                "score": 0.7,
-            },
-        ),
-        cast(
-            "SynthesizePassage",
-            {
-                "cite_id": "wiki/A/Munich#geography",
-                "text_markdown": "",
-                "rank": 3,
-                "score": 0.5,
-            },
-        ),
+        _passage("wiki/A/Berlin#geography", "", 1, 0.9),
+        _passage("wiki/A/Berlin#climate", "", 2, 0.7),
+        _passage("wiki/A/Munich#geography", "", 3, 0.5),
     ]
     bundle_titles = {"A/Berlin": "Berlin", "A/Munich": "Munich"}
     bundle_section_titles = {

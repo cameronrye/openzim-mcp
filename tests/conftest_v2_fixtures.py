@@ -128,33 +128,29 @@ def v2_phase_c_zim(tmp_path_factory) -> Path:
         def get_hints(self):
             return {Hint.FRONT_ARTICLE: 1}
 
+    berlin_html = (
+        "<html><body><h1>Berlin</h1>"
+        + "<p>Berlin is the capital and largest city of Germany.</p>"
+        + "<h2 id='geography'>Geography</h2>"
+        + "<p>Berlin lies in northeastern Germany on the river Spree.</p>"
+        + "<h2 id='climate'>Climate</h2>"
+        + "<p>Berlin has a temperate seasonal climate.</p>"
+        + "<h2 id='history'>History</h2>"
+        + "<p>The history of Berlin begins in the 13th century.</p>"
+        + "</body></html>"
+    )
+    munich_html = (
+        "<html><body><h1>Munich</h1>"
+        + "<p>Munich is the capital of Bavaria.</p>"
+        + "<h2 id='history'>History</h2>"
+        + "<p>Munich was founded in 1158.</p>"
+        + "<h2 id='culture'>Culture</h2>"
+        + "<p>Munich is famous for Oktoberfest.</p>"
+        + "</body></html>"
+    )
     articles = [
-        (
-            "A/Berlin",
-            "Berlin",
-            "<html><body>"
-            "<h1>Berlin</h1>"
-            "<p>Berlin is the capital and largest city of Germany.</p>"
-            "<h2 id='geography'>Geography</h2>"
-            "<p>Berlin lies in northeastern Germany on the river Spree.</p>"
-            "<h2 id='climate'>Climate</h2>"
-            "<p>Berlin has a temperate seasonal climate.</p>"
-            "<h2 id='history'>History</h2>"
-            "<p>The history of Berlin begins in the 13th century.</p>"
-            "</body></html>",
-        ),
-        (
-            "A/Munich",
-            "Munich",
-            "<html><body>"
-            "<h1>Munich</h1>"
-            "<p>Munich is the capital of Bavaria.</p>"
-            "<h2 id='history'>History</h2>"
-            "<p>Munich was founded in 1158.</p>"
-            "<h2 id='culture'>Culture</h2>"
-            "<p>Munich is famous for Oktoberfest.</p>"
-            "</body></html>",
-        ),
+        ("A/Berlin", "Berlin", berlin_html),
+        ("A/Munich", "Munich", munich_html),
     ]
 
     with Creator(out_path).config_indexing(True, "eng") as creator:

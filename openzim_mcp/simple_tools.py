@@ -153,7 +153,7 @@ class SimpleToolsHandler:
         options = options or {}
         if options.get("synthesize"):
             try:
-                return self._handle_synthesize_query(query, zim_file_path, options)
+                return self._handle_synthesize_query(query, zim_file_path)
             except Exception as e:
                 logger.error(
                     "Unexpected error in synthesize path: %s", e, exc_info=True
@@ -1565,7 +1565,6 @@ class SimpleToolsHandler:
         self,
         query: str,
         zim_file_path: Optional[str],
-        options: Dict[str, Any],
     ) -> Union[SynthesizeResponse, ToolErrorPayload]:
         """Phase C: dispatch query to the synthesize pipeline.
 
