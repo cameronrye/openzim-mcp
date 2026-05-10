@@ -185,7 +185,9 @@ def test_attribute_sections_adds_section_id_when_match_in_first_section() -> Non
             },
         ),
     ]
-    bundle_lookup = lambda path: bundle if path == "A/Berlin" else None
+
+    def bundle_lookup(path: str) -> dict | None:
+        return bundle if path == "A/Berlin" else None
 
     attributed = _attribute_sections(
         passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
@@ -235,7 +237,10 @@ def test_attribute_sections_no_match_keeps_entry_level() -> None:
             },
         ],
     }
-    bundle_lookup = lambda path: bundle
+
+    def bundle_lookup(path: str) -> dict:
+        return bundle
+
     passages = [
         cast(
             SynthesizePassage,
