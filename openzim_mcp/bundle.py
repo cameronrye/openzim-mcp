@@ -226,12 +226,12 @@ def extract_entry_bundle(
 
 
 def get_or_build_bundle(
-    archive: "Archive",
+    archive: Archive,
     entry_path: str,
     *,
-    cache: "OpenZimMcpCache",
-    validated_path: "Path",
-    content_processor: "ContentProcessor",
+    cache: OpenZimMcpCache,
+    validated_path: Path,
+    content_processor: ContentProcessor,
 ) -> EntryBundle:
     """Cache-aware bundle accessor. Builds on miss; returns cached on hit."""
     key = _bundle_cache_key(validated_path, entry_path)

@@ -117,7 +117,9 @@ def test_bundle_links_categorized(cp: ContentProcessor) -> None:
     # Spree is internal (relative url)
     assert any(li["url"] == "A/Spree_River" for li in links["internal"])
     # External link
-    assert any("wikipedia.org" in li["url"] for li in links["external"])
+    assert any(
+        li["url"] == "https://en.wikipedia.org/wiki/Berlin" for li in links["external"]
+    )
     # Media link
     assert any(li["url"] == "berlin.jpg" for li in links["media"])
 
