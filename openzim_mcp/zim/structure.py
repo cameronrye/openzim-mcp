@@ -268,21 +268,22 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
         try:
-            extraction = self._get_or_load_link_extraction(
-                str(validated_path), entry_path
-            )
+            from openzim_mcp.bundle import get_or_build_bundle
 
-            full_internal: List[Any] = extraction["internal"]
-            full_external: List[Any] = extraction["external"]
-            full_media: List[Any] = extraction["media"]
-            by_kind = {
-                "internal": full_internal,
-                "external": full_external,
-                "media": full_media,
-            }
-            full_list = by_kind[kind]
-            total_for_kind = len(full_list)
-            page = full_list[offset : offset + limit]
+            with _zim_ops_mod.zim_archive(validated_path) as archive:
+                bundle = get_or_build_bundle(
+                    archive,
+                    entry_path,
+                    cache=self.cache,
+                    validated_path=validated_path,
+                    content_processor=self.content_processor,
+                )
+
+            all_links_for_kind: List[Any] = cast(
+                "List[Any]", bundle["links"][kind]  # type: ignore[literal-required]
+            )
+            total_for_kind = len(all_links_for_kind)
+            page = all_links_for_kind[offset : offset + limit]
             returned_count = len(page)
             last_index = offset + returned_count
             done = last_index >= total_for_kind
@@ -299,9 +300,9 @@ class _StructureMixin:
                 )
 
             payload: Dict[str, Any] = {
-                "title": extraction["title"],
-                "path": extraction["path"],
-                "content_type": extraction["content_type"],
+                "title": bundle["title"],
+                "path": bundle["entry_path"],
+                "content_type": bundle["content_type"],
                 "kind": kind,
                 "results": page,
                 "next_cursor": next_cursor,
@@ -313,13 +314,11 @@ class _StructureMixin:
                     "returned_count": returned_count,
                 },
                 "category_totals": {
-                    "internal": len(full_internal),
-                    "external": len(full_external),
-                    "media": len(full_media),
+                    "internal": len(bundle["links"]["internal"]),
+                    "external": len(bundle["links"]["external"]),
+                    "media": len(bundle["links"]["media"]),
                 },
             }
-            if extraction.get("message"):
-                payload["message"] = extraction["message"]
 
             logger.info(
                 f"Extracted links for: {entry_path} "
@@ -377,68 +376,6 @@ class _StructureMixin:
             indent=2,
             ensure_ascii=False,
         )
-
-    def _get_or_load_link_extraction(
-        self, validated_path: str, entry_path: str
-    ) -> Dict[str, Any]:
-        """Return the parsed extraction (cached) for ``(file, entry)``.
-
-        The extraction dict carries the *full* internal/external/media lists
-        plus title/path/mime/message metadata. Pagination slices from this
-        dict in-memory; callers paging through results pay the HTML parse
-        cost exactly once per (archive, entry) pair instead of once per page.
-        """
-        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
-        # shape: parallel arrays/multi-category) don't leak through after upgrade.
-        cache_key = f"links_full:v2b:{validated_path}:{entry_path}"
-        cached = self.cache.get(cache_key)
-        if cached is not None:
-            logger.debug(f"Returning cached link extraction for: {entry_path}")
-            return cached  # type: ignore[no-any-return]
-
-        with _zim_ops_mod.zim_archive(Path(validated_path)) as archive:
-            extraction = self._load_link_extraction(archive, entry_path)
-        self.cache.set(cache_key, extraction)
-        return extraction
-
-    def _load_link_extraction(
-        self, archive: Archive, entry_path: str
-    ) -> Dict[str, Any]:
-        """Resolve the entry and parse all links once, returning the full lists."""
-        try:
-            entry, resolved_path = self._resolve_entry_with_fallback(
-                archive, entry_path
-            )
-            title = entry.title or "Untitled"
-            item = entry.get_item()
-            mime_type = item.mimetype or ""
-            raw_content = bytes(item.content).decode("utf-8", errors="replace")
-
-            full_internal: List[Any] = []
-            full_external: List[Any] = []
-            full_media: List[Any] = []
-            message: Optional[str] = None
-
-            if mime_type.startswith(TEXT_HTML_MIME):
-                parsed = self.content_processor.extract_html_links(raw_content)
-                full_internal = parsed.get("internal_links", []) or []
-                full_external = parsed.get("external_links", []) or []
-                full_media = parsed.get("media_links", []) or []
-            else:
-                message = f"Link extraction not supported for {mime_type}"
-
-            return {
-                "title": title,
-                "path": resolved_path,
-                "content_type": mime_type,
-                "internal": full_internal,
-                "external": full_external,
-                "media": full_media,
-                "message": message,
-            }
-        except Exception as e:
-            logger.error(f"Error extracting links for {entry_path}: {e}")
-            raise OpenZimMcpArchiveError(f"Failed to extract article links: {e}") from e
 
     def get_table_of_contents_data(
         self, zim_file_path: str, entry_path: str

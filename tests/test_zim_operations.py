@@ -1388,26 +1388,28 @@ class TestZimOperations:
         assert "_meta" in result
 
         # Test extract_article_links_data cache hit. extract_article_links_data
-        # caches the parsed extraction (full lists) under a stable
-        # ``links_full:v2b:`` key so different paginated requests share one parse;
-        # the response is rendered fresh per call, so the hit assertion checks
-        # the post-render dict carries the cached title/path metadata rather
-        # than asserting raw equality.
-        cache_key = f"links_full:v2b:{validated_path}:A/Test"
+        # now reads from the shared EntryBundle (Phase C). Caching happens at
+        # the bundle level under a ``bundle:v2c:`` key. The hit assertion checks
+        # that the post-render dict carries the cached title/path metadata.
+        cache_key = f"bundle:v2c:{validated_path}:A/Test"
         zim_operations.cache.set(
             cache_key,
             {
+                "entry_path": "A/Test",
                 "title": "Cached Title",
-                "path": "A/Test",
                 "content_type": "text/html",
-                "internal": [],
-                "external": [],
-                "media": [],
-                "message": None,
+                "word_count": 0,
+                "char_count": 0,
+                "rendered_markdown": "",
+                "sections": [],
+                "links": {"internal": [], "external": [], "media": []},
+                "infobox": None,
             },
         )
 
-        result = zim_operations.extract_article_links_data(str(zim_file), "A/Test")
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive_links:
+            mock_archive_links.return_value.__enter__.return_value = MagicMock()
+            result = zim_operations.extract_article_links_data(str(zim_file), "A/Test")
         assert result["title"] == "Cached Title"
         assert result["path"] == "A/Test"
 
@@ -1660,7 +1662,10 @@ class TestZimOperations:
             mock_item.content = b"binary image data"
 
             result = zim_operations.extract_article_links(str(zim_file), "I/Image")
-            assert "Link extraction not supported" in result
+            # Phase C: non-HTML entries return empty link buckets (no message
+            # field). The content_type signals the non-HTML nature to callers.
+            assert "image/png" in result
+            assert '"results": []' in result
 
     def test_smart_retrieval_direct_access_success(
         self, zim_operations: ZimOperations, temp_dir: Path

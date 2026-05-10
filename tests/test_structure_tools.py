@@ -621,26 +621,28 @@ class TestStructureDataMethodsMeta:
         self, zim_ops, temp_dir, monkeypatch
     ):
         """extract_article_links_data result carries _meta."""
-        zim_file = self._zim_file(temp_dir)
-
-        fake_extraction = {
-            "title": "Foo",
-            "path": "C/Foo",
-            "content_type": "text/html",
-            "internal": [],
-            "external": [],
-            "media": [],
-            "message": None,
-        }
-        monkeypatch.setattr(
-            zim_ops,
-            "_get_or_load_link_extraction",
-            lambda *a, **kw: fake_extraction,
-        )
-
         from unittest.mock import MagicMock, patch
 
-        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+        from openzim_mcp.tool_schemas import EntryBundle
+
+        zim_file = self._zim_file(temp_dir)
+
+        fake_bundle: EntryBundle = {  # type: ignore[typeddict-item]
+            "entry_path": "C/Foo",
+            "title": "Foo",
+            "content_type": "text/html",
+            "word_count": 0,
+            "char_count": 0,
+            "rendered_markdown": "",
+            "sections": [],
+            "links": {"internal": [], "external": [], "media": []},
+            "infobox": None,
+        }
+
+        with (
+            patch("openzim_mcp.bundle.get_or_build_bundle", return_value=fake_bundle),
+            patch("openzim_mcp.zim_operations.zim_archive") as mock_archive,
+        ):
             mock_archive.return_value.__enter__.return_value = MagicMock()
             result = zim_ops.extract_article_links_data(str(zim_file), "C/Foo")
 
