@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0](https://github.com/cameronrye/openzim-mcp/compare/v2.0.0...v2.1.0) (2026-05-10)
+
+
+### Features
+
+* **v2:** Phase C part 2 — get_section + synthesize ([#7](https://github.com/cameronrye/openzim-mcp/issues/7) + [#10](https://github.com/cameronrye/openzim-mcp/issues/10)) ([#118](https://github.com/cameronrye/openzim-mcp/issues/118)) ([0479807](https://github.com/cameronrye/openzim-mcp/commit/0479807e42b34a089ed9141f9f93d9f36b2295af))
+
 ## [2.0.0a4] — 2026-05-10 (alpha pre-release)
 
 v2 Phase C, part 2: completes the retrieval-primitives phase. Adds the
