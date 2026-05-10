@@ -30,6 +30,25 @@ from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
 
+_LOOPBACK_TRANSPORT_HOSTS = (
+    "127.0.0.1",
+    "127.0.0.1:*",
+    "localhost",
+    "localhost:*",
+    "[::1]",
+    "[::1]:*",
+)
+
+
+def _build_transport_allowed_hosts(configured_hosts: list[str]) -> list[str]:
+    """Build FastMCP Host allow-list entries from configured hostnames."""
+    allowed_hosts = list(_LOOPBACK_TRANSPORT_HOSTS)
+    for host in configured_hosts:
+        allowed_hosts.append(host)
+        if ":" not in host:
+            allowed_hosts.append(f"{host}:*")
+    return allowed_hosts
+
 
 class OpenZimMcpServer:
     """Main OpenZIM MCP server class with dependency injection."""
@@ -59,12 +78,7 @@ class OpenZimMcpServer:
         # Initialize components
         self.path_validator = PathValidator(config.allowed_directories)
         self.cache = OpenZimMcpCache(config.cache)
-        self.content_processor = ContentProcessor(
-            config.content.snippet_length,
-            table_row_threshold=config.content.table_row_threshold,
-            table_char_threshold=config.content.table_char_threshold,
-            infobox_kv_limit=config.content.infobox_kv_limit,
-        )
+        self.content_processor = ContentProcessor(config.content.snippet_length)
         # ``RateLimitConfig`` is unified — ``OpenZimMcpConfig.rate_limit`` is
         # the same model the limiter expects, including ``per_operation_limits``
         # which would otherwise be unreachable from env-var/JSON config.
@@ -105,12 +119,7 @@ class OpenZimMcpServer:
             from mcp.server.transport_security import TransportSecuritySettings
 
             fastmcp_kwargs["transport_security"] = TransportSecuritySettings(
-                allowed_hosts=[
-                    "127.0.0.1:*",
-                    "localhost:*",
-                    "[::1]:*",
-                    *config.allowed_hosts,
-                ],
+                allowed_hosts=_build_transport_allowed_hosts(config.allowed_hosts),
                 allowed_origins=list(config.cors_origins),
             )
         self.mcp = FastMCP(config.server_name, **fastmcp_kwargs)
