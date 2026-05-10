@@ -244,8 +244,8 @@ def test_get_table_of_contents_does_not_cache_on_toc_build_error(
 ) -> None:
     """If TOC building raises, the error must not land in the cache.
 
-    Stubs ``BeautifulSoup`` (used inside ``_build_hierarchical_toc``) to
-    raise so the failure propagates through the real code path.
+    Stubs ``BeautifulSoup`` (used inside the bundle extractor) to raise
+    so the failure propagates through the real code path.
     """
     zim_file = _zim_path(temp_dir)
 

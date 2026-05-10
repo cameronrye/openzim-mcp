@@ -125,7 +125,7 @@ def test_toc_heading_uses_section_id_not_id() -> None:
     hints = get_type_hints(ts.TocHeading)
     assert "section_id" in hints, "TocHeading must use section_id (Phase C rename)"
     assert "id" not in hints, "TocHeading must not retain the old `id` field"
-    for key in ("text", "level", "id_source", "children"):
+    for key in ("text", "level", "children"):  # id_source dropped
         assert key in hints, f"TocHeading missing {key}"
 
 

@@ -363,7 +363,6 @@ class TocHeading(TypedDict):
     section_id: str
     text: str
     level: int
-    id_source: Literal["id", "descendant_anchor", "preceding_anchor", "slug"]
     children: list[TocHeading]
 
 
