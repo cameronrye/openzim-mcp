@@ -7,11 +7,14 @@ the post-render text-matching algorithm. The cache-aware accessor
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from openzim_mcp.bundle import extract_entry_bundle
+from openzim_mcp.bundle import extract_entry_bundle, get_or_build_bundle
+from openzim_mcp.cache import OpenZimMcpCache
+from openzim_mcp.config import CacheConfig
 from openzim_mcp.content_processor import ContentProcessor
 
 SAMPLE_HTML = """\
@@ -168,3 +171,112 @@ def test_bundle_word_and_char_counts(cp: ContentProcessor) -> None:
     md = bundle["rendered_markdown"]
     assert bundle["char_count"] == len(md)
     assert bundle["word_count"] == len(md.split())
+
+
+# ---------------------------------------------------------------------------
+# get_or_build_bundle: cache-hit / cache-miss / eviction-round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_get_or_build_bundle_cache_miss_then_hit(
+    cp: ContentProcessor, tmp_path: Path
+) -> None:
+    """First call builds; second call returns cached without re-parsing."""
+    config = CacheConfig(enabled=True, max_size=128, ttl_seconds=300)
+    cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+    archive = _make_archive_with_entry(SAMPLE_HTML)
+    validated_path = tmp_path / "test.zim"
+    validated_path.touch()
+
+    # First call: cache miss → build
+    initial_misses = cache.stats()["misses"]
+    bundle1 = get_or_build_bundle(
+        archive,
+        "A/Berlin",
+        cache=cache,
+        validated_path=validated_path,
+        content_processor=cp,
+    )
+    after_first = cache.stats()
+    assert after_first["misses"] == initial_misses + 1
+    assert archive.get_entry_by_path.call_count == 1
+
+    # Second call: cache hit → no archive access
+    bundle2 = get_or_build_bundle(
+        archive,
+        "A/Berlin",
+        cache=cache,
+        validated_path=validated_path,
+        content_processor=cp,
+    )
+    after_second = cache.stats()
+    assert after_second["misses"] == after_first["misses"]  # no new miss
+    assert after_second["hits"] >= after_first["hits"] + 1
+    assert archive.get_entry_by_path.call_count == 1  # still one archive read
+    assert bundle1 == bundle2
+
+
+def test_get_or_build_bundle_eviction_rebuild_identical(
+    cp: ContentProcessor, tmp_path: Path
+) -> None:
+    """After eviction, rebuild produces a bundle == the original."""
+    config = CacheConfig(enabled=True, max_size=128, ttl_seconds=300)
+    cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+    archive = _make_archive_with_entry(SAMPLE_HTML)
+    validated_path = tmp_path / "test.zim"
+    validated_path.touch()
+
+    bundle1 = get_or_build_bundle(
+        archive,
+        "A/Berlin",
+        cache=cache,
+        validated_path=validated_path,
+        content_processor=cp,
+    )
+
+    # Force eviction by clearing the cache entirely
+    cache.clear()
+
+    bundle2 = get_or_build_bundle(
+        archive,
+        "A/Berlin",
+        cache=cache,
+        validated_path=validated_path,
+        content_processor=cp,
+    )
+
+    assert bundle1 == bundle2  # determinism — required for cursor-survival
+
+
+def test_get_or_build_bundle_different_paths_different_keys(
+    cp: ContentProcessor, tmp_path: Path
+) -> None:
+    """Two different validated_paths produce two cache entries."""
+    config = CacheConfig(enabled=True, max_size=128, ttl_seconds=300)
+    cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+    archive_a = _make_archive_with_entry(SAMPLE_HTML)
+    archive_b = _make_archive_with_entry(SAMPLE_HTML)
+    path_a = tmp_path / "a.zim"
+    path_b = tmp_path / "b.zim"
+    path_a.touch()
+    path_b.touch()
+
+    get_or_build_bundle(
+        archive_a,
+        "A/Berlin",
+        cache=cache,
+        validated_path=path_a,
+        content_processor=cp,
+    )
+    get_or_build_bundle(
+        archive_b,
+        "A/Berlin",
+        cache=cache,
+        validated_path=path_b,
+        content_processor=cp,
+    )
+
+    # Both archives were touched (different cache keys)
+    assert archive_a.get_entry_by_path.call_count == 1
+    assert archive_b.get_entry_by_path.call_count == 1
+    assert cache.stats()["misses"] >= 2
