@@ -118,6 +118,27 @@ def test_cors_preflight_allows_mcp_protocol_version_header():
     assert "mcp-protocol-version" in allowed
 
 
+def test_cors_preflight_allows_last_event_id_header():
+    """Last-Event-ID lets browser MCP clients resume interrupted streams.
+
+    Without this header in allow_headers, browser preflight rejects stream
+    resume requests before they reach the streamable-HTTP transport.
+    """
+    app = _build_app(["http://localhost:5173"])
+    client = TestClient(app)
+    resp = client.options(
+        "/hello",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "last-event-id",
+        },
+    )
+    assert resp.status_code == 200
+    allowed = resp.headers.get("access-control-allow-headers", "").lower()
+    assert "last-event-id" in allowed
+
+
 def test_cors_preflight_allows_delete_for_session_termination():
     """The MCP streamable-HTTP spec defines DELETE for explicit session
     termination (the SDK's handler advertises ``Allow: GET, POST, DELETE``).
