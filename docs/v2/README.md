@@ -28,8 +28,8 @@ These apply across all phases; per-phase specs do not re-litigate them.
 | Phase | Theme | Items | Status | Spec |
 |-------|-------|-------|--------|------|
 | **A** | Quality wins, non-breaking | #1, #2, #4, #5, #14 | **Shipped (v2.0.0a1)** | [2026-05-08-v2-phase-a-quality-wins-design.md](../superpowers/specs/2026-05-08-v2-phase-a-quality-wins-design.md) |
-| **B** | Response contract | #3, #13 | Planned | _TBD_ |
-| **C** | New retrieval primitives | #7, #10, #11 | Planned | _TBD_ |
+| **B** | Response contract | #3, #13 | **Shipped (v2.0.0a2)** | [2026-05-08-v2-phase-b-response-contract-design.md](../superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md) |
+| **C** | New retrieval primitives | #7, #10, #11 | In Design | [2026-05-09-v2-phase-c-retrieval-primitives-design.md](../superpowers/specs/2026-05-09-v2-phase-c-retrieval-primitives-design.md) |
 | **D** | Optional ML accelerators | #6, #8, #12, #15 | Planned | _TBD_ |
 | **E** | Offline build artifacts | #16, #17 | Planned | _TBD_ |
 | **F** | Tool surface v2 | #9 | Planned | _TBD_ |
