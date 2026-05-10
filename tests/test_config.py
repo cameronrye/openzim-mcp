@@ -414,3 +414,13 @@ def test_meta_env_override(monkeypatch):
     monkeypatch.setenv("OPENZIM_MCP_ALLOWED_DIRECTORIES", json.dumps([TMP_DIR]))
     cfg = OpenZimMcpConfig()
     assert cfg.meta.footer_enabled is False
+
+
+def test_synthesize_config_defaults() -> None:
+    """Phase C — synthesize tunables exist with documented defaults."""
+    from openzim_mcp.config import OpenZimMcpConfig
+
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.synthesize.top_n == 5
+    assert cfg.synthesize.per_archive_k == 10
+    assert cfg.synthesize.output_char_budget == 4800
