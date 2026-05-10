@@ -239,3 +239,113 @@ def test_attribute_sections_no_match_keeps_entry_level() -> None:
         passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
     )
     assert attributed[0]["cite_id"] == "wiki/A/Berlin"
+
+
+# ---------------------------------------------------------------------------
+# Task 20: citation rendering, budget enforcement, citation building
+# ---------------------------------------------------------------------------
+
+
+def test_render_answer_joins_passages_with_citations() -> None:
+    from openzim_mcp.synthesize import _render_answer
+
+    passages = [
+        cast(
+            "SynthesizePassage",
+            {
+                "cite_id": "wiki/A/Berlin#geography",
+                "text_markdown": "Berlin is mostly flat.",
+                "rank": 1,
+                "score": 0.9,
+            },
+        ),
+        cast(
+            "SynthesizePassage",
+            {
+                "cite_id": "wiki/A/Berlin#climate",
+                "text_markdown": "Climate is humid continental.",
+                "rank": 2,
+                "score": 0.7,
+            },
+        ),
+    ]
+    md = _render_answer(passages)
+    assert "Berlin is mostly flat." in md
+    assert "[cite: wiki/A/Berlin#geography]" in md
+    assert "Climate is humid continental." in md
+    assert "[cite: wiki/A/Berlin#climate]" in md
+
+
+def test_enforce_budget_truncates_last_passage() -> None:
+    from openzim_mcp.synthesize import _enforce_budget
+
+    passages = [
+        cast(
+            "SynthesizePassage",
+            {"cite_id": "x/y", "text_markdown": "A" * 50, "rank": 1, "score": 1.0},
+        ),
+        cast(
+            "SynthesizePassage",
+            {"cite_id": "x/y", "text_markdown": "B" * 50, "rank": 2, "score": 0.9},
+        ),
+    ]
+    capped = _enforce_budget(passages, char_budget=70)
+    # First passage is 50 chars; budget allows 70. Second passage truncates to 20.
+    assert len(capped) == 2
+    assert len(capped[0]["text_markdown"]) == 50
+    assert len(capped[1]["text_markdown"]) == 20
+
+
+def test_build_citations_dedupes_by_entry() -> None:
+    from openzim_mcp.synthesize import _build_citations
+
+    passages = [
+        cast(
+            "SynthesizePassage",
+            {
+                "cite_id": "wiki/A/Berlin#geography",
+                "text_markdown": "",
+                "rank": 1,
+                "score": 0.9,
+            },
+        ),
+        cast(
+            "SynthesizePassage",
+            {
+                "cite_id": "wiki/A/Berlin#climate",
+                "text_markdown": "",
+                "rank": 2,
+                "score": 0.7,
+            },
+        ),
+        cast(
+            "SynthesizePassage",
+            {
+                "cite_id": "wiki/A/Munich#geography",
+                "text_markdown": "",
+                "rank": 3,
+                "score": 0.5,
+            },
+        ),
+    ]
+    bundle_titles = {"A/Berlin": "Berlin", "A/Munich": "Munich"}
+    bundle_section_titles = {
+        ("A/Berlin", "geography"): "Geography",
+        ("A/Berlin", "climate"): "Climate",
+        ("A/Munich", "geography"): "Geography",
+    }
+    citations = _build_citations(
+        passages,
+        archive_titles=bundle_titles,
+        section_titles=bundle_section_titles,
+    )
+    # 3 unique cite_ids → 3 citations
+    assert len(citations) == 3
+    cite_ids = [c["cite_id"] for c in citations]
+    assert "wiki/A/Berlin#geography" in cite_ids
+    berlin_geo = next(c for c in citations if c["cite_id"] == "wiki/A/Berlin#geography")
+    assert berlin_geo["title"] == "Berlin"
+    assert berlin_geo["section_title"] == "Geography"
+    assert berlin_geo["section_id"] == "geography"
+    assert berlin_geo["entry_path"] == "A/Berlin"
+    assert berlin_geo["archive"] == "wiki"

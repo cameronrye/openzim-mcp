@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import SynthesizeConfig
     from openzim_mcp.content_processor import ContentProcessor
 
-from openzim_mcp.tool_schemas import SynthesizePassage, SynthesizeResponse
+from openzim_mcp.tool_schemas import Citation, SynthesizePassage, SynthesizeResponse
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +177,102 @@ def _attribute_sections(
         new_passage["cite_id"] = new_cite_id
         attributed.append(cast(SynthesizePassage, new_passage))
     return attributed
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 6: answer rendering
+# ---------------------------------------------------------------------------
+
+
+def _render_answer(passages: list[SynthesizePassage]) -> str:
+    """Concatenate passages with inline [cite: ...] markers."""
+    parts: list[str] = []
+    for p in passages:
+        parts.append(f"{p['text_markdown']}\n[cite: {p['cite_id']}]")
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 7: budget enforcement
+# ---------------------------------------------------------------------------
+
+
+def _enforce_budget(
+    passages: list[SynthesizePassage],
+    *,
+    char_budget: int,
+) -> list[SynthesizePassage]:
+    """Truncate passages so total text_markdown chars <= char_budget.
+
+    Iterates in rank order; the last passage that doesn't fit is truncated
+    to fit the remaining budget. Subsequent passages are dropped if budget
+    is exhausted. Citation markers are NOT counted against the budget
+    (they're small and rendering happens after this stage).
+    """
+    budget = char_budget
+    capped: list[SynthesizePassage] = []
+    for p in passages:
+        body = p["text_markdown"]
+        if len(body) <= budget:
+            capped.append(p)
+            budget -= len(body)
+            continue
+        if budget > 0:
+            new_p = dict(p)
+            new_p["text_markdown"] = body[:budget]
+            capped.append(cast("SynthesizePassage", new_p))
+        break
+    return capped
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 8: citation building
+# ---------------------------------------------------------------------------
+
+
+def _parse_cite_id(cite_id: str) -> tuple[str, str, Optional[str]]:
+    """Decompose 'archive/entry_path#section_id' into its parts.
+
+    archive/entry_path is everything before '#'; section_id is the suffix
+    after '#' (or None if absent). The archive identifier is the FIRST
+    path segment (basename of the .zim, minus extension).
+    """
+    base, _, section_id = cite_id.partition("#")
+    archive, _, entry_path = base.partition("/")
+    return archive, entry_path, (section_id or None)
+
+
+def _build_citations(
+    passages: list[SynthesizePassage],
+    *,
+    archive_titles: dict[str, str],  # entry_path -> entry title
+    section_titles: dict[
+        tuple[str, str], str
+    ],  # (entry_path, section_id) -> section title
+) -> list[Citation]:
+    """Expand passages' cite_ids into Citation entries; dedupe by cite_id."""
+    seen: dict[str, Citation] = {}
+    for p in passages:
+        cite_id = p["cite_id"]
+        if cite_id in seen:
+            continue
+        archive, entry_path, section_id = _parse_cite_id(cite_id)
+        title = archive_titles.get(entry_path, entry_path)
+        section_title = (
+            section_titles.get((entry_path, section_id)) if section_id else None
+        )
+        seen[cite_id] = cast(
+            "Citation",
+            {
+                "cite_id": cite_id,
+                "archive": archive,
+                "entry_path": entry_path,
+                "title": title,
+                "section_id": section_id,
+                "section_title": section_title,
+            },
+        )
+    return list(seen.values())
 
 
 # ---------------------------------------------------------------------------
