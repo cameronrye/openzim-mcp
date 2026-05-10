@@ -44,3 +44,45 @@ def test_rrf_fuse_score_formula() -> None:
     fused = _rrf_fuse(rankings, k=60)
     expected = 1.0 / (60 + 1) + 1.0 / (60 + 1)
     assert fused[0][1] == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# Task 17: per-archive search stage
+# ---------------------------------------------------------------------------
+
+from unittest.mock import MagicMock  # noqa: E402
+
+
+def test_per_archive_search_single_archive() -> None:
+    """Single archive → list[(entry_path, snippet, score)] from Xapian."""
+    from openzim_mcp.synthesize import _per_archive_search
+
+    archive = MagicMock()
+    archive.basename = "wikipedia_en_simple"
+
+    search_handler = MagicMock()
+    search_handler.search_top_k.return_value = [
+        {"path": "A/Berlin", "snippet": "...", "score": 0.9},
+        {"path": "A/Munich", "snippet": "...", "score": 0.7},
+    ]
+
+    results = _per_archive_search(
+        archive,
+        search_handler=search_handler,
+        query="german cities",
+        k=5,
+    )
+    assert len(results) == 2
+    assert results[0]["path"] == "A/Berlin"
+
+
+def test_synthesize_query_signature_exists() -> None:
+    """synthesize_query is callable; signature stable from this task on."""
+    import inspect
+
+    from openzim_mcp.synthesize import synthesize_query
+
+    sig = inspect.signature(synthesize_query)
+    assert {"query", "archives", "cache", "content_processor", "config"} <= set(
+        sig.parameters
+    )

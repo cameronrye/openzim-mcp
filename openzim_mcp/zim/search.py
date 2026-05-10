@@ -1977,3 +1977,39 @@ class _SearchMixin:
             indent=2,
             ensure_ascii=False,
         )
+
+    def search_top_k(self, archive: "Archive", query: str, *, k: int) -> list[dict]:
+        """Top-K Xapian results from an open archive as a flat dict list.
+
+        Used by synthesize.py as the primary stage of the pipeline.  Each hit
+        has the shape ``{"path": str, "snippet": str, "score": float}``.
+
+        ``path`` is the entry path string returned directly by
+        ``search.getResults()`` (entry_id IS the path in libzim 9+).
+        ``snippet`` is produced by ``_get_entry_snippet`` (content-processor
+        extract, consistent with the rest of the search surface).
+        ``score`` is set to the hit's rank-based inverse (1 / rank) as a
+        lightweight proxy — libzim's Xapian binding does not expose raw BM25
+        scores through the public Python API.
+        """
+        query_obj = _zim_ops_mod.Query().set_query(query)
+        searcher = _zim_ops_mod.Searcher(archive)
+        search = searcher.search(query_obj)
+        total_results = search.getEstimatedMatches()
+        if total_results == 0:
+            return []
+        result_count = min(k, total_results)
+        entry_ids: List[str] = list(search.getResults(0, result_count))
+        hits: list[dict] = []
+        for rank, entry_id in enumerate(entry_ids, start=1):
+            try:
+                entry = archive.get_entry_by_path(entry_id)
+                snippet = self._get_entry_snippet(entry, query=query)
+            except Exception as exc:
+                logger.warning(
+                    f"search_top_k: error fetching entry {entry_id!r}: {exc}"
+                )
+                snippet = ""
+            score = 1.0 / rank  # rank-inverse proxy; no raw BM25 in libzim Python API
+            hits.append({"path": entry_id, "snippet": snippet, "score": score})
+        return hits

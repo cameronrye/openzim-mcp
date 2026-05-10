@@ -15,6 +15,18 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from libzim.reader import Archive  # type: ignore[import-untyped]
+
+    from openzim_mcp.cache import OpenZimMcpCache
+    from openzim_mcp.config import SynthesizeConfig
+    from openzim_mcp.content_processor import ContentProcessor
+
+from openzim_mcp.tool_schemas import SynthesizeResponse
 
 logger = logging.getLogger(__name__)
 
@@ -51,3 +63,70 @@ def _rrf_fuse(
             scores[path] += 1.0 / (k + rank)
     fused = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     return fused
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 1: per-archive search
+# ---------------------------------------------------------------------------
+
+
+def _per_archive_search(
+    archive: "Archive",
+    *,
+    search_handler: Any,  # SearchToolsHandler — typed loosely to avoid circular import
+    query: str,
+    k: int,
+) -> list[dict]:
+    """Run Xapian search on one archive, return top-K hits as dicts.
+
+    Hit shape: {"path": str, "snippet": str, "score": float}.
+    """
+    return cast(list[dict], search_handler.search_top_k(archive, query, k=k))
+
+
+# ---------------------------------------------------------------------------
+# synthesize_query — main entry point (skeleton; stages added in Tasks 18-21)
+# ---------------------------------------------------------------------------
+
+
+def synthesize_query(
+    query: str,
+    *,
+    archives: list[tuple["Archive", "Path"]],  # (archive, validated_path) pairs
+    search_handler: Any,
+    cache: "OpenZimMcpCache",
+    content_processor: "ContentProcessor",
+    config: "SynthesizeConfig",
+) -> SynthesizeResponse:
+    """Run the synthesize pipeline. Stages added incrementally in Tasks 18-21."""
+    # Stage 1: per-archive search
+    per_archive_results: list[list[dict]] = []
+    archives_searched: list[str] = []
+    for archive, validated_path in archives:
+        archive_name = validated_path.stem
+        archives_searched.append(archive_name)
+        per_archive_results.append(
+            _per_archive_search(
+                archive,
+                search_handler=search_handler,
+                query=query,
+                k=config.per_archive_k,
+            )
+        )
+
+    # Subsequent stages added in Tasks 18-21 below this line.
+    # For now, return a minimal SynthesizeResponse so the module imports cleanly.
+    return cast(
+        "SynthesizeResponse",
+        {
+            "query": query,
+            "answer_markdown": "",
+            "passages": [],
+            "citations": [],
+            "archives_searched": archives_searched,
+            "fallback_used": "xapian_score" if len(archives) == 1 else "rrf_fusion",
+            "total_chars": 0,
+            "total_words": 0,
+            "_meta": {},
+        },
+    )
