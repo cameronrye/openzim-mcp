@@ -11,6 +11,7 @@ from ..tool_schemas import (
     ArticleStructureResponse,
     BinaryEntryResponse,
     EntrySummaryResponse,
+    GetSectionResponse,
     LinksResponse,
     RelatedArticlesResponse,
     TableOfContentsResponse,
@@ -35,6 +36,7 @@ def register_structure_tools(server: "OpenZimMcpServer") -> None:
     _register_get_table_of_contents(server)
     _register_get_binary_entry(server)
     _register_get_related_articles(server)
+    _register_get_section(server)
 
 
 def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
@@ -515,4 +517,70 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
                     context=f"File: {zim_file_path}, Entry: {entry_path}",
                 ),
                 context=f"File: {zim_file_path}, Entry: {entry_path}",
+            )
+
+
+def _register_get_section(server: "OpenZimMcpServer") -> None:
+    @server.mcp.tool()
+    async def get_section(
+        zim_file_path: str,
+        entry_path: str,
+        section_id: str,
+        max_chars: Optional[int] = None,
+    ) -> Union[GetSectionResponse, ToolErrorPayload]:
+        """Fetch a single section from an entry by its section_id.
+
+        section_id values come from get_table_of_contents (TocHeading.section_id)
+        or get_article_structure (heading[].id). Returns the section body as
+        markdown plus metadata. Sections are sized for direct consumption
+        (≈500-1500 tokens); a max_chars cap truncates the body and sets
+        truncated=True.
+
+        On a miss (no section with that id), returns a ToolErrorPayload with
+        error="section_not_found" and available_section_ids in the payload so
+        the model can self-correct.
+
+        Args:
+            zim_file_path: Path to the ZIM file.
+            entry_path: Entry path (e.g., 'A/Berlin').
+            section_id: Section identifier from TOC.
+            max_chars: Optional cap on section body chars (default uses
+                       config.content.max_content_length).
+        """
+        try:
+            try:
+                server.rate_limiter.check_rate_limit("get_structure")
+            except OpenZimMcpRateLimitError as e:
+                return tool_error(
+                    operation="get section",
+                    message=server._create_enhanced_error_message(
+                        operation="get section",
+                        error=e,
+                        context=f"Entry: {entry_path}, section_id: {section_id}",
+                    ),
+                    context=f"Entry: {entry_path}, section_id: {section_id}",
+                )
+
+            zim_file_path = sanitize_input(zim_file_path, INPUT_LIMIT_FILE_PATH)
+            entry_path = sanitize_input(entry_path, INPUT_LIMIT_ENTRY_PATH)
+
+            return await server.async_zim_operations.get_section_data(
+                zim_file_path,
+                entry_path,
+                section_id,
+                max_chars=max_chars,
+            )
+
+        except Exception as e:
+            logger.error(f"Error in get_section: {e}")
+            return tool_error(
+                operation="get section",
+                message=server._create_enhanced_error_message(
+                    operation="get section",
+                    error=e,
+                    context=f"File: {zim_file_path}, Entry: {entry_path}, "
+                    f"section_id: {section_id}",
+                ),
+                context=f"File: {zim_file_path}, Entry: {entry_path}, "
+                f"section_id: {section_id}",
             )

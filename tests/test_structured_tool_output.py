@@ -747,6 +747,44 @@ class TestStructuredOutput:
         assert "configuration" in payload
         assert "diagnostics" in payload
 
+    @pytest.mark.asyncio
+    async def test_get_section_returns_structured_content(
+        self, server: OpenZimMcpServer, basic_test_zim_files
+    ) -> None:
+        """get_section must emit a structured dict envelope."""
+        zim_path = basic_test_zim_files.get("nons") or basic_test_zim_files.get(
+            "withns"
+        )
+        if zim_path is None:
+            pytest.skip("ZIM testing-suite small.zim not available")
+        result = await server.mcp._tool_manager.call_tool(
+            "get_section",
+            {
+                "zim_file_path": str(zim_path),
+                "entry_path": "A/Main_Page",
+                "section_id": "introduction",
+            },
+            convert_result=True,
+        )
+        assert isinstance(result, tuple)
+        _, structured = result
+        assert isinstance(structured, dict)
+        # FastMCP wraps Union returns in a uniform {"result": ...} envelope.
+        # Accept the wrapper; assert the inner shape.
+        payload = structured.get("result", structured)
+        # Tool returns either a GetSectionResponse or a ToolErrorPayload
+        # (section_not_found when the archive lacks that section_id).
+        # Both paths carry the wire-format contract — the structured
+        # content must be a real dict, not a JSON string.
+        assert isinstance(payload, dict)
+        if payload.get("error") is True:
+            # section_not_found or entry-missing — check ToolErrorPayload shape.
+            assert "operation" in payload
+        else:
+            assert "section_id" in payload
+            assert "section_title" in payload
+            assert "_meta" in payload
+
 
 def test_phase_c_bundle_shared_across_four_tools(v2_phase_a_zim) -> None:
     """All four collapsed tools share one EntryBundle per entry.
