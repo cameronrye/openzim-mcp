@@ -78,6 +78,15 @@ ARCHIVE_OPEN_TIMEOUT = 30.0
 # ``ContentDefaults.MAX_REDIRECT_DEPTH`` in ``defaults.py``.
 MAX_REDIRECT_DEPTH = CONTENT.MAX_REDIRECT_DEPTH
 
+# Per-entry preview cap for ``_extract_zim_metadata``. Wikipedia ZIMs
+# store ``M/Title`` as a full HTML document (~1 MB) rather than the
+# archive's bare title string; without a cap, that single value dwarfs
+# every other metadata field AND blows past the per-call response
+# budget. 800 chars is enough to surface the actual title for archives
+# that store it plain, AND a clear "[truncated, …]" marker for the
+# pathological HTML-template case.
+_METADATA_PREVIEW_CAP = 800
+
 
 logger = logging.getLogger(__name__)
 
@@ -453,7 +462,24 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                             .strip()
                         )
                         if content:
-                            metadata_entries[meta_key] = content
+                            # Wikipedia ZIMs store ``M/Title`` as a full
+                            # HTML document (~1 MB) rather than the bare
+                            # archive title. Embedding that verbatim
+                            # blows the response past every per-call
+                            # budget and starves a small model of the
+                            # other metadata fields. Cap each value at
+                            # 800 chars + mark elision so the caller
+                            # can still see structure (date, language,
+                            # creator) without paying for the rare
+                            # template-bloated field.
+                            if len(content) > _METADATA_PREVIEW_CAP:
+                                preview = content[:_METADATA_PREVIEW_CAP].rstrip()
+                                metadata_entries[meta_key] = (
+                                    f"{preview}… "
+                                    f"[truncated, {len(content):,} chars total]"
+                                )
+                            else:
+                                metadata_entries[meta_key] = content
                 except Exception as e:
                     # Entry doesn't exist or can't be read - expected for optional
                     logger.debug(f"Metadata 'M/{meta_key}' not available: {e}")

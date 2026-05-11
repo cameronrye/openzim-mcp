@@ -701,6 +701,29 @@ class _NamespaceMixin:
         # Check if archive uses new namespace scheme
         has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
 
+        # Fast path: new-scheme + C namespace. Every iterable entry in a
+        # new-scheme archive lives under C, so we don't need to enumerate
+        # a list of "C entries" — we can pull each page directly from
+        # the entry-id range. This avoids the 27M-iteration crash that
+        # the legacy "build full list then slice" path triggered on
+        # Wikipedia (D2): walking every entry to build a list we
+        # immediately slice 50 rows out of is both pathologically slow
+        # and memory-hostile. The total is ``archive.entry_count``,
+        # which libzim returns in O(1).
+        if has_new_scheme and namespace == "C":
+            return self._browse_new_scheme_c_paginated(
+                archive, namespace, limit, offset
+            )
+        # Fast path: new-scheme + W namespace. libzim doesn't surface W
+        # through the iterable surface, but the well-known entries
+        # (mainPage, favicon) ARE reachable by ``has_entry_by_path``.
+        # Probing the known paths recovers the W namespace's actual
+        # contents (D3) instead of the legacy empty result.
+        if has_new_scheme and namespace == "W":
+            return self._browse_new_scheme_w_paginated(
+                archive, namespace, limit, offset
+            )
+
         # Discover entries in the namespace. The full listing is cached
         # separately from the per-page JSON (cache_key in browse_namespace),
         # so different (limit, offset) pages share one scan. The stat
@@ -775,6 +798,149 @@ class _NamespaceMixin:
         }
 
         return result
+
+    def _materialise_paths(
+        self, archive: Archive, paths: List[str], *, log_label: str
+    ) -> List[Dict[str, Any]]:
+        """Run ``_materialise_browse_entry`` for each path, swallowing errors.
+
+        Shared between the new-scheme C / W paginators — both materialise
+        an already-known list of paths into the row dicts that
+        ``browse_namespace_data`` expects. ``log_label`` lets the warning
+        path identify which caller (C-range vs W-probe) produced the
+        failure for diagnostics.
+        """
+        out: List[Dict[str, Any]] = []
+        for entry_path in paths:
+            try:
+                materialised = self._materialise_browse_entry(
+                    archive, entry_path, has_new_scheme=True
+                )
+                if materialised is not None:
+                    out.append(materialised)
+            except Exception as e:
+                logger.warning(f"Error processing {log_label} entry {entry_path}: {e}")
+                continue
+        return out
+
+    @staticmethod
+    def _new_scheme_browse_payload(
+        *,
+        namespace: str,
+        total: int,
+        offset: int,
+        limit: int,
+        entries: List[Dict[str, Any]],
+        discovery_method: str,
+    ) -> Dict[str, Any]:
+        """Build the v2 Phase B browse-namespace inner payload shape.
+
+        Both the entry-id-range fast path (C) and the known-path probe
+        (W) produce authoritative totals with no sampling — every field
+        below is the same between them except ``discovery_method``,
+        so factor the dict to one place.
+        """
+        return {
+            "namespace": namespace,
+            "total_in_namespace": total,
+            "total_in_namespace_is_lower_bound": False,
+            "offset": offset,
+            "limit": limit,
+            "returned_count": len(entries),
+            "entries": entries,
+            "sampling_based": False,
+            "discovery_method": discovery_method,
+            "is_total_authoritative": True,
+            "results_may_be_incomplete": False,
+        }
+
+    def _browse_new_scheme_c_paginated(
+        self,
+        archive: Archive,
+        namespace: str,
+        limit: int,
+        offset: int,
+    ) -> Dict[str, Any]:
+        """Page through new-scheme C-namespace entries by entry-id range.
+
+        New-scheme archives store every iterable entry under C, so
+        pagination is just ``[offset, offset+limit)`` against the
+        entry-id range. The legacy code built a 27M-item list first and
+        then sliced — slow, memory-hostile, and triggered "session
+        expired" errors on real Wikipedia archives (D2). ``entry_count``
+        is the authoritative total; ``done`` falls out naturally from
+        ``offset + returned_count >= total``.
+        """
+        total = int(getattr(archive, "entry_count", 0) or 0)
+        page_paths: List[str] = []
+        end = min(offset + limit, total)
+        for entry_id in range(offset, end):
+            try:
+                entry = archive._get_entry_by_id(entry_id)
+            except Exception as e:
+                logger.warning(f"Error reading entry id {entry_id}: {e}")
+                continue
+            page_paths.append(entry.path)
+        return self._new_scheme_browse_payload(
+            namespace=namespace,
+            total=total,
+            offset=offset,
+            limit=limit,
+            entries=self._materialise_paths(
+                archive, page_paths, log_label="C-namespace"
+            ),
+            discovery_method="entry_id_range",
+        )
+
+    # Well-known W-namespace paths in new-scheme archives. libzim's
+    # iterable surface doesn't expose W, but ``has_entry_by_path`` does.
+    # MediaWiki-flavoured ZIMs typically populate ``W/mainPage`` and
+    # ``W/favicon``; some carry ``W/index`` and ``W/robots.txt``.
+    # Probe in priority order so the first page surfaces the most
+    # useful entries.
+    _NEW_SCHEME_W_CANDIDATES = (
+        "W/mainPage",
+        "W/favicon",
+        "W/index",
+        "W/robots.txt",
+        "W/exception.html",
+        "W/404.html",
+    )
+
+    def _browse_new_scheme_w_paginated(
+        self,
+        archive: Archive,
+        namespace: str,
+        limit: int,
+        offset: int,
+    ) -> Dict[str, Any]:
+        """Enumerate new-scheme W-namespace entries by probing known paths.
+
+        D3 fix: ``browse namespace W`` was returning 0 results despite
+        ``list_namespaces`` reporting two W entries. New-scheme archives
+        keep W off the iterable surface, but the well-known paths
+        (mainPage, favicon, …) are reachable via ``has_entry_by_path``.
+        Probing the known-candidates list recovers the actual W
+        contents so a small model navigating by namespace doesn't get a
+        false-empty page.
+        """
+        present: List[str] = []
+        for path in self._NEW_SCHEME_W_CANDIDATES:
+            try:
+                if archive.has_entry_by_path(path):
+                    present.append(path)
+            except Exception as e:
+                logger.debug(f"has_entry_by_path probe failed for {path}: {e}")
+        return self._new_scheme_browse_payload(
+            namespace=namespace,
+            total=len(present),
+            offset=offset,
+            limit=limit,
+            entries=self._materialise_paths(
+                archive, present[offset : offset + limit], log_label="W-namespace"
+            ),
+            discovery_method="known_path_probe",
+        )
 
     def _materialise_browse_entry(
         self, archive: Archive, entry_path: str, has_new_scheme: bool

@@ -17,7 +17,7 @@ Type: text/html
 
 Albert Einstein was a German-born theoretical physicist. He developed the theory of relativity, one of the two pillars of modern physics.
 
-[Table 1: 15 rows × 2 cols — pass compact=False to expand]
+[Table 1: 15 rows x 2 cols - pass compact=False to expand]
 </retrieved_archive_content>
 
 > ~148 tokens

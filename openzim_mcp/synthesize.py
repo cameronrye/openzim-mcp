@@ -146,6 +146,24 @@ def _normalize_ws(text: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
+# Strip ``**...**`` bold markers that ``create_snippet``'s
+# query-highlighting pass added. The bundle's ``rendered_markdown`` is
+# rendered WITHOUT the per-query highlight wrap, so a literal
+# ``md.find("**Photosynthesis**")`` returns -1 even though the plain
+# text matches. Stripping the bold markers before locating restores
+# section attribution (D8): every passage now carries its
+# ``#section_id`` suffix instead of dropping back to bare entry-level
+# citation.
+_BOLD_MARKER_RE = re.compile(r"\*\*")
+
+
+def _strip_bold(text: str) -> str:
+    """Remove ``**`` markers added by ``_highlight_terms`` so the
+    passage text can be located inside the bundle's plain
+    rendered_markdown."""
+    return _BOLD_MARKER_RE.sub("", text)
+
+
 def _locate_passage(md: str, passage_text: str) -> int:
     """Return the offset of ``passage_text`` within ``md``, or -1 on miss.
 
@@ -154,7 +172,15 @@ def _locate_passage(md: str, passage_text: str) -> int:
     inline-markup drift between the snippet rendering path and the
     bundle's rendered markdown. The returned offset is into the
     *original* ``md`` so callers can map it back to section ranges.
+
+    Passes the bold-stripped form to both probes — ``create_snippet``'s
+    query-highlight wrapper inserts ``**...**`` around the query term,
+    but the bundle markdown is rendered without highlighting, so a
+    literal ``md.find(passage_text)`` misses every snippet that
+    carries a highlighted term. Section attribution (D8) depends on
+    these probes hitting.
     """
+    passage_text = _strip_bold(passage_text)
     pos = md.find(passage_text)
     if pos >= 0:
         return pos
@@ -366,6 +392,43 @@ def _build_citations(
             },
         )
     return list(seen.values())
+
+
+# Markdown link/image regex shared between simple_tools._strip_markdown_links
+# and synthesize. Same disjoint-alternation shape as the simple_tools regex
+# so the pattern engine doesn't backtrack against unclosed brackets.
+_MD_LINK_RE = re.compile(r"\[([^\[\]]*?)\]\((?:[^()\n\\]|\\.)*\)")
+_MD_IMAGE_RE = re.compile(r"!\[[^\[\]]*?\]\((?:[^()\n\\]|\\.)*\)")
+
+
+def _strip_links_in_passage(p: SynthesizePassage) -> SynthesizePassage:
+    """Strip Wikipedia-style markdown link syntax from a passage's text.
+
+    Drops ``![alt](src)`` images entirely (alt-text + URL are rarely
+    informative for a small model). Replaces ``[text](href "tooltip")``
+    with ``text``. Idempotent on already-stripped text. Op4: useful
+    when ``synthesize=True`` is called with ``compact=True``, where
+    the simple-mode dispatcher otherwise applies the link strip to
+    the rendered markdown but NOT to the passages list.
+    """
+    body = p["text_markdown"]
+    if not body or "[" not in body:
+        return p
+    body = _MD_IMAGE_RE.sub("", body)
+    body = _MD_LINK_RE.sub(r"\1", body)
+    new_p = dict(p)
+    new_p["text_markdown"] = body
+    return cast("SynthesizePassage", new_p)
+
+
+def _drop_passage_text(p: SynthesizePassage) -> SynthesizePassage:
+    """Return a passage with ``text_markdown`` replaced by an empty
+    string — keeping the field present (TypedDict schema) but
+    collapsing it to one byte so it doesn't duplicate ``answer_markdown``
+    in the response."""
+    new_p = dict(p)
+    new_p["text_markdown"] = ""
+    return cast("SynthesizePassage", new_p)
 
 
 # ---------------------------------------------------------------------------
@@ -609,8 +672,30 @@ def synthesize_query(
     cache: OpenZimMcpCache,
     content_processor: ContentProcessor,
     config: SynthesizeConfig,
+    original_query: Optional[str] = None,
+    strip_links: bool = False,
+    omit_passage_text: bool = False,
 ) -> SynthesizeResponse:
-    """Run the synthesize pipeline end-to-end."""
+    """Run the synthesize pipeline end-to-end.
+
+    ``original_query`` is echoed back as ``response["query"]`` when
+    supplied — the caller is responsible for any pre-processing
+    (intent-prefix stripping for D5) and ``original_query`` lets the
+    user-facing query be preserved while ``query`` carries the
+    BM25-friendly form.
+
+    ``strip_links`` (Op4): when True, markdown-link soup
+    ``[text](href "tooltip")`` in passages is stripped to plain text
+    before rendering. Wikipedia exports are ~50% link syntax in the
+    head of a typical article; stripping doubles the useful prose
+    density for small models that can't follow inline links anyway.
+
+    ``omit_passage_text`` (D8): when True, the ``passages[]`` array
+    drops ``text_markdown`` (which is verbatim-duplicated inside
+    ``answer_markdown``) and keeps only the lightweight metadata
+    (``cite_id``, ``rank``, ``score``). Cuts the response by ~50%
+    on a typical 5-passage synthesize call.
+    """
     per_archive_hits, archives_searched, archive_by_name = _do_per_archive_search(
         archives,
         search_handler=search_handler,
@@ -620,10 +705,13 @@ def synthesize_query(
     top_hits, fallback_used = _select_top_hits(
         per_archive_hits, archives_searched, top_n=config.top_n
     )
+    response_query = original_query if original_query is not None else query
     if not top_hits:
-        return _zero_hits_response(query, archives_searched, fallback_used)
+        return _zero_hits_response(response_query, archives_searched, fallback_used)
 
     all_passages, hit_keys = _extract_passages_for_top_hits(top_hits)
+    if strip_links:
+        all_passages = [_strip_links_in_passage(p) for p in all_passages]
     bundle_lookup = _make_bundle_lookup(
         top_hits,
         archive_by_name,
@@ -653,12 +741,21 @@ def synthesize_query(
         content_chars=len(answer_md) if truncated else None,
         total_chars=pre_cap_chars if truncated else None,
     )
+    # D8: ``answer_markdown`` already carries each passage's text
+    # verbatim; ``passages[].text_markdown`` is a 100% duplicate.
+    # When ``omit_passage_text=True`` (default for compact mode in
+    # simple_tools / zim_query), drop the field so the response halves
+    # in size on a typical 5-passage call. The cite_id/rank/score
+    # remain so callers can correlate passages with citations.
+    response_passages: list[SynthesizePassage] = capped
+    if omit_passage_text:
+        response_passages = [_drop_passage_text(p) for p in capped]
     return cast(
         "SynthesizeResponse",
         {
-            "query": query,
+            "query": response_query,
             "answer_markdown": answer_md,
-            "passages": capped,
+            "passages": response_passages,
             "citations": citations,
             "archives_searched": archives_searched,
             "fallback_used": fallback_used,

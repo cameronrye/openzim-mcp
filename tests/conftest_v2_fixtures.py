@@ -107,14 +107,27 @@ def capture_or_compare(
     goldens_dir.mkdir(parents=True, exist_ok=True)
     path = goldens_dir / f"{name}.json"
     if capture_mode or not path.exists():
+        # Explicit UTF-8 encoding so non-ASCII characters in goldens
+        # (em dashes, multiplication signs, accented entry titles) survive
+        # a round-trip on Windows runners. ``write_text`` without ``encoding=``
+        # picks ``locale.getpreferredencoding(False)``, which is ``cp1252``
+        # on default Windows; bytes outside cp1252's repertoire raise on
+        # write or surface as ``?`` mojibake.
         path.write_text(
             json.dumps(
                 strip_volatile(payload), indent=2, ensure_ascii=False, sort_keys=True
             ),
             newline="\n",
+            encoding="utf-8",
         )
         return
-    expected = json.loads(path.read_text())
+    # Matching ``encoding="utf-8"`` on the read side — the goldens are
+    # written as UTF-8 with ``ensure_ascii=False``, so any non-ASCII
+    # character (``×``, ``—``, accents) becomes mojibake when read with
+    # cp1252. Pre-fix, the Windows CI runners saw ``[Table 1: 15 rows
+    # � 2 cols � pass`` and diffed against the Mac/Linux-captured
+    # ``rows × 2 cols —``.
+    expected = json.loads(path.read_text(encoding="utf-8"))
     assert strip_volatile(payload) == strip_volatile(expected), (
         f"Golden mismatch for {name}. "
         "Set OPENZIM_MCP_CAPTURE_GOLDENS=1 to refresh after intentional changes."

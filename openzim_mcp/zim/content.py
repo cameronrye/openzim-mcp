@@ -64,14 +64,32 @@ class _ContentMixin:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
     def _get_entry_snippet(self, entry: Any, query: Optional[str] = None) -> str:
-        """Get content snippet for search result, optionally query-aware."""
+        """Get content snippet for search result, optionally query-aware.
+
+        Renders the entry's HTML with ``compact=True`` so the resulting
+        markdown matches what the EntryBundle stores (the bundle is also
+        built with ``compact=True`` in :mod:`openzim_mcp.bundle`).
+        Without the same flag on both sides, search snippets carried
+        pipe-soup infoboxes and raw tables that the bundle had already
+        replaced with placeholders — section attribution in synthesize
+        couldn't find those snippets in the bundle markdown, so every
+        passage dropped back to entry-level citations.
+
+        ``title=entry.title`` is forwarded to ``create_snippet`` so the
+        leading ``# <Title>`` H1 that html2text emits (a verbatim
+        duplicate of the entry title already shown in the result row)
+        is stripped before snippet selection — Op1.
+        """
         try:
             item = entry.get_item()
             if item.mimetype.startswith("text/"):
                 content = self.content_processor.process_mime_content(
-                    bytes(item.content), item.mimetype
+                    bytes(item.content), item.mimetype, compact=True
                 )
-                return self.content_processor.create_snippet(content, query=query)
+                entry_title = getattr(entry, "title", None) or ""
+                return self.content_processor.create_snippet(
+                    content, query=query, title=entry_title
+                )
             else:
                 return f"(Unsupported content type: {item.mimetype})"
         except Exception as e:

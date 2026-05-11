@@ -208,6 +208,7 @@ class OpenZimMcpServer:
             zim_file_path: Optional[str] = None,
             limit: Optional[int] = None,
             offset: int = 0,
+            cursor: Optional[str] = None,
             max_content_length: Optional[int] = None,
             compact: bool = True,
             compact_budget: Optional[Any] = None,
@@ -314,6 +315,15 @@ class OpenZimMcpServer:
                     options["offset"] = offset
                 if compact_budget is not None:
                     options["compact_budget"] = compact_budget
+                # D10: ``cursor`` is the v2 Phase B pagination handle.
+                # When supplied, it's decoded and its embedded ``o``
+                # (offset) overrides any caller-supplied ``offset``.
+                # Without this, the cursors that walk/browse/search
+                # responses surface are decorative: the only paging
+                # channel reachable from zim_query was the integer
+                # ``offset`` parameter.
+                if cursor is not None and str(cursor).strip():
+                    options["cursor"] = str(cursor).strip()
 
                 # Use simple tools handler. handle_zim_query is synchronous and
                 # performs blocking ZIM I/O, so dispatch it to a worker thread

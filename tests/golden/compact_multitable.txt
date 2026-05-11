@@ -13,11 +13,11 @@ Type: text/html
 
 Intro paragraph.
 
-[Table 1: 20 rows × 1 cols — pass compact=False to expand]
+[Table 1: 20 rows x 1 cols - pass compact=False to expand]
 
 Middle paragraph.
 
-[Table 2: 20 rows × 1 cols — pass compact=False to expand]
+[Table 2: 20 rows x 1 cols - pass compact=False to expand]
 </retrieved_archive_content>
 
 > ~121 tokens

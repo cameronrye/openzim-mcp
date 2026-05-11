@@ -331,6 +331,11 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
         respiration, path=Biology
       * ``"section 3 of Biology"`` -> name="3" (numeric) — handler treats
         bare integers as 1-indexed positions into the article's headings.
+      * ``"narrow section Geography of Berlin"`` (or ``"just section …"``)
+        -> name=Geography, path=Berlin, narrow=True. Tells the handler
+        to scope the slice to the heading itself (no nested
+        subsections). Op3: surfaces ``include_subsections=False`` to
+        small-model callers via a memorable verb.
 
     Two separate patterns because the section-name placement differs:
     pre-keyword (``"section X of Y"``) vs. pre-keyword-with-determiner
@@ -338,6 +343,15 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
     section called ``"In the news"`` doesn't get parsed as ``"In"`` +
     `` the news`` of nothing.
     """
+    # Op3: detect a "narrow" / "just" prefix and strip it before the
+    # regular section-extraction passes run. Stays a flag in ``params``
+    # so the handler can switch ``include_subsections``.
+    narrow_match = safe_regex_search(
+        r"^\s*(?:narrow|just|only)\s+", query, re.IGNORECASE
+    )
+    if narrow_match:
+        params["narrow"] = True
+        query = query[narrow_match.end() :]
     # Form A: ``[the] section <name> of|in|from <path>``
     m = safe_regex_search(
         rf"\b(?:the\s+)?section\s+{_QUOTE_OPEN}?({_QUOTE_NOT}+?){_QUOTE_OPEN}?"

@@ -20,11 +20,15 @@ from typing import Any, Dict, Mapping, Optional
 def compact_structure_payload(payload: Mapping[str, Any]) -> str:
     """Render a compact JSON view of an article-structure payload.
 
-    Drops the per-heading ``preview`` field (~3000 chars each, the
-    bulk of the response budget) and keeps only the navigation-shaped
-    fields (level, text, id) plus the article-level summary. Reduces
-    a typical structure response from ~17k chars to ~1-2k while
-    preserving everything an LLM needs to choose a next operation.
+    Drops the per-heading 300-char ``content_preview`` and substitutes
+    a tight 80-char ``summary`` derived from each section's leading
+    prose. Op2: surfacing a per-section summary closes the small-LLM
+    gap where the legacy compact form had only the heading text —
+    enough to know *that* a section exists, not enough to choose
+    which one to drill into. The 80-char cap keeps total response
+    size bounded: a typical 50-section Wikipedia article comes in
+    around 2-4 kB even with summaries, vs ~17 kB with full previews
+    or ~1 kB with bare-heading list.
 
     Returns a JSON string (matching the shape of the legacy
     ``get_article_structure`` text path) so callers can swap in
@@ -32,18 +36,47 @@ def compact_structure_payload(payload: Mapping[str, Any]) -> str:
     """
     if not isinstance(payload, dict):
         return json.dumps(payload)
+
+    # Build a quick (title → first_preview) lookup so we can pair
+    # each heading with the matching ``sections[]`` entry without
+    # an O(n²) inner loop. Sections and headings share the same
+    # document-order layout, but joining by title is more robust
+    # to future shape changes than joining by index.
+    section_summary_by_title: Dict[str, str] = {}
+    for s in payload.get("sections") or []:
+        if not isinstance(s, dict):
+            continue
+        st = s.get("title")
+        sp = s.get("content_preview") or ""
+        if (
+            isinstance(st, str)
+            and isinstance(sp, str)
+            and st not in section_summary_by_title
+        ):
+            # 80-char cap: short enough to keep the compact response
+            # tight, long enough to give a small model a sense of
+            # what each section covers ("Climate", "Demographics",
+            # etc. are themselves uninformative without context).
+            section_summary_by_title[st] = sp.strip()[:80]
+
+    compact_headings = []
+    for h in payload.get("headings") or []:
+        if not isinstance(h, dict):
+            continue
+        entry: Dict[str, Any] = {
+            "level": h.get("level"),
+            "text": h.get("text"),
+            "id": h.get("id"),
+        }
+        summary = section_summary_by_title.get(h.get("text") or "")
+        if summary:
+            entry["summary"] = summary
+        compact_headings.append(entry)
+
     compact: Dict[str, Any] = {
         "title": payload.get("title"),
         "path": payload.get("path"),
-        "headings": [
-            {
-                "level": h.get("level"),
-                "text": h.get("text"),
-                "id": h.get("id"),
-            }
-            for h in payload.get("headings") or []
-            if isinstance(h, dict)
-        ],
+        "headings": compact_headings,
     }
     # Preserve a couple of small article-level summary fields that
     # callers may want for context — they're a few bytes each, not a

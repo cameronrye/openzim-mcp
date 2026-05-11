@@ -279,7 +279,14 @@ def extract_entry_bundle(
     raw_links = content_processor.extract_html_links(html)
     link_buckets = _build_link_buckets(raw_links)
     infobox = _extract_infobox(soup, content_processor)
-    rendered = content_processor._render_soup_to_text(soup, compact=False)
+    # Render with compact=True so that the bundle's rendered_markdown
+    # carries the same table-stripping placeholders that direct
+    # ``get_zim_entry`` callers see. Without this, get_section returns
+    # raw pipe-soup tables for the climate / standings / etc. data
+    # tables embedded in Wikipedia articles — a UX regression vs. the
+    # surrounding article-fetch path. The infobox is already
+    # ``decompose()``d above, so compact rendering won't re-extract it.
+    rendered = content_processor._render_soup_to_text(soup, compact=True)
     sections = _compute_section_offsets(rendered, headings)
 
     bundle: EntryBundle = cast(

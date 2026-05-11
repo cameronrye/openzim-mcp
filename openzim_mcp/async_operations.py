@@ -677,6 +677,8 @@ class AsyncZimOperations:
         entry_path: str,
         section_id: str,
         max_chars: Optional[int] = None,
+        *,
+        include_subsections: bool = True,
     ) -> "Union[GetSectionResponse, ToolErrorPayload]":
         """Structured variant of ``get_section`` (async)."""
         return await asyncio.to_thread(
@@ -685,4 +687,5 @@ class AsyncZimOperations:
             entry_path,
             section_id,
             max_chars=max_chars,
+            include_subsections=include_subsections,
         )
