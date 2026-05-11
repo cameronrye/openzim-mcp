@@ -5,6 +5,144 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a7] — 2026-05-11 (alpha pre-release)
+
+Defect + opportunity batch on top of v2.0.0a6, found by end-to-end
+testing against a real Wikipedia ZIM (118 GB, 27.2M entries,
+Feb 2026 snapshot). 14 defects fixed, 8 opportunities added.
+1388 tests pass (+13 from new test modules); no regressions.
+
+### Fixed — Phase A (snippets, infobox, typo fallback)
+
+- **#14: `_typo_variants` now reaches `"Photosythesis"` → `"Photosynthesis"`.**
+  v2.0.0a4 shipped only transposition + deletion edits — mathematically
+  unable to recover the missing `'n'` (insertion). Added insertion +
+  substitution against the full a-z alphabet, length-gated at ≥ 5 chars
+  to bound cost (~700 variants for a 13-char input; ≤ 10 ms/call).
+- **#1: snippet highlighter no longer produces malformed markdown.**
+  `_highlight_terms` previously wrapped query terms verbatim, producing
+  `**Artificial **photosynthesis****`, `_****Berlin****_`, and
+  `[**Photosynthesis**](**Photosynthesis** "**Photosynthesis**")` when
+  the match landed inside existing bold / italic / link constructs.
+  Added a skip regex covering paired emphasis runs and full
+  `[text](href "tooltip")` link constructs (deliberately not bare
+  parens, so prose like `(also called assimilation)` keeps its
+  highlighting).
+- **#1: snippet fallback to stem-prefix substring match.** When no
+  whole-word match existed, the snippet used to drop to the lead
+  paragraph. Now it falls back to a stem-prefix substring (first ⅔ of
+  the query term) so `"photosynthesis"` catches paragraphs mentioning
+  `"photosynthetic"` instead of returning the article's unrelated lead.
+- **Op1: snippets drop the duplicate `# <Title>` H1.** `create_snippet`
+  accepts an optional `title=`; `_get_entry_snippet` forwards the
+  entry title so the heading that already appears in the result row
+  doesn't burn 5–15 tokens per result.
+- **#2 / Op5: infobox extraction tracks parent-section context.**
+  `extract_infobox` now prefixes labels with their parent
+  `<th colspan>` heading row, so a Berlin infobox renders
+  `Area — City/State` / `Population — City/State` instead of three
+  identical `City/State` rows. Also skips rows whose nearest table
+  ancestor isn't the infobox (handles nested chronology / coords
+  microformats) and rejects `<th>` / `<td>` candidates borrowed from
+  inside nested tables.
+- **Op6: strip image-caption / hatnote / sidebar / navbox / inline
+  citation noise.** `UNWANTED_HTML_SELECTORS` now drops `figure`,
+  `figcaption`, `.thumb`, `.thumbcaption`, `.gallery`, `.hatnote`,
+  `.sidebar`, `.navbox`, `.metadata.mbox-small`, `sup.reference`,
+  `.reference`, `.mw-collapsible-toggle`, and the `.geo-*` coordinate
+  microformats. Article leads now start with the actual prose, not
+  `Schematic of … For other uses, see X (disambiguation). Part of a
+  series on … 52°31'07"N 13°24'16"E …`.
+
+### Fixed — Phase B (response contract)
+
+- **#3 / Op8: `zim_query` accepts a `cursor` parameter.** Tools advertised
+  opaque base64 cursors in their responses, but the simple-mode
+  `zim_query` tool only took an integer `offset` — the cursors were
+  decorative. Now decoded; `s.o` populates `options["offset"]` and the
+  per-tool state is preserved. Length-capped at 2 KB
+  defense-in-depth.
+
+### Fixed — Phase C (primitives)
+
+- **#9 / #7: `get_section` table rendering now matches `get_zim_entry`.**
+  The bundle's `rendered_markdown` was built with `compact=False` while
+  `get_zim_entry` rendered with `compact=True`. Result: `get_section
+  "Geography"` returned pipe-soup tables while the surrounding article
+  fetch path showed `[Table N: M rows x P cols - pass compact=False to
+  expand]` placeholders. Bundle and search-snippet rendering paths now
+  both apply `compact=True`, so the markdown is consistent everywhere.
+- **#10 / D8: synthesize attribution carries the `#section_id` suffix.**
+  `_locate_passage` couldn't find passages containing `**bold**`
+  highlight markers inside the bundle's plain markdown — every citation
+  fell back to entry-level (`section_id: null`). Now strips `**`
+  markers before locating so attribution resolves correctly.
+- **#10 / D5: synthesize strips natural-language interrogative prefix.**
+  `synthesize=True` with `"tell me about Berlin"` previously fed the
+  entire phrase to BM25 — returning Irving Berlin songs, Nat King Cole
+  albums, and a graffiti article instead of the canonical Berlin
+  entry. Intent-parses first, hands only the topic to the search
+  stage; preserves the original query for response echo.
+- **#10 / D8 / Op4: response dedupe + link-strip in compact mode.**
+  `passages[].text_markdown` previously duplicated `answer_markdown`
+  verbatim (~50% token bloat on every synthesize call). In compact
+  mode, passages now omit the body text. Wikipedia link-soup
+  (`[text](href "tooltip")`) is also stripped from passages — small
+  models can't follow inline links from inside tool responses anyway.
+- **Op3: `get_section` supports narrow scoping.** New
+  `include_subsections=False` parameter on `get_section_data` (and the
+  `narrow section X of Y` / `just section X of Y` query syntax in
+  simple mode) ends the slice at the next heading of any level, so a
+  caller can fetch just the H2 lead paragraphs without the cascading
+  H3 sub-tree.
+- **Op2: compact structure response carries per-heading summaries.**
+  The 80-char `summary` field is derived from each section's body
+  preview so a small model can choose which section to drill into,
+  not just see which exist.
+
+### Fixed — namespace / metadata / `tell me about`
+
+- **D2: `browse namespace C` no longer crashes on new-scheme archives.**
+  Legacy code built a full 27 M-entry list before slicing 50 rows out
+  of it — slow, memory-hostile, and triggered "session expired" errors
+  on real Wikipedia archives. New `_browse_new_scheme_c_paginated`
+  pages directly through the entry-id range.
+- **D3: `browse namespace W` returns the actual W entries.** New-scheme
+  archives keep W off libzim's iterable surface, but the well-known
+  paths (`W/mainPage`, `W/favicon`, ...) are reachable via
+  `has_entry_by_path`. New `_browse_new_scheme_w_paginated` probes
+  them so the response matches `list_namespaces`' count.
+- **D11: metadata previews cap at 800 chars.** Wikipedia ZIMs store
+  `M/Title` as a full HTML document (~1 MB) rather than the bare title
+  string. The `metadata for <archive>` call previously returned 980 KB,
+  starving every other metadata field. Each entry is now capped with
+  a `[truncated, N chars total]` marker.
+- **D6 / Op7: `tell me about <topic>` auto-fetches on title-index hit.**
+  When the top BM25 result wasn't a strong-title match (Xapian ranked
+  `List of songs about Berlin` above the canonical `Berlin` article),
+  the response used to render the search list. Now falls back to
+  `find_entry_by_title_data`; promotes any score-1.0 result past the
+  BM25 ranking and inlines the article body.
+
+### CI / quality
+
+- **3 new test modules, 47 additional assertions** covering each fix:
+  `test_typo_variants_v2a7.py`, `test_content_processor_fixes_v2a7.py`,
+  `test_v2a7_fixes_helpers.py`. End-to-end proof that `"Photosythesis"`
+  resolves through the full call path (mock archive + suggester); perf
+  guard against quadratic regressions in `_typo_variants`; cursor
+  garbage-rejection; metadata cap on both long and short values.
+- **Goldens regenerated** (all strict improvements): pipe-soup infobox
+  snippet → clean lead-paragraph snippet for Einstein; H1 dedup +
+  section attribution on the Berlin / Munich synthesize fixtures.
+- **Test infra**: explicit `encoding="utf-8"` on golden read/write so
+  non-ASCII characters in goldens survive Windows runners.
+- **SonarCloud quality gate**: factored shared test setup
+  (`_make_simple_handler`, `_build_metadata_mock_archive`,
+  `_wire_typo_fallback_archive`) and namespace browse-payload shape
+  (`_new_scheme_browse_payload`, `_materialise_paths`) so new-code
+  duplication stays under 3%.
+
 ## [2.0.0a6] — 2026-05-11 (alpha pre-release)
 
 Bugfix-only follow-up to v2.0.0a4 after a two-pass review of the
