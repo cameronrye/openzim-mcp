@@ -249,10 +249,16 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     entries = data.get("results") or []
     done = data.get("done", False)
 
+    # D10 (v2.0.0a9): the prior wording read ``(archive total: 27M)``
+    # for ``walk namespace M`` even though the M namespace only has 13
+    # entries — the figure was the WHOLE-archive count. That confused
+    # callers into thinking M had millions of entries. Label the
+    # number explicitly as ``archive-wide entries`` so the scope is
+    # unambiguous.
     if archive_total:
         header = (
             f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned} "
-            f"(archive total: {archive_total:,})"
+            f"(of ~{archive_total:,} archive-wide entries)"
         )
     else:
         header = f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned}"

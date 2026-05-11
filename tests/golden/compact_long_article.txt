@@ -17,4 +17,4 @@ Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word Word 
 _Response truncated at 5,799 chars (was 8,203). Use a tighter query, `show structure of <path>` for navigation, or pass `compact=False` to opt out of size caps._
 </retrieved_archive_content>
 
-> ~1.3K tokens · 6.0K of 8.2K chars · pass `offset=6000` for more
+> ~1.3K tokens · 6.0K of 8.2K chars

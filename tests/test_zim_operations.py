@@ -614,11 +614,15 @@ class TestZimOperations:
         ):
             zim_operations.browse_namespace("test.zim", "C", offset=-1)
 
+        # Path validation must fire when the namespace is recognized
+        # (so the canonicalisation can't pre-empt with a fast-reject).
+        # ``C`` is the most common new-scheme content namespace and
+        # always passes the D11 known-namespace check.
         with pytest.raises(
             OpenZimMcpSecurityError,
             match="Access denied - Path is outside allowed directories",
         ):
-            zim_operations.browse_namespace("test.zim", "ABC", limit=10)
+            zim_operations.browse_namespace("test.zim", "C", limit=10)
 
     def test_browse_namespace_raises_validation_error_for_bad_limit(
         self, zim_operations: ZimOperations

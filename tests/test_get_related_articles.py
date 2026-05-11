@@ -96,6 +96,43 @@ class TestGetRelatedArticles:
         assert result["page_info"]["offset"] == 0
         assert result["page_info"]["returned_count"] == len(result["results"])
 
+    def test_outbound_ranks_by_mention_count(self, server: OpenZimMcpServer):
+        """D9 (v2.0.0a9): related-articles rank by mention frequency.
+
+        Previously the first N links in document order won, which made
+        the ``articles related to X`` surface basically "first N links",
+        not a relatedness measure. Now a target mentioned 3 times in
+        the article outranks one mentioned once — a cheap proxy for
+        semantic centrality. The ``mention_count`` field surfaces the
+        ranking signal so callers can interpret the order.
+        """
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "kind": "internal",
+                "results": [
+                    {"url": "Berlin", "text": "Berlin"},
+                    {"url": "Brandenburg", "text": "Brandenburg"},
+                    {"url": "Berlin", "text": "the capital"},
+                    {"url": "Berlin", "text": "Berlin"},
+                    {"url": "Spree", "text": "Spree"},
+                    {"url": "Brandenburg", "text": "Brandenburg"},
+                ],
+            }
+        )
+        result = server.zim_operations.get_related_articles_data(
+            "/zim/test.zim", "C/Germany", limit=10
+        )
+        results = result["results"]
+        # Berlin (3 mentions) leads, Brandenburg (2) is second, Spree (1) is third.
+        assert [r["path"] for r in results] == ["C/Berlin", "C/Brandenburg", "C/Spree"]
+        # mention_count surfaces the ranking signal.
+        counts = {r["path"]: r["mention_count"] for r in results}
+        assert counts == {"C/Berlin": 3, "C/Brandenburg": 2, "C/Spree": 1}
+        # link_text is the FIRST occurrence's anchor text — not the last
+        # or a synthesized merge.
+        berlin_row = next(r for r in results if r["path"] == "C/Berlin")
+        assert berlin_row["link_text"] == "Berlin"
+
     def test_invalid_limit_raises(self, server: OpenZimMcpServer):
         """An out-of-range limit raises OpenZimMcpValidationError."""
         with pytest.raises(OpenZimMcpValidationError, match="limit must be"):

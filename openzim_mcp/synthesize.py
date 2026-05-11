@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
 
 from openzim_mcp.bundle import get_or_build_bundle
+from openzim_mcp.title_promotion import is_strong_title_match
 from openzim_mcp.tool_schemas import Citation, SynthesizePassage, SynthesizeResponse
 
 logger = logging.getLogger(__name__)
@@ -366,8 +367,15 @@ def _build_citations(
     section_titles: dict[
         tuple[str, str, str], str
     ],  # (archive, entry_path, section_id) -> section title
+    include_rank_score: bool = False,
 ) -> list[Citation]:
-    """Expand passages' cite_ids into Citation entries; dedupe by cite_id."""
+    """Expand passages' cite_ids into Citation entries; dedupe by cite_id.
+
+    When ``include_rank_score`` is True (D8/Op4 compact-mode path), the
+    passage rank and score fold into the citation row. The verbose
+    path keeps citations metadata-only — rank/score live on
+    ``SynthesizePassage`` in that mode.
+    """
     seen: dict[str, Citation] = {}
     for p in passages:
         cite_id = p["cite_id"]
@@ -380,17 +388,18 @@ def _build_citations(
             if section_id
             else None
         )
-        seen[cite_id] = cast(
-            "Citation",
-            {
-                "cite_id": cite_id,
-                "archive": archive,
-                "entry_path": entry_path,
-                "title": title,
-                "section_id": section_id,
-                "section_title": section_title,
-            },
-        )
+        citation: dict[str, Any] = {
+            "cite_id": cite_id,
+            "archive": archive,
+            "entry_path": entry_path,
+            "title": title,
+            "section_id": section_id,
+            "section_title": section_title,
+        }
+        if include_rank_score:
+            citation["rank"] = int(p.get("rank", 0))
+            citation["score"] = float(p.get("score", 0.0))
+        seen[cite_id] = cast("Citation", citation)
     return list(seen.values())
 
 
@@ -418,16 +427,6 @@ def _strip_links_in_passage(p: SynthesizePassage) -> SynthesizePassage:
     body = _MD_LINK_RE.sub(r"\1", body)
     new_p = dict(p)
     new_p["text_markdown"] = body
-    return cast("SynthesizePassage", new_p)
-
-
-def _drop_passage_text(p: SynthesizePassage) -> SynthesizePassage:
-    """Return a passage with ``text_markdown`` replaced by an empty
-    string — keeping the field present (TypedDict schema) but
-    collapsing it to one byte so it doesn't duplicate ``answer_markdown``
-    in the response."""
-    new_p = dict(p)
-    new_p["text_markdown"] = ""
     return cast("SynthesizePassage", new_p)
 
 
@@ -481,6 +480,79 @@ def _do_per_archive_search(
             )
         )
     return per_archive_hits, archives_searched, archive_by_name
+
+
+def _promote_title_match(
+    top_hits: list[tuple[str, dict]],
+    *,
+    query: str,
+    archives: list[tuple[Archive, Path]],
+    archives_searched: list[str],
+    search_handler: Any,
+) -> list[tuple[str, dict]]:
+    """Promote a canonical title-index hit past BM25 noise (D3 / Op1).
+
+    Mirrors the title-promotion logic in ``tell_me_about``: when the
+    top BM25 hit isn't a strong title match for the query, ask each
+    archive's title-index fast path for the canonical entry. If one
+    archive answers, prepend that hit so the synthesized response
+    leads with the canonical article instead of a derivative.
+
+    Pre-existing BM25 hits are preserved — the promoted entry just
+    moves to rank 1. Already-strong top hits short-circuit so the
+    common case pays no extra archive probes.
+
+    No-op when ``query`` is multi-word phrasing that isn't really a
+    topic ask (handled upstream by ``intent_parser``) — by then
+    ``query`` is the topic itself, so a fast-path title lookup is
+    the right shape.
+    """
+    if top_hits:
+        top_hit_0 = top_hits[0][1]
+        top_path = str(top_hit_0.get("path", ""))
+        # Use the path as the title proxy — Wikipedia exports preserve the
+        # title in the path (``Berlin`` ↔ ``Berlin``) so the token-match
+        # comparison works without a second archive read.
+        if is_strong_title_match(query, top_path, top_path.replace("_", " ")):
+            return top_hits
+
+    title_match_hit = getattr(search_handler, "title_match_hit", None)
+    if not callable(title_match_hit):
+        return top_hits
+
+    # Probe each archive's title-index fast path in order. The first
+    # archive that resolves wins — for single-archive synthesize this
+    # is trivially deterministic; for multi-archive the order is
+    # ``archives_searched`` (set by ``_do_per_archive_search``).
+    existing_paths = {(name, str(h.get("path", ""))) for name, h in top_hits}
+    for (archive, _vp), archive_name in zip(archives, archives_searched):
+        try:
+            promoted = title_match_hit(archive, query)
+        except Exception as e:
+            logger.debug("title_match_hit failed for %s: %s", archive_name, e)
+            continue
+        # Defensive: tolerate mock handlers that return non-dict
+        # sentinel values; only act on a real hit payload.
+        if not isinstance(promoted, dict):
+            continue
+        promoted_path = str(promoted.get("path", ""))
+        if not promoted_path:
+            continue
+        if (archive_name, promoted_path) in existing_paths:
+            # Already present — re-rank it to first instead of duplicating.
+            reordered: list[tuple[str, dict]] = [
+                (n, h)
+                for n, h in top_hits
+                if not (n == archive_name and str(h.get("path", "")) == promoted_path)
+            ]
+            promoted_hit = next(
+                h
+                for n, h in top_hits
+                if n == archive_name and str(h.get("path", "")) == promoted_path
+            )
+            return [(archive_name, promoted_hit), *reordered]
+        return [(archive_name, promoted), *top_hits]
+    return top_hits
 
 
 def _select_top_hits(
@@ -705,9 +777,35 @@ def synthesize_query(
     top_hits, fallback_used = _select_top_hits(
         per_archive_hits, archives_searched, top_n=config.top_n
     )
+    # D3 / Op1: when BM25 ranks "List of songs about Berlin" above the
+    # canonical "Berlin" article for query="Berlin", title-index
+    # promotion replaces the top hit with the canonical entry — same
+    # shape as the simple-mode tell_me_about path. Applied AFTER
+    # fusion so multi-archive RRF still drives the lower-ranked
+    # ordering, but BEFORE passage extraction so the promoted entry
+    # flows through the same bundle / attribution stages as a normal hit.
+    top_hits = _promote_title_match(
+        top_hits,
+        query=query,
+        archives=archives,
+        archives_searched=archives_searched,
+        search_handler=search_handler,
+    )
     response_query = original_query if original_query is not None else query
     if not top_hits:
-        return _zero_hits_response(response_query, archives_searched, fallback_used)
+        # Even with empty BM25 hits, a canonical title hit might still
+        # exist (rare: the title isn't in the full-text index but is in
+        # the title index). Try one more time before declaring 0-hit.
+        promoted = _promote_title_match(
+            [],
+            query=query,
+            archives=archives,
+            archives_searched=archives_searched,
+            search_handler=search_handler,
+        )
+        if not promoted:
+            return _zero_hits_response(response_query, archives_searched, fallback_used)
+        top_hits = promoted
 
     all_passages, hit_keys = _extract_passages_for_top_hits(top_hits)
     if strip_links:
@@ -727,7 +825,12 @@ def synthesize_query(
     answer_md = _render_answer(capped)
     archive_titles, section_titles = _build_section_lookups(top_hits, bundle_lookup)
     citations = _build_citations(
-        capped, archive_titles=archive_titles, section_titles=section_titles
+        capped,
+        archive_titles=archive_titles,
+        section_titles=section_titles,
+        # D8/Op4: in compact mode, fold rank/score into citations so
+        # the dropped passages[] array isn't a data loss.
+        include_rank_score=omit_passage_text,
     )
     # Real _meta envelope (not the hardcoded `{}` of earlier versions).
     # ``rendered`` is the answer body — same convention as simple-mode
@@ -735,21 +838,32 @@ def synthesize_query(
     # caller actually sees, not the JSON envelope cost.
     from openzim_mcp.meta import build_meta as _build_meta
 
+    # D7 (v2.0.0a9): synthesize is NOT resumable by content offset —
+    # the next "page" of the synthesized answer would require re-running
+    # the pipeline against a different starting passage, not slicing
+    # an already-rendered string. Pass ``content_chars=None`` so the
+    # meta envelope omits ``more_at_offset`` (the prior shape emitted a
+    # nonsensical value: ``len(answer_md)`` mixed with a ``total_chars``
+    # field that measured passage chars, not answer chars). The caller
+    # still sees ``truncated=True`` + ``total_chars`` as informational
+    # "how much was cut" signals.
     meta = _build_meta(
         rendered=answer_md,
         truncated=truncated,
-        content_chars=len(answer_md) if truncated else None,
+        content_chars=None,
         total_chars=pre_cap_chars if truncated else None,
     )
-    # D8: ``answer_markdown`` already carries each passage's text
-    # verbatim; ``passages[].text_markdown`` is a 100% duplicate.
-    # When ``omit_passage_text=True`` (default for compact mode in
-    # simple_tools / zim_query), drop the field so the response halves
-    # in size on a typical 5-passage call. The cite_id/rank/score
-    # remain so callers can correlate passages with citations.
+    # D8 / Op4 (v2.0.0a9): compact mode drops the passages array
+    # entirely. The passages were already structurally redundant
+    # after the earlier text-dedup pass (only cite_id/rank/score
+    # remained, and cite_id duplicates citations[].cite_id). To preserve
+    # the positional rank/score signal, fold those into the citation
+    # rows directly. Verbose mode (omit_passage_text=False) keeps the
+    # legacy passages array intact for callers doing downstream
+    # processing.
     response_passages: list[SynthesizePassage] = capped
     if omit_passage_text:
-        response_passages = [_drop_passage_text(p) for p in capped]
+        response_passages = []
     return cast(
         "SynthesizeResponse",
         {

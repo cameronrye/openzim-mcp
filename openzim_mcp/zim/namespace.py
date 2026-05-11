@@ -54,6 +54,14 @@ _NAMESPACE_DESCRIPTIONS = {
     "-": "Layout and template files",
 }
 
+# D11 / Op6 (v2.0.0a9): the set of namespace letters defined by the ZIM
+# spec — used by ``browse_namespace_data`` to fast-reject unknown
+# tokens before the full-iteration fallback wastes cycles scanning a
+# 27 M-entry archive for letters that don't exist. New-scheme
+# archives are dominated by C; old-scheme add A and I. ``-`` is the
+# layout/templates pseudo-namespace.
+_KNOWN_NAMESPACE_LETTERS = frozenset({"C", "M", "W", "X", "A", "I", "-"})
+
 # Minimum sampled hits required before we project a per-namespace total
 # from the sampling ratio. Below this we report the lower-bound (sampled +
 # probed) instead of fabricating numbers from single-hit projections.
@@ -558,6 +566,32 @@ class _NamespaceMixin:
         # entry when callers pass lowercase or long-form names.
         namespace = self._canonicalise_namespace(namespace.strip())
 
+        # D11 / Op6 (v2.0.0a9): fast-reject unknown namespaces before the
+        # full-iteration fallback wastes cycles scanning a 27M-entry
+        # archive for a letter that the ZIM spec doesn't define.
+        # Returns a structured ``bad_namespace`` payload so the caller
+        # can self-correct via the empty-result footer's recovery hint.
+        if namespace not in _KNOWN_NAMESPACE_LETTERS:
+            empty_payload: Dict[str, Any] = {
+                "namespace": namespace,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {
+                    "offset": offset,
+                    "limit": limit,
+                    "returned_count": 0,
+                },
+                "discovery_method": "rejected_unknown_namespace",
+                "sampling_based": False,
+                "results_may_be_incomplete": False,
+            }
+            return cast(
+                "BrowseNamespaceResponse",
+                attach_meta(empty_payload, reason="bad_namespace"),
+            )
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
@@ -892,15 +926,15 @@ class _NamespaceMixin:
             discovery_method="entry_id_range",
         )
 
-    # Well-known W-namespace paths in new-scheme archives. libzim's
-    # iterable surface doesn't expose W, but ``has_entry_by_path`` does.
-    # MediaWiki-flavoured ZIMs typically populate ``W/mainPage`` and
-    # ``W/favicon``; some carry ``W/index`` and ``W/robots.txt``.
-    # Probe in priority order so the first page surfaces the most
-    # useful entries.
-    _NEW_SCHEME_W_CANDIDATES = (
-        "W/mainPage",
-        "W/favicon",
+    # Well-known W-namespace paths in new-scheme archives. The
+    # ``has_entry_by_path`` probe is unreliable here — most Wikipedia
+    # ZIMs return False for ``W/mainPage`` even when ``archive.main_entry``
+    # resolves correctly, because the main page is stored under its
+    # canonical C-namespace path and exposed via libzim's well-known-entry
+    # APIs rather than as a literal ``W/`` entry. Auxiliary probes
+    # (``W/index``, ``W/robots.txt`` etc.) cover archives that DO carry
+    # extra well-known entries directly.
+    _NEW_SCHEME_W_AUX_CANDIDATES = (
         "W/index",
         "W/robots.txt",
         "W/exception.html",
@@ -914,18 +948,41 @@ class _NamespaceMixin:
         limit: int,
         offset: int,
     ) -> Dict[str, Any]:
-        """Enumerate new-scheme W-namespace entries by probing known paths.
+        """Enumerate new-scheme W-namespace entries via the same probes
+        ``list_namespaces`` uses.
 
-        D3 fix: ``browse namespace W`` was returning 0 results despite
-        ``list_namespaces`` reporting two W entries. New-scheme archives
-        keep W off the iterable surface, but the well-known paths
-        (mainPage, favicon, …) are reachable via ``has_entry_by_path``.
-        Probing the known-candidates list recovers the actual W
-        contents so a small model navigating by namespace doesn't get a
-        false-empty page.
+        D2 (v2.0.0a9): the original D3 fix probed
+        ``archive.has_entry_by_path("W/mainPage")`` etc., which returns
+        False on real Wikipedia archives even when the main entry
+        exists — the path isn't a literal entry, it's a well-known
+        alias resolved via ``archive.main_entry``. The result was
+        ``list_namespaces`` reporting W=2 and ``browse_namespace W``
+        reporting empty, with no way for a small model to reconcile.
+
+        This rewrite asks the SAME questions ``list_namespaces`` does
+        (``has_main_entry``, ``has_illustration()``) and synthesises
+        the corresponding ``W/mainPage`` / ``W/favicon`` rows. Auxiliary
+        candidates (``W/index``, ``W/robots.txt``) still get the
+        ``has_entry_by_path`` probe because they ARE stored as literal
+        entries when present.
         """
         present: List[str] = []
-        for path in self._NEW_SCHEME_W_CANDIDATES:
+        # Synthetic well-known entries — resolved through libzim's
+        # dedicated APIs at materialisation time, not by path lookup.
+        try:
+            if getattr(archive, "has_main_entry", False):
+                present.append("W/mainPage")
+        except Exception as e:
+            logger.debug(f"has_main_entry probe failed: {e}")
+        try:
+            if archive.has_illustration():
+                present.append("W/favicon")
+        except Exception as e:
+            logger.debug(f"has_illustration probe failed: {e}")
+        # Auxiliary literal W entries — when present they ARE addressable
+        # by path. Wikipedia maxi ZIMs rarely carry these but other
+        # ZIM flavours (e.g. some scraped sites) do.
+        for path in self._NEW_SCHEME_W_AUX_CANDIDATES:
             try:
                 if archive.has_entry_by_path(path):
                     present.append(path)
@@ -951,9 +1008,17 @@ class _NamespaceMixin:
         libzim's regular entry surface — they're reached via
         ``archive.get_metadata_item``. Without this branch a new-scheme
         ``browse_namespace('M', ...)`` would error on every row.
+
+        Synthetic ``W/mainPage`` / ``W/favicon`` rows (D2) similarly
+        route through dedicated libzim well-known-entry APIs because
+        those paths aren't literal entries on most new-scheme archives.
         """
         if has_new_scheme and entry_path.startswith("M/"):
             return self._materialise_new_scheme_metadata_entry(archive, entry_path)
+        if has_new_scheme and entry_path == "W/mainPage":
+            return self._materialise_new_scheme_main_entry(archive)
+        if has_new_scheme and entry_path == "W/favicon":
+            return self._materialise_new_scheme_favicon(archive)
 
         entry = archive.get_entry_by_path(entry_path)
         title = entry.title or entry_path
@@ -963,6 +1028,74 @@ class _NamespaceMixin:
             "title": title,
             "content_type": content_type,
             "preview": preview,
+        }
+
+    def _materialise_new_scheme_main_entry(
+        self, archive: Archive
+    ) -> Optional[Dict[str, Any]]:
+        """Render the synthetic ``W/mainPage`` row.
+
+        Resolves through ``archive.main_entry`` (libzim's well-known
+        entry API) — the canonical target may live anywhere in C, so
+        we render its actual path/title rather than a synthetic
+        placeholder. Following the redirect chain is intentional: the
+        ``main_entry`` value is typically a redirect to the actual
+        landing page.
+        """
+        try:
+            entry = archive.main_entry
+        except Exception as e:
+            logger.debug(f"main_entry resolution failed: {e}")
+            return None
+        # Follow the redirect chain so the rendered row points at the
+        # actual page rather than the redirect stub.
+        hops = 0
+        seen: set = set()
+        try:
+            while getattr(entry, "is_redirect", False) and hops < 10:
+                p = getattr(entry, "path", None)
+                if p is None or p in seen:
+                    break
+                seen.add(p)
+                entry = entry.get_redirect_entry()
+                hops += 1
+        except Exception:
+            pass
+        title = getattr(entry, "title", None) or "Main Page"
+        try:
+            preview, content_type = self._render_entry_preview(entry, "W/mainPage")
+        except Exception:
+            preview, content_type = "", "text/html"
+        return {
+            "path": "W/mainPage",
+            "title": title,
+            "content_type": content_type,
+            "preview": preview,
+        }
+
+    @staticmethod
+    def _materialise_new_scheme_favicon(
+        archive: Archive,
+    ) -> Optional[Dict[str, Any]]:
+        """Render the synthetic ``W/favicon`` row.
+
+        Pulls the illustration item's mimetype via
+        ``archive.get_illustration_item`` without dereferencing the
+        bytes — favicons can be tens of KB and rendering them as a
+        preview adds nothing useful.
+        """
+        content_type = "image/png"
+        try:
+            item = archive.get_illustration_item(48)
+            if item and item.mimetype:
+                content_type = item.mimetype
+        except Exception as e:
+            logger.debug(f"get_illustration_item failed: {e}")
+        return {
+            "path": "W/favicon",
+            "title": "favicon",
+            "content_type": content_type,
+            "preview": "(archive favicon)",
         }
 
     def _materialise_new_scheme_metadata_entry(

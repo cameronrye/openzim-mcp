@@ -88,6 +88,68 @@ MAX_REDIRECT_DEPTH = CONTENT.MAX_REDIRECT_DEPTH
 _METADATA_PREVIEW_CAP = 800
 
 
+# Cheap heuristic: a value with one of these markers in its first ~200
+# bytes is HTML and needs ``_extract_metadata_text`` to surface the
+# real value. Anything else (Date, Tags, Counter, ...) is plain text
+# and goes through unchanged.
+_HTML_MARKERS = ("<!doctype html", "<html", "<head", "<title>")
+
+
+def _extract_metadata_text(raw: str) -> str:
+    """Distil an M-namespace value down to its readable text.
+
+    Wikipedia (and other MediaWiki-derived) ZIMs wrap each metadata
+    field in a full HTML document — the literal title string ``"en"``
+    arrives as ``<!DOCTYPE html><html …><head>…<title>en</title>…``
+    plus a body. ``_METADATA_PREVIEW_CAP`` alone can't recover from
+    this: the cap clips inside the boilerplate prefix, every field
+    looks identical, and the caller never sees the real value.
+
+    Strategy:
+      1. If the content doesn't look like HTML, return as-is.
+      2. Parse via BeautifulSoup. Prefer ``<title>`` text (often the
+         exact field value on Wikipedia-flavour exports). Fall back
+         to visible ``<body>`` text with scripts/styles stripped.
+      3. Collapse whitespace runs so multi-line HTML doesn't bleed
+         into the preview.
+      4. If parsing fails, return the raw input — the cap path will
+         still produce a (less useful but honest) preview.
+    """
+    if not raw:
+        return raw
+    head = raw[:200].lstrip().lower()
+    if not any(marker in head for marker in _HTML_MARKERS):
+        return raw
+    try:
+        from bs4 import BeautifulSoup  # imported lazily; only needed for HTML metadata
+    except Exception:
+        return raw
+    try:
+        soup = BeautifulSoup(raw, "html.parser")
+    except Exception:
+        return raw
+    # Prefer the body's visible text — on Wikipedia ZIMs the body
+    # carries the actual field value (``en``, ``Wikipedia``,
+    # ``The Free Encyclopedia``, ...), while ``<title>`` typically
+    # echoes the M-key name (``Title``, ``Date``, ``Language``).
+    # Strip script/style first so injected analytics don't leak
+    # into the preview.
+    for noise in soup(("script", "style", "noscript")):
+        noise.decompose()
+    body = soup.find("body")
+    if body is not None:
+        body_text = " ".join(body.get_text(separator=" ", strip=True).split())
+        if body_text:
+            return body_text
+    # No body / empty body — fall back to <title>, then to all-text.
+    title = soup.find("title")
+    if title is not None:
+        title_text = " ".join(title.get_text(separator=" ", strip=True).split())
+        if title_text:
+            return title_text
+    return " ".join(soup.get_text(separator=" ", strip=True).split())
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -462,21 +524,42 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                             .strip()
                         )
                         if content:
-                            # Wikipedia ZIMs store ``M/Title`` as a full
-                            # HTML document (~1 MB) rather than the bare
-                            # archive title. Embedding that verbatim
-                            # blows the response past every per-call
-                            # budget and starves a small model of the
-                            # other metadata fields. Cap each value at
-                            # 800 chars + mark elision so the caller
-                            # can still see structure (date, language,
-                            # creator) without paying for the rare
-                            # template-bloated field.
-                            if len(content) > _METADATA_PREVIEW_CAP:
-                                preview = content[:_METADATA_PREVIEW_CAP].rstrip()
+                            # D4 / Op2 (v2.0.0a9): Wikipedia ZIMs store
+                            # ``M/Title``, ``M/Description``, ``M/Language``
+                            # etc. as full HTML documents (~1 MB each)
+                            # rather than bare strings. The original
+                            # a7 fix capped to 800 chars but every value
+                            # then leads with the SAME 800 chars of
+                            # ``<!DOCTYPE html>…<title>X</title>``
+                            # boilerplate — the actual field value
+                            # lives buried past the cap in ``<body>``.
+                            # Extract the readable text (preferring the
+                            # ``<title>`` element, then ``<body>`` text)
+                            # before the cap so the response surfaces
+                            # the actual archive title / description /
+                            # language instead of identical HTML
+                            # prefixes.
+                            extracted = _extract_metadata_text(content)
+                            original_chars = len(content)
+                            if len(extracted) > _METADATA_PREVIEW_CAP:
+                                preview = extracted[:_METADATA_PREVIEW_CAP].rstrip()
                                 metadata_entries[meta_key] = (
                                     f"{preview}… "
-                                    f"[truncated, {len(content):,} chars total]"
+                                    f"[truncated, {original_chars:,} chars total]"
+                                )
+                            elif extracted != content:
+                                # The field was HTML — record the
+                                # extracted text alongside an indicator
+                                # of the source-document size so the
+                                # caller knows the value was distilled
+                                # from a larger HTML wrapper.
+                                metadata_entries[meta_key] = (
+                                    f"{extracted}"
+                                    if original_chars <= len(extracted) + 16
+                                    else (
+                                        f"{extracted} "
+                                        f"[extracted from {original_chars:,}-char HTML]"
+                                    )
                                 )
                             else:
                                 metadata_entries[meta_key] = content

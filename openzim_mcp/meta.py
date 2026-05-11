@@ -196,8 +196,14 @@ def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
         chars_label = _humanize_count(meta["chars"])
         total_label = _humanize_count(meta.get("total_chars", meta["chars"]))
         parts.append(f"{chars_label} of {total_label} chars")
+        # Op5 (v2.0.0a9): make the byte-offset semantics explicit.
+        # ``more_at_offset`` is the byte offset to feed back as
+        # ``content_offset`` on tools that paginate article bodies
+        # (today: ``get_zim_entry``). Label it ``content_offset`` so
+        # callers don't confuse it with the result-set ``offset`` used
+        # by search/browse/walk.
         if "more_at_offset" in meta:
-            parts.append(f"pass `offset={meta['more_at_offset']}` for more")
+            parts.append(f"pass `content_offset={meta['more_at_offset']}` for more")
     return "> " + " · ".join(parts)
 
 

@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from openzim_mcp.simple_tools import IntentParser, SimpleToolsHandler
+from openzim_mcp.title_promotion import is_strong_title_match
 
 
 class TestIntentParser:
@@ -2330,7 +2331,7 @@ class TestTellMeAboutAutoPromote:
 
     def test_strong_title_match_helper(self):
         """Direct unit test of the title-match heuristic."""
-        match = SimpleToolsHandler._is_strong_title_match
+        match = is_strong_title_match
         # Exact-modulo-punctuation match.
         assert match(
             "Martin Luther King Jr.", "Martin_Luther_King_Jr.", "Martin Luther King Jr."
@@ -2359,7 +2360,7 @@ class TestTellMeAboutAutoPromote:
         ``"cat" in "catfish"`` is True. Token-list comparison fixes this:
         distinct single tokens never match each other unless equal.
         """
-        match = SimpleToolsHandler._is_strong_title_match
+        match = is_strong_title_match
         assert not match("cat", "Catfish", "Catfish")
         assert not match("py", "Pyramid", "Pyramid")
         assert not match("Pi", "Pizza", "Pizza")

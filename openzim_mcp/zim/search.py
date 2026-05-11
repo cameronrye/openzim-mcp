@@ -26,8 +26,14 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
 )
+from openzim_mcp.defaults import CONTENT as _CONTENT_DEFAULTS
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.responses import tool_error
+
+# Mirror ``openzim_mcp.zim.archive.MAX_REDIRECT_DEPTH`` without importing
+# it directly — archive.py imports this module, so the reverse-import
+# would be circular at module-init time.
+MAX_REDIRECT_DEPTH = _CONTENT_DEFAULTS.MAX_REDIRECT_DEPTH
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -1655,13 +1661,33 @@ class _SearchMixin:
 
         return variants
 
+    # After the first hit, keep probing for at most this many extra
+    # variants. Caps the worst-case latency at
+    # ``first_hit_position + _TYPO_MAX_EXTRA_PROBES`` fast-path lookups
+    # so a typo with a canonical reachable two positions later doesn't
+    # explode into a full ~700-variant scan.
+    _TYPO_MAX_EXTRA_PROBES = 32
+
     def _find_entry_typo_fallback(self, archive: Any, title: str) -> Optional[Any]:
         """Try typo-corrected variants of ``title`` against the fast path.
 
         Runs only when the case-variant fast path AND the libzim
         suggestion search both came up empty — fuzzy-matching is a
-        last-resort try-this-before-giving-up step. Returns the first
-        Entry whose case-variant fast path hits any single-edit variant.
+        last-resort try-this-before-giving-up step.
+
+        D1 (v2.0.0a9): the prior first-hit-wins iteration order picked
+        whichever variant came first alphabetically, which on real
+        Wikipedia returned typo-redirects (``Photosymthesis``) ahead of
+        canonical articles (``Photosynthesis``) — ``'m'`` < ``'n'`` at
+        position 7 of the alphabet sweep. The new shape: continue
+        iterating past the first hit, and prefer a canonical
+        (non-redirect) variant when one is reachable. After the first
+        hit we cap additional probes at ``_TYPO_MAX_EXTRA_PROBES`` to
+        keep worst-case latency bounded.
+
+        Both hit entries are passed through redirect-following so a
+        redirect-only variant still resolves to its canonical target —
+        the caller wants the actual article, not the misspelling page.
 
         Length-gated via config.search.fuzzy_title_min_query_len (default >= 4):
         short queries like ``"DNA"`` or ``"Pi"`` get too many spurious
@@ -1669,11 +1695,64 @@ class _SearchMixin:
         """
         if len(title) < self.config.search.fuzzy_title_min_query_len:
             return None
+
+        best: Optional[Any] = None
+        best_is_canonical = False
+        extra_probes = 0
         for variant in self._typo_variants(title):
+            # Bound additional work: once we have a hit AND a canonical
+            # alternative, stop. Otherwise allow ``_TYPO_MAX_EXTRA_PROBES``
+            # more probes to look for a canonical that would beat the
+            # redirect we found first.
+            if best is not None:
+                if best_is_canonical:
+                    break
+                if extra_probes >= self._TYPO_MAX_EXTRA_PROBES:
+                    break
             entry = self._find_entry_fast_path(archive, variant)
-            if entry is not None:
-                return entry
-        return None
+            if entry is None:
+                if best is not None:
+                    extra_probes += 1
+                continue
+            source_is_canonical = not bool(getattr(entry, "is_redirect", False))
+            resolved = self._follow_redirect_chain(entry)
+            if best is None:
+                best = resolved
+                best_is_canonical = source_is_canonical
+            elif source_is_canonical and not best_is_canonical:
+                # A canonical variant beats a redirect we found earlier
+                # in the alphabetical sweep.
+                best = resolved
+                best_is_canonical = True
+            else:
+                extra_probes += 1
+        return best
+
+    @staticmethod
+    def _follow_redirect_chain(entry: Any) -> Any:
+        """Walk an entry's ``is_redirect`` chain to its canonical target.
+
+        Bounded by ``MAX_REDIRECT_DEPTH``; tolerates cycles by tracking
+        seen paths. Returns the original entry on any failure so the
+        caller still gets something it can name.
+        """
+        target = entry
+        seen: set = set()
+        first_path = getattr(target, "path", None)
+        if first_path is not None:
+            seen.add(first_path)
+        for _ in range(MAX_REDIRECT_DEPTH):
+            if not getattr(target, "is_redirect", False):
+                return target
+            try:
+                target = target.get_redirect_entry()
+            except Exception:
+                return target
+            tp = getattr(target, "path", None)
+            if tp is None or tp in seen:
+                return target
+            seen.add(tp)
+        return target
 
     def _verified_typo_variants(
         self, archives: List[Any], title: str, *, limit: int
@@ -1702,7 +1781,11 @@ class _SearchMixin:
                 except Exception:
                     continue
                 if entry is not None:
-                    resolved = entry.title or variant
+                    # Follow redirects so the surfaced ``alt_spelling``
+                    # suggestion lands on the canonical article title,
+                    # not a typo-redirect's own (also-misspelled) title.
+                    target = self._follow_redirect_chain(entry)
+                    resolved = target.title or entry.title or variant
                     if resolved not in seen:
                         verified.append(resolved)
                         seen.add(resolved)
@@ -2296,3 +2379,36 @@ class _SearchMixin:
             score = 1.0 / rank  # rank-inverse proxy; no raw BM25 in libzim Python API
             hits.append({"path": entry_id, "snippet": snippet, "score": score})
         return hits
+
+    def title_match_hit(
+        self, archive: "Archive", title: str
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve ``title`` against an open archive's title-index fast path
+        and return a search-top-k-shaped hit on success, ``None`` on miss.
+
+        D3 / Op1 (v2.0.0a9): synthesize and other ranking-aware paths
+        need to promote canonical title hits past BM25 noise without
+        re-opening the archive. ``_find_entry_fast_path`` already knows
+        the case-variant + namespace-prefix sweep; we wrap its result
+        in the ``{path, snippet, score}`` shape that downstream stages
+        expect, so the promoted entry plugs into the synthesize pipeline
+        as if it had come from ``search_top_k``.
+
+        ``score`` is fixed at 1.0 — a fast-path title hit is the
+        strongest possible signal we can produce, and the caller uses
+        the value only to label the promoted entry; subsequent fusion
+        respects positional order anyway.
+        """
+        try:
+            entry = self._find_entry_fast_path(archive, title)
+        except Exception as e:
+            logger.debug(f"title_match_hit fast-path failed for {title!r}: {e}")
+            return None
+        if entry is None:
+            return None
+        try:
+            snippet = self._get_entry_snippet(entry, query=title)
+        except Exception as e:
+            logger.debug(f"title_match_hit snippet failed for {title!r}: {e}")
+            snippet = ""
+        return {"path": entry.path, "snippet": snippet, "score": 1.0}

@@ -135,6 +135,10 @@ def _wire_typo_fallback_archive(
     mock_entry = MagicMock()
     mock_entry.path = entry_path
     mock_entry.title = entry_title
+    # Explicit non-redirect: without this, MagicMock attribute access
+    # returns a truthy MagicMock and the v2.0.0a9 typo-ranking path
+    # would follow a phantom redirect chain off the mock.
+    mock_entry.is_redirect = False
     mock_archive.get_entry_by_path.return_value = mock_entry
 
     mock_suggest = MagicMock()
@@ -231,3 +235,173 @@ def test_photosynthsis_deletion_also_resolves(test_config, monkeypatch):
     )
     assert result["fuzzy_path_hit"] is True
     assert result["results"][0]["path"] == "C/Photosynthesis"
+
+
+# ---------------------------------------------------------------------------
+# D1 (v2.0.0a9): typo collision — alphabetically-earlier variant exists
+# but resolves to a redirect; later variant is canonical
+# ---------------------------------------------------------------------------
+
+
+def _wire_typo_collision_archive(test_config, monkeypatch):
+    """Wire an archive that contains BOTH ``C/Photosymthesis`` (a
+    redirect to ``C/Photosynthesis``) and ``C/Photosynthesis`` (the
+    canonical entry).
+
+    Mirrors the real Wikipedia behaviour that the v2.0.0a7 mock missed:
+    the misspelling-redirect ``Photosymthesis`` is reachable at
+    position-7-letter ``'m'`` (alphabetically earlier than ``'n'``), so
+    the original first-hit-wins iteration order returned the redirect
+    instead of the canonical article.
+    """
+    from openzim_mcp.server import OpenZimMcpServer
+
+    server = OpenZimMcpServer(test_config)
+
+    # Canonical (non-redirect) entry.
+    photosyn = MagicMock()
+    photosyn.path = "C/Photosynthesis"
+    photosyn.title = "Photosynthesis"
+    photosyn.is_redirect = False
+
+    # Misspelling-redirect entry that points to the canonical.
+    photosym = MagicMock()
+    photosym.path = "C/Photosymthesis"
+    photosym.title = "Photosymthesis"
+    photosym.is_redirect = True
+    photosym.get_redirect_entry.return_value = photosyn
+
+    valid_paths = {"C/Photosynthesis", "C/Photosymthesis"}
+
+    def _get_entry(path):
+        if path == "C/Photosynthesis":
+            return photosyn
+        if path == "C/Photosymthesis":
+            return photosym
+        raise KeyError(path)
+
+    mock_archive = MagicMock()
+    mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
+    mock_archive.get_entry_by_path.side_effect = _get_entry
+
+    mock_suggest = MagicMock()
+    mock_suggest.getEstimatedMatches.return_value = 0
+    mock_suggest.getResults.return_value = []
+    mock_searcher = MagicMock()
+    mock_searcher.suggest.return_value = mock_suggest
+
+    monkeypatch.setattr(
+        "openzim_mcp.zim_operations.SuggestionSearcher",
+        lambda archive: mock_searcher,
+    )
+    monkeypatch.setattr(
+        "openzim_mcp.zim_operations.zim_archive",
+        lambda *a, **kw: _ctx(mock_archive),
+    )
+    monkeypatch.setattr(
+        server.zim_operations.path_validator,
+        "validate_path",
+        lambda p: __import__("pathlib").Path(p),
+    )
+    monkeypatch.setattr(
+        server.zim_operations.path_validator,
+        "validate_zim_file",
+        lambda p: p,
+    )
+    return server
+
+
+def test_photosythesis_prefers_canonical_over_redirect_collision(
+    test_config, monkeypatch
+):
+    """D1: when two variants both resolve, prefer the non-redirect one.
+
+    On real Wikipedia, both ``Photosymthesis`` (a redirect from a common
+    misspelling) and ``Photosynthesis`` (the canonical article) are
+    reachable paths. The original alphabetical-iteration-first-hit-wins
+    implementation returned ``Photosymthesis`` because ``'m' < 'n'`` at
+    position 7. The v2.0.0a9 ranking step continues iterating until it
+    finds a canonical (non-redirect) alternative, then prefers it.
+    """
+    server = _wire_typo_collision_archive(test_config, monkeypatch)
+
+    result = server.zim_operations.find_entry_by_title_data(
+        "/fake/test.zim", "Photosythesis", cross_file=False, limit=10
+    )
+
+    assert result["fuzzy_path_hit"] is True
+    hit = result["results"][0]
+    assert hit["path"] == "C/Photosynthesis", (
+        "Canonical Photosynthesis must win over the typo-redirect "
+        "Photosymthesis even though the alphabetical variant iteration "
+        "reaches 'm' before 'n' at position 7."
+    )
+    assert hit["title"] == "Photosynthesis"
+
+
+def test_typo_fallback_keeps_redirect_when_no_canonical_alternative(
+    test_config, monkeypatch
+):
+    """Bound check on D1: if only a redirect variant resolves, return
+    its target (via redirect-following) rather than nothing.
+
+    This pins the behaviour that the new ranking path doesn't penalise
+    redirect-only matches into empty results — it only prefers
+    canonical hits when one is reachable in the variant set.
+    """
+    from openzim_mcp.server import OpenZimMcpServer
+
+    server = OpenZimMcpServer(test_config)
+
+    target = MagicMock()
+    target.path = "C/Photosynthesis"
+    target.title = "Photosynthesis"
+    target.is_redirect = False
+
+    redirect_only = MagicMock()
+    redirect_only.path = "C/Photosymthesis"
+    redirect_only.title = "Photosymthesis"
+    redirect_only.is_redirect = True
+    redirect_only.get_redirect_entry.return_value = target
+
+    # Only the redirect path exists; the canonical path does NOT.
+    valid_paths = {"C/Photosymthesis"}
+
+    mock_archive = MagicMock()
+    mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
+    mock_archive.get_entry_by_path.side_effect = (
+        lambda p: redirect_only if p == "C/Photosymthesis" else None
+    )
+
+    mock_suggest = MagicMock()
+    mock_suggest.getEstimatedMatches.return_value = 0
+    mock_suggest.getResults.return_value = []
+    monkeypatch.setattr(
+        "openzim_mcp.zim_operations.SuggestionSearcher",
+        lambda archive: MagicMock(suggest=lambda t: mock_suggest),
+    )
+    monkeypatch.setattr(
+        "openzim_mcp.zim_operations.zim_archive",
+        lambda *a, **kw: _ctx(mock_archive),
+    )
+    monkeypatch.setattr(
+        server.zim_operations.path_validator,
+        "validate_path",
+        lambda p: __import__("pathlib").Path(p),
+    )
+    monkeypatch.setattr(
+        server.zim_operations.path_validator,
+        "validate_zim_file",
+        lambda p: p,
+    )
+
+    result = server.zim_operations.find_entry_by_title_data(
+        "/fake/test.zim", "Photosythesis", cross_file=False, limit=10
+    )
+    assert result["fuzzy_path_hit"] is True
+    # We accept either the followed-redirect target OR the raw redirect
+    # entry — both are honest representations of "the only typo variant
+    # that resolved was a redirect." The key point is we returned a
+    # result rather than nothing.
+    hit = result["results"][0]
+    assert hit["path"] in {"C/Photosynthesis", "C/Photosymthesis"}

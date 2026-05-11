@@ -500,13 +500,24 @@ class GetSectionResponse(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class Citation(TypedDict):
+class Citation(TypedDict, total=False):
+    """A citation in a SynthesizeResponse.
+
+    ``total=False`` lets D8 (v2.0.0a9) attach ``rank`` and ``score``
+    in compact-mode synthesize responses — fields the verbose path
+    keeps on ``SynthesizePassage`` but compact mode drops the
+    passages array entirely to save tokens. Compact callers correlate
+    rank/score with the citation directly.
+    """
+
     cite_id: str
     archive: str
     entry_path: str
     title: str
     section_id: Optional[str]
     section_title: Optional[str]
+    rank: int
+    score: float
 
 
 class SynthesizePassage(TypedDict):

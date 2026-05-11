@@ -623,12 +623,35 @@ class _StructureMixin:
         # paragraphs without the cascading H3 sub-tree. The legacy
         # behavior (True) returns the full sub-tree.
         char_end = section["char_end"]
+        narrow_widened = False
         if not include_subsections:
             sections = bundle["sections"]
+            narrowed_end = char_end
+            first_child_end: Optional[int] = None
             for sib in sections[section_idx + 1 :]:
                 if sib["char_start"] > section["char_start"]:
-                    char_end = min(char_end, sib["char_start"])
+                    narrowed_end = min(narrowed_end, sib["char_start"])
+                    # Track the first child's own char_end so we can
+                    # widen to it when the narrow slice would otherwise
+                    # be empty (D5: section opens directly with a
+                    # subheading and has no lead prose).
+                    first_child_end = sib["char_end"]
                     break
+            # D5 (v2.0.0a9): when the narrow slice has essentially no
+            # body (the section heading is immediately followed by a
+            # subheading), widening to include the first immediate
+            # child gives the caller useful content instead of just
+            # the section title. The trigger: narrow slice <= heading
+            # length + 20 chars (covers heading + minor whitespace).
+            # Falling back to the legacy ``char_end`` would dump the
+            # entire sub-tree; widening to the first child's end gives
+            # only the first lead subsection.
+            heading_len = len(section.get("title", "")) + len("#" * section["level"]) + 4
+            if narrowed_end - section["char_start"] <= heading_len + 20 and first_child_end is not None:
+                char_end = first_child_end
+                narrow_widened = True
+            else:
+                char_end = narrowed_end
         full_body = bundle["rendered_markdown"][section["char_start"] : char_end]
         cap = (
             max_chars
@@ -654,6 +677,14 @@ class _StructureMixin:
                 "truncated": truncated,
             },
         )
+        # D5: signal when the narrow slice was widened so the caller
+        # can interpret the response correctly ("the section has no
+        # lead prose; we returned the first subsection instead").
+        if narrow_widened:
+            payload = cast(
+                "GetSectionResponse",
+                {**payload, "narrow_widened_to_first_child": True},
+            )
         # When truncation happens, surface ``total_chars`` so the caller
         # can tell how much of the section was elided. ``more_at_offset``
         # is intentionally omitted — get_section truncation is not
@@ -731,18 +762,34 @@ class _StructureMixin:
             # directory (or namespace), resolving against the source's
             # dirname produces non-existent paths.
             resolved_source = links_data.get("path") or entry_path
-            seen: set[str] = set()
+            # D9 (v2.0.0a9): rank by link frequency rather than first-N
+            # in document order. A target referenced N times in the
+            # article is N-stronger as a "related article" signal
+            # than one mentioned once — a cheap, robust proxy for
+            # semantic relatedness that doesn't require categories or
+            # rebuilding an embedding index. First-link-text wins for
+            # the surfaced ``link_text`` field; ``mention_count`` is
+            # added to the response so the caller can see the
+            # ranking signal.
+            from collections import Counter
+
+            target_counts: Counter[str] = Counter()
+            first_text: Dict[str, str] = {}
             for link in links_data.get("results", []):
                 target = self._resolve_link_to_entry_path(
                     link.get("url", ""), resolved_source
                 )
-                if (
-                    not target
-                    or target in seen
-                    or target in (entry_path, resolved_source)
-                ):
+                if not target or target in (entry_path, resolved_source):
                     continue
-                seen.add(target)
+                target_counts[target] += 1
+                if target not in first_text:
+                    first_text[target] = (
+                        link.get("text") or link.get("title") or ""
+                    )
+            # Rank: frequency descending, ties broken by first-appearance
+            # order (Counter.most_common preserves insertion order for
+            # equal counts).
+            for target, count in target_counts.most_common(limit):
                 outbound.append(
                     {
                         "path": target,
@@ -750,11 +797,10 @@ class _StructureMixin:
                         # under a single archive open so we don't pay one
                         # open per result.
                         "title": target,
-                        "link_text": link.get("text") or link.get("title") or "",
+                        "link_text": first_text.get(target, ""),
+                        "mention_count": count,
                     }
                 )
-                if len(outbound) >= limit:
-                    break
             self._resolve_outbound_titles(validated_str, outbound)
         except OpenZimMcpArchiveError as e:
             # Partial-success contract: an archive- or extraction-level

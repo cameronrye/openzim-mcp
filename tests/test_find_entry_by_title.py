@@ -212,6 +212,11 @@ def _mock_archive_and_suggester(
         mock_entry = MagicMock()
         mock_entry.path = entry_path
         mock_entry.title = entry_title or entry_path
+        # Explicit non-redirect: without this, MagicMock attribute access
+        # returns a truthy MagicMock and the v2.0.0a9 typo-ranking path
+        # would follow a phantom redirect chain off the mock and serialize
+        # MagicMock-typed paths/titles into the JSON envelope.
+        mock_entry.is_redirect = False
         mock_archive.get_entry_by_path.return_value = mock_entry
     results = suggestion_results or []
     mock_suggest = MagicMock()
@@ -475,6 +480,7 @@ class TestMetaSuggestionsAndReason:
         einstein_entry = MagicMock()
         einstein_entry.path = "C/Einstein"
         einstein_entry.title = "Einstein"
+        einstein_entry.is_redirect = False
         mock_archive.has_entry_by_path.side_effect = lambda p: p == "C/Einstein"
         mock_archive.get_entry_by_path.side_effect = lambda p: (
             einstein_entry if p == "C/Einstein" else (_ for _ in ()).throw(KeyError(p))

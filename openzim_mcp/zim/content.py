@@ -39,6 +39,48 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# D12 (v2.0.0a9): regex captures the path-traversal shapes that
+# don't make sense for a ZIM entry path. ZIM paths are
+# ``<namespace>/<name>`` (e.g. ``C/Berlin``) — they never start with
+# ``/``, contain ``..``, or use URL-encoded equivalents. Reject these
+# at the API boundary so log-based abuse detection has a clean
+# signal and the response carries a security-flavoured message
+# instead of the generic "entry not found" remediation advice.
+_PATH_TRAVERSAL_MARKERS = (
+    "../",
+    "..\\",
+    "/..",
+    "\\..",
+    "%2e%2e",
+    "%2E%2E",
+)
+
+
+def _looks_like_path_traversal(entry_path: str) -> bool:
+    """Return True iff ``entry_path`` carries a path-traversal shape.
+
+    Conservative — only well-known injection markers trigger. Catches
+    ``../etc/passwd``, ``..\\\\windows``, URL-encoded variants, leading
+    ``/`` (absolute path), and bare ``..`` segments. A ZIM entry path
+    is namespace-prefixed (``C/X``); none of these shapes can address
+    a legitimate entry, so a false positive on real data is
+    structurally impossible.
+    """
+    if not entry_path:
+        return False
+    if entry_path.startswith("/") or entry_path.startswith("\\"):
+        return True
+    # Any leading ``..`` segment is suspect — no legitimate ZIM entry
+    # path begins with parent-directory references. Covers ``..``,
+    # ``../foo``, ``..\\foo``, ``..%2Ffoo``, etc.
+    if entry_path.startswith(".."):
+        return True
+    for marker in _PATH_TRAVERSAL_MARKERS:
+        if marker in entry_path:
+            return True
+    return False
+
+
 class _ContentMixin:
     """Entry-content retrieval methods for ZimOperations.
 
@@ -139,6 +181,21 @@ class _ContentMixin:
             max_content_length = self.config.content.max_content_length
         if content_offset < 0:
             content_offset = 0
+
+        # D12 (v2.0.0a9): reject path-traversal-shaped entry paths
+        # before reaching the archive layer. The legacy code path
+        # treated ``../../etc/passwd`` as a regular entry lookup and
+        # returned the generic "Entry not found" message with
+        # "browse_namespace" remediation advice — wrong shape for
+        # what is clearly an injection attempt, and noisy for
+        # log-based abuse detection. This raises a distinct error so
+        # the response carries a security-flavoured message.
+        if _looks_like_path_traversal(entry_path):
+            raise OpenZimMcpArchiveError(
+                f"Rejected suspicious entry path {entry_path!r}: paths with "
+                f"``..`` segments or absolute prefixes are blocked. ZIM "
+                f"entry paths are namespace-prefixed (e.g. ``C/Article_Name``)."
+            )
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)

@@ -25,6 +25,7 @@ from .intent_parser import IntentParser, safe_regex_sub
 from .meta import build_meta, format_footer
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
+from .title_promotion import find_title_match, is_strong_title_match
 from .tool_schemas import SynthesizeResponse
 from .zim_operations import ZimOperations
 
@@ -384,20 +385,25 @@ class SimpleToolsHandler:
                 if will_wrap:
                     result = self._wrap_retrieved_content(result)
 
-                # Build footer with truncation state. At simple-mode level,
-                # there's no pagination, so no more_at_offset hint.
-                # ``handler_reason`` / ``handler_suggestions`` are non-None
-                # only when the handler returned a ``_HandlerResult``
-                # (currently: compact + zero-result search).  When set,
-                # ``format_footer`` renders the empty-result suggestion
-                # variant instead of the token-count variant.
-                # In simple mode ``result`` is the body markdown itself —
-                # ``len(result)`` is both the rendered char count AND the
-                # paginable content length, so they drive the same field.
+                # Op5 (v2.0.0a9): simple-mode truncation comes from
+                # ``_cap_response_size`` capping the *rendered output*
+                # — the operation underneath doesn't support content-
+                # byte re-pagination from this layer. Passing
+                # ``content_chars=None`` suppresses the misleading
+                # ``pass offset=N for more`` footer hint (which
+                # interprets ``offset`` as a result-set index for
+                # search/browse, not a byte offset). The
+                # ``_cap_response_size`` body already carries the
+                # actionable recovery advice (``tighter query`` /
+                # ``compact=False``) so the user isn't blind.
+                # ``total_chars`` stays so callers can still see how
+                # much was elided. ``handler_reason`` /
+                # ``handler_suggestions`` (compact-mode zero-result
+                # search) drive the empty-result footer variant.
                 meta = build_meta(
                     rendered=result,
                     truncated=was_truncated,
-                    content_chars=len(result) if was_truncated else None,
+                    content_chars=None,
                     total_chars=pre_cap_chars if was_truncated else None,
                     reason=handler_reason,
                     suggestions=handler_suggestions,
@@ -1241,6 +1247,12 @@ class SimpleToolsHandler:
 
         In ``compact=False`` mode, delegates straight to the legacy
         ``search_zim_file`` string surface so existing callers see no change.
+
+        D6 (v2.0.0a9): on first-page searches, splice in a title-index
+        score-1.0 hit when the top BM25 result isn't a strong match
+        for the query (``search for Einstein`` → ``List of things
+        named after Albert Einstein`` instead of ``Albert_Einstein``).
+        Only applied at ``offset=0`` so paged results stay stable.
         """
         search_query = params.get("query", query)
         limit = options.get("limit")
@@ -1263,14 +1275,80 @@ class SimpleToolsHandler:
                     reason=meta.get("reason", "0_hits"),
                     suggestions=meta.get("suggestions"),
                 )
+            # D6: promote canonical title-index hit if the top BM25 hit
+            # isn't a strong title match. Only on first page.
+            if offset == 0:
+                payload = self._splice_title_match_into_search(
+                    payload, zim_file_path, search_query
+                )
             # Non-empty results: render via the legacy text formatter so the
             # markdown shape is identical to the non-compact path.
             return self.zim_operations._format_search_text(payload)
 
-        # compact=False: unchanged legacy path.
+        # compact=False: unchanged legacy path. Title promotion is
+        # applied in compact mode only (the default surface for
+        # ``zim_query``). Legacy callers of the non-compact rendered
+        # string keep byte-identical output, including the original
+        # BM25 ranking.
         return self.zim_operations.search_zim_file(
             zim_file_path, search_query, limit, offset
         )
+
+    def _splice_title_match_into_search(
+        self,
+        payload: Dict[str, Any],
+        zim_file_path: str,
+        search_query: str,
+    ) -> Dict[str, Any]:
+        """Prepend the title-index score-1.0 hit to ``payload['results']``
+        when the BM25 top hit isn't a strong title match.
+
+        Mutates and returns ``payload`` — callers treat the response as
+        new-shape regardless of caching upstream because the splice is
+        applied per-request after the cache read.
+        """
+        results = payload.get("results") or []
+        if not results:
+            return payload
+        top = results[0]
+        if not isinstance(top, dict):
+            return payload
+        top_path = str(top.get("path", ""))
+        top_title = str(top.get("title", top_path.replace("_", " ")))
+        if is_strong_title_match(search_query, top_path, top_title):
+            return payload
+        promoted = find_title_match(self.zim_operations, zim_file_path, search_query)
+        if promoted is None:
+            return payload
+        promoted_path = promoted["path"]
+        existing_paths = {
+            str(r.get("path", "")) for r in results if isinstance(r, dict)
+        }
+        if promoted_path in existing_paths:
+            # Reorder: move the canonical to position 0 without dup.
+            reordered = [
+                r
+                for r in results
+                if not (isinstance(r, dict) and str(r.get("path", "")) == promoted_path)
+            ]
+            promoted_existing = next(
+                r
+                for r in results
+                if isinstance(r, dict) and str(r.get("path", "")) == promoted_path
+            )
+            payload["results"] = [promoted_existing, *reordered]
+            return payload
+        # Build a synthetic result row matching the existing shape — no
+        # snippet text since the title-index path doesn't compute one;
+        # downstream renderers tolerate missing snippets and show a
+        # clear "title match" indicator.
+        synthetic = {
+            "path": promoted_path,
+            "title": promoted["title"],
+            "snippet": "(canonical title match)",
+        }
+        payload["results"] = [synthetic, *results]
+        return payload
 
     def _handle_tell_me_about(
         self,
@@ -1332,7 +1410,7 @@ class SimpleToolsHandler:
         top = results[0]
         top_path = top.get("path", "")
         top_title = top.get("title", "")
-        if not self._is_strong_title_match(topic, top_path, top_title):
+        if not is_strong_title_match(topic, top_path, top_title):
             # D6 fix: Xapian ranks "List of songs about Berlin" above the
             # canonical "Berlin" article for query="Berlin" because
             # title-match boost isn't strong enough. Before giving up
@@ -1341,7 +1419,7 @@ class SimpleToolsHandler:
             # promote it past the search ranking and inline the article.
             # Saves the small-model agentic loop a turn on the most
             # common case ("tell me about <canonical topic name>").
-            promoted = self._find_title_match_for_topic(zim_file_path, topic)
+            promoted = find_title_match(self.zim_operations, zim_file_path, topic)
             if promoted is None:
                 return self.zim_operations.search_zim_file(
                     zim_file_path, topic, search_limit, 0
@@ -1361,7 +1439,7 @@ class SimpleToolsHandler:
             r
             for r in results
             if isinstance(r, dict)
-            and self._is_strong_title_match(
+            and is_strong_title_match(
                 topic, r.get("path", ""), r.get("title", "")
             )
         ]
@@ -1410,49 +1488,6 @@ class SimpleToolsHandler:
             f"{article_body}"
         )
 
-    def _find_title_match_for_topic(
-        self, zim_file_path: str, topic: str
-    ) -> Optional[Dict[str, Any]]:
-        """Ask the title index whether ``topic`` resolves to an exact entry.
-
-        Returns ``{"path": ..., "title": ...}`` when the title index
-        produces a score-1.0 match for the topic; otherwise ``None``.
-        Used as a fallback when the Xapian search ranking buries the
-        canonical article under "List of songs about X" / "Timeline of
-        X" / etc. — the title index isn't affected by BM25 noise on
-        common topic words, so an exact-title hit there is a strong
-        signal we should surface the canonical article.
-
-        Failures in the backend are logged and swallowed; the caller
-        falls through to the search-render path so a backend hiccup
-        never blanks out the response.
-        """
-        try:
-            data = self.zim_operations.find_entry_by_title_data(
-                zim_file_path, topic, cross_file=False, limit=3
-            )
-        except Exception as e:
-            logger.debug("find_entry_by_title_data failed in tell_me_about: %s", e)
-            return None
-        results = data.get("results") if isinstance(data, dict) else None
-        if not results:
-            return None
-        # Require an exact-title score of 1.0. Lower scores include
-        # SuggestionSearcher prefix matches, which can produce noise
-        # ("Java" → "Java (programming language)" with score 0.95).
-        # The disambiguation branch lower in tell_me_about handles
-        # multiple-strong-match cases; here we only promote when the
-        # title is unambiguous.
-        top = results[0]
-        if not isinstance(top, dict):
-            return None
-        if float(top.get("score", 0.0)) < 1.0:
-            return None
-        return {
-            "path": str(top.get("path", "")),
-            "title": str(top.get("title", "")),
-        }
-
     @staticmethod
     def _render_disambiguation(topic: str, candidates: list) -> str:
         """Render a "did you mean?" list when 2+ articles strong-match
@@ -1494,60 +1529,6 @@ class SimpleToolsHandler:
             "body, or `get article <path>` for the raw entry._"
         )
         return "\n".join(lines)
-
-    @staticmethod
-    def _is_strong_title_match(topic: str, path: str, title: str) -> bool:
-        """Return True iff ``path`` or ``title`` looks like the article
-        for ``topic``.
-
-        Tokenizes both sides on alphanumerics (so ``"Martin_Luther_King_Jr."``
-        and ``"Martin Luther King Jr."`` both yield
-        ``("martin", "luther", "king", "jr")``), then accepts the match
-        when the token lists are either equal or one is a prefix of the
-        other:
-
-        * Equal: ``"DNA"`` ↔ ``"DNA"``.
-        * Topic is a prefix of the candidate: ``"Apollo 11"`` →
-          ``"Apollo_11_(mission)"`` (caller asked for a topic, candidate
-          adds a disambiguation suffix).
-        * Candidate is a prefix of the topic: ``"Apollo 11 (mission)"``
-          → ``"Apollo_11"`` (the caller pre-disambiguated; the bare
-          article matches).
-
-        Pure substring containment was the v1.2.0-pre version of this
-        check, but that false-matched short topics: ``"cat"`` "matched"
-        ``"Catfish"`` and ``"py"`` "matched" ``"Pyramid"``. Token-list
-        comparison fixes those without losing the disambiguation
-        forgiveness above.
-
-        A short-topic guard rejects topics whose tokens collectively have
-        fewer than 3 characters, except for *exact* matches — so
-        ``"Pi"`` ↔ ``"Pi"`` still works but ``"Pi"`` ↔ ``"Pizza"`` does
-        not enter the prefix path at all.
-        """
-        topic_tokens = tuple(re.findall(r"[a-z0-9]+", topic.lower()))
-        if not topic_tokens:
-            return False
-
-        for candidate in (path, title):
-            if not candidate:
-                continue
-            cand_tokens = tuple(re.findall(r"[a-z0-9]+", candidate.lower()))
-            if not cand_tokens:
-                continue
-            # Exact match is always strong — works at any length.
-            if topic_tokens == cand_tokens:
-                return True
-            # Prefix matches are only safe for topics with enough material
-            # to be unambiguous; below 3 chars total, "Pi" / "Pizza" type
-            # collisions outweigh the value.
-            if sum(len(t) for t in topic_tokens) < 3:
-                continue
-            if cand_tokens[: len(topic_tokens)] == topic_tokens:
-                return True
-            if topic_tokens[: len(cand_tokens)] == cand_tokens:
-                return True
-        return False
 
     def _handle_search_all(
         self,
