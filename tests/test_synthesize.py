@@ -576,28 +576,19 @@ def test_select_top_hits_multi_credits_archive_with_best_rank() -> None:
     """
     from openzim_mcp.synthesize import _select_top_hits_multi
 
+    # wiki1 ranks Berlin at index 1 (Munich first); wiki2 ranks Berlin at
+    # index 0. The broken implementation always picked the first archive
+    # in iteration order regardless of per-archive rank — i.e. wiki1 —
+    # which would yield the wrong cite_id. The fixed implementation picks
+    # the archive with the better (lower) rank, so Berlin must be
+    # attributed to wiki2 here.
     per_archive_hits = [
-        # wiki1: Berlin is at rank 1 (best in this archive)
-        [{"path": "A/Berlin", "snippet": "", "score": 0.5}],
-        # wiki2: Berlin is at rank 0 (top of this archive)
-        [
-            {"path": "A/Berlin", "snippet": "", "score": 0.95},
-            {"path": "A/Munich", "snippet": "", "score": 0.4},
-        ],
-    ]
-    # Note iteration order puts wiki1 first — the broken implementation
-    # would always pick wiki1 here. Correct implementation picks wiki2
-    # because Berlin was ranked higher there (rank 0 vs. rank 0 — both
-    # at top of their list; tiebreaker is rank, then iteration order;
-    # so the broken impl AND the correct impl both pick wiki1. To
-    # actually exercise the fix, give wiki1 a worse rank for Berlin:
-    per_archive_hits = [
-        # wiki1: Berlin is at rank 1 (Munich first)
+        # wiki1: Berlin at rank 1 (Munich first)
         [
             {"path": "A/Munich", "snippet": "", "score": 0.95},
             {"path": "A/Berlin", "snippet": "", "score": 0.5},
         ],
-        # wiki2: Berlin is at rank 0 (top of this archive)
+        # wiki2: Berlin at rank 0 (top of this archive)
         [{"path": "A/Berlin", "snippet": "", "score": 0.95}],
     ]
     archives_searched = ["wiki1", "wiki2"]

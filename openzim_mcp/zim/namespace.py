@@ -11,6 +11,7 @@ without changes.
 import contextlib
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
@@ -28,8 +29,6 @@ from openzim_mcp.exceptions import (
 from openzim_mcp.meta import attach_meta
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from openzim_mcp.cache import OpenZimMcpCache
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
@@ -711,11 +710,9 @@ class _NamespaceMixin:
         listing_key: Optional[str] = None
         cached_listing: Optional[Tuple[List[str], bool]] = None
         if archive_path is not None:
-            from pathlib import Path as _Path
-
             from openzim_mcp.bundle import archive_stat_token
 
-            stat_token = archive_stat_token(_Path(archive_path))
+            stat_token = archive_stat_token(Path(archive_path))
             listing_key = f"ns_entries:{archive_path}:{stat_token}:{namespace}"
             cached_listing = self.cache.get(listing_key)
 
