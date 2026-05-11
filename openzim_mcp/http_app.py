@@ -7,6 +7,7 @@ This module exists so server.py stays focused on MCP-protocol concerns and
 HTTP-specific behavior is grouped here.
 """
 
+import hashlib
 import hmac
 import logging
 import os
@@ -157,12 +158,45 @@ def _make_readyz(
     return readyz
 
 
+def _derive_client_id(request: Request, token: str) -> str:
+    """Derive a stable client identifier from the request.
+
+    Priority:
+    1. Hash of the presented Bearer token (8 hex chars). Different tokens
+       → different buckets, so per-token rate isolation works when
+       operators issue one token per consumer.
+    2. ``request.client.host`` when no token is set (the configuration
+       allowed by ``OPENZIM_MCP_INSECURE_DISABLE_AUTH`` or a localhost
+       bind with auth disabled). Per-IP isolation is the next best
+       coarse-grained signal.
+    3. ``"default"`` if neither is available.
+
+    The token is hashed (not stored verbatim) so the rate-limiter's
+    ``_global_buckets`` keys don't leak the secret if a stats endpoint
+    is later added. Hash output is truncated to 8 hex chars — collision
+    probability across a realistic operator's token set is negligible
+    and the short form keeps log messages readable.
+    """
+    if token:
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
+        return f"bearer:{digest}"
+    if request.client is not None and request.client.host:
+        return f"ip:{request.client.host}"
+    return "default"
+
+
 class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
     """Reject requests without a valid Bearer token.
 
     Health endpoints (/healthz, /readyz) are exempt.
     Comparison is timing-safe via hmac.compare_digest.
     The attempted token is NEVER logged.
+
+    Side effect: on successful auth (or on the no-token-configured fast
+    path), sets ``request_context.client_id_var`` so the rate limiter
+    can isolate buckets per-token. ContextVars propagate across the
+    ``await call_next(request)`` boundary, so the value is visible
+    inside every tool handler dispatched for this request.
     """
 
     def __init__(self, app: ASGIApp, config: object) -> None:
@@ -177,6 +211,8 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         """Validate the Bearer token; pass through on success, 401 otherwise."""
+        from .request_context import set_client_id
+
         if request.url.path in AUTH_EXEMPT_PATHS:
             # Health endpoints are public; OPTIONS preflight against them is
             # also fine (no secret to leak via the preflight response).
@@ -191,8 +227,11 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
         # to worry about).
 
         # If no token configured, allow (the safe-default check ensures this
-        # only happens for localhost binding).
+        # only happens for localhost binding). Still derive a client_id
+        # from the remote address so per-IP isolation applies on the
+        # insecure-localhost path.
         if self._expected is None:
+            set_client_id(_derive_client_id(request, ""))
             return await call_next(request)
 
         # M28: RFC 6750 §3 requires ``realm`` on the Bearer challenge.
@@ -220,6 +259,11 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
                     )
                 },
             )
+        # Token validated. Set client_id for rate-limit isolation; the
+        # hash is over the *presented* token (which matches the expected
+        # token here, since compare_digest just verified it) so callers
+        # presenting different tokens land on different rate buckets.
+        set_client_id(_derive_client_id(request, token))
         return await call_next(request)
 
     def _log_failure(self, request: Request, reason: str) -> None:

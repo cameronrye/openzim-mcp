@@ -51,3 +51,30 @@ def test_query_aware_respects_snippet_length(processor):
 def test_no_query_preserves_legacy_behavior(processor):
     snippet = processor.create_snippet(SAMPLE)
     assert snippet.startswith("Photosynthesis is")
+
+
+def test_truncation_at_leading_highlight_does_not_collapse_to_ellipsis():
+    """Regression: when the post-highlight slice begins with ``**`` and
+    contains exactly one ``**`` marker (truncated mid-bold at position 0),
+    the prior fix-up logic dropped the entire content via ``sliced[:0]``,
+    leaving the caller with a content-free ``"..."``. The snippet must
+    retain the term text (less the orphan ``**`` marker) so the caller
+    still gets usable content.
+    """
+    # Setup: snippet_length=10, content begins with the matched term so
+    # the term is preserved through the first truncation (no word boundary
+    # split), highlighting adds 4 chars of ``**`` markers pushing length
+    # over the cap, and the second truncation lands inside the closing
+    # ``**`` of the leading highlight — leaving an orphan ``**`` at
+    # position 0.
+    processor = ContentProcessor(snippet_length=10)
+    snippet = processor.create_snippet("Photo is the great article", query="Photo")
+    # The bug produced exactly the string ``"..."``. The fix keeps the
+    # term text so the result has more than just an ellipsis.
+    assert snippet != "...", (
+        f"Snippet collapsed to bare ellipsis; expected term text. "
+        f"Got: {snippet!r}"
+    )
+    # Inferred contract: the matched term ``Photo`` should appear in the
+    # result. The orphan ``**`` is dropped so the visible text is "Photo...".
+    assert "Photo" in snippet

@@ -15,7 +15,7 @@ from collections import Counter
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 import openzim_mcp.zim_operations as _zim_ops_mod
 
@@ -26,7 +26,7 @@ from .meta import build_meta, format_footer
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
 from .title_promotion import find_title_match, is_strong_title_match
-from .tool_schemas import SynthesizeResponse
+from .tool_schemas import SearchResponse, SynthesizeResponse
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
@@ -1301,10 +1301,19 @@ class SimpleToolsHandler:
                     suggestions=meta.get("suggestions"),
                 )
             # D6: promote canonical title-index hit if the top BM25 hit
-            # isn't a strong title match. Only on first page.
+            # isn't a strong title match. Only on first page. The splice
+            # helper accepts/returns ``Dict[str, Any]`` so it can mutate
+            # arbitrary keys; ``SearchResponse`` is its precise wire shape
+            # and the cast bridges the TypedDict / dict narrowing gap mypy
+            # can't infer through assignment.
             if offset == 0:
-                payload = self._splice_title_match_into_search(
-                    payload, zim_file_path, search_query
+                payload = cast(
+                    "SearchResponse",
+                    self._splice_title_match_into_search(
+                        cast("Dict[str, Any]", payload),
+                        zim_file_path,
+                        search_query,
+                    ),
                 )
             # Non-empty results: render via the legacy text formatter so the
             # markdown shape is identical to the non-compact path.

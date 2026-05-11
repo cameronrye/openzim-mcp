@@ -2401,6 +2401,58 @@ class TestCompactRenderersModule:
         )
         assert "missing extractor" in out
 
+    def test_render_search_all_distinguishes_all_errors_from_zero_hits(self):
+        """Regression: when every archive errored before search completed,
+        the renderer used to emit ``"No results in any archive. Try
+        suggestions for…"`` — misleading the model into chasing a
+        query-correction fix for a server-side problem. With
+        ``files_failed >= files_searched`` the renderer now emits a
+        targeted "all archives errored" hint instead.
+        """
+        from openzim_mcp import compact_renderers
+
+        out_all_errors = compact_renderers.render_search_all(
+            {
+                "results": [
+                    {
+                        "name": "a.zim",
+                        "has_hits": False,
+                        "error": True,
+                        "error_operation": "open",
+                        "error_message": "permission denied",
+                    },
+                    {
+                        "name": "b.zim",
+                        "has_hits": False,
+                        "error": True,
+                        "error_operation": "open",
+                        "error_message": "permission denied",
+                    },
+                ],
+                "files_searched": 2,
+                "files_with_hits": 0,
+                "files_failed": 2,
+            },
+            "photosynthesis",
+        )
+        assert "errors" in out_all_errors.lower()
+        assert "suggestions for" not in out_all_errors
+
+        # Contrast: zero hits with no failures keeps the suggestion hint.
+        out_zero_hits = compact_renderers.render_search_all(
+            {
+                "results": [
+                    {"name": "a.zim", "has_hits": False, "result": {"results": []}},
+                    {"name": "b.zim", "has_hits": False, "result": {"results": []}},
+                ],
+                "files_searched": 2,
+                "files_with_hits": 0,
+                "files_failed": 0,
+            },
+            "photosynthesis",
+        )
+        assert "suggestions for" in out_zero_hits
+
     def test_compact_structure_payload_drops_preview(self):
         from openzim_mcp import compact_renderers
 

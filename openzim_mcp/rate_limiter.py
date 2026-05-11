@@ -281,7 +281,7 @@ class RateLimiter:
         self,
         operation: str = "default",
         cost: Optional[int] = None,
-        client_id: str = "default",
+        client_id: Optional[str] = None,
     ) -> None:
         """Check if operation is allowed under the rate limit.
 
@@ -292,15 +292,25 @@ class RateLimiter:
                 value to decouple from the cost table.
             client_id: Identifier for the calling client. Buckets are keyed
                 on (client_id, operation) so abuse from one client doesn't
-                starve others. Stdio callers pass "default" (single client);
-                HTTP callers should pass a stable per-connection identifier
-                derived from the auth token or remote address.
+                starve others. When ``None`` (the default for tool call
+                sites), the value is read from ``request_context.client_id_var``
+                which the HTTP middleware sets per-request — so the
+                composite key naturally varies across concurrent HTTP
+                clients without every caller needing to pass it
+                explicitly. Stdio transport has no middleware so the
+                ContextVar reads its ``"default"`` fallback, preserving
+                the single-bucket behavior.
 
         Raises:
             OpenZimMcpRateLimitError: If rate limit is exceeded
         """
         if not self.config.enabled:
             return
+
+        if client_id is None:
+            from .request_context import current_client_id
+
+            client_id = current_client_id()
 
         if cost is None:
             cost = self.DEFAULT_COSTS.get(operation, self.DEFAULT_COSTS["default"])

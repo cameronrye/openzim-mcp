@@ -794,6 +794,8 @@ class _StructureMixin:
 
         outbound: List[Dict[str, Any]] = []
         outbound_error: Optional[str] = None
+        links_scan_truncated = False
+        links_total_internal: Optional[int] = None
 
         try:
             # Use the dict-returning extract_article_links_data so we don't
@@ -806,6 +808,19 @@ class _StructureMixin:
                 limit=500,
                 kind="internal",
             )
+            # Hub articles (``List of …``, ``Index of …``) routinely carry
+            # 1000–5000 internal links. The 500-link cap above evaluates
+            # frequency rank on a truncated sample, so the surfaced
+            # "most-related" set is biased toward the document-order head.
+            # Surface that fact so callers can decide whether the rank is
+            # trustworthy for their use case.
+            category_totals = links_data.get("category_totals") or {}
+            links_total_internal = (
+                category_totals.get("internal")
+                if isinstance(category_totals, dict)
+                else None
+            )
+            links_scan_truncated = not bool(links_data.get("done", True))
             # extract_article_links_data resolves redirects internally and
             # stores the post-redirect entry path in ``links_data["path"]``.
             # Resolve relative links against THAT path, not the caller-supplied
@@ -877,7 +892,17 @@ class _StructureMixin:
         }
         if outbound_error is not None:
             payload["outbound_error"] = outbound_error
-        return cast("RelatedArticlesResponse", attach_meta(payload))
+        # Frequency rank was computed over only the first 500 internal links.
+        # Hub/index articles can have many more; the surfaced ranking is then
+        # biased toward the document-head links. Flag this so callers don't
+        # treat the rank as authoritative for those articles.
+        if links_scan_truncated:
+            payload["scan_truncated"] = True
+            if links_total_internal is not None:
+                payload["scan_total_internal"] = links_total_internal
+            payload["scan_limit"] = 500
+        meta_reason = "scan_truncated" if links_scan_truncated else None
+        return cast("RelatedArticlesResponse", attach_meta(payload, reason=meta_reason))
 
     @staticmethod
     def _resolve_outbound_titles(

@@ -498,8 +498,14 @@ class ContentProcessor:
             # ``return cell.find_parent("table") is node`` was correct
             # only because the function happened to be called inside
             # the same loop iteration that defined ``node`` — fragile.
+            # ``node`` was narrowed from ``Tag | None`` to ``Tag`` by the
+            # ``if node is None: continue`` guard above, but mypy does not
+            # carry that narrowing into the default-arg expression. Bind
+            # via a local intermediate so the narrowed type flows in.
+            node_bound: Tag = node
+
             def _cell_belongs_to_infobox(
-                cell: Optional[Tag], _node: Tag = node
+                cell: Optional[Tag], _node: Tag = node_bound
             ) -> bool:
                 """``True`` iff ``cell``'s nearest enclosing table is
                 ``_node`` itself — i.e. not buried inside a nested table.
@@ -822,11 +828,19 @@ class ContentProcessor:
                 # Truncation can land inside a ``**term**`` highlight, leaving
                 # an unmatched opening marker (e.g. ``…**ter``) that downstream
                 # markdown renderers will treat as runaway bold. Detect an
-                # unpaired trailing ``**`` and strip the dangling fragment.
+                # unpaired trailing ``**`` and resolve the dangling fragment.
+                # The ``last_open == 0`` branch covers the rare case where the
+                # dangling ``**`` is at position 0 — the entire sliced snippet
+                # is the start of the first highlighted term. Slicing
+                # ``sliced[:0]`` there yields ``""`` and the caller sees a
+                # content-free ``"..."``; instead drop the orphan ``**``
+                # marker and keep the term text so the snippet stays useful.
                 if sliced.count("**") % 2 == 1:
                     last_open = sliced.rfind("**")
-                    if last_open >= 0:
+                    if last_open > 0:
                         sliced = sliced[:last_open].rstrip()
+                    elif last_open == 0:
+                        sliced = sliced[2:].lstrip()
                 snippet_text = sliced + "..."
 
         return snippet_text

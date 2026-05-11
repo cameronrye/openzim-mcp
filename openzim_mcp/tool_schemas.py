@@ -291,6 +291,15 @@ class RelatedArticlesResponse(TypedDict):
     # Set on partial-success when archive- or extraction-level failure
     # downgrades the response to an empty list with a textual reason.
     outbound_error: NotRequired[str]
+    # Set when frequency rank was computed over a truncated link sample
+    # (the underlying link scan capped at ``scan_limit`` and there are
+    # more internal links in the source article). Callers should treat
+    # the ranking as document-head-biased on hub articles when this is
+    # True. ``_meta.reason`` carries ``"scan_truncated"`` to surface
+    # the same signal to compact-mode renderers.
+    scan_truncated: NotRequired[bool]
+    scan_total_internal: NotRequired[int]
+    scan_limit: NotRequired[int]
 
 
 class _BatchEntryItem(TypedDict):

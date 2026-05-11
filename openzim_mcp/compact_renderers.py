@@ -296,13 +296,26 @@ def render_search_all(data: Mapping[str, Any], query: str) -> str:
     per_file = data.get("results") or []
     files_with_hits = int(data.get("files_with_hits", 0) or 0)
     files_searched = int(data.get("files_searched", len(per_file)) or 0)
+    files_failed = int(data.get("files_failed", 0) or 0)
     lines = [f'# Search across {files_searched} ZIM files for "{query}"', ""]
 
     if files_with_hits == 0:
-        lines.append(
-            "No results in any archive. Try `suggestions for "
-            f"{query[:30]}`, broaden the terms, or check `list_zim_files`."
-        )
+        # Distinguish "no archive matched the query" from "every archive
+        # errored before returning hits". The latter is a server-side
+        # signal — telling the model to ``try suggestions`` on a query the
+        # archives never actually evaluated wastes turns chasing a
+        # not-the-real-problem fix.
+        if files_failed > 0 and files_failed >= files_searched:
+            lines.append(
+                f"All {files_failed} archive(s) returned errors before search "
+                "completed. Check `list_zim_files` and server logs; the query "
+                "itself was not the problem."
+            )
+        else:
+            lines.append(
+                "No results in any archive. Try `suggestions for "
+                f"{query[:30]}`, broaden the terms, or check `list_zim_files`."
+            )
         return "\n".join(lines)
 
     for entry in per_file:
