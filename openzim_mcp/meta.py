@@ -164,7 +164,9 @@ def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
                     "Try `find_entry_by_title` or `browse_namespace`."
                 )
             if reason == "bad_namespace":
-                return "> Unknown namespace. Try `list_namespaces` to see valid options."
+                return (
+                    "> Unknown namespace. Try `list_namespaces` to see valid options."
+                )
             return "> No results. Try a shorter or differently-spelled query."
         bits: List[str] = []
         for item in visible:
