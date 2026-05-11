@@ -799,6 +799,61 @@ class _NamespaceMixin:
 
         return result
 
+    def _materialise_paths(
+        self, archive: Archive, paths: List[str], *, log_label: str
+    ) -> List[Dict[str, Any]]:
+        """Run ``_materialise_browse_entry`` for each path, swallowing errors.
+
+        Shared between the new-scheme C / W paginators — both materialise
+        an already-known list of paths into the row dicts that
+        ``browse_namespace_data`` expects. ``log_label`` lets the warning
+        path identify which caller (C-range vs W-probe) produced the
+        failure for diagnostics.
+        """
+        out: List[Dict[str, Any]] = []
+        for entry_path in paths:
+            try:
+                materialised = self._materialise_browse_entry(
+                    archive, entry_path, has_new_scheme=True
+                )
+                if materialised is not None:
+                    out.append(materialised)
+            except Exception as e:
+                logger.warning(f"Error processing {log_label} entry {entry_path}: {e}")
+                continue
+        return out
+
+    @staticmethod
+    def _new_scheme_browse_payload(
+        *,
+        namespace: str,
+        total: int,
+        offset: int,
+        limit: int,
+        entries: List[Dict[str, Any]],
+        discovery_method: str,
+    ) -> Dict[str, Any]:
+        """Build the v2 Phase B browse-namespace inner payload shape.
+
+        Both the entry-id-range fast path (C) and the known-path probe
+        (W) produce authoritative totals with no sampling — every field
+        below is the same between them except ``discovery_method``,
+        so factor the dict to one place.
+        """
+        return {
+            "namespace": namespace,
+            "total_in_namespace": total,
+            "total_in_namespace_is_lower_bound": False,
+            "offset": offset,
+            "limit": limit,
+            "returned_count": len(entries),
+            "entries": entries,
+            "sampling_based": False,
+            "discovery_method": discovery_method,
+            "is_total_authoritative": True,
+            "results_may_be_incomplete": False,
+        }
+
     def _browse_new_scheme_c_paginated(
         self,
         archive: Archive,
@@ -817,7 +872,7 @@ class _NamespaceMixin:
         ``offset + returned_count >= total``.
         """
         total = int(getattr(archive, "entry_count", 0) or 0)
-        entries: List[Dict[str, Any]] = []
+        page_paths: List[str] = []
         end = min(offset + limit, total)
         for entry_id in range(offset, end):
             try:
@@ -825,28 +880,17 @@ class _NamespaceMixin:
             except Exception as e:
                 logger.warning(f"Error reading entry id {entry_id}: {e}")
                 continue
-            try:
-                materialised = self._materialise_browse_entry(
-                    archive, entry.path, has_new_scheme=True
-                )
-                if materialised is not None:
-                    entries.append(materialised)
-            except Exception as e:
-                logger.warning(f"Error processing entry {entry.path}: {e}")
-                continue
-        return {
-            "namespace": namespace,
-            "total_in_namespace": total,
-            "total_in_namespace_is_lower_bound": False,
-            "offset": offset,
-            "limit": limit,
-            "returned_count": len(entries),
-            "entries": entries,
-            "sampling_based": False,
-            "discovery_method": "entry_id_range",
-            "is_total_authoritative": True,
-            "results_may_be_incomplete": False,
-        }
+            page_paths.append(entry.path)
+        return self._new_scheme_browse_payload(
+            namespace=namespace,
+            total=total,
+            offset=offset,
+            limit=limit,
+            entries=self._materialise_paths(
+                archive, page_paths, log_label="C-namespace"
+            ),
+            discovery_method="entry_id_range",
+        )
 
     # Well-known W-namespace paths in new-scheme archives. libzim's
     # iterable surface doesn't expose W, but ``has_entry_by_path`` does.
@@ -887,32 +931,16 @@ class _NamespaceMixin:
                     present.append(path)
             except Exception as e:
                 logger.debug(f"has_entry_by_path probe failed for {path}: {e}")
-        total = len(present)
-        page = present[offset : offset + limit]
-        entries: List[Dict[str, Any]] = []
-        for entry_path in page:
-            try:
-                materialised = self._materialise_browse_entry(
-                    archive, entry_path, has_new_scheme=True
-                )
-                if materialised is not None:
-                    entries.append(materialised)
-            except Exception as e:
-                logger.warning(f"Error processing W entry {entry_path}: {e}")
-                continue
-        return {
-            "namespace": namespace,
-            "total_in_namespace": total,
-            "total_in_namespace_is_lower_bound": False,
-            "offset": offset,
-            "limit": limit,
-            "returned_count": len(entries),
-            "entries": entries,
-            "sampling_based": False,
-            "discovery_method": "known_path_probe",
-            "is_total_authoritative": True,
-            "results_may_be_incomplete": False,
-        }
+        return self._new_scheme_browse_payload(
+            namespace=namespace,
+            total=len(present),
+            offset=offset,
+            limit=limit,
+            entries=self._materialise_paths(
+                archive, present[offset : offset + limit], log_label="W-namespace"
+            ),
+            discovery_method="known_path_probe",
+        )
 
     def _materialise_browse_entry(
         self, archive: Archive, entry_path: str, has_new_scheme: bool

@@ -108,6 +108,62 @@ def _ctx(value):
     yield value
 
 
+def _wire_typo_fallback_archive(
+    test_config,
+    monkeypatch,
+    *,
+    valid_paths: set,
+    entry_path: str,
+    entry_title: str,
+):
+    """Build a server with a mock archive whose ``has_entry_by_path``
+    succeeds only for ``valid_paths``, returns ``entry_path`` /
+    ``entry_title`` on a hit, and whose ``SuggestionSearcher`` always
+    misses. Bypasses the path validator. Returns the configured
+    server so the test can call ``find_entry_by_title_data`` directly.
+
+    Shared between the insertion-typo and deletion-typo regression
+    tests; SonarCloud's duplication detector treats the per-test
+    inline setup as new-code duplication on PRs.
+    """
+    from openzim_mcp.server import OpenZimMcpServer
+
+    server = OpenZimMcpServer(test_config)
+
+    mock_archive = MagicMock()
+    mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
+    mock_entry = MagicMock()
+    mock_entry.path = entry_path
+    mock_entry.title = entry_title
+    mock_archive.get_entry_by_path.return_value = mock_entry
+
+    mock_suggest = MagicMock()
+    mock_suggest.getEstimatedMatches.return_value = 0
+    mock_suggest.getResults.return_value = []
+    mock_searcher = MagicMock()
+    mock_searcher.suggest.return_value = mock_suggest
+
+    monkeypatch.setattr(
+        "openzim_mcp.zim_operations.SuggestionSearcher",
+        lambda archive: mock_searcher,
+    )
+    monkeypatch.setattr(
+        "openzim_mcp.zim_operations.zim_archive",
+        lambda *a, **kw: _ctx(mock_archive),
+    )
+    monkeypatch.setattr(
+        server.zim_operations.path_validator,
+        "validate_path",
+        lambda p: __import__("pathlib").Path(p),
+    )
+    monkeypatch.setattr(
+        server.zim_operations.path_validator,
+        "validate_zim_file",
+        lambda p: p,
+    )
+    return server
+
+
 def test_photosythesis_resolves_to_photosynthesis_via_typo_fallback(
     test_config, monkeypatch
 ):
@@ -129,42 +185,12 @@ def test_photosythesis_resolves_to_photosynthesis_via_typo_fallback(
       6. The response surfaces the canonical entry with the
          ``typo_corrected`` match_type and the alt-spelling suggestion.
     """
-    from openzim_mcp.server import OpenZimMcpServer
-
-    server = OpenZimMcpServer(test_config)
-
-    mock_archive = MagicMock()
-    valid_paths = {"C/Photosynthesis", "A/Photosynthesis"}
-    mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
-    mock_entry = MagicMock()
-    mock_entry.path = "C/Photosynthesis"
-    mock_entry.title = "Photosynthesis"
-    mock_archive.get_entry_by_path.return_value = mock_entry
-
-    mock_suggest = MagicMock()
-    mock_suggest.getEstimatedMatches.return_value = 0
-    mock_suggest.getResults.return_value = []
-    mock_searcher = MagicMock()
-    mock_searcher.suggest.return_value = mock_suggest
-
-    monkeypatch.setattr(
-        "openzim_mcp.zim_operations.SuggestionSearcher",
-        lambda archive: mock_searcher,
-    )
-    monkeypatch.setattr(
-        "openzim_mcp.zim_operations.zim_archive",
-        lambda *a, **kw: _ctx(mock_archive),
-    )
-    # Bypass path-validator (the test uses a fake test zim path).
-    monkeypatch.setattr(
-        server.zim_operations.path_validator,
-        "validate_path",
-        lambda p: __import__("pathlib").Path(p),
-    )
-    monkeypatch.setattr(
-        server.zim_operations.path_validator,
-        "validate_zim_file",
-        lambda p: p,
+    server = _wire_typo_fallback_archive(
+        test_config,
+        monkeypatch,
+        valid_paths={"C/Photosynthesis", "A/Photosynthesis"},
+        entry_path="C/Photosynthesis",
+        entry_title="Photosynthesis",
     )
 
     result = server.zim_operations.find_entry_by_title_data(
@@ -193,43 +219,13 @@ def test_photosythesis_resolves_to_photosynthesis_via_typo_fallback(
 def test_photosynthsis_deletion_also_resolves(test_config, monkeypatch):
     """``Photosynthsis`` (missing 'e' — a deletion typo) should also
     reach ``Photosynthesis`` via the insertion edit."""
-    from openzim_mcp.server import OpenZimMcpServer
-
-    server = OpenZimMcpServer(test_config)
-
-    mock_archive = MagicMock()
-    valid_paths = {"C/Photosynthesis"}
-    mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
-    mock_entry = MagicMock()
-    mock_entry.path = "C/Photosynthesis"
-    mock_entry.title = "Photosynthesis"
-    mock_archive.get_entry_by_path.return_value = mock_entry
-
-    mock_suggest = MagicMock()
-    mock_suggest.getEstimatedMatches.return_value = 0
-    mock_suggest.getResults.return_value = []
-    mock_searcher = MagicMock()
-    mock_searcher.suggest.return_value = mock_suggest
-
-    monkeypatch.setattr(
-        "openzim_mcp.zim_operations.SuggestionSearcher",
-        lambda archive: mock_searcher,
+    server = _wire_typo_fallback_archive(
+        test_config,
+        monkeypatch,
+        valid_paths={"C/Photosynthesis"},
+        entry_path="C/Photosynthesis",
+        entry_title="Photosynthesis",
     )
-    monkeypatch.setattr(
-        "openzim_mcp.zim_operations.zim_archive",
-        lambda *a, **kw: _ctx(mock_archive),
-    )
-    monkeypatch.setattr(
-        server.zim_operations.path_validator,
-        "validate_path",
-        lambda p: __import__("pathlib").Path(p),
-    )
-    monkeypatch.setattr(
-        server.zim_operations.path_validator,
-        "validate_zim_file",
-        lambda p: p,
-    )
-
     result = server.zim_operations.find_entry_by_title_data(
         "/fake/test.zim", "Photosynthsis", cross_file=False, limit=10
     )
