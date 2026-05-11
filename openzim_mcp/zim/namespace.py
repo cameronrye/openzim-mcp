@@ -1082,8 +1082,12 @@ class _NamespaceMixin:
                 seen.add(p)
                 entry = entry.get_redirect_entry()
                 hops += 1
-        except Exception:
-            pass
+        except Exception as redirect_err:
+            # Best-effort redirect chase: if a hop raises (e.g. a stale
+            # redirect entry on a partially-rewritten archive), fall back
+            # to the last resolved ``entry`` rather than failing the whole
+            # main-page lookup.
+            logger.debug(f"main_entry redirect chase aborted: {redirect_err}")
         title = getattr(entry, "title", None) or "Main Page"
         try:
             preview, content_type = self._render_entry_preview(entry, "W/mainPage")

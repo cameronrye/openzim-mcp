@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from openzim_mcp.config import SynthesizeConfig
     from openzim_mcp.content_processor import ContentProcessor
 
-from openzim_mcp.bundle import get_or_build_bundle
+from openzim_mcp import bundle as _bundle_mod
 from openzim_mcp.title_promotion import is_strong_title_match
 from openzim_mcp.tool_schemas import Citation, SynthesizePassage, SynthesizeResponse
 
@@ -678,7 +678,7 @@ def _make_bundle_lookup(
         if pair is None:
             return None
         archive_val, validated_path = pair
-        return get_or_build_bundle(
+        return _bundle_mod.get_or_build_bundle(
             archive_val,
             entry_path,
             cache=cache,

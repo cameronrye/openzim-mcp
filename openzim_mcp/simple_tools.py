@@ -15,7 +15,7 @@ from collections import Counter
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import openzim_mcp.zim_operations as _zim_ops_mod
 
@@ -26,8 +26,13 @@ from .meta import build_meta, format_footer
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
 from .title_promotion import find_title_match, is_strong_title_match
-from .tool_schemas import SearchResponse, SynthesizeResponse
+from .tool_schemas import SynthesizeResponse
 from .zim_operations import ZimOperations
+
+if TYPE_CHECKING:
+    # SearchResponse is only referenced as a string forward-reference in a
+    # ``cast()`` call below; importing it at runtime would be unused.
+    from .tool_schemas import SearchResponse  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

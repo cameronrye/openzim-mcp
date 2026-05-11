@@ -65,7 +65,7 @@ def _wire_two_hits(monkeypatch):
         "infobox": None,
     }
     monkeypatch.setattr(
-        "openzim_mcp.synthesize.get_or_build_bundle",
+        "openzim_mcp.bundle.get_or_build_bundle",
         lambda archive, path, **kwargs: bundle,
     )
     return archive, cache, search_handler

@@ -192,7 +192,7 @@ def test_synthesize_end_to_end_promotes_berlin(monkeypatch):
         "infobox": None,
     }
     monkeypatch.setattr(
-        "openzim_mcp.synthesize.get_or_build_bundle",
+        "openzim_mcp.bundle.get_or_build_bundle",
         lambda archive, path, **kwargs: bundle if path == "Berlin" else None,
     )
 
