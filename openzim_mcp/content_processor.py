@@ -575,7 +575,7 @@ class ContentProcessor:
 
         Tables with more rows than ``row_threshold`` OR more text characters
         than ``char_threshold`` are replaced in document order with a
-        ``[Table N: M rows × P cols — pass compact=False to expand]`` paragraph.
+        ``[Table N: M rows x P cols - pass compact=False to expand]`` paragraph.
         """
         if row_threshold is None:
             row_threshold = self._table_row_threshold
@@ -601,8 +601,17 @@ class ContentProcessor:
                 default=0,
             )
             placeholder = soup.new_tag("p")
+            # ASCII-only placeholder: the earlier ``× ... —`` form
+            # round-tripped fine on macOS / Ubuntu CI but produced
+            # ``� ... �`` (replacement chars) on Windows runners.
+            # Snippet-level html2text rendering hits an encoding boundary
+            # somewhere — likely a sys-default-codec fallback inside
+            # html2text or BeautifulSoup. Using ASCII ``x`` / ``-``
+            # bypasses the issue entirely; the placeholder is internal
+            # diagnostic text, not user-facing prose, so the slight
+            # downgrade in glyph fidelity has no practical cost.
             placeholder.string = (
-                f"[Table {index}: {len(rows)} rows × {cols} cols — "
+                f"[Table {index}: {len(rows)} rows x {cols} cols - "
                 f"pass compact=False to expand]"
             )
             table.replace_with(placeholder)
