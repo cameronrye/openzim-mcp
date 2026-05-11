@@ -219,8 +219,6 @@ class _SearchMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached search dict for query: {query}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
             return cast("SearchResponse", cached_result)
 
         try:
@@ -228,12 +226,6 @@ class _SearchMixin:
                 payload, total_results = self._perform_search(
                     archive, query, limit, offset
                 )
-
-            # Don't cache zero-result responses: libzim's lazy index warm-up
-            # can return 0 matches transiently, and a TTL-cached "no results"
-            # would mask the index becoming ready.
-            if total_results > 0:
-                self.cache.set(cache_key, payload)
             logger.debug(f"Search completed: query='{query}', results found")
             reason = "0_hits" if total_results == 0 else None
 
@@ -260,14 +252,20 @@ class _SearchMixin:
                 except Exception as e:
                     logger.debug(f"alt_archive suggestion build failed: {e}")
 
-            return cast(
-                "SearchResponse",
-                attach_meta(
-                    payload,
-                    reason=reason,
-                    suggestions=suggestions if suggestions else None,
-                ),
+            with_meta = attach_meta(
+                payload,
+                reason=reason,
+                suggestions=suggestions if suggestions else None,
             )
+            # Cache the meta-attached payload so cold vs warm reads are
+            # bit-identical. Skip the cache for zero-hit responses
+            # because libzim's lazy index warm-up can return 0 matches
+            # transiently — TTL-caching "no results" would mask the
+            # index becoming ready (also, the suggestions block depends
+            # on freshly-enumerated alt_archive candidates).
+            if total_results > 0:
+                self.cache.set(cache_key, with_meta)
+            return cast("SearchResponse", with_meta)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -605,8 +603,6 @@ class _SearchMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached filtered search dict for query: {query}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
             return cast("SearchWithFiltersResponse", cached_result)
 
         try:
@@ -672,21 +668,19 @@ class _SearchMixin:
             "page_info": page_info,
         }
 
-        # Don't cache zero-result responses: libzim's lazy index warm-up
-        # can return 0 matches transiently, and a TTL-cached "no results"
-        # would mask the index becoming ready.
-        if scan.filtered_count > 0:
-            self.cache.set(cache_key, payload)
         logger.info(
             f"Filtered search completed: query='{query}', "
             f"namespace={namespace}, type={content_type}, "
             f"results={returned_count}"
         )
         reason = "0_hits" if scan.filtered_count == 0 else None
-        return cast(
-            "SearchWithFiltersResponse",
-            attach_meta(payload, reason=reason),
-        )
+        with_meta = attach_meta(payload, reason=reason)
+        # Cache the post-attach payload so cold/warm reads are bit-identical
+        # (Phase B #12). Skip zero-hit results — see search_zim_file_data
+        # for rationale (libzim lazy index, fresh suggestions).
+        if scan.filtered_count > 0:
+            self.cache.set(cache_key, with_meta)
+        return cast("SearchWithFiltersResponse", with_meta)
 
     def _perform_filtered_search_data(
         self,
@@ -1053,8 +1047,6 @@ class _SearchMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached suggestions dict for: {partial_query}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
             return cast("SearchSuggestionsResponse", cached_result)
 
         try:
@@ -1082,15 +1074,17 @@ class _SearchMixin:
                 },
             }
 
-            # A cold-cache request that hits before the libzim title index
-            # has warmed up can return zero suggestions for a query that
-            # will produce results moments later — caching that empty
-            # payload locks the query into "no suggestions" for the full
-            # TTL. Only cache non-empty results.
+            with_meta = attach_meta(payload)
+            # Cache the post-attach payload (Phase B #12). A cold-cache
+            # request that hits before the libzim title index has warmed
+            # up can return zero suggestions for a query that will
+            # produce results moments later — caching that empty payload
+            # locks the query into "no suggestions" for the full TTL.
+            # Only cache non-empty results.
             if actual_count > 0:
-                self.cache.set(cache_key, payload)
+                self.cache.set(cache_key, with_meta)
             logger.info(f"Generated {actual_count} suggestions for: {partial_query}")
-            return cast("SearchSuggestionsResponse", attach_meta(payload))
+            return cast("SearchSuggestionsResponse", with_meta)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -1465,6 +1459,42 @@ class _SearchMixin:
                 return entry
         return None
 
+    def _verified_typo_variants(
+        self, archives: List[Any], title: str, *, limit: int
+    ) -> List[str]:
+        """Return typo-variant *titles* that actually resolve to an entry.
+
+        Used to populate ``_meta.suggestions`` only with values the caller
+        can reuse as a query (Phase A #6 fix). The naive implementation
+        emitted raw permutations of the user's mangled input; this one
+        probes the same fast-path that produced the real results so
+        suggestions are guaranteed to be reachable.
+
+        ``archives`` is a list of open ``Archive`` objects (one per ZIM
+        file already opened by the caller); we probe each in order until
+        ``limit`` variants are confirmed. Length-gated identically to
+        ``_find_entry_typo_fallback``.
+        """
+        if len(title) < self.config.search.fuzzy_title_min_query_len:
+            return []
+        verified: List[str] = []
+        seen: set[str] = set()
+        for variant in self._typo_variants(title):
+            for archive in archives:
+                try:
+                    entry = self._find_entry_fast_path(archive, variant)
+                except Exception:
+                    continue
+                if entry is not None:
+                    resolved = entry.title or variant
+                    if resolved not in seen:
+                        verified.append(resolved)
+                        seen.add(resolved)
+                    break
+            if len(verified) >= limit:
+                break
+        return verified
+
     def find_entry_by_title_data(
         self,
         zim_file_path: str,
@@ -1506,6 +1536,13 @@ class _SearchMixin:
         fast_path_hit = False
         fuzzy_path_hit = False
         title_lower = title.lower()
+        # Verified typo-variant titles accumulated during the per-file
+        # typo-fallback probe. Used only when *all* archives return
+        # zero hits, to populate ``_meta.suggestions`` with values the
+        # caller can re-issue as a fresh query (Phase A #6 fix).
+        verified_variants: List[str] = []
+        verified_variants_seen: set[str] = set()
+        structured_suggestions_limit = self.config.search.structured_suggestions_limit
 
         for file_path in files:
             try:
@@ -1615,6 +1652,25 @@ class _SearchMixin:
                                 }
                             )
                             fuzzy_path_hit = True
+                        else:
+                            # Collect *additional* verified variants from
+                            # this archive while it's still open — these
+                            # surface as ``alt_spelling`` suggestions iff
+                            # the final aggregate is empty.
+                            for resolved in self._verified_typo_variants(
+                                [archive],
+                                title,
+                                limit=structured_suggestions_limit
+                                - len(verified_variants),
+                            ):
+                                if resolved not in verified_variants_seen:
+                                    verified_variants.append(resolved)
+                                    verified_variants_seen.add(resolved)
+                                if (
+                                    len(verified_variants)
+                                    >= structured_suggestions_limit
+                                ):
+                                    break
             except Exception as e:
                 if not cross_file:
                     raise
@@ -1624,19 +1680,17 @@ class _SearchMixin:
         # otherwise preserve per-file rank order.
         aggregate_results.sort(key=lambda r: -r["score"])
 
-        # Build _meta.suggestions[] from typo variants when the fuzzy path
-        # is eligible (fast path missed and query is long enough). These are
-        # candidate spellings the caller can surface as "did you mean?" hints.
+        # Build _meta.suggestions[] from archive-verified typo variants
+        # only when there are NO results of any kind — otherwise a
+        # successful (or partially successful) response would carry
+        # "did you mean?" hints that contradict what was returned
+        # (Phase A #7 fix). The variants themselves are confirmed to
+        # resolve to a real entry in at least one archive (Phase A #6
+        # fix), accumulated during the per-file typo-fallback pass.
         suggestions: List[Dict[str, str]] = []
-        limit_n = self.config.search.structured_suggestions_limit
-        if (
-            not fast_path_hit
-            and len(title) >= self.config.search.fuzzy_title_min_query_len
-        ):
-            for variant in self._typo_variants(title):
-                suggestions.append({"type": "alt_spelling", "value": variant})
-                if len(suggestions) >= limit_n:
-                    break
+        if not aggregate_results:
+            for resolved in verified_variants[:structured_suggestions_limit]:
+                suggestions.append({"type": "alt_spelling", "value": resolved})
 
         reason = None if aggregate_results else "0_hits"
 

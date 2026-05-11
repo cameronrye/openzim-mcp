@@ -189,11 +189,11 @@ def test_attribute_sections_adds_section_id_when_match_in_first_section() -> Non
     }
     passages = [_passage("wiki/A/Berlin", "Geography text here.", 1, 0.9)]
 
-    def bundle_lookup(path: str) -> dict | None:
-        return bundle if path == "A/Berlin" else None
+    def bundle_lookup(archive_name: str, path: str) -> dict | None:
+        return bundle if (archive_name == "wiki" and path == "A/Berlin") else None
 
     attributed = _attribute_sections(
-        passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
+        passages, bundle_lookup=bundle_lookup, hit_keys=[("wiki", "A/Berlin")]
     )
     assert attributed[0]["cite_id"] == "wiki/A/Berlin#geography"
 
@@ -202,12 +202,12 @@ def test_attribute_sections_drops_section_on_bundle_failure() -> None:
     """Bundle build fails → cite_id stays at entry level; passage not dropped."""
     from openzim_mcp.synthesize import _attribute_sections
 
-    def bundle_lookup(path: str) -> None:
+    def bundle_lookup(archive_name: str, path: str) -> None:
         raise RuntimeError("simulated archive read failure")
 
     passages = [_passage("wiki/A/Berlin", "Anything", 1, 0.5)]
     attributed = _attribute_sections(
-        passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
+        passages, bundle_lookup=bundle_lookup, hit_keys=[("wiki", "A/Berlin")]
     )
     assert len(attributed) == 1
     assert attributed[0]["cite_id"] == "wiki/A/Berlin"  # unchanged
@@ -231,12 +231,12 @@ def test_attribute_sections_no_match_keeps_entry_level() -> None:
         ],
     }
 
-    def bundle_lookup(path: str) -> dict:
+    def bundle_lookup(archive_name: str, path: str) -> dict:
         return bundle
 
     passages = [_passage("wiki/A/Berlin", "totally unrelated string", 1, 0.1)]
     attributed = _attribute_sections(
-        passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
+        passages, bundle_lookup=bundle_lookup, hit_keys=[("wiki", "A/Berlin")]
     )
     assert attributed[0]["cite_id"] == "wiki/A/Berlin"
 
@@ -282,11 +282,11 @@ def test_build_citations_dedupes_by_entry() -> None:
         _passage("wiki/A/Berlin#climate", "", 2, 0.7),
         _passage("wiki/A/Munich#geography", "", 3, 0.5),
     ]
-    bundle_titles = {"A/Berlin": "Berlin", "A/Munich": "Munich"}
+    bundle_titles = {("wiki", "A/Berlin"): "Berlin", ("wiki", "A/Munich"): "Munich"}
     bundle_section_titles = {
-        ("A/Berlin", "geography"): "Geography",
-        ("A/Berlin", "climate"): "Climate",
-        ("A/Munich", "geography"): "Geography",
+        ("wiki", "A/Berlin", "geography"): "Geography",
+        ("wiki", "A/Berlin", "climate"): "Climate",
+        ("wiki", "A/Munich", "geography"): "Geography",
     }
     citations = _build_citations(
         passages,
@@ -424,3 +424,79 @@ def test_synthesize_query_multi_archive_uses_rrf_fusion(
     )
     assert response["fallback_used"] == "rrf_fusion"
     assert sorted(response["archives_searched"]) == ["wiki1", "wiki2"]
+
+
+def test_synthesize_response_meta_envelope_populated(
+    cp: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: ``_meta`` must carry tokens_est/chars/truncated, not be
+    an empty dict (Phase C #5 review finding).
+    """
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.synthesize import synthesize_query
+
+    archive = MagicMock()
+    search_handler = MagicMock()
+    search_handler.search_top_k.return_value = [
+        {"path": "A/Berlin", "snippet": "Berlin body text", "score": 0.9},
+    ]
+    monkeypatch.setattr(
+        "openzim_mcp.synthesize.get_or_build_bundle",
+        lambda archive, path, **kw: None,
+    )
+    response = synthesize_query(
+        "berlin",
+        archives=[(archive, Path("wiki.zim"))],
+        search_handler=search_handler,
+        cache=MagicMock(),
+        content_processor=cp,
+        config=SynthesizeConfig(),
+    )
+    meta = response["_meta"]
+    assert "tokens_est" in meta and meta["tokens_est"] >= 0
+    assert "chars" in meta and meta["chars"] >= 0
+    assert "truncated" in meta
+
+
+def test_select_top_hits_multi_credits_archive_with_best_rank() -> None:
+    """When a path appears in multiple archives, attribute it to the
+    archive that ranked it highest in its own list, not the first
+    archive in ``archives_searched`` iteration order (Phase C #16).
+    """
+    from openzim_mcp.synthesize import _select_top_hits_multi
+
+    per_archive_hits = [
+        # wiki1: Berlin is at rank 1 (best in this archive)
+        [{"path": "A/Berlin", "snippet": "", "score": 0.5}],
+        # wiki2: Berlin is at rank 0 (top of this archive)
+        [
+            {"path": "A/Berlin", "snippet": "", "score": 0.95},
+            {"path": "A/Munich", "snippet": "", "score": 0.4},
+        ],
+    ]
+    # Note iteration order puts wiki1 first — the broken implementation
+    # would always pick wiki1 here. Correct implementation picks wiki2
+    # because Berlin was ranked higher there (rank 0 vs. rank 0 — both
+    # at top of their list; tiebreaker is rank, then iteration order;
+    # so the broken impl AND the correct impl both pick wiki1. To
+    # actually exercise the fix, give wiki1 a worse rank for Berlin:
+    per_archive_hits = [
+        # wiki1: Berlin is at rank 1 (Munich first)
+        [
+            {"path": "A/Munich", "snippet": "", "score": 0.95},
+            {"path": "A/Berlin", "snippet": "", "score": 0.5},
+        ],
+        # wiki2: Berlin is at rank 0 (top of this archive)
+        [{"path": "A/Berlin", "snippet": "", "score": 0.95}],
+    ]
+    archives_searched = ["wiki1", "wiki2"]
+    top_hits, fallback = _select_top_hits_multi(
+        per_archive_hits, archives_searched, top_n=5
+    )
+    # Berlin is attributed to wiki2 (rank 0 there beats rank 1 in wiki1)
+    berlin_archive = next(
+        archive_name for archive_name, hit in top_hits if hit["path"] == "A/Berlin"
+    )
+    assert berlin_archive == "wiki2"
+    assert fallback == "rrf_fusion"

@@ -221,6 +221,8 @@ class _StructureMixin:
         limit: int = 100,
         offset: int = 0,
         kind: str = "internal",
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "LinksResponse":
         """Structured variant of ``extract_article_links``. v2 Phase B contract.
 
@@ -273,6 +275,24 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
+        # Cursor integrity (Phase B #11): a cursor issued for archive A
+        # must not be honoured when resubmitted against archive B.
+        if cursor_archive_identity is not None:
+            from openzim_mcp.pagination import (
+                Cursor as _CursorClass,
+                CursorMismatchError,
+                archive_identity,
+            )
+
+            try:
+                _CursorClass.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="extract_article_links",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
+
         try:
             from openzim_mcp.bundle import get_or_build_bundle
 
@@ -295,6 +315,8 @@ class _StructureMixin:
             done = last_index >= total_for_kind
             next_cursor: Optional[str] = None
             if not done:
+                from openzim_mcp.pagination import archive_identity
+
                 next_cursor = Cursor.encode(
                     tool="extract_article_links",
                     state={
@@ -302,6 +324,7 @@ class _StructureMixin:
                         "l": limit,
                         "ep": entry_path,
                         "k": kind,
+                        "ai": archive_identity(validated_path),
                     },
                 )
 

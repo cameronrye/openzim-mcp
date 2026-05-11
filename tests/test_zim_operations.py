@@ -1328,26 +1328,23 @@ class TestZimOperations:
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
         assert result == "cached entry content"
 
-        # Test list_namespaces_data cache hit (lines 584-585).
-        # list_namespaces now delegates to list_namespaces_data, which caches
-        # dicts under a `namespaces_data:v2b:` key (v2b marker added with the
-        # Phase B ``entry_count`` -> ``total`` rename so v1.x cached responses
-        # don't leak through). Exercise the cache hit path against the
-        # dict-returning entry point directly so we test the cache layer
-        # without an extra json.dumps round trip.
+        # Test list_namespaces_data cache hit.
+        # Phase B #12 fix: the cache now stores POST-ATTACH payloads
+        # (with ``_meta`` already attached), and cache hits return them
+        # verbatim. Seed accordingly.
         cache_key = f"namespaces_data:v2b:{validated_path}"
-        zim_operations.cache.set(cache_key, {"cached": "namespaces"})
+        cached_ns = {"cached": "namespaces", "_meta": {"chars": 1}}
+        zim_operations.cache.set(cache_key, cached_ns)
 
         result = zim_operations.list_namespaces_data(str(zim_file))
         assert result["cached"] == "namespaces"
         assert "_meta" in result
 
-        # Test browse_namespace_data cache hit. browse_namespace now
-        # delegates to browse_namespace_data, which caches dicts under a
-        # `browse_ns_data:` key. Exercise the cache hit path against the
-        # dict-returning entry point directly.
+        # Test browse_namespace_data cache hit. Same contract — cache
+        # stores the post-attach payload.
         cache_key = f"browse_ns_data:v2b:{validated_path}:A:50:0"
-        zim_operations.cache.set(cache_key, {"cached": "browse"})
+        cached_browse = {"cached": "browse", "_meta": {"chars": 1}}
+        zim_operations.cache.set(cache_key, cached_browse)
 
         result = zim_operations.browse_namespace_data(str(zim_file), "A")
         assert result["cached"] == "browse"
@@ -1389,11 +1386,15 @@ class TestZimOperations:
 
         # Test extract_article_links_data cache hit. extract_article_links_data
         # now reads from the shared EntryBundle (Phase C). Caching happens at
-        # the bundle level under a ``bundle:v2c:`` key. The hit assertion checks
-        # that the post-render dict carries the cached title/path metadata.
-        cache_key = f"bundle:v2c:{validated_path}:A/Test"
+        # the bundle level under a ``bundle:v2c:{path}:{mtime}:{size}:{entry}``
+        # key — the mtime/size token (Phase C #3 fix) invalidates cached
+        # bundles when the underlying file is replaced. Compute the key the
+        # same way the code does so the seed lands at the right slot.
+        from openzim_mcp.bundle import _bundle_cache_key
+
+        bundle_cache_key = _bundle_cache_key(validated_path, "A/Test")
         zim_operations.cache.set(
-            cache_key,
+            bundle_cache_key,
             {
                 "entry_path": "A/Test",
                 "title": "Cached Title",

@@ -257,11 +257,6 @@ class _ContentMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached entry dict for: {entry_path}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(
-                    dict(cached_result),
-                    truncated=bool(cached_result.get("_truncated")),
-                )
             return cast("EntryResponse", cached_result)
 
         try:
@@ -284,23 +279,26 @@ class _ContentMixin:
                 f"Try using search_zim_file() to verify the file is accessible."
             ) from e
 
-        # Only cache on success. ``_truncated`` is an internal hint used
-        # to set ``_meta.truncated`` on the cached path; it's stripped
-        # before the dict is returned (and never reaches the wire).
-        if content_ok:
-            self.cache.set(cache_key, dict(payload))
+        # ``_truncated`` / ``_total_chars`` are internal hints from
+        # ``_build_entry_payload`` that drive the eventual ``_meta``
+        # envelope; stripped before the dict reaches the wire.
         truncated = bool(payload.pop("_truncated", False))
         total_chars = payload.pop("_total_chars", None)
-        logger.info(f"Retrieved entry data: {entry_path}")
-        return cast(
-            "EntryResponse",
-            attach_meta(
-                payload,
-                truncated=truncated,
-                total_chars=total_chars,
-                current_offset=content_offset,
-            ),
+        # ``content_chars`` is the post-slice content length — drives
+        # ``more_at_offset`` for follow-up paginated fetches.
+        with_meta = attach_meta(
+            payload,
+            truncated=truncated,
+            total_chars=total_chars,
+            current_offset=content_offset,
+            content_chars=len(payload.get("content", "")),
         )
+        # Attach _meta before caching so cold and warm reads return
+        # bit-identical responses (Phase B #12).
+        if content_ok:
+            self.cache.set(cache_key, with_meta)
+        logger.info(f"Retrieved entry data: {entry_path}")
+        return cast("EntryResponse", with_meta)
 
     def _get_entry_data_from_archive(  # NOSONAR(python:S3776)
         self,

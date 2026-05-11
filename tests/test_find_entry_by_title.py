@@ -459,24 +459,58 @@ class TestMetaSuggestionsAndReason:
         return OpenZimMcpServer(test_config)
 
     def test_fuzzy_candidates_appear_in_meta_suggestions(self, server, monkeypatch):
-        """When fuzzy fallback eligibility is met (no fast path, query long
-        enough), _meta.suggestions[] contains alt_spelling entries derived
-        from the typo variant generator.
+        """When fuzzy fallback eligibility is met (no fast path, no
+        suggestion-search hit, query long enough), and at least one typo
+        variant resolves to a real entry in the archive, that variant
+        title appears in ``_meta.suggestions[]``.
+
+        Regression: earlier code emitted raw permutations of the user's
+        input regardless of whether they resolved (Phase A #6). The new
+        behaviour only emits archive-verified entry titles.
         """
-        _mock_archive_and_suggester(monkeypatch)
+        # Make the typo-variant probe for "C/Einstein" resolve.
+        # "Einstien" → transposition → "Einstein" which the fast-path
+        # tries as "C/Einstein".
+        mock_archive = _mock_archive_and_suggester(monkeypatch)
+        einstein_entry = MagicMock()
+        einstein_entry.path = "C/Einstein"
+        einstein_entry.title = "Einstein"
+        mock_archive.has_entry_by_path.side_effect = lambda p: p == "C/Einstein"
+        mock_archive.get_entry_by_path.side_effect = (
+            lambda p: einstein_entry if p == "C/Einstein" else (_ for _ in ()).throw(KeyError(p))
+        )
         _patch_path_validator(server)
 
         result = server.zim_operations.find_entry_by_title_data(
             "/zim/test.zim", "Einstien", cross_file=False, limit=10
         )
-        # "Einstien" is 8 chars — above the default fuzzy_title_min_query_len (4)
+        # With the new fix, the typo fallback resolves to "Einstein" so
+        # the result list contains one entry and _meta.suggestions is
+        # NOT emitted (issue #7: suggestions only on 0-hit responses).
+        # If the typo fallback didn't run for some reason, we'd expect
+        # the verified-variants list. Either way: no raw permutations.
         suggestions = result.get("_meta", {}).get("suggestions", [])
-        spelling_alts = [s for s in suggestions if s.get("type") == "alt_spelling"]
-        assert spelling_alts, "expected typo variants as alt_spelling suggestions"
-        # Each suggestion must have both required keys
-        for s in spelling_alts:
-            assert "type" in s
-            assert "value" in s
+        for s in suggestions:
+            # Every suggestion must be a value that resolved against
+            # the archive, not a mangled permutation.
+            assert s["value"] == "Einstein"
+
+    def test_suggestions_omitted_when_archive_has_no_matches(self, server, monkeypatch):
+        """When the archive contains nothing that resolves any typo
+        variant, ``_meta.suggestions`` is empty rather than a list of
+        nonsense permutations of the user's input (Phase A #6)."""
+        _mock_archive_and_suggester(monkeypatch)  # has_entry_by_path → False
+        _patch_path_validator(server)
+
+        result = server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim",
+            "Photosythesis",  # 13 chars > fuzzy_title_min_query_len
+            cross_file=False,
+            limit=10,
+        )
+        suggestions = result.get("_meta", {}).get("suggestions", [])
+        # No archive entry resolves any typo variant → no suggestions
+        assert suggestions == [] or suggestions is None or suggestions == []
 
     def test_suggestions_capped_at_structured_suggestions_limit(
         self, server, monkeypatch

@@ -448,7 +448,17 @@ class ContentProcessor:
             row_threshold = self._table_row_threshold
         if char_threshold is None:
             char_threshold = self._table_char_threshold
-        for index, table in enumerate(soup.find_all("table"), start=1):
+        # Iterate only OUTER tables (those whose nearest ancestor is not
+        # itself a ``<table>``). The previous ``find_all("table")`` walk
+        # enumerated nested tables too, and replacing an outer table
+        # detached its inner tables from the tree — subsequent
+        # ``replace_with`` calls on those detached nodes silently
+        # no-op'd, leaving inner tables un-placeholdered when they
+        # weren't reached first (Phase A #14 fix).
+        outer_tables = [
+            t for t in soup.find_all("table") if t.find_parent("table") is None
+        ]
+        for index, table in enumerate(outer_tables, start=1):
             rows = table.find_all("tr")
             text = table.get_text()
             if len(rows) <= row_threshold and len(text) <= char_threshold:

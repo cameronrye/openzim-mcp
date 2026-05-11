@@ -2742,34 +2742,60 @@ class TestSectionLevelFollowup:
     def section_handler(self):
         from unittest.mock import MagicMock
 
+        # Production data shape: ``get_article_structure_data`` heading
+        # items carry only ``{id, text, level, position}``. The full
+        # section body lives in the bundle and is sliced out by
+        # ``get_section_data`` using ``char_start``/``char_end``.
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/zim/test.zim"}]
         mock.get_article_structure_data.return_value = {
             "title": "Biology",
             "path": "Biology",
             "headings": [
-                {
-                    "level": 2,
-                    "text": "History",
-                    "id": "history",
-                    "preview": "Biology emerged as a science in the 19th century.",
-                },
-                {
-                    "level": 2,
-                    "text": "Evolution",
-                    "id": "evolution",
-                    "preview": "Evolution is change in heritable traits across "
-                    "generations of populations.",
-                },
+                {"level": 2, "text": "History", "id": "history", "position": 0},
+                {"level": 2, "text": "Evolution", "id": "evolution", "position": 1},
                 {
                     "level": 2,
                     "text": "Cellular respiration",
                     "id": "cellular-respiration",
-                    "preview": "Cellular respiration is the metabolic process by "
-                    "which cells release energy.",
+                    "position": 2,
                 },
             ],
         }
+        _section_bodies = {
+            "history": "Biology emerged as a science in the 19th century.",
+            "evolution": (
+                "Evolution is change in heritable traits across "
+                "generations of populations."
+            ),
+            "cellular-respiration": (
+                "Cellular respiration is the metabolic process by "
+                "which cells release energy."
+            ),
+        }
+
+        def _fake_get_section_data(_zim, _entry, section_id, **_kw):
+            body = _section_bodies.get(section_id)
+            if body is None:
+                return {
+                    "error": True,
+                    "operation": "section_not_found",
+                    "message": f"section_id={section_id!r} not found",
+                }
+            return {
+                "entry_path": "Biology",
+                "title": "Biology",
+                "section_id": section_id,
+                "section_title": section_id,
+                "level": 2,
+                "parent_id": None,
+                "content_markdown": body,
+                "char_count": len(body),
+                "word_count": len(body.split()),
+                "truncated": False,
+            }
+
+        mock.get_section_data.side_effect = _fake_get_section_data
         return SimpleToolsHandler(mock), mock
 
     def test_handler_returns_named_section_content(self, section_handler):

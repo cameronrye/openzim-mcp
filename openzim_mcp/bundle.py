@@ -40,7 +40,24 @@ _BUNDLE_KEY_PREFIX = "bundle:v2c"
 
 
 def _bundle_cache_key(validated_path: "Path", entry_path: str) -> str:
-    return f"{_BUNDLE_KEY_PREFIX}:{validated_path}:{entry_path}"
+    """Cache key that invalidates when the underlying ZIM is replaced.
+
+    Includes `st_mtime_ns` so an atomic file replacement (a monthly
+    Wikipedia ZIM update) causes prior bundles to be reseen as cache
+    misses rather than served as stale. `st_size` is included too —
+    cheap defence-in-depth against filesystems with low-precision mtime
+    or in-place rewrites that preserve the timestamp.
+
+    Falls back gracefully when stat() fails (path no longer exists, race
+    with replacement): the key drops to the prior shape so the cache
+    still works, just without the invalidation guarantee.
+    """
+    try:
+        st = validated_path.stat()
+        token = f"{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        token = "0:0"
+    return f"{_BUNDLE_KEY_PREFIX}:{validated_path}:{token}:{entry_path}"
 
 
 def _normalize_heading_text(text: str) -> str:
@@ -107,7 +124,11 @@ def _compute_section_offsets(
     sections: list[SectionMeta] = []
     cursor = 0
     parent_stack: list[tuple[int, str]] = []
-    matches: list[tuple[int, str, int, str]] = []
+    # Each match carries both the heading-line start (used as the
+    # *next* section's char_end boundary, so siblings don't include
+    # each other's heading lines) and the body start (where the section
+    # content actually begins, used as char_start).
+    matches: list[tuple[int, str, int, int, str]] = []  # (level, text, heading_start, body_start, id)
 
     for h in headings:
         level = int(h["level"])
@@ -116,11 +137,22 @@ def _compute_section_offsets(
         section_id = h.get("id") or ""
         if not text or not section_id:
             continue
-        pattern = re.compile(
+        # Strict pattern first; relaxed fallback covers html2text decorating
+        # the heading text with inline markup (italics, bold, code spans)
+        # that the soup-level get_text() stripped — without the fallback
+        # those sections are silently absent from the bundle and
+        # ``get_section`` returns "not found".
+        strict = re.compile(
             rf"^{'#' * level} {re.escape(text)}\s*$",
             re.MULTILINE,
         )
-        match = pattern.search(rendered_markdown, cursor)
+        match = strict.search(rendered_markdown, cursor)
+        if match is None:
+            relaxed = re.compile(
+                rf"^{'#' * level} [^\n]*{re.escape(text)}[^\n]*$",
+                re.MULTILINE,
+            )
+            match = relaxed.search(rendered_markdown, cursor)
         if match is None:
             logger.warning(
                 "Bundle: could not locate heading %r (level %d) in rendered markdown",
@@ -128,20 +160,28 @@ def _compute_section_offsets(
                 level,
             )
             continue
-        matches.append((level, text, match.start(), section_id))
+        # ``char_start`` points to the first character of the body — the
+        # newline after the heading line, then past it. The heading text
+        # is already exposed as ``section_title`` and ``level`` on every
+        # consumer, so including it in the sliced content is redundant
+        # and inflates ``char_count``/``word_count``.
+        body_start = match.end()
+        if body_start < len(rendered_markdown) and rendered_markdown[body_start] == "\n":
+            body_start += 1
+        matches.append((level, text, match.start(), body_start, section_id))
         cursor = match.end()
 
     md_len = len(rendered_markdown)
-    for i, (level, text, char_start, section_id) in enumerate(matches):
+    for i, (level, text, _heading_start, char_start, section_id) in enumerate(matches):
         # char_end extends to the next heading at the SAME OR HIGHER level
         # (lower number == higher level) — i.e., the next sibling or
-        # ancestor-sibling. This makes a parent's range envelope all its
-        # descendants, satisfying the parent.char_start <= child.char_start
-        # < child.char_end <= parent.char_end invariant.
+        # ancestor-sibling. Use the *heading_start* of the next match
+        # (not its body_start) so the current section doesn't include
+        # the sibling's heading line.
         char_end = md_len
         for j in range(i + 1, len(matches)):
             if matches[j][0] <= level:
-                char_end = matches[j][2]
+                char_end = matches[j][2]  # heading_start of next sibling
                 break
 
         while parent_stack and parent_stack[-1][0] >= level:

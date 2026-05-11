@@ -67,6 +67,7 @@ def build_meta(
     rendered: str,
     total_chars: Optional[int] = None,
     current_offset: int = 0,
+    content_chars: Optional[int] = None,
     truncated: bool = False,
     suggestions: Optional[List[Dict[str, str]]] = None,
     reason: Optional[str] = None,
@@ -76,6 +77,15 @@ def build_meta(
     Always emits `tokens_est` (with a 5% pad to cover envelope cost),
     `chars`, `truncated`. Conditionally emits `more_at_offset`,
     `total_chars`, `suggestions`, `reason`.
+
+    ``content_chars`` is the byte length of the *paginable content slice*
+    in the response (e.g. ``len(payload["content"])`` for get_zim_entry).
+    When set together with ``truncated``, drives ``more_at_offset =
+    current_offset + content_chars`` — i.e. the offset a caller would
+    use to fetch the next page. When omitted, ``more_at_offset`` is not
+    emitted: tools whose ``truncated`` means "value omitted, no
+    continuation" (binary cap, section-content cap, summary word cap)
+    must leave it ``None``.
     """
     chars = len(rendered)
     raw_tokens = tokens_est(rendered)
@@ -87,7 +97,8 @@ def build_meta(
         "truncated": truncated,
     }
     if truncated:
-        meta["more_at_offset"] = current_offset + chars
+        if content_chars is not None:
+            meta["more_at_offset"] = current_offset + content_chars
         if total_chars is not None:
             meta["total_chars"] = total_chars
     if suggestions:
@@ -149,12 +160,19 @@ def attach_meta(
     truncated: bool = False,
     total_chars: Optional[int] = None,
     current_offset: int = 0,
+    content_chars: Optional[int] = None,
     suggestions: Optional[List[Dict[str, str]]] = None,
     reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Attach a `_meta` envelope built from the JSON-rendered payload (sans _meta).
 
     Mutates and returns `payload`. Forwards build_meta kwargs.
+
+    Note: ``_meta.chars`` reflects the rendered JSON envelope size (useful
+    for context-budget tracking), which is necessarily larger than the
+    content slice. Pagination is driven by ``content_chars`` — pass the
+    length of the paginable field (e.g. ``len(payload["content"])``) so
+    ``more_at_offset`` is computed from content bytes, not envelope bytes.
     """
     rendered = _json.dumps(
         {k: v for k, v in payload.items() if k != "_meta"},
@@ -165,6 +183,7 @@ def attach_meta(
         truncated=truncated,
         total_chars=total_chars,
         current_offset=current_offset,
+        content_chars=content_chars,
         suggestions=suggestions,
         reason=reason,
     )

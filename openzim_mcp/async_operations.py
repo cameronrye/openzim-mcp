@@ -442,6 +442,8 @@ class AsyncZimOperations:
         limit: int = 100,
         offset: int = 0,
         kind: str = "internal",
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "LinksResponse":
         """Structured variant of ``extract_article_links`` (async, paginated)."""
         return await asyncio.to_thread(
@@ -451,6 +453,7 @@ class AsyncZimOperations:
             limit,
             offset,
             kind,
+            cursor_archive_identity=cursor_archive_identity,
         )
 
     async def get_entry_summary(

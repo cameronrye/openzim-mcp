@@ -131,20 +131,24 @@ def _extract_passages(
 def _attribute_sections(
     passages: list[SynthesizePassage],
     *,
-    bundle_lookup: Callable[[str], Any],
-    hit_paths: list[str],
+    bundle_lookup: Callable[[str, str], Any],
+    hit_keys: list[tuple[str, str]],
 ) -> list[SynthesizePassage]:
     """For each passage, find its containing section in the bundle and append #section_id.
 
     On bundle-build failure for an entry, leave the cite_id at entry level
     (no #section suffix). The passage is never dropped — section attribution
     is best-effort.
+
+    ``hit_keys`` is a parallel list of ``(archive_name, entry_path)`` tuples;
+    using the tuple as the bundle-lookup key avoids cross-archive
+    collisions (issue Phase C #4).
     """
     attributed: list[SynthesizePassage] = []
-    for passage, hit_path in zip(passages, hit_paths):
+    for passage, (archive_name, hit_path) in zip(passages, hit_keys):
         new_cite_id = passage["cite_id"]
         try:
-            bundle = bundle_lookup(hit_path)
+            bundle = bundle_lookup(archive_name, hit_path)
         except Exception as e:
             logger.info(
                 "Bundle build failed for %s during synthesize attribution: %s",
@@ -246,10 +250,10 @@ def _parse_cite_id(cite_id: str) -> tuple[str, str, Optional[str]]:
 def _build_citations(
     passages: list[SynthesizePassage],
     *,
-    archive_titles: dict[str, str],  # entry_path -> entry title
+    archive_titles: dict[tuple[str, str], str],  # (archive, entry_path) -> entry title
     section_titles: dict[
-        tuple[str, str], str
-    ],  # (entry_path, section_id) -> section title
+        tuple[str, str, str], str
+    ],  # (archive, entry_path, section_id) -> section title
 ) -> list[Citation]:
     """Expand passages' cite_ids into Citation entries; dedupe by cite_id."""
     seen: dict[str, Citation] = {}
@@ -258,9 +262,11 @@ def _build_citations(
         if cite_id in seen:
             continue
         archive, entry_path, section_id = _parse_cite_id(cite_id)
-        title = archive_titles.get(entry_path, entry_path)
+        title = archive_titles.get((archive, entry_path), entry_path)
         section_title = (
-            section_titles.get((entry_path, section_id)) if section_id else None
+            section_titles.get((archive, entry_path, section_id))
+            if section_id
+            else None
         )
         seen[cite_id] = cast(
             "Citation",
@@ -333,24 +339,42 @@ def _select_top_hits_multi(
     *,
     top_n: int,
 ) -> tuple[list[tuple[str, dict]], str]:
-    """Multi-archive RRF fusion path of :func:`_select_top_hits`."""
-    hit_to_archive: dict[tuple[str, str], dict] = {
-        (archive_name, hit["path"]): hit
-        for archive_name, hits in zip(archives_searched, per_archive_hits)
-        for hit in hits
-    }
+    """Multi-archive RRF fusion path of :func:`_select_top_hits`.
+
+    On a path that appears in multiple archives (common for Wikipedia
+    ZIMs that share entry paths), credit the archive that ranked it
+    highest in its own per-archive list — not the first archive in
+    ``archives_searched`` iteration order. ``hit_to_archive`` carries
+    the original ranking position so we can pick the best contributor
+    deterministically.
+    """
+    # (archive_name, path) -> (rank_in_archive, hit_dict)
+    hit_to_archive: dict[tuple[str, str], tuple[int, dict]] = {}
+    for archive_name, hits in zip(archives_searched, per_archive_hits):
+        for rank_in_archive, hit in enumerate(hits):
+            hit_to_archive[(archive_name, hit["path"])] = (rank_in_archive, hit)
     rankings = [
         [(hit["path"], hit["score"]) for hit in hits] for hits in per_archive_hits
     ]
     fused = _rrf_fuse(rankings, k=60)[:top_n]
     top_hits: list[tuple[str, dict]] = []
     for path, fused_score in fused:
-        for archive_name in archives_searched:
-            if (archive_name, path) in hit_to_archive:
-                h = dict(hit_to_archive[(archive_name, path)])
-                h["score"] = fused_score
-                top_hits.append((archive_name, h))
-                break
+        # Among archives that contain this path, pick the one with the
+        # best (lowest) rank — i.e., the archive that contributed the
+        # highest signal to RRF. Ties broken by ``archives_searched``
+        # order for determinism.
+        candidates = [
+            (rank, archive_name)
+            for archive_name in archives_searched
+            if (archive_name, path) in hit_to_archive
+            for rank, _ in (hit_to_archive[(archive_name, path)],)
+        ]
+        if not candidates:
+            continue
+        _, best_archive = min(candidates, key=lambda t: (t[0], archives_searched.index(t[1])))
+        h = dict(hit_to_archive[(best_archive, path)][1])
+        h["score"] = fused_score
+        top_hits.append((best_archive, h))
     return top_hits, "rrf_fusion"
 
 
@@ -360,14 +384,23 @@ def _make_bundle_lookup(
     *,
     cache: OpenZimMcpCache,
     content_processor: ContentProcessor,
-) -> Callable[[str], Any]:
-    """Build a path→bundle closure used by attribution and citation lookups."""
-    archive_for_path: dict[str, tuple[Archive, Path]] = {
-        hit["path"]: archive_by_name[archive_name] for archive_name, hit in top_hits
+) -> Callable[[str, str], Any]:
+    """Build an (archive_name, path)→bundle closure used by attribution and
+    citation lookups.
+
+    Keying on ``(archive_name, entry_path)`` rather than ``entry_path``
+    alone is required for multi-archive synthesis: Wikipedia-style ZIMs
+    share entry paths (``A/Photosynthesis`` exists in every archive), so
+    a path-only dict silently collapses entries from different archives
+    and attributes citations to the wrong source.
+    """
+    archive_for_key: dict[tuple[str, str], tuple[Archive, Path]] = {
+        (archive_name, hit["path"]): archive_by_name[archive_name]
+        for archive_name, hit in top_hits
     }
 
-    def bundle_lookup(entry_path: str) -> Any:
-        pair = archive_for_path.get(entry_path)
+    def bundle_lookup(archive_name: str, entry_path: str) -> Any:
+        pair = archive_for_key.get((archive_name, entry_path))
         if pair is None:
             return None
         archive_val, validated_path = pair
@@ -386,10 +419,15 @@ def _extract_passages_for_top_hits(
     top_hits: list[tuple[str, dict]],
     *,
     content_processor: ContentProcessor,
-) -> tuple[list[SynthesizePassage], list[str]]:
-    """Stage 4: extract per-hit passages and renumber rank globally."""
+) -> tuple[list[SynthesizePassage], list[tuple[str, str]]]:
+    """Stage 4: extract per-hit passages and renumber rank globally.
+
+    Returns ``(passages, hit_keys)`` where ``hit_keys`` is a parallel
+    list of ``(archive_name, entry_path)`` tuples — used downstream for
+    multi-archive-safe bundle lookups.
+    """
     all_passages: list[SynthesizePassage] = []
-    all_paths: list[str] = []
+    hit_keys: list[tuple[str, str]] = []
     for archive_name, hit in top_hits:
         all_passages.extend(
             _extract_passages(
@@ -398,40 +436,46 @@ def _extract_passages_for_top_hits(
                 content_processor=content_processor,
             )
         )
-        all_paths.append(hit["path"])
+        hit_keys.append((archive_name, hit["path"]))
     for i, p in enumerate(all_passages, start=1):
         p["rank"] = i
-    return all_passages, all_paths
+    return all_passages, hit_keys
 
 
 def _build_section_lookups(
     top_hits: list[tuple[str, dict]],
-    bundle_lookup: Callable[[str], Any],
-) -> tuple[dict[str, str], dict[tuple[str, str], str]]:
-    """Per-(entry, section) title maps used by :func:`_build_citations`.
+    bundle_lookup: Callable[[str, str], Any],
+) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str, str], str]]:
+    """Per-(archive, entry, section) title maps used by :func:`_build_citations`.
 
     Bundle build failures are swallowed at info level by the caller pattern
     (the bundle is best-effort); on failure the entry is skipped and its
     citations stay at entry level.
+
+    Keying on ``(archive_name, ...)`` tuples avoids the multi-archive
+    collision documented in :func:`_make_bundle_lookup`.
     """
-    archive_titles: dict[str, str] = {}
-    section_titles: dict[tuple[str, str], str] = {}
-    for _, hit in top_hits:
+    archive_titles: dict[tuple[str, str], str] = {}
+    section_titles: dict[tuple[str, str, str], str] = {}
+    for archive_name, hit in top_hits:
         try:
-            b = bundle_lookup(hit["path"])
+            b = bundle_lookup(archive_name, hit["path"])
         except Exception:
             continue
         if b is None:
             continue
-        archive_titles[hit["path"]] = b["title"]
+        archive_titles[(archive_name, hit["path"])] = b["title"]
         for s in b["sections"]:
-            section_titles[(hit["path"], s["id"])] = s["title"]
+            section_titles[(archive_name, hit["path"], s["id"])] = s["title"]
     return archive_titles, section_titles
 
 
 def _zero_hits_response(
     query: str, archives_searched: list[str], fallback_used: str
 ) -> SynthesizeResponse:
+    from openzim_mcp.meta import build_meta as _build_meta
+
+    meta = _build_meta(rendered="", reason="0_hits")
     return cast(
         "SynthesizeResponse",
         {
@@ -443,7 +487,7 @@ def _zero_hits_response(
             "fallback_used": fallback_used,
             "total_chars": 0,
             "total_words": 0,
-            "_meta": {"reason": "0_hits"},
+            "_meta": cast("Any", meta),
         },
     )
 
@@ -470,7 +514,7 @@ def synthesize_query(
     if not top_hits:
         return _zero_hits_response(query, archives_searched, fallback_used)
 
-    all_passages, all_paths = _extract_passages_for_top_hits(
+    all_passages, hit_keys = _extract_passages_for_top_hits(
         top_hits, content_processor=content_processor
     )
     bundle_lookup = _make_bundle_lookup(
@@ -480,13 +524,27 @@ def synthesize_query(
         content_processor=content_processor,
     )
     attributed = _attribute_sections(
-        all_passages, bundle_lookup=bundle_lookup, hit_paths=all_paths
+        all_passages, bundle_lookup=bundle_lookup, hit_keys=hit_keys
     )
+    pre_cap_chars = sum(len(p["text_markdown"]) for p in attributed)
     capped = _enforce_budget(attributed, char_budget=config.output_char_budget)
+    truncated = sum(len(p["text_markdown"]) for p in capped) < pre_cap_chars
     answer_md = _render_answer(capped)
     archive_titles, section_titles = _build_section_lookups(top_hits, bundle_lookup)
     citations = _build_citations(
         capped, archive_titles=archive_titles, section_titles=section_titles
+    )
+    # Real _meta envelope (not the hardcoded `{}` of earlier versions).
+    # ``rendered`` is the answer body — same convention as simple-mode
+    # responses, so ``_meta.chars``/``tokens_est`` reflect what the
+    # caller actually sees, not the JSON envelope cost.
+    from openzim_mcp.meta import build_meta as _build_meta
+
+    meta = _build_meta(
+        rendered=answer_md,
+        truncated=truncated,
+        content_chars=len(answer_md) if truncated else None,
+        total_chars=pre_cap_chars if truncated else None,
     )
     return cast(
         "SynthesizeResponse",
@@ -499,6 +557,6 @@ def synthesize_query(
             "fallback_used": fallback_used,
             "total_chars": len(answer_md),
             "total_words": len(answer_md.split()),
-            "_meta": {},
+            "_meta": cast("Any", meta),
         },
     )

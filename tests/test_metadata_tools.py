@@ -212,15 +212,24 @@ class TestGetZimMetadataDataMeta:
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
 
-    def test_get_zim_metadata_data_cached_backfills_meta(self, zim_ops, temp_dir):
-        """Cached entry without _meta is backfilled on read."""
+    def test_get_zim_metadata_data_cached_payload_returned_verbatim(
+        self, zim_ops, temp_dir
+    ):
+        """Cache stores the post-attach payload. A cache hit returns it
+        verbatim — _meta is NOT recomputed on every read (Phase B #12
+        fix; non-determinism between cold/warm was eliminated).
+        """
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
         cache_key = f"metadata_data:{validated}"
-        old = {"title": "Test", "language": "eng"}
-        zim_ops.cache.set(cache_key, old)
+        seeded = {
+            "title": "Test",
+            "language": "eng",
+            "_meta": {"tokens_est": 17, "chars": 32, "truncated": False},
+        }
+        zim_ops.cache.set(cache_key, seeded)
 
         result = zim_ops.get_zim_metadata_data(str(zim_file))
-        assert "_meta" in result
-        assert result["_meta"]["tokens_est"] >= 1
+        assert result is seeded
+        assert result["_meta"]["tokens_est"] == 17

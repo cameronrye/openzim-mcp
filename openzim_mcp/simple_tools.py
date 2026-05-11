@@ -330,9 +330,13 @@ class SimpleToolsHandler:
                 # (currently: compact + zero-result search).  When set,
                 # ``format_footer`` renders the empty-result suggestion
                 # variant instead of the token-count variant.
+                # In simple mode ``result`` is the body markdown itself —
+                # ``len(result)`` is both the rendered char count AND the
+                # paginable content length, so they drive the same field.
                 meta = build_meta(
                     rendered=result,
                     truncated=was_truncated,
+                    content_chars=len(result) if was_truncated else None,
                     total_chars=pre_cap_chars if was_truncated else None,
                     reason=handler_reason,
                     suggestions=handler_suggestions,
@@ -968,10 +972,33 @@ class SimpleToolsHandler:
                 f"Available sections:\n{avail}"
             )
 
-        # ``preview`` is the section's leading paragraph(s) trimmed by
-        # the structure backend. It's pre-baked to ~3000 chars per
-        # heading and is exactly the data shape we want here.
-        text = (target.get("preview") or "").strip()
+        # Delegate to ``get_section_data`` to slice the full section out
+        # of the bundle's rendered markdown — ~500-1500 tokens, the
+        # small-model sweet spot per Phase C #7. The heading's ``id``
+        # matches the bundle section ``id`` 1:1 (both are derived from
+        # the same ``bundle["sections"]`` list).
+        section_id = target.get("id") or ""
+        try:
+            section = self.zim_operations.get_section_data(
+                zim_file_path, entry_path, section_id
+            )
+        except Exception as e:
+            return (
+                f"**Could not load section `{target.get('text')}` "
+                f"from `{entry_path}`**\n\n"
+                f"{sanitize_context_for_error(str(e))}"
+            )
+        if isinstance(section, dict) and section.get("error"):
+            return (
+                f'**Section "{target.get("text")}" in `{entry_path}` is empty**\n\n'
+                f"This heading exists in the article structure but has "
+                f"no content rendered. The article may have been "
+                f"truncated by the backend; try `get article "
+                f"{entry_path}` for the full body."
+            )
+        text = (section.get("content_markdown") or "").strip() if isinstance(
+            section, dict
+        ) else ""
         if not text:
             return (
                 f'**Section "{target.get("text")}" in `{entry_path}` is empty**\n\n'

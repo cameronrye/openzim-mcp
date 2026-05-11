@@ -37,16 +37,49 @@ def test_build_meta_basic_dict():
     assert "suggestions" not in meta
 
 
-def test_build_meta_truncated():
+def test_build_meta_truncated_with_content_chars_emits_more_at_offset():
     meta = build_meta(
         rendered="X" * 100,
         total_chars=10_000,
         current_offset=0,
+        content_chars=100,
         truncated=True,
     )
     assert meta["truncated"] is True
     assert meta["more_at_offset"] == 100
     assert meta["total_chars"] == 10_000
+
+
+def test_build_meta_truncated_without_content_chars_omits_more_at_offset():
+    """Tools that truncate WITHOUT a follow-up offset (binary cap, section cap,
+    summary word cap) must not surface ``more_at_offset`` — a caller can't
+    page past where there is no continuation."""
+    meta = build_meta(
+        rendered="X" * 100,
+        total_chars=10_000,
+        truncated=True,
+    )
+    assert meta["truncated"] is True
+    assert "more_at_offset" not in meta
+    assert meta["total_chars"] == 10_000
+
+
+def test_build_meta_more_at_offset_uses_content_not_envelope():
+    """Regression: ``more_at_offset`` must reflect content byte offset,
+    not the JSON envelope size. Earlier code mistakenly used
+    ``len(rendered)`` (envelope) which inflated the offset by the wrapper
+    field bytes (`path`, `title`, …) and broke follow-up pagination."""
+    envelope = '{"path":"A/Foo","title":"Foo","content":"' + "X" * 100 + '"}'
+    meta = build_meta(
+        rendered=envelope,
+        current_offset=200,
+        content_chars=100,
+        truncated=True,
+    )
+    # Caller asked for offset=200, returned 100 chars of content → next
+    # call uses offset=300. The envelope is much longer than 100, but
+    # that doesn't enter the calculation.
+    assert meta["more_at_offset"] == 300
 
 
 def test_build_meta_with_suggestions():

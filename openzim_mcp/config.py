@@ -30,6 +30,12 @@ class CacheConfig(BaseModel):
 
     enabled: bool = True
     max_size: int = Field(default=CACHE.MAX_SIZE, ge=1, le=10000)
+    # Soft byte cap. The count-based ``max_size`` remains a hard upper
+    # bound; ``max_bytes`` adds an approximate-size eviction trigger so
+    # a few large bundles can't pin hundreds of MB. Computed via
+    # ``len(json.dumps(value))`` — cheap, deterministic, and accurate
+    # enough for budgeting. ``0`` disables the byte cap entirely.
+    max_bytes: int = Field(default=CACHE.MAX_BYTES, ge=0, le=8 * 1024 * 1024 * 1024)
     ttl_seconds: int = Field(default=CACHE.TTL_SECONDS, ge=60, le=86400)
     persistence_enabled: bool = Field(default=CACHE.PERSISTENCE_ENABLED)
     persistence_path: str = Field(default_factory=lambda: CACHE.PERSISTENCE_PATH)

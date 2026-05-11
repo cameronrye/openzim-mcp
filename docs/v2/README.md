@@ -1,3 +1,4 @@
+
 # openzim-mcp v2 — Release Tracking
 
 **Status:** Planning
@@ -46,9 +47,13 @@ Each phase's spec is created via the brainstorming workflow when that phase begi
 
 ### #1 — Use libzim native query-aware snippets
 
-**Current state.** [`openzim_mcp/zim/content.py:62-72`](../../openzim_mcp/zim/content.py) builds search snippets via `_get_entry_snippet`, which decompresses the entry, runs HTML-to-text, and takes the first 2 paragraphs (`create_snippet` in [`openzim_mcp/content_processor.py:432-459`](../../openzim_mcp/content_processor.py)). This bears no relation to where the query actually matched.
+**Original target.** Use libzim's `SearchIterator.getSnippet()` which returns the actual matched passage with highlighting, replacing the prior "decompress + take first two paragraphs" approach.
 
-**Target.** Use libzim's `SearchIterator.getSnippet()` which returns the actual matched passage with highlighting. Keep the lead-paragraph fallback for entries without a snippet (e.g., suggestion-search results).
+**What shipped (v2.0.0a1).** A pure-Python query-aware rewrite in [`content_processor.create_snippet`](../../openzim_mcp/content_processor.py): the snippet is now the first paragraph containing a whole-word match for any query term (instead of the lead paragraph), and up to 5 matches inside the slice are wrapped in `**bold**` for visibility. This delivers the _query-relevance_ and _highlighting_ outcomes of the original target.
+
+**What did NOT ship.** The libzim-native code path. `python-libzim` 3.9.0 exposes `Searcher` / `SearchResultSet` but does NOT surface `SearchIterator.getSnippet()` — the iterator yields plain entry-path strings. Calling the C++ libzim `getSnippet` API would require an upstream binding change (or a custom CFFI shim, which is out of scope for v2 alpha). The Python path still decompresses the entry per hit, so the perf-target half of the original design has not been realized.
+
+**Follow-up.** Open an upstream [python-libzim issue](https://github.com/openzim/python-libzim/issues) requesting that `SearchIterator.getSnippet()` be exposed on the binding. When that lands, swap the body of `_get_entry_snippet` in [`openzim_mcp/zim/content.py`](../../openzim_mcp/zim/content.py) to call the native API and keep the Python `create_snippet` as a fallback for paths that don't go through the search iterator (e.g., suggestion search).
 
 **Reference:** [openzim/javascript-libzim SEARCH_SNIPPETS_IMPLEMENTATION.md](https://github.com/openzim/javascript-libzim/blob/main/SEARCH_SNIPPETS_IMPLEMENTATION.md).
 
