@@ -5,6 +5,80 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0](https://github.com/cameronrye/openzim-mcp/compare/v2.0.0...v2.0.0) (2026-05-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **v2:** bugfix-only follow-up to v2.0.0a4 — 41 defects across phases A–C ([#119](https://github.com/cameronrye/openzim-mcp/issues/119))
+* **v2:** Phase C part 1 — EntryBundle infrastructure (#11; #7 + #10 deferred) ([#117](https://github.com/cameronrye/openzim-mcp/issues/117))
+* **v2:** Phase B — response contract & TypedDict migration ([#111](https://github.com/cameronrye/openzim-mcp/issues/111))
+
+### Features
+
+* add article summaries, table of contents, and pagination cursors ([bf5d18f](https://github.com/cameronrye/openzim-mcp/commit/bf5d18fcfecb2e6b03c667565640439b145a4e30))
+* add automated version bumping with release-please ([6b4e27c](https://github.com/cameronrye/openzim-mcp/commit/6b4e27c0382bb4cfa16a7e101f012e8355f7c827))
+* add binary content retrieval for PDFs, images, and media files ([#52](https://github.com/cameronrye/openzim-mcp/issues/52)) ([95611c9](https://github.com/cameronrye/openzim-mcp/commit/95611c9135836202d1fc97181d98307c199e3888))
+* Add Contributor Covenant Code of Conduct ([#58](https://github.com/cameronrye/openzim-mcp/issues/58)) ([8ddb720](https://github.com/cameronrye/openzim-mcp/commit/8ddb720707354b6757ae32b7f38afb3b304ce8f7))
+* add dual-mode support with intelligent natural language tool ([#31](https://github.com/cameronrye/openzim-mcp/issues/31)) ([6d97993](https://github.com/cameronrye/openzim-mcp/commit/6d97993a8bda3f20cc65abfeef459f9487b94406))
+* Create new engaging website for OpenZIM MCP ([39c0fa8](https://github.com/cameronrye/openzim-mcp/commit/39c0fa8614f4915ec4f5ee92903d82ad55eec73f))
+* enhance GitHub Pages site with comprehensive feature showcase ([#14](https://github.com/cameronrye/openzim-mcp/issues/14)) ([c50c69b](https://github.com/cameronrye/openzim-mcp/commit/c50c69b73bc4ec142a2080146644ed9c84da63c4))
+* enhance GitHub Pages site with comprehensive feature showcase and uv-first installation ([#15](https://github.com/cameronrye/openzim-mcp/issues/15)) ([f988c5a](https://github.com/cameronrye/openzim-mcp/commit/f988c5a9c7af4acbfe08922a68e11a288f06da70))
+* enhance GitHub Pages website with dark mode, dynamic versioning, and improved UX ([#22](https://github.com/cameronrye/openzim-mcp/issues/22)) ([977d46a](https://github.com/cameronrye/openzim-mcp/commit/977d46abf61efbafca2bd24142176c3857cc32b8))
+* **http:** operator-acknowledged auth bypass + rate-limit env-var docs ([#104](https://github.com/cameronrye/openzim-mcp/issues/104)) ([7294b1d](https://github.com/cameronrye/openzim-mcp/commit/7294b1d33dfa40a8e07c7ba67c062cc2d3c741c7))
+* overhaul release system for reliability and enterprise-grade automation ([#9](https://github.com/cameronrye/openzim-mcp/issues/9)) ([ef0f1b8](https://github.com/cameronrye/openzim-mcp/commit/ef0f1b8f2eaac99a1850672088ddc29d28f0bcde))
+* tool responses use MCP structured content (no more double-stringified JSON) ([#96](https://github.com/cameronrye/openzim-mcp/issues/96)) ([5b541ec](https://github.com/cameronrye/openzim-mcp/commit/5b541ec616386128e6a9d105f07c27bc94676265))
+* v1.2.0 follow-up — refinements + production-readiness improvements ([#106](https://github.com/cameronrye/openzim-mcp/issues/106)) ([e9396ec](https://github.com/cameronrye/openzim-mcp/commit/e9396ec699a62d4b0ec990d1a155b0ae7ddb73dd))
+* v1.2.0 simple-mode tool ergonomics — tell_me_about, bigger snippets, compact pagination ([#103](https://github.com/cameronrye/openzim-mcp/issues/103)) ([212a60a](https://github.com/cameronrye/openzim-mcp/commit/212a60afd7c1e66bd573605925ccbb06261ed27c))
+* **v2:** Phase A — quality wins ([#1](https://github.com/cameronrye/openzim-mcp/issues/1), [#2](https://github.com/cameronrye/openzim-mcp/issues/2), [#4](https://github.com/cameronrye/openzim-mcp/issues/4), [#5](https://github.com/cameronrye/openzim-mcp/issues/5), [#14](https://github.com/cameronrye/openzim-mcp/issues/14)) ([#108](https://github.com/cameronrye/openzim-mcp/issues/108)) ([669c0a9](https://github.com/cameronrye/openzim-mcp/commit/669c0a995cb342ceb7b18f4d2e90880559f673f1))
+* **v2:** Phase B — response contract & TypedDict migration ([#111](https://github.com/cameronrye/openzim-mcp/issues/111)) ([6dd862e](https://github.com/cameronrye/openzim-mcp/commit/6dd862e4deeda9527c271bd33aa19651f2dbdad5))
+* **v2:** Phase C part 1 — EntryBundle infrastructure ([#11](https://github.com/cameronrye/openzim-mcp/issues/11); [#7](https://github.com/cameronrye/openzim-mcp/issues/7) + [#10](https://github.com/cameronrye/openzim-mcp/issues/10) deferred) ([#117](https://github.com/cameronrye/openzim-mcp/issues/117)) ([43ef418](https://github.com/cameronrye/openzim-mcp/commit/43ef41861b9b0838f84fc367301719e88a6c0a7b))
+* **v2:** Phase C part 2 — get_section + synthesize ([#7](https://github.com/cameronrye/openzim-mcp/issues/7) + [#10](https://github.com/cameronrye/openzim-mcp/issues/10)) ([#118](https://github.com/cameronrye/openzim-mcp/issues/118)) ([0479807](https://github.com/cameronrye/openzim-mcp/commit/0479807e42b34a089ed9141f9f93d9f36b2295af))
+
+
+### Bug Fixes
+
+* add manual trigger support to Release workflow ([b968cf6](https://github.com/cameronrye/openzim-mcp/commit/b968cf661f536183f4ef5fd6374e75a847a0123f))
+* add tag_name parameter to GitHub Release action ([74d393c](https://github.com/cameronrye/openzim-mcp/commit/74d393c600155b303a26d6f066130cb26351cb49))
+* **ci:** handle existing GitHub releases in release workflow ([#54](https://github.com/cameronrye/openzim-mcp/issues/54)) ([63afa3d](https://github.com/cameronrye/openzim-mcp/commit/63afa3d9150a60716b7fa25524beedb806ded84d))
+* configure release-please to skip GitHub release creation and handle existing PyPI packages ([b865454](https://github.com/cameronrye/openzim-mcp/commit/b8654546c1a8ea3a90eb3dedfb95c671beaaca98))
+* correct CodeQL badge URL to match workflow name ([#13](https://github.com/cameronrye/openzim-mcp/issues/13)) ([7446f74](https://github.com/cameronrye/openzim-mcp/commit/7446f7491d1c0a028a7ba55071b46c73424b58e4))
+* ensure Release workflow checks out correct tag for all jobs ([b4a61ca](https://github.com/cameronrye/openzim-mcp/commit/b4a61ca7a034f9eefae2606c4eb9769ef4f79379))
+* formatting issues in Architecture Overview ([baa32f7](https://github.com/cameronrye/openzim-mcp/commit/baa32f7885a4af4e4ba24efc97fcf07874c2964d))
+* **http:** allow Last-Event-ID CORS header ([#116](https://github.com/cameronrye/openzim-mcp/issues/116)) ([08abc18](https://github.com/cameronrye/openzim-mcp/commit/08abc186df6394cdf783e0aa3c7507549860313e))
+* **http:** allow MCP-Protocol-Version header and DELETE method in CORS ([#93](https://github.com/cameronrye/openzim-mcp/issues/93)) ([dbb791e](https://github.com/cameronrye/openzim-mcp/commit/dbb791e5a6b90a229283ee0a6a283615deae6e42))
+* **http:** allow operator-configured Host allowlist ([#90](https://github.com/cameronrye/openzim-mcp/issues/90)) ([c4dad8a](https://github.com/cameronrye/openzim-mcp/commit/c4dad8a4eb0147178ca268403d85f90530290fe4))
+* namespace, pagination, resources, and find-by-title beta-test fixes ([#92](https://github.com/cameronrye/openzim-mcp/issues/92)) ([4b572ef](https://github.com/cameronrye/openzim-mcp/commit/4b572efa9acdec84551163e0170c3e6569c28151))
+* release 0.8.2 with bug fixes and improvements ([77f08c5](https://github.com/cameronrye/openzim-mcp/commit/77f08c5ae429cafb1be7ed899865f9da7cb192ee))
+* Release System Architecture diagram ([694849c](https://github.com/cameronrye/openzim-mcp/commit/694849c56f55450fdde4ab125cc42abff14e0512))
+* remove unused imports in test files for CI linting ([0ddb250](https://github.com/cameronrye/openzim-mcp/commit/0ddb250d49fb627ee7adb41cf3fa52a8caf69172))
+* resolve CI workflow issues ([4bd6c33](https://github.com/cameronrye/openzim-mcp/commit/4bd6c332548a444c58390889052ebcc417d65094))
+* resolve CI/CD status reporting issue for bot commits ([#20](https://github.com/cameronrye/openzim-mcp/issues/20)) ([af23589](https://github.com/cameronrye/openzim-mcp/commit/af235896b4a1afd96269d08d97362ff903e093d5))
+* resolve GitHub Actions workflow errors ([#17](https://github.com/cameronrye/openzim-mcp/issues/17)) ([dcda274](https://github.com/cameronrye/openzim-mcp/commit/dcda2749a394a599e3f77a4b64412fa21e65a29d))
+* resolve GitHub code scanning alerts ([2ad2c56](https://github.com/cameronrye/openzim-mcp/commit/2ad2c56a6e7a958ed63d6bd23ad975dd80e1e1f0))
+* resolve PyPI deployment workflow issues ([822ffa8](https://github.com/cameronrye/openzim-mcp/commit/822ffa8f89ab9a35d5f30f58b72b60637ba89e8c))
+* resolve release-please workflow issues ([68b47ea](https://github.com/cameronrye/openzim-mcp/commit/68b47ea711525e126ec3ed8297808f7779edd87e))
+* server tools ([7268ea1](https://github.com/cameronrye/openzim-mcp/commit/7268ea107b88121c3a4b01095cc4233ab45df27d))
+* **server:** make simple mode actually expose only zim_query ([#94](https://github.com/cameronrye/openzim-mcp/issues/94)) ([92c725f](https://github.com/cameronrye/openzim-mcp/commit/92c725f0cffd43f592185c0f2173f4c6ca0ef1e4))
+* **server:** mirror cors_origins into SDK transport allowed_origins ([#100](https://github.com/cameronrye/openzim-mcp/issues/100)) ([96001d1](https://github.com/cameronrye/openzim-mcp/commit/96001d1365933cd948027e6291c34d26234792fe))
+* **v2:** align search_all per-file error shape with TypedDict schema ([a070d14](https://github.com/cameronrye/openzim-mcp/commit/a070d1451b10d2d7ee8d04c12ad05064a8f602fe))
+* **v2:** bugfix-only follow-up to v2.0.0a4 — 41 defects across phases A–C ([#119](https://github.com/cameronrye/openzim-mcp/issues/119)) ([4526816](https://github.com/cameronrye/openzim-mcp/commit/4526816c76a853655a0f86d39c48d716d7c148c4))
+* **v2:** post-a6 defect-fix batch — 14 defects + 8 opportunities across phases A–C ([#126](https://github.com/cameronrye/openzim-mcp/issues/126)) ([a54589b](https://github.com/cameronrye/openzim-mcp/commit/a54589bf05d958a73acc61e3def67749bbe3c757))
+* walk_namespace, related-articles, and confidence beta-refinement fixes ([#98](https://github.com/cameronrye/openzim-mcp/issues/98)) ([912d346](https://github.com/cameronrye/openzim-mcp/commit/912d34607220d2a3f7b61d0f39cff918d23c3f99))
+
+
+### Documentation
+
+* Comprehensive documentation update for v0.4.0+ features ([#16](https://github.com/cameronrye/openzim-mcp/issues/16)) ([e1bce58](https://github.com/cameronrye/openzim-mcp/commit/e1bce5816e95beca7adeca92c03dbd551808151f))
+* improve installation instructions with PyPI as primary method ([d6f758b](https://github.com/cameronrye/openzim-mcp/commit/d6f758b30836e916933e87a316754cd757cec833))
+* spec for Deployment Guide ([8e7a525](https://github.com/cameronrye/openzim-mcp/commit/8e7a5252a5e19c7487eae308b0093bfafdd16b79))
+* **v2:** add release tracking doc for 17-item v2 effort ([4984ac3](https://github.com/cameronrye/openzim-mcp/commit/4984ac3777cb34cb3e364129ea22641e878dd89b))
+
+
+### Miscellaneous Chores
+
+* trigger release v2.0.0a7 ([90be71a](https://github.com/cameronrye/openzim-mcp/commit/90be71a43ebb4474a292a82fcd51d17ffbfee986))
+
 ## [2.0.0a6] — 2026-05-11 (alpha pre-release)
 
 Bugfix-only follow-up to v2.0.0a4 after a two-pass review of the
