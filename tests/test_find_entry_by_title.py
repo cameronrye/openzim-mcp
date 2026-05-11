@@ -476,8 +476,8 @@ class TestMetaSuggestionsAndReason:
         einstein_entry.path = "C/Einstein"
         einstein_entry.title = "Einstein"
         mock_archive.has_entry_by_path.side_effect = lambda p: p == "C/Einstein"
-        mock_archive.get_entry_by_path.side_effect = (
-            lambda p: einstein_entry if p == "C/Einstein" else (_ for _ in ()).throw(KeyError(p))
+        mock_archive.get_entry_by_path.side_effect = lambda p: (
+            einstein_entry if p == "C/Einstein" else (_ for _ in ()).throw(KeyError(p))
         )
         _patch_path_validator(server)
 

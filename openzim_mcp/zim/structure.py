@@ -58,15 +58,19 @@ def _sections_to_toc_tree(sections: "List[SectionMeta]") -> "List[TocHeading]":
     stack: "List[Tuple[int, List[TocHeading]]]" = [(0, root)]
 
     for s in sections:
-        node: "TocHeading" = cast(
-            "TocHeading",
-            {
-                "section_id": s["id"],
-                "text": s["title"],
-                "level": s["level"],
-                "children": [],
-            },
-        )
+        node_dict: Dict[str, Any] = {
+            "section_id": s["id"],
+            "text": s["title"],
+            "level": s["level"],
+            "children": [],
+        }
+        # ``id_source`` is preserved per the Phase C spec so callers can
+        # tell stable anchors from generated slugs. Drop when absent so
+        # the wire shape stays minimal for bundles built before the
+        # field was tracked.
+        if "id_source" in s:
+            node_dict["id_source"] = s["id_source"]
+        node: "TocHeading" = cast("TocHeading", node_dict)
         while stack and stack[-1][0] >= s["level"]:
             stack.pop()
         if stack:
@@ -157,12 +161,21 @@ class _StructureMixin:
         """Extract structure from article content via bundle."""
         from openzim_mcp.bundle import get_or_build_bundle
 
+        if validated_path is None:
+            # Falling back to Path(entry_path) makes the bundle cache key
+            # archive-agnostic — the same key collides across every ZIM
+            # whose archive holds this entry path. Require the caller to
+            # pass the resolved archive path so bundles stay archive-bound.
+            raise OpenZimMcpValidationError(
+                "_extract_article_structure_data requires validated_path"
+            )
+
         try:
             bundle = get_or_build_bundle(
                 archive,
                 entry_path,
                 cache=self.cache,
-                validated_path=validated_path or Path(entry_path),
+                validated_path=validated_path,
                 content_processor=self.content_processor,
             )
 
@@ -278,8 +291,8 @@ class _StructureMixin:
         # Cursor integrity (Phase B #11): a cursor issued for archive A
         # must not be honoured when resubmitted against archive B.
         if cursor_archive_identity is not None:
+            from openzim_mcp.pagination import Cursor as _CursorClass
             from openzim_mcp.pagination import (
-                Cursor as _CursorClass,
                 CursorMismatchError,
                 archive_identity,
             )
@@ -474,12 +487,20 @@ class _StructureMixin:
         """Extract hierarchical table of contents from article via bundle."""
         from openzim_mcp.bundle import get_or_build_bundle
 
+        if validated_path is None:
+            # Same archive-binding requirement as
+            # _extract_article_structure_data — without a real archive
+            # path the bundle cache collides cross-archive.
+            raise OpenZimMcpValidationError(
+                "_extract_table_of_contents_data requires validated_path"
+            )
+
         try:
             bundle = get_or_build_bundle(
                 archive,
                 entry_path,
                 cache=self.cache,
-                validated_path=validated_path or Path(entry_path),
+                validated_path=validated_path,
                 content_processor=self.content_processor,
             )
 

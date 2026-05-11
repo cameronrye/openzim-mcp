@@ -241,6 +241,110 @@ def test_attribute_sections_no_match_keeps_entry_level() -> None:
     assert attributed[0]["cite_id"] == "wiki/A/Berlin"
 
 
+def test_attribute_sections_picks_innermost_nested_section() -> None:
+    """Nested ranges → cite_id uses the deepest (smallest) containing section.
+
+    Audit fix: the prior implementation iterated forward in document
+    order and broke on the first containment match, which always
+    yielded the OUTERMOST (parent) section. A passage in an h3 inside
+    an h2 inside an h1 would cite the h1 — far less useful than
+    citing the h3.
+    """
+    from openzim_mcp.synthesize import _attribute_sections
+
+    # Parent h1 (0..200) contains child h2 (40..150) contains grandchild
+    # h3 (80..120). Passage offset will fall inside the grandchild.
+    bundle = {
+        "rendered_markdown": (
+            "# Berlin\n"  # 0..8
+            + " " * 30  # 9..38
+            + "\n## Geography\n"  # 39..52
+            + " " * 26  # 53..78
+            + "\n### Climate\n"  # 79..91
+            + "Rainfall here is high. " * 2  # 92..137
+            + "\n## Demographics\n"  # 138..154
+            + "Population data."  # 155..170
+        ),
+        "sections": [
+            # Parent h1 — spans the whole article
+            {
+                "id": "berlin",
+                "title": "Berlin",
+                "level": 1,
+                "char_start": 0,
+                "char_end": 200,
+                "parent_id": None,
+            },
+            # Child h2 — Geography subsection
+            {
+                "id": "geography",
+                "title": "Geography",
+                "level": 2,
+                "char_start": 40,
+                "char_end": 138,
+                "parent_id": "berlin",
+            },
+            # Grandchild h3 — Climate sub-subsection (innermost)
+            {
+                "id": "climate",
+                "title": "Climate",
+                "level": 3,
+                "char_start": 92,
+                "char_end": 137,
+                "parent_id": "geography",
+            },
+        ],
+    }
+    # The passage text appears at offset 92 — inside all three sections.
+    passages = [_passage("wiki/A/Berlin", "Rainfall here is high.", 1, 0.9)]
+
+    def bundle_lookup(archive_name: str, path: str) -> dict:
+        return bundle
+
+    attributed = _attribute_sections(
+        passages, bundle_lookup=bundle_lookup, hit_keys=[("wiki", "A/Berlin")]
+    )
+    # The deepest (smallest-range) containing section is "climate".
+    assert attributed[0]["cite_id"] == "wiki/A/Berlin#climate"
+
+
+def test_attribute_sections_normalized_fallback_search() -> None:
+    """When passage text doesn't byte-match the bundle markdown verbatim
+    (whitespace/inline-markup drift between snippet path and bundle
+    rendering path), section attribution falls back to a whitespace-
+    normalized probe instead of silently degrading to entry-level.
+    """
+    from openzim_mcp.synthesize import _attribute_sections, _locate_passage
+
+    md = "## Geography\n\nBerlin   sits  in  the   North   European   Plain."
+    # passage_text has different whitespace shape — newlines and
+    # collapsed runs that wouldn't match md.find() literally.
+    passage_text = "Berlin sits in the North European Plain."
+    pos = _locate_passage(md, passage_text)
+    assert pos >= 0, f"normalized probe should locate the passage in md (got {pos})"
+
+    bundle = {
+        "rendered_markdown": md,
+        "sections": [
+            {
+                "id": "geography",
+                "title": "Geography",
+                "level": 2,
+                "char_start": 13,
+                "char_end": len(md),
+                "parent_id": None,
+            },
+        ],
+    }
+    passages = [_passage("wiki/A/Berlin", passage_text, 1, 0.9)]
+    attributed = _attribute_sections(
+        passages,
+        bundle_lookup=lambda a, p: bundle,
+        hit_keys=[("wiki", "A/Berlin")],
+    )
+    assert attributed[0]["cite_id"] == "wiki/A/Berlin#geography"
+
+
 # ---------------------------------------------------------------------------
 # Task 20: citation rendering, budget enforcement, citation building
 # ---------------------------------------------------------------------------

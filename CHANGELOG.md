@@ -202,9 +202,13 @@ Migrated tools (TypedDict-only, no contract): `get_zim_metadata`,
 
 ### Cursor format
 
-Cursors are URL-safe base64 JSON: `{v: 1, t: <tool_name>, s: <state>}`.
+Cursors are URL-safe base64 JSON: `{v: 2, t: <tool_name>, s: <state>}`.
 **Tool-bound** — a search cursor passed to browse raises a clear error.
 **Versioned** — adding new fields later doesn't break the wire format.
+**Archive-bound** — cursors for archive-specific tools carry `s.ai` (a
+short SHA-256 token of the validated archive path); resubmitting a
+cursor against a different archive is rejected. v=1 cursors are
+rejected so callers re-fetch rather than silently follow stale state.
 
 ### Compat shim removed
 

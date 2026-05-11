@@ -4,11 +4,12 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union, cast
 
 from ..constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
-from ..responses import tool_error
+from ..responses import ToolErrorPayload, tool_error
 from ..security import redact_paths_in_message, sanitize_path_for_error
+from ..tool_schemas import ServerConfigurationResponse, ServerHealthResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -33,28 +34,28 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
 
 def _register_get_server_health(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
-    async def get_server_health() -> Dict[str, Any]:
+    async def get_server_health() -> Union[ServerHealthResponse, ToolErrorPayload]:
         """Get comprehensive server health and statistics.
 
         Includes cache performance, directory health, and recommendations.
 
         Returns:
-            Structured dict containing detailed server health information.
-            On failure, returns a structured error envelope (see
-            ``responses.tool_error``).
+            ``ServerHealthResponse``-shaped dict on success; ``ToolErrorPayload``
+            envelope on failure (see ``responses.tool_error``).
         """
         return await asyncio.to_thread(_build_health_report, server)
 
 
 def _register_get_server_configuration(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
-    async def get_server_configuration() -> Dict[str, Any]:
+    async def get_server_configuration() -> (
+        Union[ServerConfigurationResponse, ToolErrorPayload]
+    ):
         """Get detailed server configuration with diagnostics and validation.
 
         Returns:
-            Structured dict containing server configuration information
-            including validation results and recommendations. On failure,
-            returns a structured error envelope (see
+            ``ServerConfigurationResponse``-shaped dict on success;
+            ``ToolErrorPayload`` envelope on failure (see
             ``responses.tool_error``).
         """
         return await asyncio.to_thread(_build_configuration_report, server)
@@ -195,7 +196,9 @@ def _build_uptime_info(server: "OpenZimMcpServer") -> Dict[str, Any]:
     }
 
 
-def _build_health_report(server: "OpenZimMcpServer") -> Dict[str, Any]:
+def _build_health_report(
+    server: "OpenZimMcpServer",
+) -> Union[ServerHealthResponse, ToolErrorPayload]:
     try:
         cache_stats = server.cache.stats()
         recommendations: List[str] = []
@@ -247,25 +250,24 @@ def _build_health_report(server: "OpenZimMcpServer") -> Dict[str, Any]:
             health_info, accessible_dirs, total_zim_files, warnings, recommendations
         )
 
-        return health_info
+        return cast(ServerHealthResponse, health_info)
 
     except Exception as e:
         logger.error(f"Error getting server health: {e}")
-        return cast(
-            Dict[str, Any],
-            tool_error(
+        return tool_error(
+            operation="get server health",
+            message=server._create_enhanced_error_message(
                 operation="get server health",
-                message=server._create_enhanced_error_message(
-                    operation="get server health",
-                    error=e,
-                    context="Checking server health and performance metrics",
-                ),
+                error=e,
                 context="Checking server health and performance metrics",
             ),
+            context="Checking server health and performance metrics",
         )
 
 
-def _build_configuration_report(server: "OpenZimMcpServer") -> Dict[str, Any]:
+def _build_configuration_report(
+    server: "OpenZimMcpServer",
+) -> Union[ServerConfigurationResponse, ToolErrorPayload]:
     try:
         # Always redact paths and PID — even on stdio, diagnostic output
         # frequently ends up in bug reports / logs / issue trackers, so
@@ -316,24 +318,21 @@ def _build_configuration_report(server: "OpenZimMcpServer") -> Dict[str, Any]:
                 "Check that all allowed directories exist and are accessible"
             )
 
-        result = {
-            "configuration": config_info,
-            "diagnostics": diagnostics,
+        result: ServerConfigurationResponse = {
+            "configuration": cast("Any", config_info),
+            "diagnostics": cast("Any", diagnostics),
             "timestamp": _utc_now_iso(),
         }
 
         return result
     except Exception as e:
         logger.error(f"Error getting server configuration: {e}")
-        return cast(
-            Dict[str, Any],
-            tool_error(
+        return tool_error(
+            operation="get server configuration",
+            message=server._create_enhanced_error_message(
                 operation="get server configuration",
-                message=server._create_enhanced_error_message(
-                    operation="get server configuration",
-                    error=e,
-                    context="Configuration diagnostics",
-                ),
+                error=e,
                 context="Configuration diagnostics",
             ),
+            context="Configuration diagnostics",
         )

@@ -317,6 +317,33 @@ class TestSearchCursor:
         # The operations layer must not be called on cross-tool cursor reuse.
         server.async_zim_operations.search_zim_file_data.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_cursor_ai_propagates_to_data_layer(self, server: OpenZimMcpServer):
+        """``s.ai`` decoded from the cursor must reach the data layer as
+        ``cursor_archive_identity``.
+
+        Audit fix: prior to this, ``search_zim_file`` decoded the cursor
+        but never read ``s.ai`` — the data layer received None and
+        silently accepted any archive. Pin the wiring here.
+        """
+        from openzim_mcp.pagination import archive_identity
+
+        ai = archive_identity("/zim/wiki.zim")
+        token = Cursor.encode(
+            tool="search_zim_file",
+            state={"o": 10, "l": 5, "q": "diabetes", "ai": ai},
+        )
+
+        fn = _get_tool_fn(server, "search_zim_file")
+        await fn(
+            zim_file_path="/zim/wiki.zim",
+            query="diabetes",
+            cursor=token,
+        )
+
+        call = server.async_zim_operations.search_zim_file_data.await_args
+        assert call.kwargs.get("cursor_archive_identity") == ai
+
 
 class TestSearchPaginationFooterFormat:
     """v1.2.0 search/filter renderers emit a compact one-line footer.

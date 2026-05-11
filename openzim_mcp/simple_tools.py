@@ -996,9 +996,11 @@ class SimpleToolsHandler:
                 f"truncated by the backend; try `get article "
                 f"{entry_path}` for the full body."
             )
-        text = (section.get("content_markdown") or "").strip() if isinstance(
-            section, dict
-        ) else ""
+        text: str = ""
+        if isinstance(section, dict):
+            raw = section.get("content_markdown")
+            if isinstance(raw, str):
+                text = raw.strip()
         if not text:
             return (
                 f'**Section "{target.get("text")}" in `{entry_path}` is empty**\n\n'

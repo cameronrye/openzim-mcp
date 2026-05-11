@@ -1244,7 +1244,16 @@ class _ContentMixin:
                 md = bundle["rendered_markdown"]
                 if bundle["sections"]:
                     first = bundle["sections"][0]
-                    summary_md = md[first["char_start"] : first["char_end"]]
+                    # Many Wikipedia-style articles render with prose
+                    # before the first heading (the lead paragraph) and
+                    # no top-level h1 in the markdown. Slicing only the
+                    # first section's body silently drops that lead.
+                    # Take everything from the start of the markdown
+                    # through the end of the first section so the lead
+                    # is preserved when present; equivalent to the prior
+                    # behaviour for articles whose first heading sits at
+                    # offset 0.
+                    summary_md = md[: first["char_end"]]
                 else:
                     summary_md = md
 

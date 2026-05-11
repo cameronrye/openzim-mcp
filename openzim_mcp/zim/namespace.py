@@ -506,7 +506,13 @@ class _NamespaceMixin:
         ]
 
     def browse_namespace_data(
-        self, zim_file_path: str, namespace: str, limit: int = 50, offset: int = 0
+        self,
+        zim_file_path: str,
+        namespace: str,
+        limit: int = 50,
+        offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "BrowseNamespaceResponse":
         """Structured variant of ``browse_namespace``.
 
@@ -517,15 +523,24 @@ class _NamespaceMixin:
         ``total`` / ``done`` / ``page_info`` plus the ``namespace`` /
         ``discovery_method`` / ``sampling_based`` /
         ``results_may_be_incomplete`` extras. ``next_cursor`` is encoded
-        with ``tool="browse_namespace"`` and state ``{o, l, ns}``.
+        with ``tool="browse_namespace"`` and state ``{o, l, ns, ai}``.
+
+        ``cursor_archive_identity`` is the ``s.ai`` value decoded from a
+        resumed cursor; mismatched archives are rejected so a cursor
+        issued for archive A cannot be honoured against archive B.
 
         Raises:
             OpenZimMcpValidationError: If parameter validation fails (limit,
-                offset, or namespace).
+                offset, or namespace), or if a cursor was issued for a
+                different archive.
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If browsing fails
         """
-        from openzim_mcp.pagination import Cursor
+        from openzim_mcp.pagination import (
+            Cursor,
+            CursorMismatchError,
+            archive_identity,
+        )
 
         # Validate parameters. These are caller-input errors, distinct from
         # archive-access failures, so they surface as
@@ -547,6 +562,19 @@ class _NamespaceMixin:
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Cursor integrity: a cursor issued for archive A must not be
+        # honoured when resubmitted against archive B (same guard as
+        # walk_namespace / extract_article_links / search_zim_file).
+        if cursor_archive_identity is not None:
+            try:
+                Cursor.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="browse_namespace",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
         # shape: entries/total_in_namespace/...) don't leak through
@@ -1091,8 +1119,8 @@ class _NamespaceMixin:
         # (issues Phase B #10, #17, #11 for the equivalent pattern in
         # extract_article_links).
         if cursor_state:
+            from openzim_mcp.pagination import Cursor as _CursorClass
             from openzim_mcp.pagination import (
-                Cursor as _CursorClass,
                 CursorMismatchError,
                 archive_identity,
             )

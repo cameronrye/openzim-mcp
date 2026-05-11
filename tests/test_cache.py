@@ -417,9 +417,7 @@ class TestCacheByteBudget:
 
     def test_byte_budget_zero_disables_byte_eviction(self):
         """max_bytes=0 → byte cap disabled; only count cap applies."""
-        config = CacheConfig(
-            enabled=True, max_size=100, ttl_seconds=60, max_bytes=0
-        )
+        config = CacheConfig(enabled=True, max_size=100, ttl_seconds=60, max_bytes=0)
         cache = OpenZimMcpCache(config, enable_background_cleanup=False)
 
         big = "X" * 4096

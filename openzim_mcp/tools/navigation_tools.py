@@ -62,6 +62,7 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
             / ``sampling_based`` / ``results_may_be_incomplete`` extras);
             ``ToolErrorPayload`` envelope on failure.
         """
+        cursor_ai: Optional[str] = None
         try:
             # Phase B: cursor wins on conflict per response-contract spec.
             if cursor is not None:
@@ -86,6 +87,7 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
                     limit = decoded["s"]["l"]
                 if "ns" in decoded["s"]:
                     namespace = decoded["s"]["ns"]
+                cursor_ai = decoded["s"].get("ai")
 
             # Check rate limit
             try:
@@ -137,7 +139,11 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
 
             # Use async operations
             return await server.async_zim_operations.browse_namespace_data(
-                zim_file_path, namespace, limit, offset
+                zim_file_path,
+                namespace,
+                limit,
+                offset,
+                cursor_archive_identity=cursor_ai,
             )
 
         except Exception as e:
@@ -318,6 +324,7 @@ def _register_search_with_filters(server: "OpenZimMcpServer") -> None:
             / ``content_type_filter`` extras); ``ToolErrorPayload``
             envelope on failure.
         """
+        cursor_ai: Optional[str] = None
         try:
             # Phase B: cursor wins on conflict per response-contract spec.
             if cursor is not None:
@@ -346,6 +353,7 @@ def _register_search_with_filters(server: "OpenZimMcpServer") -> None:
                     namespace = decoded["s"]["ns"]
                 if "ct" in decoded["s"]:
                     content_type = decoded["s"]["ct"]
+                cursor_ai = decoded["s"].get("ai")
 
             # Check rate limit
             try:
@@ -414,7 +422,13 @@ def _register_search_with_filters(server: "OpenZimMcpServer") -> None:
             # Perform the filtered search using async operations
             # (structured payload).
             return await server.async_zim_operations.search_with_filters_data(
-                zim_file_path, query, namespace, content_type, limit, offset
+                zim_file_path,
+                query,
+                namespace,
+                content_type,
+                limit,
+                offset,
+                cursor_archive_identity=cursor_ai,
             )
 
         except Exception as e:

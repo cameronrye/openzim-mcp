@@ -14,6 +14,7 @@ Returns SynthesizeResponse (defined in tool_schemas.py).
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
@@ -128,6 +129,62 @@ def _extract_passages(
 # ---------------------------------------------------------------------------
 
 
+# Collapse whitespace runs to single spaces. Snippets are produced by a
+# different rendering path than the bundle's markdown (today: html2text
+# applied per-snippet vs per-article), and incidental whitespace
+# divergence is the most common reason a literal ``md.find`` misses.
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_ws(text: str) -> str:
+    """Collapse whitespace runs so attribution survives format drift."""
+    return _WS_RE.sub(" ", text).strip()
+
+
+def _locate_passage(md: str, passage_text: str) -> int:
+    """Return the offset of ``passage_text`` within ``md``, or -1 on miss.
+
+    Tries the exact match first (cheap, common). Falls back to a
+    whitespace-normalized search so attribution survives whitespace or
+    inline-markup drift between the snippet rendering path and the
+    bundle's rendered markdown. The returned offset is into the
+    *original* ``md`` so callers can map it back to section ranges.
+    """
+    pos = md.find(passage_text)
+    if pos >= 0:
+        return pos
+
+    # Use the first ~80 chars of the normalized passage as a probe — long
+    # enough to be specific, short enough that a single intra-passage
+    # divergence doesn't kill the match.
+    probe = _normalize_ws(passage_text)[:80]
+    if len(probe) < 12:
+        return -1
+
+    md_norm = _normalize_ws(md)
+    probe_pos = md_norm.find(probe)
+    if probe_pos < 0:
+        return -1
+
+    # Map the normalized offset back to the original md offset. Walk md
+    # in lockstep with md_norm, advancing the original cursor only when
+    # the normalized character matches.
+    md_cursor = 0
+    norm_cursor = 0
+    prev_was_space = False
+    while md_cursor < len(md) and norm_cursor < probe_pos:
+        ch = md[md_cursor]
+        if ch.isspace():
+            if not prev_was_space and norm_cursor > 0:
+                norm_cursor += 1
+            prev_was_space = True
+        else:
+            norm_cursor += 1
+            prev_was_space = False
+        md_cursor += 1
+    return md_cursor
+
+
 def _attribute_sections(
     passages: list[SynthesizePassage],
     *,
@@ -143,6 +200,11 @@ def _attribute_sections(
     ``hit_keys`` is a parallel list of ``(archive_name, entry_path)`` tuples;
     using the tuple as the bundle-lookup key avoids cross-archive
     collisions (issue Phase C #4).
+
+    When multiple nested sections contain the passage offset (a child
+    section sits inside its parent's range), the *most specific*
+    (smallest, deepest) section wins. Citing "Berlin#Geography" beats
+    "Berlin" when the snippet sits inside the Geography subsection.
     """
     attributed: list[SynthesizePassage] = []
     for passage, (archive_name, hit_path) in zip(passages, hit_keys):
@@ -168,15 +230,25 @@ def _attribute_sections(
             attributed.append(passage)
             continue
 
-        pos = md.find(passage_text)
+        pos = _locate_passage(md, passage_text)
         if pos < 0:
             attributed.append(passage)
             continue
 
+        # Pick the smallest-range containing section so nested attribution
+        # cites the deepest heading (e.g. h3 inside h2 inside h1).
+        best_section: Optional[dict] = None
+        best_span = None
         for section in bundle.get("sections", []):
-            if section["char_start"] <= pos < section["char_end"]:
-                new_cite_id = f"{passage['cite_id']}#{section['id']}"
-                break
+            cs = section["char_start"]
+            ce = section["char_end"]
+            if cs <= pos < ce:
+                span = ce - cs
+                if best_span is None or span < best_span:
+                    best_section = section
+                    best_span = span
+        if best_section is not None:
+            new_cite_id = f"{passage['cite_id']}#{best_section['id']}"
 
         new_passage = dict(passage)
         new_passage["cite_id"] = new_cite_id
@@ -371,7 +443,9 @@ def _select_top_hits_multi(
         ]
         if not candidates:
             continue
-        _, best_archive = min(candidates, key=lambda t: (t[0], archives_searched.index(t[1])))
+        _, best_archive = min(
+            candidates, key=lambda t: (t[0], archives_searched.index(t[1]))
+        )
         h = dict(hit_to_archive[(best_archive, path)][1])
         h["score"] = fused_score
         top_hits.append((best_archive, h))

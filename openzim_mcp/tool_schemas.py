@@ -358,12 +358,22 @@ class TocHeading(TypedDict):
 
     `section_id` is the value to pass to get_section(section_id=...).
     Renamed from the old `id` field for clarity.
+
+    `id_source` documents how the section identifier was derived (``"id"``
+    when libzim/raw HTML carried an explicit anchor, ``"descendant_anchor"``
+    / ``"preceding_anchor"`` when we resolved it from a nearby anchor in
+    the soup, or ``"slug"`` when we generated a slug from the heading
+    text). Preserved per the Phase C spec so callers can tell which IDs
+    are stable across re-rendering vs. derived heuristically.
     """
 
     section_id: str
     text: str
     level: int
     children: list[TocHeading]
+    id_source: NotRequired[
+        Literal["id", "descendant_anchor", "preceding_anchor", "slug"]
+    ]
 
 
 class TableOfContentsResponse(TypedDict):
@@ -411,7 +421,10 @@ class BinaryEntryResponse(TypedDict):
 class SectionMeta(TypedDict):
     """One section's metadata in an EntryBundle.
 
-    Section IDs come from openzim_mcp.content_processor.resolve_heading_id.
+    Section IDs come from openzim_mcp.content_processor.resolve_heading_id;
+    ``id_source`` records which arm of that resolver produced the ID
+    (preserved through the TOC response so callers can tell stable
+    anchors from generated slugs).
     char_start / char_end are offsets into EntryBundle.rendered_markdown.
     """
 
@@ -421,6 +434,9 @@ class SectionMeta(TypedDict):
     char_start: int
     char_end: int
     parent_id: NotRequired[Optional[str]]
+    id_source: NotRequired[
+        Literal["id", "descendant_anchor", "preceding_anchor", "slug"]
+    ]
 
 
 class InfoboxField(TypedDict):
@@ -510,3 +526,85 @@ class SynthesizeResponse(TypedDict):
     total_chars: int
     total_words: int
     _meta: MetaEnvelope
+
+
+# ---------------------------------------------------------------------------
+# Phase B — server-tools responses
+# ---------------------------------------------------------------------------
+
+
+class UptimeInfo(TypedDict):
+    """Uptime block of ``ServerHealthResponse``."""
+
+    process_id: str
+    started_at: str
+    uptime_seconds: Optional[float]
+
+
+class HealthChecks(TypedDict):
+    """Per-check booleans/counters of ``ServerHealthResponse``."""
+
+    directories_accessible: int
+    zim_files_found: int
+    permissions_ok: bool
+
+
+class HealthConfiguration(TypedDict):
+    """Configuration summary embedded in the health report."""
+
+    allowed_directories: int
+    cache_enabled: bool
+    config_hash: str
+
+
+class ServerHealthResponse(TypedDict, total=False):
+    """``get_server_health`` success payload.
+
+    ``cache_performance`` and ``simple_tools_telemetry`` carry free-form
+    dicts whose shape is owned by the cache / simple-tools modules; the
+    server-tools surface intentionally doesn't pin them here so additions
+    in those modules don't ripple back into the response schema.
+    """
+
+    timestamp: str
+    status: str
+    server_name: str
+    uptime_info: UptimeInfo
+    configuration: HealthConfiguration
+    cache_performance: dict[str, Any]
+    simple_tools_telemetry: dict[str, Any]
+    health_checks: HealthChecks
+    recommendations: list[str]
+    warnings: list[str]
+
+
+class ServerConfigDetails(TypedDict):
+    """Configuration block inside ``ServerConfigurationResponse``."""
+
+    server_name: str
+    allowed_directories: list[str]
+    allowed_directories_count: int
+    cache_enabled: bool
+    cache_max_size: int
+    cache_ttl_seconds: int
+    content_max_length: int
+    content_snippet_length: int
+    search_default_limit: int
+    config_hash: str
+    server_pid: str
+
+
+class ServerConfigDiagnostics(TypedDict):
+    """Diagnostics block inside ``ServerConfigurationResponse``."""
+
+    validation_status: str
+    warnings: list[str]
+    recommendations: list[str]
+
+
+class ServerConfigurationResponse(TypedDict):
+    """``get_server_configuration`` success payload."""
+
+    configuration: ServerConfigDetails
+    diagnostics: ServerConfigDiagnostics
+    timestamp: str

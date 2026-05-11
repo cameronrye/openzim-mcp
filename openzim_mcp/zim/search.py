@@ -59,6 +59,7 @@ class _FilteredScanState:
     scanned: int
     scan_cap_hit: bool
     total_filtered_is_lower_bound: bool
+    unfiltered_total: int = 0  # pre-filter Xapian hit count, for reason classification
 
 
 def _format_filter_text(namespace: Optional[str], content_type: Optional[str]) -> str:
@@ -194,6 +195,8 @@ class _SearchMixin:
         query: str,
         limit: Optional[int] = None,
         offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "SearchResponse":
         """Structured variant of ``search_zim_file``.
 
@@ -202,9 +205,15 @@ class _SearchMixin:
         structured-output path without the json.dumps + re-parse round trip
         the legacy string variant required.
 
+        ``cursor_archive_identity`` is the ``s.ai`` value decoded from a
+        resumed cursor. When supplied, it must match the current archive's
+        identity or the call is rejected — same anti-cross-archive guard
+        as ``walk_namespace`` / ``extract_article_links``.
+
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If search operation fails
+            OpenZimMcpValidationError: If a cursor was issued for a different archive
         """
         if limit is None:
             limit = self.config.content.default_search_limit
@@ -212,6 +221,44 @@ class _SearchMixin:
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Cursor integrity: reject cursors issued against a different archive
+        # (cf. pagination.py module docstring — search_zim_file is in the list
+        # of tools that must verify ``s.ai`` on resume).
+        if cursor_archive_identity is not None:
+            from openzim_mcp.pagination import Cursor as _CursorClass
+            from openzim_mcp.pagination import (
+                CursorMismatchError,
+                archive_identity,
+            )
+
+            try:
+                _CursorClass.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="search_zim_file",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
+
+        # Empty / whitespace-only query: surface a structured reason so the
+        # model can self-correct without parsing an error envelope.
+        if not query or not query.strip():
+            empty_payload: Dict[str, Any] = {
+                "query": query,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {
+                    "offset": offset,
+                    "limit": limit,
+                    "returned_count": 0,
+                },
+            }
+            return cast(
+                "SearchResponse", attach_meta(empty_payload, reason="bad_query")
+            )
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old shape)
         # don't leak through after the upgrade.
@@ -224,33 +271,65 @@ class _SearchMixin:
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 payload, total_results = self._perform_search(
-                    archive, query, limit, offset
+                    archive, query, limit, offset, validated_path=validated_path
                 )
             logger.debug(f"Search completed: query='{query}', results found")
             reason = "0_hits" if total_results == 0 else None
 
-            # Cross-archive name match (Phase A item #4: alt_archive source)
-            # When search yields zero results, suggest other ZIM archives whose
-            # basename contains a query token (length >= 4 chars only).
+            # Zero-hit suggestions (Phase A item #4). Sourced in priority order:
+            # 1. ``alt_spelling`` from SuggestionSearcher partial matches —
+            #    typo correction on the query against the title index.
+            # 2. ``alt_archive`` — other open ZIM files whose basename matches a
+            #    query token. Last-resort hint when the term itself is correct
+            #    but the article lives in a different archive.
             suggestions: List[Dict[str, str]] = []
             if total_results == 0:
+                limit_n = self.config.search.structured_suggestions_limit
+                # alt_spelling first (priority 1 per spec).
                 try:
-                    files = self.list_zim_files_data()
+                    with _zim_ops_mod.zim_archive(validated_path) as archive:
+                        sugg_searcher = _zim_ops_mod.SuggestionSearcher(archive)
+                        sugg = sugg_searcher.suggest(query)
+                        # Cap at 2x the structured limit to give room for de-dup
+                        # against the query itself; SuggestionSearcher results
+                        # include exact matches that we don't want to surface.
+                        candidates = list(sugg.getResults(0, max(limit_n * 2, 5)))
                     q_lower = query.lower()
-                    # Tokens of length >= 4 only (avoids matching "in", "the", etc.)
-                    q_tokens = [tok for tok in q_lower.split() if len(tok) >= 4]
-                    for f in files:
-                        file_path_str = str(f.get("path", ""))
-                        if file_path_str == str(validated_path):
-                            continue  # skip current archive
-                        stem = Path(file_path_str).stem  # e.g., "wikipedia_en_all"
-                        if any(tok in stem.lower() for tok in q_tokens):
-                            suggestions.append({"type": "alt_archive", "value": stem})
-                            limit_n = self.config.search.structured_suggestions_limit
-                            if len(suggestions) >= limit_n:
-                                break
+                    seen: set[str] = set()
+                    for cand_path in candidates:
+                        # SuggestionSearcher returns paths (e.g. "C/Berlin");
+                        # extract the title segment.
+                        title = cand_path.rsplit("/", 1)[-1]
+                        title_lower = title.lower()
+                        if title_lower == q_lower or title_lower in seen:
+                            continue
+                        seen.add(title_lower)
+                        suggestions.append({"type": "alt_spelling", "value": title})
+                        if len(suggestions) >= limit_n:
+                            break
                 except Exception as e:
-                    logger.debug(f"alt_archive suggestion build failed: {e}")
+                    logger.debug(f"alt_spelling suggestion build failed: {e}")
+
+                # alt_archive (priority 3) — fill remaining slots.
+                if len(suggestions) < limit_n:
+                    try:
+                        files = self.list_zim_files_data()
+                        q_lower = query.lower()
+                        # Tokens of length >= 4 only (avoids matching "in", "the").
+                        q_tokens = [tok for tok in q_lower.split() if len(tok) >= 4]
+                        for f in files:
+                            file_path_str = str(f.get("path", ""))
+                            if file_path_str == str(validated_path):
+                                continue  # skip current archive
+                            stem = Path(file_path_str).stem
+                            if any(tok in stem.lower() for tok in q_tokens):
+                                suggestions.append(
+                                    {"type": "alt_archive", "value": stem}
+                                )
+                                if len(suggestions) >= limit_n:
+                                    break
+                    except Exception as e:
+                        logger.debug(f"alt_archive suggestion build failed: {e}")
 
             with_meta = attach_meta(
                 payload,
@@ -267,7 +346,33 @@ class _SearchMixin:
                 self.cache.set(cache_key, with_meta)
             return cast("SearchResponse", with_meta)
 
-        except OpenZimMcpArchiveError:
+        except OpenZimMcpArchiveError as e:
+            # Detect "no Xapian index" so we can return a structured reason
+            # instead of just an opaque archive error. libzim raises
+            # RuntimeError("Archive has no fulltext index") under the hood;
+            # the typed wrapper carries that message verbatim.
+            msg = str(e).lower()
+            if (
+                "no fulltext index" in msg
+                or "no full-text index" in msg
+                or "no xapian" in msg
+            ):
+                empty_payload2: Dict[str, Any] = {
+                    "query": query,
+                    "results": [],
+                    "next_cursor": None,
+                    "total": 0,
+                    "done": True,
+                    "page_info": {
+                        "offset": offset,
+                        "limit": limit,
+                        "returned_count": 0,
+                    },
+                }
+                return cast(
+                    "SearchResponse",
+                    attach_meta(empty_payload2, reason="no_xapian_index"),
+                )
             # Inner helper already raised a typed archive error with full
             # context. Don't re-wrap and double the message prefix.
             raise
@@ -276,16 +381,26 @@ class _SearchMixin:
             raise OpenZimMcpArchiveError(f"Search operation failed: {e}") from e
 
     def _perform_search(
-        self, archive: Archive, query: str, limit: int, offset: int
+        self,
+        archive: Archive,
+        query: str,
+        limit: int,
+        offset: int,
+        *,
+        validated_path: Optional[Path] = None,
     ) -> Tuple[Dict[str, Any], int]:
         """Perform the actual search operation.
+
+        ``validated_path`` is the resolved archive path used to derive the
+        cursor's ``s.ai`` archive identity. Optional for test-only callers
+        that don't paginate; production callers always supply it.
 
         Returns:
             (structured_payload, total_results) — caller uses total_results
             to decide whether the response is safe to cache. The payload
             shape is documented on ``search_zim_file_data``.
         """
-        from openzim_mcp.pagination import Cursor
+        from openzim_mcp.pagination import Cursor, archive_identity
 
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
@@ -352,9 +467,16 @@ class _SearchMixin:
         done = last_index >= total_results
         next_cursor: Optional[str] = None
         if not done:
+            cursor_state: Dict[str, Any] = {
+                "o": last_index,
+                "l": limit,
+                "q": query,
+            }
+            if validated_path is not None:
+                cursor_state["ai"] = archive_identity(validated_path)
             next_cursor = Cursor.encode(
                 tool="search_zim_file",
-                state={"o": last_index, "l": limit, "q": query},
+                state=cast("Any", cursor_state),
             )
 
         return (
@@ -550,6 +672,8 @@ class _SearchMixin:
         content_type: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "SearchWithFiltersResponse":
         """Structured filtered-search response. v2 Phase B contract.
 
@@ -566,13 +690,22 @@ class _SearchMixin:
         filtering, which would otherwise multiply ``offset + limit`` entry
         materialisations across every candidate.
 
+        ``cursor_archive_identity`` is the ``s.ai`` value decoded from a
+        resumed cursor; mismatched archives are rejected per the cursor
+        contract.
+
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpValidationError: If parameter validation fails
-                (limit out of range, negative offset, malformed namespace).
+                (limit out of range, negative offset, malformed namespace,
+                cursor archive mismatch).
             OpenZimMcpArchiveError: If search operation fails
         """
-        from openzim_mcp.pagination import Cursor
+        from openzim_mcp.pagination import (
+            Cursor,
+            CursorMismatchError,
+            archive_identity,
+        )
 
         if limit is None:
             limit = self.config.content.default_search_limit
@@ -592,6 +725,17 @@ class _SearchMixin:
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Cursor integrity: reject cursors issued against a different archive.
+        if cursor_archive_identity is not None:
+            try:
+                Cursor.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="search_with_filters",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (markdown
         # strings under the legacy ``search_filtered:`` prefix) don't leak
@@ -639,7 +783,12 @@ class _SearchMixin:
         )
         next_cursor: Optional[str] = None
         if not done:
-            cursor_state: Dict[str, Any] = {"o": last_index, "l": limit, "q": query}
+            cursor_state: Dict[str, Any] = {
+                "o": last_index,
+                "l": limit,
+                "q": query,
+                "ai": archive_identity(validated_path),
+            }
             if namespace:
                 cursor_state["ns"] = namespace
             if content_type:
@@ -673,7 +822,18 @@ class _SearchMixin:
             f"namespace={namespace}, type={content_type}, "
             f"results={returned_count}"
         )
-        reason = "0_hits" if scan.filtered_count == 0 else None
+        # Classify the zero-result case: if a namespace/content_type filter
+        # was supplied AND the unfiltered search returned hits, the filter
+        # is what killed them — surface that as ``bad_namespace`` so the
+        # model can self-correct (drop or change the filter) instead of
+        # treating the whole query as a miss.
+        if scan.filtered_count == 0:
+            if (namespace or content_type) and scan.unfiltered_total > 0:
+                reason: Optional[str] = "bad_namespace"
+            else:
+                reason = "0_hits"
+        else:
+            reason = None
         with_meta = attach_meta(payload, reason=reason)
         # Cache the post-attach payload so cold/warm reads are bit-identical
         # (Phase B #12). Skip zero-hit results — see search_zim_file_data
@@ -722,10 +882,22 @@ class _SearchMixin:
                 scanned=0,
                 scan_cap_hit=False,
                 total_filtered_is_lower_bound=False,
+                unfiltered_total=0,
             )
 
         page, scan = self._scan_filtered_search(
             archive, search, total_results, namespace, content_type, limit, offset
+        )
+
+        # Propagate the pre-filter total so the caller can distinguish
+        # "query matched nothing" (0_hits) from "filter killed every match"
+        # (bad_namespace) when emitting structured reason codes.
+        scan = _FilteredScanState(
+            filtered_count=scan.filtered_count,
+            scanned=scan.scanned,
+            scan_cap_hit=scan.scan_cap_hit,
+            total_filtered_is_lower_bound=scan.total_filtered_is_lower_bound,
+            unfiltered_total=total_results,
         )
 
         if scan.filtered_count == 0:

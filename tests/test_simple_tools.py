@@ -3300,3 +3300,133 @@ class TestCompactFlagPropagation:
         assert "**Died:**" in result
         # Infobox table should not appear as pipe-soup
         assert "|" not in result, "compact infobox should not produce pipe-table syntax"
+
+
+class TestCompactSearchFooterAndSuggestions:
+    """End-to-end coverage for Phase A item #5 (footer) and #4 (suggestions).
+
+    The Phase A spec explicitly called for these assertions to live in
+    ``tests/test_simple_tools.py``: the footer is rendered downstream of
+    every compact-mode ``handle_zim_query`` path, and the empty-result
+    branch surfaces ``_meta.suggestions`` through that footer instead of
+    the legacy prose block.
+    """
+
+    def _make_handler(self, search_data_payload):
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        # The compact path probes list_zim_files_data to enrich error
+        # responses; return one fixture archive.
+        mock.list_zim_files_data.return_value = [
+            {"path": "/test/file.zim", "name": "file.zim"}
+        ]
+        mock.search_zim_file_data.return_value = search_data_payload
+        # config.meta.footer_enabled drives format_footer suppression.
+        mock.config.meta.footer_enabled = True
+        return SimpleToolsHandler(mock)
+
+    def test_footer_appended_on_compact_successful_search(self):
+        """A non-empty compact-mode search renders the token-count footer."""
+        from unittest.mock import MagicMock
+
+        payload = {
+            "query": "biology",
+            "results": [
+                {"path": "Biology", "title": "Biology", "snippet": "Life sciences."}
+            ],
+            "next_cursor": None,
+            "total": 1,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 1},
+            "_meta": {"tokens_est": 42, "chars": 200, "truncated": False},
+        }
+        handler = self._make_handler(payload)
+        # _format_search_text isn't auto-mocked when search_zim_file_data
+        # returns a real dict — stub it explicitly so the rendered body
+        # is deterministic.
+        handler.zim_operations._format_search_text = MagicMock(
+            return_value=(
+                'Found 1 matches for "biology", showing 1-1:\n\n'
+                "## 1. Biology\nPath: Biology\nSnippet: Life sciences.\n\n"
+                "---\nShowing 1-1 of 1 (end of results)\n"
+            )
+        )
+        out = handler.handle_zim_query(
+            "search for biology", "/test/file.zim", options={"compact": True}
+        )
+        # Token-count variant of the footer ends with a blockquote marker.
+        assert "> ~" in out, f"missing token-count footer in: {out[-200:]}"
+        # The body itself must be preserved before the footer.
+        assert "Biology" in out
+
+    def test_footer_empty_results_renders_suggestions(self):
+        """A compact-mode zero-result search renders the suggestions footer.
+
+        This exercises the spec's "structured suggestions on empty/low
+        confidence" plumbing: when the search backend returns
+        ``_meta.suggestions`` with ``reason="0_hits"``, the footer should
+        surface the suggestion values as ``> No results. Try: …`` and
+        NOT fall back to the legacy "**Try one of these:**" prose.
+        """
+        payload = {
+            "query": "asdfqwer",
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 0},
+            "_meta": {
+                "tokens_est": 1,
+                "chars": 0,
+                "truncated": False,
+                "reason": "0_hits",
+                "suggestions": [
+                    {"type": "alt_spelling", "value": "asdf"},
+                    {"type": "alt_archive", "value": "wiktionary"},
+                ],
+            },
+        }
+        handler = self._make_handler(payload)
+        out = handler.handle_zim_query(
+            "search for asdfqwer", "/test/file.zim", options={"compact": True}
+        )
+        # New empty-result footer shape — values present, legacy prose absent.
+        assert "No results" in out
+        # At least one suggestion value must round-trip into the footer.
+        assert "asdf" in out or "wiktionary" in out, out
+        # Legacy "Try one of these" block from compact=False must NOT appear.
+        assert "Try one of these" not in out
+
+    def test_footer_suppressed_when_footer_enabled_false(self):
+        """``config.meta.footer_enabled=False`` strips the footer.
+
+        Clients that strip-parse markdown footers (the Phase A "footer
+        suppression" knob) must see no trailing blockquote at all.
+        """
+        from unittest.mock import MagicMock
+
+        payload = {
+            "query": "biology",
+            "results": [
+                {"path": "Biology", "title": "Biology", "snippet": "Life sciences."}
+            ],
+            "next_cursor": None,
+            "total": 1,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 1},
+            "_meta": {"tokens_est": 42, "chars": 200, "truncated": False},
+        }
+        handler = self._make_handler(payload)
+        handler.zim_operations.config.meta.footer_enabled = False
+        handler.zim_operations._format_search_text = MagicMock(
+            return_value="Found 1 matches.\n"
+        )
+        out = handler.handle_zim_query(
+            "search for biology", "/test/file.zim", options={"compact": True}
+        )
+        # No footer blockquote when disabled.
+        assert "> ~" not in out
+        assert "No results" not in out

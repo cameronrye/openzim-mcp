@@ -300,6 +300,77 @@ class TestZimOperations:
         assert data["next_cursor"] is None
         assert data["page_info"]["returned_count"] == 0
 
+    def test_search_zim_file_data_emits_ai_in_cursor(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Outbound cursors from ``search_zim_file_data`` carry ``s.ai``.
+
+        Audit fix: prior cursors omitted ``ai``, so cross-archive cursor
+        reuse on this tool was silently honoured.
+        """
+        from openzim_mcp.pagination import Cursor, archive_identity
+
+        zim_file = temp_dir / "wiki.zim"
+        zim_file.touch()
+
+        # Stage a search that returns enough hits to force a next_cursor.
+        with (
+            patch("openzim_mcp.zim_operations.zim_archive") as mock_archive,
+            patch("openzim_mcp.zim_operations.Searcher") as mock_searcher_cls,
+            patch("openzim_mcp.zim_operations.Query") as mock_query_cls,
+        ):
+            mock_archive_instance = MagicMock()
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            mock_search = MagicMock()
+            mock_search.getEstimatedMatches.return_value = 50  # > limit
+            mock_search.getResults.return_value = ["C/A", "C/B"]
+            mock_searcher_cls.return_value.search.return_value = mock_search
+            mock_query_cls.return_value.set_query.return_value = MagicMock()
+
+            mock_entry = MagicMock()
+            mock_entry.title = "T"
+            mock_archive_instance.get_entry_by_path.return_value = mock_entry
+
+            data = zim_operations.search_zim_file_data(
+                str(zim_file), "q", limit=2, offset=0
+            )
+
+        assert data["next_cursor"] is not None
+        decoded = Cursor.decode(data["next_cursor"], expected_tool="search_zim_file")
+        ai_in_cursor = decoded["s"].get("ai")
+        # ``ai`` must be present and the SHA-256:12 format the
+        # archive_identity helper produces.
+        assert ai_in_cursor is not None and len(ai_in_cursor) == 12
+        # Different archives produce different identities — the cursor's
+        # ai token cannot collide with any unrelated path.
+        assert ai_in_cursor != archive_identity("/some/other.zim")
+
+    def test_search_zim_file_data_rejects_mismatched_ai(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Resuming a cursor with the wrong ``s.ai`` raises a validation error.
+
+        Pins the anti-cross-archive guard: the data layer is the last
+        line of defence before paginated state from a different
+        archive gets honoured.
+        """
+        import pytest
+
+        from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+        zim_file = temp_dir / "wiki.zim"
+        zim_file.touch()
+
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.search_zim_file_data(
+                str(zim_file),
+                "q",
+                limit=5,
+                offset=10,
+                cursor_archive_identity="0000deadbeef",  # not this archive's ai
+            )
+
     def test_get_zim_metadata(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test ZIM metadata retrieval."""
         zim_file = temp_dir / "test.zim"

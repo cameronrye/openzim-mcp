@@ -127,14 +127,18 @@ def _compute_section_offsets(
     # Each match carries both the heading-line start (used as the
     # *next* section's char_end boundary, so siblings don't include
     # each other's heading lines) and the body start (where the section
-    # content actually begins, used as char_start).
-    matches: list[tuple[int, str, int, int, str]] = []  # (level, text, heading_start, body_start, id)
+    # content actually begins, used as char_start). The trailing
+    # ``id_source`` is propagated to SectionMeta so TocHeading consumers
+    # can tell stable author-provided anchors from generated slugs.
+    matches: list[tuple[int, str, int, int, str, str]] = []
+    # tuple shape: (level, text, heading_start, body_start, id, id_source)
 
     for h in headings:
         level = int(h["level"])
         text = _normalize_heading_text(h.get("text", ""))
         # _build_headings uses key 'id' (not 'anchor')
         section_id = h.get("id") or ""
+        id_source = h.get("id_source", "slug")
         if not text or not section_id:
             continue
         # Strict pattern first; relaxed fallback covers html2text decorating
@@ -166,13 +170,23 @@ def _compute_section_offsets(
         # consumer, so including it in the sliced content is redundant
         # and inflates ``char_count``/``word_count``.
         body_start = match.end()
-        if body_start < len(rendered_markdown) and rendered_markdown[body_start] == "\n":
+        if (
+            body_start < len(rendered_markdown)
+            and rendered_markdown[body_start] == "\n"
+        ):
             body_start += 1
-        matches.append((level, text, match.start(), body_start, section_id))
+        matches.append((level, text, match.start(), body_start, section_id, id_source))
         cursor = match.end()
 
     md_len = len(rendered_markdown)
-    for i, (level, text, _heading_start, char_start, section_id) in enumerate(matches):
+    for i, (
+        level,
+        text,
+        _heading_start,
+        char_start,
+        section_id,
+        id_source,
+    ) in enumerate(matches):
         # char_end extends to the next heading at the SAME OR HIGHER level
         # (lower number == higher level) — i.e., the next sibling or
         # ancestor-sibling. Use the *heading_start* of the next match
@@ -197,6 +211,7 @@ def _compute_section_offsets(
                     "char_start": char_start,
                     "char_end": char_end,
                     "parent_id": parent_id,
+                    "id_source": id_source,
                 },
             )
         )

@@ -49,6 +49,7 @@ def _register_search_zim_file(server: "OpenZimMcpServer") -> None:
             top-level ``results`` / ``next_cursor`` / ``total`` / ``done`` /
             ``page_info``); ``ToolErrorPayload`` envelope on failure.
         """
+        cursor_ai: Optional[str] = None
         try:
             # Phase B: cursor wins on conflict per response-contract spec.
             if cursor is not None:
@@ -76,6 +77,7 @@ def _register_search_zim_file(server: "OpenZimMcpServer") -> None:
                 # alongside.
                 if "q" in decoded["s"]:
                     query = decoded["s"]["q"]
+                cursor_ai = decoded["s"].get("ai")
 
             # Check rate limit
             try:
@@ -132,7 +134,11 @@ def _register_search_zim_file(server: "OpenZimMcpServer") -> None:
 
             # Perform the search using async operations (structured payload).
             return await server.async_zim_operations.search_zim_file_data(
-                zim_file_path, query, limit, offset
+                zim_file_path,
+                query,
+                limit,
+                offset,
+                cursor_archive_identity=cursor_ai,
             )
 
         except Exception as e:
