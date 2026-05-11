@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from openzim_mcp.zim.archive import _extract_metadata_text
 
-
 WIKIPEDIA_TITLE_HTML = """<!DOCTYPE html>
 <html lang="en"><head>
     <meta charset="UTF-8">

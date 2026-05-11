@@ -177,9 +177,7 @@ class OpenZimMcpCache:
             # Linux/macOS deployment.
             import os as _os
 
-            xdg = _os.environ.get("XDG_CACHE_HOME") or str(
-                Path.home() / ".cache"
-            )
+            xdg = _os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
             self._persistence_path = Path(xdg) / "openzim-mcp" / "cache.json"
             # Ensure parent dir exists; the actual file is written
             # later by ``_save_to_disk``.

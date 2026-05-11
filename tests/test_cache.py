@@ -830,6 +830,7 @@ class TestCachePersistence:
         """
         import builtins
         import threading
+
         from openzim_mcp.config import CacheConfig
 
         cache_path = str(temp_dir / "lock_race")

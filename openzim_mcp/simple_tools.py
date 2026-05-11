@@ -1473,9 +1473,7 @@ class SimpleToolsHandler:
             r
             for r in results
             if isinstance(r, dict)
-            and is_strong_title_match(
-                topic, r.get("path", ""), r.get("title", "")
-            )
+            and is_strong_title_match(topic, r.get("path", ""), r.get("title", ""))
         ]
         if len(strong_matches) >= 2:
             self._track("disambiguation_returned")
@@ -1598,9 +1596,7 @@ class SimpleToolsHandler:
                 isinstance(e, dict) and e.get("error") for e in per_file
             ):
                 reason = "archive_unavailable"
-            return _HandlerResult(
-                body=body, reason=reason, suggestions=suggestions
-            )
+            return _HandlerResult(body=body, reason=reason, suggestions=suggestions)
         return self.zim_operations.search_all(
             params.get("query", query),
             limit_per_file=options.get("limit", 5),

@@ -160,9 +160,7 @@ class TestGetRelatedArticles:
         assert result.get("scan_limit") == 500
         assert result["_meta"]["reason"] == "scan_truncated"
 
-    def test_scan_truncated_absent_when_scan_completed(
-        self, server: OpenZimMcpServer
-    ):
+    def test_scan_truncated_absent_when_scan_completed(self, server: OpenZimMcpServer):
         """When ``done=True`` from the link scan (full link set fit under
         the 500 cap), the truncation signal stays off — no false alarms
         on normal articles.

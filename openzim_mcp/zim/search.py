@@ -22,11 +22,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
+from openzim_mcp.defaults import CONTENT as _CONTENT_DEFAULTS
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
 )
-from openzim_mcp.defaults import CONTENT as _CONTENT_DEFAULTS
 from openzim_mcp.meta import attach_meta
 
 # Mirror ``openzim_mcp.zim.archive.MAX_REDIRECT_DEPTH`` without importing
@@ -1150,9 +1150,7 @@ class _SearchMixin:
         # the cap (clients thought iteration was complete when filtered
         # entries remained past the cap). Both stopping conditions imply
         # the filtered count is a lower bound.
-        page_filled_short_of_scan = (
-            len(page) >= limit and scanned < total_results
-        )
+        page_filled_short_of_scan = len(page) >= limit and scanned < total_results
         return page, _FilteredScanState(
             filtered_count=filtered_count,
             scanned=scanned,
@@ -2501,9 +2499,7 @@ class _SearchMixin:
                     "files_searched_successfully": sum(
                         1 for r in per_file if not r.get("error")
                     ),
-                    "files_failed": sum(
-                        1 for r in per_file if r.get("error") is True
-                    ),
+                    "files_failed": sum(1 for r in per_file if r.get("error") is True),
                     "budget_exceeded": budget_exceeded,
                     "results": per_file,
                     "next_cursor": None,

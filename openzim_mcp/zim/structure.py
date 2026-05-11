@@ -683,7 +683,9 @@ class _StructureMixin:
             # heading start so the caller sees the child's lead prose
             # only — same shape as the requested narrow contract,
             # just bumped one level down.
-            heading_len = len(section.get("title", "")) + len("#" * section["level"]) + 4
+            heading_len = (
+                len(section.get("title", "")) + len("#" * section["level"]) + 4
+            )
             if (
                 narrowed_end - section["char_start"] <= heading_len + 20
                 and first_following_idx is not None
@@ -849,9 +851,7 @@ class _StructureMixin:
                     continue
                 target_counts[target] += 1
                 if target not in first_text:
-                    first_text[target] = (
-                        link.get("text") or link.get("title") or ""
-                    )
+                    first_text[target] = link.get("text") or link.get("title") or ""
             # Rank: frequency descending, ties broken by first-appearance
             # order (Counter.most_common preserves insertion order for
             # equal counts).

@@ -31,9 +31,7 @@ from tests.live._stdio_helpers import call_tool
 pytestmark = pytest.mark.live
 
 
-def _call_zim_query(
-    proc: subprocess.Popen, msg_id: int, **args: Any
-) -> str:
+def _call_zim_query(proc: subprocess.Popen, msg_id: int, **args: Any) -> str:
     """Issue a ``zim_query`` call and return the result text payload.
 
     ``zim_query`` returns either a plain text envelope or a structured
@@ -93,9 +91,7 @@ def test_typo_collision_resolves_to_canonical(mcp_proc):
     The mock-based unit test couldn't see this regression because the
     mock only allowed one valid variant path.
     """
-    result = _call_zim_query(
-        mcp_proc, 1, query="find article titled Photosythesis"
-    )
+    result = _call_zim_query(mcp_proc, 1, query="find article titled Photosythesis")
     # If the archive has the Photosynthesis article AT ALL, the typo
     # path should land us on it (directly or through the redirect we
     # now follow). Permissive: either the response mentions
@@ -160,9 +156,7 @@ def test_metadata_for_archive_returns_extracted_text_not_html(mcp_proc):
         pytest.skip("No archive name found in list — skipping.")
     archive_name = name_match.group(1)
 
-    metadata_result = _call_zim_query(
-        mcp_proc, 2, query=f"metadata for {archive_name}"
-    )
+    metadata_result = _call_zim_query(mcp_proc, 2, query=f"metadata for {archive_name}")
     # The HTML-wrapped fields (Title, Description, Language, Creator)
     # MUST NOT just be 800 chars of ``<!DOCTYPE html>...<title>`` —
     # the boilerplate-prefix pattern the a8 audit observed.

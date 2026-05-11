@@ -253,11 +253,7 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 {"error": "unauthorized"},
                 status_code=401,
-                headers={
-                    "WWW-Authenticate": (
-                        _CHALLENGE + ', error="invalid_token"'
-                    )
-                },
+                headers={"WWW-Authenticate": (_CHALLENGE + ', error="invalid_token"')},
             )
         # Token validated. Set client_id for rate-limit isolation; the
         # hash is over the *presented* token (which matches the expected

@@ -262,6 +262,7 @@ class TestClientIdPlumbing:
         isolation works.
         """
         import hashlib
+
         from openzim_mcp.http_app import BearerTokenAuthMiddleware
         from openzim_mcp.request_context import current_client_id
 
@@ -277,14 +278,9 @@ class TestClientIdPlumbing:
         app.add_middleware(BearerTokenAuthMiddleware, config=config)
         client = TestClient(app)
 
-        resp = client.get(
-            "/probe", headers={"Authorization": "Bearer alpha-token"}
-        )
+        resp = client.get("/probe", headers={"Authorization": "Bearer alpha-token"})
         assert resp.status_code == 200
-        expected = (
-            "bearer:"
-            + hashlib.sha256(b"alpha-token").hexdigest()[:8]
-        )
+        expected = "bearer:" + hashlib.sha256(b"alpha-token").hexdigest()[:8]
         assert captured["client_id"] == expected
 
     def test_different_tokens_resolve_to_different_client_ids(self):
@@ -309,17 +305,13 @@ class TestClientIdPlumbing:
         config1.auth_token = SecretStr("token-a")
         app1 = Starlette(routes=[Route("/probe", probe)])
         app1.add_middleware(BearerTokenAuthMiddleware, config=config1)
-        TestClient(app1).get(
-            "/probe", headers={"Authorization": "Bearer token-a"}
-        )
+        TestClient(app1).get("/probe", headers={"Authorization": "Bearer token-a"})
 
         config2 = MagicMock()
         config2.auth_token = SecretStr("token-b")
         app2 = Starlette(routes=[Route("/probe", probe)])
         app2.add_middleware(BearerTokenAuthMiddleware, config=config2)
-        TestClient(app2).get(
-            "/probe", headers={"Authorization": "Bearer token-b"}
-        )
+        TestClient(app2).get("/probe", headers={"Authorization": "Bearer token-b"})
 
         assert len(seen) == 2
         assert seen[0] != seen[1], (
@@ -347,6 +339,6 @@ class TestClientIdPlumbing:
         app.add_middleware(BearerTokenAuthMiddleware, config=config)
         TestClient(app).get("/probe")
 
-        assert captured["client_id"].startswith("ip:"), (
-            f"Expected ip-derived client_id; got {captured['client_id']!r}"
-        )
+        assert captured["client_id"].startswith(
+            "ip:"
+        ), f"Expected ip-derived client_id; got {captured['client_id']!r}"

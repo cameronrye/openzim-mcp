@@ -31,7 +31,10 @@ def test_promote_title_match_promotes_canonical_over_derivative():
     when the top BM25 result isn't a strong title match for the query.
     """
     bm25_top_hits = [
-        ("wiki", {"path": "List_of_songs_about_Berlin", "snippet": "...", "score": 0.5}),
+        (
+            "wiki",
+            {"path": "List_of_songs_about_Berlin", "snippet": "...", "score": 0.5},
+        ),
         ("wiki", {"path": "Berlin_(disambiguation)", "snippet": "...", "score": 0.3}),
     ]
     search_handler = MagicMock()
@@ -87,7 +90,10 @@ def test_promote_title_match_reorders_when_canonical_is_lower_ranked():
     in the list — just reordered.
     """
     bm25_top_hits = [
-        ("wiki", {"path": "List_of_songs_about_Berlin", "snippet": "...", "score": 0.5}),
+        (
+            "wiki",
+            {"path": "List_of_songs_about_Berlin", "snippet": "...", "score": 0.5},
+        ),
         ("wiki", {"path": "Berlin", "snippet": "Berlin is...", "score": 0.4}),
         ("wiki", {"path": "Berlin_Wall", "snippet": "...", "score": 0.3}),
     ]
@@ -204,7 +210,9 @@ def test_synthesize_end_to_end_promotes_berlin(monkeypatch):
     assert "capital of Germany" in response["answer_markdown"]
     # And the answer should lead with the Berlin passage (not the
     # derivative). The first citation marker is the Berlin entry.
-    first_cite_marker = response["answer_markdown"].split("[cite:", 1)[1].split("]", 1)[0]
+    first_cite_marker = (
+        response["answer_markdown"].split("[cite:", 1)[1].split("]", 1)[0]
+    )
     assert "/Berlin" in first_cite_marker and "List_of_songs" not in first_cite_marker
 
 

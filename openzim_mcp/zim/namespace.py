@@ -654,7 +654,9 @@ class _NamespaceMixin:
             # ``_meta.reason="sample_only"`` give the caller enough signal
             # to interpret the situation correctly.
             sample_exhausted = (
-                sampling_based and returned_count >= limit and last_index >= total_in_namespace
+                sampling_based
+                and returned_count >= limit
+                and last_index >= total_in_namespace
             )
             done = (last_index >= total_in_namespace) and not sample_exhausted
             next_cursor: Optional[str] = None

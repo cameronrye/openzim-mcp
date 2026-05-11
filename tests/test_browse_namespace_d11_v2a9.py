@@ -92,7 +92,9 @@ def test_long_form_unknown_namespace_rejected(server):
     through unchanged and the reject path catches them."""
     with patch(
         "openzim_mcp.zim_operations.zim_archive",
-        side_effect=AssertionError("must not open archive for unknown long-form namespace"),
+        side_effect=AssertionError(
+            "must not open archive for unknown long-form namespace"
+        ),
     ):
         result = server.zim_operations.browse_namespace_data(
             "/zim/test.zim", "weird-thing", limit=10, offset=0

@@ -106,9 +106,9 @@ def test_browse_w_recovers_favicon_via_has_illustration():
         archive, namespace="W", limit=10, offset=0
     )
     paths = [row["path"] for row in result["entries"]]
-    assert "W/favicon" in paths, (
-        "D2: W/favicon must appear when has_illustration() is True."
-    )
+    assert (
+        "W/favicon" in paths
+    ), "D2: W/favicon must appear when has_illustration() is True."
 
 
 def test_browse_w_total_matches_list_namespaces_count():

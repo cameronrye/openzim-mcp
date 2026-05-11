@@ -72,8 +72,7 @@ def test_truncation_at_leading_highlight_does_not_collapse_to_ellipsis():
     # The bug produced exactly the string ``"..."``. The fix keeps the
     # term text so the result has more than just an ellipsis.
     assert snippet != "...", (
-        f"Snippet collapsed to bare ellipsis; expected term text. "
-        f"Got: {snippet!r}"
+        f"Snippet collapsed to bare ellipsis; expected term text. " f"Got: {snippet!r}"
     )
     # Inferred contract: the matched term ``Photo`` should appear in the
     # result. The orphan ``**`` is dropped so the visible text is "Photo...".

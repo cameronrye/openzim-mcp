@@ -356,8 +356,8 @@ def test_typo_fallback_keeps_redirect_when_no_canonical_alternative(
 
     mock_archive = MagicMock()
     mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
-    mock_archive.get_entry_by_path.side_effect = (
-        lambda p: redirect_only if p == "C/Photosymthesis" else None
+    mock_archive.get_entry_by_path.side_effect = lambda p: (
+        redirect_only if p == "C/Photosymthesis" else None
     )
 
     mock_suggest = MagicMock()
