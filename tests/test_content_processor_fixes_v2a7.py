@@ -58,6 +58,25 @@ def test_highlight_skips_inside_link_text_and_url():
     assert "**Photosynthesis**" not in out
 
 
+def test_highlight_still_bolds_inside_plain_parentheticals():
+    """A query term inside a non-link parenthetical IS still bolded.
+
+    Regression: an earlier shape matched ``\\([^\\n)]*\\)`` globally,
+    which protected ordinary prose parentheticals like
+    ``(also called assimilation)`` from highlighting too. Wikipedia
+    scientific prose is loaded with parenthetical gloss — over-
+    protecting them dropped query-term visibility on a substantial
+    fraction of search hits."""
+    text = "Photosynthesis (also called photosynthesis-2) is a process."
+    out = _highlight_terms(text, "photosynthesis", max_hits=5)
+    # First occurrence (outside parens) is bolded.
+    assert out.startswith("**Photosynthesis**")
+    # Second occurrence (inside a plain parenthetical) is ALSO bolded —
+    # the parenthetical isn't an [text](url) construct, so it's not a
+    # protected region.
+    assert "**photosynthesis-2**" in out or "**photosynthesis**" in out[10:]
+
+
 def test_highlight_still_bolds_plain_occurrences():
     """Plain query-term occurrences outside emphasis are still bolded."""
     text = "Photosynthesis converts CO2 into sugars."
@@ -195,6 +214,61 @@ def test_hatnote_stripped():
     rendered = proc.html_to_plain_text(html, compact=True)
     assert "Mercury (disambiguation)" not in rendered
     assert "smallest planet" in rendered
+
+
+NESTED_TABLE_INFOBOX_HTML = """
+<table class="infobox">
+  <tr><th colspan="2">Album Title</th></tr>
+  <tr><th>Artist</th><td>Some Band</td></tr>
+  <tr>
+    <td colspan="2">
+      <table>
+        <tr><th>prev</th><td>Old Album</td></tr>
+        <tr><th>next</th><td>New Album</td></tr>
+      </table>
+    </td>
+  </tr>
+  <tr><th>Released</th><td>1979</td></tr>
+</table>
+"""
+
+
+def test_infobox_skips_nested_table_rows():
+    """Wikipedia infoboxes frequently embed nested tables (chronology,
+    coordinates, sub-components). A naive ``select('tr')`` walks INTO
+    those nested tables and pulls their rows into the KV list as if
+    they were primary infobox fields. The nested-table guard restricts
+    rows to those whose direct table ancestor is the infobox itself."""
+    soup = BeautifulSoup(NESTED_TABLE_INFOBOX_HTML, "html.parser")
+    proc = ContentProcessor()
+    rows = proc.extract_infobox(soup)
+    labels = [r["label"] for r in rows]
+    assert "Artist" in labels
+    assert "Released" in labels
+    # The nested-table rows must NOT leak into the primary KV list.
+    assert "prev" not in labels
+    assert "next" not in labels
+
+
+def test_inline_reference_markers_stripped():
+    """``<sup class="reference">[1]</sup>`` markers between prose words
+    render as bare ``[1]`` noise after html2text. Stripping them at the
+    HTML level removes the citation noise from snippets and bodies."""
+    html = (
+        "<html><body>"
+        "<h1>Topic</h1>"
+        "<p>The first observation"
+        "<sup class='reference'><a href='#cite_note-1'>[1]</a></sup>"
+        " was made in 1879<sup class='reference'>[2]</sup>.</p>"
+        "</body></html>"
+    )
+    proc = ContentProcessor()
+    rendered = proc.html_to_plain_text(html, compact=True)
+    # The reference text MUST be gone so the snippet density goes up.
+    assert "[1]" not in rendered
+    assert "[2]" not in rendered
+    # The prose is preserved end-to-end.
+    assert "The first observation was made in 1879." in rendered
 
 
 def test_sidebar_stripped():

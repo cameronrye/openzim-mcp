@@ -199,6 +199,26 @@ UNWANTED_HTML_SELECTORS: List[str] = [
     ".sidebar",
     ".navbox",
     ".metadata.mbox-small",
+    # Inline citation superscripts (``<sup class="reference">[1]</sup>``)
+    # html2text renders as bare ``[1]``/``[a]`` text inline with prose
+    # — pure noise for a small model that won't follow them anyway and
+    # can request the reflist explicitly if needed. Stripping them
+    # noticeably tightens snippet density.
+    "sup.reference",
+    "sup.cite_ref",
+    ".reference",
+    # MediaWiki collapsed-content toggles ("show"/"hide") — render as
+    # bare ``[show]``/``[hide]`` text inline with the heading.
+    ".mw-collapsible-toggle",
+    # Coordinate displays in infoboxes: html2text mangles the
+    # microformat into pipe-soup like
+    # ``52°31′07″N 13°24′16″E / 52.518691°N 13.404183°E``. Useful for
+    # GIS, useless for a small model trying to read the article body.
+    ".geo-default",
+    ".geo-dms",
+    ".geo-dec",
+    ".geo-nondefault",
+    ".geo-multi-punct",
 ]
 
 # Rate limiter operation costs

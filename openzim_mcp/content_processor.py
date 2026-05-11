@@ -71,19 +71,26 @@ def _word_in(folded_paragraph: str, term: str) -> bool:
 # italic disambig links, ``[**Photosynthesis**](**Photosynthesis** "…")``
 # where bolding inside the link target breaks the URL).
 #
+# - ``\[[^\]\n]+\]\([^\n)]*\)`` — full ``[text](href "title")`` link,
+#   matched as ONE unit so the URL/tooltip parenthetical only counts
+#   when it's attached to a link. An earlier shape matched any ``(...)``
+#   parenthetical — that protected ordinary prose parentheticals like
+#   ``(also called assimilation)`` from highlighting too, silently
+#   dropping query-term visibility for any term that landed inside
+#   them. (Wikipedia scientific articles are loaded with parenthetical
+#   gloss; over-protecting them cost more highlights than it saved.)
 # - ``\*\*[^*\n]+\*\*`` — existing bold runs (paired markers, single line).
 #   ``[^*\n]+`` rules out adjacent ``**`` runs and multi-paragraph spans.
 # - ``(?<!\w)_[^_\n]+_(?!\w)`` — italic runs; the lookarounds skip
 #   identifier-style underscores like ``foo_bar``.
-# - ``\[[^\]\n]+\]`` — markdown link/image link-text.
-# - ``\([^\n)]*\)`` — the URL+tooltip parenthetical of a markdown link.
-#   Combined with the link-text rule above, this covers the whole
-#   ``[text](href "title")`` construct.
+# - ``` `[^`\n]+` ``` — inline code spans (rarely emitted by html2text on
+#   Wikipedia, but cheap to skip and prevents bold-inside-code from
+#   breaking code-formatted text).
 _HIGHLIGHT_SKIP_RE = re.compile(
-    r"\*\*[^*\n]+\*\*"
+    r"\[[^\]\n]+\]\([^\n)]*\)"
+    r"|\*\*[^*\n]+\*\*"
     r"|(?<!\w)_[^_\n]+_(?!\w)"
-    r"|\[[^\]\n]+\]"
-    r"|\([^\n)]*\)",
+    r"|`[^`\n]+`",
 )
 
 
@@ -469,9 +476,43 @@ class ContentProcessor:
             rows: List[Dict[str, str]] = []
             current_section: Optional[str] = None
             title_row_consumed = False
+            # Only rows whose nearest ``<table>`` ancestor is the infobox
+            # ITSELF count — Wikipedia infoboxes frequently embed nested
+            # tables inside data cells (chronology rows, coordinates
+            # microformats, sub-component sub-tables), and a naive
+            # ``select("tr")`` would pull those nested rows into the
+            # KV list as if they were top-level infobox fields. The
+            # previous code emitted things like ``"prev|1959": "next"``
+            # rows lifted out of an album-chronology nested table.
+            #
+            # Only ``th.find("th")`` would have to look up to skip — but
+            # the cleanest filter is at the row level: keep only rows
+            # whose ``parent`` chain reaches ``node`` before reaching any
+            # other ``<table>``.
+
+            def _cell_belongs_to_infobox(cell: Optional[Tag]) -> bool:
+                """``True`` iff ``cell``'s nearest enclosing table is
+                ``node`` itself — i.e. not buried inside a nested table.
+
+                ``tr.find("th")`` searches descendants, so a top-level row
+                with an empty layout-only ``<td>`` followed by a nested
+                table could otherwise borrow the nested ``<th>`` for its
+                label. Guard at the cell level so the outer row's
+                label/value pairing only counts when both cells live in
+                this infobox directly.
+                """
+                if cell is None or not isinstance(cell, Tag):
+                    return False
+                return cell.find_parent("table") is node
+
             for tr in node.select("tr"):
-                th = tr.find("th")
-                td = tr.find("td")
+                ancestor_table = tr.find_parent("table")
+                if ancestor_table is not node:
+                    continue
+                th_candidate = tr.find("th")
+                td_candidate = tr.find("td")
+                th = th_candidate if _cell_belongs_to_infobox(th_candidate) else None
+                td = td_candidate if _cell_belongs_to_infobox(td_candidate) else None
                 if th and not td:
                     # Section-header row: a single ``<th>`` (usually with a
                     # colspan that visually spans the table). The first

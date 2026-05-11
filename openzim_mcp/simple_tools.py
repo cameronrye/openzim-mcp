@@ -170,11 +170,23 @@ class SimpleToolsHandler:
             # ``s.o`` (offset). Tool-specific cursor state (archive
             # identity, query, namespace) is preserved if the caller
             # also re-supplies the matching query terms.
+            #
+            # Defense-in-depth: cap the token length at 2 KB so an
+            # adversarially-crafted cursor can't trigger oversized
+            # base64-decode or json.loads work. Legitimate cursors
+            # issued by ``Cursor.encode`` are well under 200 chars.
             import base64 as _b64
             import json as _json
 
+            token = str(cursor_raw)
+            if len(token) > 2048:
+                return (
+                    "**Invalid Cursor**\n\n"
+                    "The `cursor` value exceeds the maximum length. Drop "
+                    "the `cursor` argument and call again with an explicit "
+                    "`offset` (or no pagination arg) instead.\n"
+                )
             try:
-                token = str(cursor_raw)
                 padded = token + "=" * (-len(token) % 4)
                 decoded_payload = _json.loads(
                     _b64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
