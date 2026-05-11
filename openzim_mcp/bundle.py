@@ -39,6 +39,30 @@ logger = logging.getLogger(__name__)
 _BUNDLE_KEY_PREFIX = "bundle:v2c"
 
 
+def archive_stat_token(validated_path: Any) -> str:
+    """Return ``<mtime_ns>:<size>`` for ``validated_path`` (``"0:0"`` on OSError).
+
+    Cache keys for any data derived from a ZIM file's contents should
+    include this token so that an atomic file replacement (the typical
+    monthly Wikipedia ZIM refresh) invalidates entries instead of
+    serving stale data. The bundle cache uses it; namespace listings,
+    binary metadata, and path-resolution caches all need the same
+    guarantee.
+
+    Falls back to ``"0:0"`` when ``stat()`` fails (path removed, race
+    with replacement) — the cache continues to function, just without
+    the invalidation guarantee for that key.
+
+    ``validated_path`` is typed loosely so callers don't have to import
+    ``pathlib.Path``; any path-like with ``.stat()`` works.
+    """
+    try:
+        st = validated_path.stat()
+        return f"{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        return "0:0"
+
+
 def _bundle_cache_key(validated_path: "Path", entry_path: str) -> str:
     """Cache key that invalidates when the underlying ZIM is replaced.
 
@@ -52,12 +76,7 @@ def _bundle_cache_key(validated_path: "Path", entry_path: str) -> str:
     with replacement): the key drops to the prior shape so the cache
     still works, just without the invalidation guarantee.
     """
-    try:
-        st = validated_path.stat()
-        token = f"{st.st_mtime_ns}:{st.st_size}"
-    except OSError:
-        token = "0:0"
-    return f"{_BUNDLE_KEY_PREFIX}:{validated_path}:{token}:{entry_path}"
+    return f"{_BUNDLE_KEY_PREFIX}:{validated_path}:{archive_stat_token(validated_path)}:{entry_path}"
 
 
 def _normalize_heading_text(text: str) -> str:

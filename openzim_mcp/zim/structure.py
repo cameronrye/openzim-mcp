@@ -598,15 +598,17 @@ class _StructureMixin:
                 extras={"available_section_ids": [s["id"] for s in bundle["sections"]]},
             )
 
-        body = bundle["rendered_markdown"][section["char_start"] : section["char_end"]]
+        full_body = bundle["rendered_markdown"][
+            section["char_start"] : section["char_end"]
+        ]
         cap = (
             max_chars
             if max_chars is not None
             else self.config.content.max_content_length
         )
-        truncated = len(body) > cap
-        if truncated:
-            body = body[:cap]
+        full_len = len(full_body)
+        truncated = full_len > cap
+        body = full_body[:cap] if truncated else full_body
 
         payload: "GetSectionResponse" = cast(
             "GetSectionResponse",
@@ -623,9 +625,18 @@ class _StructureMixin:
                 "truncated": truncated,
             },
         )
+        # When truncation happens, surface ``total_chars`` so the caller
+        # can tell how much of the section was elided. ``more_at_offset``
+        # is intentionally omitted — get_section truncation is not
+        # resumable; callers needing the full body fall back to
+        # ``get_zim_entry`` with ``content_offset``.
         return cast(
             "GetSectionResponse",
-            attach_meta(cast(Dict[str, Any], payload), truncated=truncated),
+            attach_meta(
+                cast(Dict[str, Any], payload),
+                truncated=truncated,
+                total_chars=full_len if truncated else None,
+            ),
         )
 
     def get_related_articles_data(

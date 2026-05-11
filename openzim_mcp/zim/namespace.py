@@ -704,11 +704,19 @@ class _NamespaceMixin:
 
         # Discover entries in the namespace. The full listing is cached
         # separately from the per-page JSON (cache_key in browse_namespace),
-        # so different (limit, offset) pages share one scan.
+        # so different (limit, offset) pages share one scan. The stat
+        # token (st_mtime_ns:st_size) ensures an atomic ZIM replacement
+        # invalidates the listing rather than serving the prior
+        # snapshot's entries indefinitely until LRU eviction.
         listing_key: Optional[str] = None
         cached_listing: Optional[Tuple[List[str], bool]] = None
         if archive_path is not None:
-            listing_key = f"ns_entries:{archive_path}:{namespace}"
+            from pathlib import Path as _Path
+
+            from openzim_mcp.bundle import archive_stat_token
+
+            stat_token = archive_stat_token(_Path(archive_path))
+            listing_key = f"ns_entries:{archive_path}:{stat_token}:{namespace}"
             cached_listing = self.cache.get(listing_key)
 
         if cached_listing is not None:

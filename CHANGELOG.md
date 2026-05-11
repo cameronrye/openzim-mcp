@@ -5,6 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a5] — 2026-05-10 (alpha pre-release)
+
+Bugfix-only follow-up to v2.0.0a4 after a two-pass review of the
+shipped Phase A/B/C surface. 13 defects fixed; no new tools, no
+wire-format breaks. Existing tests stay green (1344 passed) and a few
+new tests pin down the corrected behaviour.
+
+### Fixed — Phase A (`_meta` envelope, snippets, fuzzy fallback)
+
+- **`format_footer` recovery branch now covers every empty-result `reason`.**
+  Responses carrying `reason="no_xapian_index"` or `"bad_namespace"`
+  previously fell through to the success branch and emitted a useless
+  "~0 tokens" footer. They now render archive-shaped recovery hints
+  ("No full-text index on this archive. Try `find_entry_by_title` or
+  `browse_namespace`." / "Unknown namespace. Try `list_namespaces`…").
+- **`create_snippet` no longer slices `**term**` mid-tag.** When the
+  highlighted snippet exceeded `snippet_length` and the second
+  truncation landed inside a bold marker, the result was a runaway-bold
+  fragment (`…**ter`). The truncation now detects an unpaired trailing
+  `**` and strips the dangling segment before appending `...`.
+- **Spec §14.4: surface `alt_spelling` suggestions when a fuzzy hit
+  is returned.** `find_entry_by_title_data` now adds the resolved
+  typo-corrected title to `_meta.suggestions[]` so callers can see
+  *which* correction the server applied and decide whether to accept
+  it. Previously suggestions only appeared when zero results were
+  found.
+- **`tokens_est` is now omitted from `_meta` when the tokenizer is
+  unavailable** (spec §5). Callers can distinguish "tokenizer
+  unavailable" from "zero-token response". `format_footer` falls back
+  to char-count when the field is absent.
+
+### Fixed — Phase B (cursor)
+
+- **`CursorPayload.v` comment refreshed.** The inline comment said
+  "currently 1" while `CURRENT_VERSION = 2`; replaced with a stable
+  reference to the module constant so it can't drift again.
+
+### Fixed — Phase C (bundle, get_section, synthesize)
+
+- **`_locate_passage` whitespace-run offset mapping.** The
+  normalized→original-offset walk could exit pointing inside a
+  whitespace run that `md_norm` had collapsed to one space, attributing
+  citations to the prior section when two section boundaries sat
+  either side of the run. The mapper now advances past any remaining
+  whitespace so the returned offset always lands on the first
+  non-space character of the match.
+- **`get_section` truncation surfaces `_meta.total_chars`.** Truncation
+  set `_meta.truncated=True` but omitted the source-length context.
+  Callers now see how much of the section was elided. `more_at_offset`
+  remains absent because `get_section` truncation is not resumable.
+- **`archive_by_name` collision on duplicate `.stem`.** Two ZIMs with
+  the same filename in different directories (`en/wiki.zim` and
+  `fr/wiki.zim`) silently overwrote each other in synthesize's
+  archive-lookup dict, causing the bundle for the first archive's hit
+  to be fetched from the second archive — i.e., citation poisoning.
+  Duplicate stems are now detected at archive enumeration and
+  disambiguated with a `~N` suffix (`wiki`, `wiki~2`) with a warning
+  log. Single-archive synthesise is unaffected.
+- **`get_entry_summary(compact=True)` no longer ignores the `compact`
+  flag.** The Phase C bundle migration silently routed compact
+  callers through `bundle["rendered_markdown"]`, which is rendered
+  with `compact=False` (pipe-soup tables, no oversized-table
+  placeholders). Compact requests now bypass the bundle and re-render
+  through `_extract_html_summary(compact=True)` so Phase A #2's table
+  trimming applies. `compact=False` (the default) still benefits from
+  the bundle's shared HTML parse.
+- **Cache keys for `path_mapping:`, `binary_meta:`, and `ns_entries:`
+  now include an `<mtime_ns>:<size>` invalidation token.** Atomic ZIM
+  file replacement (the typical monthly Wikipedia refresh) previously
+  left stale resolved paths, binary metadata, and namespace listings
+  in cache until LRU eviction. The bundle cache already did this; the
+  helper has been extracted to `bundle.archive_stat_token()` and
+  applied across all four.
+- **`synthesize._extract_passages` no longer double-renders the
+  snippet through `html_to_plain_text`.** `search_top_k` already
+  returns plain-markdown snippets via `create_snippet`; the
+  BeautifulSoup→html2text round-trip risked mangling `**bold**`
+  highlight markers. Trust the upstream pipeline; a regression test
+  pins the behaviour.
+
+### Test suite
+
+- 1344 passed, 50 skipped (one more than the v2.0.0a4 baseline; added
+  `test_extract_passages_preserves_bold_highlight_markers`).
+- Updated `test_zim_operations.py` and `test_content_tools.py` cache-key
+  assertions for the new stat-token format.
+- Updated `test_synthesize.py` to drop the `content_processor` arg
+  from `_extract_passages` and use plain-markdown snippet fixtures.
+
 ## [2.0.0a4] — 2026-05-10 (alpha pre-release)
 
 v2 Phase C, part 2: completes the retrieval-primitives phase. Adds the

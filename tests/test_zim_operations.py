@@ -1174,7 +1174,9 @@ class TestZimOperations:
         zim_file = tmp_path / "test.zim"
         zim_operations._get_entry_content(mock_archive, "A/USA", 1000, zim_file)
 
-        cache_key = f"path_mapping:{zim_file}:A/USA"
+        from openzim_mcp.bundle import archive_stat_token as _stat
+
+        cache_key = f"path_mapping:{zim_file}:{_stat(zim_file)}:A/USA"
         cached = zim_operations.cache.get(cache_key)
         assert cached == "A/United_States", (
             "Cache must store the resolved path so subsequent "
@@ -1770,7 +1772,12 @@ class TestZimOperations:
             assert "Test content" in result
 
             # Verify path mapping was cached (key includes resolved archive path)
-            cache_key = f"path_mapping:{zim_file.resolve()}:A/Test_Article"
+            from openzim_mcp.bundle import archive_stat_token as _stat
+
+            cache_key = (
+                f"path_mapping:{zim_file.resolve()}:"
+                f"{_stat(zim_file.resolve())}:A/Test_Article"
+            )
             cached_path = zim_operations.cache.get(cache_key)
             assert cached_path == "A/Test_Article"
 
@@ -1818,7 +1825,12 @@ class TestZimOperations:
                 assert "Test content" in result
 
                 # Verify path mapping was cached (key includes resolved archive path)
-                cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
+                from openzim_mcp.bundle import archive_stat_token as _stat
+
+                cache_key = (
+                    f"path_mapping:{zim_file.resolve()}:"
+                    f"{_stat(zim_file.resolve())}:A/Test Article"
+                )
                 cached_path = zim_operations.cache.get(cache_key)
                 assert cached_path == "A/Test_Article"
 
@@ -1832,7 +1844,12 @@ class TestZimOperations:
         zim_file.touch()
 
         # Pre-populate cache with path mapping
-        cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
+        from openzim_mcp.bundle import archive_stat_token as _stat
+
+        cache_key = (
+            f"path_mapping:{zim_file.resolve()}:"
+            f"{_stat(zim_file.resolve())}:A/Test Article"
+        )
         zim_operations.cache.set(cache_key, "A/Test_Article")
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
@@ -1872,7 +1889,12 @@ class TestZimOperations:
         zim_file.touch()
 
         # Pre-populate cache with invalid path mapping
-        cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
+        from openzim_mcp.bundle import archive_stat_token as _stat
+
+        cache_key = (
+            f"path_mapping:{zim_file.resolve()}:"
+            f"{_stat(zim_file.resolve())}:A/Test Article"
+        )
         zim_operations.cache.set(cache_key, "A/Invalid_Path")
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:

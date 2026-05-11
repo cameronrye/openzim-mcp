@@ -1809,10 +1809,11 @@ class _SearchMixin:
                     if not fast_path_hit and not already_has_strong:
                         typo_entry = self._find_entry_typo_fallback(archive, title)
                         if typo_entry is not None:
+                            resolved_typo_title = typo_entry.title or title
                             aggregate_results.append(
                                 {
                                     "path": typo_entry.path,
-                                    "title": typo_entry.title or title,
+                                    "title": resolved_typo_title,
                                     # Score set from config (default 0.85).
                                     # Below 0.95 (suggestion-rank top) and
                                     # well below 1.0 (exact match) so a
@@ -1824,6 +1825,17 @@ class _SearchMixin:
                                 }
                             )
                             fuzzy_path_hit = True
+                            # Spec §14.4: when a fuzzy hit is returned, the
+                            # variant that matched is itself a valuable
+                            # ``alt_spelling`` signal — it tells the model
+                            # *what* correction the server applied so it can
+                            # decide whether to re-issue the query verbatim
+                            # or accept the correction. The variant joins
+                            # the verified-variants pool regardless of
+                            # whether other archives produced results.
+                            if resolved_typo_title not in verified_variants_seen:
+                                verified_variants.append(resolved_typo_title)
+                                verified_variants_seen.add(resolved_typo_title)
                         else:
                             # Collect *additional* verified variants from
                             # this archive while it's still open — these
@@ -1852,15 +1864,16 @@ class _SearchMixin:
         # otherwise preserve per-file rank order.
         aggregate_results.sort(key=lambda r: -r["score"])
 
-        # Build _meta.suggestions[] from archive-verified typo variants
-        # only when there are NO results of any kind — otherwise a
-        # successful (or partially successful) response would carry
-        # "did you mean?" hints that contradict what was returned
-        # (Phase A #7 fix). The variants themselves are confirmed to
-        # resolve to a real entry in at least one archive (Phase A #6
-        # fix), accumulated during the per-file typo-fallback pass.
+        # Build _meta.suggestions[] from archive-verified typo variants.
+        # Two cases surface them (spec §14.4):
+        #   * No results of any kind — pure recovery hints.
+        #   * A fuzzy hit is returned — the variant that matched is shown
+        #     so the caller can verify the auto-correction rather than
+        #     silently accepting it.
+        # When the response carries a non-fuzzy hit, suggestions stay
+        # empty so confident matches aren't muddled by alt-spelling noise.
         suggestions: List[Dict[str, str]] = []
-        if not aggregate_results:
+        if not aggregate_results or fuzzy_path_hit:
             for resolved in verified_variants[:structured_suggestions_limit]:
                 suggestions.append({"type": "alt_spelling", "value": resolved})
 

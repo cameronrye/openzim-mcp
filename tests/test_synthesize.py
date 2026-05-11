@@ -109,22 +109,17 @@ def test_per_archive_search_single_archive() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_extract_passages_renders_markdown_from_snippets() -> None:
-    """libzim snippets may come back as HTML; passages contain markdown."""
+def test_extract_passages_passes_through_plain_markdown() -> None:
+    """search_top_k already returns plain-markdown snippets via create_snippet;
+    _extract_passages must not double-render or otherwise mutate them."""
     from openzim_mcp.synthesize import _extract_passages
 
     hits = [
-        {"path": "A/Berlin", "snippet": "<p>Berlin is the capital.</p>", "score": 0.9},
-        {"path": "A/Munich", "snippet": "<p>Munich is in Bavaria.</p>", "score": 0.7},
+        {"path": "A/Berlin", "snippet": "Berlin is the capital.", "score": 0.9},
+        {"path": "A/Munich", "snippet": "Munich is in Bavaria.", "score": 0.7},
     ]
-    cp = MagicMock()
-    cp.html_to_plain_text.side_effect = lambda html: html.replace("<p>", "").replace(
-        "</p>", ""
-    )
 
-    passages = _extract_passages(
-        hits, archive_name="wikipedia_en_simple", content_processor=cp
-    )
+    passages = _extract_passages(hits, archive_name="wikipedia_en_simple")
     assert len(passages) == 2
     assert passages[0]["rank"] == 1
     assert passages[0]["text_markdown"] == "Berlin is the capital."
@@ -136,13 +131,24 @@ def test_extract_passages_preserves_rank_order() -> None:
     from openzim_mcp.synthesize import _extract_passages
 
     hits = [
-        {"path": f"A/Doc{i}", "snippet": f"<p>doc {i}</p>", "score": 1.0 - 0.1 * i}
+        {"path": f"A/Doc{i}", "snippet": f"doc {i}", "score": 1.0 - 0.1 * i}
         for i in range(5)
     ]
-    cp = MagicMock()
-    cp.html_to_plain_text.side_effect = lambda html: html
-    passages = _extract_passages(hits, archive_name="test", content_processor=cp)
+    passages = _extract_passages(hits, archive_name="test")
     assert [p["rank"] for p in passages] == [1, 2, 3, 4, 5]
+
+
+def test_extract_passages_preserves_bold_highlight_markers() -> None:
+    """Highlighted ``**term**`` markers from create_snippet must survive — the
+    earlier code path round-tripped through BeautifulSoup + html2text and
+    could strip or rewrite them."""
+    from openzim_mcp.synthesize import _extract_passages
+
+    hits = [
+        {"path": "A/X", "snippet": "the **target** was found here", "score": 1.0},
+    ]
+    passages = _extract_passages(hits, archive_name="zim")
+    assert passages[0]["text_markdown"] == "the **target** was found here"
 
 
 def test_synthesize_query_signature_exists() -> None:

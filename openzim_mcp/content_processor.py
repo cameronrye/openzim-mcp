@@ -621,7 +621,16 @@ class ContentProcessor:
             # trailing "..." sentinel so callers see a consistent format.
             if len(snippet_text) > self.snippet_length:
                 cap = max(self.snippet_length - 3, 0)
-                snippet_text = snippet_text[:cap].rstrip() + "..."
+                sliced = snippet_text[:cap].rstrip()
+                # Truncation can land inside a ``**term**`` highlight, leaving
+                # an unmatched opening marker (e.g. ``…**ter``) that downstream
+                # markdown renderers will treat as runaway bold. Detect an
+                # unpaired trailing ``**`` and strip the dangling fragment.
+                if sliced.count("**") % 2 == 1:
+                    last_open = sliced.rfind("**")
+                    if last_open >= 0:
+                        sliced = sliced[:last_open].rstrip()
+                snippet_text = sliced + "..."
 
         return snippet_text
 

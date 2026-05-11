@@ -282,7 +282,9 @@ class TestGetBinaryEntryDataMeta:
         validated = zim_ops.path_validator.validate_zim_file(validated)
 
         # Seed the cache with binary metadata so the short-circuit path fires.
-        cache_key = f"binary_meta:{validated}:I/test.png"
+        from openzim_mcp.bundle import archive_stat_token as _stat
+
+        cache_key = f"binary_meta:{validated}:{_stat(validated)}:I/test.png"
         zim_ops.cache.set(
             cache_key,
             {

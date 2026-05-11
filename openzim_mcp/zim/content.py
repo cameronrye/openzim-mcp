@@ -323,8 +323,13 @@ class _ContentMixin:
             processing raised and ``payload["content"]`` is the error
             sentinel; the caller must not cache the response in that case.
         """
+        from openzim_mcp.bundle import archive_stat_token
+
         requested_path = entry_path
-        path_cache_key = f"path_mapping:{validated_path}:{entry_path}"
+        path_cache_key = (
+            f"path_mapping:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{entry_path}"
+        )
         cached_actual_path = self.cache.get(path_cache_key)
 
         # Try cached path mapping first.
@@ -694,9 +699,15 @@ class _ContentMixin:
             ``(Error retrieving content: ...)`` sentinel; the caller must
             not cache the response in that case.
         """
-        # Path mapping cache key includes archive path so identical entry
-        # names in different ZIM files don't collide.
-        cache_key = f"path_mapping:{validated_path}:{entry_path}"
+        # Path mapping cache key includes archive path + stat token so
+        # identical entry names in different ZIM files don't collide and
+        # an atomic file replacement invalidates the resolved-path cache.
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"path_mapping:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{entry_path}"
+        )
         cached_actual_path = self.cache.get(cache_key)
         if cached_actual_path:
             logger.debug(
@@ -928,8 +939,15 @@ class _ContentMixin:
 
         # Cache key for invariant metadata (size, mime_type, etc.) — not data,
         # since data is potentially large and varies with max_size_bytes.
-        # The cache stores a plain dict, so the key shape is unchanged.
-        cache_key = f"binary_meta:{validated_path}:{entry_path}"
+        # The stat token guarantees that an atomic ZIM replacement
+        # invalidates stale metadata (e.g. a thumbnail entry whose
+        # mimetype/size changed between archive revisions).
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"binary_meta:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{entry_path}"
+        )
 
         # If we already know the entry's metadata, we can short-circuit calls
         # that don't need bytes (include_data=False) or that would be rejected
@@ -1220,9 +1238,19 @@ class _ContentMixin:
 
             if mime_type.startswith("text/html"):
                 # HTML path — build (or reuse) the bundle and slice it.
-                if validated_path is None:
+                # ``compact=True`` cannot use the bundle: the bundle stores
+                # rendered markdown with ``compact=False`` semantics (tables
+                # in pipe-soup form, oversized-table placeholders absent),
+                # so serving compact-mode callers from it would re-introduce
+                # the table-bloat that Phase A #2 was designed to eliminate.
+                # When compact is requested, re-render the entry through the
+                # compact-aware ``_extract_html_summary`` path; the bundle
+                # path stays available for compact=False (the default) so
+                # the four bundle-backed tools still share one HTML parse.
+                if validated_path is None or compact:
                     # Fall back to re-reading the item when no validated_path
-                    # was supplied (e.g. tests that monkeypatch this method).
+                    # was supplied (tests that monkeypatch the path validator)
+                    # OR when compact mode demands compact-rendered markdown.
                     raw_content = bytes(item.content).decode("utf-8", errors="replace")
                     html_result = self._extract_html_summary(
                         raw_content, max_words, compact=compact

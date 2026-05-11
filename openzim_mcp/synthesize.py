@@ -95,20 +95,25 @@ def _extract_passages(
     hits: list[dict],
     *,
     archive_name: str,
-    content_processor: ContentProcessor,
 ) -> list[SynthesizePassage]:
     """Convert hit dicts into SynthesizePassage entries.
 
-    Each hit's snippet (potentially HTML from libzim.getSnippet) is
-    rendered to markdown. cite_id is the entry-level form
-    f"{archive_name}/{path}" — the "#section_id" suffix is added by
-    Stage 5 (_attribute_sections) once the bundle is consulted.
+    The snippet from ``search_top_k`` is already a plain-markdown string
+    produced by ``_get_entry_snippet`` → ``create_snippet`` (which
+    decompresses the entry, runs html2text, and slices to a paragraph
+    boundary). Re-running ``html_to_plain_text`` on it is a no-op for
+    clean output but risks mangling bold-highlight markers via the
+    BeautifulSoup → html2text round-trip — trust the upstream pipeline
+    instead.
+
+    cite_id is the entry-level form ``f"{archive_name}/{path}"`` —
+    the ``"#section_id"`` suffix is added by Stage 5 (``_attribute_sections``)
+    once the bundle is consulted.
     """
     passages: list[SynthesizePassage] = []
     for rank, hit in enumerate(hits, start=1):
         snippet = hit.get("snippet") or ""
-        text = content_processor.html_to_plain_text(snippet) if snippet else ""
-        text = text.strip()
+        text = snippet.strip()
         cite_id = f"{archive_name}/{hit['path']}"
         passages.append(
             cast(
@@ -181,6 +186,15 @@ def _locate_passage(md: str, passage_text: str) -> int:
         else:
             norm_cursor += 1
             prev_was_space = False
+        md_cursor += 1
+    # Probes are normalized + trimmed so probe[0] is always a non-space
+    # character. After lockstep walk the cursor may sit on the first
+    # whitespace of a run that md_norm collapsed to one space — advance
+    # past any remaining whitespace so the returned offset points at the
+    # first non-space char of the match in the original md. Without this
+    # step, attribution can land in an earlier section when two section
+    # boundaries hug a whitespace run.
+    while md_cursor < len(md) and md[md_cursor].isspace():
         md_cursor += 1
     return md_cursor
 
@@ -366,12 +380,36 @@ def _do_per_archive_search(
     query: str,
     k: int,
 ) -> tuple[list[list[dict]], list[str], dict[str, tuple[Archive, Path]]]:
-    """Stage 1: run per-archive Xapian search for every archive in the list."""
+    """Stage 1: run per-archive Xapian search for every archive in the list.
+
+    When two ZIM paths resolve to the same ``.stem`` (the user has
+    ``foo/wikipedia.zim`` and ``bar/wikipedia.zim`` both configured), the
+    raw stem can't act as a unique key for downstream bundle lookups —
+    a collision silently re-routes attribution to whichever archive
+    overwrote the dict entry. Detect duplicates and append a numeric
+    suffix (``stem~2``, ``stem~3``) so each archive carries a unique
+    name in ``archives_searched`` and ``archive_by_name``. The tilde
+    keeps the suffix unambiguous to humans without hijacking a
+    character that might appear in real ZIM filenames.
+    """
     per_archive_hits: list[list[dict]] = []
     archives_searched: list[str] = []
     archive_by_name: dict[str, tuple[Archive, Path]] = {}
+    stem_counts: dict[str, int] = {}
     for archive, validated_path in archives:
-        archive_name = validated_path.stem
+        base = validated_path.stem
+        n = stem_counts.get(base, 0) + 1
+        stem_counts[base] = n
+        archive_name = base if n == 1 else f"{base}~{n}"
+        if n > 1:
+            logger.warning(
+                "synthesize: duplicate ZIM stem %r — using %r for the %d-th archive "
+                "(%s) so attribution stays correct",
+                base,
+                archive_name,
+                n,
+                validated_path,
+            )
         archives_searched.append(archive_name)
         archive_by_name[archive_name] = (archive, validated_path)
         per_archive_hits.append(
@@ -491,8 +529,6 @@ def _make_bundle_lookup(
 
 def _extract_passages_for_top_hits(
     top_hits: list[tuple[str, dict]],
-    *,
-    content_processor: ContentProcessor,
 ) -> tuple[list[SynthesizePassage], list[tuple[str, str]]]:
     """Stage 4: extract per-hit passages and renumber rank globally.
 
@@ -507,7 +543,6 @@ def _extract_passages_for_top_hits(
             _extract_passages(
                 [hit],
                 archive_name=archive_name,
-                content_processor=content_processor,
             )
         )
         hit_keys.append((archive_name, hit["path"]))
@@ -588,9 +623,7 @@ def synthesize_query(
     if not top_hits:
         return _zero_hits_response(query, archives_searched, fallback_used)
 
-    all_passages, hit_keys = _extract_passages_for_top_hits(
-        top_hits, content_processor=content_processor
-    )
+    all_passages, hit_keys = _extract_passages_for_top_hits(top_hits)
     bundle_lookup = _make_bundle_lookup(
         top_hits,
         archive_by_name,

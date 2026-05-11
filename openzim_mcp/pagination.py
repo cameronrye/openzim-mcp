@@ -65,7 +65,7 @@ class CursorState(TypedDict, total=False):
 class CursorPayload(TypedDict):
     """Full cursor payload: version, tool name, and tool-specific state."""
 
-    v: int  # cursor version, currently 1
+    v: int  # cursor version (see CURRENT_VERSION)
     t: str  # tool name (e.g., "browse_namespace")
     s: CursorState  # tool-specific state
 
