@@ -300,6 +300,77 @@ class TestZimOperations:
         assert data["next_cursor"] is None
         assert data["page_info"]["returned_count"] == 0
 
+    def test_search_zim_file_data_emits_ai_in_cursor(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Outbound cursors from ``search_zim_file_data`` carry ``s.ai``.
+
+        Audit fix: prior cursors omitted ``ai``, so cross-archive cursor
+        reuse on this tool was silently honoured.
+        """
+        from openzim_mcp.pagination import Cursor, archive_identity
+
+        zim_file = temp_dir / "wiki.zim"
+        zim_file.touch()
+
+        # Stage a search that returns enough hits to force a next_cursor.
+        with (
+            patch("openzim_mcp.zim_operations.zim_archive") as mock_archive,
+            patch("openzim_mcp.zim_operations.Searcher") as mock_searcher_cls,
+            patch("openzim_mcp.zim_operations.Query") as mock_query_cls,
+        ):
+            mock_archive_instance = MagicMock()
+            mock_archive.return_value.__enter__.return_value = mock_archive_instance
+
+            mock_search = MagicMock()
+            mock_search.getEstimatedMatches.return_value = 50  # > limit
+            mock_search.getResults.return_value = ["C/A", "C/B"]
+            mock_searcher_cls.return_value.search.return_value = mock_search
+            mock_query_cls.return_value.set_query.return_value = MagicMock()
+
+            mock_entry = MagicMock()
+            mock_entry.title = "T"
+            mock_archive_instance.get_entry_by_path.return_value = mock_entry
+
+            data = zim_operations.search_zim_file_data(
+                str(zim_file), "q", limit=2, offset=0
+            )
+
+        assert data["next_cursor"] is not None
+        decoded = Cursor.decode(data["next_cursor"], expected_tool="search_zim_file")
+        ai_in_cursor = decoded["s"].get("ai")
+        # ``ai`` must be present and the SHA-256:12 format the
+        # archive_identity helper produces.
+        assert ai_in_cursor is not None and len(ai_in_cursor) == 12
+        # Different archives produce different identities — the cursor's
+        # ai token cannot collide with any unrelated path.
+        assert ai_in_cursor != archive_identity("/some/other.zim")
+
+    def test_search_zim_file_data_rejects_mismatched_ai(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """Resuming a cursor with the wrong ``s.ai`` raises a validation error.
+
+        Pins the anti-cross-archive guard: the data layer is the last
+        line of defence before paginated state from a different
+        archive gets honoured.
+        """
+        import pytest
+
+        from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+        zim_file = temp_dir / "wiki.zim"
+        zim_file.touch()
+
+        with pytest.raises(OpenZimMcpValidationError):
+            zim_operations.search_zim_file_data(
+                str(zim_file),
+                "q",
+                limit=5,
+                offset=10,
+                cursor_archive_identity="0000deadbeef",  # not this archive's ai
+            )
+
     def test_get_zim_metadata(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test ZIM metadata retrieval."""
         zim_file = temp_dir / "test.zim"
@@ -1103,7 +1174,9 @@ class TestZimOperations:
         zim_file = tmp_path / "test.zim"
         zim_operations._get_entry_content(mock_archive, "A/USA", 1000, zim_file)
 
-        cache_key = f"path_mapping:{zim_file}:A/USA"
+        from openzim_mcp.bundle import archive_stat_token as _stat
+
+        cache_key = f"path_mapping:{zim_file}:{_stat(zim_file)}:A/USA"
         cached = zim_operations.cache.get(cache_key)
         assert cached == "A/United_States", (
             "Cache must store the resolved path so subsequent "
@@ -1328,26 +1401,23 @@ class TestZimOperations:
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
         assert result == "cached entry content"
 
-        # Test list_namespaces_data cache hit (lines 584-585).
-        # list_namespaces now delegates to list_namespaces_data, which caches
-        # dicts under a `namespaces_data:v2b:` key (v2b marker added with the
-        # Phase B ``entry_count`` -> ``total`` rename so v1.x cached responses
-        # don't leak through). Exercise the cache hit path against the
-        # dict-returning entry point directly so we test the cache layer
-        # without an extra json.dumps round trip.
+        # Test list_namespaces_data cache hit.
+        # Phase B #12 fix: the cache now stores POST-ATTACH payloads
+        # (with ``_meta`` already attached), and cache hits return them
+        # verbatim. Seed accordingly.
         cache_key = f"namespaces_data:v2b:{validated_path}"
-        zim_operations.cache.set(cache_key, {"cached": "namespaces"})
+        cached_ns = {"cached": "namespaces", "_meta": {"chars": 1}}
+        zim_operations.cache.set(cache_key, cached_ns)
 
         result = zim_operations.list_namespaces_data(str(zim_file))
         assert result["cached"] == "namespaces"
         assert "_meta" in result
 
-        # Test browse_namespace_data cache hit. browse_namespace now
-        # delegates to browse_namespace_data, which caches dicts under a
-        # `browse_ns_data:` key. Exercise the cache hit path against the
-        # dict-returning entry point directly.
+        # Test browse_namespace_data cache hit. Same contract — cache
+        # stores the post-attach payload.
         cache_key = f"browse_ns_data:v2b:{validated_path}:A:50:0"
-        zim_operations.cache.set(cache_key, {"cached": "browse"})
+        cached_browse = {"cached": "browse", "_meta": {"chars": 1}}
+        zim_operations.cache.set(cache_key, cached_browse)
 
         result = zim_operations.browse_namespace_data(str(zim_file), "A")
         assert result["cached"] == "browse"
@@ -1389,11 +1459,15 @@ class TestZimOperations:
 
         # Test extract_article_links_data cache hit. extract_article_links_data
         # now reads from the shared EntryBundle (Phase C). Caching happens at
-        # the bundle level under a ``bundle:v2c:`` key. The hit assertion checks
-        # that the post-render dict carries the cached title/path metadata.
-        cache_key = f"bundle:v2c:{validated_path}:A/Test"
+        # the bundle level under a ``bundle:v2c:{path}:{mtime}:{size}:{entry}``
+        # key — the mtime/size token (Phase C #3 fix) invalidates cached
+        # bundles when the underlying file is replaced. Compute the key the
+        # same way the code does so the seed lands at the right slot.
+        from openzim_mcp.bundle import _bundle_cache_key
+
+        bundle_cache_key = _bundle_cache_key(validated_path, "A/Test")
         zim_operations.cache.set(
-            cache_key,
+            bundle_cache_key,
             {
                 "entry_path": "A/Test",
                 "title": "Cached Title",
@@ -1698,7 +1772,12 @@ class TestZimOperations:
             assert "Test content" in result
 
             # Verify path mapping was cached (key includes resolved archive path)
-            cache_key = f"path_mapping:{zim_file.resolve()}:A/Test_Article"
+            from openzim_mcp.bundle import archive_stat_token as _stat
+
+            cache_key = (
+                f"path_mapping:{zim_file.resolve()}:"
+                f"{_stat(zim_file.resolve())}:A/Test_Article"
+            )
             cached_path = zim_operations.cache.get(cache_key)
             assert cached_path == "A/Test_Article"
 
@@ -1746,7 +1825,12 @@ class TestZimOperations:
                 assert "Test content" in result
 
                 # Verify path mapping was cached (key includes resolved archive path)
-                cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
+                from openzim_mcp.bundle import archive_stat_token as _stat
+
+                cache_key = (
+                    f"path_mapping:{zim_file.resolve()}:"
+                    f"{_stat(zim_file.resolve())}:A/Test Article"
+                )
                 cached_path = zim_operations.cache.get(cache_key)
                 assert cached_path == "A/Test_Article"
 
@@ -1760,7 +1844,12 @@ class TestZimOperations:
         zim_file.touch()
 
         # Pre-populate cache with path mapping
-        cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
+        from openzim_mcp.bundle import archive_stat_token as _stat
+
+        cache_key = (
+            f"path_mapping:{zim_file.resolve()}:"
+            f"{_stat(zim_file.resolve())}:A/Test Article"
+        )
         zim_operations.cache.set(cache_key, "A/Test_Article")
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
@@ -1800,7 +1889,12 @@ class TestZimOperations:
         zim_file.touch()
 
         # Pre-populate cache with invalid path mapping
-        cache_key = f"path_mapping:{zim_file.resolve()}:A/Test Article"
+        from openzim_mcp.bundle import archive_stat_token as _stat
+
+        cache_key = (
+            f"path_mapping:{zim_file.resolve()}:"
+            f"{_stat(zim_file.resolve())}:A/Test Article"
+        )
         zim_operations.cache.set(cache_key, "A/Invalid_Path")
 
         with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:

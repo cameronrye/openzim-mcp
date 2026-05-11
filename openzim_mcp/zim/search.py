@@ -59,6 +59,7 @@ class _FilteredScanState:
     scanned: int
     scan_cap_hit: bool
     total_filtered_is_lower_bound: bool
+    unfiltered_total: int = 0  # pre-filter Xapian hit count, for reason classification
 
 
 def _format_filter_text(namespace: Optional[str], content_type: Optional[str]) -> str:
@@ -194,6 +195,8 @@ class _SearchMixin:
         query: str,
         limit: Optional[int] = None,
         offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "SearchResponse":
         """Structured variant of ``search_zim_file``.
 
@@ -202,9 +205,15 @@ class _SearchMixin:
         structured-output path without the json.dumps + re-parse round trip
         the legacy string variant required.
 
+        ``cursor_archive_identity`` is the ``s.ai`` value decoded from a
+        resumed cursor. When supplied, it must match the current archive's
+        identity or the call is rejected — same anti-cross-archive guard
+        as ``walk_namespace`` / ``extract_article_links``.
+
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If search operation fails
+            OpenZimMcpValidationError: If a cursor was issued for a different archive
         """
         if limit is None:
             limit = self.config.content.default_search_limit
@@ -213,63 +222,157 @@ class _SearchMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
+        # Cursor integrity: reject cursors issued against a different archive
+        # (cf. pagination.py module docstring — search_zim_file is in the list
+        # of tools that must verify ``s.ai`` on resume).
+        if cursor_archive_identity is not None:
+            from openzim_mcp.pagination import Cursor as _CursorClass
+            from openzim_mcp.pagination import (
+                CursorMismatchError,
+                archive_identity,
+            )
+
+            try:
+                _CursorClass.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="search_zim_file",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
+
+        # Empty / whitespace-only query: surface a structured reason so the
+        # model can self-correct without parsing an error envelope.
+        if not query or not query.strip():
+            empty_payload: Dict[str, Any] = {
+                "query": query,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {
+                    "offset": offset,
+                    "limit": limit,
+                    "returned_count": 0,
+                },
+            }
+            return cast(
+                "SearchResponse", attach_meta(empty_payload, reason="bad_query")
+            )
+
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old shape)
         # don't leak through after the upgrade.
         cache_key = f"search_v2b:{validated_path}:{query}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached search dict for query: {query}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
             return cast("SearchResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 payload, total_results = self._perform_search(
-                    archive, query, limit, offset
+                    archive, query, limit, offset, validated_path=validated_path
                 )
-
-            # Don't cache zero-result responses: libzim's lazy index warm-up
-            # can return 0 matches transiently, and a TTL-cached "no results"
-            # would mask the index becoming ready.
-            if total_results > 0:
-                self.cache.set(cache_key, payload)
             logger.debug(f"Search completed: query='{query}', results found")
             reason = "0_hits" if total_results == 0 else None
 
-            # Cross-archive name match (Phase A item #4: alt_archive source)
-            # When search yields zero results, suggest other ZIM archives whose
-            # basename contains a query token (length >= 4 chars only).
+            # Zero-hit suggestions (Phase A item #4). Sourced in priority order:
+            # 1. ``alt_spelling`` from SuggestionSearcher partial matches —
+            #    typo correction on the query against the title index.
+            # 2. ``alt_archive`` — other open ZIM files whose basename matches a
+            #    query token. Last-resort hint when the term itself is correct
+            #    but the article lives in a different archive.
             suggestions: List[Dict[str, str]] = []
             if total_results == 0:
+                limit_n = self.config.search.structured_suggestions_limit
+                # alt_spelling first (priority 1 per spec).
                 try:
-                    files = self.list_zim_files_data()
+                    with _zim_ops_mod.zim_archive(validated_path) as archive:
+                        sugg_searcher = _zim_ops_mod.SuggestionSearcher(archive)
+                        sugg = sugg_searcher.suggest(query)
+                        # Cap at 2x the structured limit to give room for de-dup
+                        # against the query itself; SuggestionSearcher results
+                        # include exact matches that we don't want to surface.
+                        candidates = list(sugg.getResults(0, max(limit_n * 2, 5)))
                     q_lower = query.lower()
-                    # Tokens of length >= 4 only (avoids matching "in", "the", etc.)
-                    q_tokens = [tok for tok in q_lower.split() if len(tok) >= 4]
-                    for f in files:
-                        file_path_str = str(f.get("path", ""))
-                        if file_path_str == str(validated_path):
-                            continue  # skip current archive
-                        stem = Path(file_path_str).stem  # e.g., "wikipedia_en_all"
-                        if any(tok in stem.lower() for tok in q_tokens):
-                            suggestions.append({"type": "alt_archive", "value": stem})
-                            limit_n = self.config.search.structured_suggestions_limit
-                            if len(suggestions) >= limit_n:
-                                break
+                    seen: set[str] = set()
+                    for cand_path in candidates:
+                        # SuggestionSearcher returns paths (e.g. "C/Berlin");
+                        # extract the title segment.
+                        title = cand_path.rsplit("/", 1)[-1]
+                        title_lower = title.lower()
+                        if title_lower == q_lower or title_lower in seen:
+                            continue
+                        seen.add(title_lower)
+                        suggestions.append({"type": "alt_spelling", "value": title})
+                        if len(suggestions) >= limit_n:
+                            break
                 except Exception as e:
-                    logger.debug(f"alt_archive suggestion build failed: {e}")
+                    logger.debug(f"alt_spelling suggestion build failed: {e}")
 
-            return cast(
-                "SearchResponse",
-                attach_meta(
-                    payload,
-                    reason=reason,
-                    suggestions=suggestions if suggestions else None,
-                ),
+                # alt_archive (priority 3) — fill remaining slots.
+                if len(suggestions) < limit_n:
+                    try:
+                        files = self.list_zim_files_data()
+                        q_lower = query.lower()
+                        # Tokens of length >= 4 only (avoids matching "in", "the").
+                        q_tokens = [tok for tok in q_lower.split() if len(tok) >= 4]
+                        for f in files:
+                            file_path_str = str(f.get("path", ""))
+                            if file_path_str == str(validated_path):
+                                continue  # skip current archive
+                            stem = Path(file_path_str).stem
+                            if any(tok in stem.lower() for tok in q_tokens):
+                                suggestions.append(
+                                    {"type": "alt_archive", "value": stem}
+                                )
+                                if len(suggestions) >= limit_n:
+                                    break
+                    except Exception as e:
+                        logger.debug(f"alt_archive suggestion build failed: {e}")
+
+            with_meta = attach_meta(
+                payload,
+                reason=reason,
+                suggestions=suggestions if suggestions else None,
             )
+            # Cache the meta-attached payload so cold vs warm reads are
+            # bit-identical. Skip the cache for zero-hit responses
+            # because libzim's lazy index warm-up can return 0 matches
+            # transiently — TTL-caching "no results" would mask the
+            # index becoming ready (also, the suggestions block depends
+            # on freshly-enumerated alt_archive candidates).
+            if total_results > 0:
+                self.cache.set(cache_key, with_meta)
+            return cast("SearchResponse", with_meta)
 
-        except OpenZimMcpArchiveError:
+        except OpenZimMcpArchiveError as e:
+            # Detect "no Xapian index" so we can return a structured reason
+            # instead of just an opaque archive error. libzim raises
+            # RuntimeError("Archive has no fulltext index") under the hood;
+            # the typed wrapper carries that message verbatim.
+            msg = str(e).lower()
+            if (
+                "no fulltext index" in msg
+                or "no full-text index" in msg
+                or "no xapian" in msg
+            ):
+                empty_payload2: Dict[str, Any] = {
+                    "query": query,
+                    "results": [],
+                    "next_cursor": None,
+                    "total": 0,
+                    "done": True,
+                    "page_info": {
+                        "offset": offset,
+                        "limit": limit,
+                        "returned_count": 0,
+                    },
+                }
+                return cast(
+                    "SearchResponse",
+                    attach_meta(empty_payload2, reason="no_xapian_index"),
+                )
             # Inner helper already raised a typed archive error with full
             # context. Don't re-wrap and double the message prefix.
             raise
@@ -278,16 +381,26 @@ class _SearchMixin:
             raise OpenZimMcpArchiveError(f"Search operation failed: {e}") from e
 
     def _perform_search(
-        self, archive: Archive, query: str, limit: int, offset: int
+        self,
+        archive: Archive,
+        query: str,
+        limit: int,
+        offset: int,
+        *,
+        validated_path: Optional[Path] = None,
     ) -> Tuple[Dict[str, Any], int]:
         """Perform the actual search operation.
+
+        ``validated_path`` is the resolved archive path used to derive the
+        cursor's ``s.ai`` archive identity. Optional for test-only callers
+        that don't paginate; production callers always supply it.
 
         Returns:
             (structured_payload, total_results) — caller uses total_results
             to decide whether the response is safe to cache. The payload
             shape is documented on ``search_zim_file_data``.
         """
-        from openzim_mcp.pagination import Cursor
+        from openzim_mcp.pagination import Cursor, archive_identity
 
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
@@ -354,9 +467,16 @@ class _SearchMixin:
         done = last_index >= total_results
         next_cursor: Optional[str] = None
         if not done:
+            cursor_state: Dict[str, Any] = {
+                "o": last_index,
+                "l": limit,
+                "q": query,
+            }
+            if validated_path is not None:
+                cursor_state["ai"] = archive_identity(validated_path)
             next_cursor = Cursor.encode(
                 tool="search_zim_file",
-                state={"o": last_index, "l": limit, "q": query},
+                state=cast("Any", cursor_state),
             )
 
         return (
@@ -552,6 +672,8 @@ class _SearchMixin:
         content_type: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "SearchWithFiltersResponse":
         """Structured filtered-search response. v2 Phase B contract.
 
@@ -568,13 +690,22 @@ class _SearchMixin:
         filtering, which would otherwise multiply ``offset + limit`` entry
         materialisations across every candidate.
 
+        ``cursor_archive_identity`` is the ``s.ai`` value decoded from a
+        resumed cursor; mismatched archives are rejected per the cursor
+        contract.
+
         Raises:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpValidationError: If parameter validation fails
-                (limit out of range, negative offset, malformed namespace).
+                (limit out of range, negative offset, malformed namespace,
+                cursor archive mismatch).
             OpenZimMcpArchiveError: If search operation fails
         """
-        from openzim_mcp.pagination import Cursor
+        from openzim_mcp.pagination import (
+            Cursor,
+            CursorMismatchError,
+            archive_identity,
+        )
 
         if limit is None:
             limit = self.config.content.default_search_limit
@@ -595,6 +726,17 @@ class _SearchMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
+        # Cursor integrity: reject cursors issued against a different archive.
+        if cursor_archive_identity is not None:
+            try:
+                Cursor.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="search_with_filters",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
+
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (markdown
         # strings under the legacy ``search_filtered:`` prefix) don't leak
         # through after the upgrade — different prefix, different cache slot.
@@ -605,8 +747,6 @@ class _SearchMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached filtered search dict for query: {query}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
             return cast("SearchWithFiltersResponse", cached_result)
 
         try:
@@ -643,7 +783,12 @@ class _SearchMixin:
         )
         next_cursor: Optional[str] = None
         if not done:
-            cursor_state: Dict[str, Any] = {"o": last_index, "l": limit, "q": query}
+            cursor_state: Dict[str, Any] = {
+                "o": last_index,
+                "l": limit,
+                "q": query,
+                "ai": archive_identity(validated_path),
+            }
             if namespace:
                 cursor_state["ns"] = namespace
             if content_type:
@@ -672,21 +817,30 @@ class _SearchMixin:
             "page_info": page_info,
         }
 
-        # Don't cache zero-result responses: libzim's lazy index warm-up
-        # can return 0 matches transiently, and a TTL-cached "no results"
-        # would mask the index becoming ready.
-        if scan.filtered_count > 0:
-            self.cache.set(cache_key, payload)
         logger.info(
             f"Filtered search completed: query='{query}', "
             f"namespace={namespace}, type={content_type}, "
             f"results={returned_count}"
         )
-        reason = "0_hits" if scan.filtered_count == 0 else None
-        return cast(
-            "SearchWithFiltersResponse",
-            attach_meta(payload, reason=reason),
-        )
+        # Classify the zero-result case: if a namespace/content_type filter
+        # was supplied AND the unfiltered search returned hits, the filter
+        # is what killed them — surface that as ``bad_namespace`` so the
+        # model can self-correct (drop or change the filter) instead of
+        # treating the whole query as a miss.
+        if scan.filtered_count == 0:
+            if (namespace or content_type) and scan.unfiltered_total > 0:
+                reason: Optional[str] = "bad_namespace"
+            else:
+                reason = "0_hits"
+        else:
+            reason = None
+        with_meta = attach_meta(payload, reason=reason)
+        # Cache the post-attach payload so cold/warm reads are bit-identical
+        # (Phase B #12). Skip zero-hit results — see search_zim_file_data
+        # for rationale (libzim lazy index, fresh suggestions).
+        if scan.filtered_count > 0:
+            self.cache.set(cache_key, with_meta)
+        return cast("SearchWithFiltersResponse", with_meta)
 
     def _perform_filtered_search_data(
         self,
@@ -728,10 +882,22 @@ class _SearchMixin:
                 scanned=0,
                 scan_cap_hit=False,
                 total_filtered_is_lower_bound=False,
+                unfiltered_total=0,
             )
 
         page, scan = self._scan_filtered_search(
             archive, search, total_results, namespace, content_type, limit, offset
+        )
+
+        # Propagate the pre-filter total so the caller can distinguish
+        # "query matched nothing" (0_hits) from "filter killed every match"
+        # (bad_namespace) when emitting structured reason codes.
+        scan = _FilteredScanState(
+            filtered_count=scan.filtered_count,
+            scanned=scan.scanned,
+            scan_cap_hit=scan.scan_cap_hit,
+            total_filtered_is_lower_bound=scan.total_filtered_is_lower_bound,
+            unfiltered_total=total_results,
         )
 
         if scan.filtered_count == 0:
@@ -1053,8 +1219,6 @@ class _SearchMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached suggestions dict for: {partial_query}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
             return cast("SearchSuggestionsResponse", cached_result)
 
         try:
@@ -1082,15 +1246,17 @@ class _SearchMixin:
                 },
             }
 
-            # A cold-cache request that hits before the libzim title index
-            # has warmed up can return zero suggestions for a query that
-            # will produce results moments later — caching that empty
-            # payload locks the query into "no suggestions" for the full
-            # TTL. Only cache non-empty results.
+            with_meta = attach_meta(payload)
+            # Cache the post-attach payload (Phase B #12). A cold-cache
+            # request that hits before the libzim title index has warmed
+            # up can return zero suggestions for a query that will
+            # produce results moments later — caching that empty payload
+            # locks the query into "no suggestions" for the full TTL.
+            # Only cache non-empty results.
             if actual_count > 0:
-                self.cache.set(cache_key, payload)
+                self.cache.set(cache_key, with_meta)
             logger.info(f"Generated {actual_count} suggestions for: {partial_query}")
-            return cast("SearchSuggestionsResponse", attach_meta(payload))
+            return cast("SearchSuggestionsResponse", with_meta)
 
         except OpenZimMcpArchiveError:
             # Inner helper already raised a typed archive error with full
@@ -1465,6 +1631,42 @@ class _SearchMixin:
                 return entry
         return None
 
+    def _verified_typo_variants(
+        self, archives: List[Any], title: str, *, limit: int
+    ) -> List[str]:
+        """Return typo-variant *titles* that actually resolve to an entry.
+
+        Used to populate ``_meta.suggestions`` only with values the caller
+        can reuse as a query (Phase A #6 fix). The naive implementation
+        emitted raw permutations of the user's mangled input; this one
+        probes the same fast-path that produced the real results so
+        suggestions are guaranteed to be reachable.
+
+        ``archives`` is a list of open ``Archive`` objects (one per ZIM
+        file already opened by the caller); we probe each in order until
+        ``limit`` variants are confirmed. Length-gated identically to
+        ``_find_entry_typo_fallback``.
+        """
+        if len(title) < self.config.search.fuzzy_title_min_query_len:
+            return []
+        verified: List[str] = []
+        seen: set[str] = set()
+        for variant in self._typo_variants(title):
+            for archive in archives:
+                try:
+                    entry = self._find_entry_fast_path(archive, variant)
+                except Exception:
+                    continue
+                if entry is not None:
+                    resolved = entry.title or variant
+                    if resolved not in seen:
+                        verified.append(resolved)
+                        seen.add(resolved)
+                    break
+            if len(verified) >= limit:
+                break
+        return verified
+
     def find_entry_by_title_data(
         self,
         zim_file_path: str,
@@ -1506,6 +1708,13 @@ class _SearchMixin:
         fast_path_hit = False
         fuzzy_path_hit = False
         title_lower = title.lower()
+        # Verified typo-variant titles accumulated during the per-file
+        # typo-fallback probe. Used only when *all* archives return
+        # zero hits, to populate ``_meta.suggestions`` with values the
+        # caller can re-issue as a fresh query (Phase A #6 fix).
+        verified_variants: List[str] = []
+        verified_variants_seen: set[str] = set()
+        structured_suggestions_limit = self.config.search.structured_suggestions_limit
 
         for file_path in files:
             try:
@@ -1600,10 +1809,11 @@ class _SearchMixin:
                     if not fast_path_hit and not already_has_strong:
                         typo_entry = self._find_entry_typo_fallback(archive, title)
                         if typo_entry is not None:
+                            resolved_typo_title = typo_entry.title or title
                             aggregate_results.append(
                                 {
                                     "path": typo_entry.path,
-                                    "title": typo_entry.title or title,
+                                    "title": resolved_typo_title,
                                     # Score set from config (default 0.85).
                                     # Below 0.95 (suggestion-rank top) and
                                     # well below 1.0 (exact match) so a
@@ -1615,6 +1825,36 @@ class _SearchMixin:
                                 }
                             )
                             fuzzy_path_hit = True
+                            # Spec §14.4: when a fuzzy hit is returned, the
+                            # variant that matched is itself a valuable
+                            # ``alt_spelling`` signal — it tells the model
+                            # *what* correction the server applied so it can
+                            # decide whether to re-issue the query verbatim
+                            # or accept the correction. The variant joins
+                            # the verified-variants pool regardless of
+                            # whether other archives produced results.
+                            if resolved_typo_title not in verified_variants_seen:
+                                verified_variants.append(resolved_typo_title)
+                                verified_variants_seen.add(resolved_typo_title)
+                        else:
+                            # Collect *additional* verified variants from
+                            # this archive while it's still open — these
+                            # surface as ``alt_spelling`` suggestions iff
+                            # the final aggregate is empty.
+                            for resolved in self._verified_typo_variants(
+                                [archive],
+                                title,
+                                limit=structured_suggestions_limit
+                                - len(verified_variants),
+                            ):
+                                if resolved not in verified_variants_seen:
+                                    verified_variants.append(resolved)
+                                    verified_variants_seen.add(resolved)
+                                if (
+                                    len(verified_variants)
+                                    >= structured_suggestions_limit
+                                ):
+                                    break
             except Exception as e:
                 if not cross_file:
                     raise
@@ -1624,19 +1864,18 @@ class _SearchMixin:
         # otherwise preserve per-file rank order.
         aggregate_results.sort(key=lambda r: -r["score"])
 
-        # Build _meta.suggestions[] from typo variants when the fuzzy path
-        # is eligible (fast path missed and query is long enough). These are
-        # candidate spellings the caller can surface as "did you mean?" hints.
+        # Build _meta.suggestions[] from archive-verified typo variants.
+        # Two cases surface them (spec §14.4):
+        #   * No results of any kind — pure recovery hints.
+        #   * A fuzzy hit is returned — the variant that matched is shown
+        #     so the caller can verify the auto-correction rather than
+        #     silently accepting it.
+        # When the response carries a non-fuzzy hit, suggestions stay
+        # empty so confident matches aren't muddled by alt-spelling noise.
         suggestions: List[Dict[str, str]] = []
-        limit_n = self.config.search.structured_suggestions_limit
-        if (
-            not fast_path_hit
-            and len(title) >= self.config.search.fuzzy_title_min_query_len
-        ):
-            for variant in self._typo_variants(title):
-                suggestions.append({"type": "alt_spelling", "value": variant})
-                if len(suggestions) >= limit_n:
-                    break
+        if not aggregate_results or fuzzy_path_hit:
+            for resolved in verified_variants[:structured_suggestions_limit]:
+                suggestions.append({"type": "alt_spelling", "value": resolved})
 
         reason = None if aggregate_results else "0_hits"
 

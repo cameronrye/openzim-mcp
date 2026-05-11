@@ -1,5 +1,7 @@
 {
-  "_meta": {},
+  "_meta": {
+    "truncated": false
+  },
   "answer_markdown": "Berlin is the **capital** and largest **city** of Germany. ## Geography\n[cite: v2_phase_c/A/Berlin]",
   "archives_searched": [
     "v2_phase_c"

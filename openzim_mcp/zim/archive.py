@@ -353,8 +353,6 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached metadata dict for: {validated_path}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
             return cast("ZimMetadataResponse", cached_result)
 
         # Late-bound lookup so test patches against
@@ -365,10 +363,12 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             with _zim_ops_shim.zim_archive(validated_path) as archive:
                 metadata = self._extract_zim_metadata(archive)
 
-            # Cache the result
-            self.cache.set(cache_key, metadata)
+            # Attach _meta before caching so cold and warm reads return
+            # bit-identical responses (Phase B #12).
+            with_meta = attach_meta(metadata)
+            self.cache.set(cache_key, with_meta)
             logger.info(f"Retrieved metadata for: {validated_path}")
-            return cast("ZimMetadataResponse", attach_meta(metadata))
+            return cast("ZimMetadataResponse", with_meta)
 
         except Exception as e:
             logger.error(f"Metadata retrieval failed for {validated_path}: {e}")
@@ -657,11 +657,6 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached main page dict for: {validated_path}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(
-                    dict(cached_result),
-                    truncated=bool(cached_result.get("_truncated")),
-                )
             return cast("EntryResponse", cached_result)
 
         # Late-bound lookup so test patches against
@@ -677,19 +672,20 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             logger.error(f"Main page retrieval failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Main page retrieval failed: {e}") from e
 
-        if content_ok:
-            self.cache.set(cache_key, dict(payload))
         truncated = bool(payload.pop("_truncated", False))
         total_chars = payload.pop("_total_chars", None)
-        logger.info(f"Retrieved main page data for: {validated_path}")
-        return cast(
-            "EntryResponse",
-            attach_meta(
-                payload,
-                truncated=truncated,
-                total_chars=total_chars,
-            ),
+        # main_page is not paginable so no ``content_chars`` is supplied;
+        # ``more_at_offset`` is intentionally omitted on a truncated
+        # response (callers can't follow-up with a content_offset here).
+        with_meta = attach_meta(
+            payload,
+            truncated=truncated,
+            total_chars=total_chars,
         )
+        if content_ok:
+            self.cache.set(cache_key, with_meta)
+        logger.info(f"Retrieved main page data for: {validated_path}")
+        return cast("EntryResponse", with_meta)
 
     def _get_main_page_data_content(  # NOSONAR(python:S3776)
         self, archive: Archive, *, compact: bool = False

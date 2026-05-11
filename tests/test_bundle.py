@@ -91,14 +91,22 @@ def test_bundle_section_offsets_are_sorted_and_disjoint(cp: ContentProcessor) ->
         assert 0 <= s["char_start"] < s["char_end"] <= md_len
 
 
-def test_bundle_slice_returns_section_content(cp: ContentProcessor) -> None:
+def test_bundle_slice_returns_section_body_without_heading(
+    cp: ContentProcessor,
+) -> None:
+    """``char_start`` points to the body, not the heading line itself.
+
+    The heading is exposed separately as ``section_title``/``level``, so
+    including ``## Geography`` again in the slice is redundant and inflates
+    ``char_count``/``word_count``.
+    """
     archive = _make_archive_with_entry(SAMPLE_HTML)
     bundle = extract_entry_bundle(archive, "A/Berlin", content_processor=cp)
     md = bundle["rendered_markdown"]
     geography = next(s for s in bundle["sections"] if s["title"] == "Geography")
     slice_text = md[geography["char_start"] : geography["char_end"]]
-    assert "Geography" in slice_text
     assert "Spree" in slice_text
+    assert not slice_text.lstrip().startswith("## Geography")
     # Must not contain the next heading's title (History)
     assert "History" not in slice_text
 

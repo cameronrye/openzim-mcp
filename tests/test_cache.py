@@ -387,6 +387,64 @@ class TestCacheLRUEviction:
         assert remaining == 2  # Only 2 should remain
 
 
+class TestCacheByteBudget:
+    """Phase C #13: byte-budget eviction prevents large entries from
+    pinning hundreds of MB even when entry count stays well below
+    ``max_size``."""
+
+    def test_oversized_payloads_trigger_byte_eviction(self):
+        # 6 KB cap, 100 entries allowed by count — byte cap kicks in first.
+        config = CacheConfig(
+            enabled=True, max_size=100, ttl_seconds=60, max_bytes=6 * 1024
+        )
+        cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+
+        big = "X" * 2048  # ~2 KB JSON-encoded (with quotes)
+        cache.set("a", big)
+        cache.set("b", big)
+        # Two ~2 KB entries fit under the 6 KB cap.
+        assert cache.get("a") == big
+        assert cache.get("b") == big
+        assert cache.stats()["size"] == 2
+
+        # Third entry pushes total over 6 KB → eviction kicks in,
+        # evicting the LRU entry (key "a" was accessed first).
+        cache.set("c", big)
+        # Cache still respects the byte budget after eviction.
+        assert cache.stats()["size_bytes"] <= 6 * 1024 + 1024  # +1 KB headroom
+        # Some entry got evicted to make room (typically the LRU one).
+        assert cache.stats()["size"] < 3
+
+    def test_byte_budget_zero_disables_byte_eviction(self):
+        """max_bytes=0 → byte cap disabled; only count cap applies."""
+        config = CacheConfig(enabled=True, max_size=100, ttl_seconds=60, max_bytes=0)
+        cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+
+        big = "X" * 4096
+        for i in range(10):
+            cache.set(f"k{i}", big)
+        # All 10 entries fit (under the 100-count cap).
+        assert cache.stats()["size"] == 10
+
+    def test_total_bytes_decrements_on_delete(self):
+        config = CacheConfig(enabled=True, max_size=10, ttl_seconds=60)
+        cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+        cache.set("k", "value")
+        before = cache.stats()["size_bytes"]
+        assert before > 0
+        cache.delete("k")
+        assert cache.stats()["size_bytes"] == 0
+
+    def test_total_bytes_resets_to_zero_on_clear(self):
+        config = CacheConfig(enabled=True, max_size=10, ttl_seconds=60)
+        cache = OpenZimMcpCache(config, enable_background_cleanup=False)
+        cache.set("k1", "value1")
+        cache.set("k2", "value2")
+        assert cache.stats()["size_bytes"] > 0
+        cache.clear()
+        assert cache.stats()["size_bytes"] == 0
+
+
 class TestCachePersistence:
     """Test cache persistence functionality."""
 

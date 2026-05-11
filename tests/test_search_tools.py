@@ -317,6 +317,33 @@ class TestSearchCursor:
         # The operations layer must not be called on cross-tool cursor reuse.
         server.async_zim_operations.search_zim_file_data.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_cursor_ai_propagates_to_data_layer(self, server: OpenZimMcpServer):
+        """``s.ai`` decoded from the cursor must reach the data layer as
+        ``cursor_archive_identity``.
+
+        Audit fix: prior to this, ``search_zim_file`` decoded the cursor
+        but never read ``s.ai`` — the data layer received None and
+        silently accepted any archive. Pin the wiring here.
+        """
+        from openzim_mcp.pagination import archive_identity
+
+        ai = archive_identity("/zim/wiki.zim")
+        token = Cursor.encode(
+            tool="search_zim_file",
+            state={"o": 10, "l": 5, "q": "diabetes", "ai": ai},
+        )
+
+        fn = _get_tool_fn(server, "search_zim_file")
+        await fn(
+            zim_file_path="/zim/wiki.zim",
+            query="diabetes",
+            cursor=token,
+        )
+
+        call = server.async_zim_operations.search_zim_file_data.await_args
+        assert call.kwargs.get("cursor_archive_identity") == ai
+
 
 class TestSearchPaginationFooterFormat:
     """v1.2.0 search/filter renderers emit a compact one-line footer.
@@ -565,31 +592,47 @@ class TestSearchZimFileDataMeta:
         assert result["total"] < result["page_info"]["offset"]
         assert result["results"] == []
 
-    def test_search_zim_file_data_meta_on_cached_return(self, zim_ops, temp_dir):
-        """Cached return path backfills _meta if missing, and always returns _meta."""
+    def test_search_zim_file_data_cached_payload_returned_verbatim(
+        self, zim_ops, temp_dir
+    ):
+        """The cache stores the post-attach payload (with ``_meta``).
+        A cache hit returns it verbatim — no re-attach, no recomputation.
+
+        Phase B #12 fix: prior code stored the bare payload and
+        re-invoked ``attach_meta`` on every cache hit, producing
+        non-deterministic ``chars``/``tokens_est`` across reads.
+        """
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
-        # Phase B: cache key bumped to ``search_v2b:`` to avoid old-shape leakthrough.
         cache_key = f"search_v2b:{validated}:climate:10:0"
 
-        # Seed cache with a Phase B-shape entry without _meta to verify backfill.
-        old_payload = {
+        # Seed cache with a Phase B-shape entry that ALREADY has _meta.
+        # The post-fix code returns this exact object on cache hit.
+        seeded = {
             "query": "climate",
             "results": [{"path": "A/Bar", "title": "Bar", "snippet": "bar"}],
             "next_cursor": None,
             "total": 2,
             "done": True,
             "page_info": {"offset": 0, "limit": 10, "returned_count": 1},
+            "_meta": {
+                "tokens_est": 42,
+                "chars": 200,
+                "truncated": False,
+            },
         }
-        zim_ops.cache.set(cache_key, old_payload)
+        zim_ops.cache.set(cache_key, seeded)
 
         result = zim_ops.search_zim_file_data(
             str(zim_file), "climate", limit=10, offset=0
         )
 
-        assert "_meta" in result, "cached return must backfill _meta"
-        assert result["_meta"]["tokens_est"] > 0
+        # Returned verbatim — same dict identity (cache holds the same
+        # object reference) and the exact _meta we seeded.
+        assert result is seeded
+        assert result["_meta"]["tokens_est"] == 42
+        assert result["_meta"]["chars"] == 200
 
 
 class TestInputSanitizationSearch:
@@ -690,22 +733,27 @@ class TestSearchMethodsMeta:
         assert "_meta" in result
         assert result["_meta"]["tokens_est"] >= 1
 
-    def test_suggestions_cached_backfills_meta(self, zim_ops, temp_dir):
-        """Cached suggestions without _meta get backfilled on read."""
+    def test_suggestions_cached_payload_returned_verbatim(self, zim_ops, temp_dir):
+        """Cached suggestions payload is returned verbatim — no _meta
+        recomputation on cache hit (Phase B #12 regression)."""
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
         cache_key = f"suggestions_data:v2b:{validated}:climate:10"
-        old = {
+        seeded = {
             "partial_query": "climate",
-            "suggestions": [{"title": "Climate"}],
-            "count": 1,
+            "results": [{"title": "Climate"}],
+            "next_cursor": None,
+            "total": 1,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 1},
+            "_meta": {"tokens_est": 50, "chars": 150, "truncated": False},
         }
-        zim_ops.cache.set(cache_key, old)
+        zim_ops.cache.set(cache_key, seeded)
 
         result = zim_ops.get_search_suggestions_data(str(zim_file), "climate")
-        assert "_meta" in result
-        assert result["_meta"]["tokens_est"] >= 1
+        assert result is seeded
+        assert result["_meta"]["tokens_est"] == 50
 
     # --- find_entry_by_title_data ---
 

@@ -11,6 +11,7 @@ without changes.
 import contextlib
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
@@ -97,17 +98,19 @@ class _NamespaceMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespaces dict for: {validated_path}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
             return cast("ListNamespacesResponse", cached_result)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 result = self._list_archive_namespaces(archive)
 
-            self.cache.set(cache_key, result)
+            # Attach _meta BEFORE caching so cold and warm reads return
+            # bit-identical responses (Phase B #12 fix — re-attaching on
+            # each cache hit produced non-deterministic chars/tokens_est).
+            with_meta = attach_meta(result)
+            self.cache.set(cache_key, with_meta)
             logger.info(f"Listed namespaces for: {validated_path}")
-            return cast("ListNamespacesResponse", attach_meta(result))
+            return cast("ListNamespacesResponse", with_meta)
 
         except Exception as e:
             logger.error(f"Namespace listing failed for {validated_path}: {e}")
@@ -502,7 +505,13 @@ class _NamespaceMixin:
         ]
 
     def browse_namespace_data(
-        self, zim_file_path: str, namespace: str, limit: int = 50, offset: int = 0
+        self,
+        zim_file_path: str,
+        namespace: str,
+        limit: int = 50,
+        offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "BrowseNamespaceResponse":
         """Structured variant of ``browse_namespace``.
 
@@ -513,15 +522,24 @@ class _NamespaceMixin:
         ``total`` / ``done`` / ``page_info`` plus the ``namespace`` /
         ``discovery_method`` / ``sampling_based`` /
         ``results_may_be_incomplete`` extras. ``next_cursor`` is encoded
-        with ``tool="browse_namespace"`` and state ``{o, l, ns}``.
+        with ``tool="browse_namespace"`` and state ``{o, l, ns, ai}``.
+
+        ``cursor_archive_identity`` is the ``s.ai`` value decoded from a
+        resumed cursor; mismatched archives are rejected so a cursor
+        issued for archive A cannot be honoured against archive B.
 
         Raises:
             OpenZimMcpValidationError: If parameter validation fails (limit,
-                offset, or namespace).
+                offset, or namespace), or if a cursor was issued for a
+                different archive.
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If browsing fails
         """
-        from openzim_mcp.pagination import Cursor
+        from openzim_mcp.pagination import (
+            Cursor,
+            CursorMismatchError,
+            archive_identity,
+        )
 
         # Validate parameters. These are caller-input errors, distinct from
         # archive-access failures, so they surface as
@@ -544,6 +562,19 @@ class _NamespaceMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
+        # Cursor integrity: a cursor issued for archive A must not be
+        # honoured when resubmitted against archive B (same guard as
+        # walk_namespace / extract_article_links / search_zim_file).
+        if cursor_archive_identity is not None:
+            try:
+                Cursor.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="browse_namespace",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
+
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
         # shape: entries/total_in_namespace/...) don't leak through
         # after the upgrade.
@@ -551,8 +582,6 @@ class _NamespaceMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespace browse dict for: {namespace}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(dict(cached_result))
             return cast("BrowseNamespaceResponse", cached_result)
 
         try:
@@ -581,9 +610,16 @@ class _NamespaceMixin:
             done = last_index >= total_in_namespace
             next_cursor: Optional[str] = None
             if not done:
+                from openzim_mcp.pagination import archive_identity
+
                 next_cursor = Cursor.encode(
                     tool="browse_namespace",
-                    state={"o": last_index, "l": limit, "ns": namespace},
+                    state={
+                        "o": last_index,
+                        "l": limit,
+                        "ns": namespace,
+                        "ai": archive_identity(validated_path),
+                    },
                 )
 
             page_info: Dict[str, Any] = {
@@ -606,11 +642,12 @@ class _NamespaceMixin:
                 "results_may_be_incomplete": results_may_be_incomplete,
             }
 
-            self.cache.set(cache_key, payload)
+            with_meta = attach_meta(payload)
+            self.cache.set(cache_key, with_meta)
             logger.info(
                 f"Browsed namespace {namespace}: {limit} entries from offset {offset}"
             )
-            return cast("BrowseNamespaceResponse", attach_meta(payload))
+            return cast("BrowseNamespaceResponse", with_meta)
 
         except Exception as e:
             logger.error(f"Namespace browsing failed for {namespace}: {e}")
@@ -666,11 +703,17 @@ class _NamespaceMixin:
 
         # Discover entries in the namespace. The full listing is cached
         # separately from the per-page JSON (cache_key in browse_namespace),
-        # so different (limit, offset) pages share one scan.
+        # so different (limit, offset) pages share one scan. The stat
+        # token (st_mtime_ns:st_size) ensures an atomic ZIM replacement
+        # invalidates the listing rather than serving the prior
+        # snapshot's entries indefinitely until LRU eviction.
         listing_key: Optional[str] = None
         cached_listing: Optional[Tuple[List[str], bool]] = None
         if archive_path is not None:
-            listing_key = f"ns_entries:{archive_path}:{namespace}"
+            from openzim_mcp.bundle import archive_stat_token
+
+            stat_token = archive_stat_token(Path(archive_path))
+            listing_key = f"ns_entries:{archive_path}:{stat_token}:{namespace}"
             cached_listing = self.cache.get(listing_key)
 
         if cached_listing is not None:
@@ -1054,9 +1097,9 @@ class _NamespaceMixin:
             )
 
         # Decoded cursor state ``s`` for walk_namespace carries
-        # ``{scan_at: int, l: int}``. Both are optional defensively —
-        # missing/negative ``scan_at`` clamps to 0, missing ``l`` falls
-        # back to the function-arg default.
+        # ``{scan_at: int, l: int, ns: str, ai: str}``. ``scan_at``/``l``
+        # are positional, ``ns``/``ai`` are integrity-check fields added
+        # in cursor v2.
         scan_at_raw = (cursor_state or {}).get("scan_at", 0)
         try:
             scan_at = int(scan_at_raw)
@@ -1074,6 +1117,36 @@ class _NamespaceMixin:
         validated = self.path_validator.validate_path(zim_file_path)
         validated = self.path_validator.validate_zim_file(validated)
 
+        # Cursor integrity: a v2 cursor encodes the namespace it was
+        # issued for and the archive identity. Rejecting on mismatch
+        # prevents silent wrong-result bugs where a caller resubmits a
+        # cursor against a different namespace or different archive
+        # (issues Phase B #10, #17, #11 for the equivalent pattern in
+        # extract_article_links).
+        if cursor_state:
+            from openzim_mcp.pagination import Cursor as _CursorClass
+            from openzim_mcp.pagination import (
+                CursorMismatchError,
+                archive_identity,
+            )
+
+            cursor_ns = cursor_state.get("ns")
+            if cursor_ns is not None and cursor_ns != namespace:
+                raise OpenZimMcpValidationError(
+                    f"Cursor was issued for namespace {cursor_ns!r}; "
+                    f"call passed namespace={namespace!r}. Drop the cursor "
+                    f"and start the walk over for the new namespace."
+                )
+            if "ai" in cursor_state:
+                try:
+                    _CursorClass.verify_archive_identity(
+                        cast("Any", cursor_state),
+                        expected=archive_identity(validated),
+                        tool="walk_namespace",
+                    )
+                except CursorMismatchError as e:
+                    raise OpenZimMcpValidationError(str(e)) from e
+
         try:
             with _zim_ops_mod.zim_archive(validated) as archive:
                 has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
@@ -1089,7 +1162,11 @@ class _NamespaceMixin:
                         "WalkNamespaceResponse",
                         attach_meta(
                             self._walk_new_scheme_metadata(
-                                archive, scan_at, limit, archive_entry_count
+                                archive,
+                                scan_at,
+                                limit,
+                                archive_entry_count,
+                                validated_path=validated,
                             )
                         ),
                     )
@@ -1143,9 +1220,16 @@ class _NamespaceMixin:
                 scanned_through_id = entry_id - 1 if entry_id > scan_at else None
                 next_cursor: Optional[str] = None
                 if not done:
+                    from openzim_mcp.pagination import archive_identity
+
                     next_cursor = Cursor.encode(
                         tool="walk_namespace",
-                        state={"scan_at": entry_id, "l": limit},
+                        state={
+                            "scan_at": entry_id,
+                            "l": limit,
+                            "ns": namespace,
+                            "ai": archive_identity(validated),
+                        },
                     )
 
                 return cast(
@@ -1218,9 +1302,11 @@ class _NamespaceMixin:
         scan_at: int,
         limit: int,
         archive_entry_count: int,
+        *,
+        validated_path: "Optional[Path]" = None,
     ) -> Dict[str, Any]:
         """Walk M (metadata) entries in a new-scheme archive via metadata_keys."""
-        from openzim_mcp.pagination import Cursor
+        from openzim_mcp.pagination import Cursor, archive_identity
 
         try:
             keys = list(getattr(archive, "metadata_keys", []) or [])
@@ -1234,9 +1320,16 @@ class _NamespaceMixin:
         done = end >= total
         next_cursor: Optional[str] = None
         if not done:
+            # ``scan_at`` here is an index into ``metadata_keys``, not an
+            # entry ID. The cursor's ``ns="M"`` discriminator + the
+            # archive's new-scheme bit are enough for the consumer to
+            # know which interpretation to use; see #17.
+            state: Dict[str, Any] = {"scan_at": end, "l": limit, "ns": "M"}
+            if validated_path is not None:
+                state["ai"] = archive_identity(validated_path)
             next_cursor = Cursor.encode(
                 tool="walk_namespace",
-                state={"scan_at": end, "l": limit},
+                state=cast("Any", state),
             )
         return cls._build_walk_result(
             namespace="M",

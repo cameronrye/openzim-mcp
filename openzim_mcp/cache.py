@@ -52,6 +52,21 @@ def _silence_logging_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def _approximate_size_bytes(value: Any) -> int:
+    """Approximate the cached value's memory cost via JSON encoding length.
+
+    JSON length is not the actual Python in-memory footprint, but it is
+    a stable, monotonic proxy that callers can budget against, and it's
+    cheap (no full pympler-style traversal). Non-serializable values
+    fall back to a conservative ``2 KB`` so they still count toward the
+    cap.
+    """
+    try:
+        return len(json.dumps(value, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        return 2048
+
+
 class CacheEntry:
     """Represents a single cache entry with TTL."""
 
@@ -69,6 +84,7 @@ class CacheEntry:
             False
         """
         self.value = value
+        self.size_bytes = _approximate_size_bytes(value)
         # Use monotonic clock for in-memory expiry/LRU so wall-clock
         # adjustments (NTP, DST, manual changes) can't break expiry.
         self.created_at = time.monotonic()
@@ -121,6 +137,10 @@ class OpenZimMcpCache:
         """
         self.config = config
         self._cache: Dict[str, CacheEntry] = {}
+        # Running total of ``CacheEntry.size_bytes`` across all live
+        # entries. Updated incrementally on every set/eviction so the
+        # byte-bound eviction check is O(1).
+        self._total_bytes: int = 0
         # Monotonic counter for LRU access ordering. A counter is used in
         # preference to a wall-clock or monotonic timestamp because clock
         # resolution varies by platform (Windows ticks at ~15.6ms by default),
@@ -285,18 +305,42 @@ class OpenZimMcpCache:
                 ) from exc
 
         with self._lock:
-            # Check if we need to evict entries
+            # Check if we need to evict by entry count
             if len(self._cache) >= self.config.max_size and key not in self._cache:
                 self._evict_lru()
 
+            # Replace path: drop the old entry's byte count first so
+            # ``_total_bytes`` stays accurate when the same key is reset
+            # with a value of different size.
+            prior = self._cache.get(key)
+            if prior is not None:
+                self._total_bytes -= prior.size_bytes
+                if self._total_bytes < 0:
+                    self._total_bytes = 0
+
             # Add/update entry
-            self._cache[key] = CacheEntry(value, self.config.ttl_seconds)
+            entry = CacheEntry(value, self.config.ttl_seconds)
+            self._cache[key] = entry
+            self._total_bytes += entry.size_bytes
             self._access_counter += 1
             access_counter = self._access_counter
             self._access_order[key] = access_counter
             # Push to heap for O(log n) LRU eviction
             heapq.heappush(self._lru_heap, (access_counter, key))
-            logger.debug(f"Cache set: {key}")
+            logger.debug(
+                f"Cache set: {key} ({entry.size_bytes} bytes, total "
+                f"{self._total_bytes} bytes)"
+            )
+
+            # Byte-budget eviction: if the cache exceeds ``max_bytes``,
+            # evict LRU entries until we're back under. Skip when the
+            # cap is 0 (disabled) or when the cache only holds this one
+            # entry (a single oversized value can legitimately exceed
+            # the cap; the count cap still bounds entry count).
+            max_bytes = getattr(self.config, "max_bytes", 0)
+            if max_bytes > 0:
+                while self._total_bytes > max_bytes and len(self._cache) > 1:
+                    self._evict_lru()
 
     def delete(self, key: str) -> None:
         """
@@ -315,7 +359,11 @@ class OpenZimMcpCache:
 
     def _remove(self, key: str) -> None:
         """Remove entry from cache (must be called with lock held)."""
-        self._cache.pop(key, None)
+        entry = self._cache.pop(key, None)
+        if entry is not None:
+            self._total_bytes -= entry.size_bytes
+            if self._total_bytes < 0:
+                self._total_bytes = 0
         self._access_order.pop(key, None)
 
     def _cleanup_expired(self) -> None:
@@ -381,6 +429,7 @@ class OpenZimMcpCache:
             self._cache.clear()
             self._access_order.clear()
             self._lru_heap.clear()
+            self._total_bytes = 0
             self._hits = 0
             self._misses = 0
         logger.info("Cache cleared")
@@ -395,6 +444,8 @@ class OpenZimMcpCache:
                 "enabled": self.config.enabled,
                 "size": len(self._cache),
                 "max_size": self.config.max_size,
+                "size_bytes": self._total_bytes,
+                "max_bytes": getattr(self.config, "max_bytes", 0),
                 "ttl_seconds": self.config.ttl_seconds,
                 "hits": self._hits,
                 "misses": self._misses,

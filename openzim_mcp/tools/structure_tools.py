@@ -155,6 +155,9 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
                 limit = state.get("l", limit)
                 entry_path = state.get("ep", entry_path)
                 kind = state.get("k", kind)
+                cursor_ai: Optional[str] = state.get("ai")
+            else:
+                cursor_ai = None
 
             try:
                 server.rate_limiter.check_rate_limit("get_structure")
@@ -189,6 +192,7 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
                 limit=limit,
                 offset=offset,
                 kind=kind,
+                cursor_archive_identity=cursor_ai,
             )
 
         except Exception as e:
@@ -316,7 +320,12 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
         Each TOC entry contains:
             - level: Heading level (1-6)
             - text: Heading text
-            - id: Anchor ID for linking
+            - section_id: Section identifier — pass to get_section(section_id=...)
+              to fetch this heading's body. Renamed from the legacy ``id`` field
+              in Phase C; clients that read ``heading["id"]`` will get a KeyError.
+            - id_source: How the section_id was derived — ``"id"`` /
+              ``"descendant_anchor"`` / ``"preceding_anchor"`` (stable, author-provided)
+              or ``"slug"`` (generated from heading text).
             - children: Nested subheadings
 
         Examples:

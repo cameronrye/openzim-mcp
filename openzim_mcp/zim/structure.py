@@ -58,15 +58,19 @@ def _sections_to_toc_tree(sections: "List[SectionMeta]") -> "List[TocHeading]":
     stack: "List[Tuple[int, List[TocHeading]]]" = [(0, root)]
 
     for s in sections:
-        node: "TocHeading" = cast(
-            "TocHeading",
-            {
-                "section_id": s["id"],
-                "text": s["title"],
-                "level": s["level"],
-                "children": [],
-            },
-        )
+        node_dict: Dict[str, Any] = {
+            "section_id": s["id"],
+            "text": s["title"],
+            "level": s["level"],
+            "children": [],
+        }
+        # ``id_source`` is preserved per the Phase C spec so callers can
+        # tell stable anchors from generated slugs. Drop when absent so
+        # the wire shape stays minimal for bundles built before the
+        # field was tracked.
+        if "id_source" in s:
+            node_dict["id_source"] = s["id_source"]
+        node: "TocHeading" = cast("TocHeading", node_dict)
         while stack and stack[-1][0] >= s["level"]:
             stack.pop()
         if stack:
@@ -157,12 +161,21 @@ class _StructureMixin:
         """Extract structure from article content via bundle."""
         from openzim_mcp.bundle import get_or_build_bundle
 
+        if validated_path is None:
+            # Falling back to Path(entry_path) makes the bundle cache key
+            # archive-agnostic — the same key collides across every ZIM
+            # whose archive holds this entry path. Require the caller to
+            # pass the resolved archive path so bundles stay archive-bound.
+            raise OpenZimMcpValidationError(
+                "_extract_article_structure_data requires validated_path"
+            )
+
         try:
             bundle = get_or_build_bundle(
                 archive,
                 entry_path,
                 cache=self.cache,
-                validated_path=validated_path or Path(entry_path),
+                validated_path=validated_path,
                 content_processor=self.content_processor,
             )
 
@@ -221,6 +234,8 @@ class _StructureMixin:
         limit: int = 100,
         offset: int = 0,
         kind: str = "internal",
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "LinksResponse":
         """Structured variant of ``extract_article_links``. v2 Phase B contract.
 
@@ -273,6 +288,24 @@ class _StructureMixin:
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
+        # Cursor integrity (Phase B #11): a cursor issued for archive A
+        # must not be honoured when resubmitted against archive B.
+        if cursor_archive_identity is not None:
+            from openzim_mcp.pagination import Cursor as _CursorClass
+            from openzim_mcp.pagination import (
+                CursorMismatchError,
+                archive_identity,
+            )
+
+            try:
+                _CursorClass.verify_archive_identity(
+                    cast("Any", {"ai": cursor_archive_identity}),
+                    expected=archive_identity(validated_path),
+                    tool="extract_article_links",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
+
         try:
             from openzim_mcp.bundle import get_or_build_bundle
 
@@ -295,6 +328,8 @@ class _StructureMixin:
             done = last_index >= total_for_kind
             next_cursor: Optional[str] = None
             if not done:
+                from openzim_mcp.pagination import archive_identity
+
                 next_cursor = Cursor.encode(
                     tool="extract_article_links",
                     state={
@@ -302,6 +337,7 @@ class _StructureMixin:
                         "l": limit,
                         "ep": entry_path,
                         "k": kind,
+                        "ai": archive_identity(validated_path),
                     },
                 )
 
@@ -451,12 +487,20 @@ class _StructureMixin:
         """Extract hierarchical table of contents from article via bundle."""
         from openzim_mcp.bundle import get_or_build_bundle
 
+        if validated_path is None:
+            # Same archive-binding requirement as
+            # _extract_article_structure_data — without a real archive
+            # path the bundle cache collides cross-archive.
+            raise OpenZimMcpValidationError(
+                "_extract_table_of_contents_data requires validated_path"
+            )
+
         try:
             bundle = get_or_build_bundle(
                 archive,
                 entry_path,
                 cache=self.cache,
-                validated_path=validated_path or Path(entry_path),
+                validated_path=validated_path,
                 content_processor=self.content_processor,
             )
 
@@ -554,15 +598,17 @@ class _StructureMixin:
                 extras={"available_section_ids": [s["id"] for s in bundle["sections"]]},
             )
 
-        body = bundle["rendered_markdown"][section["char_start"] : section["char_end"]]
+        full_body = bundle["rendered_markdown"][
+            section["char_start"] : section["char_end"]
+        ]
         cap = (
             max_chars
             if max_chars is not None
             else self.config.content.max_content_length
         )
-        truncated = len(body) > cap
-        if truncated:
-            body = body[:cap]
+        full_len = len(full_body)
+        truncated = full_len > cap
+        body = full_body[:cap] if truncated else full_body
 
         payload: "GetSectionResponse" = cast(
             "GetSectionResponse",
@@ -579,9 +625,18 @@ class _StructureMixin:
                 "truncated": truncated,
             },
         )
+        # When truncation happens, surface ``total_chars`` so the caller
+        # can tell how much of the section was elided. ``more_at_offset``
+        # is intentionally omitted — get_section truncation is not
+        # resumable; callers needing the full body fall back to
+        # ``get_zim_entry`` with ``content_offset``.
         return cast(
             "GetSectionResponse",
-            attach_meta(cast(Dict[str, Any], payload), truncated=truncated),
+            attach_meta(
+                cast(Dict[str, Any], payload),
+                truncated=truncated,
+                total_chars=full_len if truncated else None,
+            ),
         )
 
     def get_related_articles_data(

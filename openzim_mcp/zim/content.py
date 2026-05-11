@@ -257,11 +257,6 @@ class _ContentMixin:
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached entry dict for: {entry_path}")
-            if "_meta" not in cached_result:
-                cached_result = attach_meta(
-                    dict(cached_result),
-                    truncated=bool(cached_result.get("_truncated")),
-                )
             return cast("EntryResponse", cached_result)
 
         try:
@@ -284,23 +279,26 @@ class _ContentMixin:
                 f"Try using search_zim_file() to verify the file is accessible."
             ) from e
 
-        # Only cache on success. ``_truncated`` is an internal hint used
-        # to set ``_meta.truncated`` on the cached path; it's stripped
-        # before the dict is returned (and never reaches the wire).
-        if content_ok:
-            self.cache.set(cache_key, dict(payload))
+        # ``_truncated`` / ``_total_chars`` are internal hints from
+        # ``_build_entry_payload`` that drive the eventual ``_meta``
+        # envelope; stripped before the dict reaches the wire.
         truncated = bool(payload.pop("_truncated", False))
         total_chars = payload.pop("_total_chars", None)
-        logger.info(f"Retrieved entry data: {entry_path}")
-        return cast(
-            "EntryResponse",
-            attach_meta(
-                payload,
-                truncated=truncated,
-                total_chars=total_chars,
-                current_offset=content_offset,
-            ),
+        # ``content_chars`` is the post-slice content length — drives
+        # ``more_at_offset`` for follow-up paginated fetches.
+        with_meta = attach_meta(
+            payload,
+            truncated=truncated,
+            total_chars=total_chars,
+            current_offset=content_offset,
+            content_chars=len(payload.get("content", "")),
         )
+        # Attach _meta before caching so cold and warm reads return
+        # bit-identical responses (Phase B #12).
+        if content_ok:
+            self.cache.set(cache_key, with_meta)
+        logger.info(f"Retrieved entry data: {entry_path}")
+        return cast("EntryResponse", with_meta)
 
     def _get_entry_data_from_archive(  # NOSONAR(python:S3776)
         self,
@@ -325,8 +323,13 @@ class _ContentMixin:
             processing raised and ``payload["content"]`` is the error
             sentinel; the caller must not cache the response in that case.
         """
+        from openzim_mcp.bundle import archive_stat_token
+
         requested_path = entry_path
-        path_cache_key = f"path_mapping:{validated_path}:{entry_path}"
+        path_cache_key = (
+            f"path_mapping:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{entry_path}"
+        )
         cached_actual_path = self.cache.get(path_cache_key)
 
         # Try cached path mapping first.
@@ -696,9 +699,15 @@ class _ContentMixin:
             ``(Error retrieving content: ...)`` sentinel; the caller must
             not cache the response in that case.
         """
-        # Path mapping cache key includes archive path so identical entry
-        # names in different ZIM files don't collide.
-        cache_key = f"path_mapping:{validated_path}:{entry_path}"
+        # Path mapping cache key includes archive path + stat token so
+        # identical entry names in different ZIM files don't collide and
+        # an atomic file replacement invalidates the resolved-path cache.
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"path_mapping:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{entry_path}"
+        )
         cached_actual_path = self.cache.get(cache_key)
         if cached_actual_path:
             logger.debug(
@@ -930,8 +939,15 @@ class _ContentMixin:
 
         # Cache key for invariant metadata (size, mime_type, etc.) — not data,
         # since data is potentially large and varies with max_size_bytes.
-        # The cache stores a plain dict, so the key shape is unchanged.
-        cache_key = f"binary_meta:{validated_path}:{entry_path}"
+        # The stat token guarantees that an atomic ZIM replacement
+        # invalidates stale metadata (e.g. a thumbnail entry whose
+        # mimetype/size changed between archive revisions).
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"binary_meta:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{entry_path}"
+        )
 
         # If we already know the entry's metadata, we can short-circuit calls
         # that don't need bytes (include_data=False) or that would be rejected
@@ -1222,9 +1238,19 @@ class _ContentMixin:
 
             if mime_type.startswith("text/html"):
                 # HTML path — build (or reuse) the bundle and slice it.
-                if validated_path is None:
+                # ``compact=True`` cannot use the bundle: the bundle stores
+                # rendered markdown with ``compact=False`` semantics (tables
+                # in pipe-soup form, oversized-table placeholders absent),
+                # so serving compact-mode callers from it would re-introduce
+                # the table-bloat that Phase A #2 was designed to eliminate.
+                # When compact is requested, re-render the entry through the
+                # compact-aware ``_extract_html_summary`` path; the bundle
+                # path stays available for compact=False (the default) so
+                # the four bundle-backed tools still share one HTML parse.
+                if validated_path is None or compact:
                     # Fall back to re-reading the item when no validated_path
-                    # was supplied (e.g. tests that monkeypatch this method).
+                    # was supplied (tests that monkeypatch the path validator)
+                    # OR when compact mode demands compact-rendered markdown.
                     raw_content = bytes(item.content).decode("utf-8", errors="replace")
                     html_result = self._extract_html_summary(
                         raw_content, max_words, compact=compact
@@ -1246,7 +1272,16 @@ class _ContentMixin:
                 md = bundle["rendered_markdown"]
                 if bundle["sections"]:
                     first = bundle["sections"][0]
-                    summary_md = md[first["char_start"] : first["char_end"]]
+                    # Many Wikipedia-style articles render with prose
+                    # before the first heading (the lead paragraph) and
+                    # no top-level h1 in the markdown. Slicing only the
+                    # first section's body silently drops that lead.
+                    # Take everything from the start of the markdown
+                    # through the end of the first section so the lead
+                    # is preserved when present; equivalent to the prior
+                    # behaviour for articles whose first heading sits at
+                    # offset 0.
+                    summary_md = md[: first["char_end"]]
                 else:
                     summary_md = md
 

@@ -1,5 +1,7 @@
 {
-  "_meta": {},
+  "_meta": {
+    "truncated": false
+  },
   "answer_markdown": "# **Munich** **Munich** is the capital of Bavaria.\n[cite: v2_phase_c/A/Munich]",
   "archives_searched": [
     "v2_phase_c"

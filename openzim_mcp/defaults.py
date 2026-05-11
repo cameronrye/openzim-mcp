@@ -29,6 +29,12 @@ class CacheDefaults:
     ENABLED: bool = True
     MAX_SIZE: int = 100
     TTL_SECONDS: int = 3600  # 1 hour
+    # Soft cap on total approximate cache size (JSON-rendered bytes
+    # across all entries). Eviction kicks in BEFORE ``MAX_SIZE`` if
+    # entries are large (Phase C bundles can be hundreds of KB each).
+    # 64 MB keeps memory bounded on long-running servers without
+    # measurably degrading hit rate for typical workloads.
+    MAX_BYTES: int = 64 * 1024 * 1024
     PERSISTENCE_ENABLED: bool = False
     PERSISTENCE_PATH: str = field(default_factory=_default_persistence_path)
 

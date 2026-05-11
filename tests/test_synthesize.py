@@ -109,22 +109,17 @@ def test_per_archive_search_single_archive() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_extract_passages_renders_markdown_from_snippets() -> None:
-    """libzim snippets may come back as HTML; passages contain markdown."""
+def test_extract_passages_passes_through_plain_markdown() -> None:
+    """search_top_k already returns plain-markdown snippets via create_snippet;
+    _extract_passages must not double-render or otherwise mutate them."""
     from openzim_mcp.synthesize import _extract_passages
 
     hits = [
-        {"path": "A/Berlin", "snippet": "<p>Berlin is the capital.</p>", "score": 0.9},
-        {"path": "A/Munich", "snippet": "<p>Munich is in Bavaria.</p>", "score": 0.7},
+        {"path": "A/Berlin", "snippet": "Berlin is the capital.", "score": 0.9},
+        {"path": "A/Munich", "snippet": "Munich is in Bavaria.", "score": 0.7},
     ]
-    cp = MagicMock()
-    cp.html_to_plain_text.side_effect = lambda html: html.replace("<p>", "").replace(
-        "</p>", ""
-    )
 
-    passages = _extract_passages(
-        hits, archive_name="wikipedia_en_simple", content_processor=cp
-    )
+    passages = _extract_passages(hits, archive_name="wikipedia_en_simple")
     assert len(passages) == 2
     assert passages[0]["rank"] == 1
     assert passages[0]["text_markdown"] == "Berlin is the capital."
@@ -136,13 +131,24 @@ def test_extract_passages_preserves_rank_order() -> None:
     from openzim_mcp.synthesize import _extract_passages
 
     hits = [
-        {"path": f"A/Doc{i}", "snippet": f"<p>doc {i}</p>", "score": 1.0 - 0.1 * i}
+        {"path": f"A/Doc{i}", "snippet": f"doc {i}", "score": 1.0 - 0.1 * i}
         for i in range(5)
     ]
-    cp = MagicMock()
-    cp.html_to_plain_text.side_effect = lambda html: html
-    passages = _extract_passages(hits, archive_name="test", content_processor=cp)
+    passages = _extract_passages(hits, archive_name="test")
     assert [p["rank"] for p in passages] == [1, 2, 3, 4, 5]
+
+
+def test_extract_passages_preserves_bold_highlight_markers() -> None:
+    """Highlighted ``**term**`` markers from create_snippet must survive — the
+    earlier code path round-tripped through BeautifulSoup + html2text and
+    could strip or rewrite them."""
+    from openzim_mcp.synthesize import _extract_passages
+
+    hits = [
+        {"path": "A/X", "snippet": "the **target** was found here", "score": 1.0},
+    ]
+    passages = _extract_passages(hits, archive_name="zim")
+    assert passages[0]["text_markdown"] == "the **target** was found here"
 
 
 def test_synthesize_query_signature_exists() -> None:
@@ -189,11 +195,11 @@ def test_attribute_sections_adds_section_id_when_match_in_first_section() -> Non
     }
     passages = [_passage("wiki/A/Berlin", "Geography text here.", 1, 0.9)]
 
-    def bundle_lookup(path: str) -> dict | None:
-        return bundle if path == "A/Berlin" else None
+    def bundle_lookup(archive_name: str, path: str) -> dict | None:
+        return bundle if (archive_name == "wiki" and path == "A/Berlin") else None
 
     attributed = _attribute_sections(
-        passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
+        passages, bundle_lookup=bundle_lookup, hit_keys=[("wiki", "A/Berlin")]
     )
     assert attributed[0]["cite_id"] == "wiki/A/Berlin#geography"
 
@@ -202,12 +208,12 @@ def test_attribute_sections_drops_section_on_bundle_failure() -> None:
     """Bundle build fails → cite_id stays at entry level; passage not dropped."""
     from openzim_mcp.synthesize import _attribute_sections
 
-    def bundle_lookup(path: str) -> None:
+    def bundle_lookup(archive_name: str, path: str) -> None:
         raise RuntimeError("simulated archive read failure")
 
     passages = [_passage("wiki/A/Berlin", "Anything", 1, 0.5)]
     attributed = _attribute_sections(
-        passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
+        passages, bundle_lookup=bundle_lookup, hit_keys=[("wiki", "A/Berlin")]
     )
     assert len(attributed) == 1
     assert attributed[0]["cite_id"] == "wiki/A/Berlin"  # unchanged
@@ -231,14 +237,118 @@ def test_attribute_sections_no_match_keeps_entry_level() -> None:
         ],
     }
 
-    def bundle_lookup(path: str) -> dict:
+    def bundle_lookup(archive_name: str, path: str) -> dict:
         return bundle
 
     passages = [_passage("wiki/A/Berlin", "totally unrelated string", 1, 0.1)]
     attributed = _attribute_sections(
-        passages, bundle_lookup=bundle_lookup, hit_paths=["A/Berlin"]
+        passages, bundle_lookup=bundle_lookup, hit_keys=[("wiki", "A/Berlin")]
     )
     assert attributed[0]["cite_id"] == "wiki/A/Berlin"
+
+
+def test_attribute_sections_picks_innermost_nested_section() -> None:
+    """Nested ranges → cite_id uses the deepest (smallest) containing section.
+
+    Audit fix: the prior implementation iterated forward in document
+    order and broke on the first containment match, which always
+    yielded the OUTERMOST (parent) section. A passage in an h3 inside
+    an h2 inside an h1 would cite the h1 — far less useful than
+    citing the h3.
+    """
+    from openzim_mcp.synthesize import _attribute_sections
+
+    # Parent h1 (0..200) contains child h2 (40..150) contains grandchild
+    # h3 (80..120). Passage offset will fall inside the grandchild.
+    bundle = {
+        "rendered_markdown": (
+            "# Berlin\n"  # 0..8
+            + " " * 30  # 9..38
+            + "\n## Geography\n"  # 39..52
+            + " " * 26  # 53..78
+            + "\n### Climate\n"  # 79..91
+            + "Rainfall here is high. " * 2  # 92..137
+            + "\n## Demographics\n"  # 138..154
+            + "Population data."  # 155..170
+        ),
+        "sections": [
+            # Parent h1 — spans the whole article
+            {
+                "id": "berlin",
+                "title": "Berlin",
+                "level": 1,
+                "char_start": 0,
+                "char_end": 200,
+                "parent_id": None,
+            },
+            # Child h2 — Geography subsection
+            {
+                "id": "geography",
+                "title": "Geography",
+                "level": 2,
+                "char_start": 40,
+                "char_end": 138,
+                "parent_id": "berlin",
+            },
+            # Grandchild h3 — Climate sub-subsection (innermost)
+            {
+                "id": "climate",
+                "title": "Climate",
+                "level": 3,
+                "char_start": 92,
+                "char_end": 137,
+                "parent_id": "geography",
+            },
+        ],
+    }
+    # The passage text appears at offset 92 — inside all three sections.
+    passages = [_passage("wiki/A/Berlin", "Rainfall here is high.", 1, 0.9)]
+
+    def bundle_lookup(archive_name: str, path: str) -> dict:
+        return bundle
+
+    attributed = _attribute_sections(
+        passages, bundle_lookup=bundle_lookup, hit_keys=[("wiki", "A/Berlin")]
+    )
+    # The deepest (smallest-range) containing section is "climate".
+    assert attributed[0]["cite_id"] == "wiki/A/Berlin#climate"
+
+
+def test_attribute_sections_normalized_fallback_search() -> None:
+    """When passage text doesn't byte-match the bundle markdown verbatim
+    (whitespace/inline-markup drift between snippet path and bundle
+    rendering path), section attribution falls back to a whitespace-
+    normalized probe instead of silently degrading to entry-level.
+    """
+    from openzim_mcp.synthesize import _attribute_sections, _locate_passage
+
+    md = "## Geography\n\nBerlin   sits  in  the   North   European   Plain."
+    # passage_text has different whitespace shape — newlines and
+    # collapsed runs that wouldn't match md.find() literally.
+    passage_text = "Berlin sits in the North European Plain."
+    pos = _locate_passage(md, passage_text)
+    assert pos >= 0, f"normalized probe should locate the passage in md (got {pos})"
+
+    bundle = {
+        "rendered_markdown": md,
+        "sections": [
+            {
+                "id": "geography",
+                "title": "Geography",
+                "level": 2,
+                "char_start": 13,
+                "char_end": len(md),
+                "parent_id": None,
+            },
+        ],
+    }
+    passages = [_passage("wiki/A/Berlin", passage_text, 1, 0.9)]
+    attributed = _attribute_sections(
+        passages,
+        bundle_lookup=lambda a, p: bundle,
+        hit_keys=[("wiki", "A/Berlin")],
+    )
+    assert attributed[0]["cite_id"] == "wiki/A/Berlin#geography"
 
 
 # ---------------------------------------------------------------------------
@@ -282,11 +392,11 @@ def test_build_citations_dedupes_by_entry() -> None:
         _passage("wiki/A/Berlin#climate", "", 2, 0.7),
         _passage("wiki/A/Munich#geography", "", 3, 0.5),
     ]
-    bundle_titles = {"A/Berlin": "Berlin", "A/Munich": "Munich"}
+    bundle_titles = {("wiki", "A/Berlin"): "Berlin", ("wiki", "A/Munich"): "Munich"}
     bundle_section_titles = {
-        ("A/Berlin", "geography"): "Geography",
-        ("A/Berlin", "climate"): "Climate",
-        ("A/Munich", "geography"): "Geography",
+        ("wiki", "A/Berlin", "geography"): "Geography",
+        ("wiki", "A/Berlin", "climate"): "Climate",
+        ("wiki", "A/Munich", "geography"): "Geography",
     }
     citations = _build_citations(
         passages,
@@ -424,3 +534,70 @@ def test_synthesize_query_multi_archive_uses_rrf_fusion(
     )
     assert response["fallback_used"] == "rrf_fusion"
     assert sorted(response["archives_searched"]) == ["wiki1", "wiki2"]
+
+
+def test_synthesize_response_meta_envelope_populated(
+    cp: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: ``_meta`` must carry tokens_est/chars/truncated, not be
+    an empty dict (Phase C #5 review finding).
+    """
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.synthesize import synthesize_query
+
+    archive = MagicMock()
+    search_handler = MagicMock()
+    search_handler.search_top_k.return_value = [
+        {"path": "A/Berlin", "snippet": "Berlin body text", "score": 0.9},
+    ]
+    monkeypatch.setattr(
+        "openzim_mcp.synthesize.get_or_build_bundle",
+        lambda archive, path, **kw: None,
+    )
+    response = synthesize_query(
+        "berlin",
+        archives=[(archive, Path("wiki.zim"))],
+        search_handler=search_handler,
+        cache=MagicMock(),
+        content_processor=cp,
+        config=SynthesizeConfig(),
+    )
+    meta = response["_meta"]
+    assert "tokens_est" in meta and meta["tokens_est"] >= 0
+    assert "chars" in meta and meta["chars"] >= 0
+    assert "truncated" in meta
+
+
+def test_select_top_hits_multi_credits_archive_with_best_rank() -> None:
+    """When a path appears in multiple archives, attribute it to the
+    archive that ranked it highest in its own list, not the first
+    archive in ``archives_searched`` iteration order (Phase C #16).
+    """
+    from openzim_mcp.synthesize import _select_top_hits_multi
+
+    # wiki1 ranks Berlin at index 1 (Munich first); wiki2 ranks Berlin at
+    # index 0. The broken implementation always picked the first archive
+    # in iteration order regardless of per-archive rank — i.e. wiki1 —
+    # which would yield the wrong cite_id. The fixed implementation picks
+    # the archive with the better (lower) rank, so Berlin must be
+    # attributed to wiki2 here.
+    per_archive_hits = [
+        # wiki1: Berlin at rank 1 (Munich first)
+        [
+            {"path": "A/Munich", "snippet": "", "score": 0.95},
+            {"path": "A/Berlin", "snippet": "", "score": 0.5},
+        ],
+        # wiki2: Berlin at rank 0 (top of this archive)
+        [{"path": "A/Berlin", "snippet": "", "score": 0.95}],
+    ]
+    archives_searched = ["wiki1", "wiki2"]
+    top_hits, fallback = _select_top_hits_multi(
+        per_archive_hits, archives_searched, top_n=5
+    )
+    # Berlin is attributed to wiki2 (rank 0 there beats rank 1 in wiki1)
+    berlin_archive = next(
+        archive_name for archive_name, hit in top_hits if hit["path"] == "A/Berlin"
+    )
+    assert berlin_archive == "wiki2"
+    assert fallback == "rrf_fusion"

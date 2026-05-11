@@ -17,7 +17,7 @@ class TestCursorRoundTrip:
         )
         assert isinstance(token, str)
         decoded = Cursor.decode(token, expected_tool="browse_namespace")
-        assert decoded["v"] == 1
+        assert decoded["v"] == 2  # cursor v1->v2 clean break (v2 alpha line)
         assert decoded["t"] == "browse_namespace"
         assert decoded["s"] == {"o": 50, "l": 50, "ns": "C"}
 
@@ -37,23 +37,28 @@ class TestCursorRoundTrip:
 
 
 class TestCursorVersioning:
-    def test_default_version_is_one(self) -> None:
+    def test_default_version_is_two(self) -> None:
         token = Cursor.encode(
             tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"}
         )
         decoded = Cursor.decode(token, expected_tool="browse_namespace")
-        assert decoded["v"] == 1
+        assert decoded["v"] == 2
 
-    def test_explicit_version_passes_through(self) -> None:
-        token = Cursor.encode(
-            tool="browse_namespace", state={"o": 0, "l": 50, "ns": "C"}, version=1
-        )
-        decoded = Cursor.decode(token, expected_tool="browse_namespace")
-        assert decoded["v"] == 1
-
-    def test_unknown_version_rejected(self) -> None:
+    def test_v1_cursor_rejected_after_clean_break(self) -> None:
+        """Cursors from v2.0.0a2 (cursor v=1) are no longer honoured —
+        they lacked archive identity and per-tool integrity fields,
+        which led to several silent wrong-result bugs.
+        """
         raw = json.dumps(
-            {"v": 2, "t": "browse_namespace", "s": {"o": 0, "l": 50, "ns": "C"}}
+            {"v": 1, "t": "browse_namespace", "s": {"o": 0, "l": 50, "ns": "C"}}
+        )
+        token = base64.urlsafe_b64encode(raw.encode()).decode()
+        with pytest.raises(ValueError, match="Unsupported cursor version"):
+            Cursor.decode(token, expected_tool="browse_namespace")
+
+    def test_unknown_future_version_rejected(self) -> None:
+        raw = json.dumps(
+            {"v": 99, "t": "browse_namespace", "s": {"o": 0, "l": 50, "ns": "C"}}
         )
         token = base64.urlsafe_b64encode(raw.encode()).decode()
         with pytest.raises(ValueError, match="Unsupported cursor version"):
@@ -88,7 +93,7 @@ class TestCursorMalformed:
             Cursor.decode(token, expected_tool="browse_namespace")
 
     def test_decode_missing_required_fields_raises(self) -> None:
-        raw = json.dumps({"v": 1, "s": {"o": 0, "l": 20}})
+        raw = json.dumps({"v": 2, "s": {"o": 0, "l": 20}})
         token = base64.urlsafe_b64encode(raw.encode()).decode()
         with pytest.raises(ValueError, match="missing"):
             Cursor.decode(token, expected_tool="browse_namespace")
@@ -107,3 +112,40 @@ class TestCursorWalkNamespaceState:
         token = Cursor.encode(tool="walk_namespace", state={"scan_at": 0, "l": 200})
         decoded = Cursor.decode(token, expected_tool="walk_namespace")
         assert decoded["s"]["scan_at"] == 0
+
+
+class TestArchiveIdentity:
+    def test_archive_identity_is_stable_for_same_path(self) -> None:
+        from openzim_mcp.pagination import archive_identity
+
+        assert archive_identity("/zim/wiki.zim") == archive_identity("/zim/wiki.zim")
+
+    def test_archive_identity_differs_per_path(self) -> None:
+        from openzim_mcp.pagination import archive_identity
+
+        a = archive_identity("/zim/wiki.zim")
+        b = archive_identity("/zim/dictionary.zim")
+        assert a != b
+
+    def test_verify_archive_identity_passes_on_match(self) -> None:
+        from openzim_mcp.pagination import archive_identity
+
+        ai = archive_identity("/zim/wiki.zim")
+        # No exception raised
+        Cursor.verify_archive_identity(
+            {"ai": ai}, expected=ai, tool="extract_article_links"
+        )
+
+    def test_verify_archive_identity_rejects_mismatch(self) -> None:
+        from openzim_mcp.pagination import archive_identity
+
+        a = archive_identity("/zim/wiki.zim")
+        b = archive_identity("/zim/dictionary.zim")
+        with pytest.raises(CursorMismatchError):
+            Cursor.verify_archive_identity(
+                {"ai": a}, expected=b, tool="extract_article_links"
+            )
+
+    def test_verify_archive_identity_rejects_missing(self) -> None:
+        with pytest.raises(CursorMismatchError, match="missing archive-identity"):
+            Cursor.verify_archive_identity({}, expected="abc", tool="walk_namespace")

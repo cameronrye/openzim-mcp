@@ -8,6 +8,7 @@ the event loop during I/O-bound operations.
 
 import asyncio
 import logging
+from functools import partial
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from .zim_operations import ZimOperations
@@ -123,14 +124,19 @@ class AsyncZimOperations:
         query: str,
         limit: Optional[int] = None,
         offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "SearchResponse":
         """Structured variant of ``search_zim_file`` (async)."""
         return await asyncio.to_thread(
-            self._ops.search_zim_file_data,
-            zim_file_path,
-            query,
-            limit,
-            offset,
+            partial(
+                self._ops.search_zim_file_data,
+                zim_file_path,
+                query,
+                limit,
+                offset,
+                cursor_archive_identity=cursor_archive_identity,
+            ),
         )
 
     async def get_zim_entry(
@@ -282,14 +288,19 @@ class AsyncZimOperations:
         namespace: str = "C",
         limit: int = 50,
         offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "BrowseNamespaceResponse":
         """Structured variant of ``browse_namespace`` (async)."""
         return await asyncio.to_thread(
-            self._ops.browse_namespace_data,
-            zim_file_path,
-            namespace,
-            limit,
-            offset,
+            partial(
+                self._ops.browse_namespace_data,
+                zim_file_path,
+                namespace,
+                limit,
+                offset,
+                cursor_archive_identity=cursor_archive_identity,
+            ),
         )
 
     async def search_with_filters(
@@ -332,16 +343,21 @@ class AsyncZimOperations:
         content_type: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "SearchWithFiltersResponse":
         """Structured variant of ``search_with_filters`` (async)."""
         return await asyncio.to_thread(
-            self._ops.search_with_filters_data,
-            zim_file_path,
-            query,
-            namespace,
-            content_type,
-            limit,
-            offset,
+            partial(
+                self._ops.search_with_filters_data,
+                zim_file_path,
+                query,
+                namespace,
+                content_type,
+                limit,
+                offset,
+                cursor_archive_identity=cursor_archive_identity,
+            ),
         )
 
     async def get_search_suggestions(
@@ -442,6 +458,8 @@ class AsyncZimOperations:
         limit: int = 100,
         offset: int = 0,
         kind: str = "internal",
+        *,
+        cursor_archive_identity: Optional[str] = None,
     ) -> "LinksResponse":
         """Structured variant of ``extract_article_links`` (async, paginated)."""
         return await asyncio.to_thread(
@@ -451,6 +469,7 @@ class AsyncZimOperations:
             limit,
             offset,
             kind,
+            cursor_archive_identity=cursor_archive_identity,
         )
 
     async def get_entry_summary(
