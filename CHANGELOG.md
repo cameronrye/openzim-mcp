@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0a7] — 2026-05-11 (alpha pre-release)
+## [2.0.0a8] — 2026-05-11 (alpha pre-release)
+
+Re-cut of v2.0.0a7 — the v2.0.0a7 tag exists but its GitHub Release
+failed to publish because `pip-audit` surfaced two upstream urllib3
+CVEs (CVE-2026-44431 / 44432) that landed in the audit database
+between the v2.0.0a6 and v2.0.0a7 builds. v2.0.0a8 carries the same
+v2.0.0a7 content plus the urllib3 → 2.7.0 bump that closes the CVEs.
+Also adjusts `make security` to pass `--skip-editable` so pip-audit
+doesn't fail looking for the local package on PyPI mid-release.
 
 Defect + opportunity batch on top of v2.0.0a6, found by end-to-end
 testing against a real Wikipedia ZIM (118 GB, 27.2M entries,

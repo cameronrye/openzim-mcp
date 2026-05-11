@@ -69,7 +69,14 @@ security:  ## Run security scans (fails on bandit/pip-audit findings)
 	@echo "Running bandit security scan..."
 	uv run bandit -r openzim_mcp -ll
 	@echo "Running pip-audit dependency scan..."
-	uv run pip-audit
+	# --skip-editable so pip-audit doesn't try to look up the project
+	# itself on PyPI. ``uv sync`` installs ``openzim-mcp`` in editable
+	# mode, and during a release the local version (e.g. 2.0.0a7) is
+	# by definition not yet on PyPI — without the skip, pip-audit
+	# emits "Dependency not found on PyPI and could not be audited:
+	# openzim-mcp (X.Y.ZaN)" and exits 1, blocking the release. Only
+	# our project is editable; third-party deps still get audited.
+	uv run pip-audit --skip-editable
 
 download-test-data:  ## Download ZIM test data files
 	uv run python scripts/download_test_data.py --priority 1
