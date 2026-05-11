@@ -544,8 +544,19 @@ class _StructureMixin:
         section_id: str,
         *,
         max_chars: "Optional[int]" = None,
+        include_subsections: bool = True,
     ) -> "Union[GetSectionResponse, ToolErrorPayload]":
         """Public entry point for the get_section tool.
+
+        ``include_subsections`` (Op3): when ``True`` (the default), the
+        returned slice covers the requested section plus every nested
+        descendant (Geography → Geography + Topography + Climate, the
+        legacy behavior). When ``False``, the slice ends at the next
+        heading of *any* level, so a caller can fetch just the
+        Geography lead-paragraph without the H3 subsections it
+        contains. Small models that have already seen the TOC can
+        choose the subsection IDs directly; ``False`` lets them avoid
+        re-pulling the full sub-tree just to get a narrow span.
 
         Returns the typed response or a ToolErrorPayload on
         file-not-found / entry-not-found / section-not-found.
@@ -555,7 +566,12 @@ class _StructureMixin:
             validated_path = self.path_validator.validate_zim_file(validated_path)
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 return self._get_section_data(
-                    archive, validated_path, entry_path, section_id, max_chars
+                    archive,
+                    validated_path,
+                    entry_path,
+                    section_id,
+                    max_chars,
+                    include_subsections=include_subsections,
                 )
         except OpenZimMcpFileNotFoundError as e:
             return tool_error(operation="file_not_found", message=str(e))
@@ -569,6 +585,8 @@ class _StructureMixin:
         entry_path: str,
         section_id: str,
         max_chars: "Optional[int]",
+        *,
+        include_subsections: bool = True,
     ) -> "Union[GetSectionResponse, ToolErrorPayload]":
         """Build the bundle, find the section by id, and return GetSectionResponse.
 
@@ -584,11 +602,11 @@ class _StructureMixin:
             content_processor=self.content_processor,
         )
 
-        section = next(
-            (s for s in bundle["sections"] if s["id"] == section_id),
+        section_idx = next(
+            (i for i, s in enumerate(bundle["sections"]) if s["id"] == section_id),
             None,
         )
-        if section is None:
+        if section_idx is None:
             return tool_error(
                 operation="section_not_found",
                 message=(
@@ -597,10 +615,21 @@ class _StructureMixin:
                 ),
                 extras={"available_section_ids": [s["id"] for s in bundle["sections"]]},
             )
+        section = bundle["sections"][section_idx]
 
-        full_body = bundle["rendered_markdown"][
-            section["char_start"] : section["char_end"]
-        ]
+        # Op3: when ``include_subsections`` is False, narrow the slice
+        # so it ends at the next heading (any level), not at the next
+        # same-or-higher heading. Lets a caller fetch just the H2 lead
+        # paragraphs without the cascading H3 sub-tree. The legacy
+        # behavior (True) returns the full sub-tree.
+        char_end = section["char_end"]
+        if not include_subsections:
+            sections = bundle["sections"]
+            for sib in sections[section_idx + 1 :]:
+                if sib["char_start"] > section["char_start"]:
+                    char_end = min(char_end, sib["char_start"])
+                    break
+        full_body = bundle["rendered_markdown"][section["char_start"] : char_end]
         cap = (
             max_chars
             if max_chars is not None

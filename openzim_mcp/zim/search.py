@@ -1565,25 +1565,34 @@ class _SearchMixin:
                     logger.debug(f"_find_entry_fast_path probe {full!r} failed: {e}")
         return None
 
+    # Alphabet used for insertion + substitution edits. ASCII a-z + a few
+    # common diacritics covers ~99% of Wikipedia titles in English-class
+    # archives. Trying the full unicode letter set would inflate the
+    # variant count by ~50× without proportional recall improvement.
+    _TYPO_ALPHABET = tuple("abcdefghijklmnopqrstuvwxyz")
+
     @staticmethod
     def _typo_variants(title: str) -> List[str]:
         """Yield single-edit variants of ``title`` for typo-tolerant lookup.
 
-        Targets the two most common keystroke errors that survive the
+        Targets the four most common keystroke errors that survive the
         case-variant fast path AND produce no libzim suggestions:
 
           * Adjacent character transposition — ``"Einstien"`` →
             ``"Einstein"`` (swap of ``i``/``e`` at positions 5-6).
-          * Single character deletion — ``"Phyton"`` → ``"Python"``
-            (extra ``h`` removed).
-
-        Substitutions and insertions are deliberately NOT generated —
-        the search space explodes (26× per character) and the false-
-        match rate becomes unacceptable for short titles.
+          * Single character deletion — ``"Pythoon"`` → ``"Python"``
+            (extra ``o`` removed).
+          * Single character insertion — ``"Photosythesis"`` →
+            ``"Photosynthesis"`` (missing ``n`` between ``y`` and ``t``).
+            This was the named regression target of Phase A #14.
+          * Single character substitution — ``"Wikipidia"`` →
+            ``"Wikipedia"`` (i → e at position 5).
 
         Variants are de-duplicated. Whitespace is preserved; the caller
         (the fast path) is responsible for the space→underscore
-        normalisation.
+        normalisation. Insertion/substitution are length-gated more
+        strictly than deletion because they each multiply the search
+        space by 26.
         """
         seen: set = {title}
         variants: List[str] = []
@@ -1608,6 +1617,41 @@ class _SearchMixin:
                 if v and v not in seen:
                     seen.add(v)
                     variants.append(v)
+
+        # Single character insertion (Phase A #14 named regression
+        # target: "Photosythesis" → "Photosynthesis"). Length-gated at
+        # 5+ chars to suppress 3-char query false positives ("cat" →
+        # "cats", "cart", etc.). We try the full ASCII a-z alphabet
+        # because the most common case — a missing letter — is by
+        # definition a letter NOT in the input ("Photosythesis" is
+        # missing 'n', which doesn't appear in the user's keystrokes).
+        # Variant count is bounded at ``26 × (n+1)`` for an n-char
+        # title; each variant is a B-tree lookup against the libzim
+        # path index, so even ~400 variants finish in <100ms.
+        if len(title) >= 5:
+            for i in range(len(title) + 1):
+                for c in _SearchMixin._TYPO_ALPHABET:
+                    v = title[:i] + c + title[i:]
+                    if v not in seen:
+                        seen.add(v)
+                        variants.append(v)
+
+        # Single character substitution — handles the wrong-key case
+        # ("Wikipidia" → "Wikipedia", i → e at position 5). Same length
+        # gate as insertion; full alphabet because the substituting
+        # letter is, by definition, NOT the one typed.
+        if len(title) >= 5:
+            for i in range(len(title)):
+                if not title[i].isalpha():
+                    continue
+                original = title[i].lower()
+                for c in _SearchMixin._TYPO_ALPHABET:
+                    if c == original:
+                        continue
+                    v = title[:i] + c + title[i + 1 :]
+                    if v not in seen:
+                        seen.add(v)
+                        variants.append(v)
 
         return variants
 

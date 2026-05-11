@@ -65,10 +65,36 @@ def _word_in(folded_paragraph: str, term: str) -> bool:
     return bool(re.search(rf"\b{re.escape(term)}\b", folded_paragraph))
 
 
+# Regions inside which a query-term match must NOT be wrapped in a second
+# layer of emphasis: it produces malformed markdown (e.g. ``**Artificial
+# **photosynthesis****`` from a bold heading, ``_****Berlin****_`` from
+# italic disambig links, ``[**Photosynthesis**](**Photosynthesis** "…")``
+# where bolding inside the link target breaks the URL).
+#
+# - ``\*\*[^*\n]+\*\*`` — existing bold runs (paired markers, single line).
+#   ``[^*\n]+`` rules out adjacent ``**`` runs and multi-paragraph spans.
+# - ``(?<!\w)_[^_\n]+_(?!\w)`` — italic runs; the lookarounds skip
+#   identifier-style underscores like ``foo_bar``.
+# - ``\[[^\]\n]+\]`` — markdown link/image link-text.
+# - ``\([^\n)]*\)`` — the URL+tooltip parenthetical of a markdown link.
+#   Combined with the link-text rule above, this covers the whole
+#   ``[text](href "title")`` construct.
+_HIGHLIGHT_SKIP_RE = re.compile(
+    r"\*\*[^*\n]+\*\*"
+    r"|(?<!\w)_[^_\n]+_(?!\w)"
+    r"|\[[^\]\n]+\]"
+    r"|\([^\n)]*\)",
+)
+
+
 def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     """Wrap the first `max_hits` occurrences of any query term in **bold**.
 
     Case-insensitive, preserves original casing of the matched substring.
+    Skips matches that fall inside existing markdown emphasis (``**bold**``,
+    ``_italic_``) or markdown link constructs (``[text](url "title")``):
+    layering ``**…**`` on top of those produces malformed markdown that
+    confuses small models more than it helps them.
     """
     terms = [t for t in _split_query_terms(query) if len(t) >= 3]
     if not terms:
@@ -77,10 +103,26 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
         r"\b(" + "|".join(re.escape(t) for t in terms) + r")\b",
         flags=re.IGNORECASE,
     )
+    # Pre-compute spans where we must not wrap. Overlapping markdown
+    # constructs (a link inside a bold span, etc.) are collapsed into a
+    # single forbidden-position bitmap so the term-replacement pass can
+    # do a single membership check per match.
+    forbidden_starts: List[int] = []
+    forbidden_ends: List[int] = []
+    for m in _HIGHLIGHT_SKIP_RE.finditer(text):
+        forbidden_starts.append(m.start())
+        forbidden_ends.append(m.end())
+
+    def _is_forbidden(pos: int) -> bool:
+        for s, e in zip(forbidden_starts, forbidden_ends):
+            if s <= pos < e:
+                return True
+        return False
+
     hits = [0]
 
     def repl(m: re.Match[str]) -> str:
-        if hits[0] >= max_hits:
+        if hits[0] >= max_hits or _is_forbidden(m.start()):
             return str(m.group(0))
         hits[0] += 1
         return f"**{m.group(0)}**"
@@ -409,6 +451,14 @@ class ContentProcessor:
         Returns ``[{"label": str, "value": str}]``. Mutates ``soup`` to remove
         the extracted infobox so it doesn't get pipe-soup'd by html2text
         downstream.
+
+        Section-header rows (``<th colspan=...>`` only — no ``<td>``) act as
+        parent context for the rows that follow. Without that context, a
+        Wikipedia infobox renders three rows labelled ``City/State`` —
+        one each for Government / Area / Population — which is meaningless
+        to a small model. Carrying the section header through as
+        ``"Area — City/State"`` restores the disambiguation that the
+        original two-column rendering provided visually.
         """
         if kv_limit is None:
             kv_limit = self._infobox_kv_limit
@@ -417,16 +467,58 @@ class ContentProcessor:
             if node is None:
                 continue
             rows: List[Dict[str, str]] = []
+            current_section: Optional[str] = None
+            title_row_consumed = False
             for tr in node.select("tr"):
                 th = tr.find("th")
                 td = tr.find("td")
+                if th and not td:
+                    # Section-header row: a single ``<th>`` (usually with a
+                    # colspan that visually spans the table). The first
+                    # such row of the infobox is the title (a duplicate
+                    # of the article title at the top of the infobox);
+                    # subsequent ones act as parent context for the
+                    # rows that follow.
+                    classes_raw: Any = th.get("class") or []
+                    classes: List[str]
+                    if isinstance(classes_raw, str):
+                        classes = classes_raw.split()
+                    else:
+                        classes = [str(c) for c in classes_raw]
+                    if any("above" in c for c in classes) or not title_row_consumed:
+                        # First th-only row OR an explicitly-marked
+                        # ``infobox-above`` row: drop it. The flag stays
+                        # set so subsequent th-only rows are treated as
+                        # section dividers regardless of whether a KV
+                        # row has been seen yet.
+                        title_row_consumed = True
+                        continue
+                    candidate = " ".join(th.get_text().split())
+                    if candidate:
+                        current_section = candidate
+                    continue
                 if th and td:
-                    label = " ".join(th.get_text().split())
+                    raw_label = " ".join(th.get_text().split())
                     value = " ".join(td.get_text().split())
-                    if label and value:
-                        rows.append({"label": label, "value": value})
-                        if len(rows) >= kv_limit:
-                            break
+                    if not raw_label or not value:
+                        continue
+                    # Prefix with current section when present so labels
+                    # disambiguate across sections. Drop the prefix when
+                    # the label already starts with the section name
+                    # (e.g. some infoboxes have ``Population total`` /
+                    # ``Population density`` inside a "Population"
+                    # section — don't write ``Population — Population
+                    # total``).
+                    if current_section and not raw_label.lower().startswith(
+                        current_section.lower()
+                    ):
+                        label = f"{current_section} — {raw_label}"
+                    else:
+                        label = raw_label
+                    rows.append({"label": label, "value": value})
+                    title_row_consumed = True
+                    if len(rows) >= kv_limit:
+                        break
             node.decompose()
             return rows
         return []
@@ -575,19 +667,38 @@ class ContentProcessor:
         *,
         query: Optional[str] = None,
         max_paragraphs: int = 2,
+        title: Optional[str] = None,
     ) -> str:
         """Create a snippet from content, optionally query-aware.
 
         When `query` is supplied, locate the first paragraph that contains a
         whole-word match for any term in the query (case-insensitive,
-        diacritic-folded) and start the snippet there. Otherwise, take the
-        leading paragraphs (legacy behavior).
+        diacritic-folded) and start the snippet there. Falls back to a
+        substring (morphological) match when no whole-word paragraph hits —
+        captures stemmed forms like ``photosynthetic`` for query
+        ``photosynthesis`` instead of dropping to the lead paragraph
+        (which often carries zero query relevance for inflected matches).
+
+        ``title`` is the entry title; when supplied, a leading ``# <title>``
+        markdown H1 that duplicates the title is stripped from the snippet
+        (the title is already shown in the result header above the
+        snippet, so the H1 burns 5-15 tokens per result for no signal).
 
         Up to 5 occurrences of any matched term inside the returned slice are
         wrapped in `**bold**` for visibility.
         """
         if not content:
             return ""
+
+        # Strip a leading ``# <title>`` H1 that duplicates the entry title
+        # before any paragraph selection happens — otherwise we'd select a
+        # paragraph that contains the H1 and waste 5-15 tokens on a heading
+        # the caller already has from the result row. Done after the empty
+        # check so empty inputs short-circuit unchanged.
+        if title:
+            content = self._strip_leading_title_heading(content, title)
+            if not content:
+                return ""
 
         paragraphs = content.split("\n\n")
         start_idx = 0
@@ -596,10 +707,31 @@ class ContentProcessor:
             terms = [t for t in _split_query_terms(query) if len(t) >= 3]
             if terms:
                 folded_paragraphs = [_fold(p) for p in paragraphs]
+                # Pass 1: whole-word match (most precise — preserves the
+                # Phase A #1 spec promise).
+                whole_word_idx: Optional[int] = None
                 for i, p in enumerate(folded_paragraphs):
                     if any(_word_in(p, t) for t in terms):
-                        start_idx = i
+                        whole_word_idx = i
                         break
+                if whole_word_idx is not None:
+                    start_idx = whole_word_idx
+                else:
+                    # Pass 2: stem-prefix substring match catches
+                    # inflected/stemmed forms (``photosynthetic`` for
+                    # query ``photosynthesis``). Use the first
+                    # ``ceil(2/3 * len)`` chars of each query term as a
+                    # prefix probe — long enough to be specific to the
+                    # query stem ("photosynthe" for "photosynthesis"),
+                    # short enough to match plausible inflections
+                    # (-ic, -is, -ise, -ate). Falls through to the
+                    # legacy lead-text behavior (start_idx=0) when no
+                    # paragraph carries even a stem-prefix.
+                    stems = [t[: max(4, (len(t) * 2 + 2) // 3)] for t in terms]
+                    for i, p in enumerate(folded_paragraphs):
+                        if any(stem in p for stem in stems):
+                            start_idx = i
+                            break
 
         selected = paragraphs[start_idx : start_idx + max_paragraphs]
         snippet_text = (
@@ -633,6 +765,33 @@ class ContentProcessor:
                 snippet_text = sliced + "..."
 
         return snippet_text
+
+    @staticmethod
+    def _strip_leading_title_heading(content: str, title: str) -> str:
+        """Drop a leading ``# <title>`` line that duplicates the entry title.
+
+        Wikipedia exports prepend ``<h1>Title</h1>`` to the article body;
+        ``html2text`` renders that as ``# Title``. When the snippet/preview
+        is going to be displayed under a separate ``## N. <Title>``
+        result header, the duplicate H1 wastes 5-15 tokens per result.
+
+        Match is case-insensitive on the title and tolerant of one
+        trailing whitespace run (collapsed by html2text). Leaves
+        non-matching headings (real article subheadings) alone.
+        """
+        if not content or not title:
+            return content
+        norm_title = title.strip()
+        if not norm_title:
+            return content
+        # ``re.escape`` on the title keeps disambiguation parens / dots
+        # literal so ``# Mercury (planet)`` matches title
+        # ``Mercury (planet)``.
+        pattern = re.compile(
+            rf"^\s*#\s+{re.escape(norm_title)}\s*\n+",
+            flags=re.IGNORECASE,
+        )
+        return pattern.sub("", content, count=1)
 
     def truncate_content(self, content: str, max_length: int) -> str:
         """

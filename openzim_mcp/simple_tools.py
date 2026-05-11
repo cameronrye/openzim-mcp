@@ -151,9 +151,58 @@ class SimpleToolsHandler:
             (synthesize=True) or ToolErrorPayload on error.
         """
         options = options or {}
+        # D10: decode the optional ``cursor`` and project its ``o``
+        # (offset) into ``options["offset"]`` so downstream handlers —
+        # all of which still take integer offsets — keep working
+        # unchanged. The cursor's tool name is ignored at this layer:
+        # the simple-mode router dispatches based on the parsed
+        # intent, not on which tool emitted the cursor. Mismatches
+        # surface as a no-op (the offset is still valid, just maybe
+        # smaller than the new query's hit count). Malformed cursors
+        # are surfaced as a structured error.
+        cursor_raw = options.get("cursor")
+        if cursor_raw is not None:
+            # Simple-mode dispatch routes by parsed intent, not by the
+            # tool that emitted the cursor — and ``Cursor.decode`` requires
+            # an ``expected_tool`` match. Decode the payload directly so
+            # any tool's cursor can be replayed for offset extraction.
+            # Cross-tool reuse is bounded: the only field we read is
+            # ``s.o`` (offset). Tool-specific cursor state (archive
+            # identity, query, namespace) is preserved if the caller
+            # also re-supplies the matching query terms.
+            import base64 as _b64
+            import json as _json
+
+            try:
+                token = str(cursor_raw)
+                padded = token + "=" * (-len(token) % 4)
+                decoded_payload = _json.loads(
+                    _b64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+                )
+                state = (
+                    decoded_payload.get("s")
+                    if isinstance(decoded_payload, dict)
+                    else None
+                )
+                if isinstance(state, dict):
+                    decoded_offset = state.get("o")
+                    if isinstance(decoded_offset, int) and decoded_offset >= 0:
+                        options["offset"] = decoded_offset
+            except Exception as e:
+                logger.warning("Could not decode cursor %r: %s", cursor_raw, e)
+                return (
+                    "**Invalid Cursor**\n\n"
+                    "The `cursor` value could not be decoded. Drop the "
+                    "`cursor` argument and call again with an explicit "
+                    "`offset` (or no pagination arg) instead.\n"
+                )
         if options.get("synthesize"):
             try:
-                return self._handle_synthesize_query(query, zim_file_path)
+                return self._handle_synthesize_query(
+                    query,
+                    zim_file_path,
+                    compact=bool(options.get("compact", False)),
+                )
             except Exception as e:
                 logger.error(
                     "Unexpected error in synthesize path: %s", e, exc_info=True
@@ -977,10 +1026,20 @@ class SimpleToolsHandler:
         # small-model sweet spot per Phase C #7. The heading's ``id``
         # matches the bundle section ``id`` 1:1 (both are derived from
         # the same ``bundle["sections"]`` list).
+        #
+        # Op3: when the query was phrased as ``narrow section X of Y``
+        # (parser sets ``params["narrow"] = True``), scope the slice to
+        # the heading itself — no nested H3/H4 children. Lets a small
+        # model fetch just the H2 lead paragraphs without the whole
+        # sub-tree spilling into the response.
         section_id = target.get("id") or ""
+        include_subsections = not bool(params.get("narrow"))
         try:
             section = self.zim_operations.get_section_data(
-                zim_file_path, entry_path, section_id
+                zim_file_path,
+                entry_path,
+                section_id,
+                include_subsections=include_subsections,
             )
         except Exception as e:
             return (
@@ -1262,9 +1321,21 @@ class SimpleToolsHandler:
         top_path = top.get("path", "")
         top_title = top.get("title", "")
         if not self._is_strong_title_match(topic, top_path, top_title):
-            return self.zim_operations.search_zim_file(
-                zim_file_path, topic, search_limit, 0
-            )
+            # D6 fix: Xapian ranks "List of songs about Berlin" above the
+            # canonical "Berlin" article for query="Berlin" because
+            # title-match boost isn't strong enough. Before giving up
+            # and rendering search hits, ask the title index directly:
+            # is there an exact-title match for the topic? If so,
+            # promote it past the search ranking and inline the article.
+            # Saves the small-model agentic loop a turn on the most
+            # common case ("tell me about <canonical topic name>").
+            promoted = self._find_title_match_for_topic(zim_file_path, topic)
+            if promoted is None:
+                return self.zim_operations.search_zim_file(
+                    zim_file_path, topic, search_limit, 0
+                )
+            top_path = promoted["path"]
+            top_title = promoted["title"]
 
         # Disambiguation: if MULTIPLE search hits strong-match the topic,
         # there's a real ambiguity (Mercury → planet/element/mythology;
@@ -1326,6 +1397,49 @@ class SimpleToolsHandler:
             f"_Source: `{top_path}`_\n\n"
             f"{article_body}"
         )
+
+    def _find_title_match_for_topic(
+        self, zim_file_path: str, topic: str
+    ) -> Optional[Dict[str, Any]]:
+        """Ask the title index whether ``topic`` resolves to an exact entry.
+
+        Returns ``{"path": ..., "title": ...}`` when the title index
+        produces a score-1.0 match for the topic; otherwise ``None``.
+        Used as a fallback when the Xapian search ranking buries the
+        canonical article under "List of songs about X" / "Timeline of
+        X" / etc. — the title index isn't affected by BM25 noise on
+        common topic words, so an exact-title hit there is a strong
+        signal we should surface the canonical article.
+
+        Failures in the backend are logged and swallowed; the caller
+        falls through to the search-render path so a backend hiccup
+        never blanks out the response.
+        """
+        try:
+            data = self.zim_operations.find_entry_by_title_data(
+                zim_file_path, topic, cross_file=False, limit=3
+            )
+        except Exception as e:
+            logger.debug("find_entry_by_title_data failed in tell_me_about: %s", e)
+            return None
+        results = data.get("results") if isinstance(data, dict) else None
+        if not results:
+            return None
+        # Require an exact-title score of 1.0. Lower scores include
+        # SuggestionSearcher prefix matches, which can produce noise
+        # ("Java" → "Java (programming language)" with score 0.95).
+        # The disambiguation branch lower in tell_me_about handles
+        # multiple-strong-match cases; here we only promote when the
+        # title is unambiguous.
+        top = results[0]
+        if not isinstance(top, dict):
+            return None
+        if float(top.get("score", 0.0)) < 1.0:
+            return None
+        return {
+            "path": str(top.get("path", "")),
+            "title": str(top.get("title", "")),
+        }
 
     @staticmethod
     def _render_disambiguation(topic: str, candidates: list) -> str:
@@ -1594,6 +1708,8 @@ class SimpleToolsHandler:
         self,
         query: str,
         zim_file_path: Optional[str],
+        *,
+        compact: bool = False,
     ) -> Union[SynthesizeResponse, ToolErrorPayload]:
         """Phase C: dispatch query to the synthesize pipeline.
 
@@ -1607,8 +1723,40 @@ class SimpleToolsHandler:
 
         search_handler is self.zim_operations — ZimOperations has search_top_k
         directly, satisfying the synthesize pipeline's duck-typed interface.
+
+        D5 fix: strip natural-language interrogative prefixes ("tell me
+        about", "who is", "what are", …) before handing the query to
+        the search stage. Without the strip, ``synthesize=True`` with
+        query ``"tell me about Berlin"`` BM25-matched on the words
+        "tell" + "me" + "about" + "Berlin" and returned songs by Irving
+        Berlin / Nat King Cole albums / Hans Abrahamsen pieces.
+        Re-using ``IntentParser`` keeps prefix detection in one place
+        and benefits from the existing test coverage.
         """
         from openzim_mcp.synthesize import synthesize_query
+
+        # D5: distill the user's natural-language query down to the
+        # topic (or actual search terms) BEFORE handing it to BM25.
+        # The intent parser already knows how to pull "Berlin" out of
+        # "tell me about Berlin" / "who is Berlin" / "describe Berlin".
+        # Fall back to the raw query when the parser doesn't classify
+        # it as a topic ask — for plain ``search`` intents (the user
+        # typed "berlin wall" directly), the raw query IS the search
+        # query.
+        try:
+            intent, params, _confidence = self.intent_parser.parse_intent(query)
+        except Exception as e:  # pragma: no cover — defensive
+            logger.debug("intent_parser failed in synthesize prelude: %s", e)
+            intent, params = "search", {}
+        search_query = query
+        if intent == "tell_me_about" and isinstance(params, dict):
+            topic = params.get("topic")
+            if isinstance(topic, str) and topic.strip():
+                search_query = topic.strip()
+        elif intent == "search" and isinstance(params, dict):
+            extracted = params.get("query")
+            if isinstance(extracted, str) and extracted.strip():
+                search_query = extracted.strip()
 
         # Resolve the set of archive paths to open.
         archives_to_open: list[Path] = []
@@ -1666,12 +1814,25 @@ class SimpleToolsHandler:
                 )
 
             return synthesize_query(
-                query,
+                search_query,
                 archives=archives,
                 search_handler=self.zim_operations,
                 cache=self.zim_operations.cache,
                 content_processor=self.zim_operations.content_processor,
                 config=self.zim_operations.config.synthesize,
+                # The original natural-language query goes in the
+                # response so callers can correlate the synthesized
+                # answer with what they actually asked. Without this,
+                # ``query`` echoes back the BM25-stripped form which
+                # is harder to recognize.
+                original_query=query,
+                # In compact mode, suppress the answer/passage text
+                # duplication (D8) and strip Wikipedia's markdown
+                # link soup (Op4). Verbose mode keeps both for callers
+                # that want full passage shape for downstream
+                # processing.
+                omit_passage_text=compact,
+                strip_links=compact,
             )
 
     def _resolve_zim_path(self, candidate: str) -> Optional[str]:

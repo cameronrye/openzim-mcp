@@ -538,6 +538,7 @@ def _register_get_section(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         section_id: str,
         max_chars: Optional[int] = None,
+        include_subsections: bool = True,
     ) -> Union[GetSectionResponse, ToolErrorPayload]:
         """Fetch a single section from an entry by its section_id.
 
@@ -557,6 +558,13 @@ def _register_get_section(server: "OpenZimMcpServer") -> None:
             section_id: Section identifier from TOC.
             max_chars: Optional cap on section body chars (default uses
                        config.content.max_content_length).
+            include_subsections: When True (default), the returned slice
+                covers the section plus its nested children (Geography
+                returns Geography + Topography + Climate). When False,
+                the slice ends at the next heading of *any* level, so
+                only the section's own body — not its sub-tree — is
+                returned. Use False when the caller already has the
+                TOC and wants to drill into one heading at a time.
         """
         try:
             try:
@@ -580,6 +588,7 @@ def _register_get_section(server: "OpenZimMcpServer") -> None:
                 entry_path,
                 section_id,
                 max_chars=max_chars,
+                include_subsections=include_subsections,
             )
 
         except Exception as e:

@@ -180,6 +180,25 @@ UNWANTED_HTML_SELECTORS: List[str] = [
     "footer",
     ".mw-parser-output .reflist",
     ".mw-editsection",
+    # Image captions: Wikipedia's article HTML puts a figure with a caption
+    # before the lead paragraph, so snippets start with "Schematic of …"
+    # instead of the actual lead. Stripping the figure container removes
+    # the caption text and the orphan alt-text noise. Galleries (".gallery")
+    # have the same problem at section boundaries.
+    "figure",
+    "figcaption",
+    ".thumb",
+    ".thumbcaption",
+    ".gallery",
+    # Disambiguation hatnotes ("For other uses, see X") sit between the H1
+    # and the lead paragraph. They're 99% navigation noise for a small model
+    # following a topic; keep the canonical link discovery in extract_links.
+    ".hatnote",
+    # "Part of a series on" right-rail navigation. Render as pipe-soup noise
+    # at the top of the rendered article body, displacing the actual lead.
+    ".sidebar",
+    ".navbox",
+    ".metadata.mbox-small",
 ]
 
 # Rate limiter operation costs
