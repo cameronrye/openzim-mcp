@@ -56,9 +56,9 @@ def test_short_query_skips_expensive_edits():
     # Transposition: "etst", "Tset", "Tets" (some equal to original or
     # skipped due to no-op rule).
     # Insertion/substitution must not run → variant count stays modest.
-    assert len(variants) < 30, (
-        f"Short query produced {len(variants)} variants — gate broken"
-    )
+    assert (
+        len(variants) < 30
+    ), f"Short query produced {len(variants)} variants — gate broken"
 
 
 def test_variant_count_bounded():

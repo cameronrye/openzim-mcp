@@ -50,10 +50,10 @@ def test_highlight_skips_inside_italic():
 
 def test_highlight_skips_inside_link_text_and_url():
     """A query term inside a markdown link's text OR URL must not get bolded."""
-    text = "see [Photosynthesis](Photosynthesis \"Photosynthesis\")"
+    text = 'see [Photosynthesis](Photosynthesis "Photosynthesis")'
     out = _highlight_terms(text, "photosynthesis", max_hits=5)
     # Link must remain a valid ``[text](href "tooltip")`` construct.
-    assert "[Photosynthesis](Photosynthesis \"Photosynthesis\")" in out
+    assert '[Photosynthesis](Photosynthesis "Photosynthesis")' in out
     # No bold inside the link.
     assert "**Photosynthesis**" not in out
 

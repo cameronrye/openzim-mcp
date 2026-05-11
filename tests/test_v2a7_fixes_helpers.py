@@ -71,6 +71,7 @@ def _build_metadata_mock_archive(target_key: str, content: bytes) -> MagicMock:
     mock_archive.media_count = 50
     return mock_archive
 
+
 # ---------------------------------------------------------------------------
 # D8: synthesize section attribution survives bold markers in passages
 # ---------------------------------------------------------------------------
@@ -124,7 +125,11 @@ def test_compact_structure_includes_summary_when_section_preview_exists():
             {"level": 2, "text": "Geography", "id": "Geography"},
         ],
         "sections": [
-            {"title": "Berlin", "level": 1, "content_preview": "Berlin is the capital."},
+            {
+                "title": "Berlin",
+                "level": 1,
+                "content_preview": "Berlin is the capital.",
+            },
             {
                 "title": "Geography",
                 "level": 2,
@@ -140,7 +145,9 @@ def test_compact_structure_includes_summary_when_section_preview_exists():
     by_text = {h["text"]: h for h in headings}
     assert "summary" in by_text["Geography"]
     assert len(by_text["Geography"]["summary"]) <= 80
-    assert by_text["Geography"]["summary"].startswith("Berlin is in northeastern Germany")
+    assert by_text["Geography"]["summary"].startswith(
+        "Berlin is in northeastern Germany"
+    )
 
 
 def test_compact_structure_skips_summary_when_no_section_preview():
@@ -180,9 +187,7 @@ def test_intent_parser_just_section_alias():
     from openzim_mcp.intent_parser import IntentParser
 
     parser = IntentParser()
-    _intent, params, _confidence = parser.parse_intent(
-        "just section Climate of Berlin"
-    )
+    _intent, params, _confidence = parser.parse_intent("just section Climate of Berlin")
     assert params.get("narrow") is True
 
 

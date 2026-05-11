@@ -48,7 +48,11 @@ def compact_structure_payload(payload: Mapping[str, Any]) -> str:
             continue
         st = s.get("title")
         sp = s.get("content_preview") or ""
-        if isinstance(st, str) and isinstance(sp, str) and st not in section_summary_by_title:
+        if (
+            isinstance(st, str)
+            and isinstance(sp, str)
+            and st not in section_summary_by_title
+        ):
             # 80-char cap: short enough to keep the compact response
             # tight, long enough to give a small model a sense of
             # what each section covers ("Climate", "Demographics",
