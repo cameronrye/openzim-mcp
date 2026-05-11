@@ -218,11 +218,7 @@ def test_search_compact_splices_title_match_into_first_page():
     ``Albert_Einstein`` entry past BM25-buried-by-derivatives ranking.
     """
     from openzim_mcp.simple_tools import SimpleToolsHandler
-    from openzim_mcp.config import OpenZimMcpConfig
 
-    config = OpenZimMcpConfig(
-        allowed_directories=["/tmp"],
-    )
     handler = SimpleToolsHandler.__new__(SimpleToolsHandler)
     handler.zim_operations = MagicMock()
 

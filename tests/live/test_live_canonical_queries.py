@@ -20,129 +20,28 @@ the a9 batch fixed.
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import subprocess
-import sys
-from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
+from tests.live._stdio_helpers import call_tool
+
 pytestmark = pytest.mark.live
-
-
-# ---------------------------------------------------------------------------
-# stdio MCP helper — shared shape with test_live_cache_persistence.py
-# ---------------------------------------------------------------------------
-
-
-def _send(proc: subprocess.Popen, msg: Dict[str, Any]) -> None:
-    assert proc.stdin is not None
-    proc.stdin.write((json.dumps(msg) + "\n").encode())
-    proc.stdin.flush()
-
-
-def _recv_until(proc: subprocess.Popen, msg_id: int) -> Dict[str, Any]:
-    assert proc.stdout is not None
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError("server stdout closed unexpectedly")
-        try:
-            resp = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if resp.get("id") == msg_id:
-            return resp
-
-
-def _spawn_stdio(zim_dir: Path) -> subprocess.Popen:
-    cmd = [
-        sys.executable,
-        "-m",
-        "openzim_mcp",
-        "--mode",
-        "advanced",
-        "--transport",
-        "stdio",
-        str(zim_dir),
-    ]
-    return subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        env=os.environ.copy(),
-    )
-
-
-def _initialize(proc: subprocess.Popen) -> None:
-    _send(
-        proc,
-        {
-            "jsonrpc": "2.0",
-            "id": 0,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "canonical-query-test", "version": "0"},
-            },
-        },
-    )
-    _recv_until(proc, 0)
-    _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
 
 
 def _call_zim_query(
     proc: subprocess.Popen, msg_id: int, **args: Any
 ) -> str:
-    """Issue a ``zim_query`` call and return the result text payload."""
-    _send(
-        proc,
-        {
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "method": "tools/call",
-            "params": {"name": "zim_query", "arguments": args},
-        },
-    )
-    resp = _recv_until(proc, msg_id)
-    content = resp["result"]["content"]
-    # zim_query returns either a plain text envelope or a structured
-    # content block. Both cases have a string in content[0]["text"].
+    """Issue a ``zim_query`` call and return the result text payload.
+
+    ``zim_query`` returns either a plain text envelope or a structured
+    content block. Both cases have a string in ``content[0]["text"]``.
+    """
+    result = call_tool(proc, msg_id, "zim_query", **args)
+    content = result["content"]
     return str(content[0]["text"])
-
-
-def _shutdown(proc: subprocess.Popen) -> None:
-    try:
-        if proc.stdin is not None:
-            with contextlib.suppress(Exception):
-                proc.stdin.close()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                proc.wait(timeout=3)
-    finally:
-        for stream in (proc.stdin, proc.stdout, proc.stderr):
-            if stream is not None:
-                with contextlib.suppress(Exception):
-                    stream.close()
-
-
-@pytest.fixture
-def mcp_proc(zim_dir: Path):
-    """Yield an initialized stdio openzim-mcp process."""
-    proc = _spawn_stdio(zim_dir)
-    try:
-        _initialize(proc)
-        yield proc
-    finally:
-        _shutdown(proc)
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +188,7 @@ def test_browse_unknown_namespace_fast_rejects(mcp_proc):
     parsed = json.loads(result) if result.startswith("{") else None
     if parsed is None:
         pytest.skip("Unexpected non-JSON browse_namespace shape — skipping.")
+    assert parsed is not None  # narrow type after the skip above
     discovery = parsed.get("discovery_method", "")
     reason = parsed.get("_meta", {}).get("reason", "")
     # Either explicit rejection OR the legacy full-iteration path

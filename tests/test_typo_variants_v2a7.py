@@ -108,39 +108,15 @@ def _ctx(value):
     yield value
 
 
-def _wire_typo_fallback_archive(
-    test_config,
-    monkeypatch,
-    *,
-    valid_paths: set,
-    entry_path: str,
-    entry_title: str,
-):
-    """Build a server with a mock archive whose ``has_entry_by_path``
-    succeeds only for ``valid_paths``, returns ``entry_path`` /
-    ``entry_title`` on a hit, and whose ``SuggestionSearcher`` always
-    misses. Bypasses the path validator. Returns the configured
-    server so the test can call ``find_entry_by_title_data`` directly.
+def _install_archive_test_monkeypatches(server, mock_archive, monkeypatch) -> None:
+    """Wire the empty-suggest searcher + bypass the path validator.
 
-    Shared between the insertion-typo and deletion-typo regression
-    tests; SonarCloud's duplication detector treats the per-test
-    inline setup as new-code duplication on PRs.
+    Both ``_wire_typo_fallback_archive`` and ``_wire_typo_collision_archive``
+    share the same archive-side monkeypatch stack (empty suggestions, a
+    context-manager-shaped ``zim_archive``, and a no-op path validator).
+    Keeping the setup in one place avoids the SonarCloud duplication
+    detector flagging the per-test repetition.
     """
-    from openzim_mcp.server import OpenZimMcpServer
-
-    server = OpenZimMcpServer(test_config)
-
-    mock_archive = MagicMock()
-    mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
-    mock_entry = MagicMock()
-    mock_entry.path = entry_path
-    mock_entry.title = entry_title
-    # Explicit non-redirect: without this, MagicMock attribute access
-    # returns a truthy MagicMock and the v2.0.0a9 typo-ranking path
-    # would follow a phantom redirect chain off the mock.
-    mock_entry.is_redirect = False
-    mock_archive.get_entry_by_path.return_value = mock_entry
-
     mock_suggest = MagicMock()
     mock_suggest.getEstimatedMatches.return_value = 0
     mock_suggest.getResults.return_value = []
@@ -165,6 +141,40 @@ def _wire_typo_fallback_archive(
         "validate_zim_file",
         lambda p: p,
     )
+
+
+def _wire_typo_fallback_archive(
+    test_config,
+    monkeypatch,
+    *,
+    valid_paths: set,
+    entry_path: str,
+    entry_title: str,
+):
+    """Build a server with a mock archive whose ``has_entry_by_path``
+    succeeds only for ``valid_paths``, returns ``entry_path`` /
+    ``entry_title`` on a hit, and whose ``SuggestionSearcher`` always
+    misses. Bypasses the path validator. Returns the configured
+    server so the test can call ``find_entry_by_title_data`` directly.
+
+    Shared between the insertion-typo and deletion-typo regression tests.
+    """
+    from openzim_mcp.server import OpenZimMcpServer
+
+    server = OpenZimMcpServer(test_config)
+
+    mock_archive = MagicMock()
+    mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
+    mock_entry = MagicMock()
+    mock_entry.path = entry_path
+    mock_entry.title = entry_title
+    # Explicit non-redirect: without this, MagicMock attribute access
+    # returns a truthy MagicMock and the v2.0.0a9 typo-ranking path
+    # would follow a phantom redirect chain off the mock.
+    mock_entry.is_redirect = False
+    mock_archive.get_entry_by_path.return_value = mock_entry
+
+    _install_archive_test_monkeypatches(server, mock_archive, monkeypatch)
     return server
 
 
@@ -284,30 +294,7 @@ def _wire_typo_collision_archive(test_config, monkeypatch):
     mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
     mock_archive.get_entry_by_path.side_effect = _get_entry
 
-    mock_suggest = MagicMock()
-    mock_suggest.getEstimatedMatches.return_value = 0
-    mock_suggest.getResults.return_value = []
-    mock_searcher = MagicMock()
-    mock_searcher.suggest.return_value = mock_suggest
-
-    monkeypatch.setattr(
-        "openzim_mcp.zim_operations.SuggestionSearcher",
-        lambda archive: mock_searcher,
-    )
-    monkeypatch.setattr(
-        "openzim_mcp.zim_operations.zim_archive",
-        lambda *a, **kw: _ctx(mock_archive),
-    )
-    monkeypatch.setattr(
-        server.zim_operations.path_validator,
-        "validate_path",
-        lambda p: __import__("pathlib").Path(p),
-    )
-    monkeypatch.setattr(
-        server.zim_operations.path_validator,
-        "validate_zim_file",
-        lambda p: p,
-    )
+    _install_archive_test_monkeypatches(server, mock_archive, monkeypatch)
     return server
 
 

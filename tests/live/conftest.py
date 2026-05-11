@@ -253,6 +253,19 @@ def _terminate(server: LiveServer) -> None:
 
 
 @pytest.fixture
+def mcp_proc(zim_dir: Path) -> Iterator[subprocess.Popen]:
+    """Yield an initialized stdio openzim-mcp subprocess; tear down on exit."""
+    from tests.live._stdio_helpers import initialize, shutdown, spawn_stdio
+
+    proc = spawn_stdio(zim_dir)
+    try:
+        initialize(proc)
+        yield proc
+    finally:
+        shutdown(proc)
+
+
+@pytest.fixture
 def spawn_live_server(zim_dir: Path, tmp_path: Path) -> Iterator:
     """Yield a factory that spawns and auto-cleans openzim-mcp subprocesses.
 

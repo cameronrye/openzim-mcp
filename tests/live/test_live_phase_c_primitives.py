@@ -24,126 +24,14 @@ becoming a maintenance burden.
 
 from __future__ import annotations
 
-import contextlib
-import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pytest
 
+from tests.live._stdio_helpers import call_tool as _call_tool
+
 pytestmark = pytest.mark.live
-
-
-# ---------------------------------------------------------------------------
-# stdio MCP helper — same shape as test_live_canonical_queries.py
-# ---------------------------------------------------------------------------
-
-
-def _send(proc: subprocess.Popen, msg: Dict[str, Any]) -> None:
-    assert proc.stdin is not None
-    proc.stdin.write((json.dumps(msg) + "\n").encode())
-    proc.stdin.flush()
-
-
-def _recv_until(proc: subprocess.Popen, msg_id: int) -> Dict[str, Any]:
-    assert proc.stdout is not None
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError("server stdout closed unexpectedly")
-        try:
-            resp = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if resp.get("id") == msg_id:
-            return resp
-
-
-def _spawn_stdio(zim_dir: Path) -> subprocess.Popen:
-    cmd = [
-        sys.executable,
-        "-m",
-        "openzim_mcp",
-        "--mode",
-        "advanced",
-        "--transport",
-        "stdio",
-        str(zim_dir),
-    ]
-    return subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        env=os.environ.copy(),
-    )
-
-
-def _initialize(proc: subprocess.Popen) -> None:
-    _send(
-        proc,
-        {
-            "jsonrpc": "2.0",
-            "id": 0,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "phase-c-live-test", "version": "0"},
-            },
-        },
-    )
-    _recv_until(proc, 0)
-    _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
-
-
-def _call_tool(
-    proc: subprocess.Popen, msg_id: int, tool: str, **args: Any
-) -> Dict[str, Any]:
-    """Issue a generic tool call; return the structured ``result`` block."""
-    _send(
-        proc,
-        {
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "method": "tools/call",
-            "params": {"name": tool, "arguments": args},
-        },
-    )
-    resp = _recv_until(proc, msg_id)
-    return resp.get("result", {})
-
-
-def _shutdown(proc: subprocess.Popen) -> None:
-    try:
-        if proc.stdin is not None:
-            with contextlib.suppress(Exception):
-                proc.stdin.close()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                proc.wait(timeout=3)
-    finally:
-        for stream in (proc.stdin, proc.stdout, proc.stderr):
-            if stream is not None:
-                with contextlib.suppress(Exception):
-                    stream.close()
-
-
-@pytest.fixture
-def mcp_proc(zim_dir: Path):
-    """Yield an initialized stdio openzim-mcp process for Phase C tests."""
-    proc = _spawn_stdio(zim_dir)
-    try:
-        _initialize(proc)
-        yield proc
-    finally:
-        _shutdown(proc)
 
 
 def _first_wikipedia_zim(zim_dir: Path) -> Optional[Path]:

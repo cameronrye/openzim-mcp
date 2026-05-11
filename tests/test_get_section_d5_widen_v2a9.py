@@ -34,6 +34,32 @@ def _stub_structure_mixin():
     return _Stub()
 
 
+def _run_get_section_against_stub_bundle(bundle: dict) -> dict:
+    """Stub the bundle module's ``get_or_build_bundle`` to return ``bundle``,
+    then call ``_get_section_data`` on a stub mixin and return the result.
+
+    The stub-restore-in-finally pattern is the same across every D5 test;
+    keeping it in one place avoids drift and the indentation hazards that
+    raw try/finally blocks invite.
+    """
+    import openzim_mcp.bundle as _bundle_mod
+
+    mixin = _stub_structure_mixin()
+    original_get_or_build = _bundle_mod.get_or_build_bundle
+    _bundle_mod.get_or_build_bundle = lambda *a, **kw: bundle  # type: ignore[assignment]
+    try:
+        return mixin._get_section_data(
+            archive=MagicMock(),
+            validated_path=Path("/fake.zim"),
+            entry_path="Berlin",
+            section_id="Geography",
+            max_chars=None,
+            include_subsections=False,
+        )
+    finally:
+        _bundle_mod.get_or_build_bundle = original_get_or_build  # type: ignore[assignment]
+
+
 def test_narrow_widens_to_first_child_when_no_lead():
     """Geography H2 with no lead paragraph (opens directly with H3) →
     narrow scope widens to the end of the first child H3 (Topography).
@@ -77,23 +103,7 @@ def test_narrow_widens_to_first_child_when_no_lead():
         "links": {"internal": [], "external": [], "media": []},
         "infobox": None,
     }
-    mixin = _stub_structure_mixin()
-    # Stub the bundle lookup the mixin would otherwise call.
-    import openzim_mcp.bundle as _bundle_mod
-
-    original_get_or_build = _bundle_mod.get_or_build_bundle
-    _bundle_mod.get_or_build_bundle = lambda *a, **kw: bundle  # type: ignore[assignment]
-    try:
-        result = mixin._get_section_data(
-            archive=MagicMock(),
-            validated_path=Path("/fake.zim"),
-            entry_path="Berlin",
-            section_id="Geography",
-            max_chars=None,
-            include_subsections=False,
-        )
-    finally:
-        _bundle_mod.get_or_build_bundle = original_get_or_build  # type: ignore[assignment]
+    result = _run_get_section_against_stub_bundle(bundle)
 
     # The body must include Topography's text — D5 widened to the
     # first child.
@@ -140,23 +150,7 @@ def test_narrow_returns_lead_when_section_has_lead_prose():
         "links": {"internal": [], "external": [], "media": []},
         "infobox": None,
     }
-    mixin = _stub_structure_mixin()
-
-    import openzim_mcp.bundle as _bundle_mod
-
-    original_get_or_build = _bundle_mod.get_or_build_bundle
-    _bundle_mod.get_or_build_bundle = lambda *a, **kw: bundle  # type: ignore[assignment]
-    try:
-            result = mixin._get_section_data(
-            archive=MagicMock(),
-            validated_path=Path("/fake.zim"),
-            entry_path="Berlin",
-            section_id="Geography",
-            max_chars=None,
-            include_subsections=False,
-        )
-    finally:
-        _bundle_mod.get_or_build_bundle = original_get_or_build  # type: ignore[assignment]
+    result = _run_get_section_against_stub_bundle(bundle)
     # Body has the lead prose ...
     assert "northeastern Germany" in result["content_markdown"]
     # ... but NOT the Topography subsection.

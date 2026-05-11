@@ -14,9 +14,7 @@ docs/superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md
 
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, Optional, TypedDict, Union
-
-from openzim_mcp.responses import ToolErrorPayload
+from typing import Any, Literal, NotRequired, Optional, TypedDict
 
 # ---------- shared sub-shapes ----------
 

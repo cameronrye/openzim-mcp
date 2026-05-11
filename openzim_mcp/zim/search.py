@@ -28,7 +28,6 @@ from openzim_mcp.exceptions import (
 )
 from openzim_mcp.defaults import CONTENT as _CONTENT_DEFAULTS
 from openzim_mcp.meta import attach_meta
-from openzim_mcp.responses import tool_error
 
 # Mirror ``openzim_mcp.zim.archive.MAX_REDIRECT_DEPTH`` without importing
 # it directly — archive.py imports this module, so the reverse-import
