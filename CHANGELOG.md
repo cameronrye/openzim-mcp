@@ -5,6 +5,131 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — post-a9 review wave (5 defects + 4 deferred items)
+
+Follow-up review wave after the post-a8 batch (commit d3e310e). 4
+parallel code-reviewer agents covered Phases A/B/C plus cross-cutting
+concerns; 13 findings were verified, 8 were withdrawn after closer
+read (the suspected bug was either already correct or by-design), 5
+were real defects. The 4 items the post-a8 batch explicitly deferred
+("bigger than this batch") are now closed.
+
+Net: 1420 tests pass (11 new red-green-verified regression tests),
+50 skipped. One module + its test suite deleted as dead code — alpha
+clean break per v2 plan.
+
+### Fixed — Critical (post-a9)
+
+- **A1: cache `_restore_entry` skipped `_total_bytes` accounting.**
+  After a warm-start with persistence enabled, `max_bytes` eviction
+  read zero for `_total_bytes` — the `while self._total_bytes > max_bytes`
+  loop in `set()` never fired even on a snapshot that already
+  exceeded the configured cap. The byte budget was silently
+  inoperative across every restart until enough new sets accumulated
+  to cross the threshold *from zero*. Now `_restore_entry` updates
+  `_total_bytes += entry.size_bytes` symmetrically with `set()` and
+  `_remove()`.
+- **A2: cache `_load_from_disk` did not enforce `max_size` or
+  `max_bytes` against the loaded snapshot.** Operators tightening
+  caps between restarts saw the prior caps until eviction was
+  triggered by new sets. Added a post-load eviction pass using the
+  same LRU heap `set()` maintains.
+
+### Fixed — Medium (post-a9)
+
+- **A3: `create_snippet` collapsed to bare `"..."` on leading-highlight
+  truncation.** When the post-highlight slice began with `**` at
+  position 0 (an unpaired marker landing inside the first highlighted
+  term), `sliced[:0]` produced `""` and the caller saw a content-free
+  ellipsis. Now drops the orphan `**` marker and keeps the term text.
+- **A4: `render_search_all` blamed the query when every archive
+  errored.** `files_with_hits == 0` emitted "Try `suggestions for X`"
+  prose for both "no matches" and "all archives failed" cases, sending
+  the model to chase a query-correction fix for a server-side problem.
+  Now branches on `files_failed >= files_searched` and emits a
+  targeted "all archives errored" hint.
+
+### Added — Opportunity (post-a9)
+
+- **A5: `get_related_articles` surfaces scan-truncation signal.** Hub
+  articles ("List of …", "Index of …") routinely carry 1000–5000
+  internal links; the underlying `extract_article_links_data` was
+  called with `limit=500` and the frequency rank was operating on a
+  document-head-biased sample with no signal to callers. Response now
+  carries optional `scan_truncated` / `scan_total_internal` /
+  `scan_limit` and `_meta.reason="scan_truncated"` when the cap fired.
+  Added to the `RelatedArticlesResponse` TypedDict in `tool_schemas.py`.
+
+### Deferred items resolved (post-a9)
+
+- **D1 (cross-cutting H1): HTTP rate-limiter `client_id` always
+  `"default"`.** Every `check_rate_limit` call across `tools/*.py`
+  passed no `client_id`, so the per-(client_id, operation) bucket
+  infrastructure was dead in HTTP mode — one aggressive caller could
+  exhaust the global bucket for everyone. Added
+  `openzim_mcp/request_context.py` with a `ContextVar[str]`;
+  `BearerTokenAuthMiddleware` derives client_id from the presented
+  token (`"bearer:<sha256-8>"`) or remote IP (`"ip:<host>"`) and sets
+  the context var on every request; `check_rate_limit` reads the var
+  when `client_id=None` (the default at every tool call site). Stdio
+  transport has no middleware so the ContextVar reads its `"default"`
+  fallback — single-bucket behavior preserved. No tool call sites
+  changed.
+- **D2 (cross-cutting H3): `_load_from_disk` JSON parse moved inside
+  the `_lock` critical section.** The prior window (file open +
+  `json.load` outside the lock, restore inside) was narrow — only
+  `__init__`-time threads could race — but a foreign-thread regression
+  probe now verifies the lock is held during `open()`. Single brief
+  startup blocking window, no contention in production.
+- **D3 (Phase B HIGH-4): `openzim_mcp/types.py` + `tests/test_types.py`
+  deleted.** The module last shipped in v1.0.0; its TypedDicts
+  (`SearchResponse` with `total_results` / `has_more`, `NamespaceInfo`
+  with `entry_count` / `has_more` / `offset` / `limit`) contradicted
+  the live Phase B contract in `tool_schemas.py`. Only the test file
+  imported from it (32 tests pinning dead code). Removed both —
+  v2 alpha allows clean breaks per the v2 plan.
+- **D4: 3 pre-existing mypy errors fixed.** `content_processor.
+  _cell_belongs_to_infobox` narrowed via intermediate `node_bound: Tag`
+  local so the closure default carries the post-guard type;
+  `simple_tools._splice_title_match_into_search` call site added
+  explicit `cast(SearchResponse, ...)` / `cast(Dict[str, Any], ...)`
+  bridges between the TypedDict and the splice helper signature.
+
+### Withdrawn findings (post-a9, 8)
+
+After verification each was either correct as-written or by-design:
+
+- browse_namespace sampled-cache poisoning — the underlying
+  per-namespace listing is cached separately by archive_stat_token,
+  so per-page responses are deterministic after the first call.
+- bundle parent_stack not popped for dropped sections — the pop loop
+  is level-relative, correctly handles dropped sections.
+- synthesize outer / `_meta` total_chars divergence — by intentional
+  design (outer = answer length, `_meta` = pre-cap chars).
+- heading regex mandatory space — html2text always emits the space.
+- `_find_entry_typo_fallback` extra_probes cap overshoot — the cap
+  holds; initial analysis was wrong.
+- cursor `ns` field bypasses `sanitize_input` — `sanitize_input` IS
+  called on the post-cursor namespace value at the tool layer.
+- `_walk_new_scheme_metadata` missing `ai` field — only fires when
+  `validated_path=None`, which does not happen in production.
+- `synthesize.fallback_used` semantics on empty hits — the TypedDict's
+  `Literal` constraint precludes a more accurate value.
+
+### Wire-format / surface changes
+
+- **`openzim_mcp.types` module removed.** Any external consumer
+  importing from `openzim_mcp.types` must move to
+  `openzim_mcp.tool_schemas`. The v1 shapes (`total_results` /
+  `has_more`) are gone; the v2 Phase B shapes (`total` / `done` /
+  `next_cursor` / `page_info`) are authoritative.
+- **`get_related_articles` response gains optional keys.**
+  `scan_truncated`, `scan_total_internal`, `scan_limit` plus
+  `_meta.reason="scan_truncated"` when the 500-link scan cap fired.
+  Existing callers that ignore the new keys see no behavior change.
+
+---
+
 ## [Unreleased] — post-a8 review batch (33 defects + 5 opportunities)
 
 Multi-agent review wave after v2.0.0a8: 33 defects and 5 strategic
