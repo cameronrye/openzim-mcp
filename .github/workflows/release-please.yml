@@ -49,7 +49,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Comment on PR
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             // Extract PR number from the PR output (format: "https://github.com/owner/repo/pull/123")
@@ -149,7 +149,7 @@ jobs:
       actions: write
     steps:
       - name: Trigger release workflow
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const tagName = '${{ needs.release-please.outputs.tag_name }}';
@@ -186,7 +186,7 @@ jobs:
       actions: write
     steps:
       - name: Trigger docker-publish workflow
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const tagName = '${{ needs.release-please.outputs.tag_name }}';
