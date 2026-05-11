@@ -146,18 +146,29 @@ class SearchResponse(TypedDict):
     query: str
 
 
-class _SearchAllPerFile(TypedDict):
+class _SearchAllPerFile(TypedDict, total=False):
+    """Per-file row inside ``SearchAllResponse.results``.
+
+    H14: ``result`` was previously a ``Union[SearchResponse, ToolErrorPayload]``
+    so callers had to type-sniff its shape. Phase B's contract wants
+    ``results[].result`` to be a single shape; errors now ride a sibling
+    ``error`` flag plus ``error_message`` / ``error_operation`` so the wire
+    contract is uniform.
+    """
+
     zim_file_path: str
     name: str
     has_hits: bool
-    # ``result`` is a ``SearchResponse`` when the per-file search succeeded.
-    # When the per-archive search raised (e.g. ZIM lacks a full-text Xapian
-    # index), it's a ``ToolErrorPayload`` envelope so the wire shape stays
-    # uniform — every entry has ``result``, callers branch on ``error: True``.
-    result: Union[SearchResponse, ToolErrorPayload]
+    # Always present. ``None`` when ``error=True``; a ``SearchResponse`` otherwise.
+    result: Optional[SearchResponse]
+    # Always present. ``True`` on per-file failure, ``False`` on success.
+    error: bool
+    # Populated only when ``error=True``.
+    error_operation: str
+    error_message: str
 
 
-class SearchAllResponse(TypedDict):
+class SearchAllResponse(TypedDict, total=False):
     results: list[_SearchAllPerFile]
     next_cursor: Optional[str]
     total: Optional[int]
@@ -167,9 +178,16 @@ class SearchAllResponse(TypedDict):
     # Tool-specific extras
     query: str
     files_searched: int
+    # H22: ``files_available`` is the total ZIM count the server could see;
+    # ``files_searched`` is the count actually probed (may be smaller when
+    # the aggregate timeout fired).
+    files_available: int
     files_with_hits: int
     files_searched_successfully: int
     files_failed: int
+    # H22: True when the aggregate timeout cut iteration short. ``done`` is
+    # set to False in this case so callers know more archives remain.
+    budget_exceeded: bool
 
 
 class SearchWithFiltersResponse(TypedDict):

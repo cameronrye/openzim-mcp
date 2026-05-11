@@ -26,6 +26,7 @@ from openzim_mcp.exceptions import (
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.responses import ToolErrorPayload, tool_error
+from openzim_mcp.zim.content import reject_path_traversal
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -108,6 +109,8 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If structure extraction fails
         """
+        reject_path_traversal(entry_path)
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
@@ -284,6 +287,8 @@ class _StructureMixin:
                 f"(provided: {kind!r})"
             )
 
+        reject_path_traversal(entry_path)
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
@@ -431,6 +436,8 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If TOC extraction fails
         """
+        reject_path_traversal(entry_path)
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
@@ -562,6 +569,7 @@ class _StructureMixin:
         file-not-found / entry-not-found / section-not-found.
         """
         try:
+            reject_path_traversal(entry_path)
             validated_path = self.path_validator.validate_path(zim_file_path)
             validated_path = self.path_validator.validate_zim_file(validated_path)
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -607,13 +615,42 @@ class _StructureMixin:
             None,
         )
         if section_idx is None:
+            # M25: cap the returned ID list. A long Wikipedia article
+            # (United States, World War II) carries 80-150 section IDs;
+            # echoing every one back in a tool_error inflates the
+            # response to 4-6 KB of mostly-irrelevant slugs, which on a
+            # small model can crowd out the rest of the prompt.
+            _MAX_IDS = 50
+            all_ids = [s["id"] for s in bundle["sections"]]
+            truncated_ids = all_ids[:_MAX_IDS]
+            # Op5: surface the lexically-closest match so a fat-fingered
+            # ID hint ("Goegraphy" → "Geography") gives the model a
+            # direct retry path instead of forcing it to scan the IDs.
+            closest: Optional[str] = None
+            try:
+                import difflib as _difflib
+
+                candidates = _difflib.get_close_matches(
+                    section_id, all_ids, n=1, cutoff=0.6
+                )
+                closest = candidates[0] if candidates else None
+            except Exception:
+                closest = None
+            extras: Dict[str, Any] = {
+                "available_section_ids": truncated_ids,
+                "available_section_ids_truncated": len(all_ids) > _MAX_IDS,
+                "available_section_ids_total": len(all_ids),
+            }
+            if closest:
+                extras["closest_match"] = closest
             return tool_error(
                 operation="section_not_found",
                 message=(
                     f"No section with id={section_id!r} in entry {entry_path!r}. "
-                    f"Use get_table_of_contents to list available section IDs."
+                    + (f"Did you mean {closest!r}? " if closest else "")
+                    + "Use get_table_of_contents to list section IDs."
                 ),
-                extras={"available_section_ids": [s["id"] for s in bundle["sections"]]},
+                extras=extras,
             )
         section = bundle["sections"][section_idx]
 
@@ -627,28 +664,40 @@ class _StructureMixin:
         if not include_subsections:
             sections = bundle["sections"]
             narrowed_end = char_end
-            first_child_end: Optional[int] = None
-            for sib in sections[section_idx + 1 :]:
+            # The first section in document order strictly after the
+            # requested one is the first child (or the next sibling).
+            first_following_idx: Optional[int] = None
+            for j, sib in enumerate(sections[section_idx + 1 :], start=section_idx + 1):
                 if sib["char_start"] > section["char_start"]:
                     narrowed_end = min(narrowed_end, sib["char_start"])
-                    # Track the first child's own char_end so we can
-                    # widen to it when the narrow slice would otherwise
-                    # be empty (D5: section opens directly with a
-                    # subheading and has no lead prose).
-                    first_child_end = sib["char_end"]
+                    first_following_idx = j
                     break
             # D5 (v2.0.0a9): when the narrow slice has essentially no
             # body (the section heading is immediately followed by a
             # subheading), widening to include the first immediate
             # child gives the caller useful content instead of just
-            # the section title. The trigger: narrow slice <= heading
-            # length + 20 chars (covers heading + minor whitespace).
-            # Falling back to the legacy ``char_end`` would dump the
-            # entire sub-tree; widening to the first child's end gives
-            # only the first lead subsection.
+            # the section title. H18: previously widened to
+            # ``first_child.char_end`` which included that child's
+            # own descendant subtree (a grandchild's full body shipped
+            # along). Widen instead to *that child's* first-following
+            # heading start so the caller sees the child's lead prose
+            # only — same shape as the requested narrow contract,
+            # just bumped one level down.
             heading_len = len(section.get("title", "")) + len("#" * section["level"]) + 4
-            if narrowed_end - section["char_start"] <= heading_len + 20 and first_child_end is not None:
-                char_end = first_child_end
+            if (
+                narrowed_end - section["char_start"] <= heading_len + 20
+                and first_following_idx is not None
+            ):
+                first_child = sections[first_following_idx]
+                # Find the next section after this child (sibling or
+                # ancestor-sibling); use its char_start as the widened
+                # boundary so the slice covers child-lead-only.
+                widened_end = first_child["char_end"]
+                for sib in sections[first_following_idx + 1 :]:
+                    if sib["char_start"] > first_child["char_start"]:
+                        widened_end = min(widened_end, sib["char_start"])
+                        break
+                char_end = widened_end
                 narrow_widened = True
             else:
                 char_end = narrowed_end
@@ -730,6 +779,8 @@ class _StructureMixin:
             raise OpenZimMcpValidationError(
                 f"limit must be between 1 and 100 (provided: {limit})"
             )
+
+        reject_path_traversal(entry_path)
 
         # Resolve the path once so both link extraction and the title
         # resolution archive open use the same canonical absolute path.

@@ -171,8 +171,17 @@ def _compute_section_offsets(
         )
         match = strict.search(rendered_markdown, cursor)
         if match is None:
+            # H17: the relaxed pattern previously read
+            # ``[^\n]*{re.escape(text)}[^\n]*$`` — a substring match that
+            # accidentally picked up a heading like ``## Notes and See also``
+            # when the bundle was probing for ``See also``. Constrain the
+            # prefix/suffix to inline-markup characters html2text actually
+            # emits (``*``, ``_``, ``` ` ```, backslashes, whitespace) so
+            # the relaxed branch only catches decorated-heading cases, not
+            # any heading containing the text anywhere.
+            _MD_INLINE = r"[ \t\*_`\\]*"
             relaxed = re.compile(
-                rf"^{'#' * level} [^\n]*{re.escape(text)}[^\n]*$",
+                rf"^{'#' * level} {_MD_INLINE}{re.escape(text)}{_MD_INLINE}\s*$",
                 re.MULTILINE,
             )
             match = relaxed.search(rendered_markdown, cursor)
@@ -216,6 +225,15 @@ def _compute_section_offsets(
             if matches[j][0] <= level:
                 char_end = matches[j][2]  # heading_start of next sibling
                 break
+
+        # Spec invariant: ``0 <= char_start < char_end <= len(rendered_markdown)``.
+        # A heading that sits at the very end of the document with no
+        # trailing body content lands with ``char_start == char_end`` —
+        # legal markdown, but a zero-length section is useless to ``get_section``
+        # (returns empty body, ``word_count=0``). Drop those rather than
+        # ship a degenerate SectionMeta.
+        if char_end <= char_start:
+            continue
 
         while parent_stack and parent_stack[-1][0] >= level:
             parent_stack.pop()

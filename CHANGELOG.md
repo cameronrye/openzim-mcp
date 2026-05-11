@@ -5,6 +5,202 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — post-a8 review batch (33 defects + 5 opportunities)
+
+Multi-agent review wave after v2.0.0a8: 33 defects and 5 strategic
+opportunities found across Phases A/B/C and cross-cutting concerns
+(security, concurrency, hot-path perf, public-API stability). Every
+finding either fixed or explicitly deferred with rationale. No tests
+removed; existing wire-format breaks (C2, H14) are documented in the
+"Wire-format breaks" section below.
+
+### Fixed — Critical
+
+- **C1: path-traversal guard extended to every entry-path tool.** D12's
+  guard lived only in `get_zim_entry`; sibling tools
+  (`get_article_structure`, `extract_article_links`,
+  `get_table_of_contents`, `get_section`, `get_entry_summary`,
+  `get_binary_entry`, `get_related_articles`, batch `get_entries`) all
+  accepted unsanitized entry paths. Extracted `reject_path_traversal`
+  in `zim/content.py` and call it at every entry-path tool boundary.
+- **C2: `browse_namespace` no longer lies with `done=True` after a
+  sample.** When discovery is sampling-based, the contract field
+  `done` previously flipped to True once the sample was consumed —
+  clients stopped paging even though most entries remained. Now keeps
+  emitting `next_cursor` and flags the response with
+  `_meta.reason="sample_only"`. Wire-format compatible (existing
+  fields preserved; `done` semantics tightened).
+- **C4: `_scan_filtered_search` no longer cuts pagination at the scan
+  cap.** When the 10K-entry scan cap fired, `total_filtered_is_lower_bound`
+  was masked to False, which made `done=True` even though filtered
+  hits remained past the cap. Removed the `not scan_cap_hit` guard.
+- **C5: `run_with_timeout` runs in a bounded ThreadPoolExecutor.**
+  The previous per-call `threading.Thread(daemon=True)` couldn't bound
+  thread accumulation under sustained timeouts — a 118 GB ZIM with
+  slow libzim decompression and a high timeout rate could pile up
+  orphaned threads holding open archives. Default cap of 16 workers;
+  override via `OPENZIM_MCP_TIMEOUT_MAX_WORKERS`.
+- **C6: `_locate_passage` lockstep walk fix.** The `norm_cursor > 0`
+  guard suppressed counting the first whitespace run; passages that
+  began with whitespace landed in the *next* section. Dropped the
+  guard (`_normalize_ws` already strips leading whitespace).
+- **C7: bundle section invariant `char_start < char_end` enforced.**
+  A heading at the very end of an article with no body content
+  previously produced a degenerate `SectionMeta` with `char_start ==
+  char_end`. Now dropped from the bundle's `sections` list.
+- **C8: typo probe is single-sweep.** `find_entry_by_title` on a cold
+  miss used to iterate the ~700-variant set TWICE (once for the
+  fallback, once for the verified-suggestion pool). Merged into
+  `_find_entry_typo_fallback_with_suggestions` returning
+  `(best_entry, verified_titles)` from one pass. Halves worst-case
+  latency on the spec's 30 ms budget.
+
+### Fixed — High
+
+- **H9: `_meta.reason="low_relevance"`** when Xapian returned hits but
+  none token-match the query (path or title carries any query token
+  ≥3 chars). Same suggestion pool as `0_hits`. Spec §4 defined the
+  enum but no code emitted it until now.
+- **H10: `_handle_search_all` routes compact-mode through
+  `search_all_data`** so the aggregate `_meta.reason` /
+  `_meta.suggestions` surface in the footer (legacy path bypassed
+  `search_all_data` entirely). New `compact_renderers.render_search_all`.
+- **H11: `_highlight_terms` joins paragraphs with `\n\n`** (not a
+  single space). The single-space join silently broke any second
+  paragraph that opened with a markdown heading.
+- **H12: `tokens_est` no longer collapses to 0 for non-empty payloads
+  that tokenize to 0 tokens.** Rare BPE edge case; the previous
+  `if raw_tokens else 0` clause emitted a misleading zero instead of
+  the +5% padded estimate.
+- **H13: `_extract_entry_summary_data` no longer bypasses the bundle
+  when `compact=True`.** Stale comment claimed the bundle stored
+  non-compact markdown; the bundle has rendered with `compact=True`
+  since v2.0.0a3. Now the same article produces identical markdown
+  from `get_entry_summary` and `get_section`.
+- **H14: `SearchAllResponse.results[].result` is shape-stable.**
+  Previously `Union[SearchResponse, ToolErrorPayload]` (callers had
+  to type-sniff). Now `result` is `Optional[SearchResponse]` and
+  errors ride sibling keys (`error: bool`, `error_operation`,
+  `error_message`). Wire-format break — callers branching on
+  `result.get("error")` move to `entry.get("error")`.
+- **H15: Phase B spec updated to cursor v=2.** Spec previously said
+  v=1; implementation has been on v=2 since v2.0.0a4 (the cursor
+  version that added the `s.ai` archive-identity field).
+- **H16: `walk_namespace` archive-identity check is unconditional.**
+  The previous `if "ai" in cursor_state:` guard let a hand-crafted
+  cursor without `ai` skip the cross-archive verification. The
+  underlying `verify_archive_identity` already raises on absent `ai`.
+- **H17: bundle relaxed heading regex no longer over-matches.** The
+  previous `^#{level} [^\n]*{text}[^\n]*$` accepted any heading
+  *containing* the extracted text. Tightened to only match decorated-
+  text variants (`*`, `_`, `` ` ``, `\`, whitespace before/after).
+- **H18: `get_section` D5 widen scope tightened.** When the narrow
+  slice would be empty, the previous fix widened to the first
+  following section's `char_end`, which included that section's
+  whole sub-tree. Now widens to that section's *first descendant's
+  start* so the response covers only the child's lead prose.
+- **H19: RRF fuse tie-breaks deterministically.** Equal-score paths
+  now sort by `(-score, path)` so repeated multi-archive synthesize
+  calls return citations in the same order.
+- **H20: `is_strong_title_match` no longer false-positives on
+  bare-first-name candidates.** Removed the reverse-direction prefix
+  match (topic-extends-candidate) that let `"Martin"` promote past
+  the canonical article for query `"Martin Luther King"`. Kept the
+  forward direction (`"Berlin"` still promotes to `"Berlin (city)"`).
+- **H21: `_get_encoder` uses `functools.lru_cache(maxsize=1)`.**
+  Replaces the unguarded `_EncoderCache` check-then-set with a C-level
+  lock so two concurrent `asyncio.to_thread` workers no longer race
+  to write the tokenizer on first-use.
+- **H22: `search_all` honors an aggregate wall-clock timeout.** New
+  `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS` (default 20s).
+  When the budget fires, the fan-out stops, partial results return
+  with `done=False`, `budget_exceeded=True`, and
+  `_meta.reason="search_all_budget_exceeded"`.
+- **H23: `attach_meta` accepts a pre-rendered string.** Callers with a
+  ready serialization (e.g. a markdown body about to ship) can pass
+  `rendered=` to skip the per-call full-payload JSON serialization.
+  Hot-path optimization for ~50 KB search responses.
+- **H24: simple-mode cursor decode errors travel as `ToolErrorPayload`.**
+  Previously a markdown string; now `tool_error(operation="cursor_decode",
+  ...)` so callers can branch on `result.error`.
+
+### Fixed — Medium
+
+- **M25: `available_section_ids` capped at 50.** Long Wikipedia articles
+  (United States, World War II) carry 80-150 section IDs; the prior
+  unbounded error payload burned 4-6 KB of context for nothing.
+  `available_section_ids_truncated` and `available_section_ids_total`
+  surface the truncation.
+- **M26: `_promote_title_match` skips multi-word content queries.**
+  Queries with 5+ alphanumeric tokens (`"effects of climate change on
+  arctic biodiversity"`) are recognized as prose, not entity lookups —
+  skip the per-archive title-index probe to save a redundant fast-path
+  walk.
+- **M27: cache persistence default uses XDG.** Default
+  `~/.cache/openzim-mcp/cache.json` (honors `XDG_CACHE_HOME`).
+  Previously `.openzim_mcp_cache` in CWD, which silently failed inside
+  read-only Docker images. Existing configured paths unchanged.
+- **M28: Bearer challenge includes `realm`.** RFC 6750 §3 requires it;
+  some MCP SDK clients inspect the full challenge to decide whether
+  to auto-inject a token. Now emits
+  `WWW-Authenticate: Bearer realm="openzim-mcp"`.
+- **M29: `process_mime_content(snippet_mode=True)` exposed (hook only).**
+  Adds a snippet-only rendering mode that skips infobox/table
+  rewrites. `_get_entry_snippet` keeps the full compact pipeline
+  because a Wikipedia article's leading infobox dominates the
+  snippet's first paragraph without extraction — skipping the
+  rewrite produced pipe-soup snippets in golden testing. The hook
+  stays available for future callers that want raw rendering.
+- **M30: dependency upper bounds.** `mcp[cli]<2.0`, `pydantic<3.0`,
+  `libzim<4.0`, `tiktoken<1.0` etc. Caps the next major so a fresh
+  `pip install` can't land on a wheel-incompatible upstream.
+- **M31: synthesize errors return `ToolErrorPayload`.** If an inner
+  exception escapes `_handle_synthesize_query` past its own
+  try-except, the outer `handle_zim_query` except previously
+  swallowed the shape and emitted markdown. Now detects the
+  synthesize branch and emits `tool_error("synthesize_pipeline_error")`.
+- **M32: suggestion titles humanized.** `Photosynthesis_(biology)` →
+  `Photosynthesis (biology)` so the footer hint reads as a query a
+  model can copy verbatim.
+- **M33: `_cell_belongs_to_infobox` binds `node` via default arg.**
+  Python closures bind by name; the previous version was correct only
+  because the function happened to be called inside the same loop
+  iteration that defined `node`. Future-proofs against restructuring.
+
+### Added — Opportunities
+
+- **Op1: live-archive smoke skeletons.** New
+  `tests/live/test_live_phase_c_primitives.py` covers `get_section`,
+  `synthesize`, `get_related_articles`, and `walk_namespace` against
+  real Wikipedia ZIMs. Auto-skips when `ZIM_TEST_DATA_DIR` doesn't
+  point at a ZIM directory.
+- **Op2: `compact` parameter on natural-shape advanced tools.**
+  `get_zim_entry`, `get_zim_entries`, `get_entry_summary` now accept
+  `compact: bool = False` and thread it through. Documented decision
+  in `docs/v2/adr-001-compact-plumbing.md`; Phase F decides whether
+  to propagate further.
+- **Op3: `browse_namespace` sampling semantics documented in the tool
+  docstring.** Explicitly says `done=True` in sampling mode means
+  "end of sample, not end of namespace" and recommends `walk_namespace`
+  for exhaustive iteration.
+- **Op4: `_meta.reason` taxonomy expanded.** Added `sample_only`,
+  `archive_unavailable`, `search_all_budget_exceeded` reasons + footer
+  recovery prose for each.
+- **Op5: `section_not_found` carries a `closest_match` hint.**
+  `difflib`-based suggestion so a fat-fingered ID (`Goegraphy`) hands
+  the model the right ID (`Geography`) without a full TOC scan.
+
+### Wire-format breaks (alpha-line clean breaks)
+
+- **`SearchAllResponse.results[].result`** changes from
+  `Union[SearchResponse, ToolErrorPayload]` to `Optional[SearchResponse]`.
+  Errors now ride sibling keys `error: bool` / `error_message` /
+  `error_operation`. Callers branching on `result["error"]` move to
+  the per-file `entry["error"]`.
+- **`browse_namespace` `done` semantics** change in sampling mode.
+  Clients depending on `done == True` to mean "end of the namespace"
+  should consult `sampling_based` and `_meta.reason="sample_only"`.
+
 ## [2.0.0a8] — 2026-05-11 (alpha pre-release)
 
 Re-cut of v2.0.0a7 — the v2.0.0a7 tag exists but its GitHub Release

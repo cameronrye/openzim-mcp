@@ -280,6 +280,63 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_search_all(data: Mapping[str, Any], query: str) -> str:
+    """Render a search_all fan-out payload as a compact per-archive list.
+
+    H10: previously the simple-mode dispatcher always called the legacy
+    markdown ``search_all`` which bypassed ``search_all_data`` entirely —
+    no per-file ``_meta`` survived the rendering, so the structured
+    suggestions ``_meta.suggestions`` populated by the search backend
+    were unreachable from compact mode. Routing through this renderer
+    keeps the model-friendly compact prose while preserving the
+    ``reason``/``suggestions`` signals on zero-hit aggregate responses.
+    """
+    if not isinstance(data, dict):
+        return json.dumps(data)
+    per_file = data.get("results") or []
+    files_with_hits = int(data.get("files_with_hits", 0) or 0)
+    files_searched = int(data.get("files_searched", len(per_file)) or 0)
+    lines = [f'# Search across {files_searched} ZIM files for "{query}"', ""]
+
+    if files_with_hits == 0:
+        lines.append(
+            "No results in any archive. Try `suggestions for "
+            f"{query[:30]}`, broaden the terms, or check `list_zim_files`."
+        )
+        return "\n".join(lines)
+
+    for entry in per_file:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or entry.get("zim_file_path") or "(unnamed)"
+        # H14: per-file payload may be a SearchResponse OR a sibling
+        # error key. Branch on success first.
+        result = entry.get("result")
+        if entry.get("error"):
+            lines.append(f"## `{name}` — error")
+            lines.append(f"_{entry.get('error_message', 'unknown failure')}_")
+            lines.append("")
+            continue
+        if not isinstance(result, dict):
+            continue
+        results = result.get("results") or []
+        total = result.get("total")
+        if not results:
+            continue
+        header = f"## `{name}` — {len(results)} hits"
+        if total is not None:
+            header += f" (of {total})"
+        lines.append(header)
+        for r in results[:5]:
+            if not isinstance(r, dict):
+                continue
+            t = r.get("title", "(untitled)")
+            p = r.get("path", "")
+            lines.append(f"- **{t}** — `{p}`")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def render_namespaces(data: Mapping[str, Any]) -> str:
     """Render a list_namespaces payload as a compact namespace table.
 

@@ -171,14 +171,22 @@ class AsyncZimOperations:
         entry_path: str,
         max_content_length: Optional[int] = None,
         content_offset: int = 0,
+        *,
+        compact: bool = False,
     ) -> "EntryResponse":
-        """Structured variant of ``get_zim_entry`` (async)."""
+        """Structured variant of ``get_zim_entry`` (async).
+
+        Op2: forwards ``compact`` so the advanced tool surface can opt
+        into the same compact-mode rendering simple-mode uses.
+        """
         return await asyncio.to_thread(
-            self._ops.get_zim_entry_data,
-            zim_file_path,
-            entry_path,
-            max_content_length,
-            content_offset,
+            lambda: self._ops.get_zim_entry_data(
+                zim_file_path,
+                entry_path,
+                max_content_length,
+                content_offset,
+                compact=compact,
+            )
         )
 
     async def get_entries(
@@ -205,12 +213,14 @@ class AsyncZimOperations:
         self,
         entries: List[Dict[str, str]],
         max_content_length: Optional[int] = None,
+        *,
+        compact: bool = False,
     ) -> "BatchEntryResponse":
         """Structured variant of ``get_entries`` (async)."""
         return await asyncio.to_thread(
-            self._ops.get_entries_data,
-            entries,
-            max_content_length,
+            lambda: self._ops.get_entries_data(
+                entries, max_content_length, compact=compact
+            )
         )
 
     async def get_zim_metadata(self, zim_file_path: str) -> str:
@@ -497,10 +507,14 @@ class AsyncZimOperations:
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
+        *,
+        compact: bool = False,
     ) -> "EntrySummaryResponse":
         """Structured variant of ``get_entry_summary`` (async)."""
         return await asyncio.to_thread(
-            self._ops.get_entry_summary_data, zim_file_path, entry_path, max_words
+            lambda: self._ops.get_entry_summary_data(
+                zim_file_path, entry_path, max_words, compact=compact
+            )
         )
 
     async def get_table_of_contents(

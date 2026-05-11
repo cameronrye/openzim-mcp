@@ -195,6 +195,11 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
         if self._expected is None:
             return await call_next(request)
 
+        # M28: RFC 6750 §3 requires ``realm`` on the Bearer challenge.
+        # Some MCP SDK clients inspect the full challenge header to
+        # decide whether to auto-inject a credential; a bare ``Bearer``
+        # without ``realm`` is technically invalid and blocks that flow.
+        _CHALLENGE = 'Bearer realm="openzim-mcp"'
         header = request.headers.get("authorization", "")
         scheme, _, token = header.partition(" ")
         if scheme.lower() != "bearer":
@@ -202,14 +207,18 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 {"error": "unauthorized"},
                 status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
+                headers={"WWW-Authenticate": _CHALLENGE},
             )
         if not hmac.compare_digest(token, self._expected):
             self._log_failure(request, "invalid_token")
             return JSONResponse(
                 {"error": "unauthorized"},
                 status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
+                headers={
+                    "WWW-Authenticate": (
+                        _CHALLENGE + ', error="invalid_token"'
+                    )
+                },
             )
         return await call_next(request)
 

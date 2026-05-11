@@ -64,7 +64,13 @@ def _rrf_fuse(
     for ranking in rankings:
         for rank, (path, _src_score) in enumerate(ranking, start=1):
             scores[path] += 1.0 / (k + rank)
-    fused = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    # H19: deterministic tie-breaking. ``sorted`` is stable but the
+    # underlying dict insertion order varies with which ranking
+    # contributed each path first — across runs of the same multi-archive
+    # search with structurally equivalent inputs, that produced different
+    # cite_id orderings. Secondary sort by path (ascending) makes ties
+    # break the same way every time.
+    fused = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
     return fused
 
 
@@ -199,15 +205,22 @@ def _locate_passage(md: str, passage_text: str) -> int:
         return -1
 
     # Map the normalized offset back to the original md offset. Walk md
-    # in lockstep with md_norm, advancing the original cursor only when
-    # the normalized character matches.
+    # in lockstep with md_norm, advancing the normalized cursor only when
+    # we cross a non-space boundary or a single whitespace run. The
+    # ``norm_cursor > 0`` guard the previous version carried suppressed
+    # counting the first whitespace run, which made the cursor undercount
+    # whenever ``md`` opened with whitespace before the matched span —
+    # attribution then landed in the *next* section. ``_normalize_ws``
+    # already strips leading whitespace from ``md_norm`` so the run we
+    # need to track always begins after non-space content; no guard is
+    # required.
     md_cursor = 0
     norm_cursor = 0
     prev_was_space = False
     while md_cursor < len(md) and norm_cursor < probe_pos:
         ch = md[md_cursor]
         if ch.isspace():
-            if not prev_was_space and norm_cursor > 0:
+            if not prev_was_space:
                 norm_cursor += 1
             prev_was_space = True
         else:
@@ -515,6 +528,20 @@ def _promote_title_match(
         # comparison works without a second archive read.
         if is_strong_title_match(query, top_path, top_path.replace("_", " ")):
             return top_hits
+
+    # M26: skip the per-archive title probe for multi-word queries that
+    # are clearly content questions rather than entity lookups. The
+    # title-index fast path returns nothing useful for ``effects of
+    # climate change on arctic biodiversity`` but still costs a
+    # find_entry_by_title call per archive (with its case-variant and
+    # namespace sweeps). 4+ tokens is the threshold that empirically
+    # separates entity names ("Martin Luther King Jr") from prose
+    # ("what is the cause of X").
+    _content_query_token_count = 4
+    import re as _re
+
+    if len(_re.findall(r"[a-z0-9]+", query.lower())) > _content_query_token_count:
+        return top_hits
 
     title_match_hit = getattr(search_handler, "title_match_hit", None)
     if not callable(title_match_hit):

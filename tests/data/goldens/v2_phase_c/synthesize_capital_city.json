@@ -2,7 +2,7 @@
   "_meta": {
     "truncated": false
   },
-  "answer_markdown": "Berlin is the **capital** and largest **city** of Germany. ## Geography\n[cite: v2_phase_c/A/Berlin#berlin]",
+  "answer_markdown": "Berlin is the **capital** and largest **city** of Germany.\n\n## Geography\n[cite: v2_phase_c/A/Berlin#berlin]",
   "archives_searched": [
     "v2_phase_c"
   ],
@@ -22,10 +22,10 @@
       "cite_id": "v2_phase_c/A/Berlin#berlin",
       "rank": 1,
       "score": 1.0,
-      "text_markdown": "Berlin is the **capital** and largest **city** of Germany. ## Geography"
+      "text_markdown": "Berlin is the **capital** and largest **city** of Germany.\n\n## Geography"
     }
   ],
   "query": "capital city",
-  "total_chars": 106,
+  "total_chars": 107,
   "total_words": 13
 }

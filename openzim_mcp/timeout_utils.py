@@ -1,15 +1,70 @@
 """
 Shared timeout utilities for OpenZIM MCP server.
 
-Provides cross-platform timeout functionality using threading.
+Provides cross-platform timeout functionality. Workers run in a bounded
+``ThreadPoolExecutor`` so a sustained timeout rate can't accumulate
+unkillable worker threads — concurrent calls past the cap block instead
+of spawning, which makes the overload mode observable to the operator
+and bounds resource pressure when libzim is slow on a large archive.
 """
 
+import logging
+import os
 import threading
-from typing import Callable, Type, TypeVar
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Callable, Optional, Type, TypeVar
 
 from .exceptions import OpenZimMcpTimeoutError
 
+logger = logging.getLogger(__name__)
+
 T = TypeVar("T")
+
+
+# A timed-out worker can't be killed (CPython doesn't expose thread
+# cancellation); the surviving thread keeps doing libzim work and holds
+# its archive ref. Without a cap, sustained timeouts pile threads up
+# until the OS runs out of file handles or the GIL contention swamps the
+# server. The cap sets a hard ceiling: when all worker slots are busy
+# (live + orphaned-but-still-running), new submissions block on the
+# pool's queue instead of allocating new OS threads. Operators see the
+# pressure (rising queue depth, falling throughput) rather than discovering
+# it post-mortem in an OOM dump. Override via the env var below if a
+# specific deployment needs more headroom; the default is sized for a
+# typical 4-8 vCPU server with a handful of concurrent ZIM queries.
+_DEFAULT_MAX_WORKERS = 16
+_MAX_WORKERS = int(
+    os.environ.get("OPENZIM_MCP_TIMEOUT_MAX_WORKERS", _DEFAULT_MAX_WORKERS)
+)
+_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_EXECUTOR_LOCK = threading.Lock()
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    """Return the module-level executor, creating it on first use.
+
+    Lazy so ``import openzim_mcp.timeout_utils`` doesn't start threads
+    in environments that never call ``run_with_timeout``.
+    """
+    global _EXECUTOR
+    if _EXECUTOR is not None:
+        return _EXECUTOR
+    with _EXECUTOR_LOCK:
+        if _EXECUTOR is None:
+            _EXECUTOR = ThreadPoolExecutor(
+                max_workers=_MAX_WORKERS,
+                thread_name_prefix="openzim-timeout",
+            )
+        return _EXECUTOR
+
+
+def shutdown_executor() -> None:
+    """Tear down the executor — used by tests and shutdown hooks."""
+    global _EXECUTOR
+    with _EXECUTOR_LOCK:
+        if _EXECUTOR is not None:
+            _EXECUTOR.shutdown(wait=False, cancel_futures=True)
+            _EXECUTOR = None
 
 
 def run_with_timeout(
@@ -19,13 +74,13 @@ def run_with_timeout(
     timeout_exception: Type[OpenZimMcpTimeoutError] = OpenZimMcpTimeoutError,
 ) -> T:
     """
-    Run a function with a timeout using threading (cross-platform).
+    Run a function with a timeout.
 
-    Works on any thread (no main-thread restriction) and on all platforms,
-    making it safe to call from asyncio executors and worker threads.
-    Note: this cannot truly interrupt blocking Python operations; it provides
-    a best-effort timeout — the worker is left as a daemon thread to be
-    reclaimed at interpreter shutdown.
+    Best-effort interrupt: Python can't truly cancel a worker thread, so on
+    timeout the future is dropped and the worker continues until libzim
+    returns (or the interpreter shuts down). The bounded pool caps the
+    number of orphaned workers so a high-timeout-rate workload backs up
+    visibly rather than silently exhausting OS threads.
 
     Args:
         func: The function to execute
@@ -39,34 +94,19 @@ def run_with_timeout(
     Raises:
         OpenZimMcpTimeoutError: (or subclass) If the operation exceeds the time limit
     """
-    # Sentinel distinguishes "no result yet" from "returned None".
-    _SENTINEL = object()
-    result: list[T | object] = [_SENTINEL]
-    exception: list[BaseException] = []
-
-    def worker() -> None:
-        # Catch ``KeyboardInterrupt`` / ``SystemExit`` alongside ``Exception``
-        # so a Ctrl-C or ``sys.exit()`` raised inside ``func()`` is propagated
-        # by the caller via ``exception[0]`` below rather than masked as a
-        # misleading timeout. Catching ``BaseException`` directly would do
-        # the same but trips CodeQL's ``py/catch-base-exception`` — naming
-        # the three concrete types is equivalent for a sync worker (no
-        # ``GeneratorExit`` semantics here).
-        try:
-            result[0] = func()
-        except (KeyboardInterrupt, SystemExit, Exception) as e:
-            exception.append(e)
-
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout_seconds)
-
-    if thread.is_alive():
-        # Cannot forcibly kill the thread; daemon=True ensures it doesn't
-        # block interpreter shutdown.
-        raise timeout_exception(timeout_message)
-
-    if exception:
-        raise exception[0]
-
-    return result[0]  # type: ignore[return-value]
+    executor = _get_executor()
+    future: Future[T] = executor.submit(func)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except TimeoutError as e:
+        # The future keeps running in the worker; we drop the reference and
+        # let it complete. Log it so a runaway can be correlated with the
+        # request that timed out without sprinkling timing prints across
+        # callers.
+        logger.warning(
+            "run_with_timeout: worker timed out after %.1fs (%s); "
+            "thread continues until libzim returns",
+            timeout_seconds,
+            timeout_message,
+        )
+        raise timeout_exception(timeout_message) from e

@@ -214,6 +214,7 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         max_words: int = 200,
+        compact: bool = False,
     ) -> Union[EntrySummaryResponse, ToolErrorPayload]:
         """Get a concise summary of an article without returning the full content.
 
@@ -225,6 +226,9 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             zim_file_path: Path to the ZIM file
             entry_path: Entry path, e.g., 'C/Some_Article'
             max_words: Maximum number of words in the summary (default: 200, max: 1000)
+            compact: Op2 — when True, render the summary with compact
+                semantics (infoboxes extracted, oversized tables
+                replaced). Defaults to False (v1.2.0-compatible).
 
         Returns:
             ``EntrySummaryResponse``-shaped dict with ``path``, ``title``,
@@ -236,6 +240,7 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
         Examples:
             - Quick overview: get_entry_summary("/path/to/wiki.zim", "Biology")
             - Longer summary: get_entry_summary(..., "Evolution", max_words=500)
+            - Compact body: get_entry_summary(..., "Tiger", compact=True)
         """
         try:
             try:
@@ -269,7 +274,7 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
                 )
 
             return await server.async_zim_operations.get_entry_summary_data(
-                zim_file_path, entry_path, max_words
+                zim_file_path, entry_path, max_words, compact=compact
             )
 
         except Exception as e:

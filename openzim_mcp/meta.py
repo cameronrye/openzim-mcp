@@ -10,6 +10,7 @@ budgeting across Anthropic, OpenAI, and Llama tokenizers.
 
 from __future__ import annotations
 
+import functools
 import json as _json
 import logging
 from typing import Any, Dict, List, Optional
@@ -17,39 +18,33 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-class _EncoderCache:
-    """Lazy tokenizer holder. Module-level cache so the first request pays
-    the init cost; subsequent requests are millions of tokens/sec.
-
-    Two attributes track three states:
-      * ``encoder is None`` and ``not probed``   → never tried
-      * ``encoder is not None``                  → loaded successfully
-      * ``encoder is None`` and ``probed``       → tried and failed; don't retry
-
-    Encapsulating the state on a class instead of two module globals
-    makes the read/write paths obvious to static analyzers (CodeQL's
-    ``py/unused-global-variable`` doesn't follow through ``global``
-    declarations into function bodies).
-    """
-
-    encoder: Any = None
-    probed: bool = False
-
-
+@functools.lru_cache(maxsize=1)
 def _get_encoder() -> Any:
-    if _EncoderCache.probed:
-        return _EncoderCache.encoder
+    """Lazy tokenizer accessor.
+
+    H21: ``lru_cache(maxsize=1)`` replaces the previous ``_EncoderCache``
+    class with its unguarded check-then-set on shared mutable state.
+    ``lru_cache`` is implemented in C, holds its own lock around cache
+    population, and returns the same instance on every call — so two
+    concurrent ``asyncio.to_thread`` workers calling this on first-use
+    no longer race to write the encoder.
+
+    Returns the tiktoken encoder, or ``None`` if init failed (sandboxed
+    envs without a writable BPE cache). Callers that need to distinguish
+    "tokenizer unavailable" from "zero tokens" inspect the return value
+    directly via ``_raw_tokens_est``.
+    """
     try:
         import tiktoken
 
-        _EncoderCache.encoder = tiktoken.get_encoding("cl100k_base")
+        return tiktoken.get_encoding("cl100k_base")
     except Exception as e:  # pragma: no cover — defensive; sandboxed envs
         logger.warning(
-            "tiktoken init failed; tokens_est will return 0 for this session: %s", e
+            "tiktoken init failed; tokens_est will be omitted from _meta "
+            "envelopes for this session: %s",
+            e,
         )
-    finally:
-        _EncoderCache.probed = True
-    return _EncoderCache.encoder
+        return None
 
 
 def _raw_tokens_est(rendered: str) -> Optional[int]:
@@ -112,9 +107,15 @@ def build_meta(
     # Spec §5: omit ``tokens_est`` when the tokenizer is unavailable so
     # models can distinguish "zero-token response" from "tokenizer
     # unavailable". A non-None raw count (including 0 for empty input)
-    # populates the field; ``None`` skips it.
+    # populates the field; ``None`` skips it. The previous version's
+    # ``... if raw_tokens else 0`` collapsed the rare "non-empty payload
+    # that BPE tokenizes to 0 tokens" case into a misleading ``0`` — drop
+    # that special-case so the +5% pad + minimum 1 applies uniformly.
     if raw_tokens is not None:
-        meta["tokens_est"] = int(raw_tokens * 1.05) + 1 if raw_tokens else 0
+        if raw_tokens == 0 and not rendered:
+            meta["tokens_est"] = 0
+        else:
+            meta["tokens_est"] = int(raw_tokens * 1.05) + 1
     if truncated:
         if content_chars is not None:
             meta["more_at_offset"] = current_offset + content_chars
@@ -144,16 +145,30 @@ def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
 
     reason = meta.get("reason")
     # Any structured reason on an empty/low-confidence response shapes the
-    # footer as a recovery hint instead of the token-budget summary. Without
-    # this, archives lacking a full-text index (``no_xapian_index``) or
-    # invalid-namespace responses (``bad_namespace``) fall through to a
+    # footer as a recovery hint instead of the token-budget summary.
+    # Without this, archives lacking a full-text index (``no_xapian_index``)
+    # or invalid-namespace responses (``bad_namespace``) fall through to a
     # "~0 tokens" line that gives small models no actionable signal.
+    #
+    # Op4: expanded reason taxonomy.
+    # - ``low_relevance`` (H9): Xapian found hits but none token-match the
+    #   query — same recovery prose as 0_hits.
+    # - ``sample_only`` (C2): the page came from a sampled discovery and
+    #   more entries remain even though ``done=True``. Tells the model
+    #   to pivot to ``walk_namespace`` for exhaustive iteration.
+    # - ``archive_unavailable`` (H10): every per-file archive failed in a
+    #   fan-out (search_all) — the issue is infrastructural, not the query.
+    # - ``search_all_budget_exceeded`` (H22): the aggregate timeout fired
+    #   before all archives were searched; partial results returned.
     if reason in {
         "0_hits",
         "low_relevance",
         "bad_query",
         "no_xapian_index",
         "bad_namespace",
+        "sample_only",
+        "archive_unavailable",
+        "search_all_budget_exceeded",
     }:
         suggestions = meta.get("suggestions") or []
         visible = suggestions[:3]
@@ -166,6 +181,22 @@ def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
             if reason == "bad_namespace":
                 return (
                     "> Unknown namespace. Try `list_namespaces` to see valid options."
+                )
+            if reason == "sample_only":
+                return (
+                    "> Sampled view only — more entries remain. "
+                    "Use `walk_namespace` for exhaustive iteration."
+                )
+            if reason == "archive_unavailable":
+                return (
+                    "> All archives failed to respond. Check `list_zim_files` "
+                    "and server logs."
+                )
+            if reason == "search_all_budget_exceeded":
+                return (
+                    "> Search-all aggregate timeout fired before every archive "
+                    "was probed. Narrow the query or raise "
+                    "`OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`."
                 )
             return "> No results. Try a shorter or differently-spelled query."
         bits: List[str] = []
@@ -216,21 +247,30 @@ def attach_meta(
     content_chars: Optional[int] = None,
     suggestions: Optional[List[Dict[str, str]]] = None,
     reason: Optional[str] = None,
+    rendered: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Attach a `_meta` envelope built from the JSON-rendered payload (sans _meta).
 
     Mutates and returns `payload`. Forwards build_meta kwargs.
 
-    Note: ``_meta.chars`` reflects the rendered JSON envelope size (useful
-    for context-budget tracking), which is necessarily larger than the
-    content slice. Pagination is driven by ``content_chars`` — pass the
-    length of the paginable field (e.g. ``len(payload["content"])``) so
-    ``more_at_offset`` is computed from content bytes, not envelope bytes.
+    H23: ``rendered`` is an optional caller-supplied serialization of the
+    payload. When omitted, we serialize via ``json.dumps`` here. Callers
+    that already have a rendered form (e.g. a prose body about to ship as
+    TextContent) can pass it through to avoid an extra full-payload JSON
+    serialization on the hot path. For a typical Wikipedia search
+    response (~50 KB payload, top-of-funnel) this was the single largest
+    hot-path allocation outside libzim itself.
+
+    Note: ``_meta.chars`` reflects the size of ``rendered`` (caller-supplied
+    or default JSON-of-payload). Pagination is driven by ``content_chars``
+    — pass the length of the paginable field (e.g. ``len(payload["content"])``)
+    so ``more_at_offset`` is computed from content bytes, not envelope bytes.
     """
-    rendered = _json.dumps(
-        {k: v for k, v in payload.items() if k != "_meta"},
-        ensure_ascii=False,
-    )
+    if rendered is None:
+        rendered = _json.dumps(
+            {k: v for k, v in payload.items() if k != "_meta"},
+            ensure_ascii=False,
+        )
     payload["_meta"] = build_meta(
         rendered=rendered,
         truncated=truncated,

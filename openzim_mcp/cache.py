@@ -163,9 +163,36 @@ class OpenZimMcpCache:
 
         # Persistence settings
         self._persistence_enabled = getattr(config, "persistence_enabled", False)
-        self._persistence_path = Path(
-            getattr(config, "persistence_path", ".openzim_mcp_cache")
-        )
+        configured_path = getattr(config, "persistence_path", None)
+        if configured_path:
+            self._persistence_path = Path(configured_path).expanduser()
+        else:
+            # M27: default to an XDG-style cache directory rather than CWD.
+            # The previous default (``.openzim_mcp_cache`` relative to CWD)
+            # silently failed inside read-only Docker images that ran
+            # from ``/app`` with ``--chmod=555``; the save error was
+            # caught and logged but the user's cache warmup was lost
+            # without obvious feedback. ``XDG_CACHE_HOME`` is the
+            # well-known location and is writable in every standard
+            # Linux/macOS deployment.
+            import os as _os
+
+            xdg = _os.environ.get("XDG_CACHE_HOME") or str(
+                Path.home() / ".cache"
+            )
+            self._persistence_path = Path(xdg) / "openzim-mcp" / "cache.json"
+            # Ensure parent dir exists; the actual file is written
+            # later by ``_save_to_disk``.
+            try:
+                self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                logger.warning(
+                    "Cache persistence default path %s parent could not "
+                    "be created (%s); persistence will be disabled.",
+                    self._persistence_path,
+                    e,
+                )
+                self._persistence_enabled = False
 
         # Load persisted cache if enabled
         if config.enabled and self._persistence_enabled:

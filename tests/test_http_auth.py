@@ -28,11 +28,14 @@ def app_with_auth():
 
 
 def test_no_auth_header_returns_401(app_with_auth):
-    """Missing Authorization header → 401 with WWW-Authenticate: Bearer."""
+    """Missing Authorization header → 401 with WWW-Authenticate: Bearer.
+
+    M28: the challenge carries ``realm`` per RFC 6750 §3.
+    """
     client = TestClient(app_with_auth)
     resp = client.get("/protected")
     assert resp.status_code == 401
-    assert resp.headers["www-authenticate"] == "Bearer"
+    assert resp.headers["www-authenticate"] == 'Bearer realm="openzim-mcp"'
 
 
 def test_options_request_requires_auth(app_with_auth):
@@ -45,7 +48,7 @@ def test_options_request_requires_auth(app_with_auth):
     client = TestClient(app_with_auth)
     resp = client.options("/protected")
     assert resp.status_code == 401
-    assert resp.headers["www-authenticate"] == "Bearer"
+    assert resp.headers["www-authenticate"] == 'Bearer realm="openzim-mcp"'
 
 
 def test_options_request_to_health_path_still_allowed(app_with_auth):

@@ -362,15 +362,21 @@ def test_handle_zim_query_decodes_cursor_into_offset(test_config, monkeypatch):
 
 
 def test_handle_zim_query_rejects_garbage_cursor(test_config):
-    """A malformed cursor surfaces a structured error message rather
-    than silently dropping into the default offset=0 path."""
+    """A malformed cursor surfaces a ToolErrorPayload (H24) rather than
+    silently dropping into the default offset=0 path.
+
+    Pre-H24 this returned a markdown string with ``**Invalid Cursor**``;
+    the simple-mode error envelope is now structurally consistent with
+    the advanced surface so callers branch on ``result.error``.
+    """
     _, handler = _make_simple_handler(test_config)
     out = handler.handle_zim_query(
         "browse namespace C",
         options={"cursor": "not-a-valid-cursor", "compact": False},
     )
-    assert isinstance(out, str)
-    assert "Invalid Cursor" in out
+    assert isinstance(out, dict)
+    assert out.get("error") is True
+    assert out.get("operation") == "cursor_decode"
 
 
 # ---------------------------------------------------------------------------

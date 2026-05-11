@@ -45,6 +45,23 @@ def _register_browse_namespace(server: "OpenZimMcpServer") -> None:
     ) -> Union[BrowseNamespaceResponse, ToolErrorPayload]:
         """Browse entries in a specific namespace with pagination.
 
+        **Sampling caveat (Op3).** On large archives where libzim's
+        per-namespace index isn't authoritative, ``browse_namespace``
+        returns a sampled view rather than the full namespace listing.
+        Two response fields flag this:
+
+        - ``sampling_based: true`` — the discovery method walked a
+          bounded sample rather than enumerating every entry.
+        - ``page_info.total_is_lower_bound: true`` — ``total`` is the
+          sampled count, not the true namespace size.
+
+        When sampling is in play, this tool's ``done=True`` means "end
+        of the sample" — NOT "end of the namespace." For exhaustive
+        iteration over a sampled namespace, switch to ``walk_namespace``,
+        which streams every entry without sampling. The compact-mode
+        ``_meta.reason="sample_only"`` footer surfaces this hint
+        automatically.
+
         Args:
             zim_file_path: Path to the ZIM file
             namespace: Namespace to browse (C, M, W, X, A, I for old; domains for new)

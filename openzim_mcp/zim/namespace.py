@@ -641,7 +641,22 @@ class _NamespaceMixin:
 
             returned_count = len(entries)
             last_index = offset + returned_count
-            done = last_index >= total_in_namespace
+            # When the discovery method is sampling-based, ``total_in_namespace``
+            # is the size of the sample (capped at ``NAMESPACE_MAX_ENTRIES``),
+            # not the true namespace size. Reporting ``done=True`` once the
+            # caller has consumed the sample silently truncates pagination —
+            # the contract key says "no more pages" but in reality only a
+            # fraction of the namespace was returned. When sampling is in
+            # play and the page is full, keep emitting ``next_cursor`` so
+            # the caller can either continue paging or pivot to
+            # ``walk_namespace`` for exhaustive iteration. The
+            # ``page_info.total_is_lower_bound`` flag plus the new
+            # ``_meta.reason="sample_only"`` give the caller enough signal
+            # to interpret the situation correctly.
+            sample_exhausted = (
+                sampling_based and returned_count >= limit and last_index >= total_in_namespace
+            )
+            done = (last_index >= total_in_namespace) and not sample_exhausted
             next_cursor: Optional[str] = None
             if not done:
                 from openzim_mcp.pagination import archive_identity
@@ -676,7 +691,13 @@ class _NamespaceMixin:
                 "results_may_be_incomplete": results_may_be_incomplete,
             }
 
-            with_meta = attach_meta(payload)
+            # Op4: ``reason="sample_only"`` flags that the page came from
+            # a sampled discovery and ``done`` is conservatively False so
+            # the caller knows to either keep paging or pivot to
+            # ``walk_namespace`` for exhaustive iteration. The footer
+            # renderer surfaces this as actionable prose.
+            reason = "sample_only" if sample_exhausted else None
+            with_meta = attach_meta(payload, reason=reason)
             self.cache.set(cache_key, with_meta)
             logger.info(
                 f"Browsed namespace {namespace}: {limit} entries from offset {offset}"
@@ -1436,15 +1457,21 @@ class _NamespaceMixin:
                     f"call passed namespace={namespace!r}. Drop the cursor "
                     f"and start the walk over for the new namespace."
                 )
-            if "ai" in cursor_state:
-                try:
-                    _CursorClass.verify_archive_identity(
-                        cast("Any", cursor_state),
-                        expected=archive_identity(validated),
-                        tool="walk_namespace",
-                    )
-                except CursorMismatchError as e:
-                    raise OpenZimMcpValidationError(str(e)) from e
+            # H16: always verify ``ai``. The old ``if "ai" in cursor_state``
+            # guard skipped the check when a cursor lacked the field — but
+            # v=2 cursors always carry ``ai``, so the only way to miss it
+            # is a hand-crafted (or v=1, now rejected by Cursor.decode)
+            # token. ``verify_archive_identity`` itself raises a clear
+            # ``CursorMismatchError`` on absent ``ai``; relying on that
+            # makes the cross-archive guard unconditional.
+            try:
+                _CursorClass.verify_archive_identity(
+                    cast("Any", cursor_state),
+                    expected=archive_identity(validated),
+                    tool="walk_namespace",
+                )
+            except CursorMismatchError as e:
+                raise OpenZimMcpValidationError(str(e)) from e
 
         try:
             with _zim_ops_mod.zim_archive(validated) as archive:

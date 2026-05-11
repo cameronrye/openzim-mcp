@@ -32,9 +32,22 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
     Tokenizes both sides on alphanumerics (so ``"Martin_Luther_King_Jr."``
     and ``"Martin Luther King Jr."`` both yield
     ``("martin", "luther", "king", "jr")``), then accepts the match when
-    the token lists are either equal or one is a prefix of the other.
-    The 3-char-minimum guard prevents ``"Pi"`` from prefix-matching
-    ``"Pizza"`` while still allowing exact short-topic matches.
+    the token lists are equal OR when one prefixes the other within
+    reason. Two directions are valid:
+
+    * **Candidate extends topic** (``Berlin`` → ``Berlin (city)``):
+      unconditional. The candidate is the canonical article with a
+      disambiguator; the topic is the bare term the model asked about.
+    * **Topic extends candidate** (``Apollo 11 (mission)`` → ``Apollo_11``):
+      bounded — the topic must carry at most one extra token beyond the
+      candidate. This covers parenthetical disambiguation on the topic
+      side (the model asked about ``Berlin (city)`` and we found
+      ``Berlin``). Wider drops (``Martin Luther King`` → ``Martin``)
+      are NOT accepted — a bare-first-name stub shouldn't outrank the
+      canonical full-name article (H20 regression).
+
+    The 3-char-minimum guard on each side prevents trivially-short
+    tokens (``Pi``) from driving prefix matches.
     """
     topic_tokens = tuple(_TOKEN_RE.findall(topic.lower()))
     if not topic_tokens:
@@ -50,9 +63,16 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
             return True
         if sum(len(t) for t in topic_tokens) < 3:
             continue
+        if sum(len(t) for t in cand_tokens) < 3:
+            continue
+        # Candidate-extends-topic — unconditional (canonical promotion).
         if cand_tokens[: len(topic_tokens)] == topic_tokens:
             return True
-        if topic_tokens[: len(cand_tokens)] == cand_tokens:
+        # Topic-extends-candidate — bounded to a 1-token diff so
+        # ``Apollo 11 (mission)`` → ``Apollo_11`` works but
+        # ``Martin Luther King`` → ``Martin`` doesn't.
+        diff = len(topic_tokens) - len(cand_tokens)
+        if 0 < diff <= 1 and topic_tokens[: len(cand_tokens)] == cand_tokens:
             return True
     return False
 

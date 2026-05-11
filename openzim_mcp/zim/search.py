@@ -78,6 +78,51 @@ def _format_filter_text(namespace: Optional[str], content_type: Optional[str]) -
     return f" (filters: {', '.join(parts)})" if parts else ""
 
 
+# Tokens this short can't reliably indicate query relevance — "in", "of",
+# "the", "is" appear everywhere. The token-match relevance check ignores
+# them so a query like "of mice and men" doesn't get flagged low-relevance
+# because the content-bearing tokens ("mice", "men") matched but the
+# stopwords technically didn't.
+_RELEVANCE_TOKEN_MIN_LEN = 3
+
+
+def _tokenize_for_relevance(text: str) -> set[str]:
+    """Lowercase alphanumeric tokens of length >= _RELEVANCE_TOKEN_MIN_LEN."""
+    import re as _re
+
+    return {
+        tok
+        for tok in _re.findall(r"[a-z0-9]+", text.lower())
+        if len(tok) >= _RELEVANCE_TOKEN_MIN_LEN
+    }
+
+
+def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool:
+    """Return True iff NONE of the search results carry any query token.
+
+    libzim's Python binding doesn't expose per-result BM25 scores, so we
+    use a cheap proxy: when no result's path or title shares a meaningful
+    token with the query, every hit is contextually weak even though
+    Xapian found *something*. The signal feeds ``reason=low_relevance``
+    on the response so the model can pivot (try alt spellings, broaden
+    the query) rather than treat noisy results as authoritative.
+
+    Returns False when ``results`` is empty (callers gate on
+    ``total_results > 0`` so empty lists never reach this path; defensive).
+    """
+    if not results:
+        return False
+    query_tokens = _tokenize_for_relevance(query)
+    if not query_tokens:
+        return False
+    for r in results:
+        haystack = f"{r.get('path', '')} {r.get('title', '')}"
+        r_tokens = _tokenize_for_relevance(haystack)
+        if query_tokens & r_tokens:
+            return False
+    return True
+
+
 def _format_filtered_response(
     query: str,
     filter_text: str,
@@ -280,41 +325,70 @@ class _SearchMixin:
                     archive, query, limit, offset, validated_path=validated_path
                 )
             logger.debug(f"Search completed: query='{query}', results found")
-            reason = "0_hits" if total_results == 0 else None
+            reason: Optional[str] = "0_hits" if total_results == 0 else None
 
-            # Zero-hit suggestions (Phase A item #4). Sourced in priority order:
+            # H9: when Xapian returned hits but NONE of them carry the
+            # query terms in title or path, flag the response as
+            # ``low_relevance`` so callers can act (the snippet was
+            # built from the lead paragraph and the user almost
+            # certainly wanted something else). libzim's Python binding
+            # doesn't surface per-result BM25 scores, so we use a
+            # cheap proxy: if no result token-matches the query, all
+            # hits are weak. The same alt_spelling / alt_archive
+            # suggestion pool that powers ``0_hits`` is surfaced.
+            if reason is None and total_results > 0:
+                if _all_results_weakly_match(payload.get("results", []), query):
+                    reason = "low_relevance"
+
+            # Zero-hit and low-relevance suggestions (Phase A item #4).
+            # Sourced in priority order:
             # 1. ``alt_spelling`` from SuggestionSearcher partial matches —
             #    typo correction on the query against the title index.
             # 2. ``alt_archive`` — other open ZIM files whose basename matches a
             #    query token. Last-resort hint when the term itself is correct
             #    but the article lives in a different archive.
             suggestions: List[Dict[str, str]] = []
-            if total_results == 0:
+            if reason in ("0_hits", "low_relevance"):
                 limit_n = self.config.search.structured_suggestions_limit
-                # alt_spelling first (priority 1 per spec).
-                try:
-                    with _zim_ops_mod.zim_archive(validated_path) as archive:
-                        sugg_searcher = _zim_ops_mod.SuggestionSearcher(archive)
-                        sugg = sugg_searcher.suggest(query)
-                        # Cap at 2x the structured limit to give room for de-dup
-                        # against the query itself; SuggestionSearcher results
-                        # include exact matches that we don't want to surface.
-                        candidates = list(sugg.getResults(0, max(limit_n * 2, 5)))
-                    q_lower = query.lower()
-                    seen: set[str] = set()
-                    for cand_path in candidates:
-                        # SuggestionSearcher returns paths (e.g. "C/Berlin");
-                        # extract the title segment.
-                        title = cand_path.rsplit("/", 1)[-1]
-                        title_lower = title.lower()
-                        if title_lower == q_lower or title_lower in seen:
-                            continue
-                        seen.add(title_lower)
-                        suggestions.append({"type": "alt_spelling", "value": title})
-                        if len(suggestions) >= limit_n:
-                            break
-                except Exception as e:
-                    logger.debug(f"alt_spelling suggestion build failed: {e}")
+                # alt_spelling first (priority 1 per spec). Gate the
+                # archive re-open to ``0_hits`` only — when the user
+                # already has some hits (low_relevance), an extra
+                # archive open per query doubles the cost for an
+                # informational signal. low_relevance still gets the
+                # cheap alt_archive path below.
+                if reason == "0_hits":
+                    try:
+                        with _zim_ops_mod.zim_archive(validated_path) as archive:
+                            sugg_searcher = _zim_ops_mod.SuggestionSearcher(archive)
+                            sugg = sugg_searcher.suggest(query)
+                            # Cap at 2x the structured limit to give room for de-dup
+                            # against the query itself; SuggestionSearcher results
+                            # include exact matches that we don't want to surface.
+                            candidates = list(sugg.getResults(0, max(limit_n * 2, 5)))
+                        q_lower = query.lower()
+                        seen: set[str] = set()
+                        for cand_path in candidates:
+                            # SuggestionSearcher returns paths (e.g. "C/Berlin");
+                            # extract the title segment.
+                            title = cand_path.rsplit("/", 1)[-1]
+                            # M32: paths preserve title underscores
+                            # (``Photosynthesis_(biology)``); humanize back
+                            # to spaces so the rendered footer
+                            # (`` `suggestions for Photosynthesis (biology)` ``)
+                            # is something a model can reuse verbatim as a
+                            # query. The lowercase de-dup key uses the
+                            # humanized form so ``Foo_Bar`` and ``Foo Bar``
+                            # collapse.
+                            title = title.replace("_", " ")
+                            title_lower = title.lower()
+                            if title_lower == q_lower or title_lower in seen:
+                                continue
+                            seen.add(title_lower)
+                            suggestions.append({"type": "alt_spelling", "value": title})
+                            if len(suggestions) >= limit_n:
+                                break
+                    except Exception as e:
+                        logger.debug(f"alt_spelling suggestion build failed: {e}")
 
                 # alt_archive (priority 3) — fill remaining slots.
                 if len(suggestions) < limit_n:
@@ -1040,6 +1114,16 @@ class _SearchMixin:
                     entry_id, namespace, has_new_scheme=has_new_scheme
                 ):
                     continue
+                # Cheap-skip semantics: when no content_type filter is
+                # active, ``filtered_count`` counts namespace-matching
+                # candidates (not just successfully materialised ones).
+                # When a content_type filter IS active, ``filtered_count``
+                # counts entries that passed both filters. The two
+                # semantics differ slightly — entries that fail
+                # post-redirect namespace re-check would count toward
+                # the namespace-only offset but not the combined one —
+                # but pagination is internally consistent within each
+                # path (`> offset` emit gate, monotonic counter).
                 if not need_entry_for_filter and filtered_count < offset:
                     filtered_count += 1
                     continue
@@ -1060,14 +1144,21 @@ class _SearchMixin:
                     if len(page) >= limit:
                         break
 
+        # ``total_filtered_is_lower_bound`` is True when we stopped scanning
+        # before exhausting the result set — either because the page filled
+        # short of the scan tail, OR because the scan cap fired. The cap
+        # case was previously masked, which made ``done`` flip to True at
+        # the cap (clients thought iteration was complete when filtered
+        # entries remained past the cap). Both stopping conditions imply
+        # the filtered count is a lower bound.
         page_filled_short_of_scan = (
-            len(page) >= limit and scanned < total_results and not scan_cap_hit
+            len(page) >= limit and scanned < total_results
         )
         return page, _FilteredScanState(
             filtered_count=filtered_count,
             scanned=scanned,
             scan_cap_hit=scan_cap_hit,
-            total_filtered_is_lower_bound=page_filled_short_of_scan,
+            total_filtered_is_lower_bound=page_filled_short_of_scan or scan_cap_hit,
         )
 
     def _matches_cheap_namespace(
@@ -1668,6 +1759,80 @@ class _SearchMixin:
     # explode into a full ~700-variant scan.
     _TYPO_MAX_EXTRA_PROBES = 32
 
+    def _find_entry_typo_fallback_with_suggestions(
+        self,
+        archive: Any,
+        title: str,
+        *,
+        suggestion_limit: int,
+    ) -> Tuple[Optional[Any], List[str]]:
+        """Merged single-sweep typo probe.
+
+        Combines the work that previously lived in
+        ``_find_entry_typo_fallback`` + ``_verified_typo_variants`` for the
+        same-archive cold-miss case. Both functions iterated the entire
+        ~700-variant set and called ``_find_entry_fast_path`` per variant,
+        which on a ``find_entry_by_title`` zero-hit cold path doubled the
+        archive lookup count and blew through the spec's 30 ms budget.
+
+        Returns ``(best_entry, verified_titles)``:
+
+        - ``best_entry`` is the same Optional[Any] the legacy
+          ``_find_entry_typo_fallback`` returned (canonical preferred,
+          ``_TYPO_MAX_EXTRA_PROBES`` extra probes after first hit, redirect
+          chain followed).
+        - ``verified_titles`` is the same canonical-title list the legacy
+          ``_verified_typo_variants`` returned for a single archive,
+          capped at ``suggestion_limit``.
+        """
+        if len(title) < self.config.search.fuzzy_title_min_query_len:
+            return None, []
+
+        best: Optional[Any] = None
+        best_is_canonical = False
+        extra_probes = 0
+        verified: List[str] = []
+        seen_titles: set[str] = set()
+        for variant in self._typo_variants(title):
+            # Early-out once we have a canonical hit AND enough suggestions.
+            best_is_done = best is not None and (
+                best_is_canonical or extra_probes >= self._TYPO_MAX_EXTRA_PROBES
+            )
+            if best_is_done and len(verified) >= suggestion_limit:
+                break
+
+            try:
+                entry = self._find_entry_fast_path(archive, variant)
+            except Exception:
+                if best is not None and not best_is_done:
+                    extra_probes += 1
+                continue
+            if entry is None:
+                if best is not None and not best_is_done:
+                    extra_probes += 1
+                continue
+
+            source_is_canonical = not bool(getattr(entry, "is_redirect", False))
+            resolved = self._follow_redirect_chain(entry)
+
+            # Update the verified-titles pool for _meta.suggestions.
+            resolved_title = resolved.title or entry.title or variant
+            if resolved_title not in seen_titles and len(verified) < suggestion_limit:
+                verified.append(resolved_title)
+                seen_titles.add(resolved_title)
+
+            # Update the best-entry candidate.
+            if best is None:
+                best = resolved
+                best_is_canonical = source_is_canonical
+            elif source_is_canonical and not best_is_canonical:
+                best = resolved
+                best_is_canonical = True
+            else:
+                if not best_is_done:
+                    extra_probes += 1
+        return best, verified
+
     def _find_entry_typo_fallback(self, archive: Any, title: str) -> Optional[Any]:
         """Try typo-corrected variants of ``title`` against the fast path.
 
@@ -1934,7 +2099,20 @@ class _SearchMixin:
                         r.get("score", 0.0) >= 0.7 for r in aggregate_results
                     )
                     if not fast_path_hit and not already_has_strong:
-                        typo_entry = self._find_entry_typo_fallback(archive, title)
+                        # Single-sweep merged probe: one pass collects both
+                        # the typo-corrected best hit AND the verified
+                        # alt-spelling suggestions. The previous code ran
+                        # two separate ~700-variant sweeps on the same
+                        # archive, doubling the worst-case latency on
+                        # cold-miss queries.
+                        suggestion_room = structured_suggestions_limit - len(
+                            verified_variants
+                        )
+                        typo_entry, fresh_variants = (
+                            self._find_entry_typo_fallback_with_suggestions(
+                                archive, title, suggestion_limit=max(suggestion_room, 0)
+                            )
+                        )
                         if typo_entry is not None:
                             resolved_typo_title = typo_entry.title or title
                             aggregate_results.append(
@@ -1952,36 +2130,18 @@ class _SearchMixin:
                                 }
                             )
                             fuzzy_path_hit = True
-                            # Spec §14.4: when a fuzzy hit is returned, the
-                            # variant that matched is itself a valuable
-                            # ``alt_spelling`` signal — it tells the model
-                            # *what* correction the server applied so it can
-                            # decide whether to re-issue the query verbatim
-                            # or accept the correction. The variant joins
-                            # the verified-variants pool regardless of
-                            # whether other archives produced results.
-                            if resolved_typo_title not in verified_variants_seen:
-                                verified_variants.append(resolved_typo_title)
-                                verified_variants_seen.add(resolved_typo_title)
-                        else:
-                            # Collect *additional* verified variants from
-                            # this archive while it's still open — these
-                            # surface as ``alt_spelling`` suggestions iff
-                            # the final aggregate is empty.
-                            for resolved in self._verified_typo_variants(
-                                [archive],
-                                title,
-                                limit=structured_suggestions_limit
-                                - len(verified_variants),
-                            ):
-                                if resolved not in verified_variants_seen:
-                                    verified_variants.append(resolved)
-                                    verified_variants_seen.add(resolved)
-                                if (
-                                    len(verified_variants)
-                                    >= structured_suggestions_limit
-                                ):
-                                    break
+                        # Whether or not the merged probe found a fuzzy
+                        # hit, surface the verified alt-spelling pool so
+                        # the response carries actionable suggestions in
+                        # both branches (matching the spec §14.4 surfacing
+                        # rule the legacy split-pass version implemented
+                        # via two code paths).
+                        for resolved in fresh_variants:
+                            if resolved not in verified_variants_seen:
+                                verified_variants.append(resolved)
+                                verified_variants_seen.add(resolved)
+                            if len(verified_variants) >= structured_suggestions_limit:
+                                break
             except Exception as e:
                 if not cross_file:
                     raise
@@ -2258,10 +2418,29 @@ class _SearchMixin:
 
         files = self.list_zim_files_data()
         per_file: List[Dict[str, Any]] = []
+        # H22: aggregate wall-clock budget across the fan-out.
+        # ``0`` disables.
+        import time as _time
+
+        total_timeout = float(
+            getattr(
+                getattr(self.config, "search", None),
+                "search_all_total_timeout_seconds",
+                0.0,
+            )
+            or 0.0
+        )
+        deadline = _time.monotonic() + total_timeout if total_timeout > 0 else None
+        budget_exceeded = False
         for file_info in files:
             path = file_info.get("path")
             if not path:
                 continue
+            # Stop iterating once the aggregate budget is gone — the threadpool
+            # slot frees instead of blocking on another full Xapian search.
+            if deadline is not None and _time.monotonic() >= deadline:
+                budget_exceeded = True
+                break
             try:
                 payload = self.search_zim_file_data(path, query, limit_per_file, 0)
                 _total = payload.get("total", 0) or 0
@@ -2271,6 +2450,16 @@ class _SearchMixin:
                         "name": file_info.get("name"),
                         "result": payload,
                         "has_hits": _total > 0,
+                        # H14: success entries carry ``error=False`` so the
+                        # per-file row is shape-stable across success and
+                        # failure. The legacy contract stuffed a
+                        # ``ToolErrorPayload`` into ``result`` for failures,
+                        # making ``results[].result`` heterogeneous —
+                        # sometimes a SearchResponse, sometimes an error
+                        # envelope. Splitting the error into a sibling key
+                        # keeps ``result`` a single TypedDict shape and gives
+                        # small models a single boolean to branch on.
+                        "error": False,
                     }
                 )
             except Exception as e:
@@ -2280,38 +2469,54 @@ class _SearchMixin:
                         "zim_file_path": path,
                         "name": file_info.get("name"),
                         "has_hits": False,
-                        "result": tool_error(
-                            operation="search_zim_file",
-                            message=str(e),
-                            context=f"File: {path}, Query: '{query}'",
-                        ),
+                        # H14: failure entries carry ``error=True`` plus an
+                        # ``error_message`` / ``error_operation`` for context.
+                        # ``result`` is None so the TypedDict shape stays
+                        # uniform; callers branch on ``error`` instead of
+                        # type-sniffing ``result``.
+                        "result": None,
+                        "error": True,
+                        "error_operation": "search_zim_file",
+                        "error_message": str(e),
                     }
                 )
 
         files_searched = len(files)
+        # H22: when the budget cut iteration short, ``done=True`` would
+        # be a lie — there are unsearched archives. Flag with
+        # ``budget_exceeded`` on the top-level payload and propagate as a
+        # ``reason`` so the footer can render the actionable hint
+        # ("budget exceeded; raise OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS
+        # or narrow zim_file_filter").
+        meta_reason: Optional[str] = (
+            "search_all_budget_exceeded" if budget_exceeded else None
+        )
         return cast(
             "SearchAllResponse",
             attach_meta(
                 {
                     "query": query,
-                    "files_searched": files_searched,
+                    "files_searched": len(per_file),
+                    "files_available": files_searched,
                     "files_with_hits": sum(1 for r in per_file if r.get("has_hits")),
                     "files_searched_successfully": sum(
-                        1 for r in per_file if not r.get("result", {}).get("error")
+                        1 for r in per_file if not r.get("error")
                     ),
                     "files_failed": sum(
-                        1 for r in per_file if r.get("result", {}).get("error") is True
+                        1 for r in per_file if r.get("error") is True
                     ),
+                    "budget_exceeded": budget_exceeded,
                     "results": per_file,
                     "next_cursor": None,
                     "total": files_searched,
-                    "done": True,
+                    "done": not budget_exceeded,
                     "page_info": {
                         "offset": 0,
                         "limit": files_searched,
                         "returned_count": len(per_file),
                     },
-                }
+                },
+                reason=meta_reason,
             ),
         )
 

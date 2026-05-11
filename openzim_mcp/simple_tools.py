@@ -181,11 +181,18 @@ class SimpleToolsHandler:
 
             token = str(cursor_raw)
             if len(token) > 2048:
-                return (
-                    "**Invalid Cursor**\n\n"
-                    "The `cursor` value exceeds the maximum length. Drop "
-                    "the `cursor` argument and call again with an explicit "
-                    "`offset` (or no pagination arg) instead.\n"
+                # H24: errors travel as ToolErrorPayload so callers can
+                # programmatically branch on ``result.error``. The legacy
+                # markdown string forced clients to substring-match the
+                # heading, breaking the same shape the advanced tools use.
+                return tool_error(
+                    operation="cursor_decode",
+                    message=(
+                        "The `cursor` value exceeds the maximum length. "
+                        "Drop the cursor and call again with an explicit "
+                        "`offset` (or no pagination arg)."
+                    ),
+                    context=f"cursor={token[:64]}...",
                 )
             try:
                 padded = token + "=" * (-len(token) % 4)
@@ -203,11 +210,16 @@ class SimpleToolsHandler:
                         options["offset"] = decoded_offset
             except Exception as e:
                 logger.warning("Could not decode cursor %r: %s", cursor_raw, e)
-                return (
-                    "**Invalid Cursor**\n\n"
-                    "The `cursor` value could not be decoded. Drop the "
-                    "`cursor` argument and call again with an explicit "
-                    "`offset` (or no pagination arg) instead.\n"
+                # H24: see above — keep simple-mode error shape consistent
+                # with the advanced surface.
+                return tool_error(
+                    operation="cursor_decode",
+                    message=(
+                        "The `cursor` value could not be decoded. Drop "
+                        "the cursor and call again with an explicit "
+                        "`offset` (or no pagination arg)."
+                    ),
+                    context=f"cursor={token[:64]}",
                 )
         if options.get("synthesize"):
             try:
@@ -422,6 +434,19 @@ class SimpleToolsHandler:
             # absolute filesystem paths back to the MCP client.
             safe_query = sanitize_context_for_error(query)
             safe_error = sanitize_context_for_error(str(e))
+            # M31: when the inner synthesize branch raises past its own
+            # try-except (rare but reachable on unexpected internal
+            # failures), the outer except previously swallowed the
+            # ``ToolErrorPayload`` shape and emitted a markdown string.
+            # Detect the synthesize path and return a structured error
+            # so callers can programmatically branch on
+            # ``result.error``.
+            if options.get("synthesize"):
+                return tool_error(
+                    operation="synthesize_pipeline_error",
+                    message=f"Synthesize pipeline failed: {safe_error}",
+                    context=f"Query: {safe_query}",
+                )
             return (
                 f"**Error Processing Query**\n\n"
                 f"**Query**: {safe_query}\n"
@@ -1536,10 +1561,37 @@ class SimpleToolsHandler:
         zim_file_path: str,
         params: Dict[str, Any],
         options: Dict[str, Any],
-    ) -> str:
+    ) -> "Union[str, _HandlerResult]":
         # Honour caller-supplied ``limit`` (mapped to ``limit_per_file`` for
         # symmetry with other tools) and fall back to 5 — matching
         # ``search_zim_file``'s explicit ``limit_per_file=5`` default.
+        if options.get("compact", False):
+            actual_query = params.get("query", query)
+            data = self.zim_operations.search_all_data(
+                actual_query,
+                limit_per_file=options.get("limit", 5),
+            )
+            body = compact_renderers.render_search_all(data, actual_query)
+            # H10: surface the aggregate ``reason`` / ``suggestions`` from
+            # _meta so the footer renders structured recovery hints in
+            # the no-hit aggregate case. Without this, the legacy
+            # markdown path swallowed both signals.
+            meta_obj = data.get("_meta") if isinstance(data, dict) else None
+            reason = meta_obj.get("reason") if isinstance(meta_obj, dict) else None
+            suggestions = (
+                meta_obj.get("suggestions") if isinstance(meta_obj, dict) else None
+            )
+            # All-archives-failed signal (Op4): if every per-file entry
+            # carries an error, flag with ``archive_unavailable`` so the
+            # caller knows the issue is structural, not query-shape.
+            per_file = data.get("results") or []
+            if per_file and all(
+                isinstance(e, dict) and e.get("error") for e in per_file
+            ):
+                reason = "archive_unavailable"
+            return _HandlerResult(
+                body=body, reason=reason, suggestions=suggestions
+            )
         return self.zim_operations.search_all(
             params.get("query", query),
             limit_per_file=options.get("limit", 5),
