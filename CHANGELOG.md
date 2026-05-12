@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — post-a9 review wave (5 defects + 4 deferred items)
+## [2.0.0a9] — 2026-05-12 (alpha pre-release) — post-a9 review wave (5 defects + 4 deferred items)
 
 Follow-up review wave after the post-a8 batch (commit d3e310e). 4
 parallel code-reviewer agents covered Phases A/B/C plus cross-cutting
