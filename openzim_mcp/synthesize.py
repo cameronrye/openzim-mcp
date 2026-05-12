@@ -582,6 +582,45 @@ def _promote_title_match(
     return top_hits
 
 
+_LIST_ARTICLE_PREFIX_RE = re.compile(
+    r"^(?:List|Index|Outline|Glossary|Timeline|Bibliography)_of_", re.IGNORECASE
+)
+
+
+def _is_list_article(hit: dict) -> bool:
+    """O5 (beta): identify list/index articles to demote in synthesize.
+
+    Wikipedia list articles (``List_of_textbooks_on_classical_mechanics``,
+    ``Index_of_…``, ``Outline_of_…``, ``Timeline_of_…``) carry a single
+    stub paragraph plus a long enumeration. They rank surprisingly high
+    in Xapian search because their bodies match many query tokens, but
+    in synthesize their stub text adds ~50 tokens of noise without
+    informational signal. We don't drop them — sometimes the list IS
+    the answer — just push them to the back of the top_n.
+    """
+    path = hit.get("path") or ""
+    return bool(_LIST_ARTICLE_PREFIX_RE.match(path))
+
+
+def _demote_list_articles(
+    top_hits: list[tuple[str, dict]],
+) -> list[tuple[str, dict]]:
+    """Stable-partition list articles to the bottom of the top_hits set.
+
+    Preserves order within each partition so the fusion's ranking
+    decision is preserved for the meaningful articles AND for any list
+    articles that survived. Only reorders the top_n that's already been
+    selected — does not change the set of included hits.
+    """
+    if not top_hits:
+        return top_hits
+    non_list = [t for t in top_hits if not _is_list_article(t[1])]
+    list_hits = [t for t in top_hits if _is_list_article(t[1])]
+    if not list_hits:
+        return top_hits
+    return non_list + list_hits
+
+
 def _select_top_hits(
     per_archive_hits: list[list[dict]],
     archives_searched: list[str],
@@ -593,6 +632,13 @@ def _select_top_hits(
     Returns ``(top_hits, fallback_used)`` where ``top_hits`` is a list of
     ``(archive_name, hit)`` tuples and ``fallback_used`` is
     ``"rrf_fusion"`` or ``"xapian_score"``.
+
+    Note: ``_demote_list_articles`` runs in ``synthesize_query`` AFTER
+    ``_promote_title_match`` (not here). Demoting before promotion lets
+    a list article slip into position 0 of ``top_hits``; that position
+    then passes ``_promote_title_match``'s strong-match guard via the
+    candidate-extends-topic rule (``Berlin`` → ``Berlin_(…)``) and the
+    canonical entry never gets promoted.
     """
     if len(per_archive_hits) > 1:
         return _select_top_hits_multi(per_archive_hits, archives_searched, top_n=top_n)
@@ -818,6 +864,14 @@ def synthesize_query(
         archives_searched=archives_searched,
         search_handler=search_handler,
     )
+    # O5 (beta): demote list articles after title promotion has run. The
+    # promotion's strong-match guard treats ``Berlin_(disambiguation)``
+    # as a candidate-extends-topic match for ``Berlin``, so demoting
+    # ``List_of_songs_about_Berlin`` to the bottom BEFORE promotion lets
+    # ``Berlin_(disambiguation)`` claim rank 0 and skip the canonical
+    # promotion. Demoting AFTER preserves the promotion's decision and
+    # only reorders the survivors.
+    top_hits = _demote_list_articles(top_hits)
     response_query = original_query if original_query is not None else query
     if not top_hits:
         # Even with empty BM25 hits, a canonical title hit might still
@@ -832,7 +886,7 @@ def synthesize_query(
         )
         if not promoted:
             return _zero_hits_response(response_query, archives_searched, fallback_used)
-        top_hits = promoted
+        top_hits = _demote_list_articles(promoted)
 
     all_passages, hit_keys = _extract_passages_for_top_hits(top_hits)
     if strip_links:

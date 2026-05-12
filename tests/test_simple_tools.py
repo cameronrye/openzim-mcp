@@ -1634,12 +1634,21 @@ class TestCompactMarkdownRenderingForJsonIntents:
     def test_non_compact_uses_legacy_json_paths(self):
         """compact=False keeps the four JSON-returning legacy methods
         unchanged — programmatic callers continue to receive JSON.
+
+        D2 (beta): ``articles related to X`` now ALWAYS title-resolves
+        the entry path before calling the backend (the bug being fixed
+        is that ``articles related to United States`` failed with
+        "Cannot find entry" because the path is ``United_States``).
+        ``find_entry_by_title_data`` is therefore expected to be called
+        once for the related handler regardless of compact mode. The
+        rest of the legacy contract is unchanged.
         """
         from unittest.mock import MagicMock
 
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.find_entry_by_title.return_value = '{"results": []}'
+        mock.find_entry_by_title_data.return_value = {"results": []}
         mock.get_related_articles.return_value = '{"results": []}'
         mock.walk_namespace.return_value = '{"entries": []}'
         mock.list_namespaces.return_value = '{"namespaces": {}}'
@@ -1655,11 +1664,88 @@ class TestCompactMarkdownRenderingForJsonIntents:
         mock.get_related_articles.assert_called_once()
         mock.walk_namespace.assert_called_once()
         mock.list_namespaces.assert_called_once()
-        # And the data variants were NOT called for these.
-        mock.find_entry_by_title_data.assert_not_called()
+        # find_entry_by_title_data is now called once (from D2's related
+        # handler title probe). The OTHER three data variants stay dark.
+        mock.find_entry_by_title_data.assert_called_once()
         mock.get_related_articles_data.assert_not_called()
         mock.walk_namespace_data.assert_not_called()
         mock.list_namespaces_data.assert_not_called()
+
+
+class TestCursorQueryValidationD9:
+    """D9 (beta, second pass): the cursor's ``s.q`` validation must
+    accept reshaped queries about the same topic (token-set overlap)
+    while still rejecting cursors reused across genuinely unrelated
+    queries. The first revision's one-directional substring check
+    false-rejected legitimate pagination when the model shortened the
+    query on the retry."""
+
+    @staticmethod
+    def _make_cursor(q: str, offset: int = 3) -> str:
+        import base64
+        import json as _json
+
+        return base64.urlsafe_b64encode(
+            _json.dumps({"v": 2, "s": {"o": offset, "q": q}}).encode()
+        ).decode()
+
+    def _make_handler(self):
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        # search_zim_file_data returns an empty payload — the cursor
+        # validation runs BEFORE dispatch, so the search backend never
+        # has to do real work for these tests.
+        mock.search_zim_file_data.return_value = {
+            "query": "x",
+            "results": [],
+            "next_cursor": None,
+            "total": 0,
+            "done": True,
+            "page_info": {"offset": 3, "limit": 3, "returned_count": 0},
+            "_meta": {},
+        }
+        mock.search_zim_file.return_value = ""
+        return SimpleToolsHandler(mock)
+
+    def test_cursor_shorter_query_does_not_false_reject(self):
+        """Cursor issued for ``berlin culture`` then resubmitted with a
+        shorter ``berlin`` query — same topic, must not reject."""
+        h = self._make_handler()
+        out = h.handle_zim_query(
+            "search for berlin",
+            zim_file_path="/x.zim",
+            options={"cursor": self._make_cursor("berlin culture"), "limit": 2},
+        )
+        # No cursor_decode error → the search backend was invoked.
+        if isinstance(out, dict):
+            assert out.get("operation") != "cursor_decode"
+
+    def test_cursor_unrelated_query_rejects(self):
+        """Cursor issued for ``algebra`` then resubmitted with
+        ``photosynthesis`` — no shared tokens, must surface the
+        cursor_decode error."""
+        h = self._make_handler()
+        out = h.handle_zim_query(
+            "search for photosynthesis",
+            zim_file_path="/x.zim",
+            options={"cursor": self._make_cursor("algebra"), "limit": 2},
+        )
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"
+
+    def test_cursor_overlapping_tokens_accepts(self):
+        """Cursor issued for ``berlin germany`` then resubmitted with
+        ``berlin culture`` — share the ``berlin`` token, must accept."""
+        h = self._make_handler()
+        out = h.handle_zim_query(
+            "search for berlin culture",
+            zim_file_path="/x.zim",
+            options={"cursor": self._make_cursor("berlin germany"), "limit": 2},
+        )
+        if isinstance(out, dict):
+            assert out.get("operation") != "cursor_decode"
 
 
 class TestCompactLinksResponse:

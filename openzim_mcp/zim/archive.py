@@ -494,8 +494,48 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                 "Tags",
             ]
 
+            # DD1 (beta, second pass): new-scheme ZIM archives serve
+            # ``M/<key>`` via ``archive.get_metadata_item`` — the
+            # entry-by-path API silently strips the ``M/`` prefix and
+            # resolves to the C-namespace article with that name,
+            # which is why ``metadata for <file>`` returned 172 KB
+            # Wikipedia article bodies for Title / Description /
+            # Language. (D7 fixed this for the per-entry
+            # ``get article M/Title`` surface; this fix extends the
+            # same routing to the aggregator.) On old-scheme archives
+            # fall back to ``get_entry_by_path`` since the M namespace
+            # actually lives on the entry surface there.
+            has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
             for meta_key in common_metadata:
                 try:
+                    if has_new_scheme:
+                        try:
+                            item = archive.get_metadata_item(meta_key)
+                        except Exception as e:
+                            logger.debug(
+                                f"get_metadata_item failed for {meta_key}: {e}"
+                            )
+                            continue
+                        if item is None:
+                            continue
+                        content = (
+                            bytes(item.content)
+                            .decode("utf-8", errors="replace")
+                            .strip()
+                        )
+                        if not content:
+                            continue
+                        # New-scheme metadata is plain text — Title is
+                        # ``"Wikipedia"``, Date is ``"2026-02-15"``.
+                        # Skip the HTML-extraction step entirely.
+                        if len(content) > _METADATA_PREVIEW_CAP:
+                            metadata_entries[meta_key] = (
+                                f"{content[:_METADATA_PREVIEW_CAP].rstrip()}… "
+                                f"[truncated, {len(content):,} chars total]"
+                            )
+                        else:
+                            metadata_entries[meta_key] = content
+                        continue
                     entry = archive.get_entry_by_path(f"M/{meta_key}")
                     if entry:
                         # libzim raises RuntimeError if get_item() is called
