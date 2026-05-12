@@ -1859,6 +1859,25 @@ class _SearchMixin:
             return None
         return title, actual
 
+    @staticmethod
+    def _is_shortest_title_candidate(
+        title: str,
+        path: str,
+        partial_lower: str,
+        existing_paths: set,
+        existing_titles: set,
+    ) -> bool:
+        """Per-row predicate for the shortest-title Strategy B scan."""
+        if not title or not path:
+            return False
+        if _is_pseudo_namespace_entry(path, title, extended=True):
+            return False
+        if not title.lower().startswith(partial_lower):
+            return False
+        if path in existing_paths or title.lower() in existing_titles:
+            return False
+        return True
+
     def _canonical_via_shortest_title(
         self,
         archive: Archive,
@@ -1879,13 +1898,9 @@ class _SearchMixin:
             if entry_info is None:
                 continue
             title, path = entry_info
-            if not title or not path:
-                continue
-            if _is_pseudo_namespace_entry(path, title, extended=True):
-                continue
-            if not title.lower().startswith(partial_lower):
-                continue
-            if path in existing_paths or title.lower() in existing_titles:
+            if not self._is_shortest_title_candidate(
+                title, path, partial_lower, existing_paths, existing_titles
+            ):
                 continue
             if len(title) < best_len:
                 best = (title, path)

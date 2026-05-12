@@ -1665,21 +1665,44 @@ class SimpleToolsHandler:
             self._track("disambiguation_returned")
             return self._render_disambiguation(topic, strong_matches)
 
-        # DD2 (beta, second pass): thread ``content_offset`` through so
-        # callers can paginate the article body. The first revision of
-        # ``tell me about`` hard-coded offset=0, which silently dropped
-        # the parameter even when documented at the ``zim_query`` tool
-        # surface. Long Wikipedia articles (Photosynthesis: 148k chars)
-        # then required a separate ``get article <path>`` call with an
-        # explicit offset to read the tail — the auto-fetch shape was
-        # only useful for the head.
-        content_offset = options.get("content_offset", 0)
+        article_body = self._fetch_topic_article_body(
+            zim_file_path, top_path, max_content_length, options
+        )
+        if article_body is None:
+            # Article fetch failed — degrade gracefully to plain search.
+            return self.zim_operations.search_zim_file(
+                zim_file_path, topic, search_limit, 0
+            )
+        return (
+            f"# {top_title or topic}\n\n"
+            f"_Source: `{top_path}`_\n\n"
+            f"{article_body}"
+        )
+
+    def _fetch_topic_article_body(
+        self,
+        zim_file_path: str,
+        top_path: str,
+        max_content_length: int,
+        options: Dict[str, Any],
+    ) -> Optional[str]:
+        """Fetch the article body for the resolved tell_me_about top hit.
+
+        Returns the body string on success, or ``None`` when the backend
+        raises and the caller should degrade to plain search.
+
+        DD2 (beta, second pass): threads ``options["content_offset"]``
+        through so long-article pagination works under ``tell me
+        about``. When ``content_offset == 0`` AND ``compact=True``,
+        apply the lead-with-TOC cut so the response stays scoped to
+        the lead + section list (the small-model sweet spot). Skip
+        the cut when paging mid-article — the "lead section" concept
+        doesn't apply, and the H2-boundary cut would truncate the
+        requested page at the next heading.
+        """
+        content_offset = self._coerce_content_offset(options.get("content_offset"))
         try:
-            content_offset = max(int(content_offset), 0)
-        except (TypeError, ValueError):
-            content_offset = 0
-        try:
-            article_body = self.zim_operations.get_zim_entry(
+            body = self.zim_operations.get_zim_entry(
                 zim_file_path,
                 top_path,
                 max_content_length,
@@ -1687,42 +1710,29 @@ class SimpleToolsHandler:
                 compact=options.get("compact", False),
             )
         except Exception as e:
-            # Article fetch failed — degrade gracefully to plain search.
             logger.warning(
                 "tell_me_about: article fetch failed for %r, falling back to "
                 "search: %s",
                 top_path,
                 e,
             )
-            return self.zim_operations.search_zim_file(
-                zim_file_path, topic, search_limit, 0
-            )
-
-        # Strong-match path: return just the article. We deliberately do
-        # NOT append a "## Other matches" section here — the rendered
-        # search would duplicate the top hit (we already inlined it
-        # above), and the agentic-loop UX value of seeing related-but-not
-        # asked-for articles is low. If the caller wants alternatives,
-        # they can issue a separate ``search ...`` query.
+            return None
         if options.get("compact", False) and content_offset == 0:
-            # In compact mode, cut the body at the first real H2
-            # boundary (when within ``max_content_length``) so we serve
-            # a clean lead instead of mid-paragraph truncation. Then
-            # append a "Sections" navigation list pulled from the cheap
-            # structure-data side-call so the LLM can choose where to
-            # drill in next without round-tripping through a separate
-            # ``show structure of X`` call.
-            #
-            # Skip the lead-with-TOC pass when ``content_offset > 0`` —
-            # the caller is paging through the body, the "lead section"
-            # concept doesn't apply mid-article, and the H2 cut would
-            # truncate the requested page at the next heading.
-            article_body = self._lead_with_toc(zim_file_path, top_path, article_body)
-        return (
-            f"# {top_title or topic}\n\n"
-            f"_Source: `{top_path}`_\n\n"
-            f"{article_body}"
-        )
+            body = self._lead_with_toc(zim_file_path, top_path, body)
+        return body
+
+    @staticmethod
+    def _coerce_content_offset(raw: Any) -> int:
+        """Cast a caller-supplied ``content_offset`` to a non-negative int.
+
+        Defaults to 0 on any TypeError/ValueError (None, strings, etc.).
+        Negative ints are clamped to 0 so a malformed cursor can't
+        produce an out-of-range slice downstream.
+        """
+        try:
+            return max(int(raw or 0), 0)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _render_disambiguation(topic: str, candidates: list) -> str:
