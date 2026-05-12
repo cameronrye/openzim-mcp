@@ -1437,16 +1437,24 @@ class _SearchMixin:
         # already in the result list. Strategy 1 takes priority for
         # cases where the prefix lands across many same-prefix titles;
         # this prepend just fills the canonical gap.
-        canonical = self._find_canonical_prefix_match(
-            archive, partial_query, suggestions
-        )
-        if canonical is not None:
-            suggestions = [canonical] + suggestions
-            # Trim back to limit so the canonical doesn't push the
-            # original last suggestion off the cliff unaccounted.
-            suggestions = suggestions[:limit]
-
+        #
+        # D6 (beta, second pass): only run the canonical probe when
+        # Strategy 1 returned something. The probe's purpose is to fill
+        # a gap in a populated list; when Strategy 1 is empty, Strategy 2
+        # below runs SuggestionSearcher with its own canonical-promotion
+        # logic (sorted by score+length), so running the canonical probe
+        # here would just be a duplicate SuggestionSearcher call against
+        # the same archive on the cold path.
         if suggestions:
+            canonical = self._find_canonical_prefix_match(
+                archive, partial_query, suggestions
+            )
+            if canonical is not None:
+                suggestions = [canonical] + suggestions
+                # Trim back to limit so the canonical doesn't push the
+                # original last suggestion off the cliff unaccounted.
+                suggestions = suggestions[:limit]
+
             logger.info(f"Found {len(suggestions)} suggestions using search fallback")
             return {
                 "partial_query": partial_query,

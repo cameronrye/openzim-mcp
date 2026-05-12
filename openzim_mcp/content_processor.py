@@ -475,6 +475,7 @@ class ContentProcessor:
                 continue
             rows: List[Dict[str, str]] = []
             current_section: Optional[str] = None
+            section_emitted_count = 0
             title_row_consumed = False
             # Only rows whose nearest ``<table>`` ancestor is the infobox
             # ITSELF count — Wikipedia infoboxes frequently embed nested
@@ -553,6 +554,7 @@ class ContentProcessor:
                     candidate = " ".join(th.get_text().split())
                     if candidate:
                         current_section = candidate
+                        section_emitted_count = 0
                     continue
                 if th and td:
                     raw_label = " ".join(th.get_text().split())
@@ -573,14 +575,30 @@ class ContentProcessor:
                     # ``infobox-header`` row's name (``GDP — Time zone``).
                     # Section header rows (th-only) handle ``mergedtoprow``
                     # in their own branch and are unaffected.
+                    #
+                    # D1 (beta, second pass): Wikipedia ALSO marks the
+                    # first KV row inside a section with ``mergedtoprow``
+                    # — that row is the section's visual lead, NOT a
+                    # break out of it. Resetting unconditionally regressed
+                    # the original bug in the opposite direction
+                    # (``Government — Body`` collapsed to ``Body``).
+                    # Reset only after we've already emitted at least one
+                    # KV row under the current section, so the section's
+                    # lead row keeps its prefix and only trailing
+                    # ``mergedtoprow`` rows break out.
                     tr_classes_raw: Any = tr.get("class") or []
                     tr_classes: List[str]
                     if isinstance(tr_classes_raw, str):
                         tr_classes = tr_classes_raw.split()
                     else:
                         tr_classes = [str(c) for c in tr_classes_raw]
-                    if "mergedtoprow" in tr_classes:
+                    if (
+                        "mergedtoprow" in tr_classes
+                        and current_section is not None
+                        and section_emitted_count > 0
+                    ):
                         current_section = None
+                        section_emitted_count = 0
                     # Prefix with current section when present so labels
                     # disambiguate across sections. Drop the prefix when
                     # the label already starts with the section name
@@ -596,6 +614,8 @@ class ContentProcessor:
                         label = raw_label
                     rows.append({"label": label, "value": value})
                     title_row_consumed = True
+                    if current_section is not None:
+                        section_emitted_count += 1
                     if len(rows) >= kv_limit:
                         break
             node.decompose()

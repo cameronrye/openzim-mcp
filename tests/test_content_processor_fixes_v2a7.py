@@ -273,6 +273,39 @@ WIKI_INFOBOX_WITH_TRAILING_FREE_ROWS = """
 """
 
 
+# D1 (beta, second pass): if the FIRST KV row inside a section is itself
+# marked ``mergedtoprow`` (Wikipedia uses this when a section starts a
+# new visual group), the naive reset would clear the just-set section
+# context and emit the row bare (``Body`` instead of ``Government —
+# Body``). The reset must only fire when we've already emitted at least
+# one row under the current section — i.e. for *trailing* free-floating
+# rows, not for the section's lead row.
+WIKI_INFOBOX_HEADER_THEN_MERGEDTOPROW_FIRST_KV = """
+<table class="infobox">
+  <tr class="mergedtoprow"><th colspan="2" class="infobox-above">Berlin</th></tr>
+  <tr class="mergedtoprow"><th colspan="2" class="infobox-header">Government</th></tr>
+  <tr class="mergedtoprow"><th class="infobox-label">Body</th><td>Abgeordnetenhaus</td></tr>
+  <tr class="mergedrow"><th class="infobox-label">Mayor</th><td>Kai Wegner</td></tr>
+</table>
+"""
+
+
+def test_infobox_first_kv_after_header_keeps_section_prefix():
+    """The reset added in D1 must not strip the section from a section's
+    lead KV row. Wikipedia infoboxes sometimes put ``mergedtoprow`` on
+    the first KV row inside a section to mark the visual group start;
+    that row legitimately belongs to the preceding section header."""
+    soup = BeautifulSoup(WIKI_INFOBOX_HEADER_THEN_MERGEDTOPROW_FIRST_KV, "html.parser")
+    proc = ContentProcessor()
+    rows = proc.extract_infobox(soup)
+    labels = [r["label"] for r in rows]
+    assert "Government — Body" in labels
+    assert "Government — Mayor" in labels
+    # Negative: the reset must not have stripped the section here.
+    assert "Body" not in labels
+    assert "Mayor" not in labels
+
+
 def test_infobox_trailing_free_rows_do_not_inherit_last_section():
     """Trailing rows marked ``<tr class="mergedtoprow">`` — Wikipedia's
     visual "start of a new group" marker — break out of the preceding

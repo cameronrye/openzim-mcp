@@ -217,27 +217,77 @@ class SimpleToolsHandler:
                     # NEW query). Pagination state coupled to the wrong
                     # query is the same class of bug the advanced tools
                     # explicitly reject via ``CursorMismatchError`` /
-                    # ``OpenZimMcpValidationError``. Mirror that
-                    # behavior in simple-mode: when ``s.q`` is present
-                    # and not a case-insensitive substring of the
-                    # current natural-language query, surface a clear
-                    # error so the caller knows to drop the cursor.
+                    # ``OpenZimMcpValidationError``.
+                    #
+                    # D9 (beta, second pass): the first revision used a
+                    # one-directional substring check
+                    # (``cursor_q.lower() in query.lower()``). That
+                    # false-rejected legitimate pagination when the
+                    # model shortened the query on the retry —
+                    # cursor issued for ``"berlin culture"`` then
+                    # resubmitted with ``"berlin"`` errored out
+                    # even though both name the same topic. Use a
+                    # token-set overlap test instead: as long as
+                    # cursor and current query share at least one
+                    # meaningful (≥3-char) token, accept the cursor.
+                    # This catches the ``"algebra"`` → ``"photosynthesis"``
+                    # swap while tolerating same-topic phrase reshaping
+                    # in either direction. Cursors whose stored query
+                    # has no ≥3-char tokens fall back to a bidirectional
+                    # substring check.
                     cursor_q = state.get("q")
-                    if (
-                        isinstance(cursor_q, str)
-                        and cursor_q.strip()
-                        and cursor_q.lower() not in (query or "").lower()
-                    ):
-                        return tool_error(
-                            operation="cursor_decode",
-                            message=(
-                                f"Cursor was issued for query {cursor_q!r}; "
-                                f"current request mentions a different query. "
-                                "Drop the cursor and start the search over "
-                                "for the new query."
-                            ),
-                            context=f"cursor_q={cursor_q!r}",
-                        )
+                    if isinstance(cursor_q, str) and cursor_q.strip():
+                        import re as _re
+
+                        cursor_tokens = {
+                            t
+                            for t in _re.findall(r"[a-z0-9]+", cursor_q.lower())
+                            if len(t) >= 3
+                        }
+                        query_tokens = {
+                            t
+                            for t in _re.findall(r"[a-z0-9]+", (query or "").lower())
+                            if len(t) >= 3
+                        }
+                        cursor_q_lower = cursor_q.lower()
+                        query_lower = (query or "").lower()
+                        # Three outcomes:
+                        #   1. Cursor has meaningful tokens AND they
+                        #      share at least one with the query → ok.
+                        #   2. Cursor has meaningful tokens AND no
+                        #      overlap → reject.
+                        #   3. Cursor has only short tokens (rare;
+                        #      e.g. ``"bio"``) → bidirectional
+                        #      substring check.
+                        if cursor_tokens:
+                            shares_token = bool(cursor_tokens & query_tokens)
+                            if not shares_token:
+                                return tool_error(
+                                    operation="cursor_decode",
+                                    message=(
+                                        f"Cursor was issued for query {cursor_q!r}; "
+                                        f"current request shares no terms "
+                                        f"with it. Drop the cursor and start "
+                                        f"the search over for the new query."
+                                    ),
+                                    context=f"cursor_q={cursor_q!r}",
+                                )
+                        else:
+                            mutually_unrelated = (
+                                cursor_q_lower not in query_lower
+                                and query_lower not in cursor_q_lower
+                            )
+                            if mutually_unrelated:
+                                return tool_error(
+                                    operation="cursor_decode",
+                                    message=(
+                                        f"Cursor was issued for query {cursor_q!r}; "
+                                        f"current request shares no terms "
+                                        f"with it. Drop the cursor and start "
+                                        f"the search over for the new query."
+                                    ),
+                                    context=f"cursor_q={cursor_q!r}",
+                                )
             except Exception as e:
                 logger.warning("Could not decode cursor %r: %s", cursor_raw, e)
                 # H24: see above — keep simple-mode error shape consistent
@@ -1478,7 +1528,24 @@ class SimpleToolsHandler:
             "title": promoted["title"],
             "snippet": "(canonical title match)",
         }
-        payload["results"] = [synthetic, *results]
+        # DD4 (beta, second pass): trim back to the requested limit so
+        # the splice doesn't push the result count off by one. The
+        # previous prepend produced 4 results for ``limit=3``; the
+        # rendered header then read "showing 1-4" with limit=3, a
+        # contract inconsistency. Drop the last BM25 result to make
+        # room for the canonical splice; the dropped result is the
+        # lowest-ranked of the BM25 set, so the displacement carries
+        # the least information loss.
+        page_info = payload.get("page_info") or {}
+        requested_limit = page_info.get("limit") or len(results)
+        spliced = [synthetic, *results][:requested_limit]
+        payload["results"] = spliced
+        # Keep ``page_info.returned_count`` consistent with the spliced
+        # length so renderers don't claim to show more rows than they
+        # actually do.
+        if isinstance(page_info, dict):
+            page_info["returned_count"] = len(spliced)
+            payload["page_info"] = page_info
         return payload
 
     def _handle_tell_me_about(
@@ -1594,12 +1661,25 @@ class SimpleToolsHandler:
             self._track("disambiguation_returned")
             return self._render_disambiguation(topic, strong_matches)
 
+        # DD2 (beta, second pass): thread ``content_offset`` through so
+        # callers can paginate the article body. The first revision of
+        # ``tell me about`` hard-coded offset=0, which silently dropped
+        # the parameter even when documented at the ``zim_query`` tool
+        # surface. Long Wikipedia articles (Photosynthesis: 148k chars)
+        # then required a separate ``get article <path>`` call with an
+        # explicit offset to read the tail — the auto-fetch shape was
+        # only useful for the head.
+        content_offset = options.get("content_offset", 0)
+        try:
+            content_offset = max(int(content_offset), 0)
+        except (TypeError, ValueError):
+            content_offset = 0
         try:
             article_body = self.zim_operations.get_zim_entry(
                 zim_file_path,
                 top_path,
                 max_content_length,
-                0,
+                content_offset,
                 compact=options.get("compact", False),
             )
         except Exception as e:
@@ -1620,7 +1700,7 @@ class SimpleToolsHandler:
         # above), and the agentic-loop UX value of seeing related-but-not
         # asked-for articles is low. If the caller wants alternatives,
         # they can issue a separate ``search ...`` query.
-        if options.get("compact", False):
+        if options.get("compact", False) and content_offset == 0:
             # In compact mode, cut the body at the first real H2
             # boundary (when within ``max_content_length``) so we serve
             # a clean lead instead of mid-paragraph truncation. Then
@@ -1628,6 +1708,11 @@ class SimpleToolsHandler:
             # structure-data side-call so the LLM can choose where to
             # drill in next without round-tripping through a separate
             # ``show structure of X`` call.
+            #
+            # Skip the lead-with-TOC pass when ``content_offset > 0`` —
+            # the caller is paging through the body, the "lead section"
+            # concept doesn't apply mid-article, and the H2 cut would
+            # truncate the requested page at the next heading.
             article_body = self._lead_with_toc(zim_file_path, top_path, article_body)
         return (
             f"# {top_title or topic}\n\n"

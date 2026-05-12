@@ -1202,6 +1202,9 @@ class TestZimOperations:
             mock_archive_instance.all_entry_count = 120
             mock_archive_instance.article_count = 80
             mock_archive_instance.media_count = 20
+            # DD1: exercise the old-scheme code path (get_entry_by_path)
+            # since this fixture predates new-scheme metadata routing.
+            mock_archive_instance.has_new_namespace_scheme = False
 
             # Mock get_entry_by_path to raise exception for some metadata
             def mock_get_entry_by_path(path):
@@ -1241,6 +1244,11 @@ class TestZimOperations:
             mock_archive_instance.all_entry_count = 1
             mock_archive_instance.article_count = 0
             mock_archive_instance.media_count = 0
+            # DD1: exercise old-scheme redirect-resolution path. The
+            # new-scheme route uses get_metadata_item which the libzim
+            # API handles redirects for internally, so this redirect-
+            # chain test is specifically the old-scheme branch.
+            mock_archive_instance.has_new_namespace_scheme = False
 
             target_item = MagicMock()
             target_item.content = b"Resolved Title"

@@ -66,6 +66,15 @@ def _build_metadata_mock_archive(target_key: str, content: bytes) -> MagicMock:
 
     mock_archive = MagicMock()
     mock_archive.get_entry_by_path.side_effect = fake_get_entry_by_path
+    # DD1 (beta, second pass): the v2.0.0a9 ``_extract_zim_metadata``
+    # routes new-scheme archives to ``archive.get_metadata_item`` so
+    # the M-namespace API isn't silently aliased to the C-namespace
+    # entry surface (which is what made ``metadata for <file>`` return
+    # 172 KB article bodies). These tests predate that route and
+    # exercise the old-scheme code path via ``get_entry_by_path`` —
+    # pin ``has_new_namespace_scheme=False`` so the fixture keeps
+    # exercising the same branch it always did.
+    mock_archive.has_new_namespace_scheme = False
     mock_archive.entry_count = 100
     mock_archive.all_entry_count = 100
     mock_archive.article_count = 50
