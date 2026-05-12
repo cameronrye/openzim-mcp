@@ -66,24 +66,30 @@ class CursorState(TypedDict, total=False):
     o: int          # offset (search, browse, links)
     l: int          # limit
     q: str          # query (search, search_all per-file)
-    ns: str         # namespace (browse_namespace)
+    ns: str         # namespace (browse_namespace, walk_namespace)
     scan_at: int    # entry id (walk_namespace — replaces today's int cursor)
     ep: str         # entry path (extract_article_links)
     k: str          # kind: "internal" | "external" | "media"
+    ct: str         # content_type (search_with_filters)
+    ai: str         # archive identity (12-char SHA-256 truncation of validated path)
 
 class CursorPayload(TypedDict):
-    v: int                       # cursor version, currently 1
+    v: int                       # cursor version, currently 2 (v=1 cursors are rejected)
     t: str                       # tool name (e.g., "browse_namespace")
     s: CursorState               # tool-specific state
 
 class Cursor:
     @staticmethod
-    def encode(*, tool: str, state: CursorState, version: int = 1) -> str: ...
+    def encode(*, tool: str, state: CursorState, version: int = 2) -> str: ...
     @staticmethod
     def decode(token: str, *, expected_tool: str) -> CursorPayload:
         # Raises CursorMismatchError on tool mismatch (caller maps to tool_error).
-        # Raises ValueError on malformed token.
+        # Raises ValueError on malformed token or unsupported version.
 ```
+
+> **Cursor version note.** Implementation shipped at ``v=2`` to bake the ``s.ai``
+> archive-identity field into the wire format. ``v=1`` (no ``ai``) is rejected
+> by the decoder. Callers building cursors by hand must emit ``v=2`` payloads.
 
 [`openzim_mcp/tool_schemas.py`](../../../openzim_mcp/tool_schemas.py) — central home for the `PageInfo`, per-item, and per-tool response TypedDicts. Tool modules import from here rather than defining inline TypedDicts. This keeps the schema surface auditable in one file and makes it easy to spot drift between tools.
 

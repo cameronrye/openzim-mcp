@@ -490,9 +490,25 @@ class ContentProcessor:
             # whose ``parent`` chain reaches ``node`` before reaching any
             # other ``<table>``.
 
-            def _cell_belongs_to_infobox(cell: Optional[Tag]) -> bool:
+            # M33: bind ``node`` via a default arg so the closure can't
+            # accidentally pick up a different ``node`` if the outer
+            # ``for selector in self.INFOBOX_SELECTORS:`` loop is ever
+            # restructured to call this after the loop advances. Python
+            # closures bind by name (late binding), so the original
+            # ``return cell.find_parent("table") is node`` was correct
+            # only because the function happened to be called inside
+            # the same loop iteration that defined ``node`` — fragile.
+            # ``node`` was narrowed from ``Tag | None`` to ``Tag`` by the
+            # ``if node is None: continue`` guard above, but mypy does not
+            # carry that narrowing into the default-arg expression. Bind
+            # via a local intermediate so the narrowed type flows in.
+            node_bound: Tag = node
+
+            def _cell_belongs_to_infobox(
+                cell: Optional[Tag], _node: Tag = node_bound
+            ) -> bool:
                 """``True`` iff ``cell``'s nearest enclosing table is
-                ``node`` itself — i.e. not buried inside a nested table.
+                ``_node`` itself — i.e. not buried inside a nested table.
 
                 ``tr.find("th")`` searches descendants, so a top-level row
                 with an empty layout-only ``<td>`` followed by a nested
@@ -503,7 +519,7 @@ class ContentProcessor:
                 """
                 if cell is None or not isinstance(cell, Tag):
                     return False
-                return cell.find_parent("table") is node
+                return cell.find_parent("table") is _node
 
             for tr in node.select("tr"):
                 ancestor_table = tr.find_parent("table")
@@ -784,8 +800,13 @@ class ContentProcessor:
                             break
 
         selected = paragraphs[start_idx : start_idx + max_paragraphs]
+        # H11: join with blank line (``\n\n``), not a single space, so a
+        # second paragraph that opens with a markdown heading (``## Foo``)
+        # remains a heading instead of becoming inline mid-line text.
+        # Heading renderers require the marker to start the line; a
+        # single-space join silently disables them.
         snippet_text = (
-            " ".join(selected)
+            "\n\n".join(selected)
             if len(selected) > 1
             else (selected[0] if selected else "")
         )
@@ -807,11 +828,19 @@ class ContentProcessor:
                 # Truncation can land inside a ``**term**`` highlight, leaving
                 # an unmatched opening marker (e.g. ``…**ter``) that downstream
                 # markdown renderers will treat as runaway bold. Detect an
-                # unpaired trailing ``**`` and strip the dangling fragment.
+                # unpaired trailing ``**`` and resolve the dangling fragment.
+                # The ``last_open == 0`` branch covers the rare case where the
+                # dangling ``**`` is at position 0 — the entire sliced snippet
+                # is the start of the first highlighted term. Slicing
+                # ``sliced[:0]`` there yields ``""`` and the caller sees a
+                # content-free ``"..."``; instead drop the orphan ``**``
+                # marker and keep the term text so the snippet stays useful.
                 if sliced.count("**") % 2 == 1:
                     last_open = sliced.rfind("**")
-                    if last_open >= 0:
+                    if last_open > 0:
                         sliced = sliced[:last_open].rstrip()
+                    elif last_open == 0:
+                        sliced = sliced[2:].lstrip()
                 snippet_text = sliced + "..."
 
         return snippet_text
@@ -872,7 +901,12 @@ class ContentProcessor:
         )
 
     def process_mime_content(
-        self, content_bytes: bytes, mime_type: str, *, compact: bool = False
+        self,
+        content_bytes: bytes,
+        mime_type: str,
+        *,
+        compact: bool = False,
+        snippet_mode: bool = False,
     ) -> str:
         """
         Process content based on MIME type.
@@ -883,6 +917,13 @@ class ContentProcessor:
             compact: When True, forward to ``html_to_plain_text`` with
                 ``compact=True`` so infobox extraction and oversized-table
                 replacement run. Defaults to False (v1.2.0-compatible).
+            snippet_mode: M29 — when True, skip the structural rewrites
+                (infobox extraction, oversized-table replacement) and run
+                html2text directly. Search-result snippets only need the
+                first paragraph or two, so the per-result cost of the
+                full compact pipeline (10 ms each × N results) was
+                burning cycles on data the snippet discards. ``compact``
+                is ignored when ``snippet_mode`` is True.
 
         Returns:
             Processed text content
@@ -892,6 +933,10 @@ class ContentProcessor:
             raw_content = content_bytes.decode("utf-8", errors="replace")
 
             if mime_type.startswith("text/html"):
+                if snippet_mode:
+                    # Skip structural rewrites; render the soup as-is.
+                    soup = BeautifulSoup(raw_content, HTML_PARSER)
+                    return self._render_soup_to_text(soup, compact=False)
                 return self.html_to_plain_text(raw_content, compact=compact)
             elif mime_type.startswith("text/"):
                 return raw_content.strip()

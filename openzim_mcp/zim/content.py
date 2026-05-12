@@ -39,6 +39,69 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# D12 (v2.0.0a9): regex captures the path-traversal shapes that
+# don't make sense for a ZIM entry path. ZIM paths are
+# ``<namespace>/<name>`` (e.g. ``C/Berlin``) — they never start with
+# ``/``, contain ``..``, or use URL-encoded equivalents. Reject these
+# at the API boundary so log-based abuse detection has a clean
+# signal and the response carries a security-flavoured message
+# instead of the generic "entry not found" remediation advice.
+_PATH_TRAVERSAL_MARKERS = (
+    "../",
+    "..\\",
+    "/..",
+    "\\..",
+    "%2e%2e",
+    "%2E%2E",
+)
+
+
+def _looks_like_path_traversal(entry_path: str) -> bool:
+    """Return True iff ``entry_path`` carries a path-traversal shape.
+
+    Conservative — only well-known injection markers trigger. Catches
+    ``../etc/passwd``, ``..\\\\windows``, URL-encoded variants, leading
+    ``/`` (absolute path), and bare ``..`` segments. A ZIM entry path
+    is namespace-prefixed (``C/X``); none of these shapes can address
+    a legitimate entry, so a false positive on real data is
+    structurally impossible.
+    """
+    if not entry_path:
+        return False
+    if entry_path.startswith("/") or entry_path.startswith("\\"):
+        return True
+    # Any leading ``..`` segment is suspect — no legitimate ZIM entry
+    # path begins with parent-directory references. Covers ``..``,
+    # ``../foo``, ``..\\foo``, ``..%2Ffoo``, etc.
+    if entry_path.startswith(".."):
+        return True
+    for marker in _PATH_TRAVERSAL_MARKERS:
+        if marker in entry_path:
+            return True
+    return False
+
+
+def reject_path_traversal(entry_path: str) -> None:
+    """Raise OpenZimMcpArchiveError when ``entry_path`` looks like a
+    path-traversal injection attempt.
+
+    Public (no leading underscore) so every tool method that accepts a
+    caller-supplied entry path can call this at its boundary. D12 added
+    the guard to ``get_zim_entry``; the sibling tools (``get_section``,
+    ``extract_article_links``, ``get_table_of_contents``,
+    ``get_article_structure``, ``get_entry_summary``, ``get_binary_entry``,
+    ``get_related_articles``, batch ``get_entries``) need the same
+    protection so a single injection vector can't slip in via a different
+    tool name.
+    """
+    if _looks_like_path_traversal(entry_path):
+        raise OpenZimMcpArchiveError(
+            f"Rejected suspicious entry path {entry_path!r}: paths with "
+            f"``..`` segments or absolute prefixes are blocked. ZIM "
+            f"entry paths are namespace-prefixed (e.g. ``C/Article_Name``)."
+        )
+
+
 class _ContentMixin:
     """Entry-content retrieval methods for ZimOperations.
 
@@ -79,6 +142,15 @@ class _ContentMixin:
         leading ``# <Title>`` H1 that html2text emits (a verbatim
         duplicate of the entry title already shown in the result row)
         is stripped before snippet selection — Op1.
+
+        M29 update: the original M29 proposed a snippet-only mode that
+        skipped structural rewrites for per-result perf. In practice
+        the infobox extraction is doing meaningful work for the
+        SNIPPET (removing the leading infobox table so the snippet
+        starts on the lead paragraph) — skipping it produced
+        pipe-soup snippets. Kept compact=True; the M29 hook
+        (``process_mime_content(snippet_mode=True)``) remains
+        available for callers that want raw rendering.
         """
         try:
             item = entry.get_item()
@@ -139,6 +211,12 @@ class _ContentMixin:
             max_content_length = self.config.content.max_content_length
         if content_offset < 0:
             content_offset = 0
+
+        # D12 (v2.0.0a9): reject path-traversal-shaped entry paths
+        # before reaching the archive layer. ``reject_path_traversal``
+        # is shared with the sibling tools so a single injection
+        # vector can't slip in via a different tool name.
+        reject_path_traversal(entry_path)
 
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
@@ -599,6 +677,11 @@ class _ContentMixin:
                 with _zim_ops_mod.zim_archive(validated_path) as archive:
                     for index, zfp, entry_path in group:
                         try:
+                            # Per-entry path-traversal guard. Without this
+                            # check inside the batch loop, a malicious
+                            # entry slips through D12 by hiding inside a
+                            # batched request.
+                            reject_path_traversal(entry_path)
                             content = self._get_zim_entry_from_archive(
                                 archive,
                                 validated_path,
@@ -951,6 +1034,8 @@ class _ContentMixin:
         if max_size_bytes is None:
             max_size_bytes = DEFAULT_MAX_BINARY_SIZE
 
+        reject_path_traversal(entry_path)
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
@@ -1168,6 +1253,8 @@ class _ContentMixin:
         elif max_words > 1000:
             max_words = 1000
 
+        reject_path_traversal(entry_path)
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
@@ -1256,19 +1343,17 @@ class _ContentMixin:
 
             if mime_type.startswith("text/html"):
                 # HTML path — build (or reuse) the bundle and slice it.
-                # ``compact=True`` cannot use the bundle: the bundle stores
-                # rendered markdown with ``compact=False`` semantics (tables
-                # in pipe-soup form, oversized-table placeholders absent),
-                # so serving compact-mode callers from it would re-introduce
-                # the table-bloat that Phase A #2 was designed to eliminate.
-                # When compact is requested, re-render the entry through the
-                # compact-aware ``_extract_html_summary`` path; the bundle
-                # path stays available for compact=False (the default) so
-                # the four bundle-backed tools still share one HTML parse.
-                if validated_path is None or compact:
-                    # Fall back to re-reading the item when no validated_path
-                    # was supplied (tests that monkeypatch the path validator)
-                    # OR when compact mode demands compact-rendered markdown.
+                # H13: the bundle is rendered with ``compact=True`` semantics
+                # (see openzim_mcp/bundle.py:_render_soup_to_text call),
+                # so it's safe to serve compact-mode callers from it. The
+                # prior code bypassed the bundle for ``compact=True`` based
+                # on a stale assumption that bundle markdown was verbose;
+                # the bypass forced an extra HTML parse and a different
+                # rendering path, producing different markdown for the same
+                # article when fetched via ``get_entry_summary`` vs
+                # ``get_section``. Keep the ``validated_path is None``
+                # fallback for tests that monkeypatch the path validator.
+                if validated_path is None:
                     raw_content = bytes(item.content).decode("utf-8", errors="replace")
                     html_result = self._extract_html_summary(
                         raw_content, max_words, compact=compact

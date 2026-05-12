@@ -65,9 +65,16 @@ class TestSearchAll:
         assert result["files_searched"] == 2
         assert result["files_with_hits"] == 1
         assert result["files_failed"] == 1
-        # Failure entries carry the error envelope under ``result`` so the
-        # per-file shape stays uniform (every entry has ``result``).
-        assert any(entry["result"].get("error") is True for entry in result["results"])
+        # H14: failure entries carry a sibling ``error: True`` flag plus
+        # ``error_message`` / ``error_operation``. ``result`` is None for
+        # failures so the shape of ``result`` stays single-typed (no more
+        # Union with ToolErrorPayload).
+        assert any(entry.get("error") is True for entry in result["results"])
+        for entry in result["results"]:
+            if entry.get("error"):
+                assert entry["result"] is None
+                assert "error_message" in entry
+                assert entry.get("error_operation") == "search_zim_file"
         # Phase B contract-shape assertions
         assert result["done"] is True
         assert result["next_cursor"] is None

@@ -249,10 +249,16 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     entries = data.get("results") or []
     done = data.get("done", False)
 
+    # D10 (v2.0.0a9): the prior wording read ``(archive total: 27M)``
+    # for ``walk namespace M`` even though the M namespace only has 13
+    # entries — the figure was the WHOLE-archive count. That confused
+    # callers into thinking M had millions of entries. Label the
+    # number explicitly as ``archive-wide entries`` so the scope is
+    # unambiguous.
     if archive_total:
         header = (
             f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned} "
-            f"(archive total: {archive_total:,})"
+            f"(of ~{archive_total:,} archive-wide entries)"
         )
     else:
         header = f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned}"
@@ -272,6 +278,76 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     else:
         lines.append("---\n_End of namespace._")
     return "\n".join(lines)
+
+
+def render_search_all(data: Mapping[str, Any], query: str) -> str:
+    """Render a search_all fan-out payload as a compact per-archive list.
+
+    H10: previously the simple-mode dispatcher always called the legacy
+    markdown ``search_all`` which bypassed ``search_all_data`` entirely —
+    no per-file ``_meta`` survived the rendering, so the structured
+    suggestions ``_meta.suggestions`` populated by the search backend
+    were unreachable from compact mode. Routing through this renderer
+    keeps the model-friendly compact prose while preserving the
+    ``reason``/``suggestions`` signals on zero-hit aggregate responses.
+    """
+    if not isinstance(data, dict):
+        return json.dumps(data)
+    per_file = data.get("results") or []
+    files_with_hits = int(data.get("files_with_hits", 0) or 0)
+    files_searched = int(data.get("files_searched", len(per_file)) or 0)
+    files_failed = int(data.get("files_failed", 0) or 0)
+    lines = [f'# Search across {files_searched} ZIM files for "{query}"', ""]
+
+    if files_with_hits == 0:
+        # Distinguish "no archive matched the query" from "every archive
+        # errored before returning hits". The latter is a server-side
+        # signal — telling the model to ``try suggestions`` on a query the
+        # archives never actually evaluated wastes turns chasing a
+        # not-the-real-problem fix.
+        if files_failed > 0 and files_failed >= files_searched:
+            lines.append(
+                f"All {files_failed} archive(s) returned errors before search "
+                "completed. Check `list_zim_files` and server logs; the query "
+                "itself was not the problem."
+            )
+        else:
+            lines.append(
+                "No results in any archive. Try `suggestions for "
+                f"{query[:30]}`, broaden the terms, or check `list_zim_files`."
+            )
+        return "\n".join(lines)
+
+    for entry in per_file:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or entry.get("zim_file_path") or "(unnamed)"
+        # H14: per-file payload may be a SearchResponse OR a sibling
+        # error key. Branch on success first.
+        result = entry.get("result")
+        if entry.get("error"):
+            lines.append(f"## `{name}` — error")
+            lines.append(f"_{entry.get('error_message', 'unknown failure')}_")
+            lines.append("")
+            continue
+        if not isinstance(result, dict):
+            continue
+        results = result.get("results") or []
+        total = result.get("total")
+        if not results:
+            continue
+        header = f"## `{name}` — {len(results)} hits"
+        if total is not None:
+            header += f" (of {total})"
+        lines.append(header)
+        for r in results[:5]:
+            if not isinstance(r, dict):
+                continue
+            t = r.get("title", "(untitled)")
+            p = r.get("path", "")
+            lines.append(f"- **{t}** — `{p}`")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def render_namespaces(data: Mapping[str, Any]) -> str:

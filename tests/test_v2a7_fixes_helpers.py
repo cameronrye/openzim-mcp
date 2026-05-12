@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 
 from openzim_mcp.compact_renderers import compact_structure_payload
 from openzim_mcp.synthesize import _locate_passage, _strip_bold
+from openzim_mcp.title_promotion import find_title_match
 from openzim_mcp.zim.archive import _METADATA_PREVIEW_CAP
 
 
@@ -301,8 +302,12 @@ def test_tell_me_about_promotes_title_index_match(test_config, monkeypatch):
         monkeypatch,
         results=[{"path": "Berlin", "title": "Berlin", "score": 1.0}],
     )
-    promoted = handler._find_title_match_for_topic("/fake.zim", "Berlin")
-    assert promoted == {"path": "Berlin", "title": "Berlin"}
+    promoted = find_title_match(handler.zim_operations, "/fake.zim", "Berlin")
+    assert promoted == {
+        "path": "Berlin",
+        "title": "Berlin",
+        "zim_file": "/fake.zim",
+    }
 
 
 def test_tell_me_about_does_not_promote_weak_title_match(test_config, monkeypatch):
@@ -316,7 +321,7 @@ def test_tell_me_about_does_not_promote_weak_title_match(test_config, monkeypatc
             {"path": "Java_(programming_language)", "title": "Java", "score": 0.95}
         ],
     )
-    promoted = handler._find_title_match_for_topic("/fake.zim", "Java")
+    promoted = find_title_match(handler.zim_operations, "/fake.zim", "Java")
     assert promoted is None
 
 
@@ -357,15 +362,21 @@ def test_handle_zim_query_decodes_cursor_into_offset(test_config, monkeypatch):
 
 
 def test_handle_zim_query_rejects_garbage_cursor(test_config):
-    """A malformed cursor surfaces a structured error message rather
-    than silently dropping into the default offset=0 path."""
+    """A malformed cursor surfaces a ToolErrorPayload (H24) rather than
+    silently dropping into the default offset=0 path.
+
+    Pre-H24 this returned a markdown string with ``**Invalid Cursor**``;
+    the simple-mode error envelope is now structurally consistent with
+    the advanced surface so callers branch on ``result.error``.
+    """
     _, handler = _make_simple_handler(test_config)
     out = handler.handle_zim_query(
         "browse namespace C",
         options={"cursor": "not-a-valid-cursor", "compact": False},
     )
-    assert isinstance(out, str)
-    assert "Invalid Cursor" in out
+    assert isinstance(out, dict)
+    assert out.get("error") is True
+    assert out.get("operation") == "cursor_decode"
 
 
 # ---------------------------------------------------------------------------

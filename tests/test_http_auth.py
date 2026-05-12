@@ -28,11 +28,14 @@ def app_with_auth():
 
 
 def test_no_auth_header_returns_401(app_with_auth):
-    """Missing Authorization header → 401 with WWW-Authenticate: Bearer."""
+    """Missing Authorization header → 401 with WWW-Authenticate: Bearer.
+
+    M28: the challenge carries ``realm`` per RFC 6750 §3.
+    """
     client = TestClient(app_with_auth)
     resp = client.get("/protected")
     assert resp.status_code == 401
-    assert resp.headers["www-authenticate"] == "Bearer"
+    assert resp.headers["www-authenticate"] == 'Bearer realm="openzim-mcp"'
 
 
 def test_options_request_requires_auth(app_with_auth):
@@ -45,7 +48,7 @@ def test_options_request_requires_auth(app_with_auth):
     client = TestClient(app_with_auth)
     resp = client.options("/protected")
     assert resp.status_code == 401
-    assert resp.headers["www-authenticate"] == "Bearer"
+    assert resp.headers["www-authenticate"] == 'Bearer realm="openzim-mcp"'
 
 
 def test_options_request_to_health_path_still_allowed(app_with_auth):
@@ -239,3 +242,103 @@ def test_insecure_disable_auth_redundant_when_token_already_set(caplog):
     assert not any(
         "INSECURE" in rec.getMessage() for rec in caplog.records
     ), "no INSECURE warning expected when a real token is configured"
+
+
+class TestClientIdPlumbing:
+    """Per-request ``client_id`` propagation from HTTP middleware to tools.
+
+    The rate limiter's per-(client_id, operation) bucket isolation
+    requires that tools see a stable per-connection identifier.
+    Stdio transport has no middleware so ``current_client_id()`` returns
+    ``"default"``. HTTP transport must set the var via
+    ``request_context.set_client_id`` before dispatching to the route
+    handler.
+    """
+
+    def test_token_path_sets_client_id_from_token_hash(self):
+        """A valid Bearer token derives a stable per-token client_id.
+
+        Different tokens → different client_ids so per-token rate
+        isolation works.
+        """
+        import hashlib
+
+        from openzim_mcp.http_app import BearerTokenAuthMiddleware
+        from openzim_mcp.request_context import current_client_id
+
+        captured = {}
+
+        async def probe(request: Request) -> PlainTextResponse:
+            captured["client_id"] = current_client_id()
+            return PlainTextResponse("ok")
+
+        config = MagicMock()
+        config.auth_token = SecretStr("alpha-token")
+        app = Starlette(routes=[Route("/probe", probe)])
+        app.add_middleware(BearerTokenAuthMiddleware, config=config)
+        client = TestClient(app)
+
+        resp = client.get("/probe", headers={"Authorization": "Bearer alpha-token"})
+        assert resp.status_code == 200
+        expected = "bearer:" + hashlib.sha256(b"alpha-token").hexdigest()[:8]
+        assert captured["client_id"] == expected
+
+    def test_different_tokens_resolve_to_different_client_ids(self):
+        """Bucket isolation actually works: two distinct tokens land on
+        two distinct client_ids.
+        """
+        from openzim_mcp.http_app import BearerTokenAuthMiddleware
+        from openzim_mcp.request_context import current_client_id
+
+        seen: list[str] = []
+
+        async def probe(request: Request) -> PlainTextResponse:
+            seen.append(current_client_id())
+            return PlainTextResponse("ok")
+
+        # Two parallel apps each with their own expected token. Realistic
+        # multi-token deployments are typically reverse-proxy-fronted with
+        # one MCP server per token, but the derivation function operates
+        # on the *presented* token so the resolution is still correct
+        # when one server accepts multiple tokens via callers.
+        config1 = MagicMock()
+        config1.auth_token = SecretStr("token-a")
+        app1 = Starlette(routes=[Route("/probe", probe)])
+        app1.add_middleware(BearerTokenAuthMiddleware, config=config1)
+        TestClient(app1).get("/probe", headers={"Authorization": "Bearer token-a"})
+
+        config2 = MagicMock()
+        config2.auth_token = SecretStr("token-b")
+        app2 = Starlette(routes=[Route("/probe", probe)])
+        app2.add_middleware(BearerTokenAuthMiddleware, config=config2)
+        TestClient(app2).get("/probe", headers={"Authorization": "Bearer token-b"})
+
+        assert len(seen) == 2
+        assert seen[0] != seen[1], (
+            f"Different Bearer tokens must map to different client_ids; "
+            f"got both as {seen[0]!r}"
+        )
+
+    def test_no_token_config_falls_back_to_remote_address(self):
+        """The token-disabled localhost path still gets per-IP isolation —
+        not the bare ``"default"`` fallback that would share one bucket
+        across every loopback caller.
+        """
+        from openzim_mcp.http_app import BearerTokenAuthMiddleware
+        from openzim_mcp.request_context import current_client_id
+
+        captured = {}
+
+        async def probe(request: Request) -> PlainTextResponse:
+            captured["client_id"] = current_client_id()
+            return PlainTextResponse("ok")
+
+        config = MagicMock()
+        config.auth_token = None
+        app = Starlette(routes=[Route("/probe", probe)])
+        app.add_middleware(BearerTokenAuthMiddleware, config=config)
+        TestClient(app).get("/probe")
+
+        assert captured["client_id"].startswith(
+            "ip:"
+        ), f"Expected ip-derived client_id; got {captured['client_id']!r}"

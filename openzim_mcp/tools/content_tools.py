@@ -31,6 +31,7 @@ def _register_get_zim_entry(server: "OpenZimMcpServer") -> None:
         entry_path: str,
         max_content_length: Optional[int] = None,
         content_offset: int = 0,
+        compact: bool = False,
     ) -> Union[EntryResponse, ToolErrorPayload]:
         """Get detailed content of a specific entry in a ZIM file.
 
@@ -41,6 +42,11 @@ def _register_get_zim_entry(server: "OpenZimMcpServer") -> None:
             content_offset: Character offset to start reading from (default 0).
                 Combine with max_content_length to page through long articles
                 without re-fetching the prefix each time.
+            compact: Op2 — when True, render content in compact form
+                intended for small LLMs (Haiku-class, Llama-3-8B):
+                infoboxes extracted as compact key/value lists,
+                oversized tables replaced with placeholders. Defaults
+                to False (v1.2.0-compatible).
 
         Returns:
             ``EntryResponse``-shaped dict with ``path``, ``title``,
@@ -100,7 +106,11 @@ def _register_get_zim_entry(server: "OpenZimMcpServer") -> None:
 
             # Use async operations to avoid blocking
             return await server.async_zim_operations.get_zim_entry_data(
-                zim_file_path, entry_path, max_content_length, content_offset
+                zim_file_path,
+                entry_path,
+                max_content_length,
+                content_offset,
+                compact=compact,
             )
 
         except Exception as e:
@@ -122,6 +132,7 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
         entries: List[Any],
         zim_file_path: Optional[str] = None,
         max_content_length: Optional[int] = None,
+        compact: bool = False,
     ) -> Union[BatchEntryResponse, ToolErrorPayload]:
         """Fetch multiple ZIM entries in one call.
 
@@ -217,7 +228,7 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
                 )
 
             return await server.async_zim_operations.get_entries_data(
-                sanitized, max_content_length
+                sanitized, max_content_length, compact=compact
             )
 
         except Exception as e:

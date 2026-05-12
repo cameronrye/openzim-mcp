@@ -26,6 +26,7 @@ from openzim_mcp.exceptions import (
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.responses import ToolErrorPayload, tool_error
+from openzim_mcp.zim.content import reject_path_traversal
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -108,6 +109,8 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If structure extraction fails
         """
+        reject_path_traversal(entry_path)
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
@@ -284,6 +287,8 @@ class _StructureMixin:
                 f"(provided: {kind!r})"
             )
 
+        reject_path_traversal(entry_path)
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
@@ -431,6 +436,8 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If TOC extraction fails
         """
+        reject_path_traversal(entry_path)
+
         # Validate and resolve file path
         validated_path = self.path_validator.validate_path(zim_file_path)
         validated_path = self.path_validator.validate_zim_file(validated_path)
@@ -562,6 +569,7 @@ class _StructureMixin:
         file-not-found / entry-not-found / section-not-found.
         """
         try:
+            reject_path_traversal(entry_path)
             validated_path = self.path_validator.validate_path(zim_file_path)
             validated_path = self.path_validator.validate_zim_file(validated_path)
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -607,13 +615,42 @@ class _StructureMixin:
             None,
         )
         if section_idx is None:
+            # M25: cap the returned ID list. A long Wikipedia article
+            # (United States, World War II) carries 80-150 section IDs;
+            # echoing every one back in a tool_error inflates the
+            # response to 4-6 KB of mostly-irrelevant slugs, which on a
+            # small model can crowd out the rest of the prompt.
+            _MAX_IDS = 50
+            all_ids = [s["id"] for s in bundle["sections"]]
+            truncated_ids = all_ids[:_MAX_IDS]
+            # Op5: surface the lexically-closest match so a fat-fingered
+            # ID hint ("Goegraphy" → "Geography") gives the model a
+            # direct retry path instead of forcing it to scan the IDs.
+            closest: Optional[str] = None
+            try:
+                import difflib as _difflib
+
+                candidates = _difflib.get_close_matches(
+                    section_id, all_ids, n=1, cutoff=0.6
+                )
+                closest = candidates[0] if candidates else None
+            except Exception:
+                closest = None
+            extras: Dict[str, Any] = {
+                "available_section_ids": truncated_ids,
+                "available_section_ids_truncated": len(all_ids) > _MAX_IDS,
+                "available_section_ids_total": len(all_ids),
+            }
+            if closest:
+                extras["closest_match"] = closest
             return tool_error(
                 operation="section_not_found",
                 message=(
                     f"No section with id={section_id!r} in entry {entry_path!r}. "
-                    f"Use get_table_of_contents to list available section IDs."
+                    + (f"Did you mean {closest!r}? " if closest else "")
+                    + "Use get_table_of_contents to list section IDs."
                 ),
-                extras={"available_section_ids": [s["id"] for s in bundle["sections"]]},
+                extras=extras,
             )
         section = bundle["sections"][section_idx]
 
@@ -623,12 +660,49 @@ class _StructureMixin:
         # paragraphs without the cascading H3 sub-tree. The legacy
         # behavior (True) returns the full sub-tree.
         char_end = section["char_end"]
+        narrow_widened = False
         if not include_subsections:
             sections = bundle["sections"]
-            for sib in sections[section_idx + 1 :]:
+            narrowed_end = char_end
+            # The first section in document order strictly after the
+            # requested one is the first child (or the next sibling).
+            first_following_idx: Optional[int] = None
+            for j, sib in enumerate(sections[section_idx + 1 :], start=section_idx + 1):
                 if sib["char_start"] > section["char_start"]:
-                    char_end = min(char_end, sib["char_start"])
+                    narrowed_end = min(narrowed_end, sib["char_start"])
+                    first_following_idx = j
                     break
+            # D5 (v2.0.0a9): when the narrow slice has essentially no
+            # body (the section heading is immediately followed by a
+            # subheading), widening to include the first immediate
+            # child gives the caller useful content instead of just
+            # the section title. H18: previously widened to
+            # ``first_child.char_end`` which included that child's
+            # own descendant subtree (a grandchild's full body shipped
+            # along). Widen instead to *that child's* first-following
+            # heading start so the caller sees the child's lead prose
+            # only — same shape as the requested narrow contract,
+            # just bumped one level down.
+            heading_len = (
+                len(section.get("title", "")) + len("#" * section["level"]) + 4
+            )
+            if (
+                narrowed_end - section["char_start"] <= heading_len + 20
+                and first_following_idx is not None
+            ):
+                first_child = sections[first_following_idx]
+                # Find the next section after this child (sibling or
+                # ancestor-sibling); use its char_start as the widened
+                # boundary so the slice covers child-lead-only.
+                widened_end = first_child["char_end"]
+                for sib in sections[first_following_idx + 1 :]:
+                    if sib["char_start"] > first_child["char_start"]:
+                        widened_end = min(widened_end, sib["char_start"])
+                        break
+                char_end = widened_end
+                narrow_widened = True
+            else:
+                char_end = narrowed_end
         full_body = bundle["rendered_markdown"][section["char_start"] : char_end]
         cap = (
             max_chars
@@ -654,6 +728,14 @@ class _StructureMixin:
                 "truncated": truncated,
             },
         )
+        # D5: signal when the narrow slice was widened so the caller
+        # can interpret the response correctly ("the section has no
+        # lead prose; we returned the first subsection instead").
+        if narrow_widened:
+            payload = cast(
+                "GetSectionResponse",
+                {**payload, "narrow_widened_to_first_child": True},
+            )
         # When truncation happens, surface ``total_chars`` so the caller
         # can tell how much of the section was elided. ``more_at_offset``
         # is intentionally omitted — get_section truncation is not
@@ -700,6 +782,8 @@ class _StructureMixin:
                 f"limit must be between 1 and 100 (provided: {limit})"
             )
 
+        reject_path_traversal(entry_path)
+
         # Resolve the path once so both link extraction and the title
         # resolution archive open use the same canonical absolute path.
         # Without this, ``~/zims/foo.zim`` opens fine for link extraction
@@ -712,6 +796,8 @@ class _StructureMixin:
 
         outbound: List[Dict[str, Any]] = []
         outbound_error: Optional[str] = None
+        links_scan_truncated = False
+        links_total_internal: Optional[int] = None
 
         try:
             # Use the dict-returning extract_article_links_data so we don't
@@ -724,6 +810,19 @@ class _StructureMixin:
                 limit=500,
                 kind="internal",
             )
+            # Hub articles (``List of …``, ``Index of …``) routinely carry
+            # 1000–5000 internal links. The 500-link cap above evaluates
+            # frequency rank on a truncated sample, so the surfaced
+            # "most-related" set is biased toward the document-order head.
+            # Surface that fact so callers can decide whether the rank is
+            # trustworthy for their use case.
+            category_totals = links_data.get("category_totals") or {}
+            links_total_internal = (
+                category_totals.get("internal")
+                if isinstance(category_totals, dict)
+                else None
+            )
+            links_scan_truncated = not bool(links_data.get("done", True))
             # extract_article_links_data resolves redirects internally and
             # stores the post-redirect entry path in ``links_data["path"]``.
             # Resolve relative links against THAT path, not the caller-supplied
@@ -731,18 +830,32 @@ class _StructureMixin:
             # directory (or namespace), resolving against the source's
             # dirname produces non-existent paths.
             resolved_source = links_data.get("path") or entry_path
-            seen: set[str] = set()
+            # D9 (v2.0.0a9): rank by link frequency rather than first-N
+            # in document order. A target referenced N times in the
+            # article is N-stronger as a "related article" signal
+            # than one mentioned once — a cheap, robust proxy for
+            # semantic relatedness that doesn't require categories or
+            # rebuilding an embedding index. First-link-text wins for
+            # the surfaced ``link_text`` field; ``mention_count`` is
+            # added to the response so the caller can see the
+            # ranking signal.
+            from collections import Counter
+
+            target_counts: Counter[str] = Counter()
+            first_text: Dict[str, str] = {}
             for link in links_data.get("results", []):
                 target = self._resolve_link_to_entry_path(
                     link.get("url", ""), resolved_source
                 )
-                if (
-                    not target
-                    or target in seen
-                    or target in (entry_path, resolved_source)
-                ):
+                if not target or target in (entry_path, resolved_source):
                     continue
-                seen.add(target)
+                target_counts[target] += 1
+                if target not in first_text:
+                    first_text[target] = link.get("text") or link.get("title") or ""
+            # Rank: frequency descending, ties broken by first-appearance
+            # order (Counter.most_common preserves insertion order for
+            # equal counts).
+            for target, count in target_counts.most_common(limit):
                 outbound.append(
                     {
                         "path": target,
@@ -750,11 +863,10 @@ class _StructureMixin:
                         # under a single archive open so we don't pay one
                         # open per result.
                         "title": target,
-                        "link_text": link.get("text") or link.get("title") or "",
+                        "link_text": first_text.get(target, ""),
+                        "mention_count": count,
                     }
                 )
-                if len(outbound) >= limit:
-                    break
             self._resolve_outbound_titles(validated_str, outbound)
         except OpenZimMcpArchiveError as e:
             # Partial-success contract: an archive- or extraction-level
@@ -780,7 +892,17 @@ class _StructureMixin:
         }
         if outbound_error is not None:
             payload["outbound_error"] = outbound_error
-        return cast("RelatedArticlesResponse", attach_meta(payload))
+        # Frequency rank was computed over only the first 500 internal links.
+        # Hub/index articles can have many more; the surfaced ranking is then
+        # biased toward the document-head links. Flag this so callers don't
+        # treat the rank as authoritative for those articles.
+        if links_scan_truncated:
+            payload["scan_truncated"] = True
+            if links_total_internal is not None:
+                payload["scan_total_internal"] = links_total_internal
+            payload["scan_limit"] = 500
+        meta_reason = "scan_truncated" if links_scan_truncated else None
+        return cast("RelatedArticlesResponse", attach_meta(payload, reason=meta_reason))
 
     @staticmethod
     def _resolve_outbound_titles(

@@ -40,14 +40,21 @@ classifiers = [
     "Topic :: Database",
     "Typing :: Typed",
 ]
+# M30: dependency upper bounds. The MCP SDK and Pydantic ship fast and have
+# repeatedly carried breaking changes across minor versions; cap each at the
+# next major so a fresh ``pip install openzim-mcp`` can't silently land on a
+# wheel-incompatible upstream. ``libzim`` is similarly tightly coupled to the
+# Python binding ABI. tiktoken caps a major because its BPE table updates
+# have shipped breaking changes across minors in the past. Beautifulsoup
+# stays unpinned-upward (very stable surface).
 dependencies = [
-    "beautifulsoup4>=4.14.3",
-    "html2text>=2025.4.15",
-    "libzim>=3.9.0",
-    "mcp[cli]>=1.27.0",
-    "pydantic>=2.13.3",
-    "pydantic-settings>=2.14.0",
-    "tiktoken>=0.7.0",
+    "beautifulsoup4>=4.14.3,<5.0",
+    "html2text>=2025.4.15,<2027.0",
+    "libzim>=3.9.0,<4.0",
+    "mcp[cli]>=1.27.0,<2.0",
+    "pydantic>=2.13.3,<3.0",
+    "pydantic-settings>=2.14.0,<3.0",
+    "tiktoken>=0.7.0,<1.0",
 ]
 
 [project.urls]

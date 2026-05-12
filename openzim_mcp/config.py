@@ -82,6 +82,17 @@ class SearchConfig(BaseModel):
     fuzzy_title_score_penalty: float = Field(
         default=SEARCH.FUZZY_TITLE_SCORE_PENALTY, ge=0.0, le=1.0
     )
+    # H22: wall-clock budget for ``search_all`` fan-out. The serial
+    # per-archive search adds up — 10 ZIM files × 3 s ≈ 30 s in one
+    # threadpool slot. When this budget elapses, the fan-out stops
+    # iterating and the caller gets the partial result so the threadpool
+    # slot frees up. ``0`` disables the timeout (legacy behavior).
+    search_all_total_timeout_seconds: float = Field(
+        default=20.0,
+        ge=0.0,
+        le=300.0,
+        description="Aggregate timeout for search_all fan-out (seconds). 0 disables.",
+    )
 
 
 class SynthesizeConfig(BaseModel):

@@ -699,6 +699,195 @@ class TestCachePersistence:
         assert cache.get("missing_value") is None
         assert cache.get("wrong_shape") is None
 
+    def test_restore_entry_accounts_for_total_bytes(self, temp_dir):
+        """Regression: _restore_entry must update _total_bytes.
+
+        Before this guarantee, byte-budget eviction silently failed after
+        a warm-start: ``_total_bytes`` read zero until enough new ``set()``
+        calls accumulated to cross ``max_bytes`` from zero, even when the
+        loaded snapshot was already well over the cap.
+        """
+        from openzim_mcp.config import CacheConfig
+
+        cache_path = str(temp_dir / "byte_acct")
+        config = CacheConfig(
+            enabled=True,
+            max_size=100,
+            ttl_seconds=60,
+            persistence_enabled=True,
+            persistence_path=cache_path,
+        )
+        cache1 = OpenZimMcpCache(config, enable_background_cleanup=False)
+        for i in range(5):
+            cache1.set(f"k{i}", "x" * 1000)
+        bytes_before = cache1.stats()["size_bytes"]
+        assert bytes_before > 0
+        cache1._save_to_disk()
+
+        cache2 = OpenZimMcpCache(config, enable_background_cleanup=False)
+        # After load, _total_bytes must reflect the loaded entries — not 0.
+        bytes_after = cache2.stats()["size_bytes"]
+        assert bytes_after == bytes_before, (
+            f"After warm-start, _total_bytes={bytes_after} but expected "
+            f"{bytes_before} (size of loaded entries)"
+        )
+
+    def test_load_enforces_max_size_cap(self, temp_dir):
+        """Regression: _load_from_disk must enforce max_size against the snapshot.
+
+        Operator tightens ``max_size`` between restarts → loaded entries
+        must be evicted down to the new cap, not silently exceed it.
+        """
+        from openzim_mcp.config import CacheConfig
+
+        cache_path = str(temp_dir / "size_cap")
+        # Write a snapshot with 5 entries under a permissive cap.
+        wide_config = CacheConfig(
+            enabled=True,
+            max_size=10,
+            ttl_seconds=60,
+            persistence_enabled=True,
+            persistence_path=cache_path,
+        )
+        cache1 = OpenZimMcpCache(wide_config, enable_background_cleanup=False)
+        for i in range(5):
+            cache1.set(f"k{i}", f"v{i}")
+        cache1._save_to_disk()
+
+        # Reload under a tighter cap. Three entries must be evicted.
+        narrow_config = CacheConfig(
+            enabled=True,
+            max_size=2,
+            ttl_seconds=60,
+            persistence_enabled=True,
+            persistence_path=cache_path,
+        )
+        cache2 = OpenZimMcpCache(narrow_config, enable_background_cleanup=False)
+        assert cache2.stats()["size"] <= 2, (
+            f"After load under max_size=2, cache holds "
+            f"{cache2.stats()['size']} entries"
+        )
+
+    def test_load_enforces_max_bytes_cap(self, temp_dir):
+        """Regression: _load_from_disk must enforce max_bytes against the snapshot.
+
+        Without this, a snapshot whose loaded ``_total_bytes`` exceeds
+        the configured ``max_bytes`` violates the cap until new ``set()``
+        calls trigger the eviction loop. Combined with the
+        ``_restore_entry`` accounting fix, the byte budget is honored
+        immediately after warm-start.
+        """
+        from openzim_mcp.config import CacheConfig
+
+        cache_path = str(temp_dir / "byte_cap")
+        wide_config = CacheConfig(
+            enabled=True,
+            max_size=100,
+            ttl_seconds=60,
+            max_bytes=0,  # disabled while building snapshot
+            persistence_enabled=True,
+            persistence_path=cache_path,
+        )
+        cache1 = OpenZimMcpCache(wide_config, enable_background_cleanup=False)
+        # Each entry ~1100 bytes; 10 entries ~11 KB total.
+        for i in range(10):
+            cache1.set(f"k{i}", "x" * 1024)
+        cache1._save_to_disk()
+
+        # Reload with a tight 3 KB cap. Must evict down.
+        narrow_config = CacheConfig(
+            enabled=True,
+            max_size=100,
+            ttl_seconds=60,
+            max_bytes=3 * 1024,
+            persistence_enabled=True,
+            persistence_path=cache_path,
+        )
+        cache2 = OpenZimMcpCache(narrow_config, enable_background_cleanup=False)
+        # Assert on entry count (not just size_bytes): the prior bug masked
+        # itself in ``size_bytes`` because ``_restore_entry`` didn't update
+        # ``_total_bytes`` either, so a buggy load reported 0 bytes for 10
+        # loaded entries. Count is the unambiguous signal.
+        entry_count = cache2.stats()["size"]
+        bytes_after = cache2.stats()["size_bytes"]
+        # 1024-byte entries with a 3 KB cap → at most 3 entries (or 1 under
+        # the single-entry-overshoot rule in set()).
+        assert entry_count <= 3, (
+            f"After load under max_bytes=3KB, cache holds {entry_count} "
+            f"entries ({bytes_after} bytes) — byte cap not enforced"
+        )
+
+    def test_load_from_disk_holds_lock_during_file_read(self, temp_dir):
+        """Regression: ``_load_from_disk`` must hold ``_lock`` across the
+        file-read AND the entry-restore loop. Previously the JSON parse
+        ran outside the lock, leaving a narrow window where a concurrent
+        ``clear()`` or ``set()`` from another thread could land between
+        the read and the restore. Verified by probing from a *different*
+        thread whether the lock is acquirable while ``_load_from_disk``
+        opens the persistence file. The cache uses ``RLock``, so a
+        same-thread probe would always succeed (reentrant); a foreign
+        thread sees the lock as held.
+        """
+        import builtins
+        import threading
+
+        from openzim_mcp.config import CacheConfig
+
+        cache_path = str(temp_dir / "lock_race")
+        config = CacheConfig(
+            enabled=True,
+            max_size=10,
+            ttl_seconds=60,
+            persistence_enabled=True,
+            persistence_path=cache_path,
+        )
+        cache1 = OpenZimMcpCache(config, enable_background_cleanup=False)
+        cache1.set("k", "v")
+        cache1._save_to_disk()
+
+        cache2 = OpenZimMcpCache(config, enable_background_cleanup=False)
+        cache2.clear()
+        cache2.set("probe", "v")
+        cache2._save_to_disk()
+
+        lock_held_during_read = {"value": None}
+        real_open = builtins.open
+
+        def probe_from_foreign_thread() -> bool:
+            """Try-acquire from a thread that does NOT own the RLock.
+            Returns ``True`` when the lock is currently held by someone
+            else (acquire fails); ``False`` when it's free.
+            """
+            held = {"v": False}
+
+            def runner() -> None:
+                got = cache2._lock.acquire(blocking=False)
+                if got:
+                    cache2._lock.release()
+                held["v"] = not got
+
+            t = threading.Thread(target=runner)
+            t.start()
+            t.join(timeout=2.0)
+            return held["v"]
+
+        def probing_open(*args, **kwargs):
+            lock_held_during_read["value"] = probe_from_foreign_thread()
+            return real_open(*args, **kwargs)
+
+        try:
+            builtins.open = probing_open
+            cache2._load_from_disk()
+        finally:
+            builtins.open = real_open
+
+        assert lock_held_during_read["value"] is True, (
+            "Expected ``_lock`` to be held when ``_load_from_disk`` opens "
+            "the persistence file. A foreign-thread probe found the lock "
+            "free, indicating the JSON parse runs outside the critical "
+            "section."
+        )
+
 
 class TestCacheEdgeCases:
     """Test edge cases and error conditions."""

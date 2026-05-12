@@ -12,7 +12,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openzim_mcp.bundle import extract_entry_bundle, get_or_build_bundle
+from openzim_mcp import bundle as _bundle_mod
+from openzim_mcp.bundle import extract_entry_bundle
 from openzim_mcp.cache import OpenZimMcpCache
 from openzim_mcp.config import CacheConfig
 from openzim_mcp.content_processor import ContentProcessor
@@ -200,7 +201,7 @@ def test_get_or_build_bundle_cache_miss_then_hit(
 
     # First call: cache miss → build
     initial_misses = cache.stats()["misses"]
-    bundle1 = get_or_build_bundle(
+    bundle1 = _bundle_mod.get_or_build_bundle(
         archive,
         "A/Berlin",
         cache=cache,
@@ -212,7 +213,7 @@ def test_get_or_build_bundle_cache_miss_then_hit(
     assert archive.get_entry_by_path.call_count == 1
 
     # Second call: cache hit → no archive access
-    bundle2 = get_or_build_bundle(
+    bundle2 = _bundle_mod.get_or_build_bundle(
         archive,
         "A/Berlin",
         cache=cache,
@@ -236,7 +237,7 @@ def test_get_or_build_bundle_eviction_rebuild_identical(
     validated_path = tmp_path / "test.zim"
     validated_path.touch()
 
-    bundle1 = get_or_build_bundle(
+    bundle1 = _bundle_mod.get_or_build_bundle(
         archive,
         "A/Berlin",
         cache=cache,
@@ -247,7 +248,7 @@ def test_get_or_build_bundle_eviction_rebuild_identical(
     # Force eviction by clearing the cache entirely
     cache.clear()
 
-    bundle2 = get_or_build_bundle(
+    bundle2 = _bundle_mod.get_or_build_bundle(
         archive,
         "A/Berlin",
         cache=cache,
@@ -271,14 +272,14 @@ def test_get_or_build_bundle_different_paths_different_keys(
     path_a.touch()
     path_b.touch()
 
-    get_or_build_bundle(
+    _bundle_mod.get_or_build_bundle(
         archive_a,
         "A/Berlin",
         cache=cache,
         validated_path=path_a,
         content_processor=cp,
     )
-    get_or_build_bundle(
+    _bundle_mod.get_or_build_bundle(
         archive_b,
         "A/Berlin",
         cache=cache,

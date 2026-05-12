@@ -163,9 +163,34 @@ class OpenZimMcpCache:
 
         # Persistence settings
         self._persistence_enabled = getattr(config, "persistence_enabled", False)
-        self._persistence_path = Path(
-            getattr(config, "persistence_path", ".openzim_mcp_cache")
-        )
+        configured_path = getattr(config, "persistence_path", None)
+        if configured_path:
+            self._persistence_path = Path(configured_path).expanduser()
+        else:
+            # M27: default to an XDG-style cache directory rather than CWD.
+            # The previous default (``.openzim_mcp_cache`` relative to CWD)
+            # silently failed inside read-only Docker images that ran
+            # from ``/app`` with ``--chmod=555``; the save error was
+            # caught and logged but the user's cache warmup was lost
+            # without obvious feedback. ``XDG_CACHE_HOME`` is the
+            # well-known location and is writable in every standard
+            # Linux/macOS deployment.
+            import os as _os
+
+            xdg = _os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+            self._persistence_path = Path(xdg) / "openzim-mcp" / "cache.json"
+            # Ensure parent dir exists; the actual file is written
+            # later by ``_save_to_disk``.
+            try:
+                self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                logger.warning(
+                    "Cache persistence default path %s parent could not "
+                    "be created (%s); persistence will be disabled.",
+                    self._persistence_path,
+                    e,
+                )
+                self._persistence_enabled = False
 
         # Load persisted cache if enabled
         if config.enabled and self._persistence_enabled:
@@ -570,6 +595,14 @@ class OpenZimMcpCache:
         entry = CacheEntry(entry_data["value"], ttl_seconds)
         entry.created_at = now_monotonic - age
         self._cache[key] = entry
+        # ``_total_bytes`` must reflect every cached entry's size — without
+        # this, ``max_bytes`` enforcement in ``set()`` reads zero across a
+        # warm-start (the eviction loop's ``while self._total_bytes > max_bytes``
+        # never fires on already-loaded entries) and the byte budget is
+        # silently inoperative until enough new sets accumulate to cross
+        # the threshold from zero. ``set()`` and ``_remove()`` maintain
+        # this invariant; ``_restore_entry`` was the lone gap.
+        self._total_bytes += entry.size_bytes
 
         # Assign a fresh access_counter value to preserve LRU ordering across
         # restart. Loaded entries get successively higher counters in
@@ -594,22 +627,32 @@ class OpenZimMcpCache:
             return
 
         try:
-            with open(persistence_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            if data.get("version") != 1:
-                logger.warning(
-                    f"Unsupported cache persistence version: {data.get('version')}"
-                )
-                return
-
-            entries = data.get("entries", {})
-            now_wall = time.time()
-            now_monotonic = time.monotonic()
-            loaded_count = 0
-            skipped_count = 0
-
+            # Hold ``_lock`` across the file read AND the entry restore.
+            # The window between ``json.load()`` and lock acquisition was
+            # narrow (this is normally called from ``__init__`` before
+            # other threads hold a reference to the cache) but a test
+            # fixture sharing a server instance across threads could race
+            # a concurrent ``clear()`` or ``set()`` against the loaded
+            # snapshot. JSON parse inside the critical section adds a
+            # brief one-time blocking window at startup with no
+            # contention in production.
             with self._lock:
+                with open(persistence_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                if data.get("version") != 1:
+                    logger.warning(
+                        f"Unsupported cache persistence version: "
+                        f"{data.get('version')}"
+                    )
+                    return
+
+                entries = data.get("entries", {})
+                now_wall = time.time()
+                now_monotonic = time.monotonic()
+                loaded_count = 0
+                skipped_count = 0
+
                 for key, entry_data in entries.items():
                     # Per-entry try/except so a single malformed entry
                     # doesn't abort the load of every other valid entry.
@@ -623,6 +666,20 @@ class OpenZimMcpCache:
                         logger.debug(
                             f"Skipped malformed cache entry {key!r}: {entry_err}"
                         )
+
+                # Enforce the configured caps against the loaded snapshot.
+                # A persistence file written under one config can be loaded
+                # under a smaller ``max_size`` / ``max_bytes`` (operator
+                # tightened limits between restarts). Without these passes,
+                # the loaded cache violates the configured cap until enough
+                # new sets force eviction. Eviction here uses the same LRU
+                # heap that ``set()`` maintains.
+                while len(self._cache) > self.config.max_size:
+                    self._evict_lru()
+                max_bytes = getattr(self.config, "max_bytes", 0)
+                if max_bytes > 0:
+                    while self._total_bytes > max_bytes and len(self._cache) > 1:
+                        self._evict_lru()
 
             if skipped_count:
                 logger.warning(

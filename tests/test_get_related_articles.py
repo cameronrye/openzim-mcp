@@ -96,6 +96,93 @@ class TestGetRelatedArticles:
         assert result["page_info"]["offset"] == 0
         assert result["page_info"]["returned_count"] == len(result["results"])
 
+    def test_outbound_ranks_by_mention_count(self, server: OpenZimMcpServer):
+        """D9 (v2.0.0a9): related-articles rank by mention frequency.
+
+        Previously the first N links in document order won, which made
+        the ``articles related to X`` surface basically "first N links",
+        not a relatedness measure. Now a target mentioned 3 times in
+        the article outranks one mentioned once — a cheap proxy for
+        semantic centrality. The ``mention_count`` field surfaces the
+        ranking signal so callers can interpret the order.
+        """
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "kind": "internal",
+                "results": [
+                    {"url": "Berlin", "text": "Berlin"},
+                    {"url": "Brandenburg", "text": "Brandenburg"},
+                    {"url": "Berlin", "text": "the capital"},
+                    {"url": "Berlin", "text": "Berlin"},
+                    {"url": "Spree", "text": "Spree"},
+                    {"url": "Brandenburg", "text": "Brandenburg"},
+                ],
+            }
+        )
+        result = server.zim_operations.get_related_articles_data(
+            "/zim/test.zim", "C/Germany", limit=10
+        )
+        results = result["results"]
+        # Berlin (3 mentions) leads, Brandenburg (2) is second, Spree (1) is third.
+        assert [r["path"] for r in results] == ["C/Berlin", "C/Brandenburg", "C/Spree"]
+        # mention_count surfaces the ranking signal.
+        counts = {r["path"]: r["mention_count"] for r in results}
+        assert counts == {"C/Berlin": 3, "C/Brandenburg": 2, "C/Spree": 1}
+        # link_text is the FIRST occurrence's anchor text — not the last
+        # or a synthesized merge.
+        berlin_row = next(r for r in results if r["path"] == "C/Berlin")
+        assert berlin_row["link_text"] == "Berlin"
+
+    def test_scan_truncated_flag_surfaces_when_link_scan_is_capped(
+        self, server: OpenZimMcpServer
+    ):
+        """Hub articles ('List of …') carry 1000s of internal links; the
+        underlying ``extract_article_links_data`` is called with a 500-link
+        cap and so the frequency rank operates on a truncated sample. The
+        response surfaces ``scan_truncated`` / ``scan_total_internal`` /
+        ``scan_limit`` and ``_meta.reason='scan_truncated'`` so callers
+        know the ranking is document-head-biased.
+        """
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "kind": "internal",
+                "results": [{"url": "Berlin", "text": "Berlin"}],
+                # done=False signals the 500-link cap fired: more links exist.
+                "done": False,
+                "category_totals": {"internal": 1750, "external": 4, "media": 12},
+            }
+        )
+        result = server.zim_operations.get_related_articles_data(
+            "/zim/test.zim", "C/List_of_capitals", limit=10
+        )
+        assert result.get("scan_truncated") is True
+        assert result.get("scan_total_internal") == 1750
+        assert result.get("scan_limit") == 500
+        assert result["_meta"]["reason"] == "scan_truncated"
+
+    def test_scan_truncated_absent_when_scan_completed(self, server: OpenZimMcpServer):
+        """When ``done=True`` from the link scan (full link set fit under
+        the 500 cap), the truncation signal stays off — no false alarms
+        on normal articles.
+        """
+        server.zim_operations.extract_article_links_data = MagicMock(
+            return_value={
+                "kind": "internal",
+                "results": [
+                    {"url": "Berlin", "text": "Berlin"},
+                    {"url": "Spree", "text": "Spree"},
+                ],
+                "done": True,
+                "category_totals": {"internal": 2, "external": 0, "media": 0},
+            }
+        )
+        result = server.zim_operations.get_related_articles_data(
+            "/zim/test.zim", "C/Germany", limit=10
+        )
+        assert "scan_truncated" not in result
+        # _meta.reason is None on the success path.
+        assert result["_meta"].get("reason") is None
+
     def test_invalid_limit_raises(self, server: OpenZimMcpServer):
         """An out-of-range limit raises OpenZimMcpValidationError."""
         with pytest.raises(OpenZimMcpValidationError, match="limit must be"):

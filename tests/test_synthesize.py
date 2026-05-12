@@ -487,7 +487,7 @@ def test_synthesize_query_single_archive_uses_xapian_score_fallback(
     }
 
     monkeypatch.setattr(
-        "openzim_mcp.synthesize.get_or_build_bundle",
+        "openzim_mcp.bundle.get_or_build_bundle",
         lambda archive, path, **kwargs: monkey_bundle,
     )
 
@@ -520,7 +520,7 @@ def test_synthesize_query_multi_archive_uses_rrf_fusion(
     cache = MagicMock()
 
     monkeypatch.setattr(
-        "openzim_mcp.synthesize.get_or_build_bundle",
+        "openzim_mcp.bundle.get_or_build_bundle",
         lambda archive, path, **kwargs: None,
     )
 
@@ -552,7 +552,7 @@ def test_synthesize_response_meta_envelope_populated(
         {"path": "A/Berlin", "snippet": "Berlin body text", "score": 0.9},
     ]
     monkeypatch.setattr(
-        "openzim_mcp.synthesize.get_or_build_bundle",
+        "openzim_mcp.bundle.get_or_build_bundle",
         lambda archive, path, **kw: None,
     )
     response = synthesize_query(
