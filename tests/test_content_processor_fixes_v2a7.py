@@ -250,6 +250,53 @@ def test_infobox_skips_nested_table_rows():
     assert "next" not in labels
 
 
+# D1 (beta): real Wikipedia city infoboxes (Berlin, Tokyo, etc.) end with
+# free-floating "terminal" rows (Time zone, Area code, ISO 3166 code,
+# Website, HDI, Vehicle registration) that visually sit at the bottom
+# under no section header. In Wikipedia's HTML they are marked
+# ``<tr class="mergedtoprow">`` (a top-border start-of-group marker),
+# while continuation rows inside a section are ``<tr class="mergedrow">``.
+# The original Phase A #2 / Op5 fix correctly tracked ``current_section``
+# from ``infobox-header`` rows but never reset it, so the trailing
+# free-floating rows inherited the last section ("GDP — Time zone",
+# "GDP — Website") which is plainly wrong.
+WIKI_INFOBOX_WITH_TRAILING_FREE_ROWS = """
+<table class="infobox">
+  <tr class="mergedtoprow"><th colspan="2" class="infobox-above">Berlin</th></tr>
+  <tr class="mergedtoprow"><th colspan="2" class="infobox-header">GDP</th></tr>
+  <tr class="mergedrow"><th class="infobox-label">City/State</th><td>€207B</td></tr>
+  <tr class="mergedrow"><th class="infobox-label">Per capita</th><td>€53,131</td></tr>
+  <tr class="mergedtoprow"><th class="infobox-label">Time zone</th><td>CET</td></tr>
+  <tr class="mergedtoprow"><th class="infobox-label">Area code</th><td>030</td></tr>
+  <tr class="mergedtoprow"><th class="infobox-label">Website</th><td>berlin.de</td></tr>
+</table>
+"""
+
+
+def test_infobox_trailing_free_rows_do_not_inherit_last_section():
+    """Trailing rows marked ``<tr class="mergedtoprow">`` — Wikipedia's
+    visual "start of a new group" marker — break out of the preceding
+    section context. Without the reset, every Berlin/Tokyo-style infobox
+    mislabels "Time zone", "Website", etc. as "GDP — Time zone" /
+    "GDP — Website". The reset only fires for KV rows (th+td); section
+    header rows themselves remain free to use ``mergedtoprow`` (which
+    they do)."""
+    soup = BeautifulSoup(WIKI_INFOBOX_WITH_TRAILING_FREE_ROWS, "html.parser")
+    proc = ContentProcessor()
+    rows = proc.extract_infobox(soup)
+    labels = [r["label"] for r in rows]
+    # Within-section rows keep their prefix.
+    assert "GDP — City/State" in labels
+    assert "GDP — Per capita" in labels
+    # Trailing free-floating rows do NOT inherit the section prefix.
+    assert "Time zone" in labels
+    assert "Area code" in labels
+    assert "Website" in labels
+    # And explicitly: none of the leaks the bug report flagged.
+    for bad in ("GDP — Time zone", "GDP — Area code", "GDP — Website"):
+        assert bad not in labels
+
+
 def test_inline_reference_markers_stripped():
     """``<sup class="reference">[1]</sup>`` markers between prose words
     render as bare ``[1]`` noise after html2text. Stripping them at the

@@ -83,6 +83,7 @@ def find_title_match(
     topic: str,
     *,
     cross_file: bool = False,
+    min_score: float = 1.0,
 ) -> Optional[Dict[str, Any]]:
     """Ask the title index whether ``topic`` resolves to a score-1.0 entry.
 
@@ -95,9 +96,12 @@ def find_title_match(
     matches (0.95, fuzzy 0.85) can introduce false positives like
     ``Java`` → ``Java (programming language)``.
 
-    ``cross_file=True`` searches across all configured archives. Errors
-    in the backend are logged and swallowed so a transient failure
-    blanks the promotion path rather than the whole response.
+    ``cross_file=True`` searches across all configured archives.
+    ``min_score`` lets typo-tolerant callers (D3 fix:
+    ``tell me about Photosythesis``) accept the fuzzy-fallback 0.85
+    score the title index produces for single-edit typos. Errors in
+    the backend are logged and swallowed so a transient failure blanks
+    the promotion path rather than the whole response.
     """
     try:
         data = zim_operations.find_entry_by_title_data(
@@ -112,7 +116,7 @@ def find_title_match(
     top = results[0]
     if not isinstance(top, dict):
         return None
-    if float(top.get("score", 0.0)) < 1.0:
+    if float(top.get("score", 0.0)) < min_score:
         return None
     return {
         "path": str(top.get("path", "")),

@@ -625,6 +625,22 @@ class _SearchMixin:
             result_text += f"Path: {result['path']}\n"
             result_text += f"Snippet: {result['snippet']}\n\n"
 
+        # O2 (beta): warn when the match count is implausibly high. The
+        # canonical example: ``search for the and a is in to`` returns a
+        # saturated 5,000,000 — the search index treats stopword runs as
+        # OR-matches across millions of articles, and the top hits are
+        # whichever entries are highest-cited rather than topically
+        # relevant. Surface that to the model so it doesn't trust the
+        # "Found N matches" line as a meaningful signal.
+        if total_results >= 1_000_000:
+            result_text += (
+                "_Note: this query matched an unusually large set "
+                "(likely stop-word dominated). The top results are "
+                "ranked by general document importance, not topic "
+                "relevance. Re-run with more specific terms for a "
+                "narrower, topically-ranked result set._\n\n"
+            )
+
         # Compact one-liner footer — see the matching comment in the simple
         # search renderer above for rationale.
         result_text += "---\n"
@@ -1408,6 +1424,28 @@ class _SearchMixin:
         # iteration may not work reliably with all ZIM file structures.
         suggestions = self._get_suggestions_from_search(archive, partial_query, limit)
 
+        # D6 (beta): the libzim suggest index / Xapian search both miss
+        # the canonical bare-title article for common prefixes.
+        # ``suggestions for Photosyn`` returns 15 results — ``PhotoSynth``,
+        # ``Photosyntesis`` (typo), ``Photosynthetic_efficiency``,
+        # ``Photosynthesis_(song)`` etc. — but NOT bare ``Photosynthesis``,
+        # which has score 1.0 in the title index. The Xapian search
+        # ranks broader articles (mentioning photosynt-* many times)
+        # above the canonical short-title article. Probe the title-index
+        # fast-path for the partial query directly and prepend the
+        # canonical entry when it's a clean prefix match and not
+        # already in the result list. Strategy 1 takes priority for
+        # cases where the prefix lands across many same-prefix titles;
+        # this prepend just fills the canonical gap.
+        canonical = self._find_canonical_prefix_match(
+            archive, partial_query, suggestions
+        )
+        if canonical is not None:
+            suggestions = [canonical] + suggestions
+            # Trim back to limit so the canonical doesn't push the
+            # original last suggestion off the cliff unaccounted.
+            suggestions = suggestions[:limit]
+
         if suggestions:
             logger.info(f"Found {len(suggestions)} suggestions using search fallback")
             return {
@@ -1620,6 +1658,147 @@ class _SearchMixin:
         except Exception as e:
             logger.error(f"Error in search-based suggestions: {e}")
             return []
+
+    def _find_canonical_prefix_match(
+        self,
+        archive: Archive,
+        partial_query: str,
+        existing: List[Dict[str, str]],
+    ) -> Optional[Dict[str, str]]:
+        """D6 (beta): probe for the canonical title with this exact prefix.
+
+        Wikipedia files ``Photosynthesis`` at path ``Photosynthesis`` with
+        title ``Photosynthesis``; both libzim's SuggestionSearcher and
+        Xapian search routinely miss the bare canonical article in favor
+        of disambiguator-bearing variants (``Photosynthesis (song)``,
+        ``Photosynthetic_efficiency``). Strategy 1 (search-based) returns
+        15 hits, none of which is ``Photosynthesis`` because longer
+        titles like ``Photosynthetic_efficiency`` rank higher on Xapian
+        relevance. We re-probe via SuggestionSearcher and pick the
+        SHORTEST title that starts with the partial — typically the bare
+        canonical article — and prepend it when missing.
+
+        Returns ``None`` when:
+          - SuggestionSearcher returns no entries,
+          - no entry's title starts with the partial,
+          - the chosen entry is already in ``existing``.
+        """
+        partial_clean = (partial_query or "").strip()
+        if not partial_clean or len(partial_clean) < 2:
+            return None
+        try:
+            suggestion_search = _zim_ops_mod.SuggestionSearcher(archive).suggest(
+                partial_clean
+            )
+            total = suggestion_search.getEstimatedMatches()
+            if not total:
+                return None
+            max_results = min(total, 25)
+            result_paths = list(suggestion_search.getResults(0, max_results))
+        except Exception as e:
+            logger.debug(f"D6 SuggestionSearcher probe failed: {e}")
+            return None
+
+        partial_lower = partial_clean.lower()
+        existing_paths = {
+            e.get("path") for e in existing if isinstance(e.get("path"), str)
+        }
+        existing_titles = {
+            e.get("text", "").lower()
+            for e in existing
+            if isinstance(e.get("text"), str)
+        }
+
+        # Strategy A: scan the suggestion results for entries whose path
+        # has a parenthesised disambiguator (``Photosynthesis (song)``,
+        # ``Berlin (city)``). Strip the parens to derive a canonical
+        # "root" path; if that root exists in the archive AND is not in
+        # ``existing``, it IS the canonical article the SuggestionSearcher
+        # missed. Wikipedia's pattern is unambiguous: any title with
+        # ``_(suffix)`` has a corresponding ``base`` article (or
+        # disambiguation page) at the un-suffixed path.
+        roots_seen: set[str] = set()
+        for result_path in result_paths:
+            path_str = str(result_path)
+            # MagicMock-archive test guard (see test_get_search_suggestions
+            # and test_generate_search_suggestions_uses_suggestion_searcher).
+            if not isinstance(path_str, str):
+                continue
+            paren_idx = path_str.find("_(")
+            if paren_idx <= 0:
+                continue
+            root = path_str[:paren_idx]
+            if not root or root in roots_seen:
+                continue
+            roots_seen.add(root)
+            if not root.lower().startswith(partial_lower):
+                continue
+            if root in existing_paths:
+                continue
+            try:
+                if not archive.has_entry_by_path(root):
+                    continue
+                entry = archive.get_entry_by_path(root)
+                title = entry.title or root
+                path = entry.path or root
+            except Exception:  # pragma: no cover — defensive
+                continue
+            if not isinstance(title, str) or not isinstance(path, str):
+                continue
+            if not title.lower().startswith(partial_lower):
+                continue
+            if title.lower() in existing_titles or path in existing_paths:
+                continue
+            return {
+                "text": title,
+                "path": path,
+                "type": "title_start_match",
+            }
+
+        # Strategy B: fall back to "shortest title that starts with the
+        # partial". This catches archives where the canonical bare entry
+        # didn't appear alongside any parenthesised siblings (the
+        # disambiguator-strip heuristic fires only when at least one
+        # ``foo_(suffix)`` was returned by SuggestionSearcher).
+        best: Optional[Tuple[str, str]] = None
+        best_len = float("inf")
+        for result_path in result_paths:
+            try:
+                entry = archive.get_entry_by_path(str(result_path))
+                title = entry.title or ""
+                path = entry.path or str(result_path)
+            except Exception:  # pragma: no cover — defensive
+                continue
+            if not isinstance(title, str) or not isinstance(path, str):
+                continue
+            if not title or not path:
+                continue
+            if (
+                path.startswith("M/")
+                or path.startswith("X/")
+                or path.startswith("-/")
+                or title.startswith("File:")
+                or title.startswith("Category:")
+                or title.startswith("Template:")
+                or title.startswith("Wikipedia:")
+                or title.startswith("Help:")
+                or title.startswith("User:")
+            ):
+                continue
+            if not title.lower().startswith(partial_lower):
+                continue
+            if path in existing_paths or title.lower() in existing_titles:
+                continue
+            if len(title) < best_len:
+                best = (title, path)
+                best_len = len(title)
+        if best is None:
+            return None
+        return {
+            "text": best[0],
+            "path": best[1],
+            "type": "title_start_match",
+        }
 
     @staticmethod
     def _find_entry_fast_path(archive: Any, title: str) -> Optional[Any]:

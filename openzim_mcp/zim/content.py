@@ -800,6 +800,27 @@ class _ContentMixin:
             ``(Error retrieving content: ...)`` sentinel; the caller must
             not cache the response in that case.
         """
+        # D7 (beta): the path-traversal-guard error message tells callers
+        # to use namespace-prefixed paths like ``M/Title``. But libzim
+        # silently strips the ``M/`` prefix and resolves to the C-namespace
+        # article with that name — so ``get_zim_entry('M/Title')``
+        # against a Wikipedia ZIM returned the 172 KB disambiguation
+        # article "Title" instead of the ZIM metadata "Title" entry
+        # ("Wikipedia"). The proper API for M entries is
+        # ``archive.get_metadata(key)``. Route ``M/<key>`` paths to it
+        # explicitly so callers can actually reach ZIM metadata.
+        if (
+            entry_path
+            and entry_path.startswith("M/")
+            and getattr(archive, "has_new_namespace_scheme", False)
+        ):
+            return self._get_metadata_entry(
+                archive,
+                entry_path,
+                max_content_length,
+                content_offset,
+            )
+
         # Path mapping cache key includes archive path + stat token so
         # identical entry names in different ZIM files don't collide and
         # an atomic file replacement invalidates the resolved-path cache.
@@ -899,6 +920,87 @@ class _ContentMixin:
                     f"The entry may not exist or the path format may be incorrect. "
                     f"Try using search_zim_file() to find the correct entry path."
                 ) from search_error
+
+    def _get_metadata_entry(
+        self,
+        archive: Archive,
+        entry_path: str,
+        max_content_length: int,
+        content_offset: int = 0,
+    ) -> Tuple[str, bool]:
+        """D7 (beta): fetch a ZIM ``M/<key>`` metadata entry.
+
+        New-scheme ZIM archives keep metadata (Title, Description,
+        Date, Creator, Source, etc.) on a separate API surface
+        (``archive.get_metadata`` / ``get_metadata_item``) — the
+        iterable C-namespace entry surface that ``get_entry_by_path``
+        uses silently strips the ``M/`` prefix and resolves to a
+        same-named article. Callers that ask for ``M/Title`` mean the
+        archive metadata, so route the request to the metadata API
+        and return whatever text/bytes the ZIM stored.
+
+        Returns ``(result_text, content_ok)`` matching the contract of
+        :meth:`_get_entry_content`. ``content_ok`` is False only when
+        the metadata read itself raised (e.g. missing key); a present
+        non-text payload is still ``True`` — it's just rendered with
+        a ``(bytes content)`` marker.
+        """
+        key = entry_path.split("/", 1)[1] if "/" in entry_path else entry_path
+        if not key:
+            return (
+                f"# {entry_path}\n\n"
+                "Empty metadata key. Use a known M/<key> path from "
+                "`metadata for <file>` or `walk namespace M`.",
+                False,
+            )
+        try:
+            item = archive.get_metadata_item(key)
+        except Exception as e:
+            logger.debug(f"get_metadata_item failed for {key}: {e}")
+            return (
+                f"# {entry_path}\n\n"
+                f"Metadata key {key!r} not found in this archive. "
+                f"Use `walk namespace M` to list available keys.",
+                False,
+            )
+        if item is None:
+            return (
+                f"# {entry_path}\n\n"
+                f"Metadata key {key!r} resolved to an empty item.",
+                False,
+            )
+        mime = item.mimetype or ""
+        try:
+            raw = bytes(item.content)
+        except Exception as e:
+            logger.warning(f"Metadata content read failed for {key}: {e}")
+            return (
+                f"# {entry_path}\n\n(Error retrieving content: {e})",
+                False,
+            )
+        if mime.startswith("text/"):
+            try:
+                content = raw.decode("utf-8", errors="replace")
+            except Exception:
+                content = repr(raw)
+        elif raw:
+            content = f"({mime or 'binary'} content, {len(raw)} bytes)"
+        else:
+            content = ""
+        # Honour content_offset / max_content_length to match the regular
+        # entry path's contract.
+        total_length = len(content)
+        if content_offset and content_offset > 0:
+            if content_offset >= total_length:
+                content = ""
+            else:
+                content = content[content_offset:]
+        content = self.content_processor.truncate_content(content, max_content_length)
+        result_text = (
+            f"# {key}\n\nRequested Path: {entry_path}\n"
+            f"Type: {mime or 'unknown'}\n## Content\n\n{content}"
+        )
+        return result_text, True
 
     def _get_entry_content_direct(  # NOSONAR(python:S3776)
         self,

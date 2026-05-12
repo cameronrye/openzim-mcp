@@ -1502,6 +1502,30 @@ class _NamespaceMixin:
                             )
                         ),
                     )
+                # D8 (beta): symmetric handling for W namespace. The
+                # well-known entries (mainPage, favicon) are reachable via
+                # ``archive.main_entry`` / ``archive.has_illustration()``
+                # — not the iterable surface that ``walk_namespace_data``
+                # falls back to below. Without this branch, ``walk
+                # namespace W`` returned an empty result while the
+                # sibling ``list namespaces`` operation simultaneously
+                # advertised W has 2 entries (via the same probes used
+                # here in ``_add_new_scheme_well_known_namespace``).
+                # The two ops were contradicting each other on the same
+                # archive — now they agree.
+                if has_new_scheme and namespace == "W":
+                    return cast(
+                        "WalkNamespaceResponse",
+                        attach_meta(
+                            self._walk_new_scheme_well_known(
+                                archive,
+                                scan_at,
+                                limit,
+                                archive_entry_count,
+                                validated_path=validated,
+                            )
+                        ),
+                    )
                 # Other-than-C namespaces in new-scheme aren't on the
                 # iterable surface; short-circuit so callers don't pay the
                 # full-archive scan to discover that.
@@ -1665,6 +1689,63 @@ class _NamespaceMixin:
             )
         return cls._build_walk_result(
             namespace="M",
+            scan_at=scan_at,
+            limit=limit,
+            entries=entries,
+            scanned_count=end - start,
+            scanned_through_id=end - 1 if end > start else None,
+            done=done,
+            next_cursor=next_cursor,
+            archive_entry_count=archive_entry_count,
+        )
+
+    @classmethod
+    def _walk_new_scheme_well_known(
+        cls,
+        archive: Archive,
+        scan_at: int,
+        limit: int,
+        archive_entry_count: int,
+        *,
+        validated_path: "Optional[Path]" = None,
+    ) -> Dict[str, Any]:
+        """D8 (beta): walk W (well-known) entries via canonical probes.
+
+        Mirrors ``_walk_new_scheme_metadata`` but the source is the
+        ``has_main_entry`` / ``has_illustration`` probe pair that
+        ``_add_new_scheme_well_known_namespace`` already uses for the
+        namespace listing. Keeps the two operations consistent for
+        new-scheme archives: ``list namespaces`` says W has 2 entries
+        and ``walk namespace W`` now actually surfaces them.
+        """
+        from openzim_mcp.pagination import Cursor, archive_identity
+
+        probes: List[Tuple[str, str]] = []
+        # Same suppress-on-failure semantics as the namespace listing
+        # probe; W is informational, never load-bearing.
+        with contextlib.suppress(Exception):
+            if getattr(archive, "has_main_entry", False):
+                probes.append(("W/mainPage", "mainPage"))
+        with contextlib.suppress(Exception):
+            if archive.has_illustration():
+                probes.append(("W/favicon", "favicon"))
+
+        total = len(probes)
+        start = scan_at
+        end = min(start + limit, total)
+        entries = [{"path": p, "title": t} for p, t in probes[start:end]]
+        done = end >= total
+        next_cursor: Optional[str] = None
+        if not done:
+            state: Dict[str, Any] = {"scan_at": end, "l": limit, "ns": "W"}
+            if validated_path is not None:
+                state["ai"] = archive_identity(validated_path)
+            next_cursor = Cursor.encode(
+                tool="walk_namespace",
+                state=cast("Any", state),
+            )
+        return cls._build_walk_result(
+            namespace="W",
             scan_at=scan_at,
             limit=limit,
             entries=entries,

@@ -224,6 +224,32 @@ def render_related(data: Mapping[str, Any], entry_path: str) -> str:
             lines.append(f"- **{t}** (`{p}`) — linked as “{link_text}”")
         else:
             lines.append(f"- **{t}** (`{p}`)")
+    # D5 (beta): surface the a9 #A5 scan-truncation signal. Hub
+    # articles ("List of …", "Index of …") carry 1000-5000 internal
+    # links; the underlying ``extract_article_links_data`` caps the
+    # scan at 500, and the structured response carries
+    # ``scan_truncated`` / ``scan_total_internal`` to flag that the
+    # frequency-rank is operating on a document-head-biased sample.
+    # Without this footer the markdown surface dropped the signal
+    # entirely — the model couldn't tell whether it had the whole
+    # link set or a head-biased slice.
+    if data.get("scan_truncated"):
+        total = data.get("scan_total_internal")
+        limit = data.get("scan_limit")
+        if total and limit:
+            footer = (
+                f"_Scan truncated: ranked from the first {limit:,} of "
+                f"~{total:,} internal links (document-head bias). The "
+                f"true top-by-frequency may differ from this sample._"
+            )
+        else:
+            footer = (
+                "_Scan truncated: ranked from a head-biased sample of "
+                "the article's internal links._"
+            )
+        lines.append("")
+        lines.append("---")
+        lines.append(footer)
     return "\n".join(lines)
 
 
@@ -255,7 +281,20 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     # callers into thinking M had millions of entries. Label the
     # number explicitly as ``archive-wide entries`` so the scope is
     # unambiguous.
-    if archive_total:
+    # D8 (beta): for an empty result on the first page (``returned == 0``
+    # at ``offset == 0``), the legacy header rendered as ``entries 1-0``,
+    # a nonsense range that the natural reader parses as "from item 1
+    # to item 0" — actively misleading. Special-case empty results to
+    # an explicit zero-count header.
+    if returned == 0:
+        if archive_total:
+            header = (
+                f"# Namespace `{ns}` — no entries "
+                f"(of ~{archive_total:,} archive-wide entries)"
+            )
+        else:
+            header = f"# Namespace `{ns}` — no entries"
+    elif archive_total:
         header = (
             f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned} "
             f"(of ~{archive_total:,} archive-wide entries)"

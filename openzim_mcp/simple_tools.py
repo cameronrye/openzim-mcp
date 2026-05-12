@@ -208,6 +208,36 @@ class SimpleToolsHandler:
                     decoded_offset = state.get("o")
                     if isinstance(decoded_offset, int) and decoded_offset >= 0:
                         options["offset"] = decoded_offset
+                    # D9 (beta): the original implementation treated the
+                    # cursor's ``s.q`` field as decorative — only ``s.o``
+                    # was read. That meant a caller who reused a cursor
+                    # issued for ``query="algebra"`` with a fresh request
+                    # for ``query="photosynthesis"`` silently got page 2
+                    # of "photosynthesis" results (offset applied to the
+                    # NEW query). Pagination state coupled to the wrong
+                    # query is the same class of bug the advanced tools
+                    # explicitly reject via ``CursorMismatchError`` /
+                    # ``OpenZimMcpValidationError``. Mirror that
+                    # behavior in simple-mode: when ``s.q`` is present
+                    # and not a case-insensitive substring of the
+                    # current natural-language query, surface a clear
+                    # error so the caller knows to drop the cursor.
+                    cursor_q = state.get("q")
+                    if (
+                        isinstance(cursor_q, str)
+                        and cursor_q.strip()
+                        and cursor_q.lower() not in (query or "").lower()
+                    ):
+                        return tool_error(
+                            operation="cursor_decode",
+                            message=(
+                                f"Cursor was issued for query {cursor_q!r}; "
+                                f"current request mentions a different query. "
+                                "Drop the cursor and start the search over "
+                                "for the new query."
+                            ),
+                            context=f"cursor_q={cursor_q!r}",
+                        )
             except Exception as e:
                 logger.warning("Could not decode cursor %r: %s", cursor_raw, e)
                 # H24: see above — keep simple-mode error shape consistent
@@ -704,6 +734,16 @@ class SimpleToolsHandler:
 
         Appends a footer naming the original size so the caller knows
         it's reading a tail. Idempotent on already-short input.
+
+        O3 (beta): the previous hint recommended ``show structure of
+        <path>`` as the recovery step. That works for article bodies
+        but is self-referential when the truncated response IS the
+        output of a ``show structure`` call (or ``table of contents``,
+        which produces a similar response shape) — the model retries
+        the same operation and gets the same truncation. The replacement
+        guidance is operation-agnostic: ask for a tighter query, page
+        with the cursor footer the operation already emits, or opt
+        out of caps with ``compact=False``.
         """
         if len(text) <= max_chars:
             return text
@@ -711,8 +751,8 @@ class SimpleToolsHandler:
         # Reserve room for the footer.
         footer = (
             f"\n\n---\n_Response truncated at {max_chars:,} chars "
-            f"(was {original:,}). Use a tighter query, "
-            f"`show structure of <path>` for navigation, or pass "
+            f"(was {original:,}). Page using the cursor in the body "
+            f"above (if present), tighten the query, or pass "
             f"`compact=False` to opt out of size caps._"
         )
         keep = max(max_chars - len(footer), 0)
@@ -842,10 +882,34 @@ class SimpleToolsHandler:
 
         # Cut body at first non-wrapper H2 if one's present in the
         # truncated body — saves the LLM from a mid-paragraph cut.
+        #
+        # O4 (beta): disambiguation pages (Wikipedia "Martin", "Mercury",
+        # etc.) have the form ``# Title\n\n**Title** may refer to:\n\n##
+        # Category 1\n - link\n - link\n## Category 2\n...``. Cutting
+        # at the first H2 produces a ~30-char useless response — just
+        # the bare "may refer to:" line with no list. The model has to
+        # follow up with ``show structure of Title`` to discover the
+        # categories, then more calls to read entries. Detect the
+        # pattern (short pre-H2 body ending in "may refer to:") and
+        # keep the WHOLE body instead, so the disambig list is right
+        # there inline.
         h2_match = self._first_article_h2(body)
         if h2_match:
-            body = body[: h2_match.start()].rstrip()
-            clean_cut = True
+            pre_h2 = body[: h2_match.start()].rstrip()
+            is_disambig_lead = (
+                len(pre_h2) < 400
+                and re.search(
+                    r"\bmay\s+(?:also\s+)?refer\s+to\s*:?\s*$",
+                    pre_h2,
+                    re.IGNORECASE,
+                )
+                is not None
+            )
+            if is_disambig_lead:
+                clean_cut = False
+            else:
+                body = pre_h2
+                clean_cut = True
         else:
             clean_cut = False
 
@@ -921,6 +985,15 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
+        """O6 (beta): the ``show structure`` operation returns a FLAT list
+        of headings (with per-heading summaries in non-compact mode), while
+        the sibling ``table of contents`` operation
+        (:meth:`_handle_toc`) returns the same headings as a NESTED tree
+        with parent/child links. Both are valid; small models tend to
+        prefer ``show structure`` for "which sections exist" and
+        ``table of contents`` for "give me the section hierarchy I can
+        recurse into".
+        """
         entry_path = params.get("entry_path")
         if not entry_path:
             return (
@@ -949,6 +1022,12 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
+        """O6 (beta): returns the article's heading set as a NESTED tree
+        with ``children`` links per node, distinct from the FLAT
+        :meth:`_handle_structure` listing. Use ``show structure`` for a
+        single-pass scan; use ``table of contents`` when the caller
+        wants to recurse into specific sub-trees.
+        """
         entry_path = params.get("entry_path")
         if not entry_path:
             return (
@@ -1059,9 +1138,27 @@ class SimpleToolsHandler:
             avail = "\n".join(
                 f"- {h.get('text')}" for h in headings[:20] if h.get("text")
             )
+            # D4 (beta): surface a "did you mean?" pointer. The structured
+            # ``get_section`` operation already computes this via difflib
+            # at ``zim/structure.py:644`` (Op5) but the natural-language
+            # path was reimplementing section lookup against the
+            # ``headings`` list and never queried that operation, so the
+            # closest_match never reached the markdown surface. Compute
+            # it locally against the same heading text list so the model
+            # gets a direct retry path ("Did you mean 'Geography'?")
+            # instead of being forced to scan the 20-line list.
+            import difflib
+
+            heading_texts = [
+                h.get("text", "").strip() for h in headings if h.get("text")
+            ]
+            closest_matches = difflib.get_close_matches(
+                section_name, heading_texts, n=1, cutoff=0.6
+            )
+            hint = f"Did you mean **{closest_matches[0]}**? " if closest_matches else ""
             return (
                 f'**Section "{section_name}" not found in `{entry_path}`**\n\n'
-                f"Available sections:\n{avail}"
+                f"{hint}Available sections:\n{avail}"
             )
 
         # Delegate to ``get_section_data`` to slice the full section out
@@ -1455,6 +1552,24 @@ class SimpleToolsHandler:
             # common case ("tell me about <canonical topic name>").
             promoted = find_title_match(self.zim_operations, zim_file_path, topic)
             if promoted is None:
+                # D3 (beta): typo-tolerant fallback. The title index
+                # produces a 0.85 score for single-edit typos via the
+                # ``_find_entry_typo_fallback`` chain
+                # (``Photosythesis`` → ``Photosynthesis``). Without
+                # this step ``tell me about Photosythesis`` falls all
+                # the way through to Xapian search, which returns a
+                # totally unrelated article ("International Year of
+                # Chemistry") for a missing-letter typo — actively
+                # misleading. Lower the bar to 0.8 so single-edit
+                # typos resolve to the canonical article. The 1.0
+                # gate above already handled the exact match; a 0.85
+                # match is only reachable via the typo-variant chain,
+                # which is conservative by construction (length-gated
+                # at ≥5 chars, ≤700 variants).
+                promoted = find_title_match(
+                    self.zim_operations, zim_file_path, topic, min_score=0.8
+                )
+            if promoted is None:
                 return self.zim_operations.search_zim_file(
                     zim_file_path, topic, search_limit, 0
                 )
@@ -1694,6 +1809,25 @@ class SimpleToolsHandler:
                 "- 'what links to \"Climate change\"'\n"
                 "- 'links from Cellular_respiration'\n"
             )
+        # D2 (beta): the intent parser hands us the topic verbatim from
+        # the user's phrasing (``articles related to United States`` →
+        # ``United States``), but the underlying entry path stores
+        # spaces as underscores (``United_States``). Without a title
+        # resolution step the backend hits ``Cannot find entry`` and
+        # returns a useless error, even though ``tell me about United
+        # States`` would have resolved correctly via the same title
+        # promotion that ``_handle_tell_me_about`` already uses. Probe
+        # the title index for the topic-as-title FIRST; fall through to
+        # the literal path only when no canonical match exists so a
+        # caller passing the exact path (``Cellular_respiration``)
+        # still gets a direct lookup. ``min_score=0.8`` so common
+        # typos route here too (``articles related to Photosythesis``
+        # → ``Photosynthesis``).
+        promoted = find_title_match(
+            self.zim_operations, zim_file_path, entry_path, min_score=0.8
+        )
+        if promoted is not None and promoted.get("path"):
+            entry_path = promoted["path"]
         if options.get("compact", False):
             data = self.zim_operations.get_related_articles_data(
                 zim_file_path,

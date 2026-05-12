@@ -1634,12 +1634,21 @@ class TestCompactMarkdownRenderingForJsonIntents:
     def test_non_compact_uses_legacy_json_paths(self):
         """compact=False keeps the four JSON-returning legacy methods
         unchanged — programmatic callers continue to receive JSON.
+
+        D2 (beta): ``articles related to X`` now ALWAYS title-resolves
+        the entry path before calling the backend (the bug being fixed
+        is that ``articles related to United States`` failed with
+        "Cannot find entry" because the path is ``United_States``).
+        ``find_entry_by_title_data`` is therefore expected to be called
+        once for the related handler regardless of compact mode. The
+        rest of the legacy contract is unchanged.
         """
         from unittest.mock import MagicMock
 
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.find_entry_by_title.return_value = '{"results": []}'
+        mock.find_entry_by_title_data.return_value = {"results": []}
         mock.get_related_articles.return_value = '{"results": []}'
         mock.walk_namespace.return_value = '{"entries": []}'
         mock.list_namespaces.return_value = '{"namespaces": {}}'
@@ -1655,8 +1664,9 @@ class TestCompactMarkdownRenderingForJsonIntents:
         mock.get_related_articles.assert_called_once()
         mock.walk_namespace.assert_called_once()
         mock.list_namespaces.assert_called_once()
-        # And the data variants were NOT called for these.
-        mock.find_entry_by_title_data.assert_not_called()
+        # find_entry_by_title_data is now called once (from D2's related
+        # handler title probe). The OTHER three data variants stay dark.
+        mock.find_entry_by_title_data.assert_called_once()
         mock.get_related_articles_data.assert_not_called()
         mock.walk_namespace_data.assert_not_called()
         mock.list_namespaces_data.assert_not_called()

@@ -559,6 +559,28 @@ class ContentProcessor:
                     value = " ".join(td.get_text().split())
                     if not raw_label or not value:
                         continue
+                    # D1 (beta): Wikipedia infoboxes end with trailing
+                    # "free-floating" terminal rows (Time zone, Area code,
+                    # ISO 3166 code, Website, HDI) that don't belong to
+                    # any preceding ``infobox-header`` section but visually
+                    # carry top-border separators. The HTML marks each such
+                    # row with ``<tr class="mergedtoprow">`` — the same
+                    # class section header rows themselves carry. For KV
+                    # rows the class signals "this starts a new visual
+                    # group, NOT a continuation of the prior section";
+                    # reset the carried section context so the row emits
+                    # bare (``Time zone``) instead of inheriting the last
+                    # ``infobox-header`` row's name (``GDP — Time zone``).
+                    # Section header rows (th-only) handle ``mergedtoprow``
+                    # in their own branch and are unaffected.
+                    tr_classes_raw: Any = tr.get("class") or []
+                    tr_classes: List[str]
+                    if isinstance(tr_classes_raw, str):
+                        tr_classes = tr_classes_raw.split()
+                    else:
+                        tr_classes = [str(c) for c in tr_classes_raw]
+                    if "mergedtoprow" in tr_classes:
+                        current_section = None
                     # Prefix with current section when present so labels
                     # disambiguate across sections. Drop the prefix when
                     # the label already starts with the section name
