@@ -192,6 +192,40 @@ def render_find_by_title(data: Mapping[str, Any], title: str) -> str:
     return "\n".join(lines)
 
 
+def _render_related_link_line(r: Mapping[str, Any]) -> Optional[str]:
+    """Format one outbound-link row as a bullet line. Returns None when
+    the row is not a dict (defensive against partial payloads)."""
+    if not isinstance(r, dict):
+        return None
+    t = r.get("title", "(untitled)")
+    p = r.get("path", "")
+    link_text = r.get("link_text") or ""
+    if link_text and link_text.lower() != t.lower():
+        return f"- **{t}** (`{p}`) — linked as “{link_text}”"
+    return f"- **{t}** (`{p}`)"
+
+
+def _scan_truncated_footer(data: Mapping[str, Any]) -> Optional[str]:
+    """D5 (beta): build the scan-truncated footer, or None when the
+    signal isn't set. Hub articles ("List of …", "Index of …") carry
+    1000-5000 internal links; the underlying ``extract_article_links_data``
+    caps the scan at 500. Surface that to the model."""
+    if not data.get("scan_truncated"):
+        return None
+    total = data.get("scan_total_internal")
+    limit = data.get("scan_limit")
+    if total and limit:
+        return (
+            f"_Scan truncated: ranked from the first {limit:,} of "
+            f"~{total:,} internal links (document-head bias). The "
+            f"true top-by-frequency may differ from this sample._"
+        )
+    return (
+        "_Scan truncated: ranked from a head-biased sample of "
+        "the article's internal links._"
+    )
+
+
 def render_related(data: Mapping[str, Any], entry_path: str) -> str:
     """Render a get_related_articles payload as a compact list."""
     if not isinstance(data, dict):
@@ -215,42 +249,35 @@ def render_related(data: Mapping[str, Any], entry_path: str) -> str:
         )
     lines = [f'# Articles linked from "{entry_path}"', ""]
     for r in outbound:
-        if not isinstance(r, dict):
-            continue
-        t = r.get("title", "(untitled)")
-        p = r.get("path", "")
-        link_text = r.get("link_text") or ""
-        if link_text and link_text.lower() != t.lower():
-            lines.append(f"- **{t}** (`{p}`) — linked as “{link_text}”")
-        else:
-            lines.append(f"- **{t}** (`{p}`)")
-    # D5 (beta): surface the a9 #A5 scan-truncation signal. Hub
-    # articles ("List of …", "Index of …") carry 1000-5000 internal
-    # links; the underlying ``extract_article_links_data`` caps the
-    # scan at 500, and the structured response carries
-    # ``scan_truncated`` / ``scan_total_internal`` to flag that the
-    # frequency-rank is operating on a document-head-biased sample.
-    # Without this footer the markdown surface dropped the signal
-    # entirely — the model couldn't tell whether it had the whole
-    # link set or a head-biased slice.
-    if data.get("scan_truncated"):
-        total = data.get("scan_total_internal")
-        limit = data.get("scan_limit")
-        if total and limit:
-            footer = (
-                f"_Scan truncated: ranked from the first {limit:,} of "
-                f"~{total:,} internal links (document-head bias). The "
-                f"true top-by-frequency may differ from this sample._"
-            )
-        else:
-            footer = (
-                "_Scan truncated: ranked from a head-biased sample of "
-                "the article's internal links._"
-            )
-        lines.append("")
-        lines.append("---")
-        lines.append(footer)
+        line = _render_related_link_line(r)
+        if line is not None:
+            lines.append(line)
+    footer = _scan_truncated_footer(data)
+    if footer is not None:
+        lines.extend(["", "---", footer])
     return "\n".join(lines)
+
+
+def _walk_namespace_header(
+    ns: str, offset: int, returned: int, archive_total: int
+) -> str:
+    """Build the header line for ``render_walk_namespace``.
+
+    Three shapes:
+      - ``returned == 0``: ``# Namespace 'X' — no entries`` (D8 fix).
+        ``entries 1-0`` was the previous nonsense range.
+      - ``archive_total > 0``: include ``archive-wide entries`` for scale
+        (D10 v2.0.0a9 disambiguation — the M namespace has 13 entries,
+        not the 27M archive total).
+      - otherwise: bare range.
+    """
+    range_str = f"entries {offset + 1}-{offset + returned}"
+    archive_suffix = (
+        f" (of ~{archive_total:,} archive-wide entries)" if archive_total else ""
+    )
+    if returned == 0:
+        return f"# Namespace `{ns}` — no entries{archive_suffix}"
+    return f"# Namespace `{ns}` — {range_str}{archive_suffix}"
 
 
 def render_walk_namespace(data: Mapping[str, Any]) -> str:
@@ -275,33 +302,7 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     entries = data.get("results") or []
     done = data.get("done", False)
 
-    # D10 (v2.0.0a9): the prior wording read ``(archive total: 27M)``
-    # for ``walk namespace M`` even though the M namespace only has 13
-    # entries — the figure was the WHOLE-archive count. That confused
-    # callers into thinking M had millions of entries. Label the
-    # number explicitly as ``archive-wide entries`` so the scope is
-    # unambiguous.
-    # D8 (beta): for an empty result on the first page (``returned == 0``
-    # at ``offset == 0``), the legacy header rendered as ``entries 1-0``,
-    # a nonsense range that the natural reader parses as "from item 1
-    # to item 0" — actively misleading. Special-case empty results to
-    # an explicit zero-count header.
-    if returned == 0:
-        if archive_total:
-            header = (
-                f"# Namespace `{ns}` — no entries "
-                f"(of ~{archive_total:,} archive-wide entries)"
-            )
-        else:
-            header = f"# Namespace `{ns}` — no entries"
-    elif archive_total:
-        header = (
-            f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned} "
-            f"(of ~{archive_total:,} archive-wide entries)"
-        )
-    else:
-        header = f"# Namespace `{ns}` — entries {offset + 1}-{offset + returned}"
-    lines = [header, ""]
+    lines = [_walk_namespace_header(ns, offset, returned, archive_total), ""]
     for e in entries:
         if not isinstance(e, dict):
             continue

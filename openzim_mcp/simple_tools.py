@@ -1548,6 +1548,36 @@ class SimpleToolsHandler:
             payload["page_info"] = page_info
         return payload
 
+    def _promote_topic_via_title_index(
+        self, zim_file_path: str, topic: str
+    ) -> Optional[Dict[str, Any]]:
+        """Promote a canonical title-index hit for ``topic`` past noisy BM25
+        ranking. Tries the strict 1.0-score gate first, then falls back to
+        the 0.8-score typo-tolerant gate.
+
+        Returns the resolved ``{path, title, zim_file}`` dict, or ``None``
+        when neither gate fires.
+
+        D6 fix (v2.0.0a9): Xapian ranks ``List of songs about Berlin``
+        above the canonical ``Berlin`` article for ``query=Berlin``
+        because the title-match boost isn't strong enough. The 1.0 gate
+        promotes the canonical past that ranking.
+
+        D3 (beta): the 0.8 gate catches single-edit typos via the
+        ``_find_entry_typo_fallback`` chain
+        (``Photosythesis`` → ``Photosynthesis``, score 0.85). Without
+        this step ``tell me about Photosythesis`` fell all the way
+        through to Xapian search and returned a totally unrelated
+        article. The chain is conservative by construction
+        (length-gated at ≥5 chars, ≤700 variants).
+        """
+        promoted = find_title_match(self.zim_operations, zim_file_path, topic)
+        if promoted is not None:
+            return promoted
+        return find_title_match(
+            self.zim_operations, zim_file_path, topic, min_score=0.8
+        )
+
     def _handle_tell_me_about(
         self,
         query: str,
@@ -1609,33 +1639,7 @@ class SimpleToolsHandler:
         top_path = top.get("path", "")
         top_title = top.get("title", "")
         if not is_strong_title_match(topic, top_path, top_title):
-            # D6 fix: Xapian ranks "List of songs about Berlin" above the
-            # canonical "Berlin" article for query="Berlin" because
-            # title-match boost isn't strong enough. Before giving up
-            # and rendering search hits, ask the title index directly:
-            # is there an exact-title match for the topic? If so,
-            # promote it past the search ranking and inline the article.
-            # Saves the small-model agentic loop a turn on the most
-            # common case ("tell me about <canonical topic name>").
-            promoted = find_title_match(self.zim_operations, zim_file_path, topic)
-            if promoted is None:
-                # D3 (beta): typo-tolerant fallback. The title index
-                # produces a 0.85 score for single-edit typos via the
-                # ``_find_entry_typo_fallback`` chain
-                # (``Photosythesis`` → ``Photosynthesis``). Without
-                # this step ``tell me about Photosythesis`` falls all
-                # the way through to Xapian search, which returns a
-                # totally unrelated article ("International Year of
-                # Chemistry") for a missing-letter typo — actively
-                # misleading. Lower the bar to 0.8 so single-edit
-                # typos resolve to the canonical article. The 1.0
-                # gate above already handled the exact match; a 0.85
-                # match is only reachable via the typo-variant chain,
-                # which is conservative by construction (length-gated
-                # at ≥5 chars, ≤700 variants).
-                promoted = find_title_match(
-                    self.zim_operations, zim_file_path, topic, min_score=0.8
-                )
+            promoted = self._promote_topic_via_title_index(zim_file_path, topic)
             if promoted is None:
                 return self.zim_operations.search_zim_file(
                     zim_file_path, topic, search_limit, 0

@@ -85,6 +85,47 @@ def _format_filter_text(namespace: Optional[str], content_type: Optional[str]) -
 _RELEVANCE_TOKEN_MIN_LEN = 3
 
 
+# Wikipedia / MediaWiki pseudo-namespaces excluded from suggestion + title
+# probe results. These live in the C namespace (not separate ZIM
+# namespaces) but use a colon-prefixed title convention to mark
+# administrative/templating content. Used in three places — Strategy 1,
+# Strategy 2, and the canonical-prefix probe — kept here so the lists
+# stay in sync.
+_PSEUDO_NAMESPACE_PATH_PREFIXES = ("M/", "X/", "-/")
+_PSEUDO_NAMESPACE_TITLE_PREFIXES_STRICT = (
+    "File:",
+    "Category:",
+    "Template:",
+)
+_PSEUDO_NAMESPACE_TITLE_PREFIXES_EXTENDED = (
+    *_PSEUDO_NAMESPACE_TITLE_PREFIXES_STRICT,
+    "User:",
+    "Wikipedia:",
+    "Help:",
+)
+
+
+def _is_pseudo_namespace_entry(
+    path: str, title: str, *, extended: bool = False
+) -> bool:
+    """Return True iff ``path``/``title`` looks like a pseudo-namespace
+    entry that should be excluded from suggestion / canonical-probe
+    output.
+
+    ``extended=True`` adds ``User:`` / ``Wikipedia:`` / ``Help:`` to the
+    excluded-title-prefix set; the canonical-probe path uses the
+    extended set, the suggest-from-search path uses the strict set.
+    """
+    if any(path.startswith(p) for p in _PSEUDO_NAMESPACE_PATH_PREFIXES):
+        return True
+    prefixes = (
+        _PSEUDO_NAMESPACE_TITLE_PREFIXES_EXTENDED
+        if extended
+        else _PSEUDO_NAMESPACE_TITLE_PREFIXES_STRICT
+    )
+    return any(title.startswith(p) for p in prefixes)
+
+
 def _tokenize_for_relevance(text: str) -> set[str]:
     """Lowercase alphanumeric tokens of length >= _RELEVANCE_TOKEN_MIN_LEN."""
     import re as _re
@@ -1501,14 +1542,7 @@ class _SearchMixin:
                     continue
 
                 # Skip system/metadata entries (common patterns)
-                if (
-                    path.startswith("M/")
-                    or path.startswith("X/")
-                    or path.startswith("-/")
-                    or title.startswith("File:")
-                    or title.startswith("Category:")
-                    or title.startswith("Template:")
-                ):
+                if _is_pseudo_namespace_entry(path, title):
                     continue
 
                 title_lower = title.lower()
@@ -1571,6 +1605,26 @@ class _SearchMixin:
                 }
             )
 
+        # D6 (beta, third pass): also probe for the canonical bare-title
+        # article on the Strategy 2 path. The earlier "skip probe when
+        # Strategy 1 is empty" optimisation regressed the empty-Strategy-1
+        # case (``Photosynt`` returns 0 hits via Xapian on cold Strategy 1
+        # locally; Strategy 2 then surfaces ``PhotoSynth`` but misses
+        # bare ``Photosynthesis``). Reuse the same ``result_paths``
+        # the loop above already pulled so we don't pay a second
+        # ``SuggestionSearcher.suggest()`` round trip — the helper
+        # accepts pre-fetched paths via its ``result_paths=`` arg.
+        if result_paths and suggestions:
+            canonical = self._find_canonical_prefix_match(
+                archive,
+                partial_query,
+                suggestions,
+                result_paths=[str(p) for p in result_paths],
+            )
+            if canonical is not None:
+                suggestions = [canonical] + suggestions
+                suggestions = suggestions[:limit]
+
         return {
             "partial_query": partial_query,
             "suggestions": suggestions[:limit],
@@ -1614,14 +1668,7 @@ class _SearchMixin:
                         continue
 
                     # Skip system/metadata entries
-                    if (
-                        title.startswith("File:")
-                        or title.startswith("Category:")
-                        or title.startswith("Template:")
-                        or title.startswith("User:")
-                        or title.startswith("Wikipedia:")
-                        or title.startswith("Help:")
-                    ):
+                    if _is_pseudo_namespace_entry(path, title, extended=True):
                         continue
 
                     seen_titles.add(title)
@@ -1672,6 +1719,8 @@ class _SearchMixin:
         archive: Archive,
         partial_query: str,
         existing: List[Dict[str, str]],
+        *,
+        result_paths: Optional[List[str]] = None,
     ) -> Optional[Dict[str, str]]:
         """D6 (beta): probe for the canonical title with this exact prefix.
 
@@ -1686,25 +1735,20 @@ class _SearchMixin:
         SHORTEST title that starts with the partial — typically the bare
         canonical article — and prepend it when missing.
 
-        Returns ``None`` when:
-          - SuggestionSearcher returns no entries,
-          - no entry's title starts with the partial,
-          - the chosen entry is already in ``existing``.
+        Two strategies, tried in order:
+          A. Disambiguator-strip: scan ``foo_(suffix)`` results and
+             check if the un-suffixed root exists.
+          B. Shortest-prefix-title: scan all results and pick the
+             shortest title that starts with the partial.
+
+        Returns ``None`` when neither resolves.
         """
         partial_clean = (partial_query or "").strip()
         if not partial_clean or len(partial_clean) < 2:
             return None
-        try:
-            suggestion_search = _zim_ops_mod.SuggestionSearcher(archive).suggest(
-                partial_clean
-            )
-            total = suggestion_search.getEstimatedMatches()
-            if not total:
-                return None
-            max_results = min(total, 25)
-            result_paths = list(suggestion_search.getResults(0, max_results))
-        except Exception as e:
-            logger.debug(f"D6 SuggestionSearcher probe failed: {e}")
+        if result_paths is None:
+            result_paths = self._probe_suggestion_paths(archive, partial_clean)
+        if not result_paths:
             return None
 
         partial_lower = partial_clean.lower()
@@ -1717,81 +1761,127 @@ class _SearchMixin:
             if isinstance(e.get("text"), str)
         }
 
-        # Strategy A: scan the suggestion results for entries whose path
-        # has a parenthesised disambiguator (``Photosynthesis (song)``,
-        # ``Berlin (city)``). Strip the parens to derive a canonical
-        # "root" path; if that root exists in the archive AND is not in
-        # ``existing``, it IS the canonical article the SuggestionSearcher
-        # missed. Wikipedia's pattern is unambiguous: any title with
-        # ``_(suffix)`` has a corresponding ``base`` article (or
-        # disambiguation page) at the un-suffixed path.
+        canonical = self._canonical_via_disambiguator_strip(
+            archive,
+            result_paths,
+            partial_lower,
+            existing_paths,
+            existing_titles,
+        )
+        if canonical is not None:
+            return canonical
+        return self._canonical_via_shortest_title(
+            archive,
+            result_paths,
+            partial_lower,
+            existing_paths,
+            existing_titles,
+        )
+
+    @staticmethod
+    def _probe_suggestion_paths(archive: Archive, partial_clean: str) -> List[str]:
+        """Run a SuggestionSearcher probe and return result paths.
+
+        Returns an empty list on any error or zero matches; the canonical
+        probe degrades gracefully without surfacing the failure.
+        """
+        try:
+            suggestion_search = _zim_ops_mod.SuggestionSearcher(archive).suggest(
+                partial_clean
+            )
+            total = suggestion_search.getEstimatedMatches()
+            if not total:
+                return []
+            max_results = min(total, 25)
+            return [str(p) for p in suggestion_search.getResults(0, max_results)]
+        except Exception as e:
+            logger.debug(f"D6 SuggestionSearcher probe failed: {e}")
+            return []
+
+    def _canonical_via_disambiguator_strip(
+        self,
+        archive: Archive,
+        result_paths: List[str],
+        partial_lower: str,
+        existing_paths: set,
+        existing_titles: set,
+    ) -> Optional[Dict[str, str]]:
+        """Strategy A: derive a canonical root from ``foo_(suffix)`` hits.
+
+        Wikipedia's pattern is unambiguous: any title with ``_(suffix)``
+        has a corresponding base article (or disambiguation page) at the
+        un-suffixed path. Verify via ``has_entry_by_path`` so we only
+        promote articles that actually exist.
+        """
         roots_seen: set[str] = set()
-        for result_path in result_paths:
-            path_str = str(result_path)
-            # MagicMock-archive test guard (see test_get_search_suggestions
-            # and test_generate_search_suggestions_uses_suggestion_searcher).
-            if not isinstance(path_str, str):
-                continue
-            paren_idx = path_str.find("_(")
-            if paren_idx <= 0:
-                continue
-            root = path_str[:paren_idx]
-            if not root or root in roots_seen:
+        for path_str in result_paths:
+            root = self._extract_disambiguator_root(path_str, partial_lower)
+            if root is None or root in roots_seen:
                 continue
             roots_seen.add(root)
-            if not root.lower().startswith(partial_lower):
-                continue
             if root in existing_paths:
                 continue
-            try:
-                if not archive.has_entry_by_path(root):
-                    continue
-                entry = archive.get_entry_by_path(root)
-                title = entry.title or root
-                path = entry.path or root
-            except Exception:  # pragma: no cover — defensive
+            entry_info = self._resolve_entry(archive, root)
+            if entry_info is None:
                 continue
-            if not isinstance(title, str) or not isinstance(path, str):
-                continue
+            title, path = entry_info
             if not title.lower().startswith(partial_lower):
                 continue
             if title.lower() in existing_titles or path in existing_paths:
                 continue
-            return {
-                "text": title,
-                "path": path,
-                "type": "title_start_match",
-            }
+            return {"text": title, "path": path, "type": "title_start_match"}
+        return None
 
-        # Strategy B: fall back to "shortest title that starts with the
-        # partial". This catches archives where the canonical bare entry
-        # didn't appear alongside any parenthesised siblings (the
-        # disambiguator-strip heuristic fires only when at least one
-        # ``foo_(suffix)`` was returned by SuggestionSearcher).
+    @staticmethod
+    def _extract_disambiguator_root(path_str: str, partial_lower: str) -> Optional[str]:
+        """Return the pre-``_(`` portion of ``path_str`` if it starts
+        with ``partial_lower``, else None."""
+        paren_idx = path_str.find("_(")
+        if paren_idx <= 0:
+            return None
+        root = path_str[:paren_idx]
+        if not root or not root.lower().startswith(partial_lower):
+            return None
+        return root
+
+    @staticmethod
+    def _resolve_entry(archive: Archive, path: str) -> Optional[Tuple[str, str]]:
+        """Resolve ``path`` to ``(title, path)`` or None if absent / mocked."""
+        try:
+            if not archive.has_entry_by_path(path):
+                return None
+            entry = archive.get_entry_by_path(path)
+            title = entry.title or path
+            actual = entry.path or path
+        except Exception:  # pragma: no cover — defensive
+            return None
+        if not isinstance(title, str) or not isinstance(actual, str):
+            return None
+        return title, actual
+
+    def _canonical_via_shortest_title(
+        self,
+        archive: Archive,
+        result_paths: List[str],
+        partial_lower: str,
+        existing_paths: set,
+        existing_titles: set,
+    ) -> Optional[Dict[str, str]]:
+        """Strategy B: pick the shortest prefix-matching title.
+
+        Catches archives where the canonical bare entry didn't appear
+        alongside any parenthesised siblings.
+        """
         best: Optional[Tuple[str, str]] = None
         best_len = float("inf")
         for result_path in result_paths:
-            try:
-                entry = archive.get_entry_by_path(str(result_path))
-                title = entry.title or ""
-                path = entry.path or str(result_path)
-            except Exception:  # pragma: no cover — defensive
+            entry_info = self._resolve_entry(archive, result_path)
+            if entry_info is None:
                 continue
-            if not isinstance(title, str) or not isinstance(path, str):
-                continue
+            title, path = entry_info
             if not title or not path:
                 continue
-            if (
-                path.startswith("M/")
-                or path.startswith("X/")
-                or path.startswith("-/")
-                or title.startswith("File:")
-                or title.startswith("Category:")
-                or title.startswith("Template:")
-                or title.startswith("Wikipedia:")
-                or title.startswith("Help:")
-                or title.startswith("User:")
-            ):
+            if _is_pseudo_namespace_entry(path, title, extended=True):
                 continue
             if not title.lower().startswith(partial_lower):
                 continue
@@ -1802,11 +1892,7 @@ class _SearchMixin:
                 best_len = len(title)
         if best is None:
             return None
-        return {
-            "text": best[0],
-            "path": best[1],
-            "type": "title_start_match",
-        }
+        return {"text": best[0], "path": best[1], "type": "title_start_match"}
 
     @staticmethod
     def _find_entry_fast_path(archive: Any, title: str) -> Optional[Any]:

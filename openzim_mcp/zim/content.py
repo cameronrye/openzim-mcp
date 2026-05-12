@@ -39,6 +39,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Common MIME-type prefix used to gate text-extraction logic.
+_TEXT_MIME_PREFIX = "text/"
+
+
 # D12 (v2.0.0a9): regex captures the path-traversal shapes that
 # don't make sense for a ZIM entry path. ZIM paths are
 # ``<namespace>/<name>`` (e.g. ``C/Berlin``) — they never start with
@@ -154,7 +158,7 @@ class _ContentMixin:
         """
         try:
             item = entry.get_item()
-            if item.mimetype.startswith("text/"):
+            if item.mimetype.startswith(_TEXT_MIME_PREFIX):
                 content = self.content_processor.process_mime_content(
                     bytes(item.content), item.mimetype, compact=True
                 )
@@ -921,6 +925,23 @@ class _ContentMixin:
                     f"Try using search_zim_file() to find the correct entry path."
                 ) from search_error
 
+    @staticmethod
+    def _decode_metadata_content(raw: bytes, mime: str) -> str:
+        """Decode a metadata item's bytes payload into a string.
+
+        Text MIME types decode as UTF-8 (replacement on invalid bytes);
+        binary types render as a ``(mime content, N bytes)`` marker;
+        empty bytes return an empty string.
+        """
+        if mime.startswith(_TEXT_MIME_PREFIX):
+            try:
+                return raw.decode("utf-8", errors="replace")
+            except Exception:
+                return repr(raw)
+        if raw:
+            return f"({mime or 'binary'} content, {len(raw)} bytes)"
+        return ""
+
     def _get_metadata_entry(
         self,
         archive: Archive,
@@ -978,23 +999,11 @@ class _ContentMixin:
                 f"# {entry_path}\n\n(Error retrieving content: {e})",
                 False,
             )
-        if mime.startswith("text/"):
-            try:
-                content = raw.decode("utf-8", errors="replace")
-            except Exception:
-                content = repr(raw)
-        elif raw:
-            content = f"({mime or 'binary'} content, {len(raw)} bytes)"
-        else:
-            content = ""
+        content = self._decode_metadata_content(raw, mime)
         # Honour content_offset / max_content_length to match the regular
         # entry path's contract.
-        total_length = len(content)
-        if content_offset and content_offset > 0:
-            if content_offset >= total_length:
-                content = ""
-            else:
-                content = content[content_offset:]
+        if content_offset > 0:
+            content = content[content_offset:] if content_offset < len(content) else ""
         content = self.content_processor.truncate_content(content, max_content_length)
         result_text = (
             f"# {key}\n\nRequested Path: {entry_path}\n"
@@ -1504,7 +1513,7 @@ class _ContentMixin:
                     "is_truncated": is_truncated,
                 }
 
-            elif mime_type.startswith("text/"):
+            elif mime_type.startswith(_TEXT_MIME_PREFIX):
                 # For plain text, take first N words
                 title = entry.title or "Untitled"
                 raw_content = bytes(item.content).decode("utf-8", errors="replace")
