@@ -95,9 +95,11 @@ class TestContractShape:
         assert payload["done"] is True
         # And each per-archive result inside also conforms.
         for entry in payload["results"]:
-            inner = entry["result"]
-            if inner.get("error") is True:
+            # H14: per-file row carries ``error`` as a sibling of ``result``;
+            # ``result`` is None on failure, a SearchResponse on success.
+            if entry.get("error") is True:
                 continue  # inner ZIM lacked Xapian index — skip that entry
+            inner = entry["result"]
             _assert_contract(inner)
 
     @pytest.mark.asyncio

@@ -462,14 +462,20 @@ class TestStructuredOutput:
         assert payload["next_cursor"] is None
         assert "page_info" in payload
         for entry in payload["results"]:
+            # H14: per-file row carries ``error`` as a sibling of ``result``.
+            # On failure (e.g. ZIM lacks FT Xapian index, archive failed to
+            # open), ``result`` is None and ``error_message`` /
+            # ``error_operation`` ride alongside ``error=True``. On success,
+            # ``result`` is a SearchResponse dict.
+            if entry.get("error") is True:
+                assert entry["result"] is None
+                assert "error_operation" in entry
+                assert "error_message" in entry
+                continue
             inner = entry["result"]
             assert isinstance(
                 inner, dict
-            ), f"per_file[].result should be dict, got {type(inner)}"
-            if inner.get("error") is True:
-                # Per-archive search failed (e.g. ZIM lacks FT Xapian index);
-                # the error envelope replaces SearchResponse for that entry.
-                continue
+            ), f"per_file[].result should be dict on success, got {type(inner)}"
             # inner is itself a SearchResponse — it has its own results list
             assert "results" in inner
             assert "done" in inner
