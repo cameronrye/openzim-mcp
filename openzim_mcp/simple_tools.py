@@ -886,6 +886,30 @@ class SimpleToolsHandler:
                 return m
         return None
 
+    # O4 (beta): disambiguation pages on Wikipedia (``Martin``,
+    # ``Mercury``) have the form ``# Title\n\n**Title** may refer to:\n``
+    # before the first H2. Detect that pattern so the lead-with-TOC cut
+    # can be suppressed and the inline disambig list preserved.
+    #
+    # Implementation note: the original regex
+    # ``\bmay\s+(?:also\s+)?refer\s+to\s*:?\s*$`` tripped SonarCloud's
+    # S5852 ReDoS check (nested unbounded quantifiers). Equivalent
+    # behaviour via normalized ``endswith`` — no regex engine, no
+    # backtracking risk, and easier to extend with new phrasings if
+    # ZIM exporters ever produce them.
+    _DISAMBIG_LEAD_PHRASES = ("may refer to", "may also refer to")
+
+    @classmethod
+    def _is_disambig_lead(cls, pre_h2: str) -> bool:
+        """Return True when ``pre_h2`` looks like a disambig-page lead."""
+        if len(pre_h2) >= 400:
+            return False
+        # ``" ".join(s.split())`` collapses all whitespace runs (including
+        # newlines and tabs) to single spaces. ``rstrip(":")`` accommodates
+        # both ``may refer to:`` and the bare ``may refer to`` variants.
+        normalized = " ".join(pre_h2.lower().split()).rstrip(":").rstrip()
+        return normalized.endswith(cls._DISAMBIG_LEAD_PHRASES)
+
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:
         """Truncate ``body`` at the first article H2 (lead-section cut)
         and append a markdown TOC of remaining sections.
@@ -946,16 +970,7 @@ class SimpleToolsHandler:
         h2_match = self._first_article_h2(body)
         if h2_match:
             pre_h2 = body[: h2_match.start()].rstrip()
-            is_disambig_lead = (
-                len(pre_h2) < 400
-                and re.search(
-                    r"\bmay\s+(?:also\s+)?refer\s+to\s*:?\s*$",
-                    pre_h2,
-                    re.IGNORECASE,
-                )
-                is not None
-            )
-            if is_disambig_lead:
+            if self._is_disambig_lead(pre_h2):
                 clean_cut = False
             else:
                 body = pre_h2
