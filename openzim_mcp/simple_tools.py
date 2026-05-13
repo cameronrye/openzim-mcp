@@ -1957,38 +1957,43 @@ class SimpleToolsHandler:
             if isinstance(r, dict)
             and is_strong_title_match(topic, r.get("path", ""), r.get("title", ""))
         ]
-        # A11 C2 (post-a10 review): ``tell me about Apollo 11`` used to
-        # disambiguate between ``Apollo_11_anniversaries``,
+        # A11 C2 (post-a10 review, second pass): ``tell me about Apollo
+        # 11`` used to disambiguate between ``Apollo_11_anniversaries``,
         # ``Apollo_11_lunar_sample_display`` and
         # ``Apollo_11_goodwill_messages`` — three weak matches that
         # extend the topic, with the canonical ``Apollo_11`` article
         # itself hidden because Xapian's top-3 didn't include it.
         # Probe the title index for the exact-topic canonical BEFORE
-        # the disambig check so the canonical is always considered.
-        canonical = self._promote_topic_via_title_index(zim_file_path, topic)
-        if canonical is not None:
-            canonical_path = canonical.get("path", "")
-            present_paths = {
-                str(r.get("path", "")) for r in strong_matches if isinstance(r, dict)
-            }
-            if canonical_path and canonical_path not in present_paths:
-                # ``SearchHit`` is a TypedDict for the BM25 result
-                # shape — the synthetic canonical row matches the
-                # subset of keys consumers actually read (path /
-                # title / snippet), but mypy can't statically prove
-                # that. ``cast`` accepts the shape-compatibility we've
-                # already verified.
-                canonical_row: Dict[str, Any] = {
-                    "path": canonical_path,
-                    "title": canonical.get("title") or top_title,
-                    "snippet": "(canonical title match)",
+        # the disambig check fires so the canonical is always
+        # considered.
+        #
+        # Gate the probe behind ``len(strong_matches) >= 2``: that's
+        # the only condition under which the disambig page would
+        # otherwise render. When there are 0 or 1 strong matches the
+        # handler is either falling through to plain search or
+        # auto-fetching the single match, so the extra title-index
+        # call buys nothing. The same gate avoids paying for a second
+        # title-index probe when promotion above already did one for
+        # the weak-top-hit case.
+        if len(strong_matches) >= 2:
+            canonical = self._promote_topic_via_title_index(zim_file_path, topic)
+            if canonical is not None:
+                canonical_path = canonical.get("path", "")
+                present_paths = {
+                    str(r.get("path", ""))
+                    for r in strong_matches
+                    if isinstance(r, dict)
                 }
-                # ``SearchHit`` is a TypedDict; cast satisfies the
-                # type-checker since the synthetic row carries only
-                # the keys downstream consumers actually read.
-                strong_matches = cast(
-                    Any, [canonical_row, *strong_matches]
-                )
+                if canonical_path and canonical_path not in present_paths:
+                    canonical_row: Dict[str, Any] = {
+                        "path": canonical_path,
+                        "title": canonical.get("title") or top_title,
+                        "snippet": "(canonical title match)",
+                    }
+                    # ``SearchHit`` is a TypedDict; cast satisfies
+                    # the type-checker since the synthetic row carries
+                    # only the keys downstream consumers actually read.
+                    strong_matches = cast(Any, [canonical_row, *strong_matches])
         # A11 C1 + Opp1: when the disambig set contains exactly the
         # ``Foo`` article AND its ``Foo (disambiguation)`` twin, the
         # caller almost always wants the canonical ``Foo``. Drop the

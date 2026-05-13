@@ -7,11 +7,75 @@ from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import html2text
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
 
 logger = logging.getLogger(__name__)
+
+
+# A11 D1 (post-a10 second pass): block-level tag names that should
+# inject whitespace at their boundary when extracting cell text.
+# Inline tags (``span``, ``b``, ``i``, ``sup``, ``sub``, ``a``,
+# ``wbr``, ``small``, ``abbr``, ``code``, etc.) are intentionally
+# excluded — Wikipedia uses inline spans for number-separator hints
+# (``3<span>,</span>913<span>,</span>644``), unit microformats
+# (``891<wbr>.<wbr>3``), and coordinate templates
+# (``52<span>°</span>31<span>′</span>N``), so inserting whitespace
+# between adjacent inline children mangles those forms. The first
+# revision of D1 used ``td.get_text(separator=" ")`` and surfaced
+# exactly that regression; the helper below restores the inline
+# concatenation while still separating block-level siblings.
+_BLOCK_CELL_TAGS = frozenset(
+    {
+        "br",
+        "li",
+        "p",
+        "div",
+        "tr",
+        "td",
+        "th",
+        "ul",
+        "ol",
+        "dl",
+        "dt",
+        "dd",
+        "blockquote",
+        "section",
+        "article",
+        "header",
+        "footer",
+    }
+)
+
+
+def _join_cell_text(cell: Tag) -> str:
+    """Extract a table-cell's text, separating block-level children
+    with whitespace and concatenating inline children directly.
+
+    This is the safer alternative to ``cell.get_text(separator=" ")``:
+    the BeautifulSoup default emits the separator between EVERY
+    descendant Tag's text, which corrupts inline span groups used
+    for number formatting (``3,913,644``), units (``891.3``), and
+    coordinate templates. Iterating descendants ourselves and only
+    inserting whitespace at block-level tag boundaries (and
+    ``<br>``) keeps the inline forms intact while still fixing the
+    multi-line concatenation cases the original bug report flagged
+    (``5th in Europe1st in Germany``, ``Berliner(s) (English)Berliner
+    (m)``, ``TokyoTamaNorthern Izu Islands``).
+
+    The outer ``" ".join(text.split())`` collapses any whitespace
+    runs the insertion produces, so legitimate text like
+    ``"New York"`` survives.
+    """
+    parts: List[str] = []
+    for el in cell.descendants:
+        if isinstance(el, NavigableString):
+            parts.append(str(el))
+        elif isinstance(el, Tag) and el.name in _BLOCK_CELL_TAGS:
+            parts.append(" ")
+    return " ".join("".join(parts).split())
+
 
 # BeautifulSoup parser name; pinned so the dependency footprint stays minimal
 # (no lxml/html5lib needed) and the parsing semantics stay consistent.
@@ -557,20 +621,22 @@ class ContentProcessor:
                         section_emitted_count = 0
                     continue
                 if th and td:
-                    # A11 D1 (post-a10): pass ``separator=" "`` to
-                    # ``get_text`` so adjacent block-level children
-                    # (``<br>``, ``<li>``, ``<p>``, ``<span>``) don't
-                    # concatenate without whitespace. Without this
-                    # Wikipedia infoboxes produce ``5th in Europe1st in
-                    # Germany``, ``Berliner(s) (English)Berliner (m)``,
-                    # ``0.967very high``, ``TokyoTamaNorthern Izu
-                    # Islands`` — every city article had at least one
-                    # such concatenation. The outer ``" ".join(...
-                    # split())`` collapses any runs of whitespace the
-                    # separator introduces, so legitimate text like
-                    # ``"New York"`` is unaffected.
-                    raw_label = " ".join(th.get_text(separator=" ").split())
-                    value = " ".join(td.get_text(separator=" ").split())
+                    # A11 D1 (post-a10, second pass): use
+                    # ``_join_cell_text`` so block-level children
+                    # (``<br>``, ``<li>``, ``<p>``) get whitespace
+                    # while inline groups (``<span>`` for number
+                    # separators, ``<wbr>`` for soft breaks)
+                    # concatenate directly. The first revision used
+                    # ``get_text(separator=" ")`` which corrupted
+                    # population numbers (``3,913,644`` →
+                    # ``3 , 913 , 644``) and coordinate templates
+                    # (``52°31′N`` → ``52 ° 31 ′ N``). The helper
+                    # restores the inline forms while still fixing
+                    # the original ``5th in Europe1st in Germany`` /
+                    # ``TokyoTamaNorthern Izu Islands`` /
+                    # ``0.967very high`` concatenations.
+                    raw_label = _join_cell_text(th)
+                    value = _join_cell_text(td)
                     if not raw_label or not value:
                         continue
                     # D1 (beta): Wikipedia infoboxes end with trailing

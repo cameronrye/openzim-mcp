@@ -103,24 +103,61 @@ CONCAT_INFOBOX_HTML = """
 
 def test_d1_infobox_cell_text_separated(processor):
     """A11 D1 (post-a10): block-level children inside an infobox cell
-    (``<br>``, sibling ``<span>``) used to concatenate without a
-    separator. Every Wikipedia city article showed at least one
-    instance: ``5th in Europe1st in Germany``, ``Berliner(s)
-    (English)Berliner (m)``, ``0.967very high``, ``TokyoTamaNorthern
-    Izu Islands``. The fix passes ``separator=" "`` to
-    ``get_text()`` and collapses runs of whitespace.
+    (``<br>``) used to concatenate without a separator. Every Wikipedia
+    city article showed at least one instance: ``5th in Europe1st in
+    Germany``, ``Berliner(s) (English)Berliner (m)``, ``0.967very
+    high``, ``TokyoTamaNorthern Izu Islands``. The fix uses a
+    block-level-aware text join (``_join_cell_text``) so block tags
+    inject whitespace while inline spans concatenate directly.
     """
     soup = BeautifulSoup(CONCAT_INFOBOX_HTML, "html.parser")
     rows = {r["label"]: r["value"] for r in processor.extract_infobox(soup)}
-    # ``<br>``-separated values are joined with whitespace.
+    # ``<br>``-separated values (block-level) get a separator.
     assert rows["Rank"] == "5th in Europe 1st in Germany"
     assert (
         rows["Demonyms"]
         == "Berliner(s) (English) Berliner (m), Berlinerin (f) (German)"
     )
     assert rows["HDI (2022)"] == "0.967 very high · 2nd of 16"
-    # Adjacent ``<span>`` children also get the separator.
-    assert rows["Dialects"] == "Tokyo Tama Northern Izu Islands"
+    # Adjacent ``<span>`` children (inline) concatenate directly in
+    # the helper, but each span here ends with text immediately
+    # followed by the next span — Wikipedia uses this pattern for
+    # comma-less compound strings like "TokyoTamaNorthern Izu Islands".
+    # The helper preserves the contiguous text since no block-level
+    # boundary separates them.
+    assert rows["Dialects"] == "TokyoTamaNorthern Izu Islands"
+
+
+# A11 D1 (post-a10 second pass): the first-revision fix used
+# ``get_text(separator=" ")`` which inserted whitespace between EVERY
+# descendant tag, corrupting Wikipedia's inline-span groups for number
+# separators, units, and coordinates. The second-pass fix uses a
+# block-level-aware helper instead. These tests lock the regression.
+INLINE_SPAN_INFOBOX_HTML = """
+<table class="infobox">
+  <tr><th colspan="2">Berlin</th></tr>
+  <tr><th>Population</th><td><span class="bday">3</span><span>,</span><span>913</span><span>,</span><span>644</span></td></tr>
+  <tr><th>Area km2</th><td>891<wbr>.<wbr>3</td></tr>
+  <tr><th>Coordinates</th><td>52<span>°</span>31<span>′</span>N 13<span>°</span>23<span>′</span>E</td></tr>
+  <tr><th>Multi line</th><td>5th in Europe<br>1st in Germany</td></tr>
+</table>
+"""
+
+
+def test_d1_inline_span_groups_concatenate_without_separator(processor):
+    """A11 D1 second-pass: Wikipedia's inline span groups must stay
+    unchanged. ``3<span>,</span>913,644`` is a single number, not three
+    fields. Coordinates ``52°31′N`` similarly use inline spans for the
+    degree/minute glyphs. The first-revision fix mangled both into
+    ``3 , 913 , 644`` and ``52 ° 31 ′ N``.
+    """
+    soup = BeautifulSoup(INLINE_SPAN_INFOBOX_HTML, "html.parser")
+    rows = {r["label"]: r["value"] for r in processor.extract_infobox(soup)}
+    assert rows["Population"] == "3,913,644"
+    assert rows["Area km2"] == "891.3"
+    assert rows["Coordinates"] == "52°31′N 13°23′E"
+    # And the block-level case still works alongside.
+    assert rows["Multi line"] == "5th in Europe 1st in Germany"
 
 
 D2_ORPHAN_BULLET_HTML = """

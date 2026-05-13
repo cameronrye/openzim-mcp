@@ -1621,6 +1621,7 @@ class _NamespaceMixin:
         done: bool,
         next_cursor: Optional[str],
         archive_entry_count: int,
+        namespace_entry_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Assemble the walk_namespace v2 contract result dict.
 
@@ -1628,14 +1629,22 @@ class _NamespaceMixin:
         ``done`` / ``page_info``) plus walk-specific extras.
 
         ``total`` is always None: walk_namespace doesn't know the
-        per-namespace total mid-scan. Callers that need a count can use
-        ``browse_namespace`` (sampled) or wait for ``done=True``.
+        per-namespace total mid-scan for the iterable C-namespace path.
+        Callers that need a count can use ``browse_namespace`` (sampled)
+        or wait for ``done=True``.
+
+        A11 F4 (post-a10 second pass): the M and W well-known walks
+        know the bounded total ahead of time (``metadata_keys`` length;
+        main_entry / illustration probe pair). Surface it as
+        ``namespace_entry_count`` so the renderer can report a per-
+        namespace denominator instead of the archive-wide ``of ~27M``
+        scale hint that mismatches a 2- or 13-entry namespace.
 
         ``archive_entry_count`` is the file-level entry count, distinct
-        from the (unknown) namespace count.
+        from the (unknown for C, known for M/W) namespace count.
         """
         returned_count = len(entries)
-        return {
+        payload: Dict[str, Any] = {
             "namespace": namespace,
             "results": entries,
             "next_cursor": next_cursor,
@@ -1650,6 +1659,9 @@ class _NamespaceMixin:
             "scanned_through_id": scanned_through_id,
             "archive_entry_count": archive_entry_count,
         }
+        if namespace_entry_count is not None:
+            payload["namespace_entry_count"] = namespace_entry_count
+        return payload
 
     @classmethod
     def _walk_new_scheme_metadata(
@@ -1697,6 +1709,9 @@ class _NamespaceMixin:
             done=done,
             next_cursor=next_cursor,
             archive_entry_count=archive_entry_count,
+            # F4: M is bounded by metadata_keys length, so surface
+            # the real namespace total to the renderer.
+            namespace_entry_count=total,
         )
 
     @classmethod
@@ -1754,6 +1769,8 @@ class _NamespaceMixin:
             done=done,
             next_cursor=next_cursor,
             archive_entry_count=archive_entry_count,
+            # F4: W is bounded by the well-known probe pair length.
+            namespace_entry_count=total,
         )
 
     def walk_namespace(

@@ -196,22 +196,24 @@ def _render_related_link_line(r: Mapping[str, Any]) -> Optional[str]:
     """Format one outbound-link row as a bullet line. Returns None when
     the row is not a dict (defensive against partial payloads).
 
-    A11 Opp7 (post-a10): when the backend supplies a per-link
-    occurrence count (``link_count``) — how often this target appears
-    in the source article's link set — surface it so a small LLM can
+    A11 Opp7 (post-a10, second pass): surface the backend's
+    ``mention_count`` field as a ``N×`` suffix so a small LLM can
     rank which related article is most central to the source. A
     single-occurrence "See also" link is less load-bearing than a
-    20-occurrence backbone reference.
+    20-occurrence backbone reference. The first-pass H1 read a
+    ``link_count`` field that didn't exist on the payload — the
+    structured backend (D9 / v2.0.0a9) actually stores the per-
+    target frequency rank as ``mention_count``.
     """
     if not isinstance(r, dict):
         return None
     t = r.get("title", "(untitled)")
     p = r.get("path", "")
     link_text = r.get("link_text") or ""
-    link_count = r.get("link_count")
+    mention_count = r.get("mention_count")
     count_suffix = ""
-    if isinstance(link_count, int) and link_count > 1:
-        count_suffix = f" · {link_count}×"
+    if isinstance(mention_count, int) and mention_count > 1:
+        count_suffix = f" · {mention_count}×"
     if link_text and link_text.lower() != t.lower():
         return f"- **{t}** (`{p}`) — linked as “{link_text}”{count_suffix}"
     return f"- **{t}** (`{p}`){count_suffix}"
@@ -247,9 +249,23 @@ def render_related(data: Mapping[str, Any], entry_path: str) -> str:
     # outbound_error?}``. Errors surface as the backend's textual
     # reason — preserve that for diagnosability.
     if data.get("outbound_error"):
+        # A11 F3 (post-a10, second pass): the first-pass F3 fix wrapped
+        # the raise-path, but the live "Cannot find entry" case actually
+        # surfaces here via ``outbound_error`` (the backend catches and
+        # serialises rather than re-raising). Append recovery guidance
+        # to this branch too so a small LLM has concrete next-step
+        # commands instead of a bare two-line error.
+        recovery = (
+            f"\n\n**Try one of these to recover:**\n"
+            f"- `suggestions for {entry_path[:40]}` — autocomplete to "
+            "catch typos / partial names\n"
+            f"- `find article titled {entry_path}` — title-index lookup "
+            "with fuzzy fallback\n"
+            f"- `search for {entry_path}` — full-text search\n"
+        )
         return (
             f'**Could not extract related articles for "{entry_path}"**\n\n'
-            f"{data['outbound_error']}"
+            f"{data['outbound_error']}{recovery}"
         )
     outbound = data.get("results") or []
     if not outbound:
