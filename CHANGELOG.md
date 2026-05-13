@@ -5,6 +5,238 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a10] — 2026-05-12 (alpha pre-release) — post-a9 beta-test sweep (16 defects + 6 opportunities)
+
+Two-pass beta-test of `v2.0.0a9` against a 118 GB Wikipedia ZIM (Feb
+2026 snapshot), plus a self-review code-reviewer audit and a
+SonarCloud Quality Gate cleanup. The first pass exercised the
+markdown surface; the second pass audited the first-pass fixes and
+extended live testing to surfaces not covered the first time. Several
+recently-shipped backend features turned out to be unreachable from
+the natural-language surface, several handlers had silent fall-through
+bugs on common phrasings, and one libzim quirk (silent namespace-prefix
+stripping) was masking the entire metadata API.
+
+Net: 1425 tests pass (+5 over `v2.0.0a9`), 50 skipped, 38 deselected.
+Live-verified key fixes against the real Wikipedia archive via
+in-process `ZimOperations` calls.
+
+### Fixed — Critical (post-a9 beta sweep)
+
+- **D1: infobox section-context leakage on every Wikipedia city /
+  country.** Berlin and Tokyo (and the broad city-template family)
+  produced trailing rows labelled `**GDP — Time zone:**`,
+  `**GDP — Vehicle registration:**`, `**GDP — Website:**`,
+  `**GDP — HDI (2022):**` — clearly wrong. The post-a8 #2/Op5
+  parent-context fix correctly tracked `current_section` from
+  `<th class="infobox-header">` rows but never reset it; trailing
+  free-floating rows (which Wikipedia marks `<tr class="mergedtoprow">`)
+  inherited the last header. Reset `current_section` on KV rows whose
+  `<tr>` carries `mergedtoprow` AND only after at least one row has
+  been emitted under the current section — the second guard is the
+  third-pass fix, without which the reset stripped section context
+  from the *first* KV row inside a section header (Wikipedia uses
+  `mergedtoprow` on those too as the visual group lead). Both edges
+  covered by new regression tests.
+- **D7: `M/<key>` paths silently aliased to C-namespace articles.**
+  libzim's `archive.get_entry_by_path("M/Title")` strips the `M/`
+  prefix and resolves to the C-namespace article with that name;
+  `get article M/Title` against a Wikipedia ZIM returned the 172 KB
+  disambiguation article on "Title" instead of the metadata entry.
+  Route `M/<key>` paths to `archive.get_metadata_item` on new-scheme
+  archives so the proper metadata API serves these requests. Verified:
+  `M/Title` now returns `"Wikipedia"`, `M/Date` returns `"2026-02-15"`.
+
+### Fixed — High (post-a9 beta sweep)
+
+- **D2: `articles related to <topic>` failed on natural phrasings.**
+  The intent parser hands the topic verbatim from the user's query
+  (`articles related to United States` → `United States`), but the
+  underlying entry path stores spaces as underscores
+  (`United_States`). The handler called `get_related_articles_data`
+  with the unresolved string and surfaced "Cannot find entry". Now
+  probes the title index via `find_title_match(min_score=0.8)` first;
+  fall through to the literal path only when no canonical resolves.
+- **D3: `tell me about <typo>` skipped the typo-tolerant title
+  fallback.** The first-pass title promotion required score 1.0;
+  single-edit typos resolve at score 0.85 via `_find_entry_typo_fallback`.
+  `tell me about Photosythesis` (missing `n`) fell through to Xapian
+  search and returned `International Year of Chemistry` —
+  actively misleading. Retry `find_title_match(min_score=0.8)` after
+  the strict gate fails; same conservative typo chain
+  (length-gated at ≥ 5 chars, ≤ 700 variants).
+- **DD1: `metadata for <file>` aggregator returned 172 KB article
+  bodies for new-scheme archives.** D7 fixed the per-entry
+  `get article M/Title` surface but `_extract_zim_metadata`
+  (a separate code path used by the `metadata for` aggregator) was
+  still calling `get_entry_by_path("M/Title")` and getting the same
+  silently-aliased C-namespace article. Now uses `get_metadata_item`
+  for new-scheme archives, with old-scheme `get_entry_by_path`
+  fallback. Verified: `Title` returns `"Wikipedia"`, `Description`
+  returns `"The free encyclopedia"`, `Language` returns `"eng"` (was
+  172 K / 60 K / 364 K-char garbage respectively).
+- **DD2: `tell me about` ignored `content_offset`.** The handler
+  hard-coded offset = 0 in the body fetch, so callers paginating a
+  148 KB Photosynthesis article through `zim_query` couldn't reach
+  the tail without dropping to a separate `get article <path>` call.
+  Threaded `options.get("content_offset", 0)` through; suppress the
+  compact-mode lead-with-TOC step when reading mid-article.
+
+### Fixed — Medium (post-a9 beta sweep)
+
+- **D4: `get section X of Y` natural-language error path dropped the
+  `closest_match` hint.** The structured `get_section` operation
+  computes a `difflib`-based closest-match (Op5 from a8) but the
+  natural-language handler reimplemented section lookup against the
+  headings list and never queried that operation. Compute the same
+  hint locally so `get section Goegraphy of Berlin` now suggests
+  "Did you mean Geography?".
+- **D5: `articles related to <hub>` markdown dropped the
+  `scan_truncated` signal.** The a9 #A5 backend addition surfaced
+  `scan_truncated` / `scan_total_internal` / `_meta.reason` for hub
+  articles whose 500-link scan cap fired, but `compact_renderers.render_related`
+  ignored all of it. Append a footer when the signal is set.
+- **D6: `suggestions for X` missed the canonical bare-title article.**
+  `suggestions for Photosyn` returned 15 results, none of which was
+  bare `Photosynthesis` — both libzim's `SuggestionSearcher` and
+  Xapian rank disambiguator-bearing variants
+  (`Photosynthesis (song)`, `Photosynthetic_efficiency`) above the
+  short canonical title. Probe `SuggestionSearcher` for parenthesised
+  siblings (`foo_(suffix)`) and prepend the un-suffixed root path
+  when the archive resolves it. The third-pass refactor restructured
+  this to share a single `SuggestionSearcher.suggest()` round trip
+  with Strategy 2, so the cold path stays at one title-index probe.
+- **D8: `walk namespace W` returned zero entries while
+  `list namespaces` claimed W had two.** The two operations
+  contradicted each other on the same archive. The W-namespace
+  well-known entries (`mainPage`, `favicon`) live on the
+  `archive.main_entry` / `has_illustration` API, not the iterable
+  surface that `walk_namespace_data` falls back to. Mirror the same
+  probe pair `_add_new_scheme_well_known_namespace` already uses
+  for the namespace listing. Also fix the `entries 1-0` off-by-one
+  in the empty-walk header rendering.
+- **D9: cursor `s.q` field silently ignored — wrong-query
+  pagination.** Cursor reused across queries silently paginated the
+  new query at the old offset. Reject with a `cursor_decode` error
+  when `s.q` shares no meaningful (≥ 3-char) tokens with the current
+  query. Falls back to a bidirectional substring check for cursors
+  whose stored query has only short tokens. Three regression tests
+  cover the unrelated-query reject, the shortened-query accept, and
+  the overlapping-tokens accept.
+- **DD4: `_splice_title_match_into_search` returned `limit + 1`
+  results.** Prepending the canonical synthetic result didn't trim
+  back to the requested limit; `limit=3` produced 4 results with
+  header `"showing 1-4"`. Trim to `page_info.limit` and update
+  `page_info.returned_count` so the header matches the row count.
+
+### Added — Opportunities (post-a9 beta sweep)
+
+- **O2: stopword-saturation footer on search.** Queries that match
+  ≥ 1 M results (the stopword-only `search for the and a is in to`
+  saturates at ~5 M) now carry a footer noting that top hits are
+  ranked by general document importance, not topic relevance — so
+  the model doesn't trust the "Found N matches" signal as
+  meaningful.
+- **O3: truncation hint no longer self-references.** The previous
+  hint suggested `show structure of <path>` as the recovery —
+  silly when the truncated response IS the show-structure (or
+  table-of-contents) output. Replaced with operation-agnostic
+  guidance (page via cursor / tighten query / `compact=False`).
+- **O4: disambiguation page leads preserve their inline list.**
+  `tell me about Martin` previously truncated to `**Martin** may
+  refer to:` with no list, forcing a `show structure` round-trip.
+  Detect "X may refer to:" leads and skip the H2 cut so the
+  disambig list stays inline.
+- **O5: synthesize demotes `List_of_*` / `Index_of_*` /
+  `Outline_of_*` / `Timeline_of_*` etc.** These articles ranked
+  surprisingly high in synthesize because their bodies match many
+  query tokens but the actual content is just an enumeration stub.
+  Demote to the back of `top_n` AFTER title promotion runs (demoting
+  before regressed the promotion's strong-match guard, which would
+  treat `Berlin_(disambiguation)` as a match for `Berlin`).
+- **O6: docstring notes distinguish `show structure` (flat heading
+  list) from `table of contents` (nested children tree).**
+
+### Fixed — Code-reviewer audit findings (post-first-pass)
+
+A `feature-dev:code-reviewer` agent audited the first-pass commit and
+surfaced three real defects in the original fixes:
+
+- **A1 (the second guard on D1, listed under Critical above).**
+- **A2: D6 ran `SuggestionSearcher` twice on the cold path.** When
+  Strategy 1 returned empty, both the canonical probe AND Strategy 2
+  opened independent `SuggestionSearcher` instances against the same
+  archive. The first-pass "skip canonical probe when Strategy 1
+  empty" fix regressed the empty-Strategy-1 case (the canonical
+  probe IS needed when Xapian misses). Restructured to share a
+  single `SuggestionSearcher.suggest()` round trip via an optional
+  `result_paths=` parameter on `_find_canonical_prefix_match`.
+- **A3 (the token-overlap rewrite of D9, listed under Medium above).**
+
+### Fixed — Quality gate (SonarCloud third-pass cleanup)
+
+- **5 cognitive-complexity reductions (S3776).** Five functions added
+  by the beta-test commits crossed SonarCloud's complexity-15 limit.
+  Each was split into self-contained helpers without behaviour
+  change: `_find_canonical_prefix_match` (53 → split into 5 helpers
+  for path probing, root extraction, entry resolution, and the two
+  ranking strategies), `_handle_tell_me_about` (19 → 17 → ~14 over
+  two passes via `_promote_topic_via_title_index` and
+  `_fetch_topic_article_body`), `render_related` (17 → ~10 via
+  `_render_related_link_line` + `_scan_truncated_footer`),
+  `render_walk_namespace` (19 → ~12 via `_walk_namespace_header`),
+  and `_get_metadata_entry` (18 → ~13 via `_decode_metadata_content`).
+- **4 duplicate-literal extractions (S1192).** The "text/" MIME prefix
+  had three call sites in `zim/content.py`; "File:" / "Category:" /
+  "Template:" each had three call sites in `zim/search.py`. Extracted
+  to `_TEXT_MIME_PREFIX` and a `_PSEUDO_NAMESPACE_*` constant trio
+  with a shared `_is_pseudo_namespace_entry(extended=)` helper.
+- **1 ReDoS hotspot (S5852).** The O4 disambig-lead-detection regex
+  `\bmay\s+(?:also\s+)?refer\s+to\s*:?\s*$` was flagged for nested
+  unbounded quantifiers. Not actually catastrophic on Python's `re`
+  engine, but replaced anyway with a normalised
+  `str.endswith(("may refer to", "may also refer to"))` check — same
+  behaviour, no regex engine, and the phrase list is easier to
+  extend.
+
+### Wire-format / surface changes (alpha-line clean breaks)
+
+- **Infobox extraction labels for trailing rows change.** Berlin /
+  Tokyo terminal rows that previously emitted as `GDP — Time zone`
+  now emit as `Time zone`. Callers parsing the bullet-prefix
+  structure see different label strings.
+- **`metadata for <file>`** now returns short metadata strings
+  instead of 172 KB article-body excerpts. Wire-format compatible
+  (same keys); content is the actual ZIM metadata (`Title` =
+  `"Wikipedia"`, `Date` = `"2026-02-15"`, etc.).
+- **`get article M/<key>`** now returns the ZIM metadata entry
+  instead of the silently-aliased C-namespace article body.
+  Wire-format compatible (same response envelope); content differs.
+- **`_splice_title_match_into_search`** trims to the requested
+  limit. Callers receiving `limit + 1` results will now get exactly
+  `limit`.
+- **Cursor with mismatched `s.q` now errors.** Callers that
+  previously got silent wrong-query results now receive a
+  `cursor_decode` `ToolErrorPayload`.
+- **Synthesize ranking demotes list articles.** Citation order for a
+  query like `Quantum mechanics` no longer includes
+  `List_of_textbooks_…` in the top half.
+- **Truncation hint footer text changed (O3).** Callers parsing the
+  trailing prose see different wording.
+
+### Investigated and deferred
+
+- **Pseudo-namespace pollution in default search results
+  (`Portal:` / `User:` / `Help:`).** Filtering pseudo-namespace
+  articles from default search is too opinionated; some callers
+  legitimately want them. The canonical-promotion already pushes
+  the real article to rank 1 in the common case (live-verified:
+  `search for biology` → `Biology` at #1 via `(canonical title
+  match)`). Revisit if the canonical-promotion fallback proves
+  insufficient.
+
+---
+
 ## [2.0.0a9] — 2026-05-12 (alpha pre-release) — post-a9 review wave (5 defects + 4 deferred items)
 
 Follow-up review wave after the post-a8 batch (commit d3e310e). 4
