@@ -285,27 +285,64 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
       * ``"who is Martin Luther King Jr."`` -> topic ``"Martin Luther King Jr."``
       * ``"what is DNA"`` -> topic ``"DNA"``
       * ``"info about the Apollo program"`` -> topic ``"the Apollo program"``
+      * ``"explain Berlin to me"`` -> topic ``"Berlin"``  (A11 B3)
 
-    Strips the verb / interrogative prefix and any trailing sentence
-    punctuation. Falls back to the raw query so the search has *something*
-    to look up if no prefix matched.
+    Strips the verb / interrogative prefix, any trailing politeness
+    tail ("to me", "for me", "please"), and any trailing sentence
+    punctuation. Falls back to the raw query so the search has
+    *something* to look up if no prefix matched.
     """
+    # A11 B2: verb prefix uses ``\b`` (word boundary) and the topic
+    # capture is ``(.*?)`` (zero-or-more, non-greedy) so ``tell me
+    # about`` / ``tell me about `` / ``describe`` produce ``topic=""``
+    # instead of falling through to the else-branch with the entire
+    # raw query as the topic ("tell me about" → topic="tell me about"
+    # → disambiguation to articles titled "Tell Me About Tomorrow").
+    # The caller (simple_tools) checks for empty topic and surfaces a
+    # ``Topic Required`` error.
     m = safe_regex_search(
         r"^\s*("
-        r"tell\s+me\s+about\s+|"
-        r"who\s+(?:is|was|are|were)\s+|"
-        r"what\s+(?:is|are|was|were)\s+|"
-        r"describe\s+|"
-        r"explain\s+|"
-        r"info(?:rmation)?\s+(?:about|on)\s+"
-        r")(.+?)\s*\??\s*$",
+        r"tell\s+me\s+about\b|"
+        r"who\s+(?:is|was|are|were)\b|"
+        r"what\s+(?:is|are|was|were)\b|"
+        r"describe\b|"
+        r"explain\b|"
+        r"info(?:rmation)?\s+(?:about|on)\b"
+        r")\s*(.*?)\s*\??\s*$",
         query,
         re.IGNORECASE,
     )
     if m:
-        params["topic"] = m.group(2).strip().rstrip("?.,;:!")
+        topic = m.group(2).strip().rstrip("?.,;:!")
     else:
-        params["topic"] = query.strip().rstrip("?.,;:!")
+        topic = query.strip().rstrip("?.,;:!")
+    # A11 B3 (post-a10 review): topic-asking phrasings commonly carry a
+    # politeness tail — ``explain Berlin to me``, ``describe DNA for
+    # me``, ``tell me about cats please``, ``describe DNA for me
+    # please``. Strip the trailing politeness so the topic that
+    # reaches the search query is clean.
+    #
+    # Order matters: ``please`` can wrap an inner ``to me`` /
+    # ``for me`` (``DNA for me please``), so strip ``please`` FIRST,
+    # then strip the bare ``to/for me`` tail. Loop both strips until
+    # idempotent in case an unusual phrasing carries both forms.
+    for _ in range(3):
+        before = topic
+        topic = safe_regex_sub(
+            r"\s*,?\s*please\s*$",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        ).strip()
+        topic = safe_regex_sub(
+            r"\s+(?:to|for)\s+(?:me|us)\s*$",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        ).strip()
+        if topic == before:
+            break
+    params["topic"] = topic
 
 
 def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:

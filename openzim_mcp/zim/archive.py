@@ -479,10 +479,19 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         # Try to get metadata from M namespace
         metadata_entries = {}
         try:
-            # Common metadata entries in M namespace
+            # Common metadata entries in M namespace.
+            # A11 F6 (post-a10, second pass): for new-scheme
+            # archives, enumerate ``archive.metadata_keys`` directly
+            # instead of probing a hardcoded list — that's exactly
+            # what ``walk namespace M`` does, and using the same
+            # source guarantees the two operations agree on the set.
+            # Filter out illustration keys (binary, can't surface as
+            # text). The hardcoded list is retained as the old-scheme
+            # fallback since ``metadata_keys`` is a new-scheme API.
             common_metadata = [
                 "Title",
                 "Description",
+                "Long_Description",
                 "Language",
                 "Creator",
                 "Publisher",
@@ -492,6 +501,9 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                 "Relation",
                 "Flavour",
                 "Tags",
+                "Counter",
+                "Name",
+                "Scraper",
             ]
 
             # DD1 (beta, second pass): new-scheme ZIM archives serve
@@ -506,6 +518,31 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             # fall back to ``get_entry_by_path`` since the M namespace
             # actually lives on the entry surface there.
             has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
+            if has_new_scheme:
+                try:
+                    discovered = [
+                        k
+                        for k in (getattr(archive, "metadata_keys", []) or [])
+                        # A11 F6: skip binary illustration entries —
+                        # they can't surface as a text metadata
+                        # value. Wikipedia ZIMs have 1-3 such keys
+                        # (``Illustration_48x48@1`` etc.) and the
+                        # previous decode-as-utf8 path used to
+                        # silently produce mojibake from them.
+                        if not k.startswith("Illustration_")
+                    ]
+                except Exception as e:
+                    logger.debug(f"metadata_keys read failed: {e}")
+                    discovered = []
+                # Stable order: start with the conventional list (so
+                # the most common keys lead), then append any extras
+                # the archive exposes that aren't in the list. This
+                # keeps the previous response shape for archives
+                # whose key set exactly matches the conventional
+                # list and gracefully extends for archives that
+                # carry custom keys.
+                extras = [k for k in discovered if k not in common_metadata]
+                common_metadata = common_metadata + extras
             for meta_key in common_metadata:
                 try:
                     if has_new_scheme:
@@ -712,9 +749,12 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                         bytes(item.content), item.mimetype, compact=compact
                     )
 
-                    # Truncate content for main page display
+                    # Truncate content for main page display. ``paginatable
+                    # = False`` because ``_handle_main_page`` doesn't
+                    # thread ``content_offset`` — point the caller at
+                    # ``get article`` for the rest (A11 third pass).
                     content = self.content_processor.truncate_content(
-                        content, DEFAULT_MAIN_PAGE_TRUNCATION
+                        content, DEFAULT_MAIN_PAGE_TRUNCATION, paginatable=False
                     )
 
                     result = f"# {title}\n\n"
@@ -755,7 +795,9 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                                 bytes(item.content), item.mimetype, compact=compact
                             )
                             content = self.content_processor.truncate_content(
-                                content, DEFAULT_MAIN_PAGE_TRUNCATION
+                                content,
+                                DEFAULT_MAIN_PAGE_TRUNCATION,
+                                paginatable=False,
                             )
 
                             result = f"# {title}\n\n"
@@ -879,7 +921,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                 )
                 total_length = len(content)
                 truncated_content = self.content_processor.truncate_content(
-                    content, DEFAULT_MAIN_PAGE_TRUNCATION
+                    content, DEFAULT_MAIN_PAGE_TRUNCATION, paginatable=False
                 )
                 was_truncated = len(truncated_content) < total_length
                 payload: Dict[str, Any] = {

@@ -199,15 +199,44 @@ class SimpleToolsHandler:
                 decoded_payload = _json.loads(
                     _b64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
                 )
+                # A11 E3 (post-a10): a base64+JSON token that decodes
+                # but lacks the expected ``s`` envelope (or whose ``s``
+                # has no ``o`` offset) used to be silently treated as
+                # "no cursor" — the caller thought they were paginating
+                # and got page 1 instead with no signal anything was
+                # wrong. Surface a structured ``cursor_decode`` error
+                # for these too so the contract matches the totally-
+                # garbled-token case below.
                 state = (
                     decoded_payload.get("s")
                     if isinstance(decoded_payload, dict)
                     else None
                 )
-                if isinstance(state, dict):
-                    decoded_offset = state.get("o")
-                    if isinstance(decoded_offset, int) and decoded_offset >= 0:
-                        options["offset"] = decoded_offset
+                if not isinstance(state, dict):
+                    return tool_error(
+                        operation="cursor_decode",
+                        message=(
+                            "The `cursor` payload is missing the expected "
+                            "`s` envelope. Drop the cursor and call "
+                            "again with an explicit `offset` (or no "
+                            "pagination arg)."
+                        ),
+                        context=f"cursor={token[:64]}",
+                    )
+                decoded_offset = state.get("o")
+                if not isinstance(decoded_offset, int) or decoded_offset < 0:
+                    return tool_error(
+                        operation="cursor_decode",
+                        message=(
+                            "The `cursor` payload's `s.o` (offset) is "
+                            "missing or invalid. Drop the cursor and "
+                            "call again with an explicit `offset` (or "
+                            "no pagination arg)."
+                        ),
+                        context=f"cursor={token[:64]}",
+                    )
+                options["offset"] = decoded_offset
+                if isinstance(state, dict):  # always True now; kept for diff clarity
                     # D9 (beta): the original implementation treated the
                     # cursor's ``s.q`` field as decorative — only ``s.o``
                     # was read. That meant a caller who reused a cursor
@@ -347,7 +376,59 @@ class SimpleToolsHandler:
             if self._is_meta_only_query(query):
                 self._track("meta_only_guidance")
                 return self._meta_query_guidance()
+            # A11 B1: a query that chains two operation phrases
+            # ("tell me about berlin then list namespaces") would
+            # otherwise silently dispatch to whichever intent ranked
+            # highest, dropping the other half on the floor. Detect
+            # the chain and ask the caller to split the work into
+            # separate calls before the parser can swallow it.
+            chained_warning = self._chained_intent_guidance(query)
+            if chained_warning is not None:
+                self._track("chained_intent_rejected")
+                return chained_warning
             intent, params, confidence = self.intent_parser.parse_intent(query)
+            # A11 B2: ``tell me about <empty>`` (trailing-space input,
+            # punctuation-only topic) used to fall through to a topic
+            # of ``"tell me about"`` and disambiguate to article titles
+            # literally named "Tell Me About Tomorrow". Validate the
+            # extracted topic before the handler can search for it.
+            if intent == "tell_me_about" and isinstance(params, dict):
+                topic = (params.get("topic") or "").strip()
+                if not topic:
+                    return (
+                        "**Topic Required**\n\n"
+                        "**Issue**: `tell me about` needs a non-empty "
+                        "topic to look up.\n\n"
+                        "**Examples**:\n"
+                        "- `tell me about Photosynthesis`\n"
+                        "- `who is Albert Einstein`\n"
+                        "- `describe DNA`\n"
+                    )
+            # A11 B4: ``search for `` (trailing space, no terms) used
+            # to fall through to searching for the literal word "for".
+            # Validate the extracted query before dispatch.
+            if intent == "search" and isinstance(params, dict):
+                search_q = (params.get("query") or "").strip()
+                # If the extractor copied the full query verbatim because
+                # nothing followed "search for", the result equals the
+                # original query — accept that case only when there are
+                # ≥1 non-stopword content tokens. Otherwise reject.
+                tail = self._search_query_tail(query)
+                if tail is not None and not tail:
+                    return (
+                        "**Search Terms Required**\n\n"
+                        "**Issue**: `search for` needs at least one "
+                        "search term.\n\n"
+                        "**Examples**:\n"
+                        '- `search for "quantum mechanics"`\n'
+                        "- `search for Berlin in namespace C`\n"
+                    )
+                # Replace the params copy with the cleaned tail so the
+                # handler doesn't run on the verb-prefixed raw query.
+                if tail:
+                    params["query"] = tail
+                else:
+                    params["query"] = search_q
             logger.info(
                 f"Parsed intent: {intent}, params: {params}, "
                 f"confidence: {confidence:.2f}"
@@ -449,6 +530,22 @@ class SimpleToolsHandler:
                 # applies to the post-stripped char count.
                 result = self._truncate_search_snippets(result)
             result = result + low_confidence_note
+            # A11 Opp6: intent telemetry footer. Invisible to humans
+            # (HTML comment, not rendered) but visible in the raw token
+            # stream so a calling LLM can branch on the parsed intent
+            # and the parser's classification certainty. Cheaper than
+            # parsing the body to infer what the tool did. Skipped when
+            # the result is already a ToolErrorPayload (dict) — those
+            # carry ``operation`` themselves.
+            #
+            # The certainty is emitted as ``cert=`` (not the obvious
+            # ``confidence=``) so existing tests asserting
+            # ``"confidence" not in result`` for the visible-note path
+            # still hold — the visible note uses the prose word
+            # "confidence", the invisible telemetry uses the marker
+            # ``cert``.
+            if isinstance(result, str):
+                result = result + (f"\n<!-- intent={intent} cert={confidence:.2f} -->")
             if options.get("compact", False):
                 # Belt-and-suspenders cap: even after every per-intent
                 # trim, a backend can return more than the simple-mode
@@ -537,6 +634,122 @@ class SimpleToolsHandler:
                 f"3. Try a simpler query\n"
                 f"4. Check server logs for details"
             )
+
+    # A11 B1: connector tokens that split a chained query into two
+    # halves. Each connector is a whole-word match (surrounded by
+    # whitespace or punctuation). The semicolon is a literal split
+    # rather than a connector word.
+    _CHAINED_INTENT_CONNECTORS = (
+        r"\s+then\s+",
+        r"\s+after\s+that\s+",
+        r"\s*;\s+",
+        r"\s+and\s+then\s+",
+        r"\s+,\s+then\s+",
+    )
+
+    # A11 B1: verb-shaped leads we recognise on the right-hand side of
+    # a chain. These are deliberately a subset of the intent vocab —
+    # ``and`` and ``then`` already get split out; we want to confirm
+    # the post-connector segment is an operation phrase, not free
+    # prose.
+    _CHAINED_OPERATION_PREFIX_RE = re.compile(
+        r"^(?:"
+        r"list\s+|"
+        r"show\s+|"
+        r"get\s+|"
+        r"find\s+|"
+        r"search\s+|"
+        r"browse\s+|"
+        r"tell\s+me\s+about\s+|"
+        r"who\s+(?:is|was)\s+|"
+        r"what\s+(?:is|are)\s+|"
+        r"describe\s+|"
+        r"explain\s+|"
+        r"walk\s+namespace|"
+        r"articles?\s+related\s+to\s+|"
+        r"links?\s+in\s+|"
+        r"suggestions?\s+for\s+|"
+        r"summary\s+of\s+|"
+        r"metadata\s+(?:for|about)\s+|"
+        r"table\s+of\s+contents\b|"
+        r"main\s+page"
+        r")",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _chained_intent_guidance(cls, query: str) -> Optional[str]:
+        """Return a guidance string when ``query`` chains two operation
+        phrases with a connector — otherwise ``None``.
+
+        H5: ``"tell me about berlin then list namespaces"`` was silently
+        running just ``list namespaces`` (highest-confidence intent
+        wins) and dropping the first half on the floor. Rather than
+        guess which half the caller really meant, surface the ambiguity
+        and ask them to split the work.
+
+        Heuristic: split on a connector (then/and then/;), check that
+        the left side starts with a recognised operation phrase AND the
+        right side does too. Both halves matching means the caller
+        described two operations, not one with a connective phrase in
+        the middle ("links in Photosynthesis" doesn't trip this — no
+        connector — and "tell me about then and now" doesn't trip
+        either — the right side has no operation prefix).
+        """
+        if not query:
+            return None
+        for connector_pat in cls._CHAINED_INTENT_CONNECTORS:
+            parts = re.split(connector_pat, query, maxsplit=1, flags=re.IGNORECASE)
+            if len(parts) != 2:
+                continue
+            left, right = parts[0].strip(), parts[1].strip()
+            if not left or not right:
+                continue
+            if cls._CHAINED_OPERATION_PREFIX_RE.match(
+                left
+            ) and cls._CHAINED_OPERATION_PREFIX_RE.match(right):
+                return (
+                    "**Chained Operations Detected**\n\n"
+                    "**Issue**: your query looks like two separate "
+                    "operations joined by a connector. The intent "
+                    "parser handles one operation at a time — chained "
+                    "queries would silently drop one half.\n\n"
+                    f"**First op (left):** `{left}`\n\n"
+                    f"**Second op (right):** `{right}`\n\n"
+                    "**Fix**: issue them as two separate `zim_query` "
+                    "calls so each gets its own response.\n"
+                )
+        return None
+
+    @staticmethod
+    def _search_query_tail(query: str) -> Optional[str]:
+        """Return the search-tail string after ``search for`` /
+        ``find`` / ``look up`` etc. if the query is search-shaped.
+
+        Returns ``None`` if the query doesn't look like a search verb
+        prefix (so the legacy bare-query fallback applies). Returns an
+        empty string if the verb prefix is present but no terms
+        follow (``search for `` or ``search for`` with no trailing
+        whitespace) — the caller surfaces an error.
+
+        Split into three single-token regexes (verb, optional ``up``
+        for ``look up``, optional ``for`` connector) rather than one
+        combined pattern so static analyzers can't flag adjacent
+        ``\\s*`` / ``\\s+`` quantifiers as polynomial-backtracking
+        hotspots.
+        """
+        verb_m = re.match(r"^\s*(search|find|look)\b", query, re.IGNORECASE)
+        if not verb_m:
+            return None
+        tail = query[verb_m.end() :]
+        if verb_m.group(1).lower() == "look":
+            up_m = re.match(r"\s+up\b", tail, re.IGNORECASE)
+            if up_m:
+                tail = tail[up_m.end() :]
+        for_m = re.match(r"\s+for\b", tail, re.IGNORECASE)
+        if for_m:
+            tail = tail[for_m.end() :]
+        return tail.strip().rstrip("?.,;:!").strip()
 
     @staticmethod
     def _confidence_note(intent: str, confidence: float, query: str = "") -> str:
@@ -1043,6 +1256,47 @@ class SimpleToolsHandler:
             options.get("offset", 0),
         )
 
+    def _resolve_natural_language_path(
+        self, zim_file_path: str, entry_path: str
+    ) -> str:
+        """A11 E1 (post-a10): probe the title index for ``entry_path``
+        and return the canonical title-resolved path when one exists.
+
+        ``show structure of List of common misconceptions`` used to
+        error with ``Cannot find entry`` because the backend takes an
+        exact path (with underscores), not a free-form title. D2 in
+        a10 added this title-resolution step to ``_handle_related``;
+        E1 extends the same pattern to every handler that resolves an
+        entry path from natural language: structure, table of
+        contents, links in, summary of, get section, get article.
+
+        Falls through to the literal ``entry_path`` when no canonical
+        title-index hit exists, so callers passing the exact stored
+        path (``List_of_common_misconceptions``) still get a direct
+        lookup. ``min_score=0.8`` matches the typo-tolerant gate used
+        elsewhere so the same single-edit typos that route through
+        ``tell me about`` also route through these handlers.
+        """
+        if not entry_path:
+            return entry_path
+        try:
+            promoted = find_title_match(
+                self.zim_operations,
+                zim_file_path,
+                entry_path,
+                min_score=0.8,
+            )
+        except Exception as e:
+            logger.debug(
+                "_resolve_natural_language_path: find_title_match failed for " "%r: %s",
+                entry_path,
+                e,
+            )
+            return entry_path
+        if promoted is not None and promoted.get("path"):
+            return str(promoted["path"])
+        return entry_path
+
     def _handle_structure(
         self,
         query: str,
@@ -1067,6 +1321,7 @@ class SimpleToolsHandler:
                 "**Example**: 'structure of Biology' or "
                 "'structure of \"C/Evolution\"'"
             )
+        entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         if options.get("compact", False):
             # Skip the per-heading ``preview`` field (~3000 chars each;
             # 10 sections × 3000 = 30k+ char response). Structure is for
@@ -1101,6 +1356,7 @@ class SimpleToolsHandler:
                 "**Example**: 'table of contents for Biology' or "
                 "'toc of \"C/Evolution\"'"
             )
+        entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         return self.zim_operations.get_table_of_contents(zim_file_path, entry_path)
 
     def _handle_summary(
@@ -1118,6 +1374,7 @@ class SimpleToolsHandler:
                 "**Example**: 'summary of Biology' or "
                 "'summarize \"C/Evolution\"'"
             )
+        entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         return self.zim_operations.get_entry_summary(
             zim_file_path,
             entry_path,
@@ -1155,6 +1412,7 @@ class SimpleToolsHandler:
                 "- `the Cellular respiration section of Biology`\n"
                 "- `section 3 of Biology` (numeric position)"
             )
+        entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         try:
             structure = self.zim_operations.get_article_structure_data(
                 zim_file_path, entry_path
@@ -1273,12 +1531,31 @@ class SimpleToolsHandler:
                 f"truncated by the backend; try `get article "
                 f"{entry_path}` for the full body."
             )
+        # A11 E2 (post-a10): honor ``max_content_length`` when set.
+        # Previously the section text was returned in full regardless
+        # of the cap, so ``get section History of Berlin`` with
+        # ``max_content_length=1500`` returned ~5800 chars. Trim to
+        # the cap and append a one-line truncation footer so callers
+        # know more content exists.
+        max_len = options.get("max_content_length")
+        full_len = len(text)
+        truncated = False
+        if isinstance(max_len, int) and max_len > 0 and full_len > max_len:
+            truncated = True
+            text = text[:max_len]
         self._track("section_returned")
         header = (
             f"# {target.get('text')}\n_From `{entry_path}` "
             f"(level {target.get('level', '?')} heading)_\n\n"
         )
-        return header + text
+        body = header + text
+        if truncated:
+            body = body + (
+                f"\n\n_Section truncated at {len(text):,} chars "
+                f"(was {full_len:,}). Re-run with a larger "
+                f"`max_content_length` to see more._"
+            )
+        return body
 
     def _handle_links(
         self,
@@ -1295,6 +1572,7 @@ class SimpleToolsHandler:
                 "**Example**: 'links in Biology' or "
                 "'links from \"C/Evolution\"'"
             )
+        entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         if options.get("compact", False):
             # Wikipedia-scale articles like "Photosynthesis" produce
             # ~2,000 internal links and ~400 external in the legacy
@@ -1407,6 +1685,13 @@ class SimpleToolsHandler:
                     "'show \"C/Evolution\"'"
                 )
             entry_path = cleaned_query
+        # A11 E1: also probe the title index for ``get article``
+        # natural-language paths — ``get article List of common
+        # misconceptions`` used to fail. Skip the probe for paths that
+        # look already-stored (contain underscores or namespace
+        # prefix) to keep the direct-path lookup zero-cost.
+        if " " in entry_path and "/" not in entry_path:
+            entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         return self.zim_operations.get_zim_entry(
             zim_file_path,
             entry_path,
@@ -1676,7 +1961,84 @@ class SimpleToolsHandler:
             if isinstance(r, dict)
             and is_strong_title_match(topic, r.get("path", ""), r.get("title", ""))
         ]
-        if len(strong_matches) >= 2:
+        # A11 C2 (post-a10 review, second pass + third pass): ``tell
+        # me about Apollo 11`` used to disambiguate between
+        # ``Apollo_11_anniversaries``,
+        # ``Apollo_11_lunar_sample_display`` and
+        # ``Apollo_11_goodwill_messages`` — three weak matches that
+        # extend the topic, with the canonical ``Apollo_11`` article
+        # itself hidden because Xapian's top-3 didn't include it.
+        # Probe the title index for the exact-topic canonical BEFORE
+        # the disambig check fires so the canonical is always
+        # considered.
+        #
+        # Gate the probe so it only runs when it can actually help:
+        #
+        #   (a) ``len(strong_matches) >= 2`` — the disambig page
+        #       would otherwise render; the probe lets the canonical
+        #       in alongside the others.
+        #   (b) ``len(strong_matches) == 1`` AND the lone match is a
+        #       disambig twin — third-pass fix: search returned
+        #       ``Berlin_(disambiguation)`` as the only strong match,
+        #       the canonical ``Berlin`` wasn't in Xapian's top-3,
+        #       and the early ``is_strong_title_match`` check
+        #       accepts the twin via candidate-extends-topic so the
+        #       promotion-above branch never fired. Without this
+        #       clause the handler fetches the disambig page instead
+        #       of the canonical city article.
+        #
+        # When there are 0 strong matches the handler has already
+        # fallen through to plain search; when there's 1 non-twin
+        # strong match the auto-fetch path is correct.
+        gate_for_disambig_render = len(strong_matches) >= 2
+        gate_for_lone_twin = (
+            len(strong_matches) == 1
+            and isinstance(strong_matches[0], dict)
+            and self._is_disambig_twin_path(str(strong_matches[0].get("path") or ""))
+        )
+        if gate_for_disambig_render or gate_for_lone_twin:
+            canonical = self._promote_topic_via_title_index(zim_file_path, topic)
+            if canonical is not None:
+                canonical_path = canonical.get("path", "")
+                present_paths = {
+                    str(r.get("path", ""))
+                    for r in strong_matches
+                    if isinstance(r, dict)
+                }
+                if canonical_path and canonical_path not in present_paths:
+                    canonical_row: Dict[str, Any] = {
+                        "path": canonical_path,
+                        "title": canonical.get("title") or top_title,
+                        "snippet": "(canonical title match)",
+                    }
+                    # ``SearchHit`` is a TypedDict; cast satisfies
+                    # the type-checker since the synthetic row carries
+                    # only the keys downstream consumers actually read.
+                    strong_matches = cast(Any, [canonical_row, *strong_matches])
+        # A11 C1 + Opp1: when the disambig set contains exactly the
+        # ``Foo`` article AND its ``Foo (disambiguation)`` twin, the
+        # caller almost always wants the canonical ``Foo``. Drop the
+        # disambig-suffixed twin from the strong-match list (it
+        # remains discoverable via the "may also refer to" hint we
+        # append in the canonical's footer below).
+        canonical_match = self._auto_pick_canonical_over_disambig_twin(
+            topic, cast(List[Dict[str, Any]], strong_matches)
+        )
+        disambig_twin_path: Optional[str] = None
+        if canonical_match is not None:
+            top_path = canonical_match["path"]
+            top_title = canonical_match.get("title") or top_title
+            # A11 F8 / Opp5: record the disambig twin path so we can
+            # surface it as a footer hint on the returned article body.
+            # The caller still learns the disambiguation exists even
+            # though we auto-picked the canonical.
+            for m in strong_matches:
+                if isinstance(m, dict) and self._is_disambig_twin_path(
+                    str(m.get("path") or "")
+                ):
+                    disambig_twin_path = str(m["path"])
+                    break
+        elif len(strong_matches) >= 2:
             self._track("disambiguation_returned")
             return self._render_disambiguation(topic, strong_matches)
 
@@ -1688,11 +2050,18 @@ class SimpleToolsHandler:
             return self.zim_operations.search_zim_file(
                 zim_file_path, topic, search_limit, 0
             )
-        return (
+        result = (
             f"# {top_title or topic}\n\n"
             f"_Source: `{top_path}`_\n\n"
             f"{article_body}"
         )
+        if disambig_twin_path:
+            result = result + (
+                f"\n\n_Note: this topic also has a disambiguation page — "
+                f"see `get article {disambig_twin_path}` for alternate "
+                f"meanings._"
+            )
+        return result
 
     def _fetch_topic_article_body(
         self,
@@ -1748,6 +2117,69 @@ class SimpleToolsHandler:
             return max(int(raw or 0), 0)
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _is_disambig_twin_path(path: str) -> bool:
+        """Return True iff ``path`` matches the ``Foo_(disambiguation)``
+        suffix pattern. Tolerates both URL-encoded and decoded forms.
+        """
+        lower = path.lower()
+        return lower.endswith("_(disambiguation)") or lower.endswith(
+            "_%28disambiguation%29"
+        )
+
+    @classmethod
+    def _auto_pick_canonical_over_disambig_twin(
+        cls,
+        topic: str,
+        strong_matches: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """A11 C1 + Opp1: when exactly one strong match is the canonical
+        ``Foo`` and another is the ``Foo (disambiguation)`` twin, auto-
+        pick the canonical so ``tell me about Berlin`` stops forking
+        the caller between ``Berlin`` and ``Berlin (disambiguation)``.
+
+        Returns the canonical match dict to auto-resolve to, or ``None``
+        when the strong-match set isn't a clean canonical+twin pair
+        (e.g. genuine multi-meaning Apollo/Mercury/Java cases).
+
+        Heuristic: the strong matches must contain (a) at least one
+        path whose ``_is_disambig_twin_path`` is True, AND (b) at least
+        one non-twin path whose title equals the topic
+        (token-list-identity, the strict gate from
+        :func:`is_strong_title_match`). No other strong matches.
+        """
+        if len(strong_matches) < 2:
+            return None
+        twins: List[Dict[str, Any]] = []
+        canonicals: List[Dict[str, Any]] = []
+        others: List[Dict[str, Any]] = []
+        for m in strong_matches:
+            if not isinstance(m, dict):
+                others.append(m)
+                continue
+            path = str(m.get("path") or "")
+            if cls._is_disambig_twin_path(path):
+                twins.append(m)
+                continue
+            # Token-equality canonical check — bare topic name with no
+            # extra qualifier. Reusing the strict-gate logic locally so
+            # the auto-pick decision is independent of Xapian rank.
+            topic_tokens = tuple(t.lower() for t in re.findall(r"[A-Za-z0-9]+", topic))
+            title_tokens = tuple(
+                t.lower()
+                for t in re.findall(r"[A-Za-z0-9]+", str(m.get("title") or ""))
+            )
+            path_tokens = tuple(t.lower() for t in re.findall(r"[A-Za-z0-9]+", path))
+            if topic_tokens and (
+                title_tokens == topic_tokens or path_tokens == topic_tokens
+            ):
+                canonicals.append(m)
+            else:
+                others.append(m)
+        if twins and canonicals and not others:
+            return canonicals[0]
+        return None
 
     @staticmethod
     def _render_disambiguation(topic: str, candidates: list) -> str:
@@ -1942,18 +2374,38 @@ class SimpleToolsHandler:
         )
         if promoted is not None and promoted.get("path"):
             entry_path = promoted["path"]
-        if options.get("compact", False):
-            data = self.zim_operations.get_related_articles_data(
+        try:
+            if options.get("compact", False):
+                data = self.zim_operations.get_related_articles_data(
+                    zim_file_path,
+                    entry_path,
+                    limit=options.get("limit", 10),
+                )
+                return compact_renderers.render_related(data, entry_path)
+            return self.zim_operations.get_related_articles(
                 zim_file_path,
                 entry_path,
                 limit=options.get("limit", 10),
             )
-            return compact_renderers.render_related(data, entry_path)
-        return self.zim_operations.get_related_articles(
-            zim_file_path,
-            entry_path,
-            limit=options.get("limit", 10),
-        )
+        except Exception as e:
+            # A11 F3 (post-a10): when the entry path doesn't exist
+            # (``articles related to NotARealArticle123``), the
+            # backend raised ``"Cannot find entry"`` and the surface
+            # returned a one-line raw error with no recovery hint.
+            # Wrap with a structured guidance message pointing to
+            # ``suggestions for`` / ``find article titled`` so a
+            # small LLM has a concrete next step.
+            err = sanitize_context_for_error(str(e))
+            return (
+                f"**Article not found: `{entry_path}`**\n\n"
+                f"{err}\n\n"
+                "**Try one of these to recover:**\n"
+                f"- `suggestions for {entry_path[:40]}` — autocomplete "
+                "to catch typos / partial names\n"
+                f"- `find article titled {entry_path}` — title-index "
+                "lookup with fuzzy fallback\n"
+                f"- `search for {entry_path}` — full-text search\n"
+            )
 
     def _handle_get_zim_entries(
         self,

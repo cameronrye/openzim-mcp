@@ -7,11 +7,84 @@ from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import html2text
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
 
 logger = logging.getLogger(__name__)
+
+
+# A11 D1 (post-a10 second pass): block-level tag names that should
+# inject whitespace at their boundary when extracting cell text.
+# Inline tags (``span``, ``b``, ``i``, ``sup``, ``sub``, ``a``,
+# ``wbr``, ``small``, ``abbr``, ``code``, etc.) are intentionally
+# excluded — Wikipedia uses inline spans for number-separator hints
+# (``3<span>,</span>913<span>,</span>644``), unit microformats
+# (``891<wbr>.<wbr>3``), and coordinate templates
+# (``52<span>°</span>31<span>′</span>N``), so inserting whitespace
+# between adjacent inline children mangles those forms. The first
+# revision of D1 used ``td.get_text(separator=" ")`` and surfaced
+# exactly that regression; the helper below restores the inline
+# concatenation while still separating block-level siblings.
+_BLOCK_CELL_TAGS = frozenset(
+    {
+        "br",
+        "li",
+        "p",
+        "div",
+        "tr",
+        "td",
+        "th",
+        "ul",
+        "ol",
+        "dl",
+        "dt",
+        "dd",
+        "blockquote",
+        "section",
+        "article",
+        "header",
+        "footer",
+    }
+)
+
+
+def _join_cell_text(cell: Tag) -> str:
+    """Extract a table-cell's text, separating block-level children
+    with whitespace and concatenating inline children directly.
+
+    This is the safer alternative to ``cell.get_text(separator=" ")``:
+    the BeautifulSoup default emits the separator between EVERY
+    descendant Tag's text, which corrupts inline span groups used
+    for number formatting (``3,913,644``), units (``891.3``), and
+    coordinate templates. Iterating descendants ourselves and only
+    inserting whitespace at block-level tag boundaries (and
+    ``<br>``) keeps the inline forms intact while still fixing the
+    multi-line concatenation cases the original bug report flagged
+    (``5th in Europe1st in Germany``, ``Berliner(s) (English)Berliner
+    (m)``, ``TokyoTamaNorthern Izu Islands``).
+
+    The outer ``" ".join(text.split())`` collapses any whitespace
+    runs the insertion produces, so legitimate text like
+    ``"New York"`` survives.
+    """
+    parts: List[str] = []
+    for el in cell.descendants:
+        # ``Comment`` is a ``NavigableString`` subclass; the
+        # ``isinstance(NavigableString)`` test below would catch it
+        # and leak the comment text into the rendered value. Wikipedia
+        # templates emit invisible coordinate / microformat comments
+        # inside infobox cells routinely — without this guard,
+        # ``3<!-- a-template -->,913,644`` rendered as
+        # ``3 a-template ,913,644``. Filter before the string path.
+        if isinstance(el, Comment):
+            continue
+        if isinstance(el, NavigableString):
+            parts.append(str(el))
+        elif isinstance(el, Tag) and el.name in _BLOCK_CELL_TAGS:
+            parts.append(" ")
+    return " ".join("".join(parts).split())
+
 
 # BeautifulSoup parser name; pinned so the dependency footprint stays minimal
 # (no lxml/html5lib needed) and the parsing semantics stay consistent.
@@ -557,8 +630,22 @@ class ContentProcessor:
                         section_emitted_count = 0
                     continue
                 if th and td:
-                    raw_label = " ".join(th.get_text().split())
-                    value = " ".join(td.get_text().split())
+                    # A11 D1 (post-a10, second pass): use
+                    # ``_join_cell_text`` so block-level children
+                    # (``<br>``, ``<li>``, ``<p>``) get whitespace
+                    # while inline groups (``<span>`` for number
+                    # separators, ``<wbr>`` for soft breaks)
+                    # concatenate directly. The first revision used
+                    # ``get_text(separator=" ")`` which corrupted
+                    # population numbers (``3,913,644`` →
+                    # ``3 , 913 , 644``) and coordinate templates
+                    # (``52°31′N`` → ``52 ° 31 ′ N``). The helper
+                    # restores the inline forms while still fixing
+                    # the original ``5th in Europe1st in Germany`` /
+                    # ``TokyoTamaNorthern Izu Islands`` /
+                    # ``0.967very high`` concatenations.
+                    raw_label = _join_cell_text(th)
+                    value = _join_cell_text(td)
                     if not raw_label or not value:
                         continue
                     # D1 (beta): Wikipedia infoboxes end with trailing
@@ -599,6 +686,31 @@ class ContentProcessor:
                     ):
                         current_section = None
                         section_emitted_count = 0
+                    # A11 D2 (post-a10): bullet-prefixed continuation
+                    # rows ("• Summer (DST)") have no
+                    # ``infobox-header`` section header above them but
+                    # are visually owned by the immediately-preceding
+                    # KV row's label ("Time zone"). When the label
+                    # starts with a bullet character AND we have no
+                    # ``current_section``, treat the previous KV row's
+                    # label as a virtual parent FOR THIS ROW ONLY so
+                    # the orphan bullet row inherits context. Without
+                    # this, Berlin rendered ``**• Summer (DST):**
+                    # UTC+02:00 (CEST)`` with no clue that "Summer
+                    # (DST)" belongs to "Time zone". The virtual
+                    # parent is applied locally rather than persisted
+                    # via ``current_section`` so the row that follows
+                    # the bullet row (e.g. ``Area code``) doesn't
+                    # inherit the same parent.
+                    virtual_parent: Optional[str] = None
+                    if (
+                        current_section is None
+                        and rows
+                        and raw_label.lstrip().startswith(("•", "·", "‣", "▪"))
+                    ):
+                        prev_label = rows[-1].get("label", "")
+                        if prev_label:
+                            virtual_parent = prev_label.split(" — ", 1)[-1]
                     # Prefix with current section when present so labels
                     # disambiguate across sections. Drop the prefix when
                     # the label already starts with the section name
@@ -606,10 +718,11 @@ class ContentProcessor:
                     # ``Population density`` inside a "Population"
                     # section — don't write ``Population — Population
                     # total``).
-                    if current_section and not raw_label.lower().startswith(
-                        current_section.lower()
+                    effective_section = current_section or virtual_parent
+                    if effective_section and not raw_label.lower().startswith(
+                        effective_section.lower()
                     ):
-                        label = f"{current_section} — {raw_label}"
+                        label = f"{effective_section} — {raw_label}"
                     else:
                         label = raw_label
                     rows.append({"label": label, "value": value})
@@ -914,7 +1027,14 @@ class ContentProcessor:
         )
         return pattern.sub("", content, count=1)
 
-    def truncate_content(self, content: str, max_length: int) -> str:
+    def truncate_content(
+        self,
+        content: str,
+        max_length: int,
+        *,
+        current_offset: int = 0,
+        paginatable: bool = True,
+    ) -> str:
         """
         Truncate content to maximum length with informative message.
 
@@ -926,6 +1046,17 @@ class ContentProcessor:
         Args:
             content: Content to truncate
             max_length: Maximum allowed length
+            current_offset: Where this slice starts in the source
+                content. Lets the truncation hint compute the correct
+                next-page offset for paginated reads.
+            paginatable: When False, omit the ``content_offset=N``
+                hint and emit a tighter "use get article ... for the
+                rest" hint instead. Main-page rendering passes False:
+                ``_handle_main_page`` doesn't expose
+                ``content_offset`` (the operation always re-resolves
+                the main entry from scratch), so suggesting it would
+                point the caller at a parameter the main-page path
+                ignores. A11 third-pass fix.
 
         Returns:
             Truncated content with metadata
@@ -935,11 +1066,32 @@ class ContentProcessor:
 
         truncated = content[:max_length].strip()
         total_length = len(content)
+        # A11 F2 + Opp4: the truncation marker now tells the caller
+        # how to fetch the rest. Before, a small LLM saw
+        # ``[Content truncated, total of 146,250 chars, only showing
+        # first 1,500]`` with no clue what offset to pass next; the
+        # ``content_offset`` parameter is now exposed on ``zim_query``
+        # (A1) so the hint is actionable. ``current_offset`` lets
+        # paginated reads compute the next offset relative to where
+        # this slice STARTED in the original article.
+        next_offset = current_offset + max_length
+
+        if paginatable:
+            tail = f" Pass `content_offset={next_offset:,}` to read the " "next page."
+        else:
+            # Main-page rendering: ``_handle_main_page`` re-resolves
+            # from ``archive.main_entry`` on every call and never
+            # threads a content_offset. Point the caller at the
+            # ``get article`` route, which DOES support paging.
+            tail = (
+                " For the rest, switch to `get article` on the main-"
+                "page path with `content_offset`."
+            )
 
         return (
             f"{truncated}\n\n"
             f"... [Content truncated, total of {total_length:,} characters of "
-            f"body content, only showing first {max_length:,}] ..."
+            f"body content, only showing first {max_length:,}.{tail}] ..."
         )
 
     def process_mime_content(

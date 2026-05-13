@@ -194,15 +194,29 @@ def render_find_by_title(data: Mapping[str, Any], title: str) -> str:
 
 def _render_related_link_line(r: Mapping[str, Any]) -> Optional[str]:
     """Format one outbound-link row as a bullet line. Returns None when
-    the row is not a dict (defensive against partial payloads)."""
+    the row is not a dict (defensive against partial payloads).
+
+    A11 Opp7 (post-a10, second pass): surface the backend's
+    ``mention_count`` field as a ``N×`` suffix so a small LLM can
+    rank which related article is most central to the source. A
+    single-occurrence "See also" link is less load-bearing than a
+    20-occurrence backbone reference. The first-pass H1 read a
+    ``link_count`` field that didn't exist on the payload — the
+    structured backend (D9 / v2.0.0a9) actually stores the per-
+    target frequency rank as ``mention_count``.
+    """
     if not isinstance(r, dict):
         return None
     t = r.get("title", "(untitled)")
     p = r.get("path", "")
     link_text = r.get("link_text") or ""
+    mention_count = r.get("mention_count")
+    count_suffix = ""
+    if isinstance(mention_count, int) and mention_count > 1:
+        count_suffix = f" · {mention_count}×"
     if link_text and link_text.lower() != t.lower():
-        return f"- **{t}** (`{p}`) — linked as “{link_text}”"
-    return f"- **{t}** (`{p}`)"
+        return f"- **{t}** (`{p}`) — linked as “{link_text}”{count_suffix}"
+    return f"- **{t}** (`{p}`){count_suffix}"
 
 
 def _scan_truncated_footer(data: Mapping[str, Any]) -> Optional[str]:
@@ -235,9 +249,23 @@ def render_related(data: Mapping[str, Any], entry_path: str) -> str:
     # outbound_error?}``. Errors surface as the backend's textual
     # reason — preserve that for diagnosability.
     if data.get("outbound_error"):
+        # A11 F3 (post-a10, second pass): the first-pass F3 fix wrapped
+        # the raise-path, but the live "Cannot find entry" case actually
+        # surfaces here via ``outbound_error`` (the backend catches and
+        # serialises rather than re-raising). Append recovery guidance
+        # to this branch too so a small LLM has concrete next-step
+        # commands instead of a bare two-line error.
+        recovery = (
+            f"\n\n**Try one of these to recover:**\n"
+            f"- `suggestions for {entry_path[:40]}` — autocomplete to "
+            "catch typos / partial names\n"
+            f"- `find article titled {entry_path}` — title-index lookup "
+            "with fuzzy fallback\n"
+            f"- `search for {entry_path}` — full-text search\n"
+        )
         return (
             f'**Could not extract related articles for "{entry_path}"**\n\n'
-            f"{data['outbound_error']}"
+            f"{data['outbound_error']}{recovery}"
         )
     outbound = data.get("results") or []
     if not outbound:
@@ -259,25 +287,38 @@ def render_related(data: Mapping[str, Any], entry_path: str) -> str:
 
 
 def _walk_namespace_header(
-    ns: str, offset: int, returned: int, archive_total: int
+    ns: str,
+    offset: int,
+    returned: int,
+    archive_total: int,
+    namespace_total: int = 0,
 ) -> str:
     """Build the header line for ``render_walk_namespace``.
 
-    Three shapes:
+    Four shapes:
       - ``returned == 0``: ``# Namespace 'X' — no entries`` (D8 fix).
         ``entries 1-0`` was the previous nonsense range.
-      - ``archive_total > 0``: include ``archive-wide entries`` for scale
-        (D10 v2.0.0a9 disambiguation — the M namespace has 13 entries,
-        not the 27M archive total).
+      - ``namespace_total > 0``: ``X of N in this namespace`` — the
+        denominator that actually matches what's being walked (A11 F4).
+      - ``archive_total > 0``: archive-wide scale hint as a fallback.
       - otherwise: bare range.
     """
     range_str = f"entries {offset + 1}-{offset + returned}"
-    archive_suffix = (
-        f" (of ~{archive_total:,} archive-wide entries)" if archive_total else ""
-    )
+    # A11 F4 (post-a10): prefer the per-namespace denominator so the
+    # walk header isn't misleading. ``walk namespace M`` with 13
+    # entries used to render ``of ~27,199,904 archive-wide entries``
+    # — readers expected the denominator to match the namespace
+    # being walked. Fall through to the archive total only when no
+    # per-namespace count is known.
+    if namespace_total:
+        scale_suffix = f" (of {namespace_total:,} in namespace `{ns}`)"
+    elif archive_total:
+        scale_suffix = f" (archive total: ~{archive_total:,} entries)"
+    else:
+        scale_suffix = ""
     if returned == 0:
-        return f"# Namespace `{ns}` — no entries{archive_suffix}"
-    return f"# Namespace `{ns}` — {range_str}{archive_suffix}"
+        return f"# Namespace `{ns}` — no entries{scale_suffix}"
+    return f"# Namespace `{ns}` — {range_str}{scale_suffix}"
 
 
 def render_walk_namespace(data: Mapping[str, Any]) -> str:
@@ -296,13 +337,21 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     page_info = data.get("page_info") or {}
     offset = page_info.get("offset", 0)
     returned = page_info.get("returned_count", 0)
-    # walk doesn't know per-namespace total mid-scan; surface the
-    # file-level archive count as a scale hint instead.
+    # walk doesn't know per-namespace total mid-scan when scanning the
+    # iterator; well-known small namespaces (M, W) can supply a
+    # ``namespace_entry_count`` ahead of time. Prefer that for a more
+    # honest denominator (A11 F4).
     archive_total = data.get("archive_entry_count", 0)
+    namespace_total = int(data.get("namespace_entry_count", 0) or 0)
     entries = data.get("results") or []
     done = data.get("done", False)
 
-    lines = [_walk_namespace_header(ns, offset, returned, archive_total), ""]
+    lines = [
+        _walk_namespace_header(
+            ns, offset, returned, archive_total, namespace_total=namespace_total
+        ),
+        "",
+    ]
     for e in entries:
         if not isinstance(e, dict):
             continue
@@ -405,8 +454,27 @@ def render_namespaces(data: Mapping[str, Any]) -> str:
     namespaces = data.get("namespaces") or {}
 
     total_str = f"{total_entries:,}" if is_authoritative else f"~{total_entries:,}"
+    # A11 F5 (post-a10): the header reports ``archive.entry_count``
+    # (typically the C-namespace article count); the per-namespace
+    # rows below include W/M well-knowns + redirects, so their sum
+    # slightly exceeds the header total. Compute and surface the
+    # per-namespace sum alongside so readers don't think the
+    # numbers are inconsistent — they're different views (article
+    # count vs. all-entries-by-namespace).
+    per_ns_sum = sum(
+        int(info.get("total", 0) or 0)
+        for info in namespaces.values()
+        if isinstance(info, dict)
+    )
+    if per_ns_sum and per_ns_sum != total_entries:
+        header = (
+            f"# Namespaces — {total_str} archive entries "
+            f"(per-namespace sum: {per_ns_sum:,})"
+        )
+    else:
+        header = f"# Namespaces — {total_str} total entries"
     lines = [
-        f"# Namespaces — {total_str} total entries",
+        header,
         f"_Discovery: {method}._",
         "",
     ]

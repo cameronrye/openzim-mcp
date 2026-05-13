@@ -18,6 +18,7 @@ Intro paragraph.
 Middle paragraph.
 
 [Table 2: 20 rows x 1 cols - pass compact=False to expand]
+<!-- intent=tell_me_about cert=0.85 -->
 </retrieved_archive_content>
 
-> ~121 tokens
+> ~134 tokens
