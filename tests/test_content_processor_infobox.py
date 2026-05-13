@@ -160,6 +160,34 @@ def test_d1_inline_span_groups_concatenate_without_separator(processor):
     assert rows["Multi line"] == "5th in Europe 1st in Germany"
 
 
+COMMENT_INFOBOX_HTML = """
+<table class="infobox">
+  <tr><th colspan="2">Berlin</th></tr>
+  <tr><th>Population</th><td>3<!-- formatnum-template -->,913<!-- formatnum-template -->,644</td></tr>
+  <tr><th>Note</th><td>Visible<!-- hidden comment -->text</td></tr>
+</table>
+"""
+
+
+def test_d1_html_comments_filtered_from_cell_text(processor):
+    """A11 D1 third-pass: Wikipedia templates emit invisible
+    coordinate / formatnum / microformat comments inside infobox
+    cells. ``Comment`` is a ``NavigableString`` subclass, so the
+    second-pass ``isinstance(NavigableString)`` test in
+    ``_join_cell_text`` was leaking the comment bodies into the
+    rendered value (``3<!-- a-template -->,913,644`` became
+    ``3 a-template ,913,644``). Filter ``Comment`` instances
+    explicitly.
+    """
+    soup = BeautifulSoup(COMMENT_INFOBOX_HTML, "html.parser")
+    rows = {r["label"]: r["value"] for r in processor.extract_infobox(soup)}
+    # Template comments dropped; the formatted number stays intact.
+    assert rows["Population"] == "3,913,644"
+    # Inline comments don't introduce whitespace either — the visible
+    # text on either side concatenates directly.
+    assert rows["Note"] == "Visibletext"
+
+
 D2_ORPHAN_BULLET_HTML = """
 <table class="infobox">
   <tr><th colspan="2">Berlin</th></tr>

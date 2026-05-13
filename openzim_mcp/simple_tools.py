@@ -1957,8 +1957,9 @@ class SimpleToolsHandler:
             if isinstance(r, dict)
             and is_strong_title_match(topic, r.get("path", ""), r.get("title", ""))
         ]
-        # A11 C2 (post-a10 review, second pass): ``tell me about Apollo
-        # 11`` used to disambiguate between ``Apollo_11_anniversaries``,
+        # A11 C2 (post-a10 review, second pass + third pass): ``tell
+        # me about Apollo 11`` used to disambiguate between
+        # ``Apollo_11_anniversaries``,
         # ``Apollo_11_lunar_sample_display`` and
         # ``Apollo_11_goodwill_messages`` — three weak matches that
         # extend the topic, with the canonical ``Apollo_11`` article
@@ -1967,15 +1968,31 @@ class SimpleToolsHandler:
         # the disambig check fires so the canonical is always
         # considered.
         #
-        # Gate the probe behind ``len(strong_matches) >= 2``: that's
-        # the only condition under which the disambig page would
-        # otherwise render. When there are 0 or 1 strong matches the
-        # handler is either falling through to plain search or
-        # auto-fetching the single match, so the extra title-index
-        # call buys nothing. The same gate avoids paying for a second
-        # title-index probe when promotion above already did one for
-        # the weak-top-hit case.
-        if len(strong_matches) >= 2:
+        # Gate the probe so it only runs when it can actually help:
+        #
+        #   (a) ``len(strong_matches) >= 2`` — the disambig page
+        #       would otherwise render; the probe lets the canonical
+        #       in alongside the others.
+        #   (b) ``len(strong_matches) == 1`` AND the lone match is a
+        #       disambig twin — third-pass fix: search returned
+        #       ``Berlin_(disambiguation)`` as the only strong match,
+        #       the canonical ``Berlin`` wasn't in Xapian's top-3,
+        #       and the early ``is_strong_title_match`` check
+        #       accepts the twin via candidate-extends-topic so the
+        #       promotion-above branch never fired. Without this
+        #       clause the handler fetches the disambig page instead
+        #       of the canonical city article.
+        #
+        # When there are 0 strong matches the handler has already
+        # fallen through to plain search; when there's 1 non-twin
+        # strong match the auto-fetch path is correct.
+        gate_for_disambig_render = len(strong_matches) >= 2
+        gate_for_lone_twin = (
+            len(strong_matches) == 1
+            and isinstance(strong_matches[0], dict)
+            and self._is_disambig_twin_path(str(strong_matches[0].get("path") or ""))
+        )
+        if gate_for_disambig_render or gate_for_lone_twin:
             canonical = self._promote_topic_via_title_index(zim_file_path, topic)
             if canonical is not None:
                 canonical_path = canonical.get("path", "")

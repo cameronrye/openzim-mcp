@@ -749,9 +749,12 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                         bytes(item.content), item.mimetype, compact=compact
                     )
 
-                    # Truncate content for main page display
+                    # Truncate content for main page display. ``paginatable
+                    # = False`` because ``_handle_main_page`` doesn't
+                    # thread ``content_offset`` — point the caller at
+                    # ``get article`` for the rest (A11 third pass).
                     content = self.content_processor.truncate_content(
-                        content, DEFAULT_MAIN_PAGE_TRUNCATION
+                        content, DEFAULT_MAIN_PAGE_TRUNCATION, paginatable=False
                     )
 
                     result = f"# {title}\n\n"
@@ -792,7 +795,9 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                                 bytes(item.content), item.mimetype, compact=compact
                             )
                             content = self.content_processor.truncate_content(
-                                content, DEFAULT_MAIN_PAGE_TRUNCATION
+                                content,
+                                DEFAULT_MAIN_PAGE_TRUNCATION,
+                                paginatable=False,
                             )
 
                             result = f"# {title}\n\n"
@@ -916,7 +921,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                 )
                 total_length = len(content)
                 truncated_content = self.content_processor.truncate_content(
-                    content, DEFAULT_MAIN_PAGE_TRUNCATION
+                    content, DEFAULT_MAIN_PAGE_TRUNCATION, paginatable=False
                 )
                 was_truncated = len(truncated_content) < total_length
                 payload: Dict[str, Any] = {

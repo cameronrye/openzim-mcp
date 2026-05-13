@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import html2text
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
 
@@ -70,6 +70,15 @@ def _join_cell_text(cell: Tag) -> str:
     """
     parts: List[str] = []
     for el in cell.descendants:
+        # ``Comment`` is a ``NavigableString`` subclass; the
+        # ``isinstance(NavigableString)`` test below would catch it
+        # and leak the comment text into the rendered value. Wikipedia
+        # templates emit invisible coordinate / microformat comments
+        # inside infobox cells routinely — without this guard,
+        # ``3<!-- a-template -->,913,644`` rendered as
+        # ``3 a-template ,913,644``. Filter before the string path.
+        if isinstance(el, Comment):
+            continue
         if isinstance(el, NavigableString):
             parts.append(str(el))
         elif isinstance(el, Tag) and el.name in _BLOCK_CELL_TAGS:
@@ -1019,7 +1028,12 @@ class ContentProcessor:
         return pattern.sub("", content, count=1)
 
     def truncate_content(
-        self, content: str, max_length: int, *, current_offset: int = 0
+        self,
+        content: str,
+        max_length: int,
+        *,
+        current_offset: int = 0,
+        paginatable: bool = True,
     ) -> str:
         """
         Truncate content to maximum length with informative message.
@@ -1032,6 +1046,17 @@ class ContentProcessor:
         Args:
             content: Content to truncate
             max_length: Maximum allowed length
+            current_offset: Where this slice starts in the source
+                content. Lets the truncation hint compute the correct
+                next-page offset for paginated reads.
+            paginatable: When False, omit the ``content_offset=N``
+                hint and emit a tighter "use get article ... for the
+                rest" hint instead. Main-page rendering passes False:
+                ``_handle_main_page`` doesn't expose
+                ``content_offset`` (the operation always re-resolves
+                the main entry from scratch), so suggesting it would
+                point the caller at a parameter the main-page path
+                ignores. A11 third-pass fix.
 
         Returns:
             Truncated content with metadata
@@ -1051,11 +1076,22 @@ class ContentProcessor:
         # this slice STARTED in the original article.
         next_offset = current_offset + max_length
 
+        if paginatable:
+            tail = f" Pass `content_offset={next_offset:,}` to read the " "next page."
+        else:
+            # Main-page rendering: ``_handle_main_page`` re-resolves
+            # from ``archive.main_entry`` on every call and never
+            # threads a content_offset. Point the caller at the
+            # ``get article`` route, which DOES support paging.
+            tail = (
+                " For the rest, switch to `get article` on the main-"
+                "page path with `content_offset`."
+            )
+
         return (
             f"{truncated}\n\n"
             f"... [Content truncated, total of {total_length:,} characters of "
-            f"body content, only showing first {max_length:,}. "
-            f"Pass `content_offset={next_offset:,}` to read the next page.] ..."
+            f"body content, only showing first {max_length:,}.{tail}] ..."
         )
 
     def process_mime_content(

@@ -412,3 +412,62 @@ def test_metadata_short_value_not_capped(test_config):
     mock_archive = _build_metadata_mock_archive("Creator", b"Wikipedia")
     metadata = server.zim_operations._extract_zim_metadata(mock_archive)
     assert metadata["metadata_entries"]["Creator"] == "Wikipedia"
+
+
+def test_a11_f6_aggregator_enumerates_metadata_keys_new_scheme(test_config):
+    """A11 F6 (post-a10 second pass): on new-scheme archives, the
+    metadata aggregator now enumerates ``archive.metadata_keys``
+    instead of probing a hardcoded list — that's the same source
+    ``walk namespace M`` uses, so the two operations agree on what
+    counts as metadata. ``Illustration_*`` binary keys are filtered
+    out (can't decode as text).
+    """
+    server, _handler = _make_simple_handler(test_config)
+
+    # New-scheme mock: surfaces ``metadata_keys`` directly and routes
+    # reads through ``get_metadata_item``.
+    mock_item_text = MagicMock()
+    mock_item_text.content = b"Wikipedia"
+
+    def fake_get_metadata_item(key):
+        if key == "Counter":
+            item = MagicMock()
+            item.content = b"category=wikipedia;count=7139567"
+            return item
+        if key == "CustomKey":
+            item = MagicMock()
+            item.content = b"custom-value"
+            return item
+        # Title / Description / etc. fall back to the hardcoded probe
+        # list — keep returning Wikipedia for ``Title``.
+        if key == "Title":
+            return mock_item_text
+        raise RuntimeError("not present")
+
+    mock_archive = MagicMock()
+    mock_archive.has_new_namespace_scheme = True
+    mock_archive.entry_count = 100
+    mock_archive.all_entry_count = 100
+    mock_archive.article_count = 50
+    mock_archive.media_count = 50
+    # ``metadata_keys`` carries the conventional keys plus one custom
+    # one AND a binary illustration the aggregator should skip.
+    mock_archive.metadata_keys = [
+        "Title",
+        "Counter",
+        "Illustration_48x48@1",  # binary — must be filtered
+        "CustomKey",
+    ]
+    mock_archive.get_metadata_item.side_effect = fake_get_metadata_item
+
+    metadata = server.zim_operations._extract_zim_metadata(mock_archive)
+    entries = metadata.get("metadata_entries", {})
+    # Title flows through.
+    assert entries.get("Title") == "Wikipedia"
+    # Counter (a11 first-pass key) flows through.
+    assert "Counter" in entries
+    # CustomKey discovered via ``metadata_keys`` enumeration —
+    # would NOT be in the hardcoded list and was unreachable before.
+    assert entries.get("CustomKey") == "custom-value"
+    # Illustration_* keys filtered out.
+    assert "Illustration_48x48@1" not in entries

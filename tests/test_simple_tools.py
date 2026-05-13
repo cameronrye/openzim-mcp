@@ -2511,6 +2511,110 @@ class TestCompactRenderersModule:
         )
         assert "missing extractor" in out
 
+    def test_a11_f3_outbound_error_includes_recovery_hints(self):
+        """A11 F3 (post-a10 second pass): the live "Cannot find entry"
+        case surfaces via the ``outbound_error`` payload branch in
+        ``render_related``. The first-pass F3 fix wrapped the
+        wrong-side raise path; the second-pass fix appends recovery
+        commands to the outbound_error rendering so a small LLM gets a
+        concrete next step.
+        """
+        from openzim_mcp import compact_renderers
+
+        out = compact_renderers.render_related(
+            {"outbound_error": "Cannot find entry: 'NotARealArticle'"},
+            "NotARealArticle",
+        )
+        # The original error text is preserved.
+        assert "Cannot find entry" in out
+        # ...and the recovery hints are appended.
+        assert "suggestions for NotARealArticle" in out
+        assert "find article titled NotARealArticle" in out
+        assert "search for NotARealArticle" in out
+
+    def test_a11_f4_walk_namespace_per_namespace_denominator(self):
+        """A11 F4 (post-a10 second pass): when the backend supplies
+        ``namespace_entry_count`` (M / W well-known walks know the
+        total ahead of time), the renderer prefers it as the
+        denominator so the header reads ``of 13 in namespace `M```
+        instead of ``of ~27,199,904 archive-wide entries``.
+        """
+        from openzim_mcp import compact_renderers
+
+        out = compact_renderers.render_walk_namespace(
+            {
+                "namespace": "M",
+                "results": [{"path": "M/Counter", "title": "Counter"}],
+                "next_cursor": None,
+                "total": None,
+                "done": True,
+                "page_info": {"offset": 0, "limit": 200, "returned_count": 1},
+                "scanned_count": 1,
+                "scanned_through_id": 0,
+                "archive_entry_count": 27_199_904,
+                # F4 second-pass: backend now plumbs the per-namespace total.
+                "namespace_entry_count": 13,
+            }
+        )
+        assert "of 13 in namespace `M`" in out
+        # The archive-wide total should NOT appear when per-namespace is known.
+        assert "27,199,904" not in out
+
+    def test_a11_f4_walk_namespace_falls_back_to_archive_total(self):
+        """A11 F4 negative case: when ``namespace_entry_count`` is
+        absent (e.g. the C-namespace iterable walk doesn't know the
+        per-namespace total mid-scan), fall back to the archive-wide
+        total as a scale hint with a clearer label.
+        """
+        from openzim_mcp import compact_renderers
+
+        out = compact_renderers.render_walk_namespace(
+            {
+                "namespace": "C",
+                "results": [{"path": "C/A", "title": "A"}],
+                "next_cursor": None,
+                "total": None,
+                "done": False,
+                "page_info": {"offset": 0, "limit": 200, "returned_count": 1},
+                "scanned_count": 1,
+                "scanned_through_id": 0,
+                "archive_entry_count": 27_199_904,
+            }
+        )
+        assert "archive total: ~27,199,904" in out
+
+    def test_a11_h1_mention_count_renders_as_suffix(self):
+        """A11 H1 (post-a10 second pass): the backend stores per-link
+        occurrence count as ``mention_count`` (D9 in v2.0.0a9); the
+        first-pass H1 read the wrong field name (``link_count``) and
+        the suffix never appeared. Surface ``N×`` only when the count
+        is > 1 so singleton mentions don't render as visual noise.
+        """
+        from openzim_mcp import compact_renderers
+
+        out = compact_renderers.render_related(
+            {
+                "results": [
+                    {
+                        "path": "Carbohydrate",
+                        "title": "Carbohydrate",
+                        "mention_count": 17,
+                    },
+                    {
+                        "path": "Phytoplankton",
+                        "title": "Phytoplankton",
+                        "mention_count": 1,
+                    },
+                ],
+            },
+            "Photosynthesis",
+        )
+        # 17 mentions → suffix appears.
+        assert "**Carbohydrate** (`Carbohydrate`) · 17×" in out
+        # Singleton mention → no suffix (visual noise).
+        assert "**Phytoplankton** (`Phytoplankton`)" in out
+        assert "1×" not in out
+
     def test_render_search_all_distinguishes_all_errors_from_zero_hits(self):
         """Regression: when every archive errored before search completed,
         the renderer used to emit ``"No results in any archive. Try
