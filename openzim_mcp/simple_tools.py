@@ -732,24 +732,24 @@ class SimpleToolsHandler:
         follow (``search for `` or ``search for`` with no trailing
         whitespace) — the caller surfaces an error.
 
-        The optional ``for`` is gated on ``\\s+`` (mandatory leading
-        whitespace) and a trailing ``\\b`` (word boundary), so ``search
-        for`` and ``search for `` both yield ``""`` rather than ``"for"``
-        while ``search forbid`` still falls through to ``"forbid"`` as
-        the search tail.
-
-        The pattern intentionally avoids adjacent ``\\s*`` quantifiers
-        so that static analyzers don't flag it as a polynomial-
-        backtracking regex.
+        Split into three single-token regexes (verb, optional ``up``
+        for ``look up``, optional ``for`` connector) rather than one
+        combined pattern so static analyzers can't flag adjacent
+        ``\\s*`` / ``\\s+`` quantifiers as polynomial-backtracking
+        hotspots.
         """
-        m = re.match(
-            r"^\s*(?:search|find|look(?:\s+up)?)\b(?:\s+for\b)?\s*(.*)$",
-            query,
-            re.IGNORECASE,
-        )
-        if not m:
+        verb_m = re.match(r"^\s*(search|find|look)\b", query, re.IGNORECASE)
+        if not verb_m:
             return None
-        return m.group(1).strip().rstrip("?.,;:!").strip()
+        tail = query[verb_m.end() :]
+        if verb_m.group(1).lower() == "look":
+            up_m = re.match(r"\s+up\b", tail, re.IGNORECASE)
+            if up_m:
+                tail = tail[up_m.end() :]
+        for_m = re.match(r"\s+for\b", tail, re.IGNORECASE)
+        if for_m:
+            tail = tail[for_m.end() :]
+        return tail.strip().rstrip("?.,;:!").strip()
 
     @staticmethod
     def _confidence_note(intent: str, confidence: float, query: str = "") -> str:
