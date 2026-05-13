@@ -732,14 +732,18 @@ class SimpleToolsHandler:
         follow (``search for `` or ``search for`` with no trailing
         whitespace) — the caller surfaces an error.
 
-        ``for`` followed by ``\\b\\s*`` (word boundary + optional
-        whitespace, rather than ``\\s+``) lets the optional ``for``
-        get consumed even when no trailing space follows: ``search
-        for`` and ``search for `` both yield ``""`` rather than
-        ``"for"``.
+        The optional ``for`` is gated on ``\\s+`` (mandatory leading
+        whitespace) and a trailing ``\\b`` (word boundary), so ``search
+        for`` and ``search for `` both yield ``""`` rather than ``"for"``
+        while ``search forbid`` still falls through to ``"forbid"`` as
+        the search tail.
+
+        The pattern intentionally avoids adjacent ``\\s*`` quantifiers
+        so that static analyzers don't flag it as a polynomial-
+        backtracking regex.
         """
         m = re.match(
-            r"^\s*(?:search|find|look(?:\s+up)?)\b\s*(?:for\b\s*)?(.*)$",
+            r"^\s*(?:search|find|look(?:\s+up)?)\b(?:\s+for\b)?\s*(.*)$",
             query,
             re.IGNORECASE,
         )
@@ -1534,10 +1538,10 @@ class SimpleToolsHandler:
         # the cap and append a one-line truncation footer so callers
         # know more content exists.
         max_len = options.get("max_content_length")
+        full_len = len(text)
         truncated = False
-        if isinstance(max_len, int) and max_len > 0 and len(text) > max_len:
+        if isinstance(max_len, int) and max_len > 0 and full_len > max_len:
             truncated = True
-            full_len = len(text)
             text = text[:max_len]
         self._track("section_returned")
         header = (
