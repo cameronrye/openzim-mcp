@@ -130,6 +130,11 @@ def test_check_safe_startup_localhost_resolving_to_loopback_is_safe(monkeypatch)
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1:*", "localhost:*", "[::1]:*"}
+_CUSTOM_TRANSPORT_LOOPBACK_HOSTS = _LOOPBACK_HOSTS | {
+    "127.0.0.1",
+    "localhost",
+    "[::1]",
+}
 
 
 def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
@@ -158,7 +163,12 @@ def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
     sec: TransportSecuritySettings = server.mcp.settings.transport_security  # type: ignore[union-attr]
     assert sec is not None
     hosts = set(sec.allowed_hosts)
-    assert hosts >= _LOOPBACK_HOSTS | {"mcp.example.com", "alt.example.com:*"}
+    assert hosts >= _CUSTOM_TRANSPORT_LOOPBACK_HOSTS | {
+        "mcp.example.com",
+        "mcp.example.com:*",
+        "alt.example.com:*",
+    }
+    assert "alt.example.com:*:*" not in hosts
 
 
 def test_fastmcp_uses_sdk_default_when_hosts_unset(tmp_path):
