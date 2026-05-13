@@ -19,7 +19,7 @@ from .error_messages import (
 )
 from .exceptions import OpenZimMcpConfigurationError
 from .rate_limiter import RateLimiter
-from .responses import ToolErrorPayload
+from .responses import ToolErrorPayload, tool_error
 from .security import (
     PathValidator,
     redact_paths_in_message,
@@ -208,6 +208,7 @@ class OpenZimMcpServer:
             zim_file_path: Optional[str] = None,
             limit: Optional[int] = None,
             offset: int = 0,
+            content_offset: int = 0,
             cursor: Optional[str] = None,
             max_content_length: Optional[int] = None,
             compact: bool = True,
@@ -259,6 +260,12 @@ class OpenZimMcpServer:
                 limit: Max search/browse results (default: 3).
                 offset: Pagination offset (default: 0).
                 max_content_length: Article body cap (default: 4000).
+                content_offset: Character offset to start reading the
+                    article body from (default: 0). The truncation footer
+                    on long articles surfaces a `pass content_offset=N`
+                    hint — wire that value back here to read the next
+                    page. Negative values are rejected with an
+                    `invalid_content_offset` error.
                 compact: When True (default in simple mode), apply
                     small-LLM optimizations — strip markdown link-soup,
                     drop section previews from structure responses,
@@ -287,6 +294,42 @@ class OpenZimMcpServer:
                 citations, and archives_searched.
             """
             try:
+                # A11: ``content_offset`` is the article-body paging
+                # channel surfaced by the truncation footer on long
+                # ``tell me about`` / ``get article`` responses. Reject
+                # negative offsets up-front so a malformed cursor can't
+                # produce an out-of-range slice downstream — the cursor
+                # decoder already enforces this contract.
+                if content_offset < 0:
+                    return tool_error(
+                        operation="invalid_content_offset",
+                        message=(
+                            "`content_offset` must be non-negative "
+                            f"(provided: {content_offset})."
+                        ),
+                    )
+                # A11 F1: ``limit=0`` used to produce a nonsensical
+                # ``Showing 1-0 of N — pass offset=0 for the next
+                # page`` pagination header that looped on itself.
+                # Reject non-positive limits up-front. ``None`` keeps
+                # working — that's the "use the default limit" sentinel.
+                if limit is not None and limit < 1:
+                    return tool_error(
+                        operation="invalid_limit",
+                        message=(
+                            "`limit` must be a positive integer "
+                            f"(provided: {limit})."
+                        ),
+                    )
+                # A11 F1: same for ``offset``.
+                if offset < 0:
+                    return tool_error(
+                        operation="invalid_offset",
+                        message=(
+                            "`offset` must be non-negative " f"(provided: {offset})."
+                        ),
+                    )
+
                 # Build options dict from parameters. Simple mode is for
                 # smaller / context-limited LLMs, so we apply tighter
                 # defaults than ContentConfig's (100 000-char articles,
@@ -313,6 +356,8 @@ class OpenZimMcpServer:
                 }
                 if offset != 0:
                     options["offset"] = offset
+                if content_offset != 0:
+                    options["content_offset"] = content_offset
                 if compact_budget is not None:
                     options["compact_budget"] = compact_budget
                 # D10: ``cursor`` is the v2 Phase B pagination handle.

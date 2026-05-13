@@ -557,9 +557,11 @@ class _ContentMixin:
             offset_applied = True
 
         # Truncate post-offset so max_content_length governs the *returned*
-        # slice, matching the legacy text path.
+        # slice, matching the legacy text path. ``current_offset`` carries
+        # the starting offset into the original article so the truncation
+        # hint can compute the correct next-page offset (A11 F2/Opp4).
         truncated_content = self.content_processor.truncate_content(
-            content, max_content_length
+            content, max_content_length, current_offset=content_offset
         )
         was_truncated = len(truncated_content) < len(content)
         content = truncated_content
@@ -1004,7 +1006,9 @@ class _ContentMixin:
         # entry path's contract.
         if content_offset > 0:
             content = content[content_offset:] if content_offset < len(content) else ""
-        content = self.content_processor.truncate_content(content, max_content_length)
+        content = self.content_processor.truncate_content(
+            content, max_content_length, current_offset=content_offset
+        )
         result_text = (
             f"# {key}\n\nRequested Path: {entry_path}\n"
             f"Type: {mime or 'unknown'}\n## Content\n\n{content}"
@@ -1094,8 +1098,12 @@ class _ContentMixin:
                 content = content[content_offset:]
             offset_applied = True
 
-        # Truncate if necessary
-        content = self.content_processor.truncate_content(content, max_content_length)
+        # Truncate if necessary. ``current_offset`` lets the hint
+        # compute the correct next-page offset for paginated reads
+        # (A11 F2/Opp4).
+        content = self.content_processor.truncate_content(
+            content, max_content_length, current_offset=content_offset
+        )
 
         # Build return content - show both requested and actual paths if different
         result_text = f"# {title}\n\n"

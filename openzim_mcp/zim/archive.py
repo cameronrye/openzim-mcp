@@ -479,10 +479,17 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         # Try to get metadata from M namespace
         metadata_entries = {}
         try:
-            # Common metadata entries in M namespace
+            # Common metadata entries in M namespace.
+            # A11 F6 (post-a10): added ``Counter`` / ``Name`` /
+            # ``Scraper`` / ``Long_Description`` to align with what
+            # ``walk namespace M`` enumerates — those keys were
+            # present on Wikipedia archives (13 entries in M) but the
+            # aggregator only surfaced 9 of them, so the two operations
+            # disagreed on what counts as metadata.
             common_metadata = [
                 "Title",
                 "Description",
+                "Long_Description",
                 "Language",
                 "Creator",
                 "Publisher",
@@ -492,6 +499,9 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
                 "Relation",
                 "Flavour",
                 "Tags",
+                "Counter",
+                "Name",
+                "Scraper",
             ]
 
             # DD1 (beta, second pass): new-scheme ZIM archives serve

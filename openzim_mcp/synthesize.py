@@ -583,23 +583,109 @@ def _promote_title_match(
 
 
 _LIST_ARTICLE_PREFIX_RE = re.compile(
-    r"^(?:List|Index|Outline|Glossary|Timeline|Bibliography)_of_", re.IGNORECASE
+    r"^(?:List|Index|Outline|Glossary|Timeline|Bibliography|Lists)_of_",
+    re.IGNORECASE,
 )
+
+# A11 G1 (post-a10): list-shaped articles whose names don't start with
+# ``List_of_`` but behave identically — long enumeration, no narrative.
+# ``Listed_buildings_in_North_Yorkshire`` and music-industry catalogs
+# (``Rephlex_Records_discography``) ranked top-3 in synthesize for
+# unrelated queries (``tell me about cats`` returned a Rephlex
+# discography). Match each suffix as a whole-word path component so
+# ``Discography`` alone doesn't sweep the canonical
+# ``Music_industry_discography`` article — the suffix has to come at
+# the tail of the path.
+_LIST_ARTICLE_SUFFIX_RE = re.compile(
+    r"_(?:discography|filmography|videography|bibliography|"
+    r"awards|honors|appearances|albums|singles|recordings|"
+    r"appearances_and_filmography)$",
+    re.IGNORECASE,
+)
+
+# Stem-shaped patterns: ``Listed_buildings_in_…``,
+# ``Index_of_…`` (already covered by prefix), ``Member_of_…``
+# enumeration articles.
+_LIST_ARTICLE_STEM_RE = re.compile(r"^Listed_", re.IGNORECASE)
 
 
 def _is_list_article(hit: dict) -> bool:
-    """O5 (beta): identify list/index articles to demote in synthesize.
+    """O5 (beta) + A11 G1 (post-a10): identify list/index/catalog
+    articles to demote in synthesize.
 
     Wikipedia list articles (``List_of_textbooks_on_classical_mechanics``,
-    ``Index_of_…``, ``Outline_of_…``, ``Timeline_of_…``) carry a single
-    stub paragraph plus a long enumeration. They rank surprisingly high
-    in Xapian search because their bodies match many query tokens, but
-    in synthesize their stub text adds ~50 tokens of noise without
-    informational signal. We don't drop them — sometimes the list IS
-    the answer — just push them to the back of the top_n.
+    ``Index_of_…``, ``Outline_of_…``, ``Timeline_of_…``) and their
+    plural/stem variants (``Lists_of_musicians``, ``Listed_buildings_in_…``)
+    plus music-industry catalog articles (``X_discography``,
+    ``X_filmography``) carry a single stub paragraph plus a long
+    enumeration. They rank surprisingly high in Xapian search because
+    their bodies match many query tokens, but in synthesize their stub
+    text adds ~50 tokens of noise without informational signal. We
+    don't drop them — sometimes the list IS the answer — just push
+    them to the back of the top_n.
     """
     path = hit.get("path") or ""
-    return bool(_LIST_ARTICLE_PREFIX_RE.match(path))
+    if _LIST_ARTICLE_PREFIX_RE.match(path):
+        return True
+    if _LIST_ARTICLE_STEM_RE.match(path):
+        return True
+    if _LIST_ARTICLE_SUFFIX_RE.search(path):
+        return True
+    return False
+
+
+def _drop_low_relevance_tail(
+    top_hits: list[tuple[str, dict]],
+    *,
+    fallback_used: str,
+    threshold_ratio: float = 0.25,
+) -> list[tuple[str, dict]]:
+    """A11 G2 (post-a10): drop hits whose Xapian score is below
+    ``threshold_ratio`` of the top hit's score.
+
+    Live testing showed ``tell me about cats`` returning
+    ``Rephlex_Records_discography`` as rank-2 with score 1.0 because
+    RRF normalizes scores to ``1/(k+rank)`` regardless of underlying
+    relevance — a weak match looks identical to a strong one. The
+    original Xapian score is preserved on each hit (when search
+    returns it) as ``score`` or ``xapian_score``; use that as the
+    relevance signal.
+
+    Conservative behavior:
+      * Single-archive (``xapian_score`` fallback): apply the
+        threshold because all hits share the same scoring basis.
+      * Multi-archive (``rrf_fusion``): keep all hits — the RRF
+        score is rank-based, not relevance-based, so a low-rank-in-
+        the-fused-list hit might still be a strong match in its
+        source archive.
+      * Always keep at least one hit so empty-set checks downstream
+        don't fall over.
+    """
+    if not top_hits or fallback_used != "xapian_score":
+        return top_hits
+
+    # Read the Xapian relevance score off each hit. Possible keys
+    # (varies by search path): ``xapian_score`` (preferred),
+    # ``score`` (legacy), ``relevance`` (alt). Fall back to None when
+    # absent.
+    def _xapian_score(hit: dict) -> Optional[float]:
+        for key in ("xapian_score", "score", "relevance"):
+            value = hit.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return float(value)
+        return None
+
+    scores = [_xapian_score(hit) for _, hit in top_hits]
+    top_score = scores[0]
+    if top_score is None:
+        return top_hits
+    threshold = top_score * threshold_ratio
+    filtered = [
+        (archive, hit)
+        for (archive, hit), score in zip(top_hits, scores)
+        if score is None or score >= threshold
+    ]
+    return filtered or top_hits[:1]
 
 
 def _demote_list_articles(
@@ -872,6 +958,17 @@ def synthesize_query(
     # promotion. Demoting AFTER preserves the promotion's decision and
     # only reorders the survivors.
     top_hits = _demote_list_articles(top_hits)
+    # A11 G2 (post-a10): drop hits whose Xapian relevance score is
+    # < 25% of the top hit's score. ``tell me about cats`` was
+    # returning ``Rephlex_Records_discography`` at rank 2 with score
+    # equal to the top hit (1.0 each) because RRF normalizes scores
+    # — but the underlying Xapian relevance was a fraction of the
+    # canonical Cats article. Read the original Xapian score from
+    # the hit dict to apply the threshold before passage extraction
+    # wastes work on weak matches. Conservative: keep all hits when
+    # we can't compare scores (RRF-fused multi-archive sets where the
+    # underlying scores aren't on the same scale).
+    top_hits = _drop_low_relevance_tail(top_hits, fallback_used=fallback_used)
     response_query = original_query if original_query is not None else query
     if not top_hits:
         # Even with empty BM25 hits, a canonical title hit might still

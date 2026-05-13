@@ -83,3 +83,68 @@ def test_process_mime_content_non_compact_no_kv_extraction(processor):
     result = processor.process_mime_content(html, "text/html", compact=False)
     # No bold KV prefix expected in default mode
     assert "**Born:**" not in result
+
+
+# ---------------------------------------------------------------------------
+# A11 D1 + D2 (post-a10 review)
+# ---------------------------------------------------------------------------
+
+
+CONCAT_INFOBOX_HTML = """
+<table class="infobox">
+  <tr><th colspan="2">Berlin</th></tr>
+  <tr><th>Rank</th><td>5th in Europe<br>1st in Germany</td></tr>
+  <tr><th>Demonyms</th><td>Berliner(s) (English)<br>Berliner (m), Berlinerin (f) (German)</td></tr>
+  <tr><th>HDI (2022)</th><td>0.967<br>very high · 2nd of 16</td></tr>
+  <tr><th>Dialects</th><td><span>Tokyo</span><span>Tama</span><span>Northern Izu Islands</span></td></tr>
+</table>
+"""
+
+
+def test_d1_infobox_cell_text_separated(processor):
+    """A11 D1 (post-a10): block-level children inside an infobox cell
+    (``<br>``, sibling ``<span>``) used to concatenate without a
+    separator. Every Wikipedia city article showed at least one
+    instance: ``5th in Europe1st in Germany``, ``Berliner(s)
+    (English)Berliner (m)``, ``0.967very high``, ``TokyoTamaNorthern
+    Izu Islands``. The fix passes ``separator=" "`` to
+    ``get_text()`` and collapses runs of whitespace.
+    """
+    soup = BeautifulSoup(CONCAT_INFOBOX_HTML, "html.parser")
+    rows = {r["label"]: r["value"] for r in processor.extract_infobox(soup)}
+    # ``<br>``-separated values are joined with whitespace.
+    assert rows["Rank"] == "5th in Europe 1st in Germany"
+    assert (
+        rows["Demonyms"]
+        == "Berliner(s) (English) Berliner (m), Berlinerin (f) (German)"
+    )
+    assert rows["HDI (2022)"] == "0.967 very high · 2nd of 16"
+    # Adjacent ``<span>`` children also get the separator.
+    assert rows["Dialects"] == "Tokyo Tama Northern Izu Islands"
+
+
+D2_ORPHAN_BULLET_HTML = """
+<table class="infobox">
+  <tr><th colspan="2">Berlin</th></tr>
+  <tr><th>Time zone</th><td>UTC+01:00 (CET)</td></tr>
+  <tr><th>• Summer (DST)</th><td>UTC+02:00 (CEST)</td></tr>
+  <tr><th>Area code</th><td>030</td></tr>
+</table>
+"""
+
+
+def test_d2_orphan_bullet_inherits_previous_label(processor):
+    """A11 D2 (post-a10): bullet-prefixed continuation rows ("• Summer
+    (DST)") have no ``infobox-header`` parent in the markup but are
+    visually owned by the immediately-preceding KV row's label
+    ("Time zone"). Before this fix the row rendered as orphan
+    ``**• Summer (DST):** UTC+02:00`` with no parent context.
+    """
+    soup = BeautifulSoup(D2_ORPHAN_BULLET_HTML, "html.parser")
+    rows = {r["label"]: r["value"] for r in processor.extract_infobox(soup)}
+    # The Time zone row stays bare (no inheritance — it's the parent).
+    assert rows["Time zone"] == "UTC+01:00 (CET)"
+    # The bullet row inherits Time zone as its virtual parent.
+    assert rows["Time zone — • Summer (DST)"] == "UTC+02:00 (CEST)"
+    # A subsequent non-bullet row breaks back out to bare.
+    assert rows["Area code"] == "030"

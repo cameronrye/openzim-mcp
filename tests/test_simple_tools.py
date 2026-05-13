@@ -434,6 +434,29 @@ class TestSimpleToolsHandler:
         mock_zim_operations.search_zim_file.assert_called_once()
         assert "Search results" in result
 
+    def test_intent_telemetry_footer_present_on_markdown_responses(
+        self, handler, mock_zim_operations
+    ):
+        """A11 Opp6: every markdown response carries a trailing HTML-
+        comment intent telemetry footer.
+
+        Invisible to human readers (HTML comments aren't rendered) but
+        present in the raw token stream so a calling LLM can branch on
+        how the natural-language query was actually classified. Cheaper
+        than parsing the body to infer intent. Tests both a verb-led
+        query (high certainty) and a bare-topic fallback (lower
+        certainty) — both should carry the footer.
+
+        ``cert=`` not ``confidence=`` so the older visible-note tests
+        ("confidence" not in result) keep working — the visible note
+        spells out the word, the invisible telemetry uses the marker.
+        """
+        result = handler.handle_zim_query("search for biology", "/test/file.zim")
+        assert "<!-- intent=search cert=" in result
+
+        result2 = handler.handle_zim_query("get article Biology", "/test/file.zim")
+        assert "<!-- intent=get_article cert=" in result2
+
     def test_handle_get_article(self, handler, mock_zim_operations):
         """Test handling get article queries."""
         result = handler.handle_zim_query("get article Biology", "/test/file.zim")
@@ -1048,9 +1071,10 @@ class TestCompactStructureResponse:
         assert (
             len(result) < 1000
         ), f"compact structure should be < 1k chars, got {len(result)}"
-        # Strip the one-line footer ("> ~... tokens") before parsing JSON —
-        # the footer is appended after the JSON body in compact mode.
-        json_body = result.split("\n\n>")[0].strip()
+        # Strip the one-line footer ("> ~... tokens") and the A11 intent-
+        # telemetry HTML comment before parsing JSON — both are appended
+        # after the JSON body in compact mode.
+        json_body = result.split("\n<!--")[0].split("\n\n>")[0].strip()
         parsed = json.loads(json_body)
         assert parsed["title"] == "Photosynthesis"
         assert len(parsed["headings"]) == 2
@@ -3569,3 +3593,350 @@ class TestCompactSearchFooterAndSuggestions:
         # No footer blockquote when disabled.
         assert "> ~" not in out
         assert "No results" not in out
+
+
+class TestA11IntentParserFixes:
+    """A11 post-a10 sweep — intent-parser fixes B1/B2/B3/B4.
+
+    These all surfaced in live beta-testing against the Wikipedia archive
+    via the ``zim_query`` MCP tool. Each broke in a different way that
+    the existing 1425-test suite didn't catch.
+    """
+
+    @pytest.fixture
+    def handler(self):
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/test/wiki.zim"}]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/test/wiki.zim", "name": "wiki.zim"}]'
+        )
+        mock.search_zim_file.return_value = "Search results"
+        mock.search_zim_file_data.return_value = {"results": []}
+        mock.get_zim_entry.return_value = "Article content"
+        mock.list_namespaces.return_value = "Namespaces"
+        mock.config.meta.footer_enabled = False
+        return SimpleToolsHandler(mock)
+
+    @pytest.mark.parametrize(
+        "chained",
+        [
+            "tell me about berlin then list namespaces",
+            "search for cats; show main page",
+            "main page and then describe DNA",
+            "list namespaces then search for evolution",
+        ],
+    )
+    def test_b1_chained_intents_rejected(self, handler, chained):
+        """B1 (H5): chained operation phrases used to silently dispatch
+        to whichever intent ranked highest, dropping the other half.
+        Surface guidance so the caller can split the work explicitly.
+        """
+        out = handler.handle_zim_query(chained, "/test/wiki.zim")
+        assert "Chained Operations Detected" in out
+        assert "First op (left):" in out
+        assert "Second op (right):" in out
+
+    @pytest.mark.parametrize(
+        "not_chained",
+        [
+            # connective word inside a topic name, NOT an operation chain
+            "tell me about then and now",
+            # legitimate single search
+            "search for the rise and fall of Rome",
+            # legitimate get-section query with "of" connective
+            "get section History of Berlin",
+        ],
+    )
+    def test_b1_legitimate_queries_pass_through(self, handler, not_chained):
+        """B1 negative case: prose connectives that aren't actually
+        chains must NOT trigger the rejection — the right-hand side
+        has to start with a recognised operation verb prefix for the
+        chain to count.
+        """
+        out = handler.handle_zim_query(not_chained, "/test/wiki.zim")
+        assert "Chained Operations Detected" not in out
+
+    @pytest.mark.parametrize(
+        "empty_topic_query",
+        [
+            "tell me about ",
+            "tell me about",
+            "tell me about    ",
+            "tell me about ?",
+            "describe ",
+            "explain ",
+        ],
+    )
+    def test_b2_empty_topic_rejected(self, handler, empty_topic_query):
+        """B2 (M10): ``tell me about <empty>`` used to fall through to
+        a topic of literally ``"tell me about"`` and disambiguate to
+        articles titled "Tell Me About Tomorrow". Surface a topic-
+        required error instead.
+        """
+        out = handler.handle_zim_query(empty_topic_query, "/test/wiki.zim")
+        assert "Topic Required" in out
+
+    def test_b3_explain_x_to_me_strips_politeness_tail(self):
+        """B3 (M11): ``explain Berlin to me`` used to extract topic
+        ``"Berlin to me"`` and run a search that returned a "Memorial
+        to Polish Soldiers and German Anti-Fascists, Berlin" hit. The
+        topic extractor now strips ``to me`` / ``for me`` / ``please``
+        tails.
+        """
+        intent, params, _conf = IntentParser.parse_intent("explain Berlin to me")
+        assert intent == "tell_me_about"
+        assert params["topic"] == "Berlin"
+
+        intent2, params2, _ = IntentParser.parse_intent("describe DNA for me please")
+        assert intent2 == "tell_me_about"
+        assert params2["topic"] == "DNA"
+
+        intent3, params3, _ = IntentParser.parse_intent("tell me about cats please")
+        assert intent3 == "tell_me_about"
+        assert params3["topic"] == "cats"
+
+    @pytest.mark.parametrize(
+        "empty_search",
+        [
+            "search for ",
+            "search for",
+            "search for    ",
+            "find ",
+            "look for ",
+        ],
+    )
+    def test_b4_empty_search_rejected(self, handler, empty_search):
+        """B4 (L12): ``search for `` (trailing space, no terms) used to
+        fall through to searching for the literal word ``"for"``.
+        Surface a search-terms-required error instead.
+        """
+        out = handler.handle_zim_query(empty_search, "/test/wiki.zim")
+        assert "Search Terms Required" in out
+
+
+class TestA11DisambiguationFixes:
+    """A11 post-a10 sweep — disambiguation fixes C1/C2.
+
+    Two distinct failure modes surfaced in live beta:
+
+    * C1: ``tell me about Berlin`` would fork between ``Berlin`` and
+      ``Berlin (disambiguation)`` — both strong-match by the
+      candidate-extends-topic rule. Auto-pick the canonical when the
+      strong-match set is exactly ``Foo`` + ``Foo (disambiguation)``.
+    * C2: ``tell me about Apollo 11`` would disambiguate between
+      ``Apollo_11_anniversaries``, ``Apollo_11_lunar_sample_display``,
+      and ``Apollo_11_goodwill_messages`` — none of which is the
+      canonical ``Apollo_11`` article. Probe the title index for the
+      exact-topic canonical before the disambig check fires.
+    """
+
+    @pytest.fixture
+    def make_handler(self):
+        from unittest.mock import MagicMock
+
+        def factory(*, search_results, title_index=None):
+            mock = MagicMock()
+            mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+            mock.search_zim_file_data.return_value = {"results": search_results}
+            mock.get_zim_entry.return_value = "Body content."
+            mock.config.meta.footer_enabled = False
+            # find_entry_by_title_data is what find_title_match consults
+            # for the canonical-promotion gate. Default: no canonical
+            # candidate. Tests override per scenario.
+            mock.find_entry_by_title_data.return_value = (
+                {"results": [title_index]} if title_index else {"results": []}
+            )
+            mock.get_article_structure_data.return_value = {"sections": []}
+            return SimpleToolsHandler(mock), mock
+
+        return factory
+
+    def test_c1_auto_picks_canonical_over_disambig_twin(self, make_handler):
+        """C1: ``tell me about Berlin`` resolves directly to the
+        ``Berlin`` article when the strong-match set is exactly
+        ``Berlin`` + ``Berlin (disambiguation)`` — no more forking the
+        caller between the two.
+        """
+        handler, mock = make_handler(
+            search_results=[
+                {"path": "Berlin", "title": "Berlin", "score": 100},
+                {
+                    "path": "Berlin_(disambiguation)",
+                    "title": "Berlin (disambiguation)",
+                    "score": 50,
+                },
+            ],
+        )
+        out = handler.handle_zim_query(
+            "tell me about Berlin",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        # Auto-resolved: the article body is returned, NOT the
+        # "Multiple articles match" disambig fork.
+        assert "Multiple articles match" not in out
+        assert "Body content." in out
+        # get_zim_entry was called with the canonical (Berlin), not
+        # the disambig variant.
+        assert mock.get_zim_entry.called
+        first_args = mock.get_zim_entry.call_args[0]
+        assert first_args[1] == "Berlin"
+
+    def test_c1_genuine_multi_meaning_still_disambiguates(self, make_handler):
+        """C1 negative: Apollo / Mercury / Java-style genuine multi-
+        meaning ambiguities still fork — the auto-pick only triggers
+        when the strong-match set is exactly ``Foo`` + ``Foo
+        (disambiguation)``.
+        """
+        handler, _mock = make_handler(
+            search_results=[
+                {"path": "Apollo_(spacecraft)", "title": "Apollo (spacecraft)"},
+                {"path": "Apollo_program", "title": "Apollo program"},
+                {"path": "Apollo_(god)", "title": "Apollo (god)"},
+            ],
+        )
+        out = handler.handle_zim_query(
+            "tell me about Apollo",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        # Multiple genuine senses → disambig page fires.
+        assert "Multiple articles match" in out
+
+    def test_c2_disambig_includes_canonical_via_title_index(self, make_handler):
+        """C2: ``tell me about Apollo 11`` no longer hides the canonical
+        ``Apollo_11`` article. When the search results have only weak
+        extends-topic strong matches, probe the title index for the
+        bare-topic canonical and prepend it.
+        """
+        handler, _mock = make_handler(
+            search_results=[
+                {
+                    "path": "Apollo_11_anniversaries",
+                    "title": "Apollo 11 anniversaries",
+                    "score": 100,
+                },
+                {
+                    "path": "Apollo_11_lunar_sample_display",
+                    "title": "Apollo 11 lunar sample display",
+                    "score": 90,
+                },
+                {
+                    "path": "Apollo_11_goodwill_messages",
+                    "title": "Apollo 11 goodwill messages",
+                    "score": 80,
+                },
+            ],
+            # Title index resolves the bare topic to the canonical
+            # Apollo_11 article (score 1.0).
+            title_index={
+                "path": "Apollo_11",
+                "title": "Apollo 11",
+                "score": 1.0,
+            },
+        )
+        out = handler.handle_zim_query(
+            "tell me about Apollo 11",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        # Canonical now appears in the disambig list, no longer
+        # hidden behind the three weak extends-topic matches.
+        assert "Apollo_11" in out
+        # The 3 weak matches still listed for context.
+        assert "Apollo_11_anniversaries" in out
+
+
+class TestA11PathAndCursorFixes:
+    """A11 post-a10 sweep — E1/E2/E3."""
+
+    @pytest.fixture
+    def make_handler(self):
+        from unittest.mock import MagicMock
+
+        def factory():
+            mock = MagicMock()
+            mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+            mock.config.meta.footer_enabled = False
+            mock.get_article_structure_data.return_value = {
+                "title": "List of common misconceptions",
+                "headings": [{"text": "Introduction", "id": "Intro", "level": 2}],
+            }
+            mock.get_article_structure.return_value = "Structure JSON"
+            # Title-index lookup resolves the natural-language query to
+            # the underscore-stored path. ``min_score=0.8`` is the gate.
+            mock.find_entry_by_title_data.return_value = {
+                "results": [
+                    {
+                        "path": "List_of_common_misconceptions",
+                        "title": "List of common misconceptions",
+                        "score": 1.0,
+                    }
+                ]
+            }
+            mock.get_section_data.return_value = {
+                "content_markdown": "A" * 5800,
+            }
+            return SimpleToolsHandler(mock), mock
+
+        return factory
+
+    def test_e1_show_structure_normalizes_multi_word_title(self, make_handler):
+        """E1 (M7): ``show structure of List of common misconceptions``
+        used to error with ``Cannot find entry`` because the backend
+        takes the underscore-stored path. The title-index probe added
+        here resolves the natural-language form before dispatch.
+        """
+        handler, mock = make_handler()
+        out = handler.handle_zim_query(
+            "show structure of List of common misconceptions",
+            zim_file_path="/x.zim",
+            options={"compact": True},
+        )
+        # Backend was called with the canonical underscore path, not
+        # the natural-language string.
+        mock.get_article_structure_data.assert_called_once()
+        first_args = mock.get_article_structure_data.call_args[0]
+        assert first_args[1] == "List_of_common_misconceptions"
+        assert "Cannot find entry" not in out
+
+    def test_e2_get_section_honors_max_content_length(self, make_handler):
+        """E2 (M8): ``get section`` used to ignore
+        ``max_content_length`` and return the full section text.
+        Cap and append a clear truncation notice.
+        """
+        handler, _mock = make_handler()
+        out = handler.handle_zim_query(
+            "get section Introduction of List of common misconceptions",
+            zim_file_path="/x.zim",
+            options={"compact": False, "max_content_length": 1500},
+        )
+        # Section was trimmed to roughly 1500 chars + header + footer.
+        assert len(out) < 2500
+        assert "Section truncated" in out
+
+    def test_e3_malformed_cursor_errors(self, make_handler):
+        """E3 (M9): a base64+JSON cursor that decodes but lacks the
+        expected ``s`` envelope used to silently no-op and serve page
+        1. Now errors with ``cursor_decode``.
+        """
+        import base64
+        import json as _json
+
+        handler, _mock = make_handler()
+        # ``{"malformed":true}`` decodes cleanly but has no ``s`` key.
+        bad = (
+            base64.urlsafe_b64encode(_json.dumps({"malformed": True}).encode())
+            .decode()
+            .rstrip("=")
+        )
+        out = handler.handle_zim_query(
+            "search for biology",
+            zim_file_path="/x.zim",
+            options={"cursor": bad},
+        )
+        # Returns a ToolErrorPayload dict, not a markdown string.
+        assert isinstance(out, dict)
+        assert out.get("operation") == "cursor_decode"

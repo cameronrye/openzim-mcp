@@ -557,8 +557,20 @@ class ContentProcessor:
                         section_emitted_count = 0
                     continue
                 if th and td:
-                    raw_label = " ".join(th.get_text().split())
-                    value = " ".join(td.get_text().split())
+                    # A11 D1 (post-a10): pass ``separator=" "`` to
+                    # ``get_text`` so adjacent block-level children
+                    # (``<br>``, ``<li>``, ``<p>``, ``<span>``) don't
+                    # concatenate without whitespace. Without this
+                    # Wikipedia infoboxes produce ``5th in Europe1st in
+                    # Germany``, ``Berliner(s) (English)Berliner (m)``,
+                    # ``0.967very high``, ``TokyoTamaNorthern Izu
+                    # Islands`` — every city article had at least one
+                    # such concatenation. The outer ``" ".join(...
+                    # split())`` collapses any runs of whitespace the
+                    # separator introduces, so legitimate text like
+                    # ``"New York"`` is unaffected.
+                    raw_label = " ".join(th.get_text(separator=" ").split())
+                    value = " ".join(td.get_text(separator=" ").split())
                     if not raw_label or not value:
                         continue
                     # D1 (beta): Wikipedia infoboxes end with trailing
@@ -599,6 +611,31 @@ class ContentProcessor:
                     ):
                         current_section = None
                         section_emitted_count = 0
+                    # A11 D2 (post-a10): bullet-prefixed continuation
+                    # rows ("• Summer (DST)") have no
+                    # ``infobox-header`` section header above them but
+                    # are visually owned by the immediately-preceding
+                    # KV row's label ("Time zone"). When the label
+                    # starts with a bullet character AND we have no
+                    # ``current_section``, treat the previous KV row's
+                    # label as a virtual parent FOR THIS ROW ONLY so
+                    # the orphan bullet row inherits context. Without
+                    # this, Berlin rendered ``**• Summer (DST):**
+                    # UTC+02:00 (CEST)`` with no clue that "Summer
+                    # (DST)" belongs to "Time zone". The virtual
+                    # parent is applied locally rather than persisted
+                    # via ``current_section`` so the row that follows
+                    # the bullet row (e.g. ``Area code``) doesn't
+                    # inherit the same parent.
+                    virtual_parent: Optional[str] = None
+                    if (
+                        current_section is None
+                        and rows
+                        and raw_label.lstrip().startswith(("•", "·", "‣", "▪"))
+                    ):
+                        prev_label = rows[-1].get("label", "")
+                        if prev_label:
+                            virtual_parent = prev_label.split(" — ", 1)[-1]
                     # Prefix with current section when present so labels
                     # disambiguate across sections. Drop the prefix when
                     # the label already starts with the section name
@@ -606,10 +643,11 @@ class ContentProcessor:
                     # ``Population density`` inside a "Population"
                     # section — don't write ``Population — Population
                     # total``).
-                    if current_section and not raw_label.lower().startswith(
-                        current_section.lower()
+                    effective_section = current_section or virtual_parent
+                    if effective_section and not raw_label.lower().startswith(
+                        effective_section.lower()
                     ):
-                        label = f"{current_section} — {raw_label}"
+                        label = f"{effective_section} — {raw_label}"
                     else:
                         label = raw_label
                     rows.append({"label": label, "value": value})
@@ -914,7 +952,9 @@ class ContentProcessor:
         )
         return pattern.sub("", content, count=1)
 
-    def truncate_content(self, content: str, max_length: int) -> str:
+    def truncate_content(
+        self, content: str, max_length: int, *, current_offset: int = 0
+    ) -> str:
         """
         Truncate content to maximum length with informative message.
 
@@ -935,11 +975,21 @@ class ContentProcessor:
 
         truncated = content[:max_length].strip()
         total_length = len(content)
+        # A11 F2 + Opp4: the truncation marker now tells the caller
+        # how to fetch the rest. Before, a small LLM saw
+        # ``[Content truncated, total of 146,250 chars, only showing
+        # first 1,500]`` with no clue what offset to pass next; the
+        # ``content_offset`` parameter is now exposed on ``zim_query``
+        # (A1) so the hint is actionable. ``current_offset`` lets
+        # paginated reads compute the next offset relative to where
+        # this slice STARTED in the original article.
+        next_offset = current_offset + max_length
 
         return (
             f"{truncated}\n\n"
             f"... [Content truncated, total of {total_length:,} characters of "
-            f"body content, only showing first {max_length:,}] ..."
+            f"body content, only showing first {max_length:,}. "
+            f"Pass `content_offset={next_offset:,}` to read the next page.] ..."
         )
 
     def process_mime_content(

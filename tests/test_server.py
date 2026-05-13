@@ -1619,3 +1619,74 @@ class TestSimpleModeWrapperDefaults:
         tool_fn = server.mcp._tool_manager._tools["zim_query"].fn
         asyncio.run(tool_fn(query="tell me about Photosynthesis", compact=False))
         assert captured["options"]["compact"] is False
+
+    def test_zim_query_threads_content_offset(self, test_config: OpenZimMcpConfig):
+        """A11 (post-a10): ``content_offset`` is the article-body paging
+        channel for ``tell me about`` / ``get article`` long articles.
+        Beta a10 threaded it through ``_fetch_topic_article_body`` but
+        never exposed it on the MCP tool surface — so the truncation
+        footer's ``pass content_offset=N`` hint was unreachable. Expose
+        it as a top-level parameter and forward it via
+        ``options["content_offset"]``.
+        """
+        simple_config = test_config.model_copy(update={"tool_mode": "simple"})
+        server = OpenZimMcpServer(simple_config)
+        captured: dict = {}
+
+        def fake_handle_zim_query(query, zim_file_path, options):
+            captured["options"] = options
+            return "ok"
+
+        assert server.simple_tools_handler is not None
+        server.simple_tools_handler.handle_zim_query = fake_handle_zim_query
+
+        tool_fn = server.mcp._tool_manager._tools["zim_query"].fn
+        asyncio.run(
+            tool_fn(
+                query="tell me about Photosynthesis",
+                max_content_length=2000,
+                content_offset=4000,
+            )
+        )
+        assert captured["options"]["content_offset"] == 4000
+
+    def test_zim_query_content_offset_default_suppressed(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """When the caller doesn't pass ``content_offset``, the key is
+        absent from ``options`` (mirrors how ``offset=0`` is suppressed)
+        so legacy handlers that don't read it stay unchanged.
+        """
+        simple_config = test_config.model_copy(update={"tool_mode": "simple"})
+        server = OpenZimMcpServer(simple_config)
+        captured: dict = {}
+
+        def fake_handle_zim_query(query, zim_file_path, options):
+            captured["options"] = options
+            return "ok"
+
+        assert server.simple_tools_handler is not None
+        server.simple_tools_handler.handle_zim_query = fake_handle_zim_query
+
+        tool_fn = server.mcp._tool_manager._tools["zim_query"].fn
+        asyncio.run(tool_fn(query="tell me about Photosynthesis"))
+        assert "content_offset" not in captured["options"]
+
+    def test_zim_query_rejects_negative_content_offset(
+        self, test_config: OpenZimMcpConfig
+    ):
+        """``content_offset`` must be non-negative. A negative value
+        comes back as a ``ToolErrorPayload`` (operation
+        ``invalid_content_offset``) rather than being silently clamped —
+        the cursor decoder already enforces this contract for ``offset``
+        / cursor state, and the article-paging channel should match.
+        """
+        simple_config = test_config.model_copy(update={"tool_mode": "simple"})
+        server = OpenZimMcpServer(simple_config)
+
+        tool_fn = server.mcp._tool_manager._tools["zim_query"].fn
+        result = asyncio.run(
+            tool_fn(query="tell me about Photosynthesis", content_offset=-5)
+        )
+        assert isinstance(result, dict) and result.get("error") is True
+        assert result.get("operation") == "invalid_content_offset"

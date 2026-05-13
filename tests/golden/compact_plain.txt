@@ -12,6 +12,7 @@ Type: text/html
 ## Content
 
 This article has no infobox and no large tables. It is a control case for the snapshot suite.
+<!-- intent=tell_me_about cert=0.85 -->
 </retrieved_archive_content>
 
-> ~97 tokens
+> ~110 tokens
