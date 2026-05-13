@@ -5,6 +5,280 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a11] — 2026-05-13 (alpha pre-release) — post-a10 beta-test sweep (22+6+3 defects + 7 opportunities across three passes)
+
+Three-pass beta-test of `v2.0.0a10` against a 118 GB Wikipedia ZIM
+(Feb 2026 snapshot) via the simple-mode `zim_query` MCP surface. The
+first pass surfaced 22 defects + 7 opportunities from live use; the
+second and third passes were self-audits of the prior commit, each
+finding fewer issues than the last (22 → 6 → 3). Every fix here was
+first observed live; the existing 1425-test suite covered none of
+them.
+
+The single most user-visible regression is silent text concatenation
+inside Wikipedia infoboxes — every city / country article had at
+least one corrupted number (`5th in Europe1st in Germany`,
+`Berliner(s) (English)Berliner (m)`, `0.967very high`,
+`TokyoTamaNorthern Izu Islands`). A small LLM reading this would
+emit those as single tokens. Plus one **critical**: the a10 DD2 fix
+threaded `content_offset` through the article-paging handler, but
+the parameter was never exposed on the MCP tool — the truncation
+footer told callers to "pass `content_offset=N`" via a channel that
+didn't exist.
+
+Net: 1463 tests pass (+38 over `v2.0.0a10`), 50 skipped, 38
+deselected. `black` / `isort` / `flake8` / `mypy` / CodeQL /
+SonarCloud all clean.
+
+### Fixed — Critical (post-a10 beta sweep)
+
+- **C1: `content_offset` unreachable from `zim_query`.** A10's DD2
+  threaded `options["content_offset"]` through
+  `_fetch_topic_article_body`, but the `zim_query` MCP signature
+  never exposed the parameter. The top-level `offset` arg routes to
+  `options["offset"]` (search / browse pagination), not
+  `options["content_offset"]` (article-body paging). Result: every
+  `tell me about Photosynthesis` truncation footer pointed to a
+  paging channel that returned the same page 1. Exposed
+  `content_offset` as a top-level `zim_query` parameter, validated
+  `>= 0`, threaded through `options`. Truncation footers on
+  `truncate_content` now report the correct next-page offset
+  (Opp4 implemented inline).
+
+### Fixed — High (post-a10 beta sweep)
+
+- **H2: `tell me about Berlin` non-determinism.** `Berlin` and
+  `Berlin (disambiguation)` both strong-matched by the candidate-
+  extends-topic rule, so the disambig set fired 2+ → fork between
+  the city article and the disambig page. Auto-pick the canonical
+  when the strong-match set is exactly `Foo` + `Foo (disambiguation)`;
+  the disambig twin is surfaced as a footer hint on the returned
+  body. Genuine multi-meaning topics (Apollo / Mercury / Java) still
+  fork as before (Opp1 implemented inline).
+- **H3: disambig hides the canonical it should be helping pick.**
+  `tell me about Apollo 11` forked between `Apollo_11_anniversaries`,
+  `Apollo_11_lunar_sample_display`, `Apollo_11_goodwill_messages` —
+  none of which is the canonical `Apollo_11`. Probe the title index
+  for the exact-topic canonical BEFORE the disambig check; prepend
+  it to the strong-match list when absent.
+- **H4: infobox text-extraction silently concatenates adjacent
+  block-level children.** `td.get_text()` joined `<br>`, `<li>`,
+  `<span>` runs without whitespace. Three-pass evolution:
+  first-pass `separator=" "` mangled inline span groups
+  (`3,913,644` → `3 , 913 , 644`); second-pass `_join_cell_text`
+  helper inserts whitespace at block-tag boundaries only and
+  concatenates inline tags directly; third-pass filters
+  `Comment` instances (a `NavigableString` subclass) so invisible
+  formatnum/microformat comments stop leaking as visible text.
+- **H5: intent parser preempts on later-occurring keywords.**
+  `tell me about berlin then list namespaces` silently ran only
+  `list namespaces` (highest-confidence intent wins). New
+  `_chained_intent_guidance` splits on `then` / `;` / `and then`
+  connectors; if both halves start with a recognised operation
+  prefix, return a "split into separate calls" guidance message.
+- **H6: orphan bullet rows lose parent context.** Berlin's
+  `**• Summer (DST):** UTC+02:00` rendered without a parent
+  because `Time zone:` was a regular KV (not an `infobox-header`).
+  When a KV row's label starts with a bullet char AND there's no
+  active section, treat the previous KV row's label as a virtual
+  parent — applied for that row only, doesn't persist into the
+  next non-bullet row.
+
+### Fixed — Medium (post-a10 beta sweep)
+
+- **M7: `show structure of <multi-word title>` doesn't normalize.**
+  D2 in a10 added `find_title_match(min_score=0.8)` to
+  `_handle_related`; M7 extends the same pattern via the new
+  `_resolve_natural_language_path` helper applied to `structure`,
+  `table of contents`, `links`, `summary`, `get section`, and
+  `get article` (when the path contains spaces and no namespace
+  separator — direct-path lookups stay zero-cost).
+- **M8: `get section` ignores `max_content_length`.** Section text
+  was returned in full regardless of the cap. Honor the cap and
+  append a one-line truncation footer reporting the original
+  length.
+- **M9: malformed cursor silent no-op.** A base64+JSON token that
+  decodes but lacks the expected `s` envelope (or whose `s.o` is
+  missing/invalid) used to silently degrade to page 1. The contract
+  now mirrors the totally-garbled-token case: structured
+  `cursor_decode` error.
+- **M10: trailing-whitespace `tell me about` produces an empty
+  topic.** A query of `tell me about` with a trailing space fell
+  through to a topic of `"tell me about"` and disambiguated to
+  articles titled "Tell Me About Tomorrow". The
+  `_extract_tell_me_about` regex now uses `\b` + `(.*?)` so empty
+  topics resolve to empty strings; simple_tools rejects with a
+  clear "Topic Required" error.
+- **M11: `explain X to me` parses incorrectly.** "explain Berlin
+  to me" extracted topic `"Berlin to me"` and returned a memorial
+  article. Topic extractor strips `to me` / `for me` / `please`
+  politeness tails, loop-until-idempotent so wrapping cases
+  (`DNA for me please`) collapse cleanly.
+
+### Fixed — Low (post-a10 beta sweep)
+
+- **L12: trailing-whitespace `search for` with no terms.** Used to
+  fall through to searching for the literal word "for". Validate
+  the extracted tail before dispatch; surface "Search Terms
+  Required".
+- **L13: `limit=0` nonsensical pagination.** `Showing 1-0 of N —
+  pass offset=0 for the next page` looped on itself. Reject
+  non-positive `limit` and negative `offset` at the MCP boundary.
+- **L15: `articles related to <nonexistent>` raw error.** Wrap the
+  backend's "Cannot find entry" with a structured guidance message
+  pointing to `suggestions for` / `find article titled` /
+  `search for`. (Second-pass F3 added the same hint trio to the
+  `outbound_error` branch in `render_related` that the live case
+  actually surfaces through.)
+- **L16: walk namespace denominator misleading.** `walk namespace M`
+  with 13 entries used to render `of ~27,199,904 archive-wide
+  entries`. Prefer a per-namespace denominator when available; fall
+  through to the archive total only when no per-namespace count is
+  known. Second-pass F4 plumbed `namespace_entry_count` through
+  `_build_walk_result` so the new `of N in namespace X` shape
+  actually renders.
+- **L17 / L18: list namespaces total mismatch, metadata aggregator
+  underreports.** Header now annotates "X archive entries (per-
+  namespace sum: Y)" when the two differ. `_extract_zim_metadata`
+  enumerates `archive.metadata_keys` on new-scheme archives (filtering
+  `Illustration_*` binaries) so `metadata for` and
+  `walk namespace M` agree on what counts as metadata. Second-pass
+  F6 replaced the first-pass hardcoded probe-list extension with
+  the enumeration so future archive additions don't reopen the
+  disagreement.
+
+### Added — Opportunities (post-a10 beta sweep)
+
+- **Opp1: auto-fall-through twin.** Implemented inline with H2.
+- **Opp2: expanded demote patterns.** `_LIST_ARTICLE_PREFIX_RE`
+  picks up `Lists_of_*` (plural); two new patterns demote
+  `Listed_*` stems and `*_discography` / `*_filmography` /
+  `*_videography` / `*_bibliography` / `*_albums` / `*_singles`
+  suffixes. `tell me about cats` returning a Rephlex Records
+  discography at rank 2 is the canonical failure this fixes.
+- **Opp3: synthesize relevance threshold.** New
+  `_drop_low_relevance_tail` cuts hits whose Xapian score is below
+  25% of the top hit's. Only applied in `xapian_score` fallback
+  (single-archive); multi-archive RRF keeps all hits because RRF
+  normalizes scores. Always keeps at least one hit.
+- **Opp4: `content_offset` in truncation footers.** Implemented
+  inline with C1 — `truncate_content` accepts `current_offset` so
+  paginated reads compute the next offset relative to where the
+  slice started in the original article. Third-pass F2 added a
+  `paginatable: bool = True` kwarg so the three main-page call sites
+  switch to operation-accurate guidance (the main-page surface
+  doesn't accept `content_offset`).
+- **Opp5: canonical-exists hint in disambig auto-pick.** When the
+  H2 auto-fall-through fires, append a `_Note: this topic also has
+  a disambiguation page — see ``get article <path>`` for alternate
+  meanings._` footer so the disambiguation stays discoverable.
+- **Opp6: intent telemetry on all responses.** Every markdown
+  response now carries a trailing `<!-- intent=foo cert=0.85 -->`
+  HTML comment. Invisible to humans (HTML comments aren't rendered)
+  but visible in the token stream so calling LLMs can branch on the
+  parser's classification certainty without parsing the body.
+- **Opp7: link-count rank on related articles.** When the related-
+  articles backend supplies a `mention_count`, surface it inline as
+  `- **Title** (`path`) · N×` so a small LLM can rank which related
+  article is most central to the source. (Second-pass H1 fixed the
+  first-pass typo that read the wrong field name — `link_count`
+  vs `mention_count`.)
+
+### Fixed — Second-pass self-audit findings
+
+A self-audit of the first-pass commit surfaced six defects in the
+fixes themselves:
+
+- **D1 second-pass (folded into H4 above).** `get_text(separator=" ")`
+  mangled inline-span numeric groups.
+- **F3 second-pass (folded into L15 above).** Wrapped the wrong
+  error path — backend serialises rather than re-raising.
+- **F4 second-pass (folded into L16 above).** `namespace_entry_count`
+  was renderer-only and never plumbed through the data payload.
+- **F6 second-pass (folded into L17/L18 above).** Hardcoded probe-
+  list extension still drifts; replaced with `metadata_keys`
+  enumeration on new-scheme archives.
+- **H1 second-pass (folded into Opp7 above).** First-pass read
+  `link_count` from the related-articles result; the backend stores
+  the frequency-rank signal as `mention_count`.
+- **C2 perf: title-index probe ran twice on the weak-top-hit path.**
+  Gated the H3 canonical-probe behind `len(strong_matches) >= 2`
+  (the only condition under which the disambig page would otherwise
+  render). Strong-top-hit and weak-then-promoted paths skip the
+  second probe entirely. Third-pass extended the gate to also fire
+  when the single strong match is itself the disambig twin.
+
+### Fixed — Third-pass self-audit findings
+
+A second self-audit found three more defects in the second-pass
+commit:
+
+- **D1 third-pass (folded into H4 above).** `Comment` is a
+  `NavigableString` subclass; second-pass `_join_cell_text` caught
+  comments and rendered their bodies as visible text.
+- **C2 third-pass.** Lone disambig-twin search case bypassed the
+  second-pass `>= 2` gate; extended the gate to also fire when the
+  one strong match is `Foo (disambiguation)` itself.
+- **F2 third-pass (folded into Opp4 above).** The second-pass
+  truncation hint pointed at a `content_offset` parameter the
+  main-page operation doesn't accept; added a `paginatable=False`
+  kwarg on the three main-page call sites and routed them to
+  operation-accurate guidance.
+
+### Fixed — Quality gate (PR CI cleanup)
+
+- **CodeQL: `full_len` may be uninitialized.** In the M8 truncation-
+  footer code path, `full_len = len(text)` was assigned only inside
+  the truncation `if` block but referenced in a different (correlated)
+  `if truncated:` block. The correlation was opaque to CodeQL.
+  Lifted the assignment above the branch so the variable is always
+  defined. No behaviour change.
+- **SonarCloud python:S5852 (ReDoS hotspot).** The
+  `_search_query_tail` regex had adjacent `\s*` quantifiers that
+  the heuristic flagged as polynomial-backtracking. Split into
+  three single-token regexes (verb, optional `up` for `look up`,
+  optional `for` connector) with plain-Python tail slicing between
+  matches. Each individual pattern has at most one whitespace
+  quantifier so the heuristic has nothing to flag. Behaviour
+  verified identical across all 1463 tests.
+
+### Wire-format / surface changes (alpha-line clean breaks)
+
+- **`zim_query` accepts a top-level `content_offset` parameter.**
+  Existing callers passing only the previous parameters are
+  unaffected; new callers paginating long article bodies should
+  use `content_offset` instead of the legacy `offset` (the latter
+  remains the search / browse pagination knob).
+- **Every markdown response now carries a trailing
+  `<!-- intent=... cert=... -->` HTML comment** (Opp6). Invisible
+  to humans; callers that token-count or post-process the trailing
+  bytes will see two extra tokens per response.
+- **Intent-parser chained-query guard returns guidance instead of
+  silently dispatching the rightmost intent.** Callers sending
+  `X then Y` queries that previously got Y's result silently now
+  receive a structured "split into separate calls" message.
+- **`get section` honors `max_content_length` and appends a
+  truncation footer.** Callers that previously got full section
+  bodies now receive at most `max_content_length` bytes plus a
+  one-line footer reporting the original length.
+- **Cursor with missing/invalid `s` envelope now errors
+  (`cursor_decode`).** Callers that previously got silent page-1
+  fall-through now receive a structured error.
+- **Infobox cells render with intra-cell whitespace at block-tag
+  boundaries only.** Most callers see strictly better text (no
+  `5th in Europe1st in Germany`-style concatenation); inline
+  numeric / unit / coordinate microformats remain intact.
+- **Synthesize ranking demotes `Lists_of_*` and `*_discography` /
+  `*_filmography` / `*_albums` / `*_singles` suffixes.** Citation
+  order for queries like `cats` no longer surfaces a Rephlex
+  Records discography in the top half.
+- **`walk namespace M` and `metadata for <file>` agree on what
+  counts as metadata** (new-scheme archives enumerate
+  `metadata_keys` directly). Old-scheme archives keep the
+  hardcoded probe list as a fallback.
+
+---
+
 ## [2.0.0a10] — 2026-05-12 (alpha pre-release) — post-a9 beta-test sweep (16 defects + 6 opportunities)
 
 Two-pass beta-test of `v2.0.0a9` against a 118 GB Wikipedia ZIM (Feb
