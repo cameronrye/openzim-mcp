@@ -77,6 +77,34 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
     return False
 
 
+# A11 post-a11 H1: punctuation characters whose presence in the topic
+# encodes load-bearing meaning the title resolver may smear away.
+# ``C++`` (the language) was getting silently mapped to ``C/C++`` (a
+# compatibility-of-C-and-C++ shorthand) because libzim's title index
+# normalises ``+`` away, so the resolver couldn't tell ``C`` from
+# ``C++``. The token-equality guard below requires that the resolved
+# path preserve the count of each load-bearing punctuation character —
+# if the topic has two ``+`` and the candidate has zero, it's a smear,
+# not a match.
+_LOAD_BEARING_PUNCTUATION = ("+", "#", "*", "&", "?", "!")
+
+
+def _punctuation_smear_detected(topic: str, candidate_path: str) -> bool:
+    """Return True iff resolving ``topic`` to ``candidate_path`` collapsed
+    a load-bearing punctuation character (``+``, ``#``, etc.).
+
+    Cheap byte-level count comparison. Designed to catch the false-
+    positive class observed live (``C++`` → ``C/C++``,
+    ``F#`` → ``F``-the-letter), without rejecting legitimate
+    punctuation-preserving redirects (``Newton's_laws`` →
+    ``Newton's_laws_of_motion`` keeps the apostrophe count steady).
+    """
+    for ch in _LOAD_BEARING_PUNCTUATION:
+        if topic.count(ch) > candidate_path.count(ch):
+            return True
+    return False
+
+
 def find_title_match(
     zim_operations: Any,
     zim_file_path: str,
@@ -102,6 +130,14 @@ def find_title_match(
     score the title index produces for single-edit typos. Errors in
     the backend are logged and swallowed so a transient failure blanks
     the promotion path rather than the whole response.
+
+    A11 post-a11 H1: rejects matches that drop load-bearing
+    punctuation from the topic (``C++`` → ``C/C++`` was silently
+    smearing the language name onto the cross-language compatibility
+    article). Falls through to ``None`` so the calling search /
+    tell-me-about path uses its Xapian fallback instead, where the
+    actual ``C++_programming_language`` article resolves correctly via
+    canonical-title-match.
     """
     try:
         data = zim_operations.find_entry_by_title_data(
@@ -118,8 +154,16 @@ def find_title_match(
         return None
     if float(top.get("score", 0.0)) < min_score:
         return None
+    candidate_path = str(top.get("path", ""))
+    if _punctuation_smear_detected(topic, candidate_path):
+        logger.debug(
+            "find_title_match: punctuation smear rejected (%r -> %r)",
+            topic,
+            candidate_path,
+        )
+        return None
     return {
-        "path": str(top.get("path", "")),
+        "path": candidate_path,
         "title": str(top.get("title", "")),
         "zim_file": str(top.get("zim_file", zim_file_path)),
     }

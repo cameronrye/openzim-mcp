@@ -520,16 +520,19 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
             if has_new_scheme:
                 try:
+                    # A11 post-a11 M1: shared filter — see
+                    # ``zim.namespace.is_human_readable_metadata_key``.
+                    # Walk-namespace M and metadata-for must agree on
+                    # what counts as metadata; sharing the predicate
+                    # guarantees that.
+                    from openzim_mcp.zim.namespace import (
+                        is_human_readable_metadata_key,
+                    )
+
                     discovered = [
                         k
                         for k in (getattr(archive, "metadata_keys", []) or [])
-                        # A11 F6: skip binary illustration entries —
-                        # they can't surface as a text metadata
-                        # value. Wikipedia ZIMs have 1-3 such keys
-                        # (``Illustration_48x48@1`` etc.) and the
-                        # previous decode-as-utf8 path used to
-                        # silently produce mojibake from them.
-                        if not k.startswith("Illustration_")
+                        if is_human_readable_metadata_key(k)
                     ]
                 except Exception as e:
                     logger.debug(f"metadata_keys read failed: {e}")

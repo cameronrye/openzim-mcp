@@ -1034,6 +1034,7 @@ class ContentProcessor:
         *,
         current_offset: int = 0,
         paginatable: bool = True,
+        original_total: Optional[int] = None,
     ) -> str:
         """
         Truncate content to maximum length with informative message.
@@ -1044,7 +1045,11 @@ class ContentProcessor:
         body in the final output. ``max_length`` applies only to the body.
 
         Args:
-            content: Content to truncate
+            content: Content to truncate. When the caller already sliced
+                the article (``current_offset > 0``), ``len(content)`` is
+                the post-slice length, NOT the article's full length —
+                pass ``original_total`` so the footer's "of N" denominator
+                stays correct.
             max_length: Maximum allowed length
             current_offset: Where this slice starts in the source
                 content. Lets the truncation hint compute the correct
@@ -1057,6 +1062,14 @@ class ContentProcessor:
                 the main entry from scratch), so suggesting it would
                 point the caller at a parameter the main-page path
                 ignores. A11 third-pass fix.
+            original_total: Pre-slice length of the source body, used
+                as the denominator in the footer. Defaults to
+                ``len(content) + current_offset`` so callers that pass
+                an already-sliced ``content`` still produce a correct
+                "of N" — A11 post-a11 M4 fix. Without this, the footer
+                read "total of N characters of body content" using the
+                post-slice length, so paginated reads under-reported
+                the article's length by ``current_offset`` chars.
 
         Returns:
             Truncated content with metadata
@@ -1065,7 +1078,16 @@ class ContentProcessor:
             return content
 
         truncated = content[:max_length].strip()
-        total_length = len(content)
+        # A11 post-a11 M4: prefer the caller-supplied pre-slice length;
+        # fall back to a computed approximation that still beats the
+        # previous "len(post-slice content)" bug. Either way the
+        # footer's "of N" denominator now matches the article's actual
+        # length, regardless of where in the article we're paged into.
+        full_length = (
+            original_total
+            if original_total is not None
+            else len(content) + current_offset
+        )
         # A11 F2 + Opp4: the truncation marker now tells the caller
         # how to fetch the rest. Before, a small LLM saw
         # ``[Content truncated, total of 146,250 chars, only showing
@@ -1088,11 +1110,24 @@ class ContentProcessor:
                 "page path with `content_offset`."
             )
 
-        return (
-            f"{truncated}\n\n"
-            f"... [Content truncated, total of {total_length:,} characters of "
-            f"body content, only showing first {max_length:,}.{tail}] ..."
-        )
+        # Body of the slice description switches shape based on
+        # whether we're paginating mid-article: at offset 0 the
+        # "showing first N" wording is honest; mid-article the user
+        # wants to see "chars X–Y of Z" so they can reason about
+        # where they are in the document.
+        if current_offset > 0:
+            slice_end = current_offset + max_length
+            body_desc = (
+                f"showing chars {current_offset:,}–{slice_end:,} of "
+                f"{full_length:,}-char body"
+            )
+        else:
+            body_desc = (
+                f"total of {full_length:,} characters of body content, "
+                f"only showing first {max_length:,}"
+            )
+
+        return f"{truncated}\n\n... [Content truncated, {body_desc}.{tail}] ..."
 
     def process_mime_content(
         self,

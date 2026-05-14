@@ -398,6 +398,13 @@ class TestSimpleToolsHandler:
         mock.extract_article_links.return_value = "Article links"
         mock.get_search_suggestions.return_value = "Suggestions"
         mock.search_with_filters.return_value = "Filtered search results"
+        # Post-a11 H2: simple_tools._handle_filtered_search now routes
+        # through ``search_with_filters_with_canonical_splice``. Stub
+        # it with the same string so existing assertions on the
+        # response body keep passing.
+        mock.search_with_filters_with_canonical_splice.return_value = (
+            "Filtered search results"
+        )
         mock.get_binary_entry.return_value = (
             '{"path": "I/image.png", "mime_type": "image/png", "size": 1234}'
         )
@@ -494,11 +501,26 @@ class TestSimpleToolsHandler:
         assert "Suggestions" in result
 
     def test_handle_filtered_search(self, handler, mock_zim_operations):
-        """Test handling filtered search queries."""
+        """Test handling filtered search queries.
+
+        Post-a11 H2: ``_handle_filtered_search`` now routes to
+        ``search_with_filters_with_canonical_splice`` so the canonical
+        title-match splice the basic-search path already enjoyed
+        applies here too. The legacy ``search_with_filters`` is
+        called from inside the splice helper as a fall-through, so
+        either call signal is acceptable evidence the handler dispatched
+        correctly.
+        """
         result = handler.handle_zim_query(
             "search evolution in namespace C", "/test/file.zim"
         )
-        mock_zim_operations.search_with_filters.assert_called_once()
+        # Either entry point is fine — the splice variant delegates to
+        # the legacy method when no canonical splice is needed.
+        called = (
+            mock_zim_operations.search_with_filters_with_canonical_splice.called
+            or mock_zim_operations.search_with_filters.called
+        )
+        assert called, "filtered_search dispatch did not call either backend method"
         assert "Filtered search results" in result
 
     def test_auto_select_single_file(self, handler, mock_zim_operations):
@@ -3910,10 +3932,14 @@ class TestA11DisambiguationFixes:
         assert "Multiple articles match" in out
 
     def test_c2_disambig_includes_canonical_via_title_index(self, make_handler):
-        """C2: ``tell me about Apollo 11`` no longer hides the canonical
-        ``Apollo_11`` article. When the search results have only weak
-        extends-topic strong matches, probe the title index for the
-        bare-topic canonical and prepend it.
+        """C2 + post-a11 C1: ``tell me about Apollo 11`` resolves to
+        the canonical ``Apollo_11`` article. Initially (a11) the H3
+        fix prepended the canonical to the disambig fork; the post-a11
+        C1 sibling auto-pick goes further and just returns the
+        canonical body when the strong-match set is
+        ``[canonical, extends-topic-only]``. The variants are surfaced
+        as a "may also refer to" footer hint so the caller can still
+        reach them without a follow-up search.
         """
         handler, _mock = make_handler(
             search_results=[
@@ -3946,10 +3972,10 @@ class TestA11DisambiguationFixes:
             zim_file_path="/x.zim",
             options={"compact": False},
         )
-        # Canonical now appears in the disambig list, no longer
-        # hidden behind the three weak extends-topic matches.
-        assert "Apollo_11" in out
-        # The 3 weak matches still listed for context.
+        # Auto-picked the canonical Apollo_11 article (post-a11 C1).
+        assert "_Source: `Apollo_11`_" in out
+        # The variants are still discoverable via the footer hint.
+        assert "May also refer to" in out
         assert "Apollo_11_anniversaries" in out
 
 

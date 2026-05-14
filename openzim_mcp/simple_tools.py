@@ -25,7 +25,7 @@ from .intent_parser import IntentParser, safe_regex_sub
 from .meta import build_meta, format_footer
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
-from .title_promotion import find_title_match, is_strong_title_match
+from .title_promotion import _TOKEN_RE, find_title_match, is_strong_title_match
 from .tool_schemas import SearchResponse, SynthesizeResponse
 from .zim_operations import ZimOperations
 
@@ -385,7 +385,14 @@ class SimpleToolsHandler:
             chained_warning = self._chained_intent_guidance(query)
             if chained_warning is not None:
                 self._track("chained_intent_rejected")
-                return chained_warning
+                # A11 post-a11 L1: structured guidance responses participate
+                # in the same intent-telemetry contract as article-body
+                # responses (Opp6). Append a deterministic comment so a
+                # calling LLM can branch on the rejection class without
+                # body-parsing.
+                return chained_warning + (
+                    "\n<!-- intent=chained_intent_rejected cert=1.00 -->"
+                )
             intent, params, confidence = self.intent_parser.parse_intent(query)
             # A11 B2: ``tell me about <empty>`` (trailing-space input,
             # punctuation-only topic) used to fall through to a topic
@@ -403,6 +410,7 @@ class SimpleToolsHandler:
                         "- `tell me about Photosynthesis`\n"
                         "- `who is Albert Einstein`\n"
                         "- `describe DNA`\n"
+                        "<!-- intent=topic_required cert=1.00 -->"
                     )
             # A11 B4: ``search for `` (trailing space, no terms) used
             # to fall through to searching for the literal word "for".
@@ -422,6 +430,7 @@ class SimpleToolsHandler:
                         "**Examples**:\n"
                         '- `search for "quantum mechanics"`\n'
                         "- `search for Berlin in namespace C`\n"
+                        "<!-- intent=search_terms_required cert=1.00 -->"
                     )
                 # Replace the params copy with the cleaned tail so the
                 # handler doesn't run on the verb-prefixed raw query.
@@ -704,6 +713,21 @@ class SimpleToolsHandler:
                 continue
             left, right = parts[0].strip(), parts[1].strip()
             if not left or not right:
+                continue
+            # A11 post-a11 L2: when the connector is ``then`` (not ``and
+            # then``), an ``and`` may dangle on the end of the left half
+            # — ``tell me about berlin and then list namespaces`` splits
+            # to left=``tell me about berlin and`` / right=``list
+            # namespaces``. Trim trailing connectors / orphan punctuation
+            # so the suggested split-up call is clean for the caller to
+            # paste back as a follow-up query.
+            left = re.sub(
+                r"\s+(?:and|or|but)\s*$|\s*[;,]\s*$",
+                "",
+                left,
+                flags=re.IGNORECASE,
+            ).strip()
+            if not left:
                 continue
             if cls._CHAINED_OPERATION_PREFIX_RE.match(
                 left
@@ -1646,7 +1670,12 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
-        return self.zim_operations.search_with_filters(
+        # A11 post-a11 H2: route to the canonical-title-match-aware
+        # variant so ``search for berlin in namespace C`` surfaces
+        # the canonical ``Berlin`` article instead of dropping it
+        # behind ``List of songs about Berlin``. Only fires at
+        # offset=0 — see the wrapper for paging-stability rationale.
+        return self.zim_operations.search_with_filters_with_canonical_splice(
             zim_file_path,
             params.get("query", query),
             params.get("namespace"),
@@ -1775,6 +1804,36 @@ class SimpleToolsHandler:
             zim_file_path, search_query, limit, offset
         )
 
+    @staticmethod
+    def _stable_demote_list_articles(
+        results: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """A11 post-a11 H3: stable-partition list / discography / catalog
+        articles to the bottom of a search results list.
+
+        Reuses the same predicate the synthesize ranker uses
+        (:func:`openzim_mcp.synthesize._is_list_article`) so plain
+        ``search`` and ``synthesize`` agree on which hits are catalog-
+        shaped. Pre-fix, ``search for cats`` returned
+        ``Rephlex_Records_discography`` at rank 2 — the synthesize-
+        layer Opp2 demote was applied only inside ``synthesize_query``;
+        plain search left the discography in place. The basic-search
+        splice now applies the same demote so the two surfaces line up.
+
+        Stable: preserves order within both partitions so the splice's
+        canonical promotion + Xapian's underlying ranking are
+        unchanged for non-list hits.
+        """
+        if not results:
+            return results
+        from openzim_mcp.synthesize import _is_list_article
+
+        non_list = [r for r in results if not _is_list_article(r)]
+        list_hits = [r for r in results if _is_list_article(r)]
+        if not list_hits:
+            return results
+        return non_list + list_hits
+
     def _splice_title_match_into_search(
         self,
         payload: Dict[str, Any],
@@ -1782,7 +1841,11 @@ class SimpleToolsHandler:
         search_query: str,
     ) -> Dict[str, Any]:
         """Prepend the title-index score-1.0 hit to ``payload['results']``
-        when the BM25 top hit isn't a strong title match.
+        when the BM25 top hit isn't a strong title match. Then stable-
+        demote any list / discography / catalog articles to the
+        bottom of the page (A11 post-a11 H3) so the splice and the
+        synthesize ranker agree on which hits are catalog-shaped
+        noise.
 
         Mutates and returns ``payload`` — callers treat the response as
         new-shape regardless of caching upstream because the splice is
@@ -1791,6 +1854,13 @@ class SimpleToolsHandler:
         results = payload.get("results") or []
         if not results:
             return payload
+        # Pre-splice demote: regardless of whether the canonical
+        # title-match probe fires, push catalog-shape hits below the
+        # narrative articles so ``search for cats`` stops surfacing
+        # Rephlex Records discography at rank 2 even when no title
+        # promotion happens.
+        results = self._stable_demote_list_articles(cast(List[Dict[str, Any]], results))
+        payload["results"] = results
         top = results[0]
         if not isinstance(top, dict):
             return payload
@@ -1988,15 +2058,50 @@ class SimpleToolsHandler:
         #       of the canonical city article.
         #
         # When there are 0 strong matches the handler has already
-        # fallen through to plain search; when there's 1 non-twin
-        # strong match the auto-fetch path is correct.
+        # fallen through to plain search.
+        #
+        # A11 post-a11 C1: extended the gate to also fire when the
+        # lone strong match is an "extends-topic" hit (not a token-
+        # equality match). The pre-fix assumption — "1 non-twin
+        # strong match → auto-fetch is correct" — silently broke for
+        # ``tell me about France``: Xapian's top hit was
+        # ``France_national_football_team_results_(2000–2019)``,
+        # which strong-matched ``France`` via the candidate-extends-
+        # topic rule (``cand_tokens[:1] == ("france",)``). The
+        # canonical ``France`` article exists in the title index but
+        # was never probed, so the football article was returned
+        # silently. The probe now fires for this case too; a sibling
+        # auto-pick (below) prefers the canonical when its tokens
+        # equal the topic exactly. Mercury / Apollo / Java / DNA
+        # forks are unaffected — those already have a token-equality
+        # canonical in their strong-match set.
+        topic_tokens = tuple(_TOKEN_RE.findall(topic.lower()))
         gate_for_disambig_render = len(strong_matches) >= 2
         gate_for_lone_twin = (
             len(strong_matches) == 1
             and isinstance(strong_matches[0], dict)
             and self._is_disambig_twin_path(str(strong_matches[0].get("path") or ""))
         )
-        if gate_for_disambig_render or gate_for_lone_twin:
+        gate_for_lone_extends_topic = (
+            len(strong_matches) == 1
+            and isinstance(strong_matches[0], dict)
+            and topic_tokens
+            and tuple(
+                _TOKEN_RE.findall(
+                    str(
+                        strong_matches[0].get("title")
+                        or strong_matches[0].get("path")
+                        or ""
+                    ).lower()
+                )
+            )
+            != topic_tokens
+        )
+        if (
+            gate_for_disambig_render
+            or gate_for_lone_twin
+            or gate_for_lone_extends_topic
+        ):
             canonical = self._promote_topic_via_title_index(zim_file_path, topic)
             if canonical is not None:
                 canonical_path = canonical.get("path", "")
@@ -2024,8 +2129,26 @@ class SimpleToolsHandler:
         canonical_match = self._auto_pick_canonical_over_disambig_twin(
             topic, cast(List[Dict[str, Any]], strong_matches)
         )
+        # A11 post-a11 C1 (sibling rule): if the strong-match set is
+        # ``[canonical-with-topic-tokens, ..._extends-topic-only]`` —
+        # i.e. one entry whose title equals the topic exactly AND zero
+        # disambig twins AND zero other token-equality matches — pick
+        # the canonical and surface the others as a "may also refer
+        # to" hint. Without this, ``tell me about France`` (after the
+        # gate change above prepends the canonical) would render a
+        # 2-way fork between ``France`` and the football team article.
+        # Apollo / Mercury / Java / DNA are unaffected — those have
+        # multiple token-equality matches (e.g. ``Apollo`` AND
+        # ``Apollo (disambiguation)``), so this rule sees more than
+        # one canonical and returns None to let the disambig render.
+        if canonical_match is None:
+            canonical_match = self._auto_pick_canonical_over_extends_topic(
+                topic, cast(List[Dict[str, Any]], strong_matches)
+            )
         disambig_twin_path: Optional[str] = None
+        related_extends_paths: List[str] = []
         if canonical_match is not None:
+            canonical_path = str(canonical_match.get("path") or "")
             top_path = canonical_match["path"]
             top_title = canonical_match.get("title") or top_title
             # A11 F8 / Opp5: record the disambig twin path so we can
@@ -2038,6 +2161,19 @@ class SimpleToolsHandler:
                 ):
                     disambig_twin_path = str(m["path"])
                     break
+            # A11 post-a11 C1: when the auto-pick is the
+            # canonical-over-extends-topic case (Apollo 11 over
+            # anniversaries / lunar / goodwill, France over the
+            # football article), surface the other strong matches as a
+            # short "may also refer to" hint so the caller can still
+            # reach the variants without paying a follow-up search call.
+            for m in strong_matches:
+                if not isinstance(m, dict):
+                    continue
+                m_path = str(m.get("path") or "")
+                if m_path and m_path != canonical_path:
+                    if not self._is_disambig_twin_path(m_path):
+                        related_extends_paths.append(m_path)
         elif len(strong_matches) >= 2:
             self._track("disambiguation_returned")
             return self._render_disambiguation(topic, strong_matches)
@@ -2060,6 +2196,20 @@ class SimpleToolsHandler:
                 f"\n\n_Note: this topic also has a disambiguation page — "
                 f"see `get article {disambig_twin_path}` for alternate "
                 f"meanings._"
+            )
+        if related_extends_paths:
+            # A11 post-a11 C1: cap the hint at the first 4 alternates
+            # so the footer stays small even on hub topics that
+            # generated a long extends-list.
+            preview = ", ".join(f"`{p}`" for p in related_extends_paths[:4])
+            extra = (
+                f" (+{len(related_extends_paths) - 4} more)"
+                if len(related_extends_paths) > 4
+                else ""
+            )
+            result = result + (
+                f"\n\n_May also refer to: {preview}{extra} — "
+                f"use `tell me about <full title>` to fetch any of these._"
             )
         return result
 
@@ -2178,6 +2328,70 @@ class SimpleToolsHandler:
             else:
                 others.append(m)
         if twins and canonicals and not others:
+            return canonicals[0]
+        return None
+
+    @classmethod
+    def _auto_pick_canonical_over_extends_topic(
+        cls,
+        topic: str,
+        strong_matches: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """A11 post-a11 C1: pick the canonical when the strong-match set
+        contains exactly one entry whose tokens equal the topic AND every
+        other entry is a pure "extends-topic" hit (a longer-titled
+        article whose title starts with the topic).
+
+        Returns the canonical match dict to auto-resolve to, or ``None``
+        when the shape doesn't match — e.g. zero token-equality
+        canonicals (no clear winner), multiple token-equality canonicals
+        (Apollo / Mercury / Java — genuine multi-meaning), or any
+        disambig twin in the set (handled by
+        ``_auto_pick_canonical_over_disambig_twin`` already).
+
+        Concrete failure this fixes: ``tell me about France`` with
+        Xapian's #1 = ``France_national_football_team_results_(2000–
+        2019)``. The H3 canonical-prepend gate (extended in C1) injects
+        ``France`` at the head of the strong-matches list, then this
+        helper recognises the [canonical, extends-only] shape and picks
+        the canonical France article instead of forking the caller.
+        """
+        if len(strong_matches) < 2:
+            return None
+        topic_tokens = tuple(t.lower() for t in re.findall(r"[A-Za-z0-9]+", topic))
+        if not topic_tokens:
+            return None
+        canonicals: List[Dict[str, Any]] = []
+        extends: List[Dict[str, Any]] = []
+        for m in strong_matches:
+            if not isinstance(m, dict):
+                return None
+            path = str(m.get("path") or "")
+            # Any disambig twin in the set means the older
+            # canonical-over-twin auto-pick should have handled this
+            # case (or chose to fork) — don't second-guess it.
+            if cls._is_disambig_twin_path(path):
+                return None
+            title_tokens = tuple(
+                t.lower()
+                for t in re.findall(r"[A-Za-z0-9]+", str(m.get("title") or ""))
+            )
+            path_tokens = tuple(t.lower() for t in re.findall(r"[A-Za-z0-9]+", path))
+            if title_tokens == topic_tokens or path_tokens == topic_tokens:
+                canonicals.append(m)
+            elif (
+                len(title_tokens) > len(topic_tokens)
+                and title_tokens[: len(topic_tokens)] == topic_tokens
+            ) or (
+                len(path_tokens) > len(topic_tokens)
+                and path_tokens[: len(topic_tokens)] == topic_tokens
+            ):
+                extends.append(m)
+            else:
+                # Doesn't fit the [canonical, extends-only] shape; bail
+                # out so the existing disambig-render path takes over.
+                return None
+        if len(canonicals) == 1 and extends:
             return canonicals[0]
         return None
 

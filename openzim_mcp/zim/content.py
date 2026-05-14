@@ -560,8 +560,15 @@ class _ContentMixin:
         # slice, matching the legacy text path. ``current_offset`` carries
         # the starting offset into the original article so the truncation
         # hint can compute the correct next-page offset (A11 F2/Opp4).
+        # ``original_total`` carries the pre-slice length so the footer's
+        # "of N" denominator stays correct under pagination (A11 post-a11
+        # M4); without it the footer reported the post-slice length and
+        # the "total" decreased every time the caller paged forward.
         truncated_content = self.content_processor.truncate_content(
-            content, max_content_length, current_offset=content_offset
+            content,
+            max_content_length,
+            current_offset=content_offset,
+            original_total=total_length,
         )
         was_truncated = len(truncated_content) < len(content)
         content = truncated_content
@@ -1004,10 +1011,14 @@ class _ContentMixin:
         content = self._decode_metadata_content(raw, mime)
         # Honour content_offset / max_content_length to match the regular
         # entry path's contract.
+        full_meta_length = len(content)
         if content_offset > 0:
             content = content[content_offset:] if content_offset < len(content) else ""
         content = self.content_processor.truncate_content(
-            content, max_content_length, current_offset=content_offset
+            content,
+            max_content_length,
+            current_offset=content_offset,
+            original_total=full_meta_length,
         )
         result_text = (
             f"# {key}\n\nRequested Path: {entry_path}\n"
@@ -1100,9 +1111,13 @@ class _ContentMixin:
 
         # Truncate if necessary. ``current_offset`` lets the hint
         # compute the correct next-page offset for paginated reads
-        # (A11 F2/Opp4).
+        # (A11 F2/Opp4); ``original_total`` keeps the footer's "of N"
+        # denominator stable across paginated reads (A11 post-a11 M4).
         content = self.content_processor.truncate_content(
-            content, max_content_length, current_offset=content_offset
+            content,
+            max_content_length,
+            current_offset=content_offset,
+            original_total=total_length,
         )
 
         # Build return content - show both requested and actual paths if different
