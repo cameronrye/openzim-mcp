@@ -846,9 +846,31 @@ class _SearchMixin:
         non_list = [r for r in results if not _is_list_article(r)]
         list_hits = [r for r in results if _is_list_article(r)]
         results = non_list + list_hits
-        # Skip the splice if the top hit is already a strong-title
-        # match for the canonical — no value adding a duplicate.
-        if results:
+        # A11 post-a11 H2 third-pass: build the synthetic canonical row
+        # once so the empty-results path (Xapian filtered to zero) and
+        # the populated-results path (canonical missing or out-of-order)
+        # share the same prepend logic. Pre-fix, the empty-results
+        # branch fell through unchanged — a ``search for X in
+        # namespace C`` that returned zero hits but had a canonical X
+        # in C would still report "0 filtered matches" even though
+        # the canonical existed. Now the canonical lands as a single-
+        # result page with the badge, mirroring how the unfiltered
+        # search surface treats it.
+        synthetic_canonical: Dict[str, Any] = {
+            "path": canonical_path,
+            "title": canonical["title"],
+            "snippet": "(canonical title match)",
+            # The renderer needs ``namespace`` / ``content_type`` so
+            # derive them from the requested filter and the canonical
+            # path's prefix. Defaults match the plain-search shape for
+            # archives without explicit filters.
+            "namespace": namespace
+            or (canonical_path.split("/", 1)[0] if "/" in canonical_path else "C"),
+            "content_type": content_type or "text/html",
+        }
+        if not results:
+            results = [synthetic_canonical]
+        else:
             top = results[0]
             if isinstance(top, dict) and is_strong_title_match(
                 query, str(top.get("path") or ""), str(top.get("title") or "")
@@ -880,23 +902,7 @@ class _SearchMixin:
                 )
                 results = [promoted_existing, *reordered][:limit]
             else:
-                synthetic = {
-                    "path": canonical_path,
-                    "title": canonical["title"],
-                    "snippet": "(canonical title match)",
-                    # The renderer needs ``namespace`` / ``content_type``
-                    # so derive them from the requested filter and the
-                    # canonical path's prefix. Defaults fall back to the
-                    # plain-search shape for archives without filters.
-                    "namespace": namespace
-                    or (
-                        canonical_path.split("/", 1)[0]
-                        if "/" in canonical_path
-                        else "C"
-                    ),
-                    "content_type": content_type or "text/html",
-                }
-                results = [synthetic, *results][:limit]
+                results = [synthetic_canonical, *results][:limit]
 
         # Synthesise a ``_FilteredScanState`` from the structured
         # payload so the render path stays unchanged. Honor the

@@ -455,6 +455,54 @@ class TestCanonicalTitleMatchBadge:
     sentinel doesn't pipe into snippet processing downstream.
     """
 
+    def test_filtered_search_empty_xapian_still_surfaces_canonical(self):
+        """H2 third-pass: when ``search_with_filters_data`` returns 0
+        hits but ``find_title_match`` reports the canonical exists in
+        the requested namespace, the splice now surfaces the canonical
+        as a single-result page. Pre third-pass, the empty-results
+        branch fell through and the canonical was silently dropped.
+        """
+        # Use the real method on a stub mixin so we exercise the
+        # production splice / render path with mocked I/O hooks.
+        from openzim_mcp.zim.search import _SearchMixin
+
+        class _Stub(_SearchMixin):
+            def __init__(self):
+                pass
+
+            def search_with_filters_data(self, *_args, **_kwargs):
+                return {
+                    "query": "berlin",
+                    "namespace_filter": "C",
+                    "content_type_filter": None,
+                    "results": [],
+                    "next_cursor": None,
+                    "total": 0,
+                    "done": True,
+                    "page_info": {
+                        "offset": 0,
+                        "limit": 10,
+                        "returned_count": 0,
+                    },
+                }
+
+            def find_entry_by_title_data(self, *_args, **_kwargs):
+                return {
+                    "results": [
+                        {"path": "Berlin", "title": "Berlin", "score": 1.0},
+                    ]
+                }
+
+        stub = _Stub()
+        out = stub.search_with_filters_with_canonical_splice(
+            "/x.zim", "berlin", namespace="C", limit=10, offset=0
+        )
+        # The canonical lands as the (single) result and uses the
+        # post-a11 L3 badge instead of the legacy "Snippet:" line.
+        assert "Berlin" in out
+        assert "Match type: canonical title match" in out
+        assert "Snippet: (canonical title match)" not in out
+
     def test_format_search_text_renders_badge_for_canonical_row(self):
         from openzim_mcp.zim.search import _SearchMixin
 
