@@ -2048,6 +2048,110 @@ class TestZimPathHallucinationHandling:
         handler = SimpleToolsHandler(mock)
         assert handler._resolve_zim_path("anything.zim") is None
 
+    def test_synthesize_bare_filename_match_resolves_before_validation(
+        self, handler, mock_zim_operations
+    ):
+        """A14: ``synthesize=True`` must run the same hallucination
+        resolver as the intent-classification branch. Pre-A14, the
+        synthesize path bypassed it and handed the raw caller string
+        to ``path_validator.validate_path`` — so a bare filename that
+        matched a known basename succeeded with ``synthesize=False``
+        but failed with ``synthesize=True`` (path-anchor-to-CWD
+        produced ``/app/wikipedia_en_all_maxi.zim``, outside the
+        allowed dirs). Verify the resolver runs ahead of the synthesize
+        branch by asserting the dispatcher receives the normalized path.
+        """
+        with patch.object(handler, "_handle_synthesize_query") as mock_synth:
+            mock_synth.return_value = {
+                "answer_markdown": "ok",
+                "passages": [],
+                "citations": [],
+                "archives_searched": [],
+            }
+            handler.handle_zim_query(
+                "berlin",
+                zim_file_path="wikipedia_en_all_maxi.zim",
+                options={"synthesize": True},
+            )
+        # The synthesize dispatcher received the resolved full path,
+        # not the bare hallucinated name.
+        mock_synth.assert_called_once_with(
+            "berlin",
+            "/var/lib/zim/wikipedia_en_all_maxi.zim",
+            compact=False,
+        )
+
+    def test_synthesize_bare_filename_no_match_triggers_auto_select(
+        self, handler, mock_zim_operations
+    ):
+        """A14: synthesize branch also gets the auto-select fallback for
+        unmatched bare filenames (e.g. ``"Big Rapids, Michigan.zim"``
+        — an article title hallucinated as a path). With exactly one
+        archive loaded, the synthesize dispatcher should receive that
+        archive's real path.
+        """
+        with patch.object(handler, "_handle_synthesize_query") as mock_synth:
+            mock_synth.return_value = {
+                "answer_markdown": "ok",
+                "passages": [],
+                "citations": [],
+                "archives_searched": [],
+            }
+            handler.handle_zim_query(
+                "May Erlewine",
+                zim_file_path="Big Rapids, Michigan.zim",
+                options={"synthesize": True},
+            )
+        mock_synth.assert_called_once_with(
+            "May Erlewine",
+            "/var/lib/zim/wikipedia_en_all_maxi.zim",
+            compact=False,
+        )
+
+    def test_synthesize_slashed_unmatched_path_passed_through(
+        self, handler, mock_zim_operations
+    ):
+        """A14: a deliberate slashed path that doesn't match the listing
+        must still reach the synthesize pipeline verbatim — same H14
+        rule as the intent branch. The backend path validator can then
+        surface a clearer error than silent replacement.
+        """
+        explicit = "/some/other/wikipedia.zim"
+        with patch.object(handler, "_handle_synthesize_query") as mock_synth:
+            mock_synth.return_value = {
+                "answer_markdown": "ok",
+                "passages": [],
+                "citations": [],
+                "archives_searched": [],
+            }
+            handler.handle_zim_query(
+                "berlin",
+                zim_file_path=explicit,
+                options={"synthesize": True},
+            )
+        mock_synth.assert_called_once_with("berlin", explicit, compact=False)
+
+    def test_synthesize_no_path_skips_resolver(self, handler, mock_zim_operations):
+        """A14: when ``zim_file_path`` is None, the resolver is
+        intentionally skipped on the synthesize branch — synthesize
+        opens all loaded archives for multi-archive RRF fusion. The
+        dispatcher must receive None unchanged, not an auto-selected
+        single path.
+        """
+        with patch.object(handler, "_handle_synthesize_query") as mock_synth:
+            mock_synth.return_value = {
+                "answer_markdown": "ok",
+                "passages": [],
+                "citations": [],
+                "archives_searched": [],
+            }
+            handler.handle_zim_query(
+                "berlin",
+                zim_file_path=None,
+                options={"synthesize": True},
+            )
+        mock_synth.assert_called_once_with("berlin", None, compact=False)
+
 
 class TestLowConfidenceNoteAppendedConsistently:
     """Regression for finding 8.13: every intent branch appends the note.

@@ -426,6 +426,131 @@ class TestSearchPaginationFooterFormat:
         assert "**End of results**" not in out
 
 
+class TestLargeResultSetRefinementNudge:
+    """A14: when a search returns far more hits than a small page can
+    cover, the response footer surfaces a refinement nudge alongside the
+    next-page hint. Pre-A14, an 8B model facing "notable people from X"
+    (4000 hits, page size 3) would either give up or page mechanically
+    until its context budget died — the existing O2 saturation warning
+    only fired at ≥1M hits, so mid-tier counts had no signal at all.
+    """
+
+    def test_nudge_appears_when_total_far_exceeds_page(self):
+        from openzim_mcp.zim.search import _FilteredScanState, _format_filtered_response
+
+        scan = _FilteredScanState(
+            filtered_count=4000,
+            scanned=4000,
+            scan_cap_hit=False,
+            total_filtered_is_lower_bound=False,
+        )
+        results = [
+            {
+                "title": f"R{i}",
+                "path": f"C/R{i}",
+                "namespace": "C",
+                "content_type": "text/html",
+                "snippet": "...",
+            }
+            for i in range(3)
+        ]
+        out = _format_filtered_response(
+            query="notable people from big rapids michigan",
+            filter_text="",
+            results=results,
+            scan=scan,
+            total_results=4000,
+            offset=0,
+            limit=3,
+        )
+        assert "Showing 1-3 of 4000" in out
+        assert "pass `offset=3` for the next page" in out
+        # The new refinement nudge fires for 4000-hit / 3-result pages.
+        assert "refining with a quoted phrase" in out
+        assert "more specific term" in out
+
+    def test_nudge_absent_for_modest_total(self):
+        from openzim_mcp.zim.search import _FilteredScanState, _format_filtered_response
+
+        scan = _FilteredScanState(
+            filtered_count=42,
+            scanned=100,
+            scan_cap_hit=False,
+            total_filtered_is_lower_bound=False,
+        )
+        results = [
+            {
+                "title": f"R{i}",
+                "path": f"C/R{i}",
+                "namespace": "C",
+                "content_type": "text/html",
+                "snippet": "...",
+            }
+            for i in range(5)
+        ]
+        out = _format_filtered_response(
+            query="x",
+            filter_text="",
+            results=results,
+            scan=scan,
+            total_results=42,
+            offset=0,
+            limit=5,
+        )
+        # 42 hits is well below the threshold; no nudge.
+        assert "refining with a quoted phrase" not in out
+
+    def test_nudge_absent_at_end_of_results(self):
+        from openzim_mcp.zim.search import _FilteredScanState, _format_filtered_response
+
+        # Even at high total, the last page already exhausts results —
+        # no point nudging refinement once there's nothing left to page to.
+        scan = _FilteredScanState(
+            filtered_count=4000,
+            scanned=4000,
+            scan_cap_hit=False,
+            total_filtered_is_lower_bound=False,
+        )
+        results = [
+            {
+                "title": "R0",
+                "path": "C/R0",
+                "namespace": "C",
+                "content_type": "text/html",
+                "snippet": "...",
+            }
+        ]
+        out = _format_filtered_response(
+            query="x",
+            filter_text="",
+            results=results,
+            scan=scan,
+            total_results=4000,
+            offset=3999,
+            limit=3,
+        )
+        assert "end of results" in out
+        assert "refining with a quoted phrase" not in out
+
+    def test_threshold_helper(self):
+        """The threshold is a function of both absolute total and the
+        total-to-page ratio, so a 250-hit response with a 25-result page
+        doesn't trigger (paging works fine) but the same 250 with a 3-
+        result page does (paging would take 80+ turns).
+        """
+        from openzim_mcp.zim.search import _is_large_result_set
+
+        # Below absolute threshold.
+        assert _is_large_result_set(50, 3) is False
+        # Above absolute threshold, but page ratio low (250/25 = 10 < 20).
+        assert _is_large_result_set(250, 25) is False
+        # Above both thresholds — fires.
+        assert _is_large_result_set(250, 3) is True
+        assert _is_large_result_set(4000, 3) is True
+        # Defensive: zero/negative page_size never fires.
+        assert _is_large_result_set(4000, 0) is False
+
+
 class TestSearchAllLimitAlias:
     """`limit` is accepted as an alias of `limit_per_file` on search_all."""
 

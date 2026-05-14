@@ -256,7 +256,12 @@ class OpenZimMcpServer:
             Args:
                 query: REQUIRED. Translated from user intent — never the
                     user's raw message.
-                zim_file_path: Optional (auto-selected if one archive).
+                zim_file_path: Optional. The on-disk path of a .zim file
+                    (e.g. `/data/wikipedia_en_all_maxi.zim`) — NOT an
+                    article title, topic, or made-up filename. Omit
+                    entirely and the tool auto-selects the one loaded
+                    archive (or opens all of them when `synthesize=True`).
+                    Use `list available ZIM files` to see real paths.
                 limit: Max search/browse results (default: 3).
                 offset: Pagination offset (default: 0).
                 max_content_length: Article body cap (default: 4000).
@@ -287,6 +292,12 @@ class OpenZimMcpServer:
                     attribution, and citation rendering. Returns a
                     SynthesizeResponse dict instead of markdown text.
                     Defaults to False (legacy markdown path unchanged).
+                    NOTE: this is a mode toggle, not a "search harder"
+                    flag. Don't flip it on a follow-up just because the
+                    previous response was unhelpful — refine the `query`
+                    or `offset` instead. The synthesize pipeline runs
+                    one structured query and returns one answer; calling
+                    it twice with the same query yields the same answer.
 
             Returns:
                 Markdown string (synthesize=False) or SynthesizeResponse
