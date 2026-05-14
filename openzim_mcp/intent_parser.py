@@ -159,7 +159,23 @@ def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
 
 
 def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
-    """Shared extractor for get_article / structure / links / toc / summary."""
+    """Shared extractor for get_article / structure / links / toc / summary.
+
+    Locates the LAST keyword (article / entry / page / of / for / in /
+    from / to) and treats everything after it as the entry path. This
+    captures multi-word titles (``United States``, ``World War II``,
+    ``Albert Einstein``) and Wikipedia-legal punctuation like ``@`` (in
+    metadata illustration paths ``M/Illustration_48x48@1``), apostrophes,
+    parens, etc. — all of which the previous ``[A-Za-z0-9_/.-]+`` capture
+    silently truncated, dropping the user at the wrong article (the
+    common silent-fall-through failure mode for ``show structure of
+    United States`` returning the ``United`` disambig page).
+
+    The downstream :meth:`SimpleToolsHandler._resolve_natural_language_path`
+    helper then runs the captured tail through ``find_title_match`` so a
+    free-form title like ``United States`` resolves to the canonical
+    stored path ``United_States``.
+    """
     quoted_match = safe_regex_search(
         rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}", query
     )
@@ -167,16 +183,21 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         params["entry_path"] = quoted_match.group(1)
         return
 
-    # The keyword set intentionally excludes "contents" — for "table of
-    # contents for Biology" we don't want "of contents" to capture
-    # "contents". We use the LAST match rather than the first: queries
-    # like "table of contents for Biology" have multiple keyword hits
-    # ("of <stop-word>", "for <real-target>") and the trailing match is
-    # the actual target the user named.
-    path_pattern = r"(?:article|entry|page|of|for|in|from|to)" r"\s+([A-Za-z0-9_/.-]+)"
-    path_matches = safe_regex_findall(path_pattern, query, re.IGNORECASE)
-    if path_matches:
-        params["entry_path"] = path_matches[-1]
+    # Find every keyword position; take the LAST so that
+    # "table of contents for Biology" picks "Biology" (after "for")
+    # rather than "contents for Biology" (after "of"). The keyword set
+    # intentionally excludes "contents" so the "of contents" pair
+    # doesn't shadow the trailing "for <target>" anchor.
+    keyword_re = re.compile(
+        r"\b(?:article|entry|page|of|for|in|from|to)\s+",
+        re.IGNORECASE,
+    )
+    matches = list(keyword_re.finditer(query))
+    if not matches:
+        return
+    tail = query[matches[-1].end() :].strip().rstrip("?.,;:!").strip()
+    if tail:
+        params["entry_path"] = tail
 
 
 def _extract_binary(query: str, params: Dict[str, Any]) -> None:

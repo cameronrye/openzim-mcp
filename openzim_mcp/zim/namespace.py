@@ -42,6 +42,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def is_human_readable_metadata_key(key: str) -> bool:
+    """A11 post-a11 M1: shared filter for ``M/<key>`` metadata entries that
+    can surface as text-rendered values.
+
+    ``Illustration_*`` keys are binary PNG payloads (favicon-shaped art)
+    that decode-as-utf8 turns into mojibake. Both ``metadata for <file>``
+    (the aggregator at :meth:`Archive._extract_zim_metadata`) and
+    ``walk namespace M`` should agree on what counts as a human-readable
+    metadata key — splitting the filter between the two surfaces produced
+    a 12-vs-13 disagreement (aggregator dropped the illustration; walk
+    kept it). One predicate, one answer.
+    """
+    return not key.startswith("Illustration_")
+
+
 # Human-readable description per ZIM namespace letter; surfaced in the
 # ``list_namespaces`` JSON response.
 _NAMESPACE_DESCRIPTIONS = {
@@ -1588,6 +1603,18 @@ class _NamespaceMixin:
                         },
                     )
 
+                # A11 post-a11 M3: surface a per-namespace denominator
+                # for new-scheme C as well. M / W already plumb their
+                # bounded totals (metadata_keys length / well-known
+                # probe pair); for new-scheme C the iterable surface
+                # IS the C-namespace, so ``archive.entry_count`` is
+                # the authoritative count and the renderer can read
+                # "of N in namespace C" instead of the misleading
+                # "archive total: ~27M" header that the empty-default
+                # fall-through produces.
+                ns_count_c = (
+                    archive_entry_count if has_new_scheme and namespace == "C" else None
+                )
                 return cast(
                     "WalkNamespaceResponse",
                     attach_meta(
@@ -1601,6 +1628,7 @@ class _NamespaceMixin:
                             done=done,
                             next_cursor=next_cursor,
                             archive_entry_count=archive_entry_count,
+                            namespace_entry_count=ns_count_c,
                         )
                     ),
                 )
@@ -1677,7 +1705,16 @@ class _NamespaceMixin:
         from openzim_mcp.pagination import Cursor, archive_identity
 
         try:
-            keys = list(getattr(archive, "metadata_keys", []) or [])
+            keys = [
+                k
+                for k in (getattr(archive, "metadata_keys", []) or [])
+                # A11 post-a11 M1: same filter the metadata-for aggregator
+                # uses (Archive._extract_zim_metadata) so the two surfaces
+                # agree on what counts as a metadata key. Without this,
+                # walk reported 13 entries (incl. binary illustration)
+                # while metadata-for reported 12.
+                if is_human_readable_metadata_key(k)
+            ]
         except Exception as e:
             logger.debug(f"metadata_keys read failed: {e}")
             keys = []

@@ -196,7 +196,14 @@ def _format_filtered_response(
         parts.append(f"Path: {result['path']}\n")
         parts.append(f"Namespace: {result['namespace']}\n")
         parts.append(f"Content Type: {result['content_type']}\n")
-        parts.append(f"Snippet: {result['snippet']}\n\n")
+        # A11 post-a11 L3: same canonical-title-match badge handling as
+        # ``_format_search_text`` so filtered-search results that pick
+        # up the splice (post-a11 H2) use the same shape as plain search.
+        snippet = result.get("snippet", "")
+        if snippet == "(canonical title match)":
+            parts.append("Match type: canonical title match\n\n")
+        else:
+            parts.append(f"Snippet: {snippet}\n\n")
 
     parts.append("---\n")
     has_more = scan.total_filtered_is_lower_bound or (
@@ -664,7 +671,19 @@ class _SearchMixin:
         for i, result in enumerate(results):
             result_text += f"## {offset + i + 1}. {result['title']}\n"
             result_text += f"Path: {result['path']}\n"
-            result_text += f"Snippet: {result['snippet']}\n\n"
+            # A11 post-a11 L3: the canonical-title-match splice (D6 /
+            # _splice_title_match_into_search) injects a synthetic row
+            # whose ``snippet`` is the literal sentinel ``(canonical
+            # title match)``. Rendering that as a snippet line was
+            # confusing — the row looked like Xapian had snippeted the
+            # body to that string. Surface it as a distinct match-type
+            # badge instead so callers don't pipe the sentinel into
+            # downstream snippet processing.
+            snippet = result.get("snippet", "")
+            if snippet == "(canonical title match)":
+                result_text += "Match type: canonical title match\n\n"
+            else:
+                result_text += f"Snippet: {snippet}\n\n"
 
         # O2 (beta): warn when the match count is implausibly high. The
         # canonical example: ``search for the and a is in to`` returns a
@@ -703,6 +722,214 @@ class _SearchMixin:
             )
 
         return result_text
+
+    def search_with_filters_with_canonical_splice(
+        self,
+        zim_file_path: str,
+        query: str,
+        namespace: Optional[str] = None,
+        content_type: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> str:
+        """A11 post-a11 H2: ``search_with_filters`` plus the canonical-
+        title-match splice that plain ``search`` already gets through
+        ``_handle_search`` → ``_splice_title_match_into_search``.
+
+        Pre-fix, ``search for berlin in namespace C`` would return
+        ``List of songs about Berlin`` / ``Berlin (disambiguation)`` /
+        ``Timeline of Berlin`` and silently drop the canonical
+        ``Berlin`` article — even though ``Berlin`` lives in namespace
+        C and is the obvious top hit. The splice was wired into
+        ``_handle_search`` only; ``_handle_filtered_search`` delegated
+        directly to the legacy text path with no promotion. This
+        method runs the same probe + prepend the structured-search
+        path uses, gated to ``offset == 0`` (paged results stay
+        stable) and to canonical hits whose path actually lives in
+        the requested namespace.
+        """
+        if offset != 0:
+            return self.search_with_filters(
+                zim_file_path,
+                query,
+                namespace,
+                content_type,
+                limit,
+                offset,
+            )
+        if limit is None:
+            limit = self.config.content.default_search_limit
+
+        # Probe for the canonical title match BEFORE the filtered
+        # scan; if the canonical isn't reachable in the requested
+        # namespace, just return the legacy result unchanged.
+        from openzim_mcp.title_promotion import (
+            find_title_match,
+            is_strong_title_match,
+        )
+
+        try:
+            canonical = find_title_match(self, zim_file_path, query)
+        except Exception:  # pragma: no cover — defensive
+            canonical = None
+
+        if canonical is None:
+            return self.search_with_filters(
+                zim_file_path,
+                query,
+                namespace,
+                content_type,
+                limit,
+                offset,
+            )
+
+        canonical_path = canonical["path"]
+        # Namespace gate: when a namespace filter is in play, only
+        # splice the canonical if its path lives in that namespace.
+        # New-scheme C has no path prefix; legacy / metadata namespaces
+        # use the ``X/`` prefix convention.
+        if namespace:
+            ns_letter = namespace.strip().upper()
+            path_prefix = (
+                canonical_path.split("/", 1)[0] if "/" in canonical_path else "C"
+            )
+            if path_prefix != ns_letter:
+                return self.search_with_filters(
+                    zim_file_path,
+                    query,
+                    namespace,
+                    content_type,
+                    limit,
+                    offset,
+                )
+        # Same content-type gate when applicable; the title-index probe
+        # doesn't carry mimetype info, so skip the splice rather than
+        # mis-attribute one when the caller filtered by content-type.
+        if content_type:
+            return self.search_with_filters(
+                zim_file_path,
+                query,
+                namespace,
+                content_type,
+                limit,
+                offset,
+            )
+
+        # Get the structured payload, splice, then render via the same
+        # ``_format_filtered_response`` the legacy path uses. The
+        # post-splice ``_FilteredScanState`` is synthesised from the
+        # structured payload's metadata (we know filtered_count, scan
+        # cap state from the page_info hint).
+        payload = self.search_with_filters_data(
+            zim_file_path,
+            query,
+            namespace,
+            content_type,
+            limit,
+            offset,
+        )
+        # A11 post-a11 H3: stable-demote catalog-shape hits below
+        # narrative articles before the splice, mirroring the basic-
+        # search path. ``search for cats in namespace C`` was
+        # surfacing ``Rephlex Records discography`` at rank 1 — same
+        # bug the synthesize layer fixed via Opp2 / _demote_list_articles
+        # but never applied to the filtered-search surface. Cast to
+        # plain ``list[dict[str, Any]]`` so the partition / mutation /
+        # synthetic-row prepend below isn't constrained by the
+        # ``SearchHit`` TypedDict's narrower wire shape (the renderer
+        # only reads the keys we already pass through).
+        from openzim_mcp.synthesize import _is_list_article
+
+        results: List[Dict[str, Any]] = [
+            cast(Dict[str, Any], r) for r in (payload.get("results", []) or [])
+        ]
+        non_list = [r for r in results if not _is_list_article(r)]
+        list_hits = [r for r in results if _is_list_article(r)]
+        results = non_list + list_hits
+        # A11 post-a11 H2 third-pass: build the synthetic canonical row
+        # once so the empty-results path (Xapian filtered to zero) and
+        # the populated-results path (canonical missing or out-of-order)
+        # share the same prepend logic. Pre-fix, the empty-results
+        # branch fell through unchanged — a ``search for X in
+        # namespace C`` that returned zero hits but had a canonical X
+        # in C would still report "0 filtered matches" even though
+        # the canonical existed. Now the canonical lands as a single-
+        # result page with the badge, mirroring how the unfiltered
+        # search surface treats it.
+        synthetic_canonical: Dict[str, Any] = {
+            "path": canonical_path,
+            "title": canonical["title"],
+            "snippet": "(canonical title match)",
+            # The renderer needs ``namespace`` / ``content_type`` so
+            # derive them from the requested filter and the canonical
+            # path's prefix. Defaults match the plain-search shape for
+            # archives without explicit filters.
+            "namespace": namespace
+            or (canonical_path.split("/", 1)[0] if "/" in canonical_path else "C"),
+            "content_type": content_type or "text/html",
+        }
+        if not results:
+            results = [synthetic_canonical]
+        else:
+            top = results[0]
+            if isinstance(top, dict) and is_strong_title_match(
+                query, str(top.get("path") or ""), str(top.get("title") or "")
+            ):
+                return self.search_with_filters(
+                    zim_file_path,
+                    query,
+                    namespace,
+                    content_type,
+                    limit,
+                    offset,
+                )
+            existing_paths = {
+                str(r.get("path", "")) for r in results if isinstance(r, dict)
+            }
+            if canonical_path in existing_paths:
+                # Reorder: move the canonical to position 0 without dup.
+                reordered = [
+                    r
+                    for r in results
+                    if not (
+                        isinstance(r, dict) and str(r.get("path", "")) == canonical_path
+                    )
+                ]
+                promoted_existing = next(
+                    r
+                    for r in results
+                    if isinstance(r, dict) and str(r.get("path", "")) == canonical_path
+                )
+                results = [promoted_existing, *reordered][:limit]
+            else:
+                results = [synthetic_canonical, *results][:limit]
+
+        # Synthesise a ``_FilteredScanState`` from the structured
+        # payload so the render path stays unchanged. Honor the
+        # lower-bound flag from page_info.
+        page_info = payload.get("page_info") or {}
+        total_lower_bound = bool(page_info.get("total_is_lower_bound"))
+        # ``filtered_count`` for the renderer: bump by 1 when we
+        # synthesised a fresh canonical row that wasn't in the
+        # original result set.
+        original_total = int(payload.get("total") or len(results))
+        filtered_count = max(original_total, len(results))
+        synthetic_scan = _FilteredScanState(
+            filtered_count=filtered_count,
+            scanned=0,
+            scan_cap_hit=False,
+            total_filtered_is_lower_bound=total_lower_bound,
+        )
+        filter_text = _format_filter_text(namespace, content_type)
+        return _format_filtered_response(
+            query=query,
+            filter_text=filter_text,
+            results=results,
+            scan=synthetic_scan,
+            total_results=filtered_count,
+            offset=offset,
+            limit=limit,
+        )
 
     def search_with_filters(
         self,
