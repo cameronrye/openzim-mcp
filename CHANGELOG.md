@@ -5,6 +5,178 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a12] — 2026-05-13 (alpha pre-release) — post-a11 beta-test sweep (11+3+1 defects across three passes)
+
+Three-pass beta-test of `v2.0.0a11` against the same 118 GB Wikipedia
+ZIM (Feb 2026 snapshot) the a8 → a11 cuts targeted, via the simple-
+mode `zim_query` MCP surface. The first pass surfaced 11 live defects
++ a handful of opportunities; the second pass self-audited the first-
+pass commit and found 3 more; the third pass self-audited the second-
+pass commit and found 1 deeper case. The 22 → 6 → 3 a10 → a11 shape
+repeats at 11 → 3 → 1.
+
+The single most user-visible defect was `tell me about France`
+silently returning `France_national_football_team_results_(2000–
+2019)` while Germany / Italy / Spain / Brazil / Mexico all returned
+the correct country article — Xapian's top hit was the football
+article and the existing H3 canonical-prepend gate explicitly skipped
+the `len(strong_matches) == 1` non-twin case. The same root-cause
+shape (silent fall-through to a wrong-but-similar article) drove most
+of this sweep's catches.
+
+The two structural root causes — `_extract_entry_path_keyworded`
+regex character class and the early-return suffix-bypass pattern —
+each accounted for multiple defects in different surfaces.
+
+Net: 1493 tests pass (+30 over `v2.0.0a11`), 50 skipped, 38
+deselected. `black` / `isort` / `flake8` / `mypy` / CodeQL /
+SonarCloud all clean.
+
+### Fixed — Critical (post-a11 beta sweep)
+
+- **C1: `tell me about France` returned the football-team article.**
+  Xapian's #1 hit was `France_national_football_team_results_(2000–
+  2019)`, which strong-matched topic=`France` via the candidate-
+  extends-topic rule, leaving `len(strong_matches) == 1` non-twin —
+  the H3 canonical-prepend gate explicitly skipped that case. Gate
+  now also fires when the lone strong match's tokens differ from the
+  topic's, and a sibling auto-pick `_auto_pick_canonical_over_extends_topic`
+  prefers the canonical when the strong-match set is exactly
+  `[canonical-with-topic-tokens, ..._extends-topic-only]`. Mercury /
+  Apollo / Java / DNA forks unchanged. Apollo 11 and similar hub
+  topics now auto-resolve to the canonical with variants surfaced as
+  a `_May also refer to: ..._` footer hint.
+- **C2: multi-word entry-path extraction silently dropped the second
+  word on five operations.** The shared
+  `_extract_entry_path_keyworded` regex used `[A-Za-z0-9_/.-]+` for
+  the capture, so `show structure of United States` matched
+  `of United` and captured `United`. New extractor anchors at the
+  LAST keyword and captures everything that follows, so
+  `World War II`, `Albert Einstein`, `Quantum mechanics` all flow
+  through correctly on `structure` / `summary` / `links` /
+  `get_article` / `toc`.
+
+### Fixed — High (post-a11 beta sweep)
+
+- **H1: title-index lookups for punctuated topics smeared to drop-
+  the-punctuation candidates.** `tell me about C++` resolved past the
+  title index to `C` (the letter); paired with the C2 fix that now
+  preserves `++` through extraction, the punctuation-count guard
+  (`_punctuation_smear_detected`) rejects candidates that drop a
+  `+` / `#` count present in the topic. Known limitation: topic →
+  candidate pairs that preserve the punctuation count (`C++` →
+  `C/C++`) require redirect-target inspection and are deferred.
+- **H2: filtered-search dropped the canonical title-match hit.**
+  `_handle_filtered_search` was a one-call delegate to
+  `search_with_filters` (legacy markdown path), so the splice
+  `_handle_search` runs at offset=0 never fired. New
+  `search_with_filters_with_canonical_splice` runs the same probe +
+  prepend as the basic-search path, gated to canonical hits whose
+  path lives in the requested namespace.
+- **H3: Opp2 list / discography demote was synthesize-layer-only.**
+  `_demote_list_articles` lived inside `synthesize_query`; basic
+  `search` left catalog-shape hits in place at their BM25 rank.
+  Lifted the predicate `_is_list_article` for cross-call use and
+  applied it inside `_splice_title_match_into_search` (basic search)
+  and the new H2 filtered-search splice.
+
+### Fixed — Medium (post-a11 beta sweep)
+
+- **M1: `walk namespace M` and `metadata for` disagreed (13 vs 12
+  keys).** Shared `is_human_readable_metadata_key` predicate now
+  consulted from both sites.
+- **M2: `get article M/Illustration_48x48@1` stripped `@1`.** Same
+  root cause as C2 — fixed by the C2 extractor change.
+- **M3: `walk namespace C` reported "archive total" instead of per-
+  namespace count.** L16's `namespace_entry_count` plumbing now
+  applies to new-scheme C (the count equals `archive.entry_count`).
+- **M4: truncation footer reported remaining-after-offset chars as
+  "total".** Added `original_total` kwarg, plumbed from the three
+  callers in `zim/content.py`. Mid-article reads now switch to
+  `showing chars X–Y of N-char body` so the denominator stays stable
+  across pagination.
+
+### Fixed — Low (post-a11 beta sweep)
+
+- **L1: structured guidance / error responses skipped the Opp6 intent
+  telemetry comment.** Three early-return paths (`Topic Required`,
+  `Search Terms Required`, `Chained Operations Detected`) now carry
+  their own deterministic telemetry comments at `cert=1.00`.
+- **L2: chained-intent splitter left the connector word attached to
+  the left op.** Strip trailing connectors / orphan punctuation so
+  the suggested split-up call is cleanly pasteable.
+- **L3: canonical-title-match snippet rendered as snippet text.** Now
+  surfaced as a distinct `Match type: canonical title match` badge
+  in both `_format_search_text` and `_format_filtered_response`.
+
+### Fixed — Second-pass self-audit (post-a11 sweep)
+
+L1 covered three of the six structured early-return paths in the same
+code section but missed the other three:
+
+- **`Query Required`** (empty / whitespace query) →
+  `intent=query_required cert=1.00`
+- **`_meta_query_guidance`** (meta-only filler queries like `do
+  both` / `try again` / `ok`) → `intent=meta_only_guidance cert=1.00`
+- **`No ZIM File Specified`** (no archive selectable) →
+  `intent=no_zim_file_specified cert=1.00`
+
+### Fixed — Third-pass self-audit (post-a11 sweep)
+
+- H2 splice silently dropped the canonical when
+  `search_with_filters_data` returned 0 hits but `find_title_match`
+  reported the canonical exists in the requested namespace.
+  Symmetric to the bug the first-pass H2 fix addressed (canonical
+  missing from a non-empty result page) — same wrong silent-fall-
+  through, different shape. Hoisted the synthetic-canonical row
+  construction above the populated-vs-empty branch so both paths
+  share the same prepend logic. The empty-results path now lands the
+  canonical as a single-result page with the post-a11 L3 badge.
+
+### Fixed — Quality gate (post-a11 sweep)
+
+- SonarCloud S5852 ReDoS on the L2 orphan-trim regex
+  `\s+(?:and|or|but)\s*$|\s*[;,]\s*$` (multiple unbounded `\s*` /
+  `\s+` quantifiers in alternation). Replaced with string ops that
+  mirror the original "strip one of: trailing connector word OR
+  trailing `;` / `,`" semantics, same approach as the existing
+  `_is_disambig_lead` workaround in the same file.
+
+### Wire-format / surface changes (alpha-line clean breaks)
+
+- **`tell me about` auto-resolves to the canonical when the strong-
+  match set is `[canonical-with-topic-tokens, ..._extends-topic-only]`**
+  (Apollo 11, Pride and Prejudice, hub topics with parenthesized
+  siblings). Variants are surfaced as a `_May also refer to: ..._`
+  footer hint instead of the prior disambig fork. Genuine multi-
+  meaning topics (Apollo / Mercury / Java / DNA) still fork as
+  before.
+- **`show structure of` (and `summary` / `links` / `get article` /
+  `table of contents` of) actually accept multi-word titles.** Pre-
+  fix these silently truncated to the first word and rendered the
+  wrong article.
+- **Filtered-search responses include canonical title-match hits**
+  with a distinct `Match type: canonical title match` badge instead
+  of dropping them silently.
+- **`tell me about C++` (or any topic with `+` / `#`) no longer
+  resolves to a candidate that dropped the punctuation.** Falls
+  through to search-fallback where canonical-title-match can find
+  the actual `_programming_language`-suffixed article.
+- **`get article M/Illustration_48x48@1` (or any path with `@`)
+  preserves the suffix through extraction.** Pre-fix the regex
+  character class stripped `@1` before the metadata API saw it.
+- **Walk-namespace M and metadata-for now agree** on the metadata-
+  key set (filtered `Illustration_*` binaries on both sides).
+- **Walk-namespace C reports `(of N in namespace C)`** instead of
+  `(archive total: ~N entries)` for new-scheme archives.
+- **Truncation footer denominator stays stable across pagination.**
+  Mid-article reads switch to `showing chars X–Y of N-char body` so
+  a caller paging through a 146 KB article doesn't see the "total"
+  decrease with every page.
+- **Every structured guidance / error response carries an intent
+  telemetry comment** so callers branching on
+  `<!-- intent=... cert=... -->` see the rejection class.
+
 ## [2.0.0a11] — 2026-05-13 (alpha pre-release) — post-a10 beta-test sweep (22+6+3 defects + 7 opportunities across three passes)
 
 Three-pass beta-test of `v2.0.0a10` against a 118 GB Wikipedia ZIM
