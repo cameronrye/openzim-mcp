@@ -5,6 +5,181 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a13] — 2026-05-14 (alpha pre-release) — post-a12 beta-test sweep (8 defects across three passes)
+
+Three-pass beta-test of `v2.0.0a12` against the same 118 GB Wikipedia
+ZIM (Feb 2026 snapshot) the a8 → a12 cuts targeted, via the simple-
+mode `zim_query` MCP surface. The pattern across the alpha series
+continues to diminish (a10: 22+6+3, a11: 11+3+1, a12: ~6+2+0 split
+across the same three-pass shape — first pass surfaced six defects,
+second pass two structural gaps, third pass zero new).
+
+The single most user-visible defect was `search for Berlin in
+namespace C` rendering `List_of_songs_about_Berlin` at rank #1 with
+the canonical `Berlin` article absent. The H2 canonical-splice gate
+short-circuited to the legacy `search_with_filters` whenever the top
+BM25 hit token-prefix-matched the topic — `is_strong_title_match`
+returns True for any candidate that extends the topic
+(`Berlin_(disambiguation)` extends `Berlin`), so the splice never
+fired for new-scheme archives that have a disambig page for the
+topic. Tightening the gate to require exact path equality fixes the
+H2/H3 surface end-to-end for every shape, not just the case the a12
+third-pass self-audit addressed.
+
+The recurring infobox-cell concatenation bug (`5th in Europe1st in
+Germany`) got its final user-visible fix this cycle: the a10/a11
+sweep added a space separator between block-level cell children, but
+a downstream small LLM still tokenised `5th in Europe 1st in
+Germany` as one phrase. The block-cell joiner now emits `"; "`
+between block boundaries so each value reads as a distinct item.
+
+Net: 1513 tests pass (+20 over `v2.0.0a12`), 50 skipped, 38
+deselected. `black` / `isort` / `flake8` / `mypy` all clean.
+
+### Fixed — High (post-a12 beta sweep)
+
+- **D1: orphan-bullet sub-rows chained the previous row's full label
+  as their parent.** `tell me about France` rendered
+  `**Government — • President:** Macron` (correct) but then
+  `**• President — • Prime Minister:** Lecornu`,
+  `**• Prime Minister — • President of the Senate:** Larcher`
+  (wrong — the parent kept shifting). Same shape in the USA infobox.
+  Berlin's `Government` sub-rows happened to render correctly because
+  Wikipedia marked them differently in HTML. Root cause: the
+  virtual-parent extractor for orphan-bullet rows used
+  `prev_label.split(" — ", 1)[-1]` (trailing segment) instead of
+  `[0]` (original parent). Each bullet row's parent inherited the
+  PREVIOUS bullet's label rather than the constant section parent.
+  Fixed by taking the original parent.
+- **D2: `list_namespaces` reports M=13 while `walk namespace M` /
+  `metadata for` report 12.** The a12 M1 fix plumbed the shared
+  `is_human_readable_metadata_key` predicate to two of three
+  reporting surfaces but missed `_add_new_scheme_metadata_namespace`
+  in the namespace walker. `list_namespaces` reported the raw libzim
+  count (13, including the `Illustration_48x48@1` binary entry)
+  while the other two filtered. Added the predicate to the third
+  site so all three surfaces agree on 12.
+- **D3 / D4: chained-intent splitter missed two recurring-set
+  shapes.** `Biology; Chemistry` (bare topics, `;` connector) fell
+  through to topic-fetch and resolved to `Computational_Biology_&_
+  Chemistry` (a journal). `tell me about Photosynthesis and then
+  about DNA` (single-imperative-prefix continuation, right side is
+  `about DNA`) fell through to full-text search on the literal
+  phrase. The splitter required an operation verb on BOTH sides of
+  the connector. D3 adds a bare-topic-chain branch that wraps both
+  halves with `tell me about` when the connector is unambiguous
+  (`;` / `then` / `and then` / `after that` / `, then`) AND both
+  halves are topic-shaped (≤6 tokens, no internal connectors). D4
+  adds a continuation-prefix branch that re-prefixes the right half
+  with the left's verb when the right starts with
+  `about` / `of` / `for` / `with` / `on` / `in` / `into` / `to`. A
+  negative-case guard prevents the bare-topic branch from
+  over-triggering when a half is JUST an operation verb prefix with
+  no topic content (``tell me about then and now`` — the connector
+  was inside the topic name, not a chain marker).
+- **D5: H2 canonical-splice early-return fired on any token-prefix
+  strong match.** The gate at the top of the populated-results
+  branch invoked `is_strong_title_match(query, top.path, top.title)`
+  to decide whether to short-circuit to the legacy
+  `search_with_filters` path (avoiding canonical duplication when
+  BM25 already returned a strong hit). But the matcher returns True
+  for any candidate that extends the topic via prefix
+  (`Berlin_(disambiguation)` extends `Berlin`,
+  `Apollo_(disambiguation)` extends `Apollo`,
+  `List_of_…_named_after_X` extends `X`). For new-scheme Wikipedia
+  archives — where a disambig page nearly always sits next to the
+  canonical — the gate fired on the disambig and the splice never
+  ran. Tightened to `top_path == canonical_path` so the splice's
+  reorder logic handles canonical promotion in every other shape.
+  As a side effect this also unblocks H3's list-article demote,
+  which lives inside the same splice block.
+
+### Fixed — Medium (post-a12 beta sweep)
+
+- **D6: L2 trailing-punctuation trim only stripped one category per
+  call.** `tell me about DNA, and then tell me about Photosynthesis`
+  split on ` then ` to left=`tell me about DNA, and` (after
+  trimming) → only the orphan `and` got stripped, the trailing `,`
+  stayed. The `for/else` shape entered the punctuation branch only
+  when no connector matched. Reworked to loop until stable so the
+  trim handles any combination of orphan connector word + trailing
+  `;`/`,` in any order.
+- **D7: block-level cell separator was a bare space — final fix.**
+  The a10/a11 fix turned `5th in Europe1st in Germany` into
+  `5th in Europe 1st in Germany` (space separator at block
+  boundaries) so cells with `<br>`/`<li>`/`<p>` children no longer
+  concatenated without a separator. But downstream LLMs still
+  tokenised the space-separated form as a single phrase. Upgraded
+  the block-cell joiner to emit `"; "` between block boundaries so a
+  population-rank cell like `<td>5th in Europe<br>1st in
+  Germany</td>` renders as `5th in Europe; 1st in Germany` — two
+  distinct values, same row label. Inline span groups (number
+  formatting `3,913,644`, coordinates `52°31′N`) still concatenate
+  directly per the a11 second-pass invariant.
+
+### Fixed — Low (post-a12 beta sweep)
+
+- **D8: legacy unstructured `**Error Processing Query**` template
+  on four not-found surfaces.** `show structure of nonexistent_x`,
+  `summary of nonexistent_x`, `get article nonexistent_x`, and
+  `links in nonexistent_x` all let their backend exception
+  propagate to the top-level `handle_zim_query` `except` block,
+  which emitted a generic template with: no intent telemetry
+  comment (`<!-- intent=... cert=... -->` was added in a12 L1 but
+  only for the structured early-return paths), Python helper-name
+  leakage (`Try using search_zim_file()` / `browse_namespace()` —
+  none of which are MCP-surface commands), and unhelpful
+  troubleshooting refs (`Check server logs` — not accessible from
+  the MCP surface). `articles related to nonexistent_x` was
+  already modernised in a10 F3. Added a
+  `_render_not_found_recovery` helper that returns the modernised
+  shape (`**Article not found: \`path\`**` + `suggestions for` /
+  `find article titled` / `search for` recovery) and wrapped the
+  four handler delegations with `try/except`. The outer
+  `handle_zim_query` now layers the intent telemetry on success
+  because the handlers return a string instead of raising.
+
+### Wire-format / surface changes (alpha-line clean breaks)
+
+- **`tell me about France` renders consecutive bullet sub-rows
+  consistently anchored to the section parent.** Pre-fix every
+  Wikipedia country article showed a chained sequence like
+  `**• President — • Prime Minister:** ...` /
+  `**• Prime Minister — • President of the Senate:** ...`. Post-fix
+  each row reads `**Government — • Prime Minister:** ...`.
+- **`list_namespaces` reports M=12 (matching `walk namespace M` and
+  `metadata for`)** for archives whose only non-human-readable M
+  entry is `Illustration_*`. Pre-fix M=13.
+- **`Biology; Chemistry` is detected as a chained query.** Pre-fix
+  it silently resolved to `Computational_Biology_&_Chemistry`.
+  Other bare-topic chains (`DNA then Photosynthesis`, `Berlin and
+  then Munich`) likewise.
+- **`tell me about X and then about Y` is detected as a chained
+  query.** Pre-fix the right half (`about Y`) wasn't recognised as
+  an op verb continuation; the query fell through to full-text
+  search on the literal phrase.
+- **`tell me about then and now` (a topic whose name contains
+  `then`) passes through unchanged.** The bare-topic chain branch
+  guards against incomplete-verb halves so connector-in-topic
+  queries aren't mis-classified.
+- **`search for Berlin in namespace C` returns the canonical
+  `Berlin` at rank #1.** Pre-fix it returned
+  `[List_of_songs_about_Berlin, Berlin_(disambiguation),
+  Timeline_of_Berlin]` with the canonical absent. Similar shape on
+  every namespace-C archive that has a disambig page for the topic.
+- **L2 chained-intent trim handles both orphan connectors and
+  trailing punctuation.** `tell me about DNA, and then …` renders
+  the left op as `tell me about DNA` (no trailing `,` or `and`).
+- **Wikipedia infobox cells with `<br>`-separated values render with
+  a `"; "` separator between values.** `**Rank:** 5th in Europe; 1st
+  in Germany` instead of `5th in Europe 1st in Germany`. Inline
+  span groups (number formatting, coordinates) unchanged.
+- **`show structure of` / `summary of` / `get article` / `links in`
+  not-found responses are structured guidance with intent telemetry
+  and concrete recovery commands.** Same shape `articles related
+  to` has carried since a10. Pre-fix these four used a legacy
+  template with no telemetry and Python helper-name leakage.
+
 ## [2.0.0a12] — 2026-05-13 (alpha pre-release) — post-a11 beta-test sweep (11+3+1 defects across three passes)
 
 Three-pass beta-test of `v2.0.0a11` against the same 118 GB Wikipedia
