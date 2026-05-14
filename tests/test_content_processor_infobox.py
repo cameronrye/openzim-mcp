@@ -108,17 +108,21 @@ def test_d1_infobox_cell_text_separated(processor):
     Germany``, ``Berliner(s) (English)Berliner (m)``, ``0.967very
     high``, ``TokyoTamaNorthern Izu Islands``. The fix uses a
     block-level-aware text join (``_join_cell_text``) so block tags
-    inject whitespace while inline spans concatenate directly.
+    inject a value-separator while inline spans concatenate directly.
+
+    a13 D7: upgraded separator from bare ``" "`` to ``"; "`` so a
+    downstream LLM reading the row sees two distinct values rather
+    than a continuous phrase.
     """
     soup = BeautifulSoup(CONCAT_INFOBOX_HTML, "html.parser")
     rows = {r["label"]: r["value"] for r in processor.extract_infobox(soup)}
-    # ``<br>``-separated values (block-level) get a separator.
-    assert rows["Rank"] == "5th in Europe 1st in Germany"
+    # ``<br>``-separated values (block-level) get a ``; `` separator.
+    assert rows["Rank"] == "5th in Europe; 1st in Germany"
     assert (
         rows["Demonyms"]
-        == "Berliner(s) (English) Berliner (m), Berlinerin (f) (German)"
+        == "Berliner(s) (English); Berliner (m), Berlinerin (f) (German)"
     )
-    assert rows["HDI (2022)"] == "0.967 very high · 2nd of 16"
+    assert rows["HDI (2022)"] == "0.967; very high · 2nd of 16"
     # Adjacent ``<span>`` children (inline) concatenate directly in
     # the helper, but each span here ends with text immediately
     # followed by the next span — Wikipedia uses this pattern for
@@ -157,7 +161,7 @@ def test_d1_inline_span_groups_concatenate_without_separator(processor):
     assert rows["Area km2"] == "891.3"
     assert rows["Coordinates"] == "52°31′N 13°23′E"
     # And the block-level case still works alongside.
-    assert rows["Multi line"] == "5th in Europe 1st in Germany"
+    assert rows["Multi line"] == "5th in Europe; 1st in Germany"
 
 
 COMMENT_INFOBOX_HTML = """

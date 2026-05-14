@@ -739,25 +739,93 @@ class SimpleToolsHandler:
             # of: trailing connector word OR trailing ;/, " semantics
             # with no backtracking risk — same approach as
             # ``_is_disambig_lead`` below.
+            # a13 D6: trim until stable so we strip BOTH an orphan
+            # connector word AND a trailing ``;`` / ``,`` when both are
+            # present (e.g. ``tell me about DNA, and`` → ``tell me about
+            # DNA``). Pre-fix, the ``for/else`` structure only entered
+            # the punctuation branch when no connector matched, so
+            # ``tell me about DNA, and then …`` left the trailing comma
+            # unstripped after the ``and`` was removed.
             left = left.rstrip()
-            lower_left = left.lower()
-            for _conn in ("and", "or", "but"):
-                _n = len(_conn)
-                if (
-                    lower_left.endswith(_conn)
-                    and len(left) > _n
-                    and left[-_n - 1].isspace()
-                ):
-                    left = left[:-_n].rstrip()
-                    break
-            else:
-                if left and left[-1] in ";,":
+            while left:
+                trimmed = False
+                lower_left = left.lower()
+                for _conn in ("and", "or", "but"):
+                    _n = len(_conn)
+                    if (
+                        lower_left.endswith(_conn)
+                        and len(left) > _n
+                        and left[-_n - 1].isspace()
+                    ):
+                        left = left[:-_n].rstrip()
+                        trimmed = True
+                        break
+                if not trimmed and left[-1] in ";,":
                     left = left[:-1].rstrip()
+                    trimmed = True
+                if not trimmed:
+                    break
             if not left:
                 continue
-            if cls._CHAINED_OPERATION_PREFIX_RE.match(
-                left
-            ) and cls._CHAINED_OPERATION_PREFIX_RE.match(right):
+            # a13 D3 negative-case guard: append a space before the
+            # prefix match so the regex's trailing ``\s+`` is satisfied
+            # even when a half is JUST an operation verb prefix with
+            # no topic content (``tell me about``). Without this,
+            # ``tell me about then and now`` (a topic whose name
+            # contains ``then``) split into left=``tell me about`` /
+            # right=``and now``; pre-guard, the regex rejected the
+            # bare verb (no content after), the D3 bare-topic branch
+            # then mis-classified both halves as plain topics and
+            # wrapped them with ``tell me about`` — chained guidance
+            # fired for a single-topic query.
+            left_is_op = bool(cls._CHAINED_OPERATION_PREFIX_RE.match(left + " "))
+            right_is_op = bool(cls._CHAINED_OPERATION_PREFIX_RE.match(right + " "))
+            # a13 D4: single-imperative-prefix continuation. ``tell me
+            # about Photosynthesis and then about DNA`` splits to
+            # left=``tell me about Photosynthesis`` (operation) /
+            # right=``about DNA`` (continuation phrase that implicitly
+            # inherits the left's verb). Pre-fix, the right side failed
+            # the prefix regex (``about`` alone isn't an op verb) and
+            # the splitter fell through to topic-fetch full-text
+            # search on the literal concatenation. Recognise the
+            # continuation shape and re-prefix the right so the user
+            # sees the implied second call.
+            if left_is_op and not right_is_op:
+                cont_m = re.match(
+                    r"^(?:about|of|for|with|on|in|into|to)\s+(\S.*)$",
+                    right,
+                    re.IGNORECASE,
+                )
+                if cont_m:
+                    # Project the left's leading verb onto the right's
+                    # bare topic. ``tell me about X and then about Y``
+                    # becomes ``tell me about Y`` on the right.
+                    verb_m = cls._CHAINED_OPERATION_PREFIX_RE.match(left)
+                    if verb_m:
+                        right = f"{verb_m.group(0).strip()} {cont_m.group(1).strip()}"
+                        right_is_op = True
+            # a13 D3: bare-topic chains on a strong connector
+            # (``Biology; Chemistry``, ``DNA then Photosynthesis``).
+            # Neither half has an operation verb. Pre-fix, this fell
+            # through to topic-fetch, where the literal concatenation
+            # got fuzzy-resolved to a tangentially-related article
+            # (``Biology; Chemistry`` → ``Computational_Biology_&_
+            # Chemistry``). When the connector is unambiguous (``;`` or
+            # ``then``/``and then``/``after that``/``, then``) AND both
+            # halves are topic-shaped (short, no internal connectors),
+            # treat as chained and recommend explicit ``tell me about``
+            # wrapping.
+            if (
+                not left_is_op
+                and not right_is_op
+                and cls._is_strong_chain_connector(connector_pat)
+                and cls._is_topic_shaped(left)
+                and cls._is_topic_shaped(right)
+            ):
+                left = f"tell me about {left}"
+                right = f"tell me about {right}"
+                left_is_op = right_is_op = True
+            if left_is_op and right_is_op:
                 return (
                     "**Chained Operations Detected**\n\n"
                     "**Issue**: your query looks like two separate "
@@ -770,6 +838,90 @@ class SimpleToolsHandler:
                     "calls so each gets its own response.\n"
                 )
         return None
+
+    # a13 D3: connectors strong enough to imply chaining even when
+    # neither half carries an operation verb. ``,`` alone is excluded
+    # — comma can legitimately appear inside a topic (``Vienna, Austria``).
+    _STRONG_CHAIN_CONNECTOR_PATS = frozenset(
+        {
+            r"\s+then\s+",
+            r"\s+after\s+that\s+",
+            r"\s*;\s+",
+            r"\s+and\s+then\s+",
+            r"\s+,\s+then\s+",
+        }
+    )
+
+    @classmethod
+    def _is_strong_chain_connector(cls, connector_pat: str) -> bool:
+        return connector_pat in cls._STRONG_CHAIN_CONNECTOR_PATS
+
+    # a13 D3: tokens that look like the start of an operation verb
+    # prefix. ``_is_topic_shaped`` rejects phrases containing these
+    # so ``tell me about then and now`` (a single topic with prose
+    # connectives) doesn't get mis-wrapped as a chained query when
+    # the partial-prefix left ("tell me about") fails the op-verb
+    # regex but is clearly not a bare topic phrase. Mirrors the
+    # operation verb roots in ``_CHAINED_OPERATION_PREFIX_RE``.
+    _OP_VERB_TOKENS = frozenset(
+        {
+            "list",
+            "show",
+            "get",
+            "find",
+            "search",
+            "browse",
+            "tell",
+            "describe",
+            "explain",
+            "walk",
+            "links",
+            "suggestions",
+            "summary",
+            "metadata",
+            "table",
+            "main",
+            "articles",
+            "article",
+            "who",
+            "what",
+        }
+    )
+
+    @classmethod
+    def _is_topic_shaped(cls, text: str) -> bool:
+        """Return True iff ``text`` looks like a bare topic phrase
+        (short, no internal connectors/punctuation that would suggest
+        a sentence or a different operation).
+
+        Caps at 6 tokens to avoid mis-classifying free prose as a
+        chained topic. Rejects strings that contain stray operation
+        verbs or question words mid-phrase, since the splitter would
+        have caught those on the operation-prefix path.
+        """
+        stripped = text.strip()
+        if not stripped or len(stripped) > 80:
+            return False
+        tokens = stripped.split()
+        if not tokens or len(tokens) > 6:
+            return False
+        lower = stripped.lower()
+        # Reject if the bare topic contains chain-internal markers
+        # (multiple commas, semicolons, "then" mid-phrase) — those
+        # indicate a more complex query the splitter shouldn't
+        # auto-wrap.
+        if any(c in lower for c in (";", " then ", " and then ")):
+            return False
+        # a13: reject phrases containing operation-verb tokens.
+        # ``tell me about`` looks like a bare topic by token count
+        # but is actually an incomplete operation prefix that the
+        # main regex rejected because the trailing topic is missing.
+        # Auto-wrapping it would produce nonsense like
+        # ``tell me about tell me about``.
+        lower_tokens = [t.lower().strip(".,;:!?") for t in tokens]
+        if any(t in cls._OP_VERB_TOKENS for t in lower_tokens):
+            return False
+        return True
 
     @staticmethod
     def _search_query_tail(query: str) -> Optional[str]:
@@ -1306,6 +1458,52 @@ class SimpleToolsHandler:
             options.get("offset", 0),
         )
 
+    # a13 D8: backend "entry not found" messages occasionally leak
+    # Python helper names (``search_zim_file()`` / ``browse_namespace()``)
+    # that don't exist on the MCP surface. Strip them so the recovery
+    # message lists only commands the caller can actually issue.
+    _BACKEND_API_LEAK_RE = re.compile(
+        r"\s*Try using \w+\(\)[^.]*\.?",
+    )
+
+    def _render_not_found_recovery(
+        self,
+        entry_path: str,
+        exc: Exception,
+        op_label: str,
+    ) -> str:
+        """Render a structured "entry not found" response for handlers
+        whose underlying backend call raised on an unknown entry path.
+
+        Pre-a13, the four handlers ``show structure of`` / ``summary of`` /
+        ``get article`` / ``links in`` propagated the exception up to the
+        top-level ``handle_zim_query`` ``except`` block, which emitted a
+        generic ``**Error Processing Query**`` template with no intent
+        telemetry, leaked Python function names from the backend error
+        text (``Try using search_zim_file()``), and pointed callers at
+        ``Check server logs`` (which the MCP surface can't see). a13 D8
+        modernises the four sites to match the shape ``_handle_related``
+        already used: a clear article path in the title, a sanitized
+        error body, and three concrete recovery commands the caller can
+        paste back. The outer ``handle_zim_query`` then layers the
+        ``<!-- intent=... cert=... -->`` telemetry comment on success
+        — which now fires because the handler returned a string instead
+        of raising.
+        """
+        err = sanitize_context_for_error(str(exc))
+        err = self._BACKEND_API_LEAK_RE.sub("", err).strip()
+        recovery_path = entry_path[:60]
+        return (
+            f"**Article not found: `{entry_path}`**\n\n"
+            f"`{op_label} {entry_path}` failed: {err}\n\n"
+            "**Try one of these to recover:**\n"
+            f"- `suggestions for {recovery_path}` — autocomplete to "
+            "catch typos / partial names\n"
+            f"- `find article titled {entry_path}` — title-index "
+            "lookup with fuzzy fallback\n"
+            f"- `search for {entry_path}` — full-text search\n"
+        )
+
     def _resolve_natural_language_path(
         self, zim_file_path: str, entry_path: str
     ) -> str:
@@ -1372,18 +1570,21 @@ class SimpleToolsHandler:
                 "'structure of \"C/Evolution\"'"
             )
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
-        if options.get("compact", False):
-            # Skip the per-heading ``preview`` field (~3000 chars each;
-            # 10 sections × 3000 = 30k+ char response). Structure is for
-            # navigation — knowing which sections exist is enough for an
-            # LLM to choose where to drill in next via ``summary of <path>``
-            # or ``get article <path>``. Drops the response from ~17k to
-            # ~1-2k chars on a typical Wikipedia article.
-            payload = self.zim_operations.get_article_structure_data(
-                zim_file_path, entry_path
-            )
-            return compact_renderers.compact_structure_payload(payload)
-        return self.zim_operations.get_article_structure(zim_file_path, entry_path)
+        try:
+            if options.get("compact", False):
+                # Skip the per-heading ``preview`` field (~3000 chars each;
+                # 10 sections × 3000 = 30k+ char response). Structure is for
+                # navigation — knowing which sections exist is enough for an
+                # LLM to choose where to drill in next via ``summary of <path>``
+                # or ``get article <path>``. Drops the response from ~17k to
+                # ~1-2k chars on a typical Wikipedia article.
+                payload = self.zim_operations.get_article_structure_data(
+                    zim_file_path, entry_path
+                )
+                return compact_renderers.compact_structure_payload(payload)
+            return self.zim_operations.get_article_structure(zim_file_path, entry_path)
+        except Exception as e:
+            return self._render_not_found_recovery(entry_path, e, "show structure of")
 
     def _handle_toc(
         self,
@@ -1425,12 +1626,15 @@ class SimpleToolsHandler:
                 "'summarize \"C/Evolution\"'"
             )
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
-        return self.zim_operations.get_entry_summary(
-            zim_file_path,
-            entry_path,
-            options.get("max_words", 200),
-            compact=options.get("compact", False),
-        )
+        try:
+            return self.zim_operations.get_entry_summary(
+                zim_file_path,
+                entry_path,
+                options.get("max_words", 200),
+                compact=options.get("compact", False),
+            )
+        except Exception as e:
+            return self._render_not_found_recovery(entry_path, e, "summary of")
 
     def _handle_get_section(
         self,
@@ -1623,26 +1827,29 @@ class SimpleToolsHandler:
                 "'links from \"C/Evolution\"'"
             )
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
-        if options.get("compact", False):
-            # Wikipedia-scale articles like "Photosynthesis" produce
-            # ~2,000 internal links and ~400 external in the legacy
-            # response — at ~150 chars per link object that's ~36k char
-            # JSON, ~9k tokens. In compact mode use a much tighter
-            # default limit and render a flat markdown list of just
-            # ``- text -> path`` per link, dropping the per-link object
-            # shape entirely. Drops the response from ~36k to ~2k chars.
-            limit = options.get("limit") or 20
-            # v2 Phase B: extract_article_links_data returns one category
-            # per call. The compact view shows internal + external; fetch
-            # both and pass merged data to the renderer.
-            internal = self.zim_operations.extract_article_links_data(
-                zim_file_path, entry_path, limit=limit, offset=0, kind="internal"
-            )
-            external = self.zim_operations.extract_article_links_data(
-                zim_file_path, entry_path, limit=limit, offset=0, kind="external"
-            )
-            return compact_renderers.render_links(internal, external)
-        return self.zim_operations.extract_article_links(zim_file_path, entry_path)
+        try:
+            if options.get("compact", False):
+                # Wikipedia-scale articles like "Photosynthesis" produce
+                # ~2,000 internal links and ~400 external in the legacy
+                # response — at ~150 chars per link object that's ~36k char
+                # JSON, ~9k tokens. In compact mode use a much tighter
+                # default limit and render a flat markdown list of just
+                # ``- text -> path`` per link, dropping the per-link object
+                # shape entirely. Drops the response from ~36k to ~2k chars.
+                limit = options.get("limit") or 20
+                # v2 Phase B: extract_article_links_data returns one category
+                # per call. The compact view shows internal + external; fetch
+                # both and pass merged data to the renderer.
+                internal = self.zim_operations.extract_article_links_data(
+                    zim_file_path, entry_path, limit=limit, offset=0, kind="internal"
+                )
+                external = self.zim_operations.extract_article_links_data(
+                    zim_file_path, entry_path, limit=limit, offset=0, kind="external"
+                )
+                return compact_renderers.render_links(internal, external)
+            return self.zim_operations.extract_article_links(zim_file_path, entry_path)
+        except Exception as e:
+            return self._render_not_found_recovery(entry_path, e, "links in")
 
     def _handle_binary(
         self,
@@ -1747,13 +1954,16 @@ class SimpleToolsHandler:
         # prefix) to keep the direct-path lookup zero-cost.
         if " " in entry_path and "/" not in entry_path:
             entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
-        return self.zim_operations.get_zim_entry(
-            zim_file_path,
-            entry_path,
-            options.get("max_content_length"),
-            options.get("content_offset", 0),
-            compact=options.get("compact", False),
-        )
+        try:
+            return self.zim_operations.get_zim_entry(
+                zim_file_path,
+                entry_path,
+                options.get("max_content_length"),
+                options.get("content_offset", 0),
+                compact=options.get("compact", False),
+            )
+        except Exception as e:
+            return self._render_not_found_recovery(entry_path, e, "get article")
 
     def _handle_search(
         self,

@@ -214,10 +214,17 @@ class _NamespaceMixin:
         omit M for every modern archive.
         """
         try:
-            keys = list(getattr(archive, "metadata_keys", []) or [])
+            raw_keys = list(getattr(archive, "metadata_keys", []) or [])
         except Exception as e:
             logger.debug(f"Unable to read metadata_keys: {e}")
             return
+        # a13 D2: filter through the shared predicate so list_namespaces,
+        # walk namespace M, and metadata-for agree on the same bucket size.
+        # Pre-fix, list_namespaces reported M=13 (raw libzim count, includes
+        # the ``Illustration_*`` binary entry) while the other two reported
+        # M=12. The a12 M1 fix plumbed the predicate to walk + metadata-for
+        # but missed this third surface.
+        keys = [k for k in raw_keys if is_human_readable_metadata_key(k)]
         if not keys:
             return
         # ``metadata_keys`` is an exhaustive enumeration of M, so the

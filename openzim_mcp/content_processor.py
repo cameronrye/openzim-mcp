@@ -49,24 +49,35 @@ _BLOCK_CELL_TAGS = frozenset(
 )
 
 
+_BLOCK_CELL_SEPARATOR = "\x00"  # internal sentinel; replaced post-collapse
+
+
 def _join_cell_text(cell: Tag) -> str:
     """Extract a table-cell's text, separating block-level children
-    with whitespace and concatenating inline children directly.
+    with a value-separator (``; ``) and concatenating inline children
+    directly.
 
     This is the safer alternative to ``cell.get_text(separator=" ")``:
     the BeautifulSoup default emits the separator between EVERY
     descendant Tag's text, which corrupts inline span groups used
     for number formatting (``3,913,644``), units (``891.3``), and
     coordinate templates. Iterating descendants ourselves and only
-    inserting whitespace at block-level tag boundaries (and
-    ``<br>``) keeps the inline forms intact while still fixing the
-    multi-line concatenation cases the original bug report flagged
-    (``5th in Europe1st in Germany``, ``Berliner(s) (English)Berliner
-    (m)``, ``TokyoTamaNorthern Izu Islands``).
+    inserting a separator at block-level tag boundaries (``<br>``,
+    ``<li>``, ``<p>``) keeps the inline forms intact while flagging
+    multi-value cells with an explicit value boundary.
 
-    The outer ``" ".join(text.split())`` collapses any whitespace
-    runs the insertion produces, so legitimate text like
-    ``"New York"`` survives.
+    a13 D7: the previous version emitted a bare ``" "`` at block
+    boundaries, which left ``<td>5th in Europe<br>1st in Germany</td>``
+    rendering as ``5th in Europe 1st in Germany`` — a downstream LLM
+    saw the two values as one continuous phrase. Emit ``"; "``
+    instead so the cell value reads as
+    ``5th in Europe; 1st in Germany`` — two distinct items, same row.
+
+    A sentinel character (``\\x00``) marks the block boundary during
+    descendant traversal, then the post-collapse pass converts it to
+    ``"; "``. This preserves the existing whitespace-collapse semantics
+    (so ``"New York"`` from inline spans survives) without the sentinel
+    being absorbed into a whitespace run.
     """
     parts: List[str] = []
     for el in cell.descendants:
@@ -82,8 +93,17 @@ def _join_cell_text(cell: Tag) -> str:
         if isinstance(el, NavigableString):
             parts.append(str(el))
         elif isinstance(el, Tag) and el.name in _BLOCK_CELL_TAGS:
-            parts.append(" ")
-    return " ".join("".join(parts).split())
+            parts.append(f" {_BLOCK_CELL_SEPARATOR} ")
+    # Collapse whitespace per chunk while preserving sentinels, then
+    # convert sentinels to the user-facing separator. Adjacent
+    # sentinels (empty block boundaries from nested ``<ul>`` → ``<li>``)
+    # collapse to a single separator and leading/trailing sentinels
+    # are dropped so cells whose only block-level children are empty
+    # wrappers don't render with stray ``; `` prefixes.
+    raw = "".join(parts)
+    chunks = [c.strip() for c in raw.split(_BLOCK_CELL_SEPARATOR)]
+    chunks = [" ".join(c.split()) for c in chunks if c.strip()]
+    return "; ".join(chunks)
 
 
 # BeautifulSoup parser name; pinned so the dependency footprint stays minimal
@@ -710,7 +730,22 @@ class ContentProcessor:
                     ):
                         prev_label = rows[-1].get("label", "")
                         if prev_label:
-                            virtual_parent = prev_label.split(" — ", 1)[-1]
+                            # a13 D1: take the ORIGINAL parent (segment
+                            # before the first ``—``), not the trailing
+                            # segment. Pre-fix, France rendered as
+                            # ``Government — • President`` →
+                            # ``• President — • Prime Minister`` →
+                            # ``• Prime Minister — • President of the
+                            # Senate`` — each bullet row inherited the
+                            # PREVIOUS bullet's full label, chaining
+                            # them. ``split(" — ", 1)[0]`` keeps the
+                            # constant ``"Government"`` parent across
+                            # consecutive bullet rows (matching how
+                            # Berlin's ``Government`` rows already
+                            # render). Falls back to the full label
+                            # when there's no ``—`` (the row had no
+                            # parent prefix to begin with).
+                            virtual_parent = prev_label.split(" — ", 1)[0]
                     # Prefix with current section when present so labels
                     # disambiguate across sections. Drop the prefix when
                     # the label already starts with the section name

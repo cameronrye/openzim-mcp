@@ -28,6 +28,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.title_promotion import find_title_match
 
 # Mirror ``openzim_mcp.zim.archive.MAX_REDIRECT_DEPTH`` without importing
 # it directly — archive.py imports this module, so the reverse-import
@@ -763,11 +764,12 @@ class _SearchMixin:
         # Probe for the canonical title match BEFORE the filtered
         # scan; if the canonical isn't reachable in the requested
         # namespace, just return the legacy result unchanged.
-        from openzim_mcp.title_promotion import (
-            find_title_match,
-            is_strong_title_match,
-        )
-
+        # a13: imports hoisted from function-local to module-level
+        # (see top of file) so unit tests can patch
+        # ``openzim_mcp.zim.search.find_title_match`` directly. The
+        # ``is_strong_title_match`` reference is retained for
+        # historical callers but the splice gate (post-a13 D5) uses
+        # exact path comparison rather than the strong-match predicate.
         try:
             canonical = find_title_match(self, zim_file_path, query)
         except Exception:  # pragma: no cover — defensive
@@ -871,10 +873,24 @@ class _SearchMixin:
         if not results:
             results = [synthetic_canonical]
         else:
+            # a13 D5: only short-circuit when BM25's top hit IS the
+            # canonical (exact path match) — otherwise we should still
+            # splice/reorder. Pre-fix, ``is_strong_title_match`` returned
+            # True for any candidate that token-prefixed the topic
+            # (``Berlin`` → ``Berlin_(disambiguation)`` qualifies via
+            # candidate-extends-topic), and the early-return fell back
+            # to the legacy ``search_with_filters`` markdown path that
+            # neither spliced the canonical nor demoted list articles.
+            # Result: ``search for Berlin in namespace C`` rendered
+            # ``[List_of_songs_about_Berlin, Berlin_(disambiguation),
+            # Timeline_of_Berlin]`` with the actual ``Berlin`` canonical
+            # absent. Tightening to exact-path match preserves the
+            # "don't duplicate when canonical is already at top"
+            # invariant while letting the splice/reorder logic do its
+            # job for every other shape.
             top = results[0]
-            if isinstance(top, dict) and is_strong_title_match(
-                query, str(top.get("path") or ""), str(top.get("title") or "")
-            ):
+            top_path = str(top.get("path") or "") if isinstance(top, dict) else ""
+            if top_path == canonical_path:
                 return self.search_with_filters(
                     zim_file_path,
                     query,
