@@ -731,12 +731,28 @@ class SimpleToolsHandler:
             # namespaces``. Trim trailing connectors / orphan punctuation
             # so the suggested split-up call is clean for the caller to
             # paste back as a follow-up query.
-            left = re.sub(
-                r"\s+(?:and|or|but)\s*$|\s*[;,]\s*$",
-                "",
-                left,
-                flags=re.IGNORECASE,
-            ).strip()
+            #
+            # Implementation note: an earlier regex
+            # ``\s+(?:and|or|but)\s*$|\s*[;,]\s*$`` tripped SonarCloud's
+            # S5852 ReDoS check (multiple ``\s*`` / ``\s+`` quantifiers
+            # in alternation). String ops mirror the original "strip one
+            # of: trailing connector word OR trailing ;/, " semantics
+            # with no backtracking risk — same approach as
+            # ``_is_disambig_lead`` below.
+            left = left.rstrip()
+            lower_left = left.lower()
+            for _conn in ("and", "or", "but"):
+                _n = len(_conn)
+                if (
+                    lower_left.endswith(_conn)
+                    and len(left) > _n
+                    and left[-_n - 1].isspace()
+                ):
+                    left = left[:-_n].rstrip()
+                    break
+            else:
+                if left and left[-1] in ";,":
+                    left = left[:-1].rstrip()
             if not left:
                 continue
             if cls._CHAINED_OPERATION_PREFIX_RE.match(
