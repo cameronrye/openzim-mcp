@@ -362,6 +362,7 @@ class SimpleToolsHandler:
                     '- `search for "evolution"`\n'
                     "- `get article Tiger`\n"
                     "- `show structure of Biology`\n"
+                    "<!-- intent=query_required cert=1.00 -->"
                 )
             # Conversational filler / meta-instructions ("do both",
             # "try again", "test this", "ok") have no information content
@@ -375,7 +376,15 @@ class SimpleToolsHandler:
             # tool's playbook on the very next turn.
             if self._is_meta_only_query(query):
                 self._track("meta_only_guidance")
-                return self._meta_query_guidance()
+                # A11 post-a11 L1 (second pass): meta-only guidance is
+                # the third structured early-return path the first L1
+                # fix missed. Same telemetry contract as the chained
+                # / topic-required / search-terms-required paths so
+                # callers branching on the comment see this rejection
+                # class too.
+                return self._meta_query_guidance() + (
+                    "\n<!-- intent=meta_only_guidance cert=1.00 -->"
+                )
             # A11 B1: a query that chains two operation phrases
             # ("tell me about berlin then list namespaces") would
             # otherwise silently dispatch to whichever intent ranked
@@ -461,6 +470,7 @@ class SimpleToolsHandler:
                         "exactly one ZIM file available.\n\n"
                         "**Available files:**\n"
                         f"{self.zim_operations.list_zim_files()}"
+                        "\n<!-- intent=no_zim_file_specified cert=1.00 -->"
                     )
             else:
                 # Small models routinely hallucinate generic filenames such

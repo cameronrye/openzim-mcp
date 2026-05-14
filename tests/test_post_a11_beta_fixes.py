@@ -161,6 +161,23 @@ class TestEarlyReturnTelemetry:
         assert "Chained Operations Detected" in out
         assert "<!-- intent=chained_intent_rejected cert=" in out
 
+    def test_meta_only_query_carries_telemetry(self, handler):
+        """Second-pass L1: ``do both`` / ``try again`` / other meta-only
+        queries hit the ``_meta_query_guidance`` early return, which the
+        first L1 fix missed.
+        """
+        out = handler.handle_zim_query("do both", zim_file_path="/x.zim")
+        assert "<!-- intent=meta_only_guidance cert=" in out
+
+    def test_empty_query_carries_telemetry(self, handler):
+        """Second-pass L1: empty / whitespace queries hit the
+        ``Query Required`` early return — also missed by the first
+        L1 fix.
+        """
+        out = handler.handle_zim_query("", zim_file_path="/x.zim")
+        assert "**Query Required**" in out
+        assert "<!-- intent=query_required cert=" in out
+
 
 # ---------------------------------------------------------------------------
 # C1 sibling auto-pick: canonical-over-extends-topic (France defect)
