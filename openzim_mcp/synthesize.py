@@ -397,18 +397,23 @@ def _boost_by_section_affinity(
     for passage in passages:
         cite_id = passage["cite_id"]
         if "#" not in cite_id:
-            boosted.append(passage)
+            # Copy-on-append keeps the mutation model uniform: the
+            # rank-renumbering loop below can mutate any item in `boosted`
+            # without leaking back to the caller's input list.
+            boosted.append(cast("SynthesizePassage", dict(passage)))
             continue
         base, _, section_id = cite_id.partition("#")
         archive_name, _, entry_path = base.partition("/")
         if not archive_name or not entry_path or not section_id:
-            boosted.append(passage)
+            # Copy-on-append: same rationale as above.
+            boosted.append(cast("SynthesizePassage", dict(passage)))
             continue
         titles = section_titles_for(archive_name, entry_path)
         heading = titles.get(section_id, "")
         heading_tokens = _affinity_tokens(heading)
         if not heading_tokens:
-            boosted.append(passage)
+            # Copy-on-append: same rationale as above.
+            boosted.append(cast("SynthesizePassage", dict(passage)))
             continue
         overlap = heading_tokens & query_tokens
         affinity = len(overlap) / len(heading_tokens)
@@ -417,7 +422,8 @@ def _boost_by_section_affinity(
             new_p["score"] = float(passage["score"]) * boost
             boosted.append(cast(SynthesizePassage, new_p))
         else:
-            boosted.append(passage)
+            # Copy-on-append: same rationale as above.
+            boosted.append(cast("SynthesizePassage", dict(passage)))
 
     boosted.sort(key=lambda p: float(p.get("score", 0.0)), reverse=True)
     # A14: rank reflects the post-boost ordering. Without this, downstream
