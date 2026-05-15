@@ -332,6 +332,84 @@ def _affinity_tokens(text: str) -> set[str]:
     return set(_AFFINITY_TOKEN_RE.findall(text.lower()))
 
 
+def _section_titles_for(
+    archive_name: str,
+    entry_path: str,
+    *,
+    bundle_lookup: Callable[[str, str], Any],
+    cache: dict[tuple[str, str], dict[str, str]],
+) -> dict[str, str]:
+    """Memoized ``section_id → title`` map for one bundle.
+
+    Bundle lookup failures (exceptions or ``None`` returns) are
+    cached as empty dicts so a flaky bundle is not retried within
+    the same affinity pass.
+    """
+    key = (archive_name, entry_path)
+    if key in cache:
+        return cache[key]
+    try:
+        bundle = bundle_lookup(archive_name, entry_path)
+    except Exception as e:
+        logger.debug(
+            "section-affinity bundle lookup failed for %s/%s: %s",
+            archive_name,
+            entry_path,
+            e,
+        )
+        cache[key] = {}
+        return cache[key]
+    if bundle is None:
+        cache[key] = {}
+        return cache[key]
+    titles = {
+        str(s.get("id", "")): str(s.get("title", ""))
+        for s in bundle.get("sections", [])
+        if s.get("id")
+    }
+    cache[key] = titles
+    return titles
+
+
+def _maybe_boost_passage(
+    passage: SynthesizePassage,
+    *,
+    query_tokens: set[str],
+    bundle_lookup: Callable[[str, str], Any],
+    cache: dict[tuple[str, str], dict[str, str]],
+    threshold: float,
+    boost: float,
+) -> SynthesizePassage:
+    """Return a fresh copy of ``passage`` with its score possibly boosted.
+
+    No-op cases (returned with original score):
+      * cite_id has no ``#section_id`` suffix
+      * cite_id doesn't parse as ``archive/entry_path#section_id``
+      * section isn't found in the bundle (or bundle lookup failed)
+      * heading shares fewer than ``threshold`` of its tokens with the query
+
+    Always returns a freshly-allocated dict so the caller may mutate it.
+    """
+    new_p = cast("SynthesizePassage", dict(passage))
+    cite_id = passage["cite_id"]
+    if "#" not in cite_id:
+        return new_p
+    base, _, section_id = cite_id.partition("#")
+    archive_name, _, entry_path = base.partition("/")
+    if not archive_name or not entry_path or not section_id:
+        return new_p
+    titles = _section_titles_for(
+        archive_name, entry_path, bundle_lookup=bundle_lookup, cache=cache
+    )
+    heading_tokens = _affinity_tokens(titles.get(section_id, ""))
+    if not heading_tokens:
+        return new_p
+    affinity = len(heading_tokens & query_tokens) / len(heading_tokens)
+    if affinity >= threshold:
+        new_p["score"] = float(passage["score"]) * boost
+    return new_p
+
+
 def _boost_by_section_affinity(
     passages: list[SynthesizePassage],
     *,
@@ -346,85 +424,33 @@ def _boost_by_section_affinity(
     ``|query_tokens ∩ heading_tokens| / |heading_tokens|``. When that
     affinity is ≥ ``config.section_affinity_threshold``, multiply the
     passage's score by ``config.section_affinity_boost``. Re-sort the
-    list by score descending.
+    list by score descending and re-number ranks.
 
-    Article-level citations (no section_id), passages whose section
-    isn't in the bundle, and bundle-lookup failures are all no-ops:
-    the passage is preserved with its original score.
-
-    No-op when the query has no tokens (empty or whitespace-only).
-
-    Bundle caching: each (archive, entry_path) is looked up at most
-    once and its section→title map memoized for the duration of the
-    call.
+    Article-level citations, passages whose section isn't in the
+    bundle, and bundle-lookup failures are all no-ops: the passage is
+    preserved with its original score. No-op when the query has no
+    tokens. Bundle lookup is memoized per ``(archive, entry_path)``
+    for the duration of the call.
     """
     query_tokens = _affinity_tokens(query)
     if not query_tokens:
         return passages
 
-    threshold = config.section_affinity_threshold
-    boost = config.section_affinity_boost
-
-    titles_by_key: dict[tuple[str, str], dict[str, str]] = {}
-
-    def section_titles_for(archive_name: str, entry_path: str) -> dict[str, str]:
-        key = (archive_name, entry_path)
-        if key in titles_by_key:
-            return titles_by_key[key]
-        try:
-            bundle = bundle_lookup(archive_name, entry_path)
-        except Exception as e:
-            logger.debug(
-                "section-affinity bundle lookup failed for %s/%s: %s",
-                archive_name,
-                entry_path,
-                e,
-            )
-            titles_by_key[key] = {}
-            return titles_by_key[key]
-        if bundle is None:
-            titles_by_key[key] = {}
-            return titles_by_key[key]
-        titles = {
-            str(s.get("id", "")): str(s.get("title", ""))
-            for s in bundle.get("sections", [])
-            if s.get("id")
-        }
-        titles_by_key[key] = titles
-        return titles
-
-    boosted: list[SynthesizePassage] = []
-    for passage in passages:
-        cite_id = passage["cite_id"]
-        if "#" not in cite_id:
-            # Copy-on-append keeps the mutation model uniform: the
-            # rank-renumbering loop below can mutate any item in `boosted`
-            # without leaking back to the caller's input list.
-            boosted.append(cast("SynthesizePassage", dict(passage)))
-            continue
-        base, _, section_id = cite_id.partition("#")
-        archive_name, _, entry_path = base.partition("/")
-        if not archive_name or not entry_path or not section_id:
-            # Copy-on-append: same rationale as above.
-            boosted.append(cast("SynthesizePassage", dict(passage)))
-            continue
-        titles = section_titles_for(archive_name, entry_path)
-        heading = titles.get(section_id, "")
-        heading_tokens = _affinity_tokens(heading)
-        if not heading_tokens:
-            # Copy-on-append: same rationale as above.
-            boosted.append(cast("SynthesizePassage", dict(passage)))
-            continue
-        overlap = heading_tokens & query_tokens
-        affinity = len(overlap) / len(heading_tokens)
-        if affinity >= threshold:
-            new_p = dict(passage)
-            new_p["score"] = float(passage["score"]) * boost
-            boosted.append(cast(SynthesizePassage, new_p))
-        else:
-            # Copy-on-append: same rationale as above.
-            boosted.append(cast("SynthesizePassage", dict(passage)))
-
+    cache: dict[tuple[str, str], dict[str, str]] = {}
+    # Copy-on-append (each helper call returns a fresh dict) keeps the
+    # mutation model uniform: the rank-renumbering loop below can mutate
+    # any item in ``boosted`` without leaking back to the caller's list.
+    boosted = [
+        _maybe_boost_passage(
+            p,
+            query_tokens=query_tokens,
+            bundle_lookup=bundle_lookup,
+            cache=cache,
+            threshold=config.section_affinity_threshold,
+            boost=config.section_affinity_boost,
+        )
+        for p in passages
+    ]
     boosted.sort(key=lambda p: float(p.get("score", 0.0)), reverse=True)
     # A14: rank reflects the post-boost ordering. Without this, downstream
     # consumers of passages[].rank get stale BM25 positions even though the

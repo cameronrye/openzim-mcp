@@ -431,8 +431,8 @@ def test_synthesize_config_has_section_affinity_tunables():
     from openzim_mcp.config import SynthesizeConfig
 
     cfg = SynthesizeConfig()
-    assert cfg.section_affinity_threshold == 0.25
-    assert cfg.section_affinity_boost == 1.5
+    assert cfg.section_affinity_threshold == pytest.approx(0.25)
+    assert cfg.section_affinity_boost == pytest.approx(1.5)
 
 
 def test_synthesize_config_rejects_invalid_section_affinity_bounds():

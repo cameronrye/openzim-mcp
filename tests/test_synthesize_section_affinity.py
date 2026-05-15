@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+import pytest
+
 from openzim_mcp.config import SynthesizeConfig
 from openzim_mcp.synthesize import _boost_by_section_affinity
 
@@ -59,7 +61,7 @@ def test_boost_promotes_passage_when_section_heading_matches_query():
             ]
         }
     )
-    cfg = SynthesizeConfig()  # threshold=0.25, boost=1.5
+    cfg = SynthesizeConfig()
 
     out = _boost_by_section_affinity(
         passages,
@@ -70,11 +72,12 @@ def test_boost_promotes_passage_when_section_heading_matches_query():
 
     # Affinity for Notable_people heading: heading tokens {notable, people};
     # query tokens include {people}. Intersect = {people}. Affinity = 1/2 = 0.5.
-    # 0.5 >= 0.25 → boost. New score = 0.6 * 1.5 = 0.9.
+    # 0.5 >= default threshold 0.25, so the default boost 1.5 applies:
+    # new score = 0.6 * 1.5 = 0.9.
     notable_passage = next(
         p for p in out if p["cite_id"] == "wiki/Big_Rapids,_Michigan#Notable_people"
     )
-    assert notable_passage["score"] == 0.6 * 1.5
+    assert notable_passage["score"] == pytest.approx(0.6 * 1.5)
 
 
 def test_boost_flips_order_when_boosted_passage_overtakes():
@@ -142,8 +145,8 @@ def test_boost_no_op_when_no_query_token_in_heading():
     geography_passage = next(
         p for p in out if p["cite_id"] == "wiki/Big_Rapids,_Michigan#Geography"
     )
-    assert history_passage["score"] == 1.0
-    assert geography_passage["score"] == 0.6
+    assert history_passage["score"] == pytest.approx(1.0)
+    assert geography_passage["score"] == pytest.approx(0.6)
 
 
 def test_boost_skips_article_level_citations():
@@ -175,7 +178,7 @@ def test_boost_skips_article_level_citations():
     article_passage = next(
         p for p in out if p["cite_id"] == "wiki/Big_Rapids,_Michigan"
     )
-    assert article_passage["score"] == 1.0
+    assert article_passage["score"] == pytest.approx(1.0)
 
 
 def test_boost_threshold_gate_blocks_weak_overlap():
@@ -206,7 +209,7 @@ def test_boost_threshold_gate_blocks_weak_overlap():
         bundle_lookup=bundle_lookup,
         config=cfg,
     )
-    assert out[0]["score"] == 1.0
+    assert out[0]["score"] == pytest.approx(1.0)
 
 
 def test_boost_handles_missing_section_in_bundle():
@@ -224,7 +227,7 @@ def test_boost_handles_missing_section_in_bundle():
         bundle_lookup=bundle_lookup,
         config=cfg,
     )
-    assert out[0]["score"] == 1.0
+    assert out[0]["score"] == pytest.approx(1.0)
 
 
 def test_boost_handles_bundle_lookup_returning_none():
@@ -244,7 +247,7 @@ def test_boost_handles_bundle_lookup_returning_none():
         bundle_lookup=none_lookup,
         config=cfg,
     )
-    assert out[0]["score"] == 1.0
+    assert out[0]["score"] == pytest.approx(1.0)
 
 
 def test_boost_handles_bundle_lookup_raising():
@@ -264,7 +267,7 @@ def test_boost_handles_bundle_lookup_raising():
         bundle_lookup=raising_lookup,
         config=cfg,
     )
-    assert out[0]["score"] == 1.0
+    assert out[0]["score"] == pytest.approx(1.0)
 
 
 def test_boost_empty_query_is_no_op():
@@ -292,7 +295,7 @@ def test_boost_empty_query_is_no_op():
         bundle_lookup=bundle_lookup,
         config=cfg,
     )
-    assert out[0]["score"] == 1.0
+    assert out[0]["score"] == pytest.approx(1.0)
 
 
 def test_boost_bundle_lookup_called_once_per_unique_article():
