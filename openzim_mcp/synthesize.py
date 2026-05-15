@@ -311,6 +311,118 @@ def _attribute_sections(
 
 
 # ---------------------------------------------------------------------------
+# Pipeline stage 5b: section-heading affinity boost (A14)
+# ---------------------------------------------------------------------------
+
+# Same tokenizer convention used in iter_query_tails / is_strong_title_match.
+# Alphanumeric runs only; punctuation and whitespace are token boundaries.
+_AFFINITY_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _affinity_tokens(text: str) -> set[str]:
+    """Lowercase alphanumeric token set. Empty set for empty input."""
+    if not text:
+        return set()
+    return set(_AFFINITY_TOKEN_RE.findall(text.lower()))
+
+
+def _boost_by_section_affinity(
+    passages: list[SynthesizePassage],
+    *,
+    query: str,
+    bundle_lookup: Callable[[str, str], Any],
+    config: "SynthesizeConfig",
+) -> list[SynthesizePassage]:
+    """Re-rank passages by section-heading affinity with the query.
+
+    For each passage with a ``#section_id`` suffix on its cite_id,
+    look up the section's heading in the bundle and compute
+    ``|query_tokens ∩ heading_tokens| / |heading_tokens|``. When that
+    affinity is ≥ ``config.section_affinity_threshold``, multiply the
+    passage's score by ``config.section_affinity_boost``. Re-sort the
+    list by score descending.
+
+    Article-level citations (no section_id), passages whose section
+    isn't in the bundle, and bundle-lookup failures are all no-ops:
+    the passage is preserved with its original score.
+
+    No-op when the query has no tokens (empty or whitespace-only).
+
+    Bundle caching: each (archive, entry_path) is looked up at most
+    once and its section→title map memoized for the duration of the
+    call.
+    """
+    query_tokens = _affinity_tokens(query)
+    if not query_tokens:
+        return passages
+
+    threshold = config.section_affinity_threshold
+    boost = config.section_affinity_boost
+
+    titles_by_key: dict[tuple[str, str], dict[str, str]] = {}
+
+    def section_titles_for(archive_name: str, entry_path: str) -> dict[str, str]:
+        key = (archive_name, entry_path)
+        if key in titles_by_key:
+            return titles_by_key[key]
+        try:
+            bundle = bundle_lookup(archive_name, entry_path)
+        except Exception as e:
+            logger.debug(
+                "section-affinity bundle lookup failed for %s/%s: %s",
+                archive_name,
+                entry_path,
+                e,
+            )
+            titles_by_key[key] = {}
+            return titles_by_key[key]
+        if bundle is None:
+            titles_by_key[key] = {}
+            return titles_by_key[key]
+        titles = {
+            str(s.get("id", "")): str(s.get("title", ""))
+            for s in bundle.get("sections", [])
+            if s.get("id")
+        }
+        titles_by_key[key] = titles
+        return titles
+
+    boosted: list[SynthesizePassage] = []
+    for passage in passages:
+        cite_id = passage["cite_id"]
+        if "#" not in cite_id:
+            boosted.append(passage)
+            continue
+        base, _, section_id = cite_id.partition("#")
+        archive_name, _, entry_path = base.partition("/")
+        if not archive_name or not entry_path or not section_id:
+            boosted.append(passage)
+            continue
+        titles = section_titles_for(archive_name, entry_path)
+        heading = titles.get(section_id, "")
+        heading_tokens = _affinity_tokens(heading)
+        if not heading_tokens:
+            boosted.append(passage)
+            continue
+        overlap = heading_tokens & query_tokens
+        affinity = len(overlap) / len(heading_tokens)
+        if affinity >= threshold:
+            new_p = dict(passage)
+            new_p["score"] = float(passage["score"]) * boost
+            boosted.append(cast(SynthesizePassage, new_p))
+        else:
+            boosted.append(passage)
+
+    boosted.sort(key=lambda p: float(p.get("score", 0.0)), reverse=True)
+    # A14: rank reflects the post-boost ordering. Without this, downstream
+    # consumers of passages[].rank get stale BM25 positions even though the
+    # score-sorted order has changed.
+    for i, p in enumerate(boosted, start=1):
+        p["rank"] = i
+    return boosted
+
+
+# ---------------------------------------------------------------------------
 # Pipeline stage 6: answer rendering
 # ---------------------------------------------------------------------------
 
@@ -991,6 +1103,16 @@ def synthesize_query(
     )
     attributed = _attribute_sections(
         all_passages, bundle_lookup=bundle_lookup, hit_keys=hit_keys
+    )
+    # A14 (Change B): section-heading affinity boost. Promotes passages
+    # whose section heading shares tokens with the query past lexically-
+    # weaker BM25 leaders. No-op for article-level citations and for
+    # queries with no token overlap against any heading.
+    attributed = _boost_by_section_affinity(
+        attributed,
+        query=query,
+        bundle_lookup=bundle_lookup,
+        config=config,
     )
     pre_cap_chars = sum(len(p["text_markdown"]) for p in attributed)
     capped = _enforce_budget(attributed, char_budget=config.output_char_budget)
