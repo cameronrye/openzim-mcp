@@ -14,7 +14,7 @@ Today the same query short-circuits entity resolution because the query has more
 
 ## Non-goals
 
-- **No new tool, no new intent, no new module.** Three localized edits to existing files.
+- **No new tool, no new intent, no new module.** Localized edits to four existing files; one small new helper function in `title_promotion.py`.
 - **No curated question-pattern table.** No mapping of question shapes to section names.
 - **No curated section-name synonyms.** No `{notable_people: ["Notable people", "Famous residents", ...]}` table.
 - **No Wikipedia-shaped assumptions.** Section ranking uses each archive's own section headings — works equally on Stack Exchange, Wikitravel, Project Gutenberg, medical wikis.
@@ -33,7 +33,8 @@ Today the same query short-circuits entity resolution because the query has more
 
 | Decision | Choice |
 |---|---|
-| Architecture shape | **Three localized edits.** No new `qa.py` module. No new intent. No new tool. |
+| Architecture shape | **Localized edits, no new module.** One shared helper in `title_promotion.py`; entity-resolution edits in both `synthesize.py` and `simple_tools.py`; affinity stage + response fields in `synthesize.py`/`tool_schemas.py`. No new intent. No new tool. |
+| Dual-path coverage | **Both `tell_me_about` (default) and `synthesize` paths** get the greedy tail probe (Change A). Section-affinity boost (Change B) and `considered_*` handles (Change C) are synthesize-only — the default path keeps its markdown-string contract. See "Default-mode vs synthesize-mode coverage". |
 | Response shape | **Featured excerpt + fallbacks.** Lead with one section excerpt; expose alternative articles and alternative sections as handles. |
 | Query scope | **All single-entity questions, plus cross-article fallback.** When no entity resolves, fall back to existing BM25 + the new affinity boost across all hits. |
 | Entity resolution | **Greedy length-down tail probe.** Try trailing 4 tokens, then 3, then 2, then 1 against each archive's title index. First hit wins. |
@@ -45,15 +46,28 @@ Today the same query short-circuits entity resolution because the query has more
 
 ## Architecture
 
-Three changes across existing files:
+Four changes across existing files (Change A applies to two parallel code paths via a shared helper):
 
 | Change | File | Function / location | Why here |
 |---|---|---|---|
-| A — Greedy tail probe for entity resolution | [`synthesize.py`](../../../openzim_mcp/synthesize.py) | `_promote_title_match` ([line 498](../../../openzim_mcp/synthesize.py#L498)) | Title-match promotion already lives here. The fix replaces one heuristic (token count) with another (greedy tail probe). |
+| A₀ — Shared greedy tail-iterator helper | [`title_promotion.py`](../../../openzim_mcp/title_promotion.py) | New `iter_query_tails(query, max_len=4, min_len=1)` | Both paths need the same tail-generation logic. Drying it once keeps the entity-extraction heuristic in one place. |
+| A₁ — Greedy tail probe in synthesize path | [`synthesize.py`](../../../openzim_mcp/synthesize.py) | `_promote_title_match` ([line 498](../../../openzim_mcp/synthesize.py#L498)) | Replace the 4-token short-circuit with a tail probe that iterates `iter_query_tails(query)` and resolves each candidate via `title_match_hit`. |
+| A₂ — Greedy tail probe in tell_me_about path | [`simple_tools.py`](../../../openzim_mcp/simple_tools.py) | `_promote_topic_via_title_index` ([line 2141](../../../openzim_mcp/simple_tools.py#L2141)) | The default-mode path the motivating query routes through. Without this, the motivating query is unchanged in default mode — `find_title_match` is called with the full prose topic and returns nothing. |
 | B — Section-heading affinity boost | [`synthesize.py`](../../../openzim_mcp/synthesize.py) | New stage after `_attribute_sections` ([line 242](../../../openzim_mcp/synthesize.py#L242)), called from the synthesize orchestrator | Section attribution already runs; affinity scoring as a post-attribution stage keeps the change contained. |
-| C — `considered_articles` + `considered_sections` in response | [`synthesize.py`](../../../openzim_mcp/synthesize.py) response builder + [`compact_renderers.py`](../../../openzim_mcp/compact_renderers.py) | Wherever the structured response is assembled | Response shape is rendered separately for compact vs JSON modes. Both renderers get the new fields. |
+| C — `considered_articles` + `considered_sections` in response | [`tool_schemas.py`](../../../openzim_mcp/tool_schemas.py) + [`synthesize.py`](../../../openzim_mcp/synthesize.py) response builder | Add fields to `SynthesizeResponse` TypedDict; populate in `synthesize_query` after passage capping. | `SynthesizeResponse` is the only structured response shape we're extending. The default-mode `tell_me_about` keeps its current markdown-string contract (see "Default-mode vs synthesize-mode" below). |
 
-No new module. No new intent in [`intent_parser.py`](../../../openzim_mcp/intent_parser.py). No new tool. Existing `tell_me_about` path gets smarter; existing `synthesize` path gets smarter; response shape gains two fields.
+No new module. No new intent in [`intent_parser.py`](../../../openzim_mcp/intent_parser.py). No new tool. Tunable constants land in [`constants.py`](../../../openzim_mcp/constants.py).
+
+### Default-mode vs synthesize-mode coverage
+
+The motivating query *"who are some famous people from big rapids, michigan"* takes **two different code paths** depending on whether the caller sets `synthesize=True`:
+
+| Path | Caller flag | Today | After this plan |
+|---|---|---|---|
+| Default (`_handle_tell_me_about`) | `synthesize=False` (default) | `find_title_match(topic)` probes the full prose string, returns nothing, falls through to BM25 search noise | A₂ + A₀: tail probe resolves `Big_Rapids,_Michigan`, fetches and returns the article body (markdown string). Entity correct, but no section targeting. |
+| Synthesize (`_handle_synthesize_query`) | `synthesize=True` | 4+ token short-circuit skips title-index probe entirely | A₁ + A₀ + B + C: tail probe resolves the entity, affinity boost picks `#Notable_people` as the featured passage, response carries `considered_articles` + `considered_sections` handles. |
+
+The full Google-style featured-snippet experience requires `synthesize=True`. The default mode gets correct entity resolution and the article body — strictly better than today's BM25-noise outcome, but not section-targeted. Auto-routing question-shaped queries with substantive intent beyond the entity to synthesize mode is a **future enhancement**, out of scope for this plan.
 
 ---
 
