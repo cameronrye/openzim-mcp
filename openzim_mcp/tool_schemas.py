@@ -552,7 +552,33 @@ class SynthesizePassage(TypedDict):
     score: float
 
 
-class SynthesizeResponse(TypedDict):
+class ConsideredArticle(TypedDict, total=False):
+    """A14: an article hit not selected as the featured citation, surfaced
+    so the caller can pivot in a follow-up turn without re-running search.
+
+    ``archive`` + ``entry_path`` form the handle the caller passes to
+    ``get_zim_entries`` (or composes into a ``cite_id``). ``score`` is the
+    underlying ranking score at the point of selection — informational,
+    not part of the handle.
+    """
+
+    archive: str
+    entry_path: str
+    title: str
+    score: float
+
+
+class ConsideredSection(TypedDict, total=False):
+    """A14: a section of the featured article not selected as the featured
+    passage. ``section_id`` is the handle the caller passes to
+    ``get_section`` (or composes into a ``cite_id`` suffix).
+    """
+
+    section_id: str
+    title: str
+
+
+class SynthesizeResponse(TypedDict, total=False):
     query: str
     answer_markdown: str
     passages: list[SynthesizePassage]
@@ -562,6 +588,10 @@ class SynthesizeResponse(TypedDict):
     total_chars: int
     total_words: int
     _meta: MetaEnvelope
+    # A14: multi-round handles. Empty lists when no candidate space
+    # exists (zero-hit response, or no resolved entity article).
+    considered_articles: list[ConsideredArticle]
+    considered_sections: list[ConsideredSection]
 
 
 # ---------------------------------------------------------------------------
