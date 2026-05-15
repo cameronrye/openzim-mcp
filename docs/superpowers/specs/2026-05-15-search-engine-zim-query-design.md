@@ -159,8 +159,8 @@ Two new top-level fields on `SynthesizeResponse`:
   "citations": [...],
   "fallback_used": "rrf_fusion",
   "considered_articles": [
-    {"archive": "wikipedia_en_all_maxi_2026-02", "path": "Big_Rapids_Township,_Michigan", "title": "Big Rapids Township, Michigan", "score": 0.42},
-    {"archive": "wikipedia_en_all_maxi_2026-02", "path": "Ferris_State_University", "title": "Ferris State University", "score": 0.38}
+    {"archive": "wikipedia_en_all_maxi_2026-02", "entry_path": "Big_Rapids_Township,_Michigan", "title": "Big Rapids Township, Michigan", "score": 0.42},
+    {"archive": "wikipedia_en_all_maxi_2026-02", "entry_path": "Ferris_State_University", "title": "Ferris State University", "score": 0.38}
   ],
   "considered_sections": [
     {"section_id": "History",          "title": "History"},
@@ -172,26 +172,13 @@ Two new top-level fields on `SynthesizeResponse`:
 }
 ```
 
-**`considered_articles`:** top 3–5 hits *not* selected as the featured citation. Drawn from the post-promotion `top_hits` list, minus whichever ended up rendered. Each entry exposes the same `archive` + `path` the caller can pass to `get_zim_entries`.
+**`considered_articles`:** top 3 hits *not* selected as the featured citation. Drawn from the post-promotion `top_hits` list, minus whichever ended up rendered. Each entry exposes the same `archive` + `entry_path` the caller can pass to `get_zim_entries`.
 
-**`considered_sections`:** all sections of the featured article's bundle, minus the featured section. Drawn from the bundle's section list. Each entry exposes the `section_id` the caller can pass to `get_section`.
+**`considered_sections`:** top 10 sections of the featured article's bundle (document order), minus the featured section. Each entry exposes the `section_id` the caller can pass to `get_section`.
 
 Both fields are *optional* on the response model — empty list when no candidates exist (e.g. cross-archive question with no entity-resolved article).
 
-**Compact-mode rendering** ([`compact_renderers.py`](../../../openzim_mcp/compact_renderers.py)): appended to the existing rendered output as two short markdown tails, subject to the existing 6000-char hard cap. Truncated if necessary — full structured payload is always available via `structuredContent`.
-
-```
-### Other articles
-- Big_Rapids_Township,_Michigan
-- Ferris_State_University
-
-### Other sections in this article
-- History
-- Geography
-- Demographics
-- Government
-- Education
-```
+**Compact-mode rendering deferred.** This release ships the new fields on the structured payload (`structuredContent`) only. LLM consumers reading `structuredContent` directly get the candidate space; legacy clients that only read the compact text envelope will not see these fields surfaced as markdown tails. Adding `### Other articles` / `### Other sections in this article` tails in [`compact_renderers.py`](../../../openzim_mcp/compact_renderers.py) is a follow-up if a legacy consumer needs it.
 
 **JSON mode:** fields emitted directly on the structured payload.
 
