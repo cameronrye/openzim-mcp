@@ -29,7 +29,9 @@ def _make_handler(title_responses: Dict[str, Optional[Dict[str, Any]]]) -> Any:
     handler = SimpleToolsHandler.__new__(SimpleToolsHandler)
     handler.zim_operations = MagicMock()
 
-    def fake_find(zim_path: str, topic: str, *, cross_file: bool = False, limit: int = 3):
+    def fake_find(
+        zim_path: str, topic: str, *, cross_file: bool = False, limit: int = 3
+    ):
         result = title_responses.get(topic)
         if result is None:
             return {"results": []}
@@ -147,7 +149,9 @@ def test_promote_strict_gate_wins_over_fuzzy_on_longer_tail():
     handler = SimpleToolsHandler.__new__(SimpleToolsHandler)
     handler.zim_operations = MagicMock()
 
-    def fake_find(zim_path: str, topic: str, *, cross_file: bool = False, limit: int = 3):
+    def fake_find(
+        zim_path: str, topic: str, *, cross_file: bool = False, limit: int = 3
+    ):
         # Strict 1.0 hit on the clean 3-token tail
         if topic == "big rapids michigan":
             return {

@@ -19,7 +19,9 @@ def test_iter_query_tails_yields_longest_first():
 
 def test_iter_query_tails_caps_at_max_len_4_by_default():
     """A 9-token query yields at most 4 tails (lengths 4, 3, 2, 1)."""
-    tails = list(iter_query_tails("who are some famous people from big rapids michigan"))
+    tails = list(
+        iter_query_tails("who are some famous people from big rapids michigan")
+    )
     assert tails == [
         "from big rapids michigan",
         "big rapids michigan",

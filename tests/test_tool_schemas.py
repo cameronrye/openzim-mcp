@@ -228,5 +228,7 @@ def test_synthesize_response_accepts_considered_articles_and_sections():
         "considered_sections": [section],
     }
     # Structural assertion: the TypedDict shape accepts these fields.
-    assert response["considered_articles"][0]["title"] == "Big Rapids Township, Michigan"
+    assert (
+        response["considered_articles"][0]["title"] == "Big Rapids Township, Michigan"
+    )
     assert response["considered_sections"][0]["title"] == "History"

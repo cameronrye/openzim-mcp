@@ -799,7 +799,9 @@ def _promote_title_match(
                 reordered: list[tuple[str, dict]] = [
                     (n, h)
                     for n, h in top_hits
-                    if not (n == archive_name and str(h.get("path", "")) == promoted_path)
+                    if not (
+                        n == archive_name and str(h.get("path", "")) == promoted_path
+                    )
                 ]
                 promoted_hit = next(
                     h

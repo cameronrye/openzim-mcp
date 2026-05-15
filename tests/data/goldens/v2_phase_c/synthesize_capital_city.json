@@ -16,6 +16,21 @@
       "title": "Berlin"
     }
   ],
+  "considered_articles": [],
+  "considered_sections": [
+    {
+      "section_id": "geography",
+      "title": "Geography"
+    },
+    {
+      "section_id": "climate",
+      "title": "Climate"
+    },
+    {
+      "section_id": "history",
+      "title": "History"
+    }
+  ],
   "fallback_used": "xapian_score",
   "passages": [
     {

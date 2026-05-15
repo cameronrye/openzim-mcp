@@ -20,11 +20,42 @@ def test_build_considered_articles_excludes_featured_and_caps_at_3():
     """Top_hits with 6 entries; passage capped to 1 (featured). The
     considered_articles list has the remaining 5 in order, capped at 3."""
     top_hits = [
-        ("wiki", {"path": "Big_Rapids,_Michigan", "title": "Big Rapids, Michigan", "score": 1.0}),
-        ("wiki", {"path": "Big_Rapids_Township,_Michigan", "title": "Big Rapids Twp", "score": 0.7}),
-        ("wiki", {"path": "Ferris_State_University", "title": "Ferris State", "score": 0.6}),
-        ("wiki", {"path": "Mecosta_County,_Michigan", "title": "Mecosta County", "score": 0.5}),
-        ("wiki", {"path": "Pere_Marquette_River", "title": "Pere Marquette River", "score": 0.4}),
+        (
+            "wiki",
+            {
+                "path": "Big_Rapids,_Michigan",
+                "title": "Big Rapids, Michigan",
+                "score": 1.0,
+            },
+        ),
+        (
+            "wiki",
+            {
+                "path": "Big_Rapids_Township,_Michigan",
+                "title": "Big Rapids Twp",
+                "score": 0.7,
+            },
+        ),
+        (
+            "wiki",
+            {"path": "Ferris_State_University", "title": "Ferris State", "score": 0.6},
+        ),
+        (
+            "wiki",
+            {
+                "path": "Mecosta_County,_Michigan",
+                "title": "Mecosta County",
+                "score": 0.5,
+            },
+        ),
+        (
+            "wiki",
+            {
+                "path": "Pere_Marquette_River",
+                "title": "Pere Marquette River",
+                "score": 0.4,
+            },
+        ),
         ("wiki", {"path": "Muskegon_River", "title": "Muskegon River", "score": 0.3}),
     ]
     capped_passages = [

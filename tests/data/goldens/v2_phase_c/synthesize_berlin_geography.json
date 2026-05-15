@@ -16,12 +16,27 @@
       "title": "Berlin"
     }
   ],
+  "considered_articles": [],
+  "considered_sections": [
+    {
+      "section_id": "geography",
+      "title": "Geography"
+    },
+    {
+      "section_id": "climate",
+      "title": "Climate"
+    },
+    {
+      "section_id": "history",
+      "title": "History"
+    }
+  ],
   "fallback_used": "xapian_score",
   "passages": [
     {
       "cite_id": "v2_phase_c/A/Berlin#berlin",
       "rank": 1,
-      "score": 1.0,
+      "score": 1.5,
       "text_markdown": "**Berlin** is the capital and largest city of Germany.\n\n## **Geography**"
     }
   ],
