@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -167,3 +167,66 @@ def find_title_match(
         "title": str(top.get("title", "")),
         "zim_file": str(top.get("zim_file", zim_file_path)),
     }
+
+
+# Tokenizer matches the existing _TOKEN_RE / is_strong_title_match
+# convention in this module: lowercase alphanumeric runs only.
+# Underscores, punctuation, and whitespace all act as token boundaries.
+# Underscore is intentionally a boundary so path-form input like
+# "Big_Rapids,_Michigan" tokenizes to ["big", "rapids", "michigan"]
+# instead of treating "Big_Rapids" as one token.
+_TAIL_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def iter_query_tails(
+    query: str,
+    *,
+    max_len: int = 4,
+    min_len: int = 1,
+) -> Iterator[str]:
+    """Yield greedy length-down trailing token windows of ``query``.
+
+    Used by both ``_promote_title_match`` (synthesize path) and
+    ``_promote_topic_via_title_index`` (tell_me_about path) to probe
+    a multi-word natural-language query for an entity that resolves
+    against a ZIM archive's title index.
+
+    Example:
+        ``"who are some famous people from big rapids michigan"``
+        with default bounds yields:
+            ``"from big rapids michigan"``
+            ``"big rapids michigan"``
+            ``"rapids michigan"``
+            ``"michigan"``
+
+    The caller probes each yielded tail in order; the first to resolve
+    wins. Greedy length-down picks the most specific entity that
+    actually exists (``"big rapids michigan"`` beats ``"michigan"``
+    when both resolve).
+
+    Args:
+        query: Natural-language query. Tokenized on alphanumeric runs,
+            so punctuation between words is treated as a boundary
+            (``"big rapids, michigan"`` → 3 tokens).
+        max_len: Longest tail to yield. Default 4 — empirically, ZIM
+            article titles rarely exceed 4 tokens, and the cost of a
+            failed probe is microseconds, so a tight cap is safe.
+        min_len: Shortest tail to yield. Default 1. Callers that want
+            to skip single-token false positives can raise this.
+
+    Yields:
+        Tail strings reconstructed by joining tokens with single
+        spaces, in the order they were found in ``query``, lowercased.
+        The title-index lookups consumed by callers are case-insensitive,
+        so the lowercase form is what reaches the probe regardless of
+        the caller's input casing.
+    """
+    if not query or not query.strip():
+        return
+    tokens = _TAIL_TOKEN_RE.findall(query.lower())
+    if not tokens:
+        return
+    upper = min(max_len, len(tokens))
+    lower = max(1, min_len)
+    for tail_len in range(upper, lower - 1, -1):
+        yield " ".join(tokens[-tail_len:])
