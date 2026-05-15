@@ -325,3 +325,147 @@ def test_search_compact_no_splice_when_title_match_already_present():
     paths = [r["path"] for r in spliced["results"]]
     # No duplication, Berlin first.
     assert paths == ["Berlin", "List_of_songs_about_Berlin"]
+
+
+# ---------------------------------------------------------------------------
+# A14: tail-probe entity resolution (replaces M26 4-token short-circuit)
+# ---------------------------------------------------------------------------
+
+
+def test_promote_title_match_tail_probe_resolves_short_tail():
+    """A14: prose-shaped query (>4 tokens) now probes greedy tails
+    instead of short-circuiting. 'famous people from big rapids
+    michigan' → 'big rapids michigan' resolves Big_Rapids,_Michigan."""
+    bm25_top_hits = [
+        ("wiki", {"path": "Famous_People_(film)", "snippet": "...", "score": 0.5}),
+    ]
+
+    def fake_title_match(archive: Any, query: str) -> Any:
+        if query == "big rapids michigan":
+            return {"path": "Big_Rapids,_Michigan", "snippet": "...", "score": 1.0}
+        return None
+
+    search_handler = MagicMock()
+    search_handler.title_match_hit.side_effect = fake_title_match
+    archive = MagicMock()
+
+    promoted = _promote_title_match(
+        bm25_top_hits,
+        query="famous people from big rapids michigan",
+        archives=[(archive, Path("/fake/wiki.zim"))],
+        archives_searched=["wiki"],
+        search_handler=search_handler,
+    )
+    assert promoted[0][1]["path"] == "Big_Rapids,_Michigan"
+
+
+def test_promote_title_match_tail_probe_prefers_longest_resolving_tail():
+    """When both 'big rapids michigan' and 'michigan' would resolve,
+    the longer (more specific) one wins."""
+    bm25_top_hits = [
+        ("wiki", {"path": "Some_Other_Article", "snippet": "...", "score": 0.5}),
+    ]
+
+    def fake_title_match(archive: Any, query: str) -> Any:
+        if query == "big rapids michigan":
+            return {"path": "Big_Rapids,_Michigan", "snippet": "...", "score": 1.0}
+        if query == "michigan":
+            return {"path": "Michigan", "snippet": "...", "score": 1.0}
+        return None
+
+    search_handler = MagicMock()
+    search_handler.title_match_hit.side_effect = fake_title_match
+    archive = MagicMock()
+
+    promoted = _promote_title_match(
+        bm25_top_hits,
+        query="famous people from big rapids michigan",
+        archives=[(archive, Path("/fake/wiki.zim"))],
+        archives_searched=["wiki"],
+        search_handler=search_handler,
+    )
+    assert promoted[0][1]["path"] == "Big_Rapids,_Michigan"
+
+
+def test_promote_title_match_tail_probe_no_short_circuit_for_long_queries():
+    """A14: M26's 4+ token short-circuit is removed. Long queries with
+    a clear entity tail now probe and resolve."""
+    bm25_top_hits: list[tuple[str, dict]] = []
+
+    def fake_title_match(archive: Any, query: str) -> Any:
+        if query == "detroit":
+            return {"path": "Detroit", "snippet": "...", "score": 1.0}
+        return None
+
+    search_handler = MagicMock()
+    search_handler.title_match_hit.side_effect = fake_title_match
+    archive = MagicMock()
+
+    promoted = _promote_title_match(
+        bm25_top_hits,
+        query="what is the population of detroit",
+        archives=[(archive, Path("/fake/wiki.zim"))],
+        archives_searched=["wiki"],
+        search_handler=search_handler,
+    )
+    assert len(promoted) == 1
+    assert promoted[0][1]["path"] == "Detroit"
+
+
+def test_promote_title_match_tail_probe_falls_through_when_no_tail_resolves():
+    """All tails miss → return top_hits unchanged."""
+    bm25_top_hits = [
+        ("wiki", {"path": "Unrelated_Article", "snippet": "...", "score": 0.3}),
+    ]
+    search_handler = MagicMock()
+    search_handler.title_match_hit.return_value = None
+    archive = MagicMock()
+
+    promoted = _promote_title_match(
+        bm25_top_hits,
+        query="completely unknown phrase here that nothing matches",
+        archives=[(archive, Path("/fake/wiki.zim"))],
+        archives_searched=["wiki"],
+        search_handler=search_handler,
+    )
+    assert promoted == bm25_top_hits
+
+
+def test_promote_title_match_tail_probe_prefers_longer_tail_across_archives():
+    """tail × archive ordering: an archive that hits a LONGER tail
+    beats an archive that hits a SHORTER tail. Locks in the docstring
+    claim that the most specific entity in any archive wins.
+
+    Without this ordering, a future refactor that swaps the loop
+    nesting to ``archive × tail`` would silently prefer archive[0]'s
+    shorter-tail hit over archive[1]'s longer-tail hit."""
+    bm25_top_hits: list[tuple[str, dict]] = []
+    archive0 = MagicMock()
+    archive1 = MagicMock()
+
+    def fake_title_match(archive: Any, query: str) -> Any:
+        # archive0 only resolves the 1-token tail
+        if archive is archive0 and query == "michigan":
+            return {"path": "Michigan", "snippet": "...", "score": 1.0}
+        # archive1 resolves the 3-token tail
+        if archive is archive1 and query == "big rapids michigan":
+            return {"path": "Big_Rapids,_Michigan", "snippet": "...", "score": 1.0}
+        return None
+
+    search_handler = MagicMock()
+    search_handler.title_match_hit.side_effect = fake_title_match
+
+    promoted = _promote_title_match(
+        bm25_top_hits,
+        query="famous people from big rapids michigan",
+        archives=[
+            (archive0, Path("/fake/wiki0.zim")),
+            (archive1, Path("/fake/wiki1.zim")),
+        ],
+        archives_searched=["wiki0", "wiki1"],
+        search_handler=search_handler,
+    )
+    assert len(promoted) == 1
+    # The 3-token tail in archive1 beats the 1-token tail in archive0
+    assert promoted[0][0] == "wiki1"
+    assert promoted[0][1]["path"] == "Big_Rapids,_Michigan"

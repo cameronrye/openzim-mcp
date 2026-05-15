@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
 
 from openzim_mcp import bundle as _bundle_mod
-from openzim_mcp.title_promotion import is_strong_title_match
+from openzim_mcp.title_promotion import is_strong_title_match, iter_query_tails
 from openzim_mcp.tool_schemas import Citation, SynthesizePassage, SynthesizeResponse
 
 logger = logging.getLogger(__name__)
@@ -505,6 +505,12 @@ def _promote_title_match(
 ) -> list[tuple[str, dict]]:
     """Promote a canonical title-index hit past BM25 noise (D3 / Op1).
 
+    A14: replaced the M26 4+ token short-circuit with greedy length-down
+    tail iteration via ``iter_query_tails``. Long natural-language
+    queries with a clear entity tail ("famous people from big rapids
+    michigan") now resolve to ``Big_Rapids,_Michigan`` instead of
+    falling through to BM25 noise.
+
     Mirrors the title-promotion logic in ``tell_me_about``: when the
     top BM25 hit isn't a strong title match for the query, ask each
     archive's title-index fast path for the canonical entry. If one
@@ -515,10 +521,11 @@ def _promote_title_match(
     moves to rank 1. Already-strong top hits short-circuit so the
     common case pays no extra archive probes.
 
-    No-op when ``query`` is multi-word phrasing that isn't really a
-    topic ask (handled upstream by ``intent_parser``) — by then
-    ``query`` is the topic itself, so a fast-path title lookup is
-    the right shape.
+    Probe order is (tail-length, archive-order): for each tail in
+    greedy length-down order, try every archive. The first archive
+    that resolves any tail wins. This picks the most specific entity
+    that exists in any archive, biasing toward earlier-configured
+    archives only when tails of equal length tie.
     """
     if top_hits:
         top_hit_0 = top_hits[0][1]
@@ -529,56 +536,44 @@ def _promote_title_match(
         if is_strong_title_match(query, top_path, top_path.replace("_", " ")):
             return top_hits
 
-    # M26: skip the per-archive title probe for multi-word queries that
-    # are clearly content questions rather than entity lookups. The
-    # title-index fast path returns nothing useful for ``effects of
-    # climate change on arctic biodiversity`` but still costs a
-    # find_entry_by_title call per archive (with its case-variant and
-    # namespace sweeps). 4+ tokens is the threshold that empirically
-    # separates entity names ("Martin Luther King Jr") from prose
-    # ("what is the cause of X").
-    _content_query_token_count = 4
-    import re as _re
-
-    if len(_re.findall(r"[a-z0-9]+", query.lower())) > _content_query_token_count:
-        return top_hits
-
     title_match_hit = getattr(search_handler, "title_match_hit", None)
     if not callable(title_match_hit):
         return top_hits
 
-    # Probe each archive's title-index fast path in order. The first
-    # archive that resolves wins — for single-archive synthesize this
-    # is trivially deterministic; for multi-archive the order is
-    # ``archives_searched`` (set by ``_do_per_archive_search``).
     existing_paths = {(name, str(h.get("path", ""))) for name, h in top_hits}
-    for (archive, _vp), archive_name in zip(archives, archives_searched):
-        try:
-            promoted = title_match_hit(archive, query)
-        except Exception as e:
-            logger.debug("title_match_hit failed for %s: %s", archive_name, e)
-            continue
-        # Defensive: tolerate mock handlers that return non-dict
-        # sentinel values; only act on a real hit payload.
-        if not isinstance(promoted, dict):
-            continue
-        promoted_path = str(promoted.get("path", ""))
-        if not promoted_path:
-            continue
-        if (archive_name, promoted_path) in existing_paths:
-            # Already present — re-rank it to first instead of duplicating.
-            reordered: list[tuple[str, dict]] = [
-                (n, h)
-                for n, h in top_hits
-                if not (n == archive_name and str(h.get("path", "")) == promoted_path)
-            ]
-            promoted_hit = next(
-                h
-                for n, h in top_hits
-                if n == archive_name and str(h.get("path", "")) == promoted_path
-            )
-            return [(archive_name, promoted_hit), *reordered]
-        return [(archive_name, promoted), *top_hits]
+    for tail in iter_query_tails(query):
+        for (archive, _vp), archive_name in zip(archives, archives_searched):
+            try:
+                promoted = title_match_hit(archive, tail)
+            except Exception as e:
+                logger.debug(
+                    "title_match_hit failed for %s on tail %r: %s",
+                    archive_name,
+                    tail,
+                    e,
+                )
+                continue
+            # Defensive: tolerate mock handlers that return non-dict
+            # sentinel values; only act on a real hit payload.
+            if not isinstance(promoted, dict):
+                continue
+            promoted_path = str(promoted.get("path", ""))
+            if not promoted_path:
+                continue
+            if (archive_name, promoted_path) in existing_paths:
+                # Already present — re-rank it to first instead of duplicating.
+                reordered: list[tuple[str, dict]] = [
+                    (n, h)
+                    for n, h in top_hits
+                    if not (n == archive_name and str(h.get("path", "")) == promoted_path)
+                ]
+                promoted_hit = next(
+                    h
+                    for n, h in top_hits
+                    if n == archive_name and str(h.get("path", "")) == promoted_path
+                )
+                return [(archive_name, promoted_hit), *reordered]
+            return [(archive_name, promoted), *top_hits]
     return top_hits
 
 
