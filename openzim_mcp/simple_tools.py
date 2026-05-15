@@ -25,7 +25,12 @@ from .intent_parser import IntentParser, safe_regex_sub
 from .meta import build_meta, format_footer
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
-from .title_promotion import _TOKEN_RE, find_title_match, is_strong_title_match
+from .title_promotion import (
+    _TOKEN_RE,
+    find_title_match,
+    is_strong_title_match,
+    iter_query_tails,
+)
 from .tool_schemas import SearchResponse, SynthesizeResponse
 from .zim_operations import ZimOperations
 
@@ -330,6 +335,24 @@ class SimpleToolsHandler:
                     ),
                     context=f"cursor={token[:64]}",
                 )
+        # Normalize hallucinated ``zim_file_path`` BEFORE branching to the
+        # synthesize pipeline. Small models pass bare filenames
+        # (``"wikipedia.zim"``) or article titles (``"Big Rapids,
+        # Michigan.zim"``) when the parameter is documented as optional;
+        # the path validator anchors them to the process CWD and produces
+        # a confusing ``Access denied`` error. Pre-A14 fix, only the
+        # intent-classification branch (below) ran this resolver — the
+        # synthesize branch bypassed it, so the same hallucinated path
+        # succeeded with ``synthesize=False`` and failed with
+        # ``synthesize=True``. Lifting the resolver here makes both
+        # branches share one policy. The ``zim_file_path is None`` case
+        # is intentionally NOT normalized here: synthesize opens all
+        # archives for multi-archive RRF fusion when no path is given,
+        # while the intent branch auto-selects when exactly one archive
+        # is available.
+        if zim_file_path:
+            zim_file_path = self._normalize_zim_file_path(zim_file_path)
+
         if options.get("synthesize"):
             try:
                 return self._handle_synthesize_query(
@@ -472,47 +495,13 @@ class SimpleToolsHandler:
                         f"{self.zim_operations.list_zim_files()}"
                         "\n<!-- intent=no_zim_file_specified cert=1.00 -->"
                     )
-            else:
-                # Small models routinely hallucinate generic filenames such
-                # as "wikipedia.zim" when this argument is documented as
-                # optional, then the path validator rejects them with a
-                # confusing "Access denied" error. Three cases:
-                #
-                #   1. The candidate matches a real ZIM file's full path or
-                #      basename: resolve to the real path. Basename-only
-                #      matches normalize hallucinated bare filenames to
-                #      whatever directory the actual file lives in.
-                #
-                #   2. The candidate is a bare filename (no path
-                #      separator) and matches nothing: treat it as a
-                #      hallucination and fall back to auto-select when
-                #      exactly one ZIM is available.
-                #
-                #   3. The candidate has a path separator and matches
-                #      nothing: trust it. A slashed path is a deliberate
-                #      caller choice (H14 regression: explicit paths must
-                #      reach the backend), and the path validator will
-                #      surface a clearer error than silent auto-replacement.
-                resolved = self._resolve_zim_path(zim_file_path)
-                if resolved is not None:
-                    if resolved != zim_file_path:
-                        self._track("zim_path_resolved_by_basename")
-                        logger.info(
-                            f"Resolved hallucinated zim_file_path "
-                            f"'{zim_file_path}' to '{resolved}' via "
-                            f"basename match."
-                        )
-                    zim_file_path = resolved
-                elif "/" not in zim_file_path and "\\" not in zim_file_path:
-                    auto_selected = self._auto_select_zim_file()
-                    if auto_selected:
-                        self._track("zim_path_replaced_with_auto_select")
-                        logger.info(
-                            f"Discarded hallucinated zim_file_path "
-                            f"'{zim_file_path}'; auto-selected "
-                            f"'{auto_selected}'."
-                        )
-                        zim_file_path = auto_selected
+            # Hallucinated paths were already normalized at the top of
+            # ``handle_zim_query`` (see comment above the synthesize branch).
+            # By this point, ``zim_file_path`` is either a known real path,
+            # an auto-selected fallback, or an unmatched slashed path that
+            # the caller deliberately wrote (H14: explicit paths must reach
+            # the backend and surface a clear error there, not a silent
+            # auto-replacement).
 
             handler = self._INTENT_HANDLERS.get(
                 intent, SimpleToolsHandler._handle_search
@@ -2157,12 +2146,13 @@ class SimpleToolsHandler:
     def _promote_topic_via_title_index(
         self, zim_file_path: str, topic: str
     ) -> Optional[Dict[str, Any]]:
-        """Promote a canonical title-index hit for ``topic`` past noisy BM25
-        ranking. Tries the strict 1.0-score gate first, then falls back to
-        the 0.8-score typo-tolerant gate.
-
-        Returns the resolved ``{path, title, zim_file}`` dict, or ``None``
-        when neither gate fires.
+        """Resolve ``topic`` to a canonical title-index hit, probing greedy
+        length-down tails (``iter_query_tails``). First pass tries the strict
+        1.0-score gate on every tail in length-down order; second pass tries
+        the 0.8-score typo-tolerant gate on every tail. Returns the first hit,
+        or ``None`` when no tail resolves. The two-pass structure ensures an
+        exact match on a clean shorter tail beats a fuzzy match on a noisier
+        longer tail.
 
         D6 fix (v2.0.0a9): Xapian ranks ``List of songs about Berlin``
         above the canonical ``Berlin`` article for ``query=Berlin``
@@ -2176,13 +2166,33 @@ class SimpleToolsHandler:
         through to Xapian search and returned a totally unrelated
         article. The chain is conservative by construction
         (length-gated at ≥5 chars, ≤700 variants).
+
+        A14: when the full topic doesn't resolve, fall back to greedy
+        length-down tail probes (``iter_query_tails``). The motivating
+        case is prose-shaped tell_me_about topics ("famous people from
+        big rapids michigan") where the full string never resolves but a
+        trailing entity ("big rapids michigan") does. Greedy length-down
+        picks the most specific entity that exists.
         """
-        promoted = find_title_match(self.zim_operations, zim_file_path, topic)
-        if promoted is not None:
-            return promoted
-        return find_title_match(
-            self.zim_operations, zim_file_path, topic, min_score=0.8
-        )
+        # First pass: strict 1.0-score gate across every tail. Prefer an
+        # exact title match on any tail (even a short one) over a typo-
+        # tolerant fuzzy match on a longer noisier tail. Without this
+        # ordering, a 0.8 fuzzy hit on "from big rapids michigan" could
+        # beat a 1.0 exact hit on the cleaner "big rapids michigan".
+        for tail in iter_query_tails(topic):
+            promoted = find_title_match(self.zim_operations, zim_file_path, tail)
+            if promoted is not None:
+                return promoted
+        # Second pass: 0.8 typo-tolerant gate. Only fires when no tail
+        # resolved strictly — catches single-edit typos like
+        # ``Photosythesis`` → ``Photosynthesis``.
+        for tail in iter_query_tails(topic):
+            promoted = find_title_match(
+                self.zim_operations, zim_file_path, tail, min_score=0.8
+            )
+            if promoted is not None:
+                return promoted
+        return None
 
     def _handle_tell_me_about(
         self,
@@ -3034,6 +3044,46 @@ class SimpleToolsHandler:
                 omit_passage_text=compact,
                 strip_links=compact,
             )
+
+    def _normalize_zim_file_path(self, candidate: str) -> str:
+        """Resolve hallucinated ZIM file paths or fall back to auto-select.
+
+        Returns the (possibly rewritten) path. Three cases — matches the
+        policy that previously lived inline in ``handle_zim_query`` for
+        the intent-classification branch only:
+
+          1. ``candidate`` matches a real ZIM file's full path or basename:
+             return the real path. Basename-only matches normalize bare-
+             filename hallucinations like ``"wikipedia.zim"`` to whatever
+             directory the file actually lives in.
+
+          2. ``candidate`` is a bare filename (no path separator) and
+             matches nothing: treat it as a hallucination and substitute
+             the auto-selected archive when exactly one is loaded.
+
+          3. ``candidate`` has a path separator and matches nothing: trust
+             it (H14: explicit paths must reach the backend, which will
+             surface a clearer error than silent replacement).
+        """
+        resolved = self._resolve_zim_path(candidate)
+        if resolved is not None:
+            if resolved != candidate:
+                self._track("zim_path_resolved_by_basename")
+                logger.info(
+                    f"Resolved hallucinated zim_file_path "
+                    f"'{candidate}' to '{resolved}' via basename match."
+                )
+            return resolved
+        if "/" not in candidate and "\\" not in candidate:
+            auto_selected = self._auto_select_zim_file()
+            if auto_selected:
+                self._track("zim_path_replaced_with_auto_select")
+                logger.info(
+                    f"Discarded hallucinated zim_file_path "
+                    f"'{candidate}'; auto-selected '{auto_selected}'."
+                )
+                return auto_selected
+        return candidate
 
     def _resolve_zim_path(self, candidate: str) -> Optional[str]:
         """Try to resolve ``candidate`` to a real ZIM file's full path.

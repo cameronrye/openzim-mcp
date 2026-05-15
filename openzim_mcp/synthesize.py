@@ -28,8 +28,14 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
 
 from openzim_mcp import bundle as _bundle_mod
-from openzim_mcp.title_promotion import is_strong_title_match
-from openzim_mcp.tool_schemas import Citation, SynthesizePassage, SynthesizeResponse
+from openzim_mcp.title_promotion import is_strong_title_match, iter_query_tails
+from openzim_mcp.tool_schemas import (
+    Citation,
+    ConsideredArticle,
+    ConsideredSection,
+    SynthesizePassage,
+    SynthesizeResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +317,150 @@ def _attribute_sections(
 
 
 # ---------------------------------------------------------------------------
+# Pipeline stage 5b: section-heading affinity boost (A14)
+# ---------------------------------------------------------------------------
+
+# Same tokenizer convention used in iter_query_tails / is_strong_title_match.
+# Alphanumeric runs only; punctuation and whitespace are token boundaries.
+_AFFINITY_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _affinity_tokens(text: str) -> set[str]:
+    """Lowercase alphanumeric token set. Empty set for empty input."""
+    if not text:
+        return set()
+    return set(_AFFINITY_TOKEN_RE.findall(text.lower()))
+
+
+def _section_titles_for(
+    archive_name: str,
+    entry_path: str,
+    *,
+    bundle_lookup: Callable[[str, str], Any],
+    cache: dict[tuple[str, str], dict[str, str]],
+) -> dict[str, str]:
+    """Memoized ``section_id → title`` map for one bundle.
+
+    Bundle lookup failures (exceptions or ``None`` returns) are
+    cached as empty dicts so a flaky bundle is not retried within
+    the same affinity pass.
+    """
+    key = (archive_name, entry_path)
+    if key in cache:
+        return cache[key]
+    try:
+        bundle = bundle_lookup(archive_name, entry_path)
+    except Exception as e:
+        logger.debug(
+            "section-affinity bundle lookup failed for %s/%s: %s",
+            archive_name,
+            entry_path,
+            e,
+        )
+        cache[key] = {}
+        return cache[key]
+    if bundle is None:
+        cache[key] = {}
+        return cache[key]
+    titles = {
+        str(s.get("id", "")): str(s.get("title", ""))
+        for s in bundle.get("sections", [])
+        if s.get("id")
+    }
+    cache[key] = titles
+    return titles
+
+
+def _maybe_boost_passage(
+    passage: SynthesizePassage,
+    *,
+    query_tokens: set[str],
+    bundle_lookup: Callable[[str, str], Any],
+    cache: dict[tuple[str, str], dict[str, str]],
+    threshold: float,
+    boost: float,
+) -> SynthesizePassage:
+    """Return a fresh copy of ``passage`` with its score possibly boosted.
+
+    No-op cases (returned with original score):
+      * cite_id has no ``#section_id`` suffix
+      * cite_id doesn't parse as ``archive/entry_path#section_id``
+      * section isn't found in the bundle (or bundle lookup failed)
+      * heading shares fewer than ``threshold`` of its tokens with the query
+
+    Always returns a freshly-allocated dict so the caller may mutate it.
+    """
+    new_p = cast("SynthesizePassage", dict(passage))
+    cite_id = passage["cite_id"]
+    if "#" not in cite_id:
+        return new_p
+    base, _, section_id = cite_id.partition("#")
+    archive_name, _, entry_path = base.partition("/")
+    if not archive_name or not entry_path or not section_id:
+        return new_p
+    titles = _section_titles_for(
+        archive_name, entry_path, bundle_lookup=bundle_lookup, cache=cache
+    )
+    heading_tokens = _affinity_tokens(titles.get(section_id, ""))
+    if not heading_tokens:
+        return new_p
+    affinity = len(heading_tokens & query_tokens) / len(heading_tokens)
+    if affinity >= threshold:
+        new_p["score"] = float(passage["score"]) * boost
+    return new_p
+
+
+def _boost_by_section_affinity(
+    passages: list[SynthesizePassage],
+    *,
+    query: str,
+    bundle_lookup: Callable[[str, str], Any],
+    config: "SynthesizeConfig",
+) -> list[SynthesizePassage]:
+    """Re-rank passages by section-heading affinity with the query.
+
+    For each passage with a ``#section_id`` suffix on its cite_id,
+    look up the section's heading in the bundle and compute
+    ``|query_tokens ∩ heading_tokens| / |heading_tokens|``. When that
+    affinity is ≥ ``config.section_affinity_threshold``, multiply the
+    passage's score by ``config.section_affinity_boost``. Re-sort the
+    list by score descending and re-number ranks.
+
+    Article-level citations, passages whose section isn't in the
+    bundle, and bundle-lookup failures are all no-ops: the passage is
+    preserved with its original score. No-op when the query has no
+    tokens. Bundle lookup is memoized per ``(archive, entry_path)``
+    for the duration of the call.
+    """
+    query_tokens = _affinity_tokens(query)
+    if not query_tokens:
+        return passages
+
+    cache: dict[tuple[str, str], dict[str, str]] = {}
+    # Copy-on-append (each helper call returns a fresh dict) keeps the
+    # mutation model uniform: the rank-renumbering loop below can mutate
+    # any item in ``boosted`` without leaking back to the caller's list.
+    boosted = [
+        _maybe_boost_passage(
+            p,
+            query_tokens=query_tokens,
+            bundle_lookup=bundle_lookup,
+            cache=cache,
+            threshold=config.section_affinity_threshold,
+            boost=config.section_affinity_boost,
+        )
+        for p in passages
+    ]
+    boosted.sort(key=lambda p: float(p.get("score", 0.0)), reverse=True)
+    # A14: rank reflects the post-boost ordering. Without this, downstream
+    # consumers of passages[].rank get stale BM25 positions even though the
+    # score-sorted order has changed.
+    for i, p in enumerate(boosted, start=1):
+        p["rank"] = i
+    return boosted
+
+
+# ---------------------------------------------------------------------------
 # Pipeline stage 6: answer rendering
 # ---------------------------------------------------------------------------
 
@@ -416,6 +566,122 @@ def _build_citations(
     return list(seen.values())
 
 
+# ---------------------------------------------------------------------------
+# A14: multi-round handle builders for SynthesizeResponse
+# ---------------------------------------------------------------------------
+
+_DEFAULT_CONSIDERED_ARTICLES_MAX = 3
+_DEFAULT_CONSIDERED_SECTIONS_MAX = 10
+
+
+def _featured_article_key(
+    capped_passages: list[SynthesizePassage],
+) -> Optional[tuple[str, str, Optional[str]]]:
+    """Decompose the top capped passage's cite_id into
+    (archive, entry_path, section_id). Returns None when there are
+    no passages.
+
+    Used to identify which article+section to exclude from the
+    considered handles — the caller already sees the featured
+    citation, so surfacing it again as a "consider this instead"
+    is noise.
+    """
+    if not capped_passages:
+        return None
+    return _parse_cite_id(capped_passages[0]["cite_id"])
+
+
+def _build_considered_articles(
+    top_hits: list[tuple[str, dict]],
+    capped_passages: list[SynthesizePassage],
+    *,
+    max_n: int = _DEFAULT_CONSIDERED_ARTICLES_MAX,
+) -> list[ConsideredArticle]:
+    """Top-N article hits NOT represented by the featured passage.
+
+    Preserves order from top_hits (post-promotion, post-demotion).
+    Each entry carries (archive, entry_path, title, score) — the
+    caller can pass it to ``get_zim_entries`` or compose a cite_id.
+    """
+    featured = _featured_article_key(capped_passages)
+    featured_key: Optional[tuple[str, str]] = None
+    if featured is not None:
+        featured_key = (featured[0], featured[1])
+    out: list[ConsideredArticle] = []
+    for archive_name, hit in top_hits:
+        entry_path = str(hit.get("path", ""))
+        if not entry_path:
+            continue
+        if featured_key is not None and (archive_name, entry_path) == featured_key:
+            continue
+        out.append(
+            cast(
+                "ConsideredArticle",
+                {
+                    "archive": archive_name,
+                    "entry_path": entry_path,
+                    "title": str(hit.get("title", entry_path)),
+                    "score": float(hit.get("score", 0.0)),
+                },
+            )
+        )
+        if len(out) >= max_n:
+            break
+    return out
+
+
+def _build_considered_sections(
+    capped_passages: list[SynthesizePassage],
+    bundle_lookup: Callable[[str, str], Any],
+    *,
+    max_n: int = _DEFAULT_CONSIDERED_SECTIONS_MAX,
+) -> list[ConsideredSection]:
+    """Sections of the featured passage's article, minus the featured
+    section itself. Capped at max_n.
+
+    Empty list when:
+      - There are no passages.
+      - The featured passage has no #section_id.
+      - The featured article's bundle lookup returns None or raises.
+      - The bundle's section list is empty.
+    """
+    featured = _featured_article_key(capped_passages)
+    if featured is None:
+        return []
+    archive_name, entry_path, featured_section_id = featured
+    if not featured_section_id:
+        return []
+    try:
+        bundle = bundle_lookup(archive_name, entry_path)
+    except Exception as e:
+        logger.debug(
+            "considered_sections bundle lookup failed for %s/%s: %s",
+            archive_name,
+            entry_path,
+            e,
+        )
+        return []
+    if bundle is None:
+        return []
+    out: list[ConsideredSection] = []
+    for section in bundle.get("sections", []):
+        section_id = str(section.get("id", ""))
+        if not section_id or section_id == featured_section_id:
+            continue
+        out.append(
+            cast(
+                "ConsideredSection",
+                {
+                    "section_id": section_id,
+                    "title": str(section.get("title", section_id)),
+                },
+            )
+        )
+        if len(out) >= max_n:
+            break
+    return out
+
+
 # Markdown link/image regex shared between simple_tools._strip_markdown_links
 # and synthesize. Same disjoint-alternation shape as the simple_tools regex
 # so the pattern engine doesn't backtrack against unclosed brackets.
@@ -505,6 +771,12 @@ def _promote_title_match(
 ) -> list[tuple[str, dict]]:
     """Promote a canonical title-index hit past BM25 noise (D3 / Op1).
 
+    A14: replaced the M26 4+ token short-circuit with greedy length-down
+    tail iteration via ``iter_query_tails``. Long natural-language
+    queries with a clear entity tail ("famous people from big rapids
+    michigan") now resolve to ``Big_Rapids,_Michigan`` instead of
+    falling through to BM25 noise.
+
     Mirrors the title-promotion logic in ``tell_me_about``: when the
     top BM25 hit isn't a strong title match for the query, ask each
     archive's title-index fast path for the canonical entry. If one
@@ -515,10 +787,11 @@ def _promote_title_match(
     moves to rank 1. Already-strong top hits short-circuit so the
     common case pays no extra archive probes.
 
-    No-op when ``query`` is multi-word phrasing that isn't really a
-    topic ask (handled upstream by ``intent_parser``) — by then
-    ``query`` is the topic itself, so a fast-path title lookup is
-    the right shape.
+    Probe order is (tail-length, archive-order): for each tail in
+    greedy length-down order, try every archive. The first archive
+    that resolves any tail wins. This picks the most specific entity
+    that exists in any archive, biasing toward earlier-configured
+    archives only when tails of equal length tie.
     """
     if top_hits:
         top_hit_0 = top_hits[0][1]
@@ -529,56 +802,46 @@ def _promote_title_match(
         if is_strong_title_match(query, top_path, top_path.replace("_", " ")):
             return top_hits
 
-    # M26: skip the per-archive title probe for multi-word queries that
-    # are clearly content questions rather than entity lookups. The
-    # title-index fast path returns nothing useful for ``effects of
-    # climate change on arctic biodiversity`` but still costs a
-    # find_entry_by_title call per archive (with its case-variant and
-    # namespace sweeps). 4+ tokens is the threshold that empirically
-    # separates entity names ("Martin Luther King Jr") from prose
-    # ("what is the cause of X").
-    _content_query_token_count = 4
-    import re as _re
-
-    if len(_re.findall(r"[a-z0-9]+", query.lower())) > _content_query_token_count:
-        return top_hits
-
     title_match_hit = getattr(search_handler, "title_match_hit", None)
     if not callable(title_match_hit):
         return top_hits
 
-    # Probe each archive's title-index fast path in order. The first
-    # archive that resolves wins — for single-archive synthesize this
-    # is trivially deterministic; for multi-archive the order is
-    # ``archives_searched`` (set by ``_do_per_archive_search``).
     existing_paths = {(name, str(h.get("path", ""))) for name, h in top_hits}
-    for (archive, _vp), archive_name in zip(archives, archives_searched):
-        try:
-            promoted = title_match_hit(archive, query)
-        except Exception as e:
-            logger.debug("title_match_hit failed for %s: %s", archive_name, e)
-            continue
-        # Defensive: tolerate mock handlers that return non-dict
-        # sentinel values; only act on a real hit payload.
-        if not isinstance(promoted, dict):
-            continue
-        promoted_path = str(promoted.get("path", ""))
-        if not promoted_path:
-            continue
-        if (archive_name, promoted_path) in existing_paths:
-            # Already present — re-rank it to first instead of duplicating.
-            reordered: list[tuple[str, dict]] = [
-                (n, h)
-                for n, h in top_hits
-                if not (n == archive_name and str(h.get("path", "")) == promoted_path)
-            ]
-            promoted_hit = next(
-                h
-                for n, h in top_hits
-                if n == archive_name and str(h.get("path", "")) == promoted_path
-            )
-            return [(archive_name, promoted_hit), *reordered]
-        return [(archive_name, promoted), *top_hits]
+    for tail in iter_query_tails(query):
+        for (archive, _vp), archive_name in zip(archives, archives_searched):
+            try:
+                promoted = title_match_hit(archive, tail)
+            except Exception as e:
+                logger.debug(
+                    "title_match_hit failed for %s on tail %r: %s",
+                    archive_name,
+                    tail,
+                    e,
+                )
+                continue
+            # Defensive: tolerate mock handlers that return non-dict
+            # sentinel values; only act on a real hit payload.
+            if not isinstance(promoted, dict):
+                continue
+            promoted_path = str(promoted.get("path", ""))
+            if not promoted_path:
+                continue
+            if (archive_name, promoted_path) in existing_paths:
+                # Already present — re-rank it to first instead of duplicating.
+                reordered: list[tuple[str, dict]] = [
+                    (n, h)
+                    for n, h in top_hits
+                    if not (
+                        n == archive_name and str(h.get("path", "")) == promoted_path
+                    )
+                ]
+                promoted_hit = next(
+                    h
+                    for n, h in top_hits
+                    if n == archive_name and str(h.get("path", "")) == promoted_path
+                )
+                return [(archive_name, promoted_hit), *reordered]
+            return [(archive_name, promoted), *top_hits]
     return top_hits
 
 
@@ -891,6 +1154,8 @@ def _zero_hits_response(
             "total_chars": 0,
             "total_words": 0,
             "_meta": cast("Any", meta),
+            "considered_articles": [],
+            "considered_sections": [],
         },
     )
 
@@ -997,6 +1262,16 @@ def synthesize_query(
     attributed = _attribute_sections(
         all_passages, bundle_lookup=bundle_lookup, hit_keys=hit_keys
     )
+    # A14 (Change B): section-heading affinity boost. Promotes passages
+    # whose section heading shares tokens with the query past lexically-
+    # weaker BM25 leaders. No-op for article-level citations and for
+    # queries with no token overlap against any heading.
+    attributed = _boost_by_section_affinity(
+        attributed,
+        query=query,
+        bundle_lookup=bundle_lookup,
+        config=config,
+    )
     pre_cap_chars = sum(len(p["text_markdown"]) for p in attributed)
     capped = _enforce_budget(attributed, char_budget=config.output_char_budget)
     truncated = sum(len(p["text_markdown"]) for p in capped) < pre_cap_chars
@@ -1042,6 +1317,8 @@ def synthesize_query(
     response_passages: list[SynthesizePassage] = capped
     if omit_passage_text:
         response_passages = []
+    considered_articles = _build_considered_articles(top_hits, capped)
+    considered_sections = _build_considered_sections(capped, bundle_lookup)
     return cast(
         "SynthesizeResponse",
         {
@@ -1054,5 +1331,7 @@ def synthesize_query(
             "total_chars": len(answer_md),
             "total_words": len(answer_md.split()),
             "_meta": cast("Any", meta),
+            "considered_articles": considered_articles,
+            "considered_sections": considered_sections,
         },
     )

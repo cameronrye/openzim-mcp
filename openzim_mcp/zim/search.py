@@ -223,12 +223,54 @@ def _format_filtered_response(
             f"of {total_filtered_text} — "
             f"pass `offset={offset + limit}` for the next page\n"
         )
+        # A14: when the result set is much larger than a small model can
+        # productively page through, nudge toward refining the query
+        # instead. Pre-A14, a "notable people from X" search returning
+        # 4000 hits would lead an 8B model to either give up or mechanically
+        # page until its context budget died. The O2 saturation warning at
+        # ≥1M hits caught only stop-word collisions; mid-tier hit counts
+        # had no equivalent guidance.
+        if _is_large_result_set(scan.filtered_count, len(results)):
+            parts.append(_refinement_nudge() + "\n")
     else:
         parts.append(
             f"Showing {offset + 1}-{offset + len(results)} "
             f"of {total_filtered_text} (end of results)\n"
         )
     return "".join(parts)
+
+
+# A14: threshold above which the response surfaces a refinement nudge
+# alongside the next-page hint. Picked so that a 3-result page facing
+# >65× more results triggers the nudge — well below the 1M stop-word
+# saturation O2 threshold but high enough to avoid nagging on normal
+# topical searches (10-100 hits).
+_REFINEMENT_NUDGE_TOTAL_THRESHOLD = 200
+_REFINEMENT_NUDGE_PAGE_RATIO = 20  # total ≥ page_size × ratio
+
+
+def _is_large_result_set(total: int, page_size: int) -> bool:
+    """Return True when the unpaged total is large enough that mechanical
+    paging is unlikely to be productive for a small model. Used to decide
+    whether to attach the refinement nudge to the pagination footer.
+    """
+    if page_size <= 0:
+        return False
+    return (
+        total >= _REFINEMENT_NUDGE_TOTAL_THRESHOLD
+        and total >= page_size * _REFINEMENT_NUDGE_PAGE_RATIO
+    )
+
+
+def _refinement_nudge() -> str:
+    """One-line nudge appended to large-result-set pagination footers.
+
+    Keep this terse — every byte costs the agentic loop on each turn.
+    """
+    return (
+        "Tip: result set is large — try refining with a quoted phrase or a "
+        "more specific term instead of paging through all hits."
+    )
 
 
 class _SearchMixin:
@@ -716,6 +758,15 @@ class _SearchMixin:
                 f"of {total_results} — "
                 f"pass `offset={next_offset}` for the next page\n"
             )
+            # A14: see ``_format_filtered_response`` for the rationale —
+            # nudge toward query refinement when the total is much
+            # larger than a small model can productively page through.
+            # The ≥1M O2 saturation note above handles stop-word
+            # collisions; this fills the mid-tier gap (200-1M).
+            if total_results < 1_000_000 and _is_large_result_set(
+                total_results, len(results)
+            ):
+                result_text += _refinement_nudge() + "\n"
         else:
             result_text += (
                 f"Showing {offset + 1}-{offset + len(results)} "

@@ -424,3 +424,28 @@ def test_synthesize_config_defaults() -> None:
     assert cfg.synthesize.top_n == 5
     assert cfg.synthesize.per_archive_k == 10
     assert cfg.synthesize.output_char_budget == 4800
+
+
+def test_synthesize_config_has_section_affinity_tunables():
+    """Section-affinity ranking knobs default to documented values."""
+    from openzim_mcp.config import SynthesizeConfig
+
+    cfg = SynthesizeConfig()
+    assert cfg.section_affinity_threshold == pytest.approx(0.25)
+    assert cfg.section_affinity_boost == pytest.approx(1.5)
+
+
+def test_synthesize_config_rejects_invalid_section_affinity_bounds():
+    """Threshold must be in [0,1]; boost must be >= 1.0 (a multiplier)."""
+    from pydantic import ValidationError
+
+    from openzim_mcp.config import SynthesizeConfig
+
+    with pytest.raises(ValidationError):
+        SynthesizeConfig(section_affinity_threshold=1.5)
+    with pytest.raises(ValidationError):
+        SynthesizeConfig(section_affinity_threshold=-0.1)
+    with pytest.raises(ValidationError):
+        SynthesizeConfig(section_affinity_boost=0.5)
+    with pytest.raises(ValidationError):
+        SynthesizeConfig(section_affinity_boost=10.5)

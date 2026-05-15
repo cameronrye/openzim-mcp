@@ -16,12 +16,23 @@
       "title": "Munich"
     }
   ],
+  "considered_articles": [],
+  "considered_sections": [
+    {
+      "section_id": "history",
+      "title": "History"
+    },
+    {
+      "section_id": "culture",
+      "title": "Culture"
+    }
+  ],
   "fallback_used": "xapian_score",
   "passages": [
     {
       "cite_id": "v2_phase_c/A/Munich#munich",
       "rank": 1,
-      "score": 1.0,
+      "score": 1.5,
       "text_markdown": "**Munich** is the capital of Bavaria.\n\n## **History**"
     }
   ],

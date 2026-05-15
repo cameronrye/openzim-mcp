@@ -191,3 +191,44 @@ def test_synthesize_response_has_required_fields() -> None:
         "_meta",
     ):
         assert key in hints, f"SynthesizeResponse missing {key}"
+
+
+def test_synthesize_response_accepts_considered_articles_and_sections():
+    """A14: SynthesizeResponse exposes considered_articles and
+    considered_sections for multi-round refinement. Both fields are
+    optional (total=False) so existing callers aren't forced to set
+    them."""
+    from openzim_mcp.tool_schemas import (
+        ConsideredArticle,
+        ConsideredSection,
+        SynthesizeResponse,
+    )
+
+    article: ConsideredArticle = {
+        "archive": "wiki",
+        "entry_path": "Big_Rapids_Township,_Michigan",
+        "title": "Big Rapids Township, Michigan",
+        "score": 0.42,
+    }
+    section: ConsideredSection = {
+        "section_id": "History",
+        "title": "History",
+    }
+    response: SynthesizeResponse = {
+        "query": "q",
+        "answer_markdown": "a",
+        "passages": [],
+        "citations": [],
+        "archives_searched": ["wiki"],
+        "fallback_used": "rrf_fusion",
+        "total_chars": 1,
+        "total_words": 1,
+        "_meta": {},  # type: ignore[typeddict-item]
+        "considered_articles": [article],
+        "considered_sections": [section],
+    }
+    # Structural assertion: the TypedDict shape accepts these fields.
+    assert (
+        response["considered_articles"][0]["title"] == "Big Rapids Township, Michigan"
+    )
+    assert response["considered_sections"][0]["title"] == "History"

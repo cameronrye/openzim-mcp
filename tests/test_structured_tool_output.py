@@ -879,6 +879,11 @@ class TestZimQuerySynthesize:
                 "rrf_fusion",
                 "reranker",
             )
+            # A14: multi-round handles are part of the wire format
+            assert "considered_articles" in payload
+            assert "considered_sections" in payload
+            assert isinstance(payload["considered_articles"], list)
+            assert isinstance(payload["considered_sections"], list)
 
     @pytest.mark.asyncio
     async def test_zim_query_no_synthesize_returns_string(
