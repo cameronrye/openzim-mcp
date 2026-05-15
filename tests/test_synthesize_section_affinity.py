@@ -80,9 +80,23 @@ def test_boost_promotes_passage_when_section_heading_matches_query():
     assert notable_passage["score"] == pytest.approx(0.6 * 1.5)
 
 
-def test_boost_flips_order_when_boosted_passage_overtakes():
-    """When the boosted passage's new score exceeds the prior leader,
-    it ranks first."""
+def test_boost_flips_order_and_renumbers_rank():
+    """When the affinity boost re-sorts by score, the displaced passage's
+    cite_id appears at position 1 AND the ``rank`` field is renumbered
+    to match the new ordering.
+
+    Regression-locks two coupled behaviors:
+      (1) ordering — score-sort happens after the boost multiplier, so
+          the boosted passage can overtake a prior leader;
+      (2) rank renumbering — downstream consumers reading
+          ``passages[].rank`` get the current positions, not stale
+          BM25 positions inconsistent with the order they appear in.
+
+    Both fall out of the same ``_boost_by_section_affinity`` call, but
+    the rank-renumbering step is easy to forget after a sort, so the
+    paired assertions guard against accidental regression of (2) while
+    (1) keeps passing.
+    """
     passages = [
         _passage("wiki/Big_Rapids,_Michigan#History", score=0.5, rank=1),
         _passage("wiki/Big_Rapids,_Michigan#Notable_people", score=0.4, rank=2),
@@ -108,8 +122,11 @@ def test_boost_flips_order_when_boosted_passage_overtakes():
         bundle_lookup=bundle_lookup,
         config=cfg,
     )
-    # Notable_people: 0.4 * 1.5 = 0.6. History: 0.5. Notable_people wins.
+    # Notable_people: 0.4 * 1.5 = 0.6. History: 0.5. Notable_people now
+    # leads on score and on rank; History gets rank 2.
     assert out[0]["cite_id"] == "wiki/Big_Rapids,_Michigan#Notable_people"
+    assert out[0]["rank"] == 1
+    assert out[1]["rank"] == 2
 
 
 def test_boost_no_op_when_no_query_token_in_heading():
@@ -334,40 +351,3 @@ def test_boost_bundle_lookup_called_once_per_unique_article():
         config=cfg,
     )
     assert call_count["n"] == 1
-
-
-def test_boost_renumbers_rank_to_match_new_order():
-    """After the affinity boost re-sorts by score, the passages'
-    ``rank`` field is renumbered to match the new ordering. Otherwise
-    downstream consumers reading `passages[].rank` get stale BM25
-    positions inconsistent with the order they actually appear in."""
-    passages = [
-        _passage("wiki/Big_Rapids,_Michigan#History", score=0.5, rank=1),
-        _passage("wiki/Big_Rapids,_Michigan#Notable_people", score=0.4, rank=2),
-    ]
-    bundle_lookup = _bundle_lookup_for(
-        {
-            "Big_Rapids,_Michigan": [
-                {"id": "History", "title": "History", "char_start": 0, "char_end": 100},
-                {
-                    "id": "Notable_people",
-                    "title": "Notable people",
-                    "char_start": 100,
-                    "char_end": 200,
-                },
-            ]
-        }
-    )
-    cfg = SynthesizeConfig()
-
-    out = _boost_by_section_affinity(
-        passages,
-        query="famous people from big rapids",
-        bundle_lookup=bundle_lookup,
-        config=cfg,
-    )
-    # Notable_people boosted 0.4 → 0.6, History stays 0.5. Notable_people
-    # is now first AND its rank should be 1; History gets rank 2.
-    assert out[0]["cite_id"] == "wiki/Big_Rapids,_Michigan#Notable_people"
-    assert out[0]["rank"] == 1
-    assert out[1]["rank"] == 2
