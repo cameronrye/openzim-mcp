@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `zim_query` natural-language search-engine path: prose-shaped queries
+  like *"who are some famous people from big rapids, michigan"* now
+  resolve to the canonical entity (`Big_Rapids,_Michigan`) via greedy
+  length-down tail iteration in both default and `synthesize=True`
+  modes (`iter_query_tails` shared helper in `title_promotion`).
+- `synthesize=True` responses: section-heading affinity boost re-ranks
+  section-attributed passages so the *Notable people* section of a
+  city article leads when the query mentions "people". Tunable via
+  `SynthesizeConfig.section_affinity_threshold` (default 0.25) and
+  `section_affinity_boost` (default 1.5).
+- `synthesize=True` responses: new `considered_articles` and
+  `considered_sections` fields expose the candidate space for
+  multi-round refinement without re-running search.
+
+### Changed
+
+- Removed the 4-token short-circuit in `_promote_title_match`
+  (M26). Long prose queries with a clear entity tail now resolve
+  canonically instead of falling through to BM25 noise.
+- `SynthesizeResponse` TypedDict is now `total=False` to accommodate
+  the new optional fields. Existing callers populating all the
+  previously-required fields are unaffected.
+
 ## [2.0.0a13] — 2026-05-14 (alpha pre-release) — post-a12 beta-test sweep (8 defects across three passes)
 
 Three-pass beta-test of `v2.0.0a12` against the same 118 GB Wikipedia
