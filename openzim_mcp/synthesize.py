@@ -29,7 +29,13 @@ if TYPE_CHECKING:
 
 from openzim_mcp import bundle as _bundle_mod
 from openzim_mcp.title_promotion import is_strong_title_match, iter_query_tails
-from openzim_mcp.tool_schemas import Citation, SynthesizePassage, SynthesizeResponse
+from openzim_mcp.tool_schemas import (
+    Citation,
+    ConsideredArticle,
+    ConsideredSection,
+    SynthesizePassage,
+    SynthesizeResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -528,6 +534,122 @@ def _build_citations(
     return list(seen.values())
 
 
+# ---------------------------------------------------------------------------
+# A14: multi-round handle builders for SynthesizeResponse
+# ---------------------------------------------------------------------------
+
+_DEFAULT_CONSIDERED_ARTICLES_MAX = 3
+_DEFAULT_CONSIDERED_SECTIONS_MAX = 10
+
+
+def _featured_article_key(
+    capped_passages: list[SynthesizePassage],
+) -> Optional[tuple[str, str, Optional[str]]]:
+    """Decompose the top capped passage's cite_id into
+    (archive, entry_path, section_id). Returns None when there are
+    no passages.
+
+    Used to identify which article+section to exclude from the
+    considered handles — the caller already sees the featured
+    citation, so surfacing it again as a "consider this instead"
+    is noise.
+    """
+    if not capped_passages:
+        return None
+    return _parse_cite_id(capped_passages[0]["cite_id"])
+
+
+def _build_considered_articles(
+    top_hits: list[tuple[str, dict]],
+    capped_passages: list[SynthesizePassage],
+    *,
+    max_n: int = _DEFAULT_CONSIDERED_ARTICLES_MAX,
+) -> list[ConsideredArticle]:
+    """Top-N article hits NOT represented by the featured passage.
+
+    Preserves order from top_hits (post-promotion, post-demotion).
+    Each entry carries (archive, entry_path, title, score) — the
+    caller can pass it to ``get_zim_entries`` or compose a cite_id.
+    """
+    featured = _featured_article_key(capped_passages)
+    featured_key: Optional[tuple[str, str]] = None
+    if featured is not None:
+        featured_key = (featured[0], featured[1])
+    out: list[ConsideredArticle] = []
+    for archive_name, hit in top_hits:
+        entry_path = str(hit.get("path", ""))
+        if not entry_path:
+            continue
+        if featured_key is not None and (archive_name, entry_path) == featured_key:
+            continue
+        out.append(
+            cast(
+                "ConsideredArticle",
+                {
+                    "archive": archive_name,
+                    "entry_path": entry_path,
+                    "title": str(hit.get("title", entry_path)),
+                    "score": float(hit.get("score", 0.0)),
+                },
+            )
+        )
+        if len(out) >= max_n:
+            break
+    return out
+
+
+def _build_considered_sections(
+    capped_passages: list[SynthesizePassage],
+    bundle_lookup: Callable[[str, str], Any],
+    *,
+    max_n: int = _DEFAULT_CONSIDERED_SECTIONS_MAX,
+) -> list[ConsideredSection]:
+    """Sections of the featured passage's article, minus the featured
+    section itself. Capped at max_n.
+
+    Empty list when:
+      - There are no passages.
+      - The featured passage has no #section_id.
+      - The featured article's bundle lookup returns None or raises.
+      - The bundle's section list is empty.
+    """
+    featured = _featured_article_key(capped_passages)
+    if featured is None:
+        return []
+    archive_name, entry_path, featured_section_id = featured
+    if not featured_section_id:
+        return []
+    try:
+        bundle = bundle_lookup(archive_name, entry_path)
+    except Exception as e:
+        logger.debug(
+            "considered_sections bundle lookup failed for %s/%s: %s",
+            archive_name,
+            entry_path,
+            e,
+        )
+        return []
+    if bundle is None:
+        return []
+    out: list[ConsideredSection] = []
+    for section in bundle.get("sections", []):
+        section_id = str(section.get("id", ""))
+        if not section_id or section_id == featured_section_id:
+            continue
+        out.append(
+            cast(
+                "ConsideredSection",
+                {
+                    "section_id": section_id,
+                    "title": str(section.get("title", section_id)),
+                },
+            )
+        )
+        if len(out) >= max_n:
+            break
+    return out
+
+
 # Markdown link/image regex shared between simple_tools._strip_markdown_links
 # and synthesize. Same disjoint-alternation shape as the simple_tools regex
 # so the pattern engine doesn't backtrack against unclosed brackets.
@@ -998,6 +1120,8 @@ def _zero_hits_response(
             "total_chars": 0,
             "total_words": 0,
             "_meta": cast("Any", meta),
+            "considered_articles": [],
+            "considered_sections": [],
         },
     )
 
@@ -1159,6 +1283,8 @@ def synthesize_query(
     response_passages: list[SynthesizePassage] = capped
     if omit_passage_text:
         response_passages = []
+    considered_articles = _build_considered_articles(top_hits, capped)
+    considered_sections = _build_considered_sections(capped, bundle_lookup)
     return cast(
         "SynthesizeResponse",
         {
@@ -1171,5 +1297,7 @@ def synthesize_query(
             "total_chars": len(answer_md),
             "total_words": len(answer_md.split()),
             "_meta": cast("Any", meta),
+            "considered_articles": considered_articles,
+            "considered_sections": considered_sections,
         },
     )
