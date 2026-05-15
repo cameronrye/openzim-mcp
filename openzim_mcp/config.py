@@ -113,6 +113,25 @@ class SynthesizeConfig(BaseModel):
         le=20000,
         description="Soft cap on answer_markdown chars (~1200 tokens).",
     )
+    section_affinity_threshold: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum |query ∩ heading| / |heading| ratio before a "
+            "section-attributed passage gets the affinity boost."
+        ),
+    )
+    section_affinity_boost: float = Field(
+        default=1.5,
+        ge=1.0,
+        le=10.0,
+        description=(
+            "Multiplier applied to a passage's score when its section "
+            "heading affinity-matches the query. Conservative: won't "
+            "dominate strong BM25 hits."
+        ),
+    )
 
 
 class LoggingConfig(BaseModel):
