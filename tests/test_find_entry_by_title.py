@@ -43,6 +43,11 @@ class TestFindEntryByTitle:
         mock_entry = MagicMock()
         mock_entry.path = "C/Python_(programming_language)"
         mock_entry.title = "Python (programming language)"
+        # Post-a14 sweep: the production path now calls
+        # ``_follow_redirect_chain`` on the fast-path entry to report
+        # the canonical post-redirect path. Mark the mock as a non-
+        # redirect explicitly so the chain returns it unchanged.
+        mock_entry.is_redirect = False
         mock_archive.get_entry_by_path.return_value = mock_entry
 
         monkeypatch.setattr(
@@ -135,6 +140,9 @@ class TestFindEntryByTitle:
         good_entry = MagicMock()
         good_entry.path = "C/Python"
         good_entry.title = "Python"
+        # Post-a14 sweep: production path now follows redirect chain;
+        # mark the mock as canonical so the chain returns it as-is.
+        good_entry.is_redirect = False
         good_archive.get_entry_by_path.return_value = good_entry
 
         def archive_factory(path, *a, **kw):

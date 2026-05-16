@@ -2477,10 +2477,18 @@ class _SearchMixin:
         """Walk an entry's ``is_redirect`` chain to its canonical target.
 
         Bounded by ``MAX_REDIRECT_DEPTH``; tolerates cycles by tracking
-        seen paths. Returns the original entry on any failure so the
-        caller still gets something it can name.
+        seen paths. Returns the last *real* entry on any failure so the
+        caller always gets something it can name — never ``None``.
+
+        Post-a14 sweep self-audit: the prior implementation could
+        return ``None`` when ``get_redirect_entry()`` returned None
+        (observed on archives with broken redirect chains). That
+        crashed every downstream ``entry.path`` access. The
+        ``last_good`` tracking keeps the most recent non-None Entry so
+        the caller can still emit a hit.
         """
         target = entry
+        last_good = entry
         seen: set = set()
         first_path = getattr(target, "path", None)
         if first_path is not None:
@@ -2491,11 +2499,14 @@ class _SearchMixin:
             try:
                 target = target.get_redirect_entry()
             except Exception:
-                return target
+                return last_good
+            if target is None:
+                return last_good
             tp = getattr(target, "path", None)
             if tp is None or tp in seen:
-                return target
+                return last_good
             seen.add(tp)
+            last_good = target
         return target
 
     def _verified_typo_variants(
@@ -2600,6 +2611,12 @@ class _SearchMixin:
                     # archives accept ``C/<path>`` as an alias for ``<path>``.
                     fast_hit_entry = self._find_entry_fast_path(archive, title)
                     if fast_hit_entry is not None:
+                        # Post-a14 sweep: walk the redirect chain so the
+                        # reported path is the canonical post-redirect
+                        # one. ``Big_Rapids_Michigan`` (comma-stripped
+                        # redirect) → ``Big_Rapids,_Michigan`` keeps the
+                        # cite_id stable across lookup-variant paths.
+                        fast_hit_entry = self._follow_redirect_chain(fast_hit_entry)
                         aggregate_results.append(
                             {
                                 "path": fast_hit_entry.path,
@@ -2641,6 +2658,12 @@ class _SearchMixin:
                                         f"failed for {path}: {e}"
                                     )
                                     continue
+                                # Post-a14 sweep: report canonical post-
+                                # redirect path so cite_id consumers
+                                # always see the same key for the same
+                                # article regardless of which redirect
+                                # the suggestion index emitted.
+                                entry = self._follow_redirect_chain(entry)
                                 resolved_title = entry.title or path
                                 exact_ci = resolved_title.lower() == title_lower
                                 if exact_ci:
@@ -2693,6 +2716,13 @@ class _SearchMixin:
                             )
                         )
                         if typo_entry is not None:
+                            # Post-a14 sweep: typo-fallback variants
+                            # almost always land on a redirect (the
+                            # canonical title is exactly what they were
+                            # trying to reach by typo-correcting). Walk
+                            # the chain so cite_id consumers see the
+                            # canonical path.
+                            typo_entry = self._follow_redirect_chain(typo_entry)
                             resolved_typo_title = typo_entry.title or title
                             aggregate_results.append(
                                 {
@@ -2729,6 +2759,24 @@ class _SearchMixin:
         # Sort results so exact case-insensitive matches (score=1.0) lead;
         # otherwise preserve per-file rank order.
         aggregate_results.sort(key=lambda r: -r["score"])
+
+        # Post-a14 sweep self-audit: dedupe by (zim_file, path) AFTER
+        # sorting so the highest-scored row wins. The F3 redirect-
+        # chain canonicalisation collapses ``Bilogy`` and ``Biology``
+        # suggestions onto the same canonical path; without this
+        # dedup the response would carry two rows for the same
+        # article (one from each suggestion that resolved to the
+        # canonical). Pre-F3, the rows had distinct paths so no
+        # dedup was needed.
+        seen: set[tuple[str, str]] = set()
+        deduped: List[Dict[str, Any]] = []
+        for row in aggregate_results:
+            key = (str(row.get("zim_file", "")), str(row.get("path", "")))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(row)
+        aggregate_results = deduped
 
         # Build _meta.suggestions[] from archive-verified typo variants.
         # Two cases surface them (spec §14.4):
@@ -3176,6 +3224,15 @@ class _SearchMixin:
         expect, so the promoted entry plugs into the synthesize pipeline
         as if it had come from ``search_top_k``.
 
+        Post-a14 sweep: walks the redirect chain to the canonical
+        target via ``_follow_redirect_chain`` before reporting the
+        path. Wikipedia archives carry many comma-stripped /
+        case-normalised redirects (``Big_Rapids_Michigan`` →
+        ``Big_Rapids,_Michigan``); without this, the synthesize
+        ``cite_id`` and the BM25 ``cite_id`` for the same article
+        diverge depending on which lookup variant matched, splitting
+        multi-round-agent state across two distinct cite_ids.
+
         ``score`` is fixed at 1.0 — a fast-path title hit is the
         strongest possible signal we can produce, and the caller uses
         the value only to label the promoted entry; subsequent fusion
@@ -3188,6 +3245,7 @@ class _SearchMixin:
             return None
         if entry is None:
             return None
+        entry = self._follow_redirect_chain(entry)
         try:
             snippet = self._get_entry_snippet(entry, query=title)
         except Exception as e:

@@ -230,3 +230,62 @@ def iter_query_tails(
     lower = max(1, min_len)
     for tail_len in range(upper, lower - 1, -1):
         yield " ".join(tokens[-tail_len:])
+
+
+def iter_query_windows(
+    query: str,
+    *,
+    max_len: int = 4,
+    min_len: int = 1,
+) -> Iterator[str]:
+    """Yield non-trailing consecutive token windows of ``query``,
+    longest first.
+
+    Post-a14 sweep (A2): the trailing-tail probe in
+    ``iter_query_tails`` misses queries whose entity sits at the head
+    or middle (``"Big Rapids, Michigan tourism"`` — the entity is
+    tokens 0..2 of 4). This helper yields the windows
+    ``iter_query_tails`` does *not* yield, so the caller can probe
+    head/middle entities as a fallback after trailing-tail probes have
+    failed.
+
+    The iteration is length-decreasing (4-windows before 3-windows
+    before…); within a length, left-to-right. The trailing window at
+    each length is skipped — callers are expected to have already
+    probed those via ``iter_query_tails``.
+
+    Example:
+        ``"a b c d e"`` yields:
+            ``"a b c d"``     (non-trailing 4-window)
+            ``"a b c"``, ``"b c d"``  (non-trailing 3-windows)
+            ``"a b"``, ``"b c"``, ``"c d"``
+            ``"a"``, ``"b"``, ``"c"``, ``"d"``
+
+    Returns nothing when the query has fewer than 2 tokens (no
+    non-trailing windows exist).
+
+    Args:
+        query: Natural-language query. Tokenized the same way as
+            ``iter_query_tails`` (lowercased alphanumeric runs).
+        max_len: Longest window to yield. Default 4.
+        min_len: Shortest window to yield. Default 1.
+
+    Yields:
+        Window strings (single-space-joined, lowercased), in the order
+        described above. Trailing windows (those whose last token is
+        ``tokens[-1]``) are filtered out.
+    """
+    if not query or not query.strip():
+        return
+    tokens = _TAIL_TOKEN_RE.findall(query.lower())
+    n = len(tokens)
+    if n < 2:
+        return
+    upper = min(max_len, n)
+    lower = max(1, min_len)
+    for window_len in range(upper, lower - 1, -1):
+        # ``start + window_len == n`` means the window is the trailing
+        # tail at this length; iter_query_tails already yielded it,
+        # so we skip it here.
+        for start in range(n - window_len):
+            yield " ".join(tokens[start : start + window_len])

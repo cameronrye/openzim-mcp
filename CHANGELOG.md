@@ -5,7 +5,145 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] — post-a14 beta-test sweep — section-affinity feature now actually works on real Wikipedia content
+
+### Pass 2 self-audit findings (the recurring pattern: each pass's own fixes have leftover defects)
+
+Three real defects found while self-auditing pass 1; all fixed in this
+commit set. Three new tests added.
+
+- **D-Audit-1: `find_entry_by_title_data` produces duplicate rows after
+  F3's redirect-chain canonicalisation.** When two suggestions
+  (``Bilogy`` redirect + ``Biology`` canonical) both follow to the
+  same canonical path, the result list previously emitted two rows
+  with the same path. Added a ``(zim_file, path)`` dedup pass after
+  the score sort, keeping the highest-scored occurrence.
+- **D-Audit-2: `_follow_redirect_chain` can return ``None``.** The
+  pre-existing implementation's docstring promised "Returns the
+  original entry on any failure" but a redirect whose
+  ``get_redirect_entry()`` returned None resulted in the function
+  returning None — which then crashed every downstream
+  ``entry.path`` access. Tracks ``last_good`` so the helper now
+  always returns a real entry, matching its contract.
+- **D-Audit-3: F5's underscore-replace heuristic misses slash-shaped
+  paths.** Archives like IEP set their entries' ``title`` field to the
+  full path (``iep.utm.edu/kantview/``); the F5 humanise heuristic
+  only swaps underscores, so these entries surfaced unchanged in
+  ``considered_articles[].title``. Extended ``_build_considered_articles``
+  to accept ``archive_titles`` (already computed by
+  ``_build_section_lookups``) and prefer the bundle's authoritative
+  title when present. Verified in-process against the IEP archive
+  where titles like ``"Kant, Immanuel | Internet Encyclopedia of
+  Philosophy"`` now flow through correctly.
+
+The live beta-test sweep of a14 against
+`wikipedia_en_all_maxi_2026-02.zim` found that every `synthesize=True`
+response carried `section_id: null` on every citation and an empty
+`considered_sections` list — the three coordinated mechanisms a14
+shipped were architecturally inert on real archives. Unit-test
+goldens passed because they used a fabricated archive where the
+entire article body sits inside a single section whose id matches
+the article title; real Wikipedia articles have leads outside any
+section and natural-bold markup (`**EntityName**`) that breaks the
+snippet-to-markdown locate path.
+
+### Fixed
+
+- **F1 (P1): `_locate_passage` now strips bold from BOTH the snippet
+  AND the haystack markdown** before searching, with a position-
+  remap so the returned offset still indexes into the original
+  markdown. Wikipedia's universal `**EntityName**`-opens-the-lead
+  pattern previously caused every lead-snippet `md.find` and
+  normalized-search to return -1; section attribution then dropped
+  every passage to entry-level citation. New helper
+  `_strip_bold_with_remap(text) -> (stripped, remap)` in
+  `openzim_mcp/synthesize.py`.
+- **F2 (P1 cascade): `_build_considered_sections` no longer short-
+  circuits to `[]` when the featured passage is article-level.**
+  Surfacing the article's sections regardless of whether the
+  featured passage itself was section-attributed is a strict
+  improvement for the multi-round pivot — the next-turn
+  `get_section` call wins either way. The early-exit at
+  `synthesize.py:684` was a strict pessimization.
+- **F1 cascade (pre-h1 chrome fallback): `_attribute_sections` falls
+  back to the FIRST section in the bundle when no section brackets
+  the located passage.** Archives that render page chrome (nav,
+  breadcrumbs) before the h1 heading otherwise lose every chrome-
+  area BM25 snippet to entry-level citation. Verified live against
+  the IEP archive's nav-menu prefix where the h1 section starts at
+  char 513.
+- **F3 (A1): `title_match_hit` and `find_entry_by_title_data` now
+  follow the libzim redirect chain via `_follow_redirect_chain`
+  before reporting the entry path.** Wikipedia archives carry many
+  comma-stripped / case-normalised redirects (`Big_Rapids_Michigan`
+  → `Big_Rapids,_Michigan`); without canonicalisation, the same
+  article got two different cite_ids depending on which lookup
+  variant fired, splitting multi-round-agent state. Applied at all
+  three entry-emission sites (fast-path, suggestion-rank, typo-
+  fallback).
+- **F4 (A2): non-trailing sliding-window probe added as a fallback
+  to `_promote_topic_via_title_index` after the strict trailing-tail
+  pass.** Queries whose entity sits at the head/middle of the prose
+  (`"Big Rapids Michigan tourism"`) now resolve to the entity
+  instead of falling through to BM25 noise. New helper
+  `iter_query_windows(query, max_len=4, min_len=1)` in
+  `openzim_mcp/title_promotion.py`; non-trailing windows only,
+  longest-first, so a14's motivating tail-positioned-entity
+  behavior is preserved (sliding-window only fires when no
+  trailing tail resolved strictly).
+- **F5 (A3): `considered_articles[].title` is humanized via the new
+  `_humanize_path_title` helper** so path-shaped hit titles
+  (`"West_Michigan"`) render with spaces, matching the
+  `citations[]` view in the same response. Eliminates the cross-
+  view inconsistency where the same article had two different
+  display titles depending on which structured field surfaced it.
+- **F6 (B1): the lead-with-TOC trailer in `_lead_with_toc` now
+  references the canonical (post-redirect) path** for typo-
+  fallback resolutions like `tell me about Bilogy` → Biology.
+  Carried through F3's canonicalisation in
+  `find_entry_by_title_data` — `_promote_topic_via_title_index`
+  returns the canonical path, which `_fetch_topic_article_body`
+  passes to `_lead_with_toc`. Previously the trailer suggested
+  `show structure of Bilogy` (the typo), pushing the next call
+  back through typo-fallback.
+
+### Tests
+
+- Test count: 1581 (up from 1567 in a14). All passing.
+- New test files:
+  - `tests/test_synthesize_section_attribution_live_shape.py` —
+    Wikipedia-shaped HTML fixture exercising the natural-bold
+    locate path AND the pre-h1 chrome fallback.
+  - `tests/test_title_match_hit_redirect_canonicalization.py` —
+    redirect-chain canonicalisation for the fast-path hit.
+  - `tests/test_iter_query_windows.py` — sliding-window iterator
+    spec.
+  - `tests/test_simple_tools_window_probe.py` — three-pass probe
+    ordering: trailing-strict → window-strict → trailing-fuzzy.
+  - `tests/test_simple_tools_typo_trailer_canonical_path.py` — end-
+    to-end confirmation that the lead trailer uses the canonical
+    path.
+- Updated `test_build_considered_sections_empty_when_featured_is_article_level`
+  → `test_build_considered_sections_surfaces_all_sections_when_featured_is_article_level`
+  (semantics changed; old name retained as a renamed coverage of
+  the new behaviour).
+- Updated `test_fast_path_exact_match` and
+  `test_cross_file_aggregates_and_skips_failures` mock entries to
+  set `is_redirect = False` (the production path now calls
+  `_follow_redirect_chain`; default MagicMock truthy-ness made the
+  chain bounce forever otherwise).
+
+### Researched, not fixed (B2)
+
+The live sweep observed that four parallel `zim_query` calls (one
+heavy with typo-fallback variants) caused every subsequent call to
+time out for ~90 seconds before the server recovered. Hypothesis:
+libzim is not thread-safe on a single archive handle, and the
+typo-fallback path (~1400 archive probes per call) saturates the
+thread-pool. Conservative fix surface (not in this sweep):
+per-archive `asyncio.Lock` around typo-fallback, OR a per-request
+deadline, OR a libzim archive pool. Needs a reliable reproducer
+and instrumentation before landing.
 
 ## [2.0.0a14] — 2026-05-15 (alpha pre-release) — search-engine-style `zim_query`: tail-probe entity resolution + section-affinity boost + considered_* handles
 

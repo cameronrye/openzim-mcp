@@ -16,6 +16,70 @@ from openzim_mcp.synthesize import (
 )
 
 
+def test_build_considered_articles_prefers_bundle_title_over_hit_title():
+    """Post-a14 sweep pass-2 self-audit: when ``archive_titles`` carries
+    a proper bundle title for the entry, ``_build_considered_articles``
+    should use it in preference to the hit's path-shaped title. This
+    fixes the IEP-archive case where every search hit's title equals
+    the entry path (``iep.utm.edu/kantview/``) — humanizing via
+    underscore-replace doesn't help there because the path uses slashes,
+    not underscores."""
+    top_hits = [
+        (
+            "iep",
+            {
+                "path": "iep.utm.edu/kantview/",
+                "title": "iep.utm.edu/kantview/",
+                "score": 0.8,
+            },
+        ),
+    ]
+    capped_passages = [
+        {
+            "cite_id": "iep/iep.utm.edu/kantmind/",
+            "text_markdown": "...",
+            "rank": 1,
+            "score": 1.0,
+        }
+    ]
+    archive_titles = {
+        ("iep", "iep.utm.edu/kantview/"): "Immanuel Kant",
+    }
+    out = _build_considered_articles(
+        top_hits, capped_passages, max_n=10, archive_titles=archive_titles
+    )
+    assert out
+    assert (
+        out[0]["title"] == "Immanuel Kant"
+    ), f"Expected bundle title 'Immanuel Kant', got {out[0]['title']!r}"
+
+
+def test_build_considered_articles_emits_human_readable_title_when_hit_title_is_path_like():
+    """Post-a14 sweep (F5 / A3): when a search hit's ``title`` field
+    is missing or equals the underscored path (some search-result
+    shapes do this), the considered_articles entry must surface a
+    human-readable title so the multi-round response is consistent
+    with the regular ``citations[]`` view (which sources titles from
+    the bundle and always has spaces, not underscores)."""
+    top_hits = [
+        ("wiki", {"path": "Big_Rapids,_Michigan", "score": 1.0}),
+        ("wiki", {"path": "West_Michigan", "title": "West_Michigan", "score": 0.8}),
+    ]
+    capped_passages = [
+        {
+            "cite_id": "wiki/some_other_article",
+            "text_markdown": "...",
+            "rank": 1,
+            "score": 1.0,
+        }
+    ]
+    out = _build_considered_articles(top_hits, capped_passages, max_n=10)
+    titles = [a["title"] for a in out]
+    # Missing title → human-readable derived from path.
+    # Underscored title → underscores replaced with spaces.
+    assert titles == ["Big Rapids, Michigan", "West Michigan"]
+
+
 def test_build_considered_articles_excludes_featured_and_caps_at_3():
     """Top_hits with 6 entries; passage capped to 1 (featured). The
     considered_articles list has the remaining 5 in order, capped at 3."""
@@ -133,8 +197,14 @@ def test_build_considered_sections_returns_sections_minus_featured():
     assert set(ids) == {"History", "Geography", "Demographics"}
 
 
-def test_build_considered_sections_empty_when_featured_is_article_level():
-    """Featured passage has no #section_id → no anchor → []."""
+def test_build_considered_sections_surfaces_all_sections_when_featured_is_article_level():
+    """Post-a14-sweep behavior: when the featured passage is article-
+    level (no ``#section_id``), surface ALL the article's sections so
+    the next-turn pivot via ``get_section`` is still useful. Previously
+    this returned ``[]`` — a strict pessimization for the common live-
+    Wikipedia case where the BM25 lead snippet can't be located inside
+    rendered_markdown (so section attribution fails for a different
+    reason than a missing section list)."""
     capped_passages = [
         {
             "cite_id": "wiki/Big_Rapids,_Michigan",
@@ -145,10 +215,16 @@ def test_build_considered_sections_empty_when_featured_is_article_level():
     ]
 
     def bundle_lookup(archive_name: str, entry_path: str) -> Any:
-        return {"sections": [{"id": "History", "title": "History"}]}
+        return {
+            "sections": [
+                {"id": "History", "title": "History"},
+                {"id": "Notable_people", "title": "Notable people"},
+            ]
+        }
 
     result = _build_considered_sections(capped_passages, bundle_lookup, max_n=10)
-    assert result == []
+    ids = [s["section_id"] for s in result]
+    assert ids == ["History", "Notable_people"]
 
 
 def test_build_considered_sections_empty_when_no_passages():
