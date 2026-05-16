@@ -177,6 +177,31 @@ def _strip_bold(text: str) -> str:
     return _BOLD_MARKER_RE.sub("", text)
 
 
+def _strip_bold_with_remap(text: str) -> tuple[str, list[int]]:
+    """Return ``(stripped, remap)`` where ``remap[i]`` is the offset in
+    ``text`` of the character that became ``stripped[i]``.
+
+    Used by ``_locate_passage`` to back-map find/normalize-search hits
+    inside a bold-stripped haystack to offsets in the original
+    markdown. Without this back-map, the post-a14 sweep fix
+    (stripping ``**`` from both sides before searching) would land
+    section attribution on the wrong char offset whenever the natural
+    bold markers in Wikipedia lead text shift the index.
+    """
+    stripped_chars: list[str] = []
+    remap: list[int] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "*" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            continue
+        stripped_chars.append(text[i])
+        remap.append(i)
+        i += 1
+    return "".join(stripped_chars), remap
+
+
 def _locate_passage(md: str, passage_text: str) -> int:
     """Return the offset of ``passage_text`` within ``md``, or -1 on miss.
 
@@ -186,17 +211,28 @@ def _locate_passage(md: str, passage_text: str) -> int:
     bundle's rendered markdown. The returned offset is into the
     *original* ``md`` so callers can map it back to section ranges.
 
-    Passes the bold-stripped form to both probes — ``create_snippet``'s
-    query-highlight wrapper inserts ``**...**`` around the query term,
-    but the bundle markdown is rendered without highlighting, so a
-    literal ``md.find(passage_text)`` misses every snippet that
-    carries a highlighted term. Section attribution (D8) depends on
-    these probes hitting.
+    Strips ``**`` bold markers from BOTH sides before searching.
+    ``create_snippet``'s query-highlight wrapper inserts ``**...**``
+    around the query term, but real-archive markdown ALSO carries
+    natural bold (``**EntityName**`` opens every Wikipedia lead
+    paragraph). Without stripping bold from the haystack too,
+    ``md.find("Big Rapids is a city")`` returns -1 against
+    ``"**Big Rapids** is a city"`` even after stripping bold from the
+    passage — the post-a14 beta-test sweep traced every dead
+    section-affinity citation back to this asymmetry.
     """
     passage_text = _strip_bold(passage_text)
-    pos = md.find(passage_text)
+    md_clean, remap = _strip_bold_with_remap(md)
+    pos = md_clean.find(passage_text)
     if pos >= 0:
-        return pos
+        # ``remap[pos]`` is the original-md offset of ``md_clean[pos]``,
+        # i.e., the first non-bold-marker char at the match site. When
+        # the match begins at the very tail (after all non-bold chars)
+        # remap is non-empty if md_clean is non-empty; fall back to
+        # ``len(md)`` defensively otherwise.
+        if pos < len(remap):
+            return remap[pos]
+        return len(md)
 
     # Use the first ~80 chars of the normalized passage as a probe — long
     # enough to be specific, short enough that a single intra-passage
@@ -205,26 +241,22 @@ def _locate_passage(md: str, passage_text: str) -> int:
     if len(probe) < 12:
         return -1
 
-    md_norm = _normalize_ws(md)
-    probe_pos = md_norm.find(probe)
+    md_clean_norm = _normalize_ws(md_clean)
+    probe_pos = md_clean_norm.find(probe)
     if probe_pos < 0:
         return -1
 
-    # Map the normalized offset back to the original md offset. Walk md
-    # in lockstep with md_norm, advancing the normalized cursor only when
-    # we cross a non-space boundary or a single whitespace run. The
-    # ``norm_cursor > 0`` guard the previous version carried suppressed
-    # counting the first whitespace run, which made the cursor undercount
-    # whenever ``md`` opened with whitespace before the matched span —
-    # attribution then landed in the *next* section. ``_normalize_ws``
-    # already strips leading whitespace from ``md_norm`` so the run we
-    # need to track always begins after non-space content; no guard is
-    # required.
-    md_cursor = 0
+    # Map the normalized-clean offset back to the original md offset.
+    # Walk ``md_clean`` in lockstep with ``md_clean_norm`` to find the
+    # ``md_clean`` index of the probe match, then look up ``remap`` to
+    # get the original-``md`` offset. ``_normalize_ws`` strips leading
+    # whitespace, so the run we need to track always begins after
+    # non-space content; no guard is required.
+    clean_cursor = 0
     norm_cursor = 0
     prev_was_space = False
-    while md_cursor < len(md) and norm_cursor < probe_pos:
-        ch = md[md_cursor]
+    while clean_cursor < len(md_clean) and norm_cursor < probe_pos:
+        ch = md_clean[clean_cursor]
         if ch.isspace():
             if not prev_was_space:
                 norm_cursor += 1
@@ -232,17 +264,17 @@ def _locate_passage(md: str, passage_text: str) -> int:
         else:
             norm_cursor += 1
             prev_was_space = False
-        md_cursor += 1
+        clean_cursor += 1
     # Probes are normalized + trimmed so probe[0] is always a non-space
     # character. After lockstep walk the cursor may sit on the first
-    # whitespace of a run that md_norm collapsed to one space — advance
-    # past any remaining whitespace so the returned offset points at the
-    # first non-space char of the match in the original md. Without this
-    # step, attribution can land in an earlier section when two section
-    # boundaries hug a whitespace run.
-    while md_cursor < len(md) and md[md_cursor].isspace():
-        md_cursor += 1
-    return md_cursor
+    # whitespace of a run that md_clean_norm collapsed to one space —
+    # advance past any remaining whitespace so the returned offset
+    # points at the first non-space char of the match.
+    while clean_cursor < len(md_clean) and md_clean[clean_cursor].isspace():
+        clean_cursor += 1
+    if clean_cursor < len(remap):
+        return remap[clean_cursor]
+    return len(md)
 
 
 def _attribute_sections(
@@ -307,6 +339,18 @@ def _attribute_sections(
                 if best_span is None or span < best_span:
                     best_section = section
                     best_span = span
+        # Post-a14 sweep fallback: when the locate position lands in
+        # pre-h1 chrome (page nav, breadcrumbs, infobox-without-h1)
+        # and no section brackets it, attribute to the article-level
+        # FIRST section anyway. Otherwise every BM25 snippet that
+        # happens to align with the chrome falls through to entry-
+        # level citation — observed against the IEP archive's nav-
+        # menu prefix and against any archive whose renderer puts
+        # non-section content before the h1 line.
+        if best_section is None:
+            sections = bundle.get("sections", [])
+            if sections:
+                best_section = sections[0]
         if best_section is not None:
             new_cite_id = f"{passage['cite_id']}#{best_section['id']}"
 
@@ -591,6 +635,30 @@ def _featured_article_key(
     return _parse_cite_id(capped_passages[0]["cite_id"])
 
 
+def _humanize_path_title(title: str, entry_path: str) -> str:
+    """Return a human-readable display title for a considered_articles
+    entry.
+
+    Post-a14 sweep (F5 / A3): some search-hit shapes carry no
+    ``title`` field, or carry the underscored path verbatim
+    (``"West_Michigan"`` instead of ``"West Michigan"``). The
+    ``citations[]`` view in the same response sources titles from the
+    entry bundle and always renders spaces, so seeing
+    ``"West_Michigan"`` only in ``considered_articles[]`` is a
+    cross-view inconsistency.
+
+    Heuristic: if the title is empty or contains no whitespace but
+    does contain underscores, treat it as path-shaped and swap
+    underscores for spaces. Real Wikipedia display titles either
+    already contain spaces or are single tokens — neither case
+    triggers the rewrite.
+    """
+    if title and (" " in title or "_" not in title):
+        return title
+    source = title or entry_path
+    return source.replace("_", " ")
+
+
 def _build_considered_articles(
     top_hits: list[tuple[str, dict]],
     capped_passages: list[SynthesizePassage],
@@ -602,6 +670,11 @@ def _build_considered_articles(
     Preserves order from top_hits (post-promotion, post-demotion).
     Each entry carries (archive, entry_path, title, score) — the
     caller can pass it to ``get_zim_entries`` or compose a cite_id.
+
+    Post-a14 sweep (F5): the ``title`` field is humanized via
+    ``_humanize_path_title`` so path-shaped hit titles
+    (``"West_Michigan"``) render with spaces, matching the
+    ``citations[]`` view.
     """
     featured = _featured_article_key(capped_passages)
     featured_key: Optional[tuple[str, str]] = None
@@ -620,7 +693,9 @@ def _build_considered_articles(
                 {
                     "archive": archive_name,
                     "entry_path": entry_path,
-                    "title": str(hit.get("title", entry_path)),
+                    "title": _humanize_path_title(
+                        str(hit.get("title", "")), entry_path
+                    ),
                     "score": float(hit.get("score", 0.0)),
                 },
             )
@@ -641,16 +716,22 @@ def _build_considered_sections(
 
     Empty list when:
       - There are no passages.
-      - The featured passage has no #section_id.
       - The featured article's bundle lookup returns None or raises.
       - The bundle's section list is empty.
+
+    Post-a14-sweep change: a featured passage *without* a
+    ``#section_id`` (article-level citation) no longer short-circuits
+    to ``[]``. The common live-Wikipedia case for the post-a14 sweep
+    was: section attribution failed because of natural-bold markup
+    asymmetry, so featured passages dropped to entry-level cites and
+    the next-turn pivot lost its sections. Surfacing the article's
+    sections regardless of whether the featured passage itself was
+    section-attributed is a strict improvement for that case.
     """
     featured = _featured_article_key(capped_passages)
     if featured is None:
         return []
     archive_name, entry_path, featured_section_id = featured
-    if not featured_section_id:
-        return []
     try:
         bundle = bundle_lookup(archive_name, entry_path)
     except Exception as e:
@@ -666,7 +747,12 @@ def _build_considered_sections(
     out: list[ConsideredSection] = []
     for section in bundle.get("sections", []):
         section_id = str(section.get("id", ""))
-        if not section_id or section_id == featured_section_id:
+        # Drop empty ids unconditionally; drop the featured section
+        # *only* when the featured passage actually had one (otherwise
+        # there's nothing to exclude).
+        if not section_id:
+            continue
+        if featured_section_id and section_id == featured_section_id:
             continue
         out.append(
             cast(

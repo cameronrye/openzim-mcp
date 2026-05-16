@@ -2600,6 +2600,14 @@ class _SearchMixin:
                     # archives accept ``C/<path>`` as an alias for ``<path>``.
                     fast_hit_entry = self._find_entry_fast_path(archive, title)
                     if fast_hit_entry is not None:
+                        # Post-a14 sweep: walk the redirect chain so the
+                        # reported path is the canonical post-redirect
+                        # one. ``Big_Rapids_Michigan`` (comma-stripped
+                        # redirect) → ``Big_Rapids,_Michigan`` keeps the
+                        # cite_id stable across lookup-variant paths.
+                        fast_hit_entry = self._follow_redirect_chain(
+                            fast_hit_entry
+                        )
                         aggregate_results.append(
                             {
                                 "path": fast_hit_entry.path,
@@ -2641,6 +2649,12 @@ class _SearchMixin:
                                         f"failed for {path}: {e}"
                                     )
                                     continue
+                                # Post-a14 sweep: report canonical post-
+                                # redirect path so cite_id consumers
+                                # always see the same key for the same
+                                # article regardless of which redirect
+                                # the suggestion index emitted.
+                                entry = self._follow_redirect_chain(entry)
                                 resolved_title = entry.title or path
                                 exact_ci = resolved_title.lower() == title_lower
                                 if exact_ci:
@@ -2693,6 +2707,13 @@ class _SearchMixin:
                             )
                         )
                         if typo_entry is not None:
+                            # Post-a14 sweep: typo-fallback variants
+                            # almost always land on a redirect (the
+                            # canonical title is exactly what they were
+                            # trying to reach by typo-correcting). Walk
+                            # the chain so cite_id consumers see the
+                            # canonical path.
+                            typo_entry = self._follow_redirect_chain(typo_entry)
                             resolved_typo_title = typo_entry.title or title
                             aggregate_results.append(
                                 {
@@ -3176,6 +3197,15 @@ class _SearchMixin:
         expect, so the promoted entry plugs into the synthesize pipeline
         as if it had come from ``search_top_k``.
 
+        Post-a14 sweep: walks the redirect chain to the canonical
+        target via ``_follow_redirect_chain`` before reporting the
+        path. Wikipedia archives carry many comma-stripped /
+        case-normalised redirects (``Big_Rapids_Michigan`` →
+        ``Big_Rapids,_Michigan``); without this, the synthesize
+        ``cite_id`` and the BM25 ``cite_id`` for the same article
+        diverge depending on which lookup variant matched, splitting
+        multi-round-agent state across two distinct cite_ids.
+
         ``score`` is fixed at 1.0 — a fast-path title hit is the
         strongest possible signal we can produce, and the caller uses
         the value only to label the promoted entry; subsequent fusion
@@ -3188,6 +3218,7 @@ class _SearchMixin:
             return None
         if entry is None:
             return None
+        entry = self._follow_redirect_chain(entry)
         try:
             snippet = self._get_entry_snippet(entry, query=title)
         except Exception as e:

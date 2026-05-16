@@ -30,6 +30,7 @@ from .title_promotion import (
     find_title_match,
     is_strong_title_match,
     iter_query_tails,
+    iter_query_windows,
 )
 from .tool_schemas import SearchResponse, SynthesizeResponse
 from .zim_operations import ZimOperations
@@ -2146,46 +2147,46 @@ class SimpleToolsHandler:
     def _promote_topic_via_title_index(
         self, zim_file_path: str, topic: str
     ) -> Optional[Dict[str, Any]]:
-        """Resolve ``topic`` to a canonical title-index hit, probing greedy
-        length-down tails (``iter_query_tails``). First pass tries the strict
-        1.0-score gate on every tail in length-down order; second pass tries
-        the 0.8-score typo-tolerant gate on every tail. Returns the first hit,
-        or ``None`` when no tail resolves. The two-pass structure ensures an
-        exact match on a clean shorter tail beats a fuzzy match on a noisier
-        longer tail.
+        """Resolve ``topic`` to a canonical title-index hit.
+
+        Pass order (first hit wins):
+
+          1. Strict 1.0 gate over the trailing tails
+             (``iter_query_tails``) — preserves a14's motivating
+             "famous people from big rapids michigan" behavior, where
+             the entity sits at the tail of the prose.
+          2. Strict 1.0 gate over non-trailing sliding windows
+             (``iter_query_windows``) — post-a14 sweep (F4 / A2):
+             catches queries whose entity sits at the head/middle
+             ("Big Rapids Michigan tourism"). Only fires when no
+             trailing tail resolved strictly, so existing behavior is
+             unchanged for tail-positioned entities.
+          3. Typo-tolerant 0.8 gate over the trailing tails — catches
+             single-edit typos like ``Photosythesis`` →
+             ``Photosynthesis``.
 
         D6 fix (v2.0.0a9): Xapian ranks ``List of songs about Berlin``
         above the canonical ``Berlin`` article for ``query=Berlin``
         because the title-match boost isn't strong enough. The 1.0 gate
         promotes the canonical past that ranking.
-
-        D3 (beta): the 0.8 gate catches single-edit typos via the
-        ``_find_entry_typo_fallback`` chain
-        (``Photosythesis`` → ``Photosynthesis``, score 0.85). Without
-        this step ``tell me about Photosythesis`` fell all the way
-        through to Xapian search and returned a totally unrelated
-        article. The chain is conservative by construction
-        (length-gated at ≥5 chars, ≤700 variants).
-
-        A14: when the full topic doesn't resolve, fall back to greedy
-        length-down tail probes (``iter_query_tails``). The motivating
-        case is prose-shaped tell_me_about topics ("famous people from
-        big rapids michigan") where the full string never resolves but a
-        trailing entity ("big rapids michigan") does. Greedy length-down
-        picks the most specific entity that exists.
         """
-        # First pass: strict 1.0-score gate across every tail. Prefer an
-        # exact title match on any tail (even a short one) over a typo-
-        # tolerant fuzzy match on a longer noisier tail. Without this
-        # ordering, a 0.8 fuzzy hit on "from big rapids michigan" could
-        # beat a 1.0 exact hit on the cleaner "big rapids michigan".
+        # Pass 1: strict 1.0-score gate across every trailing tail.
+        # Prefer an exact title match on any tail (even a short one)
+        # over a typo-tolerant fuzzy match on a longer noisier tail.
         for tail in iter_query_tails(topic):
             promoted = find_title_match(self.zim_operations, zim_file_path, tail)
             if promoted is not None:
                 return promoted
-        # Second pass: 0.8 typo-tolerant gate. Only fires when no tail
-        # resolved strictly — catches single-edit typos like
-        # ``Photosythesis`` → ``Photosynthesis``.
+        # Pass 2: strict 1.0-score gate across non-trailing windows.
+        # Catches head/middle-positioned entities like
+        # ``Big Rapids Michigan tourism``. Length-decreasing so longer
+        # (more specific) windows win.
+        for window in iter_query_windows(topic):
+            promoted = find_title_match(self.zim_operations, zim_file_path, window)
+            if promoted is not None:
+                return promoted
+        # Pass 3: 0.8 typo-tolerant gate. Only fires when no strict
+        # match exists at all — catches single-edit typos.
         for tail in iter_query_tails(topic):
             promoted = find_title_match(
                 self.zim_operations, zim_file_path, tail, min_score=0.8
