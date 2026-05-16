@@ -16,6 +16,44 @@ from openzim_mcp.synthesize import (
 )
 
 
+def test_build_considered_articles_prefers_bundle_title_over_hit_title():
+    """Post-a14 sweep pass-2 self-audit: when ``archive_titles`` carries
+    a proper bundle title for the entry, ``_build_considered_articles``
+    should use it in preference to the hit's path-shaped title. This
+    fixes the IEP-archive case where every search hit's title equals
+    the entry path (``iep.utm.edu/kantview/``) — humanizing via
+    underscore-replace doesn't help there because the path uses slashes,
+    not underscores."""
+    top_hits = [
+        (
+            "iep",
+            {
+                "path": "iep.utm.edu/kantview/",
+                "title": "iep.utm.edu/kantview/",
+                "score": 0.8,
+            },
+        ),
+    ]
+    capped_passages = [
+        {
+            "cite_id": "iep/iep.utm.edu/kantmind/",
+            "text_markdown": "...",
+            "rank": 1,
+            "score": 1.0,
+        }
+    ]
+    archive_titles = {
+        ("iep", "iep.utm.edu/kantview/"): "Immanuel Kant",
+    }
+    out = _build_considered_articles(
+        top_hits, capped_passages, max_n=10, archive_titles=archive_titles
+    )
+    assert out
+    assert out[0]["title"] == "Immanuel Kant", (
+        f"Expected bundle title 'Immanuel Kant', got {out[0]['title']!r}"
+    )
+
+
 def test_build_considered_articles_emits_human_readable_title_when_hit_title_is_path_like():
     """Post-a14 sweep (F5 / A3): when a search hit's ``title`` field
     is missing or equals the underscored path (some search-result

@@ -664,6 +664,7 @@ def _build_considered_articles(
     capped_passages: list[SynthesizePassage],
     *,
     max_n: int = _DEFAULT_CONSIDERED_ARTICLES_MAX,
+    archive_titles: Optional[dict[tuple[str, str], str]] = None,
 ) -> list[ConsideredArticle]:
     """Top-N article hits NOT represented by the featured passage.
 
@@ -671,10 +672,18 @@ def _build_considered_articles(
     Each entry carries (archive, entry_path, title, score) — the
     caller can pass it to ``get_zim_entries`` or compose a cite_id.
 
-    Post-a14 sweep (F5): the ``title`` field is humanized via
-    ``_humanize_path_title`` so path-shaped hit titles
-    (``"West_Michigan"``) render with spaces, matching the
-    ``citations[]`` view.
+    Title-source preference (post-a14 sweep, pass 2 self-audit):
+
+      1. ``archive_titles[(archive, entry_path)]`` when supplied —
+         this is the bundle's ``title`` field, the most authoritative
+         human-readable name. Required for archives like IEP whose
+         search-hit ``title`` field carries the entry path verbatim
+         (``"iep.utm.edu/kantview/"``) and an underscore-replace
+         heuristic can't help.
+      2. ``hit.get("title")`` humanized via ``_humanize_path_title``
+         — strips underscores when the hit title is path-shaped
+         (Wikipedia's ``"West_Michigan"`` pattern).
+      3. ``entry_path`` humanized as a last resort.
     """
     featured = _featured_article_key(capped_passages)
     featured_key: Optional[tuple[str, str]] = None
@@ -687,15 +696,27 @@ def _build_considered_articles(
             continue
         if featured_key is not None and (archive_name, entry_path) == featured_key:
             continue
+        bundle_title: Optional[str] = None
+        if archive_titles is not None:
+            bundle_title = archive_titles.get((archive_name, entry_path))
+        # Bundle title wins when present and is not the path verbatim.
+        # When the bundle's title equals the entry path (some archives
+        # set entry.title to the path), fall through to the humanize
+        # heuristic so the path's underscores get spaced.
+        chosen_title: str
+        if bundle_title and bundle_title != entry_path:
+            chosen_title = bundle_title
+        else:
+            chosen_title = _humanize_path_title(
+                str(hit.get("title", "")), entry_path
+            )
         out.append(
             cast(
                 "ConsideredArticle",
                 {
                     "archive": archive_name,
                     "entry_path": entry_path,
-                    "title": _humanize_path_title(
-                        str(hit.get("title", "")), entry_path
-                    ),
+                    "title": chosen_title,
                     "score": float(hit.get("score", 0.0)),
                 },
             )
@@ -1403,7 +1424,9 @@ def synthesize_query(
     response_passages: list[SynthesizePassage] = capped
     if omit_passage_text:
         response_passages = []
-    considered_articles = _build_considered_articles(top_hits, capped)
+    considered_articles = _build_considered_articles(
+        top_hits, capped, archive_titles=archive_titles
+    )
     considered_sections = _build_considered_sections(capped, bundle_lookup)
     return cast(
         "SynthesizeResponse",

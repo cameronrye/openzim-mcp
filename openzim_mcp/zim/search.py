@@ -2477,10 +2477,18 @@ class _SearchMixin:
         """Walk an entry's ``is_redirect`` chain to its canonical target.
 
         Bounded by ``MAX_REDIRECT_DEPTH``; tolerates cycles by tracking
-        seen paths. Returns the original entry on any failure so the
-        caller still gets something it can name.
+        seen paths. Returns the last *real* entry on any failure so the
+        caller always gets something it can name — never ``None``.
+
+        Post-a14 sweep self-audit: the prior implementation could
+        return ``None`` when ``get_redirect_entry()`` returned None
+        (observed on archives with broken redirect chains). That
+        crashed every downstream ``entry.path`` access. The
+        ``last_good`` tracking keeps the most recent non-None Entry so
+        the caller can still emit a hit.
         """
         target = entry
+        last_good = entry
         seen: set = set()
         first_path = getattr(target, "path", None)
         if first_path is not None:
@@ -2491,11 +2499,14 @@ class _SearchMixin:
             try:
                 target = target.get_redirect_entry()
             except Exception:
-                return target
+                return last_good
+            if target is None:
+                return last_good
             tp = getattr(target, "path", None)
             if tp is None or tp in seen:
-                return target
+                return last_good
             seen.add(tp)
+            last_good = target
         return target
 
     def _verified_typo_variants(
@@ -2750,6 +2761,24 @@ class _SearchMixin:
         # Sort results so exact case-insensitive matches (score=1.0) lead;
         # otherwise preserve per-file rank order.
         aggregate_results.sort(key=lambda r: -r["score"])
+
+        # Post-a14 sweep self-audit: dedupe by (zim_file, path) AFTER
+        # sorting so the highest-scored row wins. The F3 redirect-
+        # chain canonicalisation collapses ``Bilogy`` and ``Biology``
+        # suggestions onto the same canonical path; without this
+        # dedup the response would carry two rows for the same
+        # article (one from each suggestion that resolved to the
+        # canonical). Pre-F3, the rows had distinct paths so no
+        # dedup was needed.
+        seen: set[tuple[str, str]] = set()
+        deduped: List[Dict[str, Any]] = []
+        for row in aggregate_results:
+            key = (str(row.get("zim_file", "")), str(row.get("path", "")))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(row)
+        aggregate_results = deduped
 
         # Build _meta.suggestions[] from archive-verified typo variants.
         # Two cases surface them (spec §14.4):

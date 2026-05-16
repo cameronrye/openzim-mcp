@@ -38,6 +38,45 @@ def _make_canonical_entry(path: str) -> Any:
     return entry
 
 
+def test_title_match_hit_survives_redirect_chain_returning_none() -> None:
+    """Defensive: if ``_follow_redirect_chain`` returns ``None``
+    (malformed archive redirect), ``title_match_hit`` must not crash
+    on ``None.path``. It should fall back to the original entry's
+    path rather than propagate the AttributeError up to the caller."""
+    from openzim_mcp.zim.search import _SearchMixin
+
+    broken_redirect = MagicMock()
+    broken_redirect.path = "Bilogy"
+    broken_redirect.title = "Bilogy"
+    broken_redirect.is_redirect = True
+    # The libzim layer returns None instead of an Entry — observed on
+    # some archives with broken redirect chains.
+    broken_redirect.get_redirect_entry.return_value = None
+
+    archive = MagicMock()
+    archive.has_entry_by_path.side_effect = (
+        lambda full: full.endswith("Bilogy")
+    )
+    archive.get_entry_by_path.side_effect = (
+        lambda full: broken_redirect if full.endswith("Bilogy") else None
+    )
+
+    class _Stub(_SearchMixin):
+        def _get_entry_snippet(self, _entry, query=None):  # type: ignore[no-untyped-def]
+            return ""
+
+    stub = _Stub.__new__(_Stub)
+
+    # Must not raise AttributeError on None.path.
+    hit = stub.title_match_hit(archive, "bilogy")
+
+    assert hit is not None, "Broken redirect should still produce a hit"
+    assert hit["path"] == "Bilogy", (
+        f"Expected fallback to the pre-follow entry's path 'Bilogy'; "
+        f"got {hit['path']!r}"
+    )
+
+
 def test_title_match_hit_returns_canonical_path_not_redirect_path() -> None:
     """When the title-index fast path lands on a redirect entry, the
     returned hit must report the canonical (post-redirect) path. This

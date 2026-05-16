@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — post-a14 beta-test sweep — section-affinity feature now actually works on real Wikipedia content
 
+### Pass 2 self-audit findings (the recurring pattern: each pass's own fixes have leftover defects)
+
+Three real defects found while self-auditing pass 1; all fixed in this
+commit set. Three new tests added.
+
+- **D-Audit-1: `find_entry_by_title_data` produces duplicate rows after
+  F3's redirect-chain canonicalisation.** When two suggestions
+  (``Bilogy`` redirect + ``Biology`` canonical) both follow to the
+  same canonical path, the result list previously emitted two rows
+  with the same path. Added a ``(zim_file, path)`` dedup pass after
+  the score sort, keeping the highest-scored occurrence.
+- **D-Audit-2: `_follow_redirect_chain` can return ``None``.** The
+  pre-existing implementation's docstring promised "Returns the
+  original entry on any failure" but a redirect whose
+  ``get_redirect_entry()`` returned None resulted in the function
+  returning None — which then crashed every downstream
+  ``entry.path`` access. Tracks ``last_good`` so the helper now
+  always returns a real entry, matching its contract.
+- **D-Audit-3: F5's underscore-replace heuristic misses slash-shaped
+  paths.** Archives like IEP set their entries' ``title`` field to the
+  full path (``iep.utm.edu/kantview/``); the F5 humanise heuristic
+  only swaps underscores, so these entries surfaced unchanged in
+  ``considered_articles[].title``. Extended ``_build_considered_articles``
+  to accept ``archive_titles`` (already computed by
+  ``_build_section_lookups``) and prefer the bundle's authoritative
+  title when present. Verified in-process against the IEP archive
+  where titles like ``"Kant, Immanuel | Internet Encyclopedia of
+  Philosophy"`` now flow through correctly.
+
 The live beta-test sweep of a14 against
 `wikipedia_en_all_maxi_2026-02.zim` found that every `synthesize=True`
 response carried `section_id: null` on every citation and an empty
