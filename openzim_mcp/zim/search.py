@@ -2616,9 +2616,7 @@ class _SearchMixin:
                         # one. ``Big_Rapids_Michigan`` (comma-stripped
                         # redirect) → ``Big_Rapids,_Michigan`` keeps the
                         # cite_id stable across lookup-variant paths.
-                        fast_hit_entry = self._follow_redirect_chain(
-                            fast_hit_entry
-                        )
+                        fast_hit_entry = self._follow_redirect_chain(fast_hit_entry)
                         aggregate_results.append(
                             {
                                 "path": fast_hit_entry.path,

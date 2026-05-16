@@ -36,7 +36,6 @@ from openzim_mcp.bundle import extract_entry_bundle
 from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.synthesize import _attribute_sections, _locate_passage
 
-
 # Wikipedia-shaped HTML: h1 with id="firstHeading", lead with natural
 # bold on the entity name (the universal Wikipedia pattern), then h2
 # sections.
@@ -85,9 +84,7 @@ def test_locate_passage_survives_natural_bold_in_markdown(
     find the snippet inside the markdown. Without this, real-archive
     lead passages drop to entry-level citation."""
     archive = _make_archive_with_entry(WIKIPEDIA_SHAPED_HTML)
-    bundle = extract_entry_bundle(
-        archive, "Big_Rapids,_Michigan", content_processor=cp
-    )
+    bundle = extract_entry_bundle(archive, "Big_Rapids,_Michigan", content_processor=cp)
     md = bundle["rendered_markdown"]
     # Sanity: the natural bold is present in the bundle.
     assert "**Big Rapids**" in md, (
@@ -127,9 +124,7 @@ def test_pre_h1_chrome_passage_falls_back_to_first_section(
 </body></html>
 """
     archive = _make_archive_with_entry(html)
-    bundle = extract_entry_bundle(
-        archive, "Big_Rapids,_Michigan", content_processor=cp
-    )
+    bundle = extract_entry_bundle(archive, "Big_Rapids,_Michigan", content_processor=cp)
     md = bundle["rendered_markdown"]
 
     # Pick a sub-string from the *chrome* (before the h1 line).
@@ -142,6 +137,7 @@ def test_pre_h1_chrome_passage_falls_back_to_first_section(
     probe = chrome_text[-60:].strip() if len(chrome_text) >= 60 else chrome_text
     if len(probe) < 12:
         import pytest as _pt
+
         _pt.skip(
             "Chrome too short for the >=12-char normalize probe; can't "
             "exercise this fallback on this fixture shape."
@@ -179,9 +175,7 @@ def test_lead_passage_attributes_to_a_section_on_wikipedia_shaped_html(
     that spans the lead). Without this, every BM25-lead-snippet on
     real Wikipedia falls through to entry-level citation."""
     archive = _make_archive_with_entry(WIKIPEDIA_SHAPED_HTML)
-    bundle = extract_entry_bundle(
-        archive, "Big_Rapids,_Michigan", content_processor=cp
-    )
+    bundle = extract_entry_bundle(archive, "Big_Rapids,_Michigan", content_processor=cp)
 
     passage = {
         "cite_id": "wiki/Big_Rapids,_Michigan",

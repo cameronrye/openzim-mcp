@@ -54,11 +54,9 @@ def test_title_match_hit_survives_redirect_chain_returning_none() -> None:
     broken_redirect.get_redirect_entry.return_value = None
 
     archive = MagicMock()
-    archive.has_entry_by_path.side_effect = (
-        lambda full: full.endswith("Bilogy")
-    )
-    archive.get_entry_by_path.side_effect = (
-        lambda full: broken_redirect if full.endswith("Bilogy") else None
+    archive.has_entry_by_path.side_effect = lambda full: full.endswith("Bilogy")
+    archive.get_entry_by_path.side_effect = lambda full: (
+        broken_redirect if full.endswith("Bilogy") else None
     )
 
     class _Stub(_SearchMixin):

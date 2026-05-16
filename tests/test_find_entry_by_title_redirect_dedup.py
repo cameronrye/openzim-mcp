@@ -81,9 +81,7 @@ def test_find_entry_by_title_dedupes_after_redirect_chain_collapse(
     )
 
     server.zim_operations.path_validator = MagicMock()
-    server.zim_operations.path_validator.validate_path.return_value = (
-        "/zim/test.zim"
-    )
+    server.zim_operations.path_validator.validate_path.return_value = "/zim/test.zim"
     server.zim_operations.path_validator.validate_zim_file.return_value = (
         "/zim/test.zim"
     )

@@ -61,8 +61,7 @@ def test_iter_query_windows_skips_trailing_so_iter_tails_handles_those():
     query = "big rapids michigan notable people"
     windows = list(iter_query_windows(query))
     tails = {
-        " ".join(query.split()[-n:])
-        for n in range(1, min(5, len(query.split())) + 1)
+        " ".join(query.split()[-n:]) for n in range(1, min(5, len(query.split())) + 1)
     }
     assert not (set(windows) & tails)
 

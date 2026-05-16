@@ -707,9 +707,7 @@ def _build_considered_articles(
         if bundle_title and bundle_title != entry_path:
             chosen_title = bundle_title
         else:
-            chosen_title = _humanize_path_title(
-                str(hit.get("title", "")), entry_path
-            )
+            chosen_title = _humanize_path_title(str(hit.get("title", "")), entry_path)
         out.append(
             cast(
                 "ConsideredArticle",

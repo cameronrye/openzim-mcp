@@ -72,9 +72,9 @@ def test_lead_trailer_uses_canonical_path_after_typo_promotion() -> None:
 
     rendered = handler._lead_with_toc("/fake/wiki.zim", "Biology", body_with_h2)
 
-    assert "show structure of Biology" in rendered, (
-        f"Trailer should reference canonical 'Biology', got: {rendered!r}"
-    )
-    assert "show structure of Bilogy" not in rendered, (
-        f"Trailer must NOT reference the typo path 'Bilogy', got: {rendered!r}"
-    )
+    assert (
+        "show structure of Biology" in rendered
+    ), f"Trailer should reference canonical 'Biology', got: {rendered!r}"
+    assert (
+        "show structure of Bilogy" not in rendered
+    ), f"Trailer must NOT reference the typo path 'Bilogy', got: {rendered!r}"

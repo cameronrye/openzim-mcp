@@ -49,9 +49,9 @@ def test_build_considered_articles_prefers_bundle_title_over_hit_title():
         top_hits, capped_passages, max_n=10, archive_titles=archive_titles
     )
     assert out
-    assert out[0]["title"] == "Immanuel Kant", (
-        f"Expected bundle title 'Immanuel Kant', got {out[0]['title']!r}"
-    )
+    assert (
+        out[0]["title"] == "Immanuel Kant"
+    ), f"Expected bundle title 'Immanuel Kant', got {out[0]['title']!r}"
 
 
 def test_build_considered_articles_emits_human_readable_title_when_hit_title_is_path_like():

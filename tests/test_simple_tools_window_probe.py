@@ -115,8 +115,6 @@ def test_promote_falls_back_to_fuzzy_when_sliding_window_misses_too():
 
     handler.zim_operations.find_entry_by_title_data.side_effect = fake_find
 
-    result = handler._promote_topic_via_title_index(
-        "/fake/wiki.zim", "Photosythesis"
-    )
+    result = handler._promote_topic_via_title_index("/fake/wiki.zim", "Photosythesis")
     assert result is not None
     assert result["path"] == "Photosynthesis"
