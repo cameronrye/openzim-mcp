@@ -5,21 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — post-a15 beta-test sweep — 4 live-Wikipedia defects (D4 / D5 / D6 / D7)
+## [Unreleased] — post-a15 beta-test sweep — 7 live-Wikipedia defects (D4 / D5 / D6 / D7 + P4-D1 / P4-D2 / P4-D3)
 
 The multi-pass live sweep of a15 against
-`wikipedia_en_all_maxi_2026-02.zim` (~118 GB, ~27.2 M entries) surfaced
-four user-facing defects: one in the `tell_me_about` disambig-page
-handling (Mercury), one in the intent parser's politeness-prefix
-regex, one in `find_by_title`'s response to namespace-prefixed input,
-and one schema-consistency gap in `walk_namespace`. Pass 2 self-
-audited every fix in both verbose and compact rendering modes and
+`wikipedia_en_all_maxi_2026-02.zim` (~118 GB, ~27.2 M entries) ran
+across five passes. Pass 1 surfaced four user-facing defects (D4 in
+the `tell_me_about` disambig-page handling for Mercury-class bare
+titles; D5 in the intent parser's politeness-prefix regex; D6 in
+`find_by_title`'s response to namespace-prefixed input; D7 a
+schema-consistency gap in `walk_namespace`). Pass 2 self-audited
+every D-fix in both verbose and compact rendering modes and
 exercised the canonical-article paths (Berlin / Apollo 11 / Java)
-that the disambig-detection logic must not regress. Pass 3 re-tested
+the disambig-detection logic must not regress. Pass 3 re-tested
 across a broader disambig set (Mars, Sun, Moon, Paris, Apollo bare),
 walked empty namespaces B / X / Z, and exercised cross-fix
-interactions (`could you find article titled M/Title`); both later
-passes found zero new defects.
+interactions (`could you find article titled M/Title`); both
+passes 2 and 3 found zero new defects. Pass 4 then deliberately
+stress-tested the four landed D-fixes from angles the earlier
+passes hadn't probed (more bare-title disambigs, pathological
+politeness combinations, find_by_title edge cases, walk_namespace
+malformed args) AND exercised the intent paths the earlier passes
+had barely touched (synthesize, browse namespace, show structure
+of, links in, suggestions for, search in namespace); it surfaced
+three more defects (P4-D1 / P4-D2 / P4-D3) — each one fixed in
+this commit. Pass 5 re-tested every fix and audited the regression
+shape; zero new defects.
 
 ### Fixed
 
@@ -76,19 +86,59 @@ passes found zero new defects.
   Fixed by passing `namespace_entry_count=0` in the short-circuit.
   Updated the `walk_A_10` golden to reflect the new schema; walk-M
   and walk-W goldens are unchanged (already carried the field).
+- **P4-D1: `suggestions for` (no actual prefix) now returns the
+  structured "Missing Search Term" error instead of silently
+  autocompleting against the literal word "for".** The regex's
+  optional `(?:for\s+)?` group failed to match without trailing
+  whitespace, so the mandatory capture greedily swallowed "for"
+  itself; the handler's existing missing-arg guard then saw a
+  non-empty `partial_query` and ran the suggestion fallback (which
+  spent ~70 s scanning for "for" — a high-frequency English token).
+  Fixed in `_extract_suggestions` by discarding a bare-"for"
+  capture so the guard takes over. Legitimate prefixes that happen
+  to start with "for" (e.g., `suggestions for forest`) still work.
+- **P4-D2: chained-intent detector no longer bypassed by a modal
+  lead-in.** `_chained_intent_guidance`'s
+  `_CHAINED_OPERATION_PREFIX_RE` is anchored at `^` and only
+  recognised operation verbs at position 0, so `could you tell me
+  about Photosynthesis then list namespaces` shifted the verb past
+  the anchor — `left_is_op` evaluated False, the chain gate failed,
+  and the query fell through to normal intent classification where
+  the higher-confidence `list_namespaces` won and silently dropped
+  the `tell me about` half. The D5 modal-strip lives inside
+  `_extract_tell_me_about`; it only runs AFTER the chain detector
+  has already decided. Fixed by pre-stripping the same modal
+  scaffold (`(?:could|can|would|will)\s+(?:you|we|i)\s+
+  (?:please\s+)?`) at the top of `_chained_intent_guidance` so
+  detection sees the cleaned query.
+- **P4-D3: `walk namespace` with a malformed argument now returns
+  a structured "Missing or Invalid Namespace" error instead of
+  silently walking C.** Multi-char (`AB`), digit (`1`), special
+  (`_`), and missing-argument forms all fell through to
+  `params.get("namespace", "C")` in `_handle_walk_namespace` with
+  no signal to the caller that the input was rejected. Sibling
+  tools (`find_by_title`, `links_in`, `suggestions`,
+  `tell_me_about`) already return structured missing-arg errors;
+  this one didn't. Fixed by adding an upfront guard that mirrors
+  their shape (rule / examples) before the C-default kicks in.
 
 ### Tests
 
-- **`tests/test_post_a15_beta_fixes.py`** — 25 regression tests
-  pinning the four defects. Each defect gets:
+- **`tests/test_post_a15_beta_fixes.py`** — 55 regression tests
+  pinning all seven defects. Each defect gets:
   - The fix-case test (Mercury body has no misleading trailer;
     "could you tell me about X" parses topic=X; "find article titled
     M/Title" returns redirect; `_build_walk_result` exposes the
-    zero-count field).
+    zero-count field; `suggestions for` triggers the missing-arg
+    guard; `could you tell me about X then list namespaces` is
+    detected as chained; `walk namespace AB` returns the missing-
+    namespace error).
   - Negative self-audit cases (Berlin keeps its disambig-twin
     footer; non-modal queries unchanged; lowercase a/b not
     redirected; `namespace_entry_count` omitted when caller passes
-    None).
+    None; legitimate `suggestions for forest` still captures the
+    prefix; non-chained `could you tell me about X` not tripped by
+    the chain detector; `walk namespace c` lowercase still works).
   - Cross-defect probes (Java disambig body suppresses
     `disambig_twin_path` footer too).
 

@@ -232,7 +232,19 @@ def _extract_suggestions(query: str, params: Dict[str, Any]) -> None:
     )
     suggest_match = safe_regex_search(suggest_pattern, query, re.IGNORECASE)
     if suggest_match:
-        params["partial_query"] = suggest_match.group(1).strip()
+        candidate = suggest_match.group(1).strip()
+        # A15 post-a15 P4-D1: when the user types ``suggestions for``
+        # with no actual prefix after it, the optional ``(?:for\s+)?``
+        # fails to match (no trailing whitespace before EOL), and the
+        # regex's mandatory capture group falls back to swallowing
+        # "for" itself as the prefix. Handler's missing-arg guard
+        # (``if not partial_query``) then never fires because "for"
+        # is non-empty. Treat a bare-"for" capture as if no prefix
+        # was supplied so the existing guard takes over and the user
+        # gets the structured "Missing Search Term" error instead of
+        # autocompleting against the literal "for".
+        if candidate.lower() != "for":
+            params["partial_query"] = candidate
 
 
 def _extract_search(query: str, params: Dict[str, Any]) -> None:

@@ -1,7 +1,9 @@
 """Regression tests for the post-a15 beta-test sweep (a16 fixes).
 
 The post-a15 live sweep against the 118 GB Wikipedia ZIM surfaced
-four user-facing defects:
+four user-facing defects in pass 1 (D4 / D5 / D6 / D7); pass 4 then
+added an explicit "stress-test the fixes from new angles" sweep that
+caught three more (P4-D1 / P4-D2 / P4-D3), all also pinned below:
 
 - D4 (Pass 1): ``tell me about Mercury`` — Mercury is a disambiguation
   page (no canonical article at the bare title), so the resolver
@@ -35,6 +37,34 @@ four user-facing defects:
   that walk-M / walk-W include — schema inconsistency in the
   short-circuit at ``namespace.py:1554``. Downstream consumers had
   to special-case "missing" vs "zero".
+
+- P4-D1 (Pass 4): ``suggestions for`` (no prefix supplied) silently
+  autocompleted against the literal word "for". The regex's optional
+  ``(?:for\\s+)?`` group fails to match without trailing whitespace,
+  so the mandatory capture greedily swallows "for" itself; the
+  handler's existing missing-arg guard then sees a non-empty
+  ``partial_query`` and runs the suggestion fallback (which spends
+  ~70 s scanning for "for" — a high-frequency English token).
+
+- P4-D2 (Pass 4): the chained-intent detector
+  (``_chained_intent_guidance``) only recognised operation verbs at
+  position 0 — its ``_CHAINED_OPERATION_PREFIX_RE`` is anchored at
+  ``^`` — so adding a modal lead-in (``could you tell me about X
+  then list namespaces``) pushed the verb past the anchor,
+  ``left_is_op`` evaluated False, the chain gate failed, and the
+  query fell through to normal intent classification. ``list
+  namespaces`` then won on confidence, the ``tell me about`` half
+  was dropped on the floor, and the caller got the wrong half
+  silently. The D5 modal-strip lives inside ``_extract_tell_me_about``
+  — it only runs AFTER the chain detector has decided.
+
+- P4-D3 (Pass 4): ``walk namespace`` with any malformed argument
+  (multi-char ``AB``, digit ``1``, special ``_``, or absent
+  entirely) silently fell through to ``params.get("namespace", "C")``
+  and walked the C-namespace. No signal to the caller that the
+  input was rejected. Sibling tools (``find_by_title``, ``links_in``,
+  ``suggestions``, ``tell_me_about``) all return structured
+  missing-arg errors.
 
 Each test pins one defect; failures here mean a regression on the
 specific bug.
@@ -453,3 +483,214 @@ class TestD4DisambigFooterSuppression:
         # Canonical article: the disambig-twin footer fires because
         # the body is NOT a disambig page.
         assert "this topic also has a disambiguation page" in out
+
+
+# ---------------------------------------------------------------------------
+# P4-D1: suggestions intent extraction must not capture "for" as the prefix
+# ---------------------------------------------------------------------------
+
+
+class TestP4D1SuggestionsForCapture:
+    """P4-D1: ``suggestions for`` (no prefix) used to autocomplete
+    against the literal word "for" because the regex's optional
+    ``(?:for\\s+)?`` failed to match without trailing whitespace and
+    the mandatory capture group greedily swallowed "for" itself. The
+    handler's missing-arg guard never saw an empty prefix. Fix
+    detects the bare-"for" capture and discards it.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "suggestions for",
+            "suggestions for ",
+            "suggestions for  ",  # multi-space trail
+            "autocomplete for",
+            "hints for",
+        ],
+    )
+    def test_bare_for_not_captured_as_prefix(self, query: str) -> None:
+        intent, params, _ = IntentParser.parse_intent(query)
+        assert intent == "suggestions"
+        assert "partial_query" not in params or not params.get("partial_query")
+
+    @pytest.mark.parametrize(
+        "query,expected_prefix",
+        [
+            ("suggestions for cat", "cat"),
+            ("suggestions for Photo", "Photo"),
+            ("suggestions Photo", "Photo"),  # no-for form
+            ('suggestions for "Photo"', "Photo"),  # quote-stripped by _QUOTE_OPEN?
+            ("autocomplete cat", "cat"),
+            # Edge: a real prefix that starts with "for-" should still
+            # be captured.
+            ("suggestions for forest", "forest"),
+        ],
+    )
+    def test_real_prefix_still_captured(self, query: str, expected_prefix: str) -> None:
+        intent, params, _ = IntentParser.parse_intent(query)
+        assert intent == "suggestions"
+        assert params.get("partial_query") == expected_prefix
+
+    def test_missing_arg_guard_now_fires(self) -> None:
+        """End-to-end: the handler's existing missing-arg guard now
+        fires for ``suggestions for`` because the parser stops
+        producing a phantom "for" prefix.
+        """
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.get_search_suggestions.side_effect = AssertionError(
+            "get_search_suggestions should not be called when prefix is empty"
+        )
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query("suggestions for", zim_file_path="/x.zim")
+        assert "Missing Search Term" in out
+        assert "suggestions for bio" in out  # example in the error body
+
+
+# ---------------------------------------------------------------------------
+# P4-D2: chained-intent detector must strip modal lead-in before splitting
+# ---------------------------------------------------------------------------
+
+
+class TestP4D2ChainDetectorModalLeadIn:
+    """P4-D2: ``could you tell me about Photosynthesis then list
+    namespaces`` was NOT rejected as chained because
+    ``_CHAINED_OPERATION_PREFIX_RE`` is anchored at ``^`` and the
+    modal lead-in pushes the verb past position 0. The chain gate
+    failed, fell through to normal intent classification, and the
+    higher-confidence ``list_namespaces`` won — silently dropping
+    the ``tell me about`` half. Fix pre-strips the modal scaffold
+    inside ``_chained_intent_guidance`` so detection sees the
+    cleaned query.
+    """
+
+    @pytest.fixture
+    def handler(self) -> SimpleToolsHandler:
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        # If the chain detector fires correctly, no backend should be
+        # touched — make them all explode.
+        mock.list_namespaces.side_effect = AssertionError(
+            "list_namespaces must not be called when chain detector fires"
+        )
+        mock.search_zim_file_data.side_effect = AssertionError(
+            "search must not be called when chain detector fires"
+        )
+        return SimpleToolsHandler(mock)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "could you tell me about Photosynthesis then list namespaces",
+            "can you tell me about Photosynthesis then list namespaces",
+            "would you tell me about Photosynthesis and then list namespaces",
+            "will you tell me about Photosynthesis; list namespaces",
+            "could you please tell me about Photosynthesis then list namespaces",
+        ],
+    )
+    def test_modal_prefix_does_not_bypass_chain_detector(
+        self, handler: SimpleToolsHandler, query: str
+    ) -> None:
+        out = handler.handle_zim_query(query, zim_file_path="/x.zim")
+        assert "Chained Operations Detected" in out
+        assert "tell me about Photosynthesis" in out
+        assert "list namespaces" in out
+
+    def test_non_chained_modal_still_works(self) -> None:
+        """Sanity: a non-chained modal query (``could you tell me
+        about Photosynthesis``) must NOT trip the chain detector.
+        """
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.search_zim_file_data.return_value = {
+            "results": [
+                {"path": "Photosynthesis", "title": "Photosynthesis", "score": 100}
+            ]
+        }
+        mock.get_zim_entry.return_value = "Photosynthesis body content."
+        mock.find_entry_by_title_data.return_value = {
+            "results": [
+                {"path": "Photosynthesis", "title": "Photosynthesis", "score": 1.0}
+            ]
+        }
+        mock.get_article_structure_data.return_value = {"sections": []}
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query(
+            "could you tell me about Photosynthesis",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert "Chained Operations Detected" not in out
+        assert "_Source: `Photosynthesis`_" in out
+
+
+# ---------------------------------------------------------------------------
+# P4-D3: walk_namespace must reject malformed namespace arguments
+# ---------------------------------------------------------------------------
+
+
+class TestP4D3WalkNamespaceMissingArg:
+    """P4-D3: ``walk namespace`` with a malformed argument silently
+    walked C — ``params.get("namespace", "C")`` defaulted whenever
+    the intent extractor failed to capture a valid single-letter
+    namespace. Fix returns a structured ``Missing or Invalid
+    Namespace`` error instead.
+    """
+
+    @pytest.fixture
+    def handler(self) -> SimpleToolsHandler:
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.walk_namespace.side_effect = AssertionError(
+            "walk_namespace must not be called when namespace is malformed"
+        )
+        mock.walk_namespace_data.side_effect = AssertionError(
+            "walk_namespace_data must not be called when namespace is malformed"
+        )
+        return SimpleToolsHandler(mock)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "walk namespace",  # no arg
+            "walk namespace AB",  # multi-char
+            "walk namespace 1",  # digit
+            "walk namespace _",  # special
+            "walk namespace ABCD",  # multi-letter
+        ],
+    )
+    def test_malformed_namespace_returns_structured_error(
+        self, handler: SimpleToolsHandler, query: str
+    ) -> None:
+        out = handler.handle_zim_query(query, zim_file_path="/x.zim")
+        assert "Missing or Invalid Namespace" in out
+        # Helpful examples included.
+        assert "walk namespace C" in out
+        assert "walk namespace M" in out
+
+    @pytest.mark.parametrize(
+        "query,expected_ns",
+        [
+            ("walk namespace A", "A"),
+            ("walk namespace C", "C"),
+            ("walk namespace M", "M"),
+            ("walk namespace W", "W"),
+            ("walk namespace c", "C"),  # lowercase coerced to upper
+        ],
+    )
+    def test_valid_namespace_passes_through(self, query: str, expected_ns: str) -> None:
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.walk_namespace.return_value = "ok"
+        handler = SimpleToolsHandler(mock)
+        handler.handle_zim_query(query, zim_file_path="/x.zim")
+        mock.walk_namespace.assert_called_once()
+        call_args = mock.walk_namespace.call_args
+        # Second positional arg is namespace.
+        assert call_args.args[1] == expected_ns

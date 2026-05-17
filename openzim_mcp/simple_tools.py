@@ -707,6 +707,25 @@ class SimpleToolsHandler:
         """
         if not query:
             return None
+        # A15 post-a15 P4-D2: strip leading modal politeness
+        # (``could you``, ``can you``, ``would you``, ``will you``)
+        # before splitting on the connector. The chained-detection
+        # `_CHAINED_OPERATION_PREFIX_RE` is anchored at ``^`` and only
+        # matches operation verbs at the very start; a modal prefix
+        # pushes the verb past position 0 so ``left_is_op`` evaluates
+        # False, the gate fails, and the chain falls through to normal
+        # intent classification — where ``list_namespaces`` (highest
+        # confidence) silently wins over the dropped ``tell me about``
+        # half. Mirror the same scaffold-strip ``_extract_tell_me_about``
+        # already uses so detection works on the cleaned query.
+        query = re.sub(
+            r"^\s*(?:could|can|would|will)\s+(?:you|we|i)\s+(?:please\s+)?",
+            "",
+            query,
+            flags=re.IGNORECASE,
+        ).strip()
+        if not query:
+            return None
         for connector_pat in cls._CHAINED_INTENT_CONNECTORS:
             parts = re.split(connector_pat, query, maxsplit=1, flags=re.IGNORECASE)
             if len(parts) != 2:
@@ -2761,6 +2780,25 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
+        # A15 post-a15 P4-D3: ``walk namespace`` with a malformed
+        # argument (multi-char ``AB``, digit ``1``, special ``_``, or
+        # missing entirely) previously fell through to
+        # ``params.get("namespace", "C")`` and silently walked C —
+        # giving the caller no signal that their input was rejected.
+        # Mirror the missing-arg shape ``_handle_find_by_title`` /
+        # ``_handle_links`` / ``_handle_suggestions`` use so the error
+        # surface is consistent across the simple-mode tools.
+        namespace = params.get("namespace")
+        if not namespace:
+            return (
+                "**Missing or Invalid Namespace**\n\n"
+                "**Issue**: `walk namespace` needs a single uppercase "
+                "namespace letter (A, C, M, W, etc.).\n"
+                "**Examples**:\n"
+                "- `walk namespace C` — main content entries\n"
+                "- `walk namespace M` — archive metadata\n"
+                "- `walk namespace W` — well-known entries"
+            )
         # ``offset`` semantically maps to ``scan_at`` here — a resume
         # entry id, not pagination skip — but it's the only
         # general-purpose passthrough channel so we honour it. v2 walk
@@ -2774,14 +2812,14 @@ class SimpleToolsHandler:
         if options.get("compact", False):
             data = self.zim_operations.walk_namespace_data(
                 zim_file_path,
-                params.get("namespace", "C"),
+                namespace,
                 cursor_state=cursor_state,
                 limit=limit,
             )
             return compact_renderers.render_walk_namespace(data)
         return self.zim_operations.walk_namespace(
             zim_file_path,
-            params.get("namespace", "C"),
+            namespace,
             cursor=cursor_state,
             limit=limit,
         )
