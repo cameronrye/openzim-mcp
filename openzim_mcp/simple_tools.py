@@ -1306,13 +1306,22 @@ class SimpleToolsHandler:
 
     @classmethod
     def _is_disambig_lead(cls, pre_h2: str) -> bool:
-        """Return True when ``pre_h2`` looks like a disambig-page lead."""
-        if len(pre_h2) >= 400:
-            return False
+        """Return True when ``pre_h2`` looks like a disambig-page lead.
+
+        Examines only the trailing 400 characters: pages like Mercury
+        carry a ``most commonly refers to:`` preamble with a list of
+        top-level entries BEFORE the ``may also refer to:`` line that
+        actually marks the end of the disambig lead. The full pre-H2
+        body is therefore well over 400 chars on those pages. The
+        original implementation bailed out at ``len(pre_h2) >= 400``
+        and missed them. The tail window keeps the regex-free
+        ``endswith`` bound while letting long preambles still trigger.
+        """
         # ``" ".join(s.split())`` collapses all whitespace runs (including
         # newlines and tabs) to single spaces. ``rstrip(":")`` accommodates
         # both ``may refer to:`` and the bare ``may refer to`` variants.
-        normalized = " ".join(pre_h2.lower().split()).rstrip(":").rstrip()
+        tail = pre_h2[-400:] if len(pre_h2) > 400 else pre_h2
+        normalized = " ".join(tail.lower().split()).rstrip(":").rstrip()
         return normalized.endswith(cls._DISAMBIG_LEAD_PHRASES)
 
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:
@@ -2438,13 +2447,34 @@ class SimpleToolsHandler:
             f"_Source: `{top_path}`_\n\n"
             f"{article_body}"
         )
-        if disambig_twin_path:
+        # A15 post-a15: when the resolved article body IS itself a
+        # disambiguation page (Mercury, Java, etc. — bare titles that
+        # never had a dedicated article and live as disambig at the
+        # canonical path), both trailing footers are misleading:
+        # ``Note: this topic also has a disambiguation page`` points
+        # back at the same content, and ``May also refer to: <one
+        # extends-topic sibling>`` names a single random match while
+        # the body itself already enumerates dozens of alternates. The
+        # canonical-vs-disambig auto-pick that produced these hints
+        # was designed for cases like Berlin (canonical city article,
+        # separate Berlin_(disambiguation) twin) — when the auto-pick
+        # is the disambig page itself, drop them. Detection re-uses
+        # the same pre-H2 ``may refer to`` test the lead-with-TOC cut
+        # uses, on the fetched body.
+        h2_in_body = self._first_article_h2(article_body)
+        pre_h2_in_body = (
+            article_body[: h2_in_body.start()].rstrip()
+            if h2_in_body
+            else article_body.rstrip()
+        )
+        body_is_disambig_page = self._is_disambig_lead(pre_h2_in_body)
+        if disambig_twin_path and not body_is_disambig_page:
             result = result + (
                 f"\n\n_Note: this topic also has a disambiguation page — "
                 f"see `get article {disambig_twin_path}` for alternate "
                 f"meanings._"
             )
-        if related_extends_paths:
+        if related_extends_paths and not body_is_disambig_page:
             # A11 post-a11 C1: cap the hint at the first 4 alternates
             # so the footer stays small even on hub topics that
             # generated a long extends-list.
@@ -2778,6 +2808,34 @@ class SimpleToolsHandler:
                 "- 'find article titled Photosynthesis'\n"
                 "- 'find entry named \"World War II\"'\n"
                 "- 'what's the path for Cellular_respiration'\n"
+            )
+        # A15 post-a15: namespace-prefixed input like ``M/Title`` is a
+        # ZIM path, not a title. The title index only stores titles
+        # (e.g. M/Title's title is just "Title"), so passing the path
+        # to ``find_entry_by_title_data`` returns silently 0 hits with
+        # no signal that the user used the wrong tool. Redirect upfront
+        # so the caller knows to use ``get article`` for path lookup.
+        # Strict pattern (uppercase letter + ``/`` + non-empty
+        # suffix) matches ZIM namespace conventions without false-
+        # positiving real titles that legitimately contain ``/``
+        # (Wikipedia subpages like ``Foo/Bar`` would have a lowercase
+        # second char, etc.).
+        if (
+            len(title) >= 3
+            and title[0].isascii()
+            and title[0].isupper()
+            and title[1] == "/"
+            and title[2:].strip()
+        ):
+            return (
+                "**Namespace Path, Not a Title**\n\n"
+                f"`{title}` looks like a ZIM namespace path. The title "
+                "index only stores entry titles, so a path lookup "
+                "returns no hits.\n"
+                "**Try one of**:\n"
+                f"- `get article {title}` — direct path lookup\n"
+                f"- `find article titled {title[2:].strip()}` — "
+                "title-only lookup (drops the namespace prefix)\n"
             )
         if options.get("compact", False):
             data = self.zim_operations.find_entry_by_title_data(

@@ -5,7 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] — post-a15 beta-test sweep — 4 live-Wikipedia defects (D4 / D5 / D6 / D7)
+
+The multi-pass live sweep of a15 against
+`wikipedia_en_all_maxi_2026-02.zim` (~118 GB, ~27.2 M entries) surfaced
+four user-facing defects: one in the `tell_me_about` disambig-page
+handling (Mercury), one in the intent parser's politeness-prefix
+regex, one in `find_by_title`'s response to namespace-prefixed input,
+and one schema-consistency gap in `walk_namespace`. Pass 2 self-
+audited every fix in both verbose and compact rendering modes and
+exercised the canonical-article paths (Berlin / Apollo 11 / Java)
+that the disambig-detection logic must not regress. Pass 3 re-tested
+across a broader disambig set (Mars, Sun, Moon, Paris, Apollo bare),
+walked empty namespaces B / X / Z, and exercised cross-fix
+interactions (`could you find article titled M/Title`); both later
+passes found zero new defects.
+
+### Fixed
+
+- **D4: `tell me about Mercury` no longer attaches a misleading
+  `_May also refer to: Mercury_Monterey — use tell me about <full
+  title>_` footer to the disambiguation-page body.** Two cooperating
+  bugs: `SimpleToolsHandler._is_disambig_lead` returned False
+  whenever `pre_h2` exceeded 400 chars — Mercury's 628-char pre-H2
+  (the "most commonly refers to" preamble, three top-level entries,
+  and the "may also refer to" header) blew past the cap, so the
+  existing disambig-page detection in `_lead_with_toc` never fired;
+  AND the trailing-footer block in `_handle_tell_me_about` had no
+  way to suppress the `disambig_twin_path` / `related_extends_paths`
+  hints when the resolved body was itself a disambig page. Fixed
+  by checking only the trailing 400 characters of `pre_h2` (the
+  regex-free `endswith` stays bounded, but long preambles now
+  trigger) and by gating both trailing footers on a fresh
+  `body_is_disambig_page` check on the fetched body. Canonical
+  pages with disambig twins (Berlin) keep their footer; canonical
+  pages with extends-topic siblings (Apollo 11 → anniversaries /
+  lunar sample display / goodwill messages) keep their footer.
+- **D5: `could you tell me about Photosynthesis` now parses
+  `topic = "Photosynthesis"` instead of leaking the modal lead-in
+  into the topic.** The verb-prefix regex in
+  `_extract_tell_me_about` anchored at `^\s*` and never matched
+  "could you" / "can you" / "would you" / "will you", so the whole
+  query fell through to the `topic = query.strip()` fallback and
+  downstream relied on the tail-probe entity rescue to find the
+  article anyway. Fixed by stripping the modal scaffold
+  (`(?:could|can|would|will)\s+(?:you|we|i)\s+(?:please\s+)?`) before
+  the verb regex runs. Leaves non-modal queries unchanged; combines
+  cleanly with the existing trailing-politeness strip
+  (`could you tell me about X please` → topic=X).
+- **D6: `find article titled M/Title` now redirects to `get article
+  M/Title` instead of returning a silent `0_hits`.** The title index
+  only stores titles (M/Title's title is "Title"), so passing a ZIM
+  namespace path through the title-lookup backend was guaranteed to
+  return nothing — with no signal to the caller that the wrong tool
+  was in use. `_handle_find_by_title` now detects the
+  uppercase-letter + slash + non-empty-suffix shape upfront and
+  returns a structured **Namespace Path, Not a Title** message that
+  points at both `get article <path>` (direct lookup) and `find
+  article titled <stripped>` (title-only fallback). Lowercase
+  prefixes (`a/b`) and titles without the namespace shape pass
+  through to the backend unchanged.
+- **D7: `walk namespace A` (and any other empty new-scheme
+  namespace) now includes `namespace_entry_count: 0` in the
+  response.** The short-circuit at
+  `openzim_mcp/zim/namespace.py` for new-scheme non-C/M/W namespaces
+  built an empty result without passing `namespace_entry_count` to
+  `_build_walk_result`, so the field was omitted entirely while
+  walk-M and walk-W (which surface their bounded totals) included
+  it. Downstream consumers had to special-case "missing" vs "zero".
+  Fixed by passing `namespace_entry_count=0` in the short-circuit.
+  Updated the `walk_A_10` golden to reflect the new schema; walk-M
+  and walk-W goldens are unchanged (already carried the field).
+
+### Tests
+
+- **`tests/test_post_a15_beta_fixes.py`** — 25 regression tests
+  pinning the four defects. Each defect gets:
+  - The fix-case test (Mercury body has no misleading trailer;
+    "could you tell me about X" parses topic=X; "find article titled
+    M/Title" returns redirect; `_build_walk_result` exposes the
+    zero-count field).
+  - Negative self-audit cases (Berlin keeps its disambig-twin
+    footer; non-modal queries unchanged; lowercase a/b not
+    redirected; `namespace_entry_count` omitted when caller passes
+    None).
+  - Cross-defect probes (Java disambig body suppresses
+    `disambig_twin_path` footer too).
 
 ## [2.0.0a15] — 2026-05-16 (alpha pre-release) — post-a14 beta-test sweep — section-affinity feature now actually works on real Wikipedia content
 

@@ -313,6 +313,20 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     punctuation. Falls back to the raw query so the search has
     *something* to look up if no prefix matched.
     """
+    # A15 post-a15: politeness lead-in ("could you tell me about X",
+    # "can you describe Y", "would you explain Z") used to bypass the
+    # verb prefix entirely — the regex anchors at ``^\s*`` and "could
+    # you" doesn't match the verb alternation, so the whole query fell
+    # through to ``topic = query.strip()`` and downstream relied on the
+    # tail-probe entity resolver to rescue the actual article. Strip
+    # the leading modal scaffold first so the verb regex sees the
+    # cleaned query.
+    query = safe_regex_sub(
+        r"^\s*(?:could|can|would|will)\s+(?:you|we|i)\s+(?:please\s+)?",
+        "",
+        query,
+        flags=re.IGNORECASE,
+    ).strip()
     # A11 B2: verb prefix uses ``\b`` (word boundary) and the topic
     # capture is ``(.*?)`` (zero-or-more, non-greedy) so ``tell me
     # about`` / ``tell me about `` / ``describe`` produce ``topic=""``
