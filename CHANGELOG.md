@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — post-a15 beta-test sweep — 10 live-Wikipedia defects across seven passes
+## [2.0.0a16] — 2026-05-17 (alpha pre-release) — post-a15 beta-test sweep — 10 live-Wikipedia defects across seven passes
 
 The multi-pass live sweep of a15 against
 `wikipedia_en_all_maxi_2026-02.zim` (~118 GB, ~27.2 M entries) ran
