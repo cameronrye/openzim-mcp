@@ -1552,6 +1552,14 @@ class _NamespaceMixin:
                 # iterable surface; short-circuit so callers don't pay the
                 # full-archive scan to discover that.
                 if has_new_scheme and namespace != "C":
+                    # A15 post-a15: pass ``namespace_entry_count=0`` so
+                    # the short-circuited empty result has the same
+                    # schema as the M / W walks (which surface their
+                    # bounded totals). Without this the field is
+                    # omitted entirely, forcing downstream consumers
+                    # to special-case "missing" vs "zero" — a schema-
+                    # consistency defect surfaced by ``walk namespace
+                    # A`` against a new-scheme Wikipedia archive.
                     return cast(
                         "WalkNamespaceResponse",
                         attach_meta(
@@ -1565,6 +1573,7 @@ class _NamespaceMixin:
                                 done=True,
                                 next_cursor=None,
                                 archive_entry_count=archive_entry_count,
+                                namespace_entry_count=0,
                             )
                         ),
                     )

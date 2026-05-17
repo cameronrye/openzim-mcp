@@ -707,6 +707,35 @@ class SimpleToolsHandler:
         """
         if not query:
             return None
+        # A15 post-a15 P4-D2 + P6-D3: strip leading politeness
+        # (``please``, ``kindly``, ``could you``, ``can you``,
+        # ``would you``, ``will you``) before splitting on the
+        # connector. The chained-detection
+        # `_CHAINED_OPERATION_PREFIX_RE` is anchored at ``^`` and only
+        # matches operation verbs at the very start; any politeness
+        # prefix pushes the verb past position 0 so ``left_is_op``
+        # evaluates False, the gate fails, and the chain falls
+        # through to normal intent classification — where
+        # ``list_namespaces`` (highest confidence) silently wins over
+        # the dropped ``tell me about`` half. Mirror the same
+        # scaffold-strip ``_extract_tell_me_about`` uses (including
+        # the loop so ``please could you tell me about X then ...``
+        # also peels cleanly).
+        for _ in range(3):
+            before_query = query
+            query = re.sub(
+                r"^\s*(?:please|kindly)\s+", "", query, flags=re.IGNORECASE
+            ).strip()
+            query = re.sub(
+                r"^\s*(?:could|can|would|will)\s+(?:you|we|i)\s+(?:please\s+)?",
+                "",
+                query,
+                flags=re.IGNORECASE,
+            ).strip()
+            if query == before_query:
+                break
+        if not query:
+            return None
         for connector_pat in cls._CHAINED_INTENT_CONNECTORS:
             parts = re.split(connector_pat, query, maxsplit=1, flags=re.IGNORECASE)
             if len(parts) != 2:
@@ -1306,13 +1335,22 @@ class SimpleToolsHandler:
 
     @classmethod
     def _is_disambig_lead(cls, pre_h2: str) -> bool:
-        """Return True when ``pre_h2`` looks like a disambig-page lead."""
-        if len(pre_h2) >= 400:
-            return False
+        """Return True when ``pre_h2`` looks like a disambig-page lead.
+
+        Examines only the trailing 400 characters: pages like Mercury
+        carry a ``most commonly refers to:`` preamble with a list of
+        top-level entries BEFORE the ``may also refer to:`` line that
+        actually marks the end of the disambig lead. The full pre-H2
+        body is therefore well over 400 chars on those pages. The
+        original implementation bailed out at ``len(pre_h2) >= 400``
+        and missed them. The tail window keeps the regex-free
+        ``endswith`` bound while letting long preambles still trigger.
+        """
         # ``" ".join(s.split())`` collapses all whitespace runs (including
         # newlines and tabs) to single spaces. ``rstrip(":")`` accommodates
         # both ``may refer to:`` and the bare ``may refer to`` variants.
-        normalized = " ".join(pre_h2.lower().split()).rstrip(":").rstrip()
+        tail = pre_h2[-400:] if len(pre_h2) > 400 else pre_h2
+        normalized = " ".join(tail.lower().split()).rstrip(":").rstrip()
         return normalized.endswith(cls._DISAMBIG_LEAD_PHRASES)
 
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:
@@ -1441,9 +1479,26 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
+        # A15 post-a15 P6-D1: missing / malformed namespace argument
+        # used to fall through to ``params.get("namespace", "C")`` and
+        # silently browse C — exact analogue of the walk_namespace
+        # P4-D3 defect, same shape error, same fix. Mirror the
+        # walk_namespace missing-arg shape so the error surface is
+        # consistent across the simple-mode tools.
+        namespace = params.get("namespace")
+        if not namespace:
+            return (
+                "**Missing or Invalid Namespace**\n\n"
+                "**Issue**: `browse namespace` needs a single uppercase "
+                "namespace letter (A, C, M, W, etc.).\n"
+                "**Examples**:\n"
+                "- `browse namespace C` — main content entries\n"
+                "- `browse namespace M` — archive metadata\n"
+                "- `browse namespace W` — well-known entries"
+            )
         return self.zim_operations.browse_namespace(
             zim_file_path,
-            params.get("namespace", "C"),
+            namespace,
             options.get("limit", 50),
             options.get("offset", 0),
         )
@@ -2438,13 +2493,34 @@ class SimpleToolsHandler:
             f"_Source: `{top_path}`_\n\n"
             f"{article_body}"
         )
-        if disambig_twin_path:
+        # A15 post-a15: when the resolved article body IS itself a
+        # disambiguation page (Mercury, Java, etc. — bare titles that
+        # never had a dedicated article and live as disambig at the
+        # canonical path), both trailing footers are misleading:
+        # ``Note: this topic also has a disambiguation page`` points
+        # back at the same content, and ``May also refer to: <one
+        # extends-topic sibling>`` names a single random match while
+        # the body itself already enumerates dozens of alternates. The
+        # canonical-vs-disambig auto-pick that produced these hints
+        # was designed for cases like Berlin (canonical city article,
+        # separate Berlin_(disambiguation) twin) — when the auto-pick
+        # is the disambig page itself, drop them. Detection re-uses
+        # the same pre-H2 ``may refer to`` test the lead-with-TOC cut
+        # uses, on the fetched body.
+        h2_in_body = self._first_article_h2(article_body)
+        pre_h2_in_body = (
+            article_body[: h2_in_body.start()].rstrip()
+            if h2_in_body
+            else article_body.rstrip()
+        )
+        body_is_disambig_page = self._is_disambig_lead(pre_h2_in_body)
+        if disambig_twin_path and not body_is_disambig_page:
             result = result + (
                 f"\n\n_Note: this topic also has a disambiguation page — "
                 f"see `get article {disambig_twin_path}` for alternate "
                 f"meanings._"
             )
-        if related_extends_paths:
+        if related_extends_paths and not body_is_disambig_page:
             # A11 post-a11 C1: cap the hint at the first 4 alternates
             # so the footer stays small even on hub topics that
             # generated a long extends-list.
@@ -2731,6 +2807,25 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
+        # A15 post-a15 P4-D3: ``walk namespace`` with a malformed
+        # argument (multi-char ``AB``, digit ``1``, special ``_``, or
+        # missing entirely) previously fell through to
+        # ``params.get("namespace", "C")`` and silently walked C —
+        # giving the caller no signal that their input was rejected.
+        # Mirror the missing-arg shape ``_handle_find_by_title`` /
+        # ``_handle_links`` / ``_handle_suggestions`` use so the error
+        # surface is consistent across the simple-mode tools.
+        namespace = params.get("namespace")
+        if not namespace:
+            return (
+                "**Missing or Invalid Namespace**\n\n"
+                "**Issue**: `walk namespace` needs a single uppercase "
+                "namespace letter (A, C, M, W, etc.).\n"
+                "**Examples**:\n"
+                "- `walk namespace C` — main content entries\n"
+                "- `walk namespace M` — archive metadata\n"
+                "- `walk namespace W` — well-known entries"
+            )
         # ``offset`` semantically maps to ``scan_at`` here — a resume
         # entry id, not pagination skip — but it's the only
         # general-purpose passthrough channel so we honour it. v2 walk
@@ -2744,14 +2839,14 @@ class SimpleToolsHandler:
         if options.get("compact", False):
             data = self.zim_operations.walk_namespace_data(
                 zim_file_path,
-                params.get("namespace", "C"),
+                namespace,
                 cursor_state=cursor_state,
                 limit=limit,
             )
             return compact_renderers.render_walk_namespace(data)
         return self.zim_operations.walk_namespace(
             zim_file_path,
-            params.get("namespace", "C"),
+            namespace,
             cursor=cursor_state,
             limit=limit,
         )
@@ -2778,6 +2873,34 @@ class SimpleToolsHandler:
                 "- 'find article titled Photosynthesis'\n"
                 "- 'find entry named \"World War II\"'\n"
                 "- 'what's the path for Cellular_respiration'\n"
+            )
+        # A15 post-a15: namespace-prefixed input like ``M/Title`` is a
+        # ZIM path, not a title. The title index only stores titles
+        # (e.g. M/Title's title is just "Title"), so passing the path
+        # to ``find_entry_by_title_data`` returns silently 0 hits with
+        # no signal that the user used the wrong tool. Redirect upfront
+        # so the caller knows to use ``get article`` for path lookup.
+        # Strict pattern (uppercase letter + ``/`` + non-empty
+        # suffix) matches ZIM namespace conventions without false-
+        # positiving real titles that legitimately contain ``/``
+        # (Wikipedia subpages like ``Foo/Bar`` would have a lowercase
+        # second char, etc.).
+        if (
+            len(title) >= 3
+            and title[0].isascii()
+            and title[0].isupper()
+            and title[1] == "/"
+            and title[2:].strip()
+        ):
+            return (
+                "**Namespace Path, Not a Title**\n\n"
+                f"`{title}` looks like a ZIM namespace path. The title "
+                "index only stores entry titles, so a path lookup "
+                "returns no hits.\n"
+                "**Try one of**:\n"
+                f"- `get article {title}` — direct path lookup\n"
+                f"- `find article titled {title[2:].strip()}` — "
+                "title-only lookup (drops the namespace prefix)\n"
             )
         if options.get("compact", False):
             data = self.zim_operations.find_entry_by_title_data(

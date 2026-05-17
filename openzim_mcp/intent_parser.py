@@ -122,13 +122,22 @@ def safe_regex_sub(
 
 
 def _extract_browse(query: str, params: Dict[str, Any]) -> None:
+    # A15 post-a15 P6-D2: the original regex
+    # ``namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?`` accepted multi-
+    # character, digit, and special-char namespace arguments
+    # (``browse namespace AB``, ``browse namespace 1``,
+    # ``browse namespace _``) and didn't uppercase lowercase input.
+    # The sibling ``_extract_walk_namespace`` is strict (single
+    # letter, ``.upper()``); these two should agree. Tighten the
+    # regex so a malformed argument fails to match and the handler's
+    # missing-arg guard fires consistently across the two tools.
     namespace_match = safe_regex_search(
-        r"namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?",
+        r"namespace\s+['\"]?([A-Za-z])\b['\"]?",
         query,
         re.IGNORECASE,
     )
     if namespace_match:
-        params["namespace"] = namespace_match.group(1)
+        params["namespace"] = namespace_match.group(1).upper()
 
 
 def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
@@ -232,7 +241,19 @@ def _extract_suggestions(query: str, params: Dict[str, Any]) -> None:
     )
     suggest_match = safe_regex_search(suggest_pattern, query, re.IGNORECASE)
     if suggest_match:
-        params["partial_query"] = suggest_match.group(1).strip()
+        candidate = suggest_match.group(1).strip()
+        # A15 post-a15 P4-D1: when the user types ``suggestions for``
+        # with no actual prefix after it, the optional ``(?:for\s+)?``
+        # fails to match (no trailing whitespace before EOL), and the
+        # regex's mandatory capture group falls back to swallowing
+        # "for" itself as the prefix. Handler's missing-arg guard
+        # (``if not partial_query``) then never fires because "for"
+        # is non-empty. Treat a bare-"for" capture as if no prefix
+        # was supplied so the existing guard takes over and the user
+        # gets the structured "Missing Search Term" error instead of
+        # autocompleting against the literal "for".
+        if candidate.lower() != "for":
+            params["partial_query"] = candidate
 
 
 def _extract_search(query: str, params: Dict[str, Any]) -> None:
@@ -313,6 +334,39 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     punctuation. Falls back to the raw query so the search has
     *something* to look up if no prefix matched.
     """
+    # A15 post-a15: politeness lead-in ("could you tell me about X",
+    # "can you describe Y", "would you explain Z") used to bypass the
+    # verb prefix entirely — the regex anchors at ``^\s*`` and "could
+    # you" doesn't match the verb alternation, so the whole query fell
+    # through to ``topic = query.strip()`` and downstream relied on the
+    # tail-probe entity resolver to rescue the actual article. Strip
+    # the leading modal scaffold first so the verb regex sees the
+    # cleaned query.
+    #
+    # A15 post-a15 P6-D3: loop the strip so successive politeness
+    # phrases peel cleanly (``please could you tell me about X`` →
+    # ``could you tell me about X`` → ``tell me about X``). Two
+    # separate patterns rather than one combined regex because
+    # ``please`` is also legitimate trailing politeness (already
+    # handled below) — keeping the leading-only strip narrow
+    # (``please``, ``kindly``) avoids accidentally matching mid-
+    # query mentions.
+    for _ in range(3):
+        before = query
+        query = safe_regex_sub(
+            r"^\s*(?:please|kindly)\s+",
+            "",
+            query,
+            flags=re.IGNORECASE,
+        ).strip()
+        query = safe_regex_sub(
+            r"^\s*(?:could|can|would|will)\s+(?:you|we|i)\s+(?:please\s+)?",
+            "",
+            query,
+            flags=re.IGNORECASE,
+        ).strip()
+        if query == before:
+            break
     # A11 B2: verb prefix uses ``\b`` (word boundary) and the topic
     # capture is ``(.*?)`` (zero-or-more, non-greedy) so ``tell me
     # about`` / ``tell me about `` / ``describe`` produce ``topic=""``
