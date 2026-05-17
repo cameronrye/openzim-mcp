@@ -5,11 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — post-a15 beta-test sweep — 7 live-Wikipedia defects (D4 / D5 / D6 / D7 + P4-D1 / P4-D2 / P4-D3)
+## [Unreleased] — post-a15 beta-test sweep — 10 live-Wikipedia defects across seven passes
 
 The multi-pass live sweep of a15 against
 `wikipedia_en_all_maxi_2026-02.zim` (~118 GB, ~27.2 M entries) ran
-across five passes. Pass 1 surfaced four user-facing defects (D4 in
+across seven passes. Pass 1 surfaced four user-facing defects (D4 in
 the `tell_me_about` disambig-page handling for Mercury-class bare
 titles; D5 in the intent parser's politeness-prefix regex; D6 in
 `find_by_title`'s response to namespace-prefixed input; D7 a
@@ -27,9 +27,18 @@ politeness combinations, find_by_title edge cases, walk_namespace
 malformed args) AND exercised the intent paths the earlier passes
 had barely touched (synthesize, browse namespace, show structure
 of, links in, suggestions for, search in namespace); it surfaced
-three more defects (P4-D1 / P4-D2 / P4-D3) — each one fixed in
-this commit. Pass 5 re-tested every fix and audited the regression
-shape; zero new defects.
+three more defects (P4-D1 / P4-D2 / P4-D3). Pass 5 verified those
+three fixes; zero new defects. Pass 6 went deeper — a source-level
+audit of every intent handler for the silent-default pattern
+P4-D3 fixed (`params.get("X", DEFAULT)`) caught the same shape in
+`_handle_browse`, and a parallel audit of every intent extractor
+for the trigger-word-capture pattern P4-D1 fixed caught a sibling
+extractor permissiveness in `_extract_browse`; plus a leading-
+politeness probe surfaced a third defect (P6-D3) — `please tell
+me about X` leaks the leading politeness into the parsed topic
+just like the original D5 did for modal verbs. Pass 7 verified
+all ten fixes and audited cumulative regressions across the three
+commits; zero new defects.
 
 ### Fixed
 
@@ -121,26 +130,61 @@ shape; zero new defects.
   `tell_me_about`) already return structured missing-arg errors;
   this one didn't. Fixed by adding an upfront guard that mirrors
   their shape (rule / examples) before the C-default kicks in.
+- **P6-D1 + P6-D2: `browse namespace` now reaches input-validation
+  parity with `walk namespace`.** Two cooperating gaps — the
+  handler `_handle_browse` had the same
+  `params.get("namespace", "C")` silent-default that P4-D3 fixed
+  for walk; AND the extractor `_extract_browse` accepted multi-char,
+  digit, and special-character namespace arguments
+  (`browse namespace AB / 1 / _`) without uppercasing lowercase
+  input — diverging from the strict
+  `_extract_walk_namespace`. The two siblings now agree: regex
+  tightened to `namespace\s+['"]?([A-Za-z])\b['"]?` with `.upper()`
+  on the captured letter, and the handler returns a structured
+  "Missing or Invalid Namespace" error when the extractor produces
+  nothing.
+- **P6-D3: leading `please` / `kindly` now strip cleanly from the
+  parsed topic.** `please tell me about Photosynthesis` and
+  `kindly describe Photosynthesis` previously parsed with the
+  politeness phrase leaking into the topic — same shape as the
+  pass-1 D5 defect but for non-modal politeness words. The article
+  still resolved via tail-probe rescue, but the parsed topic was
+  wrong. Fix extends the leading-strip in `_extract_tell_me_about`
+  to cover `please` / `kindly` AND wraps both the modal-strip and
+  the politeness-strip in a loop so composite phrases
+  (`please could you tell me about X`, `please please tell me
+  about X`) peel cleanly. Same loop also applied to the chain-
+  detector's `_chained_intent_guidance` pre-strip so leading
+  politeness doesn't bypass chain detection (mirror of P4-D2).
+  Leaves the existing trailing-politeness strip alone, so
+  `tell me about X please` still works, and the leading-only
+  anchor (`^\s*`) prevents stripping mid-query mentions of
+  `please` / `kindly` that are legitimately part of the topic.
 
 ### Tests
 
-- **`tests/test_post_a15_beta_fixes.py`** — 55 regression tests
-  pinning all seven defects. Each defect gets:
+- **`tests/test_post_a15_beta_fixes.py`** — 80 regression tests
+  pinning all ten defects. Each defect gets:
   - The fix-case test (Mercury body has no misleading trailer;
-    "could you tell me about X" parses topic=X; "find article titled
-    M/Title" returns redirect; `_build_walk_result` exposes the
+    `could you tell me about X` parses topic=X; `find article titled
+    M/Title` returns redirect; `_build_walk_result` exposes the
     zero-count field; `suggestions for` triggers the missing-arg
     guard; `could you tell me about X then list namespaces` is
     detected as chained; `walk namespace AB` returns the missing-
-    namespace error).
+    namespace error; `browse namespace AB` returns the same error
+    and `browse namespace c` lowercases to "C"; `please tell me
+    about X` strips cleanly).
   - Negative self-audit cases (Berlin keeps its disambig-twin
     footer; non-modal queries unchanged; lowercase a/b not
-    redirected; `namespace_entry_count` omitted when caller passes
-    None; legitimate `suggestions for forest` still captures the
-    prefix; non-chained `could you tell me about X` not tripped by
-    the chain detector; `walk namespace c` lowercase still works).
+    redirected by find_by_title; `namespace_entry_count` omitted
+    when caller passes None; legitimate `suggestions for forest`
+    still captures the prefix; non-chained `could you tell me about
+    X` not tripped by the chain detector; trailing `please` still
+    works; mid-query `please in linguistics` not stripped).
   - Cross-defect probes (Java disambig body suppresses
-    `disambig_twin_path` footer too).
+    `disambig_twin_path` footer too; `please could you tell me
+    about X` peels both layers; `please tell me about X then list
+    namespaces` trips chain detector).
 
 ## [2.0.0a15] — 2026-05-16 (alpha pre-release) — post-a14 beta-test sweep — section-affinity feature now actually works on real Wikipedia content
 

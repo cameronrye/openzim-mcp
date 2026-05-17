@@ -122,13 +122,22 @@ def safe_regex_sub(
 
 
 def _extract_browse(query: str, params: Dict[str, Any]) -> None:
+    # A15 post-a15 P6-D2: the original regex
+    # ``namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?`` accepted multi-
+    # character, digit, and special-char namespace arguments
+    # (``browse namespace AB``, ``browse namespace 1``,
+    # ``browse namespace _``) and didn't uppercase lowercase input.
+    # The sibling ``_extract_walk_namespace`` is strict (single
+    # letter, ``.upper()``); these two should agree. Tighten the
+    # regex so a malformed argument fails to match and the handler's
+    # missing-arg guard fires consistently across the two tools.
     namespace_match = safe_regex_search(
-        r"namespace\s+['\"]?([A-Za-z0-9_.-]+)['\"]?",
+        r"namespace\s+['\"]?([A-Za-z])\b['\"]?",
         query,
         re.IGNORECASE,
     )
     if namespace_match:
-        params["namespace"] = namespace_match.group(1)
+        params["namespace"] = namespace_match.group(1).upper()
 
 
 def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
@@ -333,12 +342,31 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     # tail-probe entity resolver to rescue the actual article. Strip
     # the leading modal scaffold first so the verb regex sees the
     # cleaned query.
-    query = safe_regex_sub(
-        r"^\s*(?:could|can|would|will)\s+(?:you|we|i)\s+(?:please\s+)?",
-        "",
-        query,
-        flags=re.IGNORECASE,
-    ).strip()
+    #
+    # A15 post-a15 P6-D3: loop the strip so successive politeness
+    # phrases peel cleanly (``please could you tell me about X`` →
+    # ``could you tell me about X`` → ``tell me about X``). Two
+    # separate patterns rather than one combined regex because
+    # ``please`` is also legitimate trailing politeness (already
+    # handled below) — keeping the leading-only strip narrow
+    # (``please``, ``kindly``) avoids accidentally matching mid-
+    # query mentions.
+    for _ in range(3):
+        before = query
+        query = safe_regex_sub(
+            r"^\s*(?:please|kindly)\s+",
+            "",
+            query,
+            flags=re.IGNORECASE,
+        ).strip()
+        query = safe_regex_sub(
+            r"^\s*(?:could|can|would|will)\s+(?:you|we|i)\s+(?:please\s+)?",
+            "",
+            query,
+            flags=re.IGNORECASE,
+        ).strip()
+        if query == before:
+            break
     # A11 B2: verb prefix uses ``\b`` (word boundary) and the topic
     # capture is ``(.*?)`` (zero-or-more, non-greedy) so ``tell me
     # about`` / ``tell me about `` / ``describe`` produce ``topic=""``

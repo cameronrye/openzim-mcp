@@ -694,3 +694,178 @@ class TestP4D3WalkNamespaceMissingArg:
         call_args = mock.walk_namespace.call_args
         # Second positional arg is namespace.
         assert call_args.args[1] == expected_ns
+
+
+# ---------------------------------------------------------------------------
+# P6-D1 + P6-D2: browse_namespace input validation parity with walk_namespace
+# ---------------------------------------------------------------------------
+
+
+class TestP6BrowseNamespaceParity:
+    """P6-D1 / P6-D2: ``_handle_browse`` and ``_extract_browse``
+    were both lax compared to their walk_namespace siblings. The
+    extractor's regex ``namespace\\s+['\\\"]?([A-Za-z0-9_.-]+)['\\\"]?``
+    accepted multi-char (``AB``), digit (``1``), and special (``_``,
+    ``a.b``) inputs and didn't uppercase lowercase letters; the
+    handler then defaulted ``params.get("namespace", "C")`` whenever
+    the extract returned no namespace, so a missing argument also
+    silently walked C. Tightened the regex to ``namespace\\s+
+    ['\\\"]?([A-Za-z])\\b['\\\"]?`` + ``.upper()`` and added a
+    missing-arg guard mirroring walk_namespace's.
+    """
+
+    @pytest.fixture
+    def handler(self) -> SimpleToolsHandler:
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.browse_namespace.side_effect = AssertionError(
+            "browse_namespace must not be called when namespace is malformed"
+        )
+        return SimpleToolsHandler(mock)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "browse namespace",  # no arg
+            "browse namespace AB",  # multi-char (no \b after first letter)
+            "browse namespace 1",  # digit
+            "browse namespace _",  # special
+            "browse namespace ABCD",  # multi-letter
+        ],
+    )
+    def test_malformed_namespace_returns_structured_error(
+        self, handler: SimpleToolsHandler, query: str
+    ) -> None:
+        out = handler.handle_zim_query(query, zim_file_path="/x.zim")
+        assert "Missing or Invalid Namespace" in out
+        # Examples consistent with walk_namespace's missing-arg shape.
+        assert "browse namespace C" in out
+        assert "browse namespace M" in out
+
+    @pytest.mark.parametrize(
+        "query,expected_ns",
+        [
+            # Dotted / hyphenated input: ``\b`` boundary after the
+            # single letter causes the extractor to capture just the
+            # leading char — same behaviour as ``_extract_walk_namespace``
+            # today. Documenting parity, not a new behaviour.
+            ("browse namespace a.b", "A"),
+            ("browse namespace a-b", "A"),
+        ],
+    )
+    def test_word_boundary_truncation_matches_walk_namespace(
+        self, query: str, expected_ns: str
+    ) -> None:
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.browse_namespace.return_value = "ok"
+        handler = SimpleToolsHandler(mock)
+        handler.handle_zim_query(query, zim_file_path="/x.zim")
+        mock.browse_namespace.assert_called_once()
+        assert mock.browse_namespace.call_args.args[1] == expected_ns
+
+    @pytest.mark.parametrize(
+        "query,expected_ns",
+        [
+            ("browse namespace A", "A"),
+            ("browse namespace C", "C"),
+            ("browse namespace M", "M"),
+            ("browse namespace W", "W"),
+            ("browse namespace c", "C"),  # lowercase coerced
+            ("browse namespace m", "M"),
+        ],
+    )
+    def test_valid_namespace_passes_through_uppercased(
+        self, query: str, expected_ns: str
+    ) -> None:
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.browse_namespace.return_value = "ok"
+        handler = SimpleToolsHandler(mock)
+        handler.handle_zim_query(query, zim_file_path="/x.zim")
+        mock.browse_namespace.assert_called_once()
+        # Second positional arg is namespace.
+        assert mock.browse_namespace.call_args.args[1] == expected_ns
+
+
+# ---------------------------------------------------------------------------
+# P6-D3: leading politeness ("please", "kindly") and looped peel-back
+# ---------------------------------------------------------------------------
+
+
+class TestP6D3LeadingPoliteness:
+    """P6-D3: ``please tell me about Photosynthesis`` /
+    ``kindly tell me about Photosynthesis`` parsed with the
+    politeness phrase leaking into the topic — same shape as the
+    pass-1 D5 modal-strip defect but for ``please`` / ``kindly``
+    (not modal verbs). Extended the strip to cover these and to
+    loop so composite phrases (``please could you tell me about X``)
+    peel cleanly.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "please tell me about Photosynthesis",
+            "Please tell me about Photosynthesis",  # case
+            "kindly tell me about Photosynthesis",
+            "kindly describe Photosynthesis",
+            "please describe Photosynthesis",
+            # Composite: leading "please" + modal
+            "please could you tell me about Photosynthesis",
+            "kindly would you explain Photosynthesis",
+            # Composite: modal + nested please (P5 order)
+            "could you please tell me about Photosynthesis",
+        ],
+    )
+    def test_leading_politeness_stripped(self, query: str) -> None:
+        intent, params, _ = IntentParser.parse_intent(query)
+        assert intent == "tell_me_about"
+        assert params["topic"] == "Photosynthesis"
+
+    def test_trailing_please_still_works(self) -> None:
+        # The existing trailing-politeness strip must not regress.
+        intent, params, _ = IntentParser.parse_intent(
+            "tell me about Photosynthesis please"
+        )
+        assert intent == "tell_me_about"
+        assert params["topic"] == "Photosynthesis"
+
+    def test_double_leading_please_loops(self) -> None:
+        # Stacked politeness — the loop must peel both layers.
+        intent, params, _ = IntentParser.parse_intent(
+            "please please tell me about Photosynthesis"
+        )
+        assert intent == "tell_me_about"
+        assert params["topic"] == "Photosynthesis"
+
+    def test_mid_query_please_unaffected(self) -> None:
+        # Sanity: "please" mentioned mid-query (in the topic itself)
+        # must not be stripped — the leading-only anchor (``^\s*``)
+        # prevents that.
+        intent, params, _ = IntentParser.parse_intent(
+            "tell me about the word please in linguistics"
+        )
+        assert intent == "tell_me_about"
+        assert "please" in params["topic"]
+
+    def test_leading_please_with_chain_still_detected(self) -> None:
+        # The chain detector's modal-strip was extended too. ``please
+        # tell me about X then list namespaces`` must trip the chain
+        # detector — without the chain-side strip, the verb sits
+        # past position 0 and the gate fails (same shape as P4-D2).
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.list_namespaces.side_effect = AssertionError(
+            "list_namespaces must not be called when chain detector fires"
+        )
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query(
+            "please tell me about Photosynthesis then list namespaces",
+            zim_file_path="/x.zim",
+        )
+        assert "Chained Operations Detected" in out
