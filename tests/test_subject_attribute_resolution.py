@@ -199,6 +199,7 @@ class TestEndToEndSubjectAttributeRouting:
                 },
             ],
         }
+
         def _find(zim_path, title, **kw):
             t_lower = title.strip().lower()
             if t_lower in {
@@ -217,6 +218,7 @@ class TestEndToEndSubjectAttributeRouting:
                     ]
                 }
             return {"results": []}
+
         mock.find_entry_by_title_data.side_effect = _find
         mock.get_article_structure_data.return_value = {
             "headings": [
@@ -264,8 +266,7 @@ class TestEndToEndSubjectAttributeRouting:
         kwargs = called_args.kwargs
         # Section id "notable" must appear somewhere in args/kwargs.
         found_section_id = (
-            "notable" in positional
-            or kwargs.get("section_id") == "notable"
+            "notable" in positional or kwargs.get("section_id") == "notable"
         )
         assert found_section_id
 
@@ -296,10 +297,7 @@ class TestEndToEndSubjectAttributeRouting:
         called_args = mock_zim_operations.get_section_data.call_args
         positional = called_args.args
         kwargs = called_args.kwargs
-        assert (
-            "notable" in positional
-            or kwargs.get("section_id") == "notable"
-        )
+        assert "notable" in positional or kwargs.get("section_id") == "notable"
 
     def test_bare_entity_request_skips_decomposition_via_no_hint(
         self, handler, mock_zim_operations
@@ -353,6 +351,7 @@ class TestEndToEndSubjectAttributeRouting:
                 {"path": "Paris", "title": "Paris", "snippet": "..."},
             ],
         }
+
         def _find(zim_path, title, **kw):
             t_lower = title.strip().lower()
             if t_lower == "paris":
@@ -366,6 +365,7 @@ class TestEndToEndSubjectAttributeRouting:
                     ]
                 }
             return {"results": []}
+
         mock_zim_operations.find_entry_by_title_data.side_effect = _find
         mock_zim_operations.get_article_structure_data.return_value = {
             "headings": [

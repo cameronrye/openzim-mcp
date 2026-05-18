@@ -79,7 +79,6 @@ import pytest
 from openzim_mcp.intent_parser import IntentParser
 from openzim_mcp.simple_tools import SimpleToolsHandler
 
-
 # ---------------------------------------------------------------------------
 # D1: soft chain connectors
 # ---------------------------------------------------------------------------
@@ -137,9 +136,7 @@ class TestD1ChainConnectorsHardFire:
             "describe Ms. Marvel",
         ],
     )
-    def test_title_abbreviation_with_period_does_not_fire(
-        self, query: str
-    ) -> None:
+    def test_title_abbreviation_with_period_does_not_fire(self, query: str) -> None:
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.config.meta.footer_enabled = False
@@ -1050,7 +1047,7 @@ class TestP3D2WalkNamespaceCursorRoundTrip:
             scan_at=0,
             limit=3,
             archive_entry_count=27_199_904,
-            validated_path=Path("/tmp/fake.zim"),
+            validated_path=Path("/nonexistent/fake.zim"),
         )
         cursor = out["next_cursor"]
         assert cursor is not None
@@ -1061,9 +1058,9 @@ class TestP3D2WalkNamespaceCursorRoundTrip:
         # Wire field MUST be ``o`` (the universal pagination key) per
         # the contract documented in pagination.py and assumed by the
         # top-level decoder in simple_tools.py.
-        assert "o" in payload["s"], (
-            f"walk_namespace cursor must use 's.o' on the wire; got: {payload['s']}"
-        )
+        assert (
+            "o" in payload["s"]
+        ), f"walk_namespace cursor must use 's.o' on the wire; got: {payload['s']}"
         assert payload["s"]["o"] == 3
 
     def test_walk_namespace_w_cursor_uses_o_field_on_wire(self) -> None:
@@ -1085,7 +1082,7 @@ class TestP3D2WalkNamespaceCursorRoundTrip:
             scan_at=0,
             limit=1,
             archive_entry_count=27_199_904,
-            validated_path=Path("/tmp/fake.zim"),
+            validated_path=Path("/nonexistent/fake.zim"),
         )
         cursor = out["next_cursor"]
         assert cursor is not None
@@ -1307,9 +1304,9 @@ class TestP3D4AutocompleteQuotedForm:
         self, query: str, expected_prefix: str
     ) -> None:
         intent, params, _cert = IntentParser.parse_intent(query)
-        assert intent == "suggestions", (
-            f"{query!r} routed to {intent!r}; expected 'suggestions'"
-        )
+        assert (
+            intent == "suggestions"
+        ), f"{query!r} routed to {intent!r}; expected 'suggestions'"
         assert params.get("partial_query") == expected_prefix
 
     def test_missing_arg_hint_examples_are_accepted_by_intent_parser(self) -> None:
@@ -1322,7 +1319,7 @@ class TestP3D4AutocompleteQuotedForm:
         # The hint text emitted by the suggestions handler currently
         # advertises 'suggestions for bio' and 'autocomplete "evol"'.
         for example in [
-            'suggestions for bio',
+            "suggestions for bio",
             'autocomplete "evol"',
         ]:
             intent, params, _ = IntentParser.parse_intent(example)
@@ -1372,7 +1369,9 @@ class TestP3D5ShowStructureTruncationFooter:
 
     def test_list_namespaces_intent_uses_atomic_footer(self) -> None:
         text = "Namespace " * 2000
-        out = SimpleToolsHandler._cap_response_size(text, 1000, intent="list_namespaces")
+        out = SimpleToolsHandler._cap_response_size(
+            text, 1000, intent="list_namespaces"
+        )
         assert "compact=False" in out
         assert "cursor" not in out
 

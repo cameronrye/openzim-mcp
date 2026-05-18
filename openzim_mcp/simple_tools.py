@@ -640,7 +640,9 @@ class SimpleToolsHandler:
                 pre_cap_chars = len(result)
                 if len(result) > effective_budget:
                     self._track("response_truncated")
-                result = self._cap_response_size(result, effective_budget, intent=intent)
+                result = self._cap_response_size(
+                    result, effective_budget, intent=intent
+                )
                 # Determine if truncation occurred
                 was_truncated = len(result) < pre_cap_chars
                 if will_wrap:
@@ -945,9 +947,7 @@ class SimpleToolsHandler:
                 # (``Dr. Strange``, ``St. Louis``, ``Mt. Everest``,
                 # ``Jr. Bandits``) — left's bare topic is the abbreviation
                 # itself (1-2 chars), clearly not a chain situation.
-                left_bare = (
-                    left[verb_m.end() :].strip() if verb_m else ""
-                )
+                left_bare = left[verb_m.end() :].strip() if verb_m else ""
                 if (
                     verb_m
                     and stripped_right
@@ -1056,9 +1056,7 @@ class SimpleToolsHandler:
         r"\s*/\s*",
     )
 
-    def _soft_connector_footer(
-        self, topic: str, top_title: str
-    ) -> Optional[str]:
+    def _soft_connector_footer(self, topic: str, top_title: str) -> Optional[str]:
         """A16 post-a16 D1 (pass-2): when ``topic`` contains an ambiguous
         connector between two substantive proper-noun-shaped halves
         AND the returned ``top_title`` only includes one of them,
@@ -1093,9 +1091,9 @@ class SimpleToolsHandler:
             # Both halves must look like substantive proper-noun
             # phrases (filters ``He or she`` and other prose where
             # the connector word is a normal English particle).
-            if not self._is_substantive_topic(
-                left
-            ) or not self._is_substantive_topic(right):
+            if not self._is_substantive_topic(left) or not self._is_substantive_topic(
+                right
+            ):
                 continue
             title_lower = top_title.lower()
             left_in = left.lower() in title_lower
@@ -1500,7 +1498,9 @@ class SimpleToolsHandler:
     )
 
     @classmethod
-    def _truncation_footer(cls, max_chars: int, original: int, intent: Optional[str]) -> str:
+    def _truncation_footer(
+        cls, max_chars: int, original: int, intent: Optional[str]
+    ) -> str:
         """Render an operation-aware truncation footer.
 
         Generic operations get the standard three-clause hint (cursor /
@@ -1509,7 +1509,9 @@ class SimpleToolsHandler:
         only ``compact=False`` applies because they don't paginate and
         have no query to tighten.
         """
-        head = f"\n\n---\n_Response truncated at {max_chars:,} chars (was {original:,}). "
+        head = (
+            f"\n\n---\n_Response truncated at {max_chars:,} chars (was {original:,}). "
+        )
         if intent in cls._ATOMIC_INTENTS_FOR_TRUNCATION_HINT:
             # P3-D5: no cursor, no query to tighten — only compact=False.
             return head + "Pass `compact=False` to opt out of size caps._"
@@ -1664,8 +1666,15 @@ class SimpleToolsHandler:
     # absolute string start regardless of flags, so no MULTILINE here.
     # The duplicated-H1 pattern runs on the output of the preamble strip,
     # which is also a fresh string start for the H1 match.
+    #
+    # Whitespace classes use ``[ \t]`` instead of ``\s`` so the newline
+    # boundaries between fields stay unambiguous — ``\s`` includes ``\n``,
+    # which SonarCloud's S5852 polynomial-backtracking detector flags as
+    # ambiguous against the explicit ``\n`` boundaries. ``[ \t]`` matches
+    # the same intra-line whitespace shape without overlapping the
+    # field separators.
     _LEAD_PREAMBLE_RE = re.compile(
-        r"\A#\s+[^\n]*\nPath:[^\n]*\nType:[^\n]*\n##\s+Content\s*\n+"
+        r"\A#[ \t]+[^\n]*\nPath:[^\n]*\nType:[^\n]*\n##[ \t]+Content[ \t]*\n+"
     )
     # The trailing ``(?:\n+|\Z)`` lets the H1 strip succeed even when the
     # duplicated-H1 line is the last line of ``pre_h2`` (callers
@@ -1675,7 +1684,7 @@ class SimpleToolsHandler:
     # Title`` (no inter-H1/H2 content) would leave ``# Title`` unstripped
     # and inflate density to title-length, defeating the empty-lead
     # threshold.
-    _DUPLICATED_H1_RE = re.compile(r"\A#\s+\S[^\n]*(?:\n+|\Z)")
+    _DUPLICATED_H1_RE = re.compile(r"\A#[ \t]+\S[^\n]*(?:\n+|\Z)")
 
     # Empty-lead detection threshold: lead is "effectively empty"
     # when ``_lead_density`` returns ``< 5`` substantive chars after
@@ -1737,10 +1746,10 @@ class SimpleToolsHandler:
             # we still want to treat the body as substantive.
             raw = len("".join(pre_h2.split()))
             return max(raw, cls._EMPTY_LEAD_DENSITY_THRESHOLD)
-        stripped = pre_h2[preamble_match.end():]
+        stripped = pre_h2[preamble_match.end() :]
         h1_match = cls._DUPLICATED_H1_RE.match(stripped)
         if h1_match is not None:
-            stripped = stripped[h1_match.end():]
+            stripped = stripped[h1_match.end() :]
         return len("".join(stripped.split()))
 
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:
@@ -3156,9 +3165,7 @@ class SimpleToolsHandler:
         return body
 
     @classmethod
-    def _extract_subject_hint(
-        cls, topic: str, resolved_title: str
-    ) -> Optional[str]:
+    def _extract_subject_hint(cls, topic: str, resolved_title: str) -> Optional[str]:
         """Detect a subject-category hint in the residual of ``topic``
         after the resolved entity's title tokens are removed.
 
