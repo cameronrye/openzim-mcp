@@ -3135,6 +3135,48 @@ class SimpleToolsHandler:
                 return tok
         return None
 
+    @classmethod
+    def _resolve_section_for_subject(
+        cls, structure: Dict[str, Any], subject: str
+    ) -> Optional[Dict[str, Any]]:
+        """Find the best-matching H2 heading for a subject hint.
+
+        ``structure`` is the dict returned by
+        ``zim_operations.get_article_structure_data``. ``subject`` is
+        one of the keys in ``_SUBJECT_HINT_TO_SECTION``. Returns the
+        heading dict (with ``text`` / ``id`` / ``level`` keys) of the
+        first matching section, or ``None`` when none of the
+        candidate section names appear as substrings of any H2 in the
+        article.
+
+        Matching is case-insensitive substring against the heading
+        text. Candidate priority is the tuple order from
+        ``_SUBJECT_HINT_TO_SECTION``: a more-specific candidate
+        (``Music``) wins over a generic fallback (``Notable people``)
+        when both exist.
+        """
+        if subject not in _SUBJECT_HINT_TO_SECTION:
+            return None
+        candidates = _SUBJECT_HINT_TO_SECTION[subject]
+        if not isinstance(structure, dict):
+            return None
+        h2s: list = []
+        for h in structure.get("headings") or []:
+            if not isinstance(h, dict):
+                continue
+            if h.get("level") != 2:
+                continue
+            text = (h.get("text") or "").strip()
+            if not text or text == "Content":
+                continue
+            h2s.append(h)
+        for cand in candidates:
+            cand_lower = cand.lower()
+            for h in h2s:
+                if cand_lower in (h.get("text") or "").lower():
+                    return h
+        return None
+
     @staticmethod
     def _coerce_content_offset(raw: Any) -> int:
         """Cast a caller-supplied ``content_offset`` to a non-negative int.

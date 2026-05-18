@@ -66,3 +66,61 @@ class TestExtractSubjectHint:
             resolved_title="Big Rapids, Michigan",
         )
         assert hint == "actors"
+
+
+class TestResolveSectionForSubject:
+    """Unit-level coverage of ``_resolve_section_for_subject`` — the
+    helper that picks the best matching H2 from an article's section
+    list given a subject hint token.
+    """
+
+    @pytest.fixture
+    def handler(self):
+        return SimpleToolsHandler(MagicMock())
+
+    def test_musician_matches_music_section(self, handler):
+        structure = {
+            "headings": [
+                {"level": 1, "text": "Big Rapids, Michigan", "id": "h1"},
+                {"level": 2, "text": "Content", "id": "content"},
+                {"level": 2, "text": "History", "id": "history"},
+                {"level": 2, "text": "Notable people", "id": "notable"},
+            ]
+        }
+        target = handler._resolve_section_for_subject(structure, "musician")
+        assert target is not None
+        assert target.get("text") == "Notable people"
+
+    def test_musician_prefers_music_over_notable_people(self, handler):
+        structure = {
+            "headings": [
+                {"level": 1, "text": "Detroit", "id": "h1"},
+                {"level": 2, "text": "Content", "id": "content"},
+                {"level": 2, "text": "Music", "id": "music"},
+                {"level": 2, "text": "Notable people", "id": "notable"},
+            ]
+        }
+        target = handler._resolve_section_for_subject(structure, "musician")
+        assert target is not None
+        assert target.get("text") == "Music"
+
+    def test_no_matching_section_returns_none(self, handler):
+        structure = {
+            "headings": [
+                {"level": 1, "text": "Big Rapids, Michigan", "id": "h1"},
+                {"level": 2, "text": "Content", "id": "content"},
+                {"level": 2, "text": "Geography", "id": "geo"},
+                {"level": 2, "text": "Climate", "id": "climate"},
+            ]
+        }
+        target = handler._resolve_section_for_subject(structure, "musician")
+        assert target is None
+
+    def test_unknown_subject_returns_none(self, handler):
+        structure = {
+            "headings": [
+                {"level": 2, "text": "Notable people", "id": "notable"},
+            ]
+        }
+        target = handler._resolve_section_for_subject(structure, "philosopher")
+        assert target is None
