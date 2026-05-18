@@ -38,6 +38,51 @@ from .zim_operations import ZimOperations
 logger = logging.getLogger(__name__)
 
 
+# Subject-attribute resolution: when the resolved entity's title
+# doesn't cover all of the topic's tokens, the residual tokens often
+# name a subject category ("musician", "actor", "athlete", etc.).
+# Map each subject hint token to a tuple of section-name candidates
+# (case-insensitive substring match against H2 text). The first
+# section whose name contains any candidate substring wins. Section
+# names are taken from Wikipedia's place-article convention; tune as
+# new gaps surface in live-MCP probes.
+#
+# Tuple ordering matters: more-specific candidates first ("Musicians"
+# beats "Music" beats "Notable people"), so a music-specific section
+# wins over the generic notable-people fallback when both exist.
+_SUBJECT_HINT_TO_SECTION: Dict[str, "tuple[str, ...]"] = {
+    "musician": ("Musicians", "Music", "Notable people"),
+    "musicians": ("Musicians", "Music", "Notable people"),
+    "music": ("Music", "Musicians", "Notable people"),
+    "actor": ("Actors", "Film", "Notable people"),
+    "actors": ("Actors", "Film", "Notable people"),
+    "actress": ("Actors", "Film", "Notable people"),
+    "athlete": ("Athletes", "Sports", "Notable people"),
+    "athletes": ("Athletes", "Sports", "Notable people"),
+    "sports": ("Sports", "Athletes", "Notable people"),
+    "scientist": ("Scientists", "Science", "Notable people"),
+    "scientists": ("Scientists", "Science", "Notable people"),
+    "writer": ("Writers", "Literature", "Notable people"),
+    "writers": ("Writers", "Literature", "Notable people"),
+    "author": ("Authors", "Writers", "Literature", "Notable people"),
+    "authors": ("Authors", "Writers", "Literature", "Notable people"),
+    "politician": ("Politicians", "Politics", "Government", "Notable people"),
+    "politicians": ("Politicians", "Politics", "Government", "Notable people"),
+    "people": ("Notable people",),
+    "person": ("Notable people",),
+    "persons": ("Notable people",),
+    "notable": ("Notable people",),
+    "famous": ("Notable people",),
+}
+
+# Tokens that ALONE (without a co-occurring entity-name token) don't
+# trigger subject-attribute resolution. ``famous`` and ``notable`` are
+# weak signals by themselves — they amplify a real subject hint
+# elsewhere in the residual ("famous musicians from X" → trigger on
+# ``musicians``) but shouldn't fire on their own.
+_WEAK_SUBJECT_HINTS: "frozenset[str]" = frozenset({"famous", "notable"})
+
+
 @dataclass
 class _HandlerResult:
     """Structured return value from an intent handler.
