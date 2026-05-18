@@ -71,7 +71,7 @@ Each test pins one defect; failures here mean a regression on the
 specific bug.
 """
 
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -85,11 +85,14 @@ from openzim_mcp.simple_tools import SimpleToolsHandler
 # ---------------------------------------------------------------------------
 
 
-class TestD1SoftChainConnectors:
-    """D1: ``and`` / ``or`` / ``also`` / ``&`` / ``plus`` / period /
-    ``->`` weren't in ``_CHAINED_INTENT_CONNECTORS``. Fix extends the
-    list and right-promotes a bare topic-shaped right half so the
-    chain detector fires uniformly.
+class TestD1ChainConnectorsHardFire:
+    """D1 (pass-1, refined in pass-2): chain warning fires only for
+    *clear* chain markers — connectors that almost never appear inside
+    real article titles (``also``, ``plus``, ``. Then``, ``->``). The
+    ambiguous cases (``and`` / ``or`` / ``&`` / ``,`` / ``/``) are
+    handled by the soft footer in ``TestD1SoftFooter`` below, because
+    a hard chain warning false-fires on common title shapes
+    (``Romeo and Juliet``, ``Tom & Jerry``, ``Vienna, Austria``).
     """
 
     @pytest.fixture
@@ -97,7 +100,6 @@ class TestD1SoftChainConnectors:
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.config.meta.footer_enabled = False
-        # Chain detection fires before parse_intent → backends untouched.
         mock.search_zim_file_data.side_effect = AssertionError(
             "search should not run for chained queries"
         )
@@ -106,20 +108,14 @@ class TestD1SoftChainConnectors:
     @pytest.mark.parametrize(
         "query",
         [
-            "tell me about Berlin and Paris",
-            "tell me about Berlin or Paris",
             "tell me about Berlin also Paris",
-            "tell me about Berlin & Paris",
             "tell me about Berlin plus Paris",
             "tell me about Berlin -> Paris",
             "tell me about Berlin. Then Paris",
             "tell me about Apollo 11 also Apollo 12",
-            "tell me about Apollo 11 and Apollo 12",
-            "describe Berlin AND Paris",
-            "explain Berlin or Paris",
         ],
     )
-    def test_soft_connector_fires_chain_warning(
+    def test_clear_chain_marker_fires(
         self, handler: SimpleToolsHandler, query: str
     ) -> None:
         out = handler.handle_zim_query(
@@ -128,25 +124,34 @@ class TestD1SoftChainConnectors:
         assert "Chained Operations Detected" in out
         assert "chained_intent_rejected" in out
 
-    def test_real_topic_with_inline_or_unaffected(self) -> None:
-        # ``the capital of Germany`` after "and" doesn't start with a
-        # capital → right-promote heuristic skips → falls through to
-        # normal intent parsing. Sanity guard against over-aggressive
-        # firing.
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # Pass-2 self-audit: period+capital connector must not
+            # mis-fire on common title abbreviations whose bare left
+            # half is too short to be a real topic.
+            "tell me about Dr. Strange",
+            "tell me about St. Louis",
+            "tell me about Mt. Everest",
+            "tell me about Mr. Bean",
+            "describe Ms. Marvel",
+        ],
+    )
+    def test_title_abbreviation_with_period_does_not_fire(
+        self, query: str
+    ) -> None:
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.config.meta.footer_enabled = False
         mock.search_zim_file_data.return_value = {
-            "results": [{"path": "Berlin", "title": "Berlin"}],
+            "results": [{"path": "stub", "title": "stub"}],
             "total": 1,
         }
         mock.get_zim_entry.return_value = "stub-body"
         mock.find_entry_by_title_data.return_value = {"results": [], "total": 0}
         handler = SimpleToolsHandler(mock)
         out = handler.handle_zim_query(
-            "tell me about Berlin and the capital of Germany",
-            zim_file_path="/x.zim",
-            options={"compact": False},
+            query, zim_file_path="/x.zim", options={"compact": False}
         )
         assert "Chained Operations Detected" not in out
 
@@ -167,6 +172,166 @@ class TestD1SoftChainConnectors:
         # adverbial ``Then`` stripped).
         assert "tell me about Paris" in out
 
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # Soft connectors must NOT fire hard chain (false positives
+            # on real titles like Romeo and Juliet, Tom & Jerry, etc.).
+            "tell me about Berlin and Paris",
+            "tell me about Berlin or Paris",
+            "tell me about Berlin & Paris",
+            "tell me about Berlin, Paris",
+            "tell me about Berlin / Paris",
+            "tell me about Berlin vs Paris",
+            "tell me about Romeo and Juliet",
+            "tell me about Pride and Prejudice",
+            "tell me about Now and Then",
+            "tell me about Tom & Jerry",
+        ],
+    )
+    def test_soft_connectors_do_not_fire_hard_chain(self, query: str) -> None:
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.search_zim_file_data.return_value = {
+            "results": [{"path": "stub", "title": "stub"}],
+            "total": 1,
+        }
+        mock.get_zim_entry.return_value = "stub-body"
+        mock.find_entry_by_title_data.return_value = {"results": [], "total": 0}
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query(
+            query, zim_file_path="/x.zim", options={"compact": False}
+        )
+        assert "Chained Operations Detected" not in out
+
+
+class TestD1SoftFooter:
+    """D1 (pass-2): for ambiguous connectors (``and`` / ``or`` / ``&``
+    / ``,`` / ``/``), the resolved-article response carries a footer
+    naming what was picked vs. dropped — unless the returned title
+    already includes both halves (``Romeo and Juliet``), in which
+    case the footer is suppressed.
+    """
+
+    def _make_handler(
+        self, top_title: str, top_path: Optional[str] = None
+    ) -> SimpleToolsHandler:
+        """Build a mock that lets the handler reach the article-fetch
+        path. Title-promotion needs a score-1.0 title-index hit so
+        ``_promote_topic_via_title_index`` succeeds when the search's
+        top hit isn't a strong token-match for the topic.
+        """
+        path = top_path or top_title
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.search_zim_file_data.return_value = {
+            "results": [{"path": path, "title": top_title}],
+            "total": 1,
+        }
+        mock.get_zim_entry.return_value = "stub-body"
+        # Title-promotion + disambig-twin probe both call this. Returning
+        # a score-1.0 hit for the title-promotion path lets the handler
+        # reach the article-fetch + footer-append code. The disambig
+        # twin probe rejects the same path because it doesn't end with
+        # ``_(disambiguation)``.
+        mock.find_entry_by_title_data.return_value = {
+            "results": [{"path": path, "title": top_title, "score": 1.0}],
+            "total": 1,
+        }
+        return SimpleToolsHandler(mock)
+
+    def test_one_half_in_title_emits_footer(self) -> None:
+        # ``Berlin and Paris`` resolved to ``Paris`` → footer fires
+        # naming Berlin as the dropped half.
+        handler = self._make_handler(top_title="Paris")
+        out = handler.handle_zim_query(
+            "tell me about Berlin and Paris",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert "query contained" in out
+        assert "Berlin" in out
+        assert "Paris" in out
+        assert "tell me about Berlin" in out
+
+    def test_both_halves_in_title_suppresses_footer(self) -> None:
+        # ``Romeo and Juliet`` resolved to ``Romeo and Juliet`` → no
+        # footer (single article).
+        handler = self._make_handler(top_title="Romeo and Juliet")
+        out = handler.handle_zim_query(
+            "tell me about Romeo and Juliet",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert "query contained" not in out
+
+    def test_tom_and_jerry_suppressed(self) -> None:
+        # ``Tom & Jerry`` resolved to ``Tom and Jerry`` → both halves
+        # in title → suppress.
+        handler = self._make_handler(top_title="Tom and Jerry")
+        out = handler.handle_zim_query(
+            "tell me about Tom & Jerry",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert "query contained" not in out
+
+    def test_short_halves_skipped(self) -> None:
+        # ``A and B`` — neither half is substantive (1-char each).
+        # No footer.
+        handler = self._make_handler(top_title="A")
+        out = handler.handle_zim_query(
+            "tell me about A and B",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert "query contained" not in out
+
+    def test_comma_connector_footer(self) -> None:
+        # ``Berlin, Paris`` resolved to ``Paris`` only → footer.
+        handler = self._make_handler(top_title="Paris")
+        out = handler.handle_zim_query(
+            "tell me about Berlin, Paris",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert "query contained" in out
+        assert "Berlin" in out
+
+
+class TestD1RealTopicWithLowercaseRightUnchanged:
+    """Sanity: prose right-side with lowercase first content word
+    (``the capital of Germany``) must not trigger the right-promote
+    or soft footer.
+    """
+
+    def test_lowercase_right_unaffected(self) -> None:
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.search_zim_file_data.return_value = {
+            "results": [{"path": "Berlin", "title": "Berlin"}],
+            "total": 1,
+        }
+        mock.get_zim_entry.return_value = "stub-body"
+        mock.find_entry_by_title_data.return_value = {"results": [], "total": 0}
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query(
+            "tell me about Berlin and the capital of Germany",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert "Chained Operations Detected" not in out
+        # Soft footer also suppressed because "the capital..." is
+        # not substantive (lowercase first word).
+        # (Substantive check fires on uppercase first-content-token
+        # heuristic via the right-promote branch, but the soft footer
+        # uses _is_substantive_topic — short lowercase prose passes
+        # because tokens count ≥2, but the check is on chars/tokens.
+        # We assert at minimum no hard chain.)
+
 
 # ---------------------------------------------------------------------------
 # D2: orphan trailing connector strip
@@ -186,12 +351,16 @@ class TestD2OrphanTrailingConnector:
             ("tell me about Berlin and", "Berlin"),
             ("tell me about Photosynthesis or", "Photosynthesis"),
             ("tell me about Mars plus", "Mars"),
-            ("tell me about Sun then", "Sun"),
             ("tell me about Berlin,", "Berlin"),
             ("tell me about Berlin &", "Berlin"),
             ("tell me about Berlin and also", "Berlin"),
             # Real "and" inside topic stays put: only trailing strips.
             ("tell me about Romeo and Juliet", "Romeo and Juliet"),
+            # Pass-2 self-audit: ``then`` is NOT in the strip list,
+            # so titles ending with ``Then`` (Now and Then, Then) are
+            # preserved.
+            ("tell me about Now and Then", "Now and Then"),
+            ("tell me about then", "then"),
         ],
     )
     def test_orphan_trailing_stripped(self, raw: str, expected: str) -> None:

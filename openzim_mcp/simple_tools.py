@@ -654,20 +654,19 @@ class SimpleToolsHandler:
         r"\s*;\s+",
         r"\s+and\s+then\s+",
         r"\s+,\s+then\s+",
-        # A16 post-a16 D1: soft connectors. These are too ambiguous to
-        # fire on bare-topic halves (``Vienna, Austria`` is one city;
-        # ``He or she`` is one phrase) so the splitter requires
-        # corroboration — either both halves carry an operation verb,
-        # or the left half carries one and the right is a topic-shaped
-        # proper noun that can have the left's verb projected onto it
-        # (handled in ``_chained_intent_guidance``'s right-promote
-        # branch). Pre-a16, ``tell me about Berlin and Paris`` fuzzy-
-        # searched the literal concatenation and silently returned
-        # whichever side ranked higher (Paris), dropping Berlin.
-        r"\s+and\s+",
-        r"\s+or\s+",
+        # A16 post-a16 D1: clear chain markers. The right-promote
+        # branch below projects the left's verb onto a bare topic-
+        # shaped right half so ``tell me about Berlin also Paris``
+        # → fires the chain warning. ``and`` / ``or`` / ``&`` /
+        # ``,`` / ``/`` are deliberately NOT here — those connectors
+        # appear inside real article titles (``Romeo and Juliet``,
+        # ``Tom & Jerry``, ``Vienna, Austria``, ``TCP/IP``) often
+        # enough that a hard chain warning false-fires too easily.
+        # Those ambiguous cases are handled by
+        # ``_soft_connector_footer`` on the resolved article instead,
+        # which suppresses the warning when the returned title
+        # already contains both halves.
         r"\s+also\s+",
-        r"\s*&\s+",
         r"\s+plus\s+",
         r"\s*\.\s+(?=[A-Z])",
         r"\s*->\s*",
@@ -876,15 +875,25 @@ class SimpleToolsHandler:
                     right,
                     flags=re.IGNORECASE,
                 ).strip()
+                verb_m = cls._CHAINED_OPERATION_PREFIX_RE.match(left)
+                # Pass-2 self-audit: require the LEFT bare topic to be
+                # substantive too. Without this, the period+capital
+                # connector mis-fires on common title abbreviations
+                # (``Dr. Strange``, ``St. Louis``, ``Mt. Everest``,
+                # ``Jr. Bandits``) — left's bare topic is the abbreviation
+                # itself (1-2 chars), clearly not a chain situation.
+                left_bare = (
+                    left[verb_m.end() :].strip() if verb_m else ""
+                )
                 if (
-                    stripped_right
+                    verb_m
+                    and stripped_right
                     and stripped_right[0].isupper()
                     and cls._is_substantive_topic(stripped_right)
+                    and cls._is_substantive_topic(left_bare)
                 ):
-                    verb_m = cls._CHAINED_OPERATION_PREFIX_RE.match(left)
-                    if verb_m:
-                        right = f"{verb_m.group(0).strip()} {stripped_right}"
-                        right_is_op = True
+                    right = f"{verb_m.group(0).strip()} {stripped_right}"
+                    right_is_op = True
             # a13 D3: bare-topic chains on a strong connector
             # (``Biology; Chemistry``, ``DNA then Photosynthesis``).
             # Neither half has an operation verb. Pre-fix, this fell
@@ -968,6 +977,82 @@ class SimpleToolsHandler:
             "what",
         }
     )
+
+    # A16 post-a16 D1 (pass-2): ambiguous connectors that can mean
+    # either "two queries" (``Berlin and Paris``) or "one article
+    # title" (``Romeo and Juliet``). Handled via the soft footer in
+    # ``_handle_tell_me_about`` rather than a hard chain warning,
+    # because firing chain on every ``X and Y`` mis-flags common
+    # title shapes.
+    _SOFT_CHAIN_CONNECTOR_PATS = (
+        r"\s+and\s+",
+        r"\s+or\s+",
+        r"\s+vs\.?\s+",
+        r"\s*,\s+",
+        r"\s+&\s+",
+        r"\s*/\s*",
+    )
+
+    def _soft_connector_footer(
+        self, topic: str, top_title: str
+    ) -> Optional[str]:
+        """A16 post-a16 D1 (pass-2): when ``topic`` contains an ambiguous
+        connector between two substantive proper-noun-shaped halves
+        AND the returned ``top_title`` only includes one of them,
+        return a footer reminding the caller that the other half was
+        dropped.
+
+        Suppressed when:
+          * ``top_title`` includes BOTH halves (the article title
+            spans the connector — ``Romeo and Juliet`` /
+            ``Tom and Jerry`` / ``Vienna, Austria``),
+          * ``top_title`` includes NEITHER half (unclear which side
+            was picked — surface no guidance rather than guess).
+
+        The footer guides the caller to a clean follow-up query for
+        the dropped half without raising a hard chain warning that
+        would force the caller to re-run for the obvious-single
+        topic cases.
+        """
+        if not topic or not top_title:
+            return None
+        topic_stripped = topic.strip()
+        if not topic_stripped:
+            return None
+        for pat in self._SOFT_CHAIN_CONNECTOR_PATS:
+            m = re.search(pat, topic_stripped, re.IGNORECASE)
+            if not m:
+                continue
+            left = topic_stripped[: m.start()].strip()
+            right = topic_stripped[m.end() :].strip()
+            if not left or not right:
+                continue
+            # Both halves must look like substantive proper-noun
+            # phrases (filters ``He or she`` and other prose where
+            # the connector word is a normal English particle).
+            if not self._is_substantive_topic(
+                left
+            ) or not self._is_substantive_topic(right):
+                continue
+            title_lower = top_title.lower()
+            left_in = left.lower() in title_lower
+            right_in = right.lower() in title_lower
+            if left_in == right_in:
+                # Both in title → returned article is the full
+                # phrase (``Romeo and Juliet``); neither in title →
+                # unclear which half was picked. Either way, no
+                # actionable footer.
+                return None
+            picked = left if left_in else right
+            dropped = right if left_in else left
+            connector_display = m.group(0).strip() or "(connector)"
+            return (
+                f"\n\n_Note: your query contained `{connector_display}` "
+                f"between two proper-noun phrases. Returned the article "
+                f"for `{picked}`. For `{dropped}`, query separately "
+                f"with `tell me about {dropped}`._"
+            )
+        return None
 
     @classmethod
     def _is_substantive_topic(cls, text: str) -> bool:
@@ -2404,12 +2489,17 @@ class SimpleToolsHandler:
         # answer. Accept both uppercase and lowercase first letter —
         # libzim namespace lookups are case-insensitive (see
         # ``openzim_mcp/zim/namespace.py``).
+        # Pass-2 self-audit: require the suffix to be ≥3 chars so real
+        # short article titles like ``A/B`` (testing methodology) or
+        # ``a/b`` aren't redirected as namespace paths. Wikipedia
+        # ZIM namespace keys are always ≥3 chars (Title, Counter,
+        # Creator, mainPage, favicon, ...).
         if (
-            len(topic) >= 3
+            len(topic) >= 4
             and topic[0].isascii()
             and topic[0].isalpha()
             and topic[1] == "/"
-            and topic[2:].strip()
+            and len(topic[2:].strip()) >= 3
         ):
             normalized = topic[0].upper() + topic[1:]
             return (
@@ -2738,6 +2828,17 @@ class SimpleToolsHandler:
                 f"\n\n_May also refer to: {preview}{extra} — "
                 f"use `tell me about <full title>` to fetch any of these._"
             )
+        # A16 post-a16 D1 (pass-2): soft-connector ambiguity footer.
+        # When the user's topic carried an ambiguous connector
+        # (``Berlin and Paris`` / ``Tokyo, Osaka`` / ``Brad & Angelina``
+        # / ``TCP/IP``) and the returned article only includes one of
+        # the halves, surface a footer so the caller knows what was
+        # picked vs. dropped. Suppressed when the returned title
+        # already contains both halves (``Romeo and Juliet`` is one
+        # article whose title spans the connector — no footer needed).
+        soft_footer = self._soft_connector_footer(topic, top_title)
+        if soft_footer:
+            result = result + soft_footer
         return result
 
     def _fetch_topic_article_body(
@@ -3122,17 +3223,18 @@ class SimpleToolsHandler:
         # to ``find_entry_by_title_data`` returns silently 0 hits with
         # no signal that the user used the wrong tool. Redirect upfront
         # so the caller knows to use ``get article`` for path lookup.
-        # Strict pattern (uppercase letter + ``/`` + non-empty
-        # suffix) matches ZIM namespace conventions without false-
-        # positiving real titles that legitimately contain ``/``
-        # (Wikipedia subpages like ``Foo/Bar`` would have a lowercase
-        # second char, etc.).
+        # Strict pattern (uppercase letter + ``/`` + ≥3-char suffix)
+        # matches ZIM namespace conventions without false-positiving
+        # real short titles that legitimately contain ``/`` (the
+        # Wikipedia ``A/B`` testing article is a real entry under
+        # path ``A/B`` whose suffix is 1 char; the ≥3-char floor
+        # filters it out).
         if (
-            len(title) >= 3
+            len(title) >= 4
             and title[0].isascii()
             and title[0].isupper()
             and title[1] == "/"
-            and title[2:].strip()
+            and len(title[2:].strip()) >= 3
         ):
             return (
                 "**Namespace Path, Not a Title**\n\n"
@@ -3166,12 +3268,12 @@ class SimpleToolsHandler:
             results = data.get("results") if isinstance(data, dict) else None
             if (
                 not results
-                and len(title) >= 3
+                and len(title) >= 4
                 and title[0].isascii()
                 and title[0].isalpha()
                 and not title[0].isupper()
                 and title[1] == "/"
-                and title[2:].strip()
+                and len(title[2:].strip()) >= 3
             ):
                 normalized = title[0].upper() + title[1:]
                 return (

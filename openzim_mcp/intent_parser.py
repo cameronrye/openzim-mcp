@@ -434,10 +434,17 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     # full phrase). The chained-intent guidance can't help here — the
     # connector regex requires a right-hand operand. Strip the orphan
     # tail before the search sees it.
+    #
+    # Pass-2 self-audit: ``then`` deliberately NOT in the strip list.
+    # Real article titles end with ``Then`` (``Now and Then``,
+    # ``Back Then``, ``Once Upon a Time ... Then ...``) often enough
+    # that stripping it would mangle valid topics. ``then`` orphans
+    # (``Apollo 11 then``) are rare and the search ranker degrades
+    # gracefully.
     for _ in range(3):
         before = topic
         topic = safe_regex_sub(
-            r"\s+(?:and|or|also|plus|then)\s*$",
+            r"\s+(?:and|or|also|plus)\s*$",
             "",
             topic,
             flags=re.IGNORECASE,
