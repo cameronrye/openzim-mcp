@@ -461,15 +461,29 @@ def render_namespaces(data: Mapping[str, Any]) -> str:
     # per-namespace sum alongside so readers don't think the
     # numbers are inconsistent — they're different views (article
     # count vs. all-entries-by-namespace).
+    #
+    # A16 post-a16 D10: the bare ``(per-namespace sum: N)`` annotation
+    # left readers uncertain which value was authoritative and why
+    # they didn't match. Spell out the relationship: the header is
+    # ``archive.entry_count`` (the canonical count exposed in
+    # ``metadata for <file>``); the per-namespace sum may exceed it
+    # by the count of well-knowns + redirects (W/M extras that
+    # ``entry_count`` excludes). When the two are equal, drop the
+    # annotation altogether — same info, less noise.
     per_ns_sum = sum(
         int(info.get("total", 0) or 0)
         for info in namespaces.values()
         if isinstance(info, dict)
     )
     if per_ns_sum and per_ns_sum != total_entries:
+        diff = per_ns_sum - total_entries
+        if diff > 0:
+            diff_note = f"+{diff:,} well-knowns/redirects"
+        else:
+            diff_note = f"{diff:,} (sampling under-count)"
         header = (
             f"# Namespaces — {total_str} archive entries "
-            f"(per-namespace sum: {per_ns_sum:,})"
+            f"(per-namespace sum: {per_ns_sum:,}; {diff_note})"
         )
     else:
         header = f"# Namespaces — {total_str} total entries"

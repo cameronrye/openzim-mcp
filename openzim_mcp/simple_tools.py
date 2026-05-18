@@ -654,6 +654,23 @@ class SimpleToolsHandler:
         r"\s*;\s+",
         r"\s+and\s+then\s+",
         r"\s+,\s+then\s+",
+        # A16 post-a16 D1: soft connectors. These are too ambiguous to
+        # fire on bare-topic halves (``Vienna, Austria`` is one city;
+        # ``He or she`` is one phrase) so the splitter requires
+        # corroboration — either both halves carry an operation verb,
+        # or the left half carries one and the right is a topic-shaped
+        # proper noun that can have the left's verb projected onto it
+        # (handled in ``_chained_intent_guidance``'s right-promote
+        # branch). Pre-a16, ``tell me about Berlin and Paris`` fuzzy-
+        # searched the literal concatenation and silently returned
+        # whichever side ranked higher (Paris), dropping Berlin.
+        r"\s+and\s+",
+        r"\s+or\s+",
+        r"\s+also\s+",
+        r"\s*&\s+",
+        r"\s+plus\s+",
+        r"\s*\.\s+(?=[A-Z])",
+        r"\s*->\s*",
     )
 
     # A11 B1: verb-shaped leads we recognise on the right-hand side of
@@ -823,6 +840,51 @@ class SimpleToolsHandler:
                     if verb_m:
                         right = f"{verb_m.group(0).strip()} {cont_m.group(1).strip()}"
                         right_is_op = True
+            # A16 post-a16 D1: right-promote for weak connectors. When
+            # the left half carries an op verb and the right half is a
+            # bare topic that LOOKS like a proper noun, the caller
+            # almost certainly meant two queries. Project the left's
+            # verb onto the right so both halves render in the chain-
+            # rejection warning.
+            #
+            # Triple guard against over-firing on natural-language
+            # phrases that contain a soft connector but mean one
+            # topic (``Now and Then``, ``Pride and Prejudice``,
+            # ``Romeo and Juliet``):
+            #   1) ``_is_topic_shaped`` — caps token count + rejects
+            #      mid-phrase strong connectors,
+            #   2) right's first content token is uppercase (filters
+            #      ``tell me about Berlin and the capital of
+            #      Germany``-style prose),
+            #   3) right is "substantive" — multi-token OR ≥5 chars OR
+            #      contains a digit. The 5-char floor filters the
+            #      common single-token English words ``Then`` / ``Now``
+            #      / ``Here`` / ``This`` while still admitting real
+            #      proper-noun topics (Paris/Berlin/Mercury/Photo
+            #      synthesis...). Multi-token / digit-containing rights
+            #      (``Apollo 12``, ``Mars rover``) are always
+            #      substantive enough to promote.
+            if left_is_op and not right_is_op and cls._is_topic_shaped(right):
+                # Strip leading adverbials (``then``, ``next``, ``also``,
+                # ``and``, ``finally``) so ``... . Then Paris`` (period
+                # connector) projects to ``tell me about Paris`` rather
+                # than ``tell me about Then Paris``. Adverbials only —
+                # no real verbs.
+                stripped_right = re.sub(
+                    r"^(?:then|next|also|and|finally|after\s+that)\s+",
+                    "",
+                    right,
+                    flags=re.IGNORECASE,
+                ).strip()
+                if (
+                    stripped_right
+                    and stripped_right[0].isupper()
+                    and cls._is_substantive_topic(stripped_right)
+                ):
+                    verb_m = cls._CHAINED_OPERATION_PREFIX_RE.match(left)
+                    if verb_m:
+                        right = f"{verb_m.group(0).strip()} {stripped_right}"
+                        right_is_op = True
             # a13 D3: bare-topic chains on a strong connector
             # (``Biology; Chemistry``, ``DNA then Photosynthesis``).
             # Neither half has an operation verb. Pre-fix, this fell
@@ -906,6 +968,34 @@ class SimpleToolsHandler:
             "what",
         }
     )
+
+    @classmethod
+    def _is_substantive_topic(cls, text: str) -> bool:
+        """A16 post-a16 D1 helper: return True iff ``text`` carries
+        enough lexical weight to plausibly name an article on its own.
+
+        Used by the right-promote branch of the chain detector to
+        filter out single-token English sentence-words (``Then`` /
+        ``Now`` / ``Here`` / ``This`` / ``Both``) that happen to
+        survive ``_is_topic_shaped`` (1 token, capitalised, no
+        connectors) but almost never name a Wikipedia article on
+        their own.
+
+        Heuristic: substantive iff any of —
+          * ≥2 tokens (multi-word proper nouns / titles),
+          * ≥5 characters in the longest token (real proper nouns
+            tend to be longer than short adverbials),
+          * contains a digit (``Apollo 12``, ``1969`` etc.).
+        """
+        stripped = text.strip()
+        if not stripped:
+            return False
+        tokens = stripped.split()
+        if len(tokens) > 1:
+            return True
+        if any(ch.isdigit() for ch in stripped):
+            return True
+        return len(stripped) >= 5
 
     @classmethod
     def _is_topic_shaped(cls, text: str) -> bool:
@@ -1489,8 +1579,8 @@ class SimpleToolsHandler:
         if not namespace:
             return (
                 "**Missing or Invalid Namespace**\n\n"
-                "**Issue**: `browse namespace` needs a single uppercase "
-                "namespace letter (A, C, M, W, etc.).\n"
+                "**Issue**: `browse namespace` needs a single namespace "
+                "letter (A, C, M, W, etc.; case-insensitive).\n"
                 "**Examples**:\n"
                 "- `browse namespace C` — main content entries\n"
                 "- `browse namespace M` — archive metadata\n"
@@ -1948,6 +2038,28 @@ class SimpleToolsHandler:
         params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
+        # A16 post-a16 D6: if the user wrote ``in namespace X`` but the
+        # extractor (now strict) couldn't parse a valid single-letter
+        # namespace, surface the same "Missing or Invalid Namespace"
+        # guidance the sibling ``browse_namespace`` / ``walk_namespace``
+        # tools produce. Pre-fix, ``search foo in namespace AB`` /
+        # ``... 1`` / ``... _`` silently dropped the namespace filter
+        # at the regex level and the backend returned ``No filtered
+        # matches`` with no signal that the namespace itself was
+        # invalid. Validate at the handler so the user gets the
+        # specific input-error class.
+        if params.get("namespace") is None and re.search(
+            r"\bin\s+namespace\b", query, re.IGNORECASE
+        ):
+            return (
+                "**Missing or Invalid Namespace**\n\n"
+                "**Issue**: `search ... in namespace` needs a single "
+                "namespace letter (A, C, M, W, etc.; case-insensitive).\n"
+                "**Examples**:\n"
+                "- `search Berlin in namespace C` — main content\n"
+                "- `search Counter in namespace M` — archive metadata\n"
+                "<!-- intent=filtered_search cert=0.80 -->"
+            )
         # A11 post-a11 H2: route to the canonical-title-match-aware
         # variant so ``search for berlin in namespace C`` surfaces
         # the canonical ``Berlin`` article instead of dropping it
@@ -2281,6 +2393,79 @@ class SimpleToolsHandler:
         topic = (params.get("topic") or query).strip()
         if not topic:
             topic = query
+        # A16 post-a16 D3: a topic like ``M/Title`` or ``c/Berlin`` is a
+        # ZIM namespace path the caller pasted into ``tell me about``.
+        # The downstream search either silently strips the prefix (libzim
+        # lookup-by-title is namespace-tolerant) and returns the canonical
+        # ``Title`` / ``Berlin`` article, or fuzzy-resolves to a wrong
+        # article entirely. Mirror the same guard
+        # ``_handle_find_by_title`` uses so the caller gets the right
+        # tool (``get article M/Title``) instead of a silent wrong
+        # answer. Accept both uppercase and lowercase first letter —
+        # libzim namespace lookups are case-insensitive (see
+        # ``openzim_mcp/zim/namespace.py``).
+        if (
+            len(topic) >= 3
+            and topic[0].isascii()
+            and topic[0].isalpha()
+            and topic[1] == "/"
+            and topic[2:].strip()
+        ):
+            normalized = topic[0].upper() + topic[1:]
+            return (
+                "**Namespace Path, Not a Topic**\n\n"
+                f"`{topic}` looks like a ZIM namespace path. "
+                "``tell me about`` runs a title-search and would "
+                "either drop the namespace prefix or fuzzy-resolve "
+                "to an unrelated article.\n"
+                "**Try one of**:\n"
+                f"- `get article {normalized}` — direct path lookup\n"
+                f"- `tell me about {topic[2:].strip()}` — "
+                "title search on the bare name\n"
+                "<!-- intent=namespace_path_redirect cert=0.95 -->"
+            )
+        # A16 post-a16 D9: callers often paste a ZIM path form
+        # (``Sun_(disambiguation)``, ``Apollo_11``) into ``tell me about``,
+        # but the title index is whitespace-tokenised and the search
+        # ranker scores ``Sun_(disambiguation)`` as a single literal
+        # token (zero hits) rather than ``Sun (disambiguation)``
+        # (matches via title-index). Normalise underscores to spaces
+        # so pasted paths resolve the same way the equivalent title
+        # form does. Real article titles do not contain underscores
+        # on Wikipedia, so the normalisation is lossless.
+        if "_" in topic:
+            topic = topic.replace("_", " ").strip()
+        # A16 post-a16 D8: when the topic explicitly names a disambig
+        # page (``Berlin (disambiguation)``, ``Apollo 11
+        # (disambiguation)``), the fuzzy title-search ranks unrelated
+        # articles containing the bare word ``disambiguation`` (e.g.
+        # ``Word-sense_disambiguation``) above the requested
+        # ``<X>_(disambiguation)`` path. Probe the title index for an
+        # exact ``<X>_(disambiguation)`` path and fetch it directly
+        # when it exists. Same path-existence helper as D4.
+        if topic.lower().endswith(" (disambiguation)"):
+            base = topic[: -len(" (disambiguation)")].strip()
+            if base:
+                resolved = self._probe_disambig_twin(
+                    zim_file_path, base.replace(" ", "_")
+                )
+                if resolved is not None:
+                    body = self._fetch_topic_article_body(
+                        zim_file_path,
+                        resolved,
+                        options.get("max_content_length") or 8000,
+                        options,
+                    )
+                    if body is not None:
+                        return (
+                            f"# {topic}\n\n"
+                            f"_Source: `{resolved}`_\n\n"
+                            f"{body}\n"
+                            "<!-- intent=tell_me_about cert=0.95 -->"
+                        )
+                # Fall through to fuzzy search if the title-index probe
+                # missed — the disambig auto-pick downstream will still
+                # try its best.
         # Cap the search at 3 results: the auto-fetch path either inlines
         # the top article (in which case we don't render the others — see
         # below) or falls through to a plain rendered search, where 3 hits
@@ -2463,6 +2648,25 @@ class SimpleToolsHandler:
                 ):
                     disambig_twin_path = str(m["path"])
                     break
+            # A16 post-a16 D4: when the strong-match scan didn't see a
+            # disambig twin, explicitly probe ``<canonical>_(disambiguation)``
+            # via the title index. The pre-a16 code relied entirely on
+            # the search engine surfacing the twin in its top hits, but
+            # for canonicals with many prefix-sibling sub-articles (Sun
+            # / Sun_Ra_..., Apollo_11 / Apollo_11_anniversaries, Java /
+            # Java_Community_Process) the search engine ranks the
+            # sub-articles higher than the disambig page (the disambig
+            # title carries the extra ``(disambiguation)`` token which
+            # hurts its fuzzy score against the bare topic). The miss
+            # then routed the footer to ``May also refer to: <sub-
+            # article>`` wording that mis-frames sub-articles as
+            # alternative meanings. A direct title-index probe is one
+            # in-memory hit per resolve and short-circuits the
+            # mis-framing.
+            if disambig_twin_path is None:
+                disambig_twin_path = self._probe_disambig_twin(
+                    zim_file_path, canonical_path
+                )
             # A11 post-a11 C1: when the auto-pick is the
             # canonical-over-extends-topic case (Apollo 11 over
             # anniversaries / lunar / goodwill, France over the
@@ -2600,6 +2804,44 @@ class SimpleToolsHandler:
         return lower.endswith("_(disambiguation)") or lower.endswith(
             "_%28disambiguation%29"
         )
+
+    def _probe_disambig_twin(
+        self, zim_file_path: str, canonical_path: str
+    ) -> Optional[str]:
+        """A16 post-a16 D4: probe the title index for ``<canonical_path>_
+        (disambiguation)``. Returns the matching path if it exists,
+        else ``None``.
+
+        Cheap (in-memory title-index hit). Strict match: the returned
+        path must equal one of the two expected forms (URL-decoded or
+        URL-encoded ``%28...%29``) — case-insensitive on the prefix
+        only. This avoids promoting unrelated articles whose titles
+        contain ``(disambiguation)`` (e.g. ``Word-sense_disambiguation``
+        in the live archive).
+        """
+        if not canonical_path:
+            return None
+        expected = {
+            (canonical_path + "_(disambiguation)").lower(),
+            (canonical_path + "_%28disambiguation%29").lower(),
+        }
+        title_probe = canonical_path.replace("_", " ") + " (disambiguation)"
+        try:
+            data = self.zim_operations.find_entry_by_title_data(
+                zim_file_path, title_probe, cross_file=False, limit=3
+            )
+        except Exception:
+            return None
+        results = data.get("results") if isinstance(data, dict) else None
+        if not results:
+            return None
+        for hit in results:
+            if not isinstance(hit, dict):
+                continue
+            hit_path = str(hit.get("path") or "")
+            if hit_path and hit_path.lower() in expected:
+                return hit_path
+        return None
 
     @classmethod
     def _auto_pick_canonical_over_disambig_twin(
@@ -2819,8 +3061,8 @@ class SimpleToolsHandler:
         if not namespace:
             return (
                 "**Missing or Invalid Namespace**\n\n"
-                "**Issue**: `walk namespace` needs a single uppercase "
-                "namespace letter (A, C, M, W, etc.).\n"
+                "**Issue**: `walk namespace` needs a single "
+                "namespace letter (A, C, M, W, etc.; case-insensitive).\n"
                 "**Examples**:\n"
                 "- `walk namespace C` — main content entries\n"
                 "- `walk namespace M` — archive metadata\n"
@@ -2909,6 +3151,40 @@ class SimpleToolsHandler:
                 cross_file=False,
                 limit=options.get("limit", 10),
             )
+            # A16 post-a16 D7: lowercase-first-char namespace-path shape
+            # (``m/Title``, ``c/Berlin``, ``w/mainPage``) couldn't fire
+            # the upfront uppercase-only redirect because some real
+            # article titles ARE lowercase-first-char + ``/`` (e.g.
+            # the Wikipedia ``A/B`` testing article via ``a/b``). Now
+            # that we've actually consulted the title index and got
+            # zero hits, the shape unambiguously means "namespace
+            # path the caller misrouted to find_by_title". Emit the
+            # same redirect the uppercase upfront path uses, with the
+            # suggestion paths normalised to uppercase (the
+            # conventional ZIM form). libzim namespace lookups are
+            # case-insensitive (see ``openzim_mcp/zim/namespace.py``).
+            results = data.get("results") if isinstance(data, dict) else None
+            if (
+                not results
+                and len(title) >= 3
+                and title[0].isascii()
+                and title[0].isalpha()
+                and not title[0].isupper()
+                and title[1] == "/"
+                and title[2:].strip()
+            ):
+                normalized = title[0].upper() + title[1:]
+                return (
+                    "**Namespace Path, Not a Title**\n\n"
+                    f"`{title}` looks like a ZIM namespace path. The "
+                    "title index only stores entry titles, so a path "
+                    "lookup returns no hits.\n"
+                    "**Try one of**:\n"
+                    f"- `get article {normalized}` — direct path lookup "
+                    "(namespace letters are case-insensitive)\n"
+                    f"- `find article titled {title[2:].strip()}` — "
+                    "title-only lookup (drops the namespace prefix)\n"
+                )
             return compact_renderers.render_find_by_title(data, title)
         return self.zim_operations.find_entry_by_title(
             zim_file_path,

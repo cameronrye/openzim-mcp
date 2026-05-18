@@ -150,13 +150,22 @@ def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
     if search_match:
         params["query"] = search_match.group(1).strip()
 
+    # A16 post-a16 D6: tighten the namespace regex to a single letter
+    # with a word boundary so ``search foo in namespace AB`` / ``... 1``
+    # / ``... _`` fails to match and the handler's validation guard
+    # fires consistently — matching the input-validation parity that
+    # P6-D1/D2 added to ``browse_namespace`` and ``walk_namespace`` in
+    # a16. Pre-fix, the regex accepted ``[A-Za-z0-9_.-]+`` and silently
+    # passed the malformed argument through to the backend, which
+    # returned ``No filtered matches`` with no signal that the
+    # namespace itself was invalid.
     namespace_match = safe_regex_search(
-        rf"namespace\s+{_QUOTE_OPEN}?([A-Za-z0-9_.-]+){_QUOTE_OPEN}?",
+        rf"namespace\s+{_QUOTE_OPEN}?([A-Za-z])\b{_QUOTE_OPEN}?",
         query,
         re.IGNORECASE,
     )
     if namespace_match:
-        params["namespace"] = namespace_match.group(1)
+        params["namespace"] = namespace_match.group(1).upper()
 
     type_match = safe_regex_search(
         rf"type\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?",
@@ -415,6 +424,25 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
             topic,
             flags=re.IGNORECASE,
         ).strip()
+        if topic == before:
+            break
+    # A16 post-a16 D2: strip orphan trailing chain connectors. ``tell
+    # me about Apollo 11 also`` with no right-hand topic used to leave
+    # ``Apollo 11 also`` as the search topic, where the fuzzy ranker
+    # promoted the unrelated ``Also`` disambig article above Apollo 11
+    # (the word ``also`` is a stronger exact-title-token match than the
+    # full phrase). The chained-intent guidance can't help here — the
+    # connector regex requires a right-hand operand. Strip the orphan
+    # tail before the search sees it.
+    for _ in range(3):
+        before = topic
+        topic = safe_regex_sub(
+            r"\s+(?:and|or|also|plus|then)\s*$",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        ).strip()
+        topic = safe_regex_sub(r"\s*[,&]\s*$", "", topic).strip()
         if topic == before:
             break
     params["topic"] = topic
