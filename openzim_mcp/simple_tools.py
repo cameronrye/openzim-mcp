@@ -3101,6 +3101,40 @@ class SimpleToolsHandler:
             body = self._lead_with_toc(zim_file_path, top_path, body)
         return body
 
+    @classmethod
+    def _extract_subject_hint(
+        cls, topic: str, resolved_title: str
+    ) -> Optional[str]:
+        """Detect a subject-category hint in the residual of ``topic``
+        after the resolved entity's title tokens are removed.
+
+        Used by the subject-attribute decomposition path: when a query
+        like ``famous musician from big rapids michigan`` resolves
+        (via tail-probing in ``_promote_topic_via_title_index``) to
+        the entity ``Big Rapids, Michigan``, the leftover tokens
+        (``famous``, ``musician``, ``from``) often name a subject
+        category that maps to a section in the resolved article.
+
+        Returns the residual subject token (lowercased) on a strong
+        match, or ``None`` when the residual is empty, contains only
+        weak hints (``famous`` / ``notable`` alone), or contains no
+        known subject vocabulary.
+
+        Token matching is whole-word, case-insensitive, alphanumeric-
+        only.
+        """
+        topic_tokens = tuple(_TOKEN_RE.findall(topic.lower()))
+        title_tokens = set(_TOKEN_RE.findall(resolved_title.lower()))
+        if not topic_tokens or not title_tokens:
+            return None
+        residual = [t for t in topic_tokens if t not in title_tokens]
+        if not residual:
+            return None
+        for tok in residual:
+            if tok in _SUBJECT_HINT_TO_SECTION and tok not in _WEAK_SUBJECT_HINTS:
+                return tok
+        return None
+
     @staticmethod
     def _coerce_content_offset(raw: Any) -> int:
         """Cast a caller-supplied ``content_offset`` to a non-negative int.
