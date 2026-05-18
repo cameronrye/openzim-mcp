@@ -169,13 +169,23 @@ def find_title_match(
     }
 
 
-# Tokenizer matches the existing _TOKEN_RE / is_strong_title_match
-# convention in this module: lowercase alphanumeric runs only.
-# Underscores, punctuation, and whitespace all act as token boundaries.
-# Underscore is intentionally a boundary so path-form input like
-# "Big_Rapids,_Michigan" tokenizes to ["big", "rapids", "michigan"]
-# instead of treating "Big_Rapids" as one token.
-_TAIL_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# Tokenizer for tail / window probe yielders. Unicode-aware so non-Latin
+# topics like ``München`` / ``Zürich`` / ``Köln`` tokenize to one token
+# (``["münchen"]``) instead of being split on the diacritic into
+# ``["m", "nchen"]`` etc. Post-a17 P1-D2: the ASCII-only ``[a-z0-9]+``
+# previously used here yielded ``"m"`` for ``München`` via
+# ``iter_query_windows``, which ``find_title_match`` then cleanly
+# resolved to the ``M`` letter article at score 1.0 — a confidently-
+# wrong answer at cert=0.85 for any place name with a diacritic. The
+# backend ``find_entry_by_title_data`` natively handles Unicode (probed
+# directly with ``find article titled München`` → resolves to Munich
+# at score 1.00), so the fix is to stop destroying the topic before it
+# reaches the backend. Underscores, punctuation, and whitespace remain
+# token boundaries — ``[^\W_]+`` keeps ``\w`` minus underscore so
+# path-form input like ``"Big_Rapids,_Michigan"`` still tokenizes to
+# ``["big", "rapids", "michigan"]``. ``re.UNICODE`` is the default in
+# Python 3 — naming it here keeps the intent explicit.
+_TAIL_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 def iter_query_tails(

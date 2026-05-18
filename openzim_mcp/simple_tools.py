@@ -305,6 +305,19 @@ class SimpleToolsHandler:
                 cursor_ns = state.get("ns")
                 if isinstance(cursor_ns, str) and cursor_ns:
                     options["_cursor_ns"] = cursor_ns
+                # Post-a17 P1-D3: stash the cursor's ``s.ai`` so
+                # cursor-rebuilding handlers (``_handle_walk_namespace``
+                # rebuilds ``{scan_at, l}`` from ``offset`` and passes
+                # that synthetic dict to ``walk_namespace_data``, whose
+                # unconditional ``verify_archive_identity`` then
+                # rejects the missing ``ai`` with a misleading
+                # "missing archive-identity field" error). Preserving
+                # the original ``ai`` round-trips it back through the
+                # check so a walk-namespace cursor returned by the
+                # tool can be replayed against the same archive.
+                cursor_ai = state.get("ai")
+                if isinstance(cursor_ai, str) and cursor_ai:
+                    options["_cursor_ai"] = cursor_ai
                 if isinstance(state, dict):  # always True now; kept for diff clarity
                     # D9 (beta): the original implementation treated the
                     # cursor's ``s.q`` field as decorative — only ``s.o``
@@ -1084,6 +1097,21 @@ class SimpleToolsHandler:
             m = re.search(pat, topic_stripped, re.IGNORECASE)
             if not m:
                 continue
+            # Post-a17 P1-D1: when the title itself contains the same
+            # connector pattern (``Big Rapids, Michigan`` carries a
+            # comma; ``Romeo and Juliet`` carries ``and``), the
+            # connector is structural to the title, not a multi-entity
+            # separator. The ``left_in == right_in`` branch below
+            # catches the simple case where both topic halves are full
+            # substrings — but subject-attribute prefixes
+            # (``notable people from Big Rapids, Michigan``,
+            # ``musicians from Romeo and Juliet``) leave the left half
+            # longer than the title, defeating that suppression. The
+            # docstring already names ``Vienna, Austria`` as a case
+            # this footer should NOT fire for; the earlier guard makes
+            # it work in the prefixed-topic shape too.
+            if re.search(pat, top_title, re.IGNORECASE):
+                return None
             left = topic_stripped[: m.start()].strip()
             right = topic_stripped[m.end() :].strip()
             if not left or not right:
@@ -3646,9 +3674,28 @@ class SimpleToolsHandler:
         # have to round-trip through base64.
         offset = int(options.get("offset", 0) or 0)
         limit = options.get("limit", 200)
-        cursor_state: Optional[Dict[str, Any]] = (
-            {"scan_at": offset, "l": limit} if offset > 0 else None
-        )
+        # Post-a17 P1-D3: include the cursor's original ``ai`` field
+        # when it was stashed by the dispatcher (see _decode_cursor at
+        # ~line 295). Without it, ``walk_namespace_data``'s
+        # unconditional ``verify_archive_identity`` rejects the
+        # synthetic cursor with a misleading "missing archive-identity
+        # field" error — even though the user was just round-tripping
+        # the cursor the tool itself emitted. ``ns`` is also threaded
+        # through so the cursor->namespace check stays meaningful when
+        # the handler-level guard (``_cursor_ns_mismatch`` above) is
+        # paired with the data-layer guard inside
+        # ``walk_namespace_data``.
+        cursor_state: Optional[Dict[str, Any]]
+        if offset > 0:
+            cursor_state = {"scan_at": offset, "l": limit}
+            cursor_ai = options.get("_cursor_ai")
+            if isinstance(cursor_ai, str) and cursor_ai:
+                cursor_state["ai"] = cursor_ai
+            cursor_ns = options.get("_cursor_ns")
+            if isinstance(cursor_ns, str) and cursor_ns:
+                cursor_state["ns"] = cursor_ns
+        else:
+            cursor_state = None
         if options.get("compact", False):
             data = self.zim_operations.walk_namespace_data(
                 zim_file_path,
