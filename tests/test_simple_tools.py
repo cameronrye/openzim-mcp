@@ -1481,6 +1481,36 @@ class TestLeadSectionFetchInTellMeAbout:
         assert "- Content\n" not in result
         assert "subsection" not in result
 
+    def test_empty_lead_advances_cut_to_second_h2(self, handler, mock_zim_operations):
+        """When pre-H2 body is empty (after wrappers/H1 stripping), the cut
+        advances to the second non-wrapper H2 so the LLM gets the first
+        real section's body instead of just a list of section names.
+
+        Motivating case: ``Big_Rapids,_Michigan`` from the 2026-05-18 live
+        transcript — empty lead before "## Notable people", model
+        hallucinated when given headings only.
+        """
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\n## Other animals\n\nFirst real section content here.\n\n"
+            "## Arts, entertainment, and media\n\nSecond section content."
+        )
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        # First real section's body IS included.
+        assert "First real section content here." in result
+        # Second section's body is NOT (cut still applied, just at the
+        # second H2 instead of the first).
+        assert "Second section content." not in result
+        # The substitution hedge fires so the LLM knows it's reading a
+        # promoted section rather than a true lead.
+        assert "Lead was empty" in result
+        # TOC still appended.
+        assert "Sections in this article" in result
+
     def test_non_compact_returns_full_body_unchanged(
         self, handler, mock_zim_operations
     ):

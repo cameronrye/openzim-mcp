@@ -1578,6 +1578,22 @@ class SimpleToolsHandler:
                 return m
         return None
 
+    @classmethod
+    def _advance_cut_to_second_h2(cls, body: str) -> Optional[str]:
+        """Return ``body`` cut at the SECOND non-wrapper H2 instead of the
+        first, or ``None`` if the body has fewer than two such H2s.
+
+        Used by ``_lead_with_toc``'s empty-lead fallback: when the
+        pre-H2 lead is essentially empty, advancing the cut to the
+        second H2 includes the first real section's prose in the
+        response, giving the LLM something to ground on instead of
+        just a TOC.
+        """
+        matches = cls._iter_article_h2(body)
+        if len(matches) < 2:
+            return None
+        return body[: matches[1].start()].rstrip()
+
     # O4 (beta): disambiguation pages on Wikipedia (``Martin``,
     # ``Mercury``) have the form ``# Title\n\n**Title** may refer to:\n``
     # before the first H2. Detect that pattern so the lead-with-TOC cut
@@ -1610,6 +1626,27 @@ class SimpleToolsHandler:
         tail = pre_h2[-400:] if len(pre_h2) > 400 else pre_h2
         normalized = " ".join(tail.lower().split()).rstrip(":").rstrip()
         return normalized.endswith(cls._DISAMBIG_LEAD_PHRASES)
+
+    @staticmethod
+    def _lead_density(pre_h2: str) -> int:
+        """Count substantive characters in the pre-H2 lead body.
+
+        Strips the ZIM header block (``# Title\nPath: ...\nType: ...\n``)
+        and the ``## Content`` wrapper plus the duplicated ``# Title``
+        that the renderer emits before the real lead, so the count
+        reflects actual lead prose. Used to detect the "empty lead"
+        pattern where an article (typically a short city/biography
+        article whose infobox got stripped) has no prose before its
+        first real H2.
+        """
+        stripped = pre_h2
+        preamble_re = re.compile(
+            r"\A#\s+[^\n]*\nPath:[^\n]*\nType:[^\n]*\n##\s+Content\s*\n+",
+            re.MULTILINE,
+        )
+        stripped = preamble_re.sub("", stripped, count=1)
+        stripped = re.sub(r"^#\s+\S[^\n]*\n+", "", stripped, count=1)
+        return len("".join(stripped.split()))
 
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:
         """Truncate ``body`` at the first article H2 (lead-section cut)
@@ -1669,10 +1706,26 @@ class SimpleToolsHandler:
         # keep the WHOLE body instead, so the disambig list is right
         # there inline.
         h2_match = self._first_article_h2(body)
+        empty_lead_advanced = False
         if h2_match:
             pre_h2 = body[: h2_match.start()].rstrip()
             if self._is_disambig_lead(pre_h2):
                 clean_cut = False
+            elif self._lead_density(pre_h2) < 80:
+                # Empty-lead case: pre-H2 body is essentially just
+                # wrappers and the duplicated H1. Advance the cut to
+                # the SECOND non-wrapper H2 so the response includes
+                # the first real section's prose. Motivating case:
+                # ``Big_Rapids,_Michigan`` (2026-05-18 live transcript).
+                advanced_body = self._advance_cut_to_second_h2(body)
+                if advanced_body is not None:
+                    body = advanced_body
+                    clean_cut = True
+                    empty_lead_advanced = True
+                else:
+                    # Only one section in the article — no second H2
+                    # to advance to. Fall back to whole-body (no cut).
+                    clean_cut = False
             else:
                 body = pre_h2
                 clean_cut = True
@@ -1686,11 +1739,19 @@ class SimpleToolsHandler:
             # leave the caller with. Avoid adding noise.
             return body
         if clean_cut and sections:
-            parts.append(
-                "\n_Lead section shown. Use `show structure of "
-                f"{entry_path}` for the full outline, or `summary of "
-                f"{entry_path}` for a longer summary._"
-            )
+            if empty_lead_advanced:
+                parts.append(
+                    "\n_Lead was empty; showing first section instead. "
+                    f"Use `show structure of {entry_path}` for the full "
+                    f"outline, or `get section <name> of {entry_path}` "
+                    "to fetch a specific section._"
+                )
+            else:
+                parts.append(
+                    "\n_Lead section shown. Use `show structure of "
+                    f"{entry_path}` for the full outline, or `summary of "
+                    f"{entry_path}` for a longer summary._"
+                )
         if sections:
             parts.append("\n## Sections in this article\n")
             parts.extend(f"- {s}" for s in sections)
