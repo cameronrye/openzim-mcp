@@ -192,11 +192,28 @@ def _format_filtered_response(
         f"{filter_text}, "
         f"showing {offset + 1}-{offset + len(results)}{capped_note}:\n\n",
     ]
+    # P3-D1 contract defence: callers may pass an active namespace /
+    # content_type filter so per-result rows without those keys still
+    # render meaningful labels. The data builder now populates these
+    # fields (P3-D1 fix), but defensive .get() guards historical /
+    # synthetic paths that surface namespace-less rows.
+    filter_namespace_fallback = ""
+    filter_content_type_fallback = ""
+    if "namespace=" in filter_text:
+        # ``filter_text`` is " (filters: namespace=C, content_type=text/html)"
+        # — extract the namespace token for the fallback label.
+        ns_seg = filter_text.split("namespace=", 1)[1]
+        filter_namespace_fallback = ns_seg.split(",", 1)[0].rstrip(")").strip()
+    if "content_type=" in filter_text:
+        ct_seg = filter_text.split("content_type=", 1)[1]
+        filter_content_type_fallback = ct_seg.split(",", 1)[0].rstrip(")").strip()
     for i, result in enumerate(results):
         parts.append(f"## {offset + i + 1}. {result['title']}\n")
         parts.append(f"Path: {result['path']}\n")
-        parts.append(f"Namespace: {result['namespace']}\n")
-        parts.append(f"Content Type: {result['content_type']}\n")
+        ns_label = result.get("namespace") or filter_namespace_fallback or "?"
+        ct_label = result.get("content_type") or filter_content_type_fallback or "?"
+        parts.append(f"Namespace: {ns_label}\n")
+        parts.append(f"Content Type: {ct_label}\n")
         # A11 post-a11 L3: same canonical-title-match badge handling as
         # ``_format_search_text`` so filtered-search results that pick
         # up the splice (post-a11 H2) use the same shape as plain search.
@@ -1336,16 +1353,40 @@ class _SearchMixin:
             return [], scan
 
         # Project (entry_id, entry, namespace, content_mime) tuples onto
-        # SearchHit-shaped dicts. Per-hit ``namespace`` / ``content_type``
-        # fields are dropped: the response contract reports the active
-        # filters once at the top level (``namespace_filter`` /
-        # ``content_type_filter``) rather than repeating them per hit.
+        # SearchHit-shaped dicts. P3-D1 (live-MCP sweep): per-hit
+        # ``namespace`` / ``content_type`` MUST be populated. The legacy
+        # ``_build_filtered_results`` always did so; this _data sibling
+        # previously dropped them with the rationale that filters were
+        # echoed once at the top level. But the renderer
+        # ``_format_filtered_response`` does direct-key access on each
+        # row, and the canonical-IS-top short-circuit at
+        # ``search_with_filters_with_canonical_splice`` falls through to
+        # that renderer with these rows — causing
+        # ``KeyError: 'namespace'`` on every ``search Berlin in namespace
+        # C`` / ``search Tokyo in namespace C`` / ``search Paris in
+        # namespace C`` query. Restore the contract so both callers
+        # (renderer + structured consumers) see the same shape.
         results: List[Dict[str, Any]] = []
-        for i, (entry_id, entry, _entry_namespace, _content_mime) in enumerate(page):
+        for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
             try:
                 title = entry.title or "Untitled"
                 snippet = self._get_entry_snippet(entry, query=query)
-                results.append({"path": entry_id, "title": title, "snippet": snippet})
+                if not content_type:
+                    try:
+                        content_mime = entry.get_item().mimetype or content_mime
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not get mimetype for entry {entry_id}: {e}"
+                        )
+                results.append(
+                    {
+                        "path": entry_id,
+                        "title": title,
+                        "snippet": snippet,
+                        "namespace": entry_namespace,
+                        "content_type": content_mime,
+                    }
+                )
             except Exception as e:
                 logger.warning(
                     f"Error processing filtered search result {entry_id}: {e}"
@@ -1355,6 +1396,8 @@ class _SearchMixin:
                         "path": entry_id,
                         "title": f"Entry {offset + i + 1}",
                         "snippet": f"(Error getting entry details: {e})",
+                        "namespace": entry_namespace or "unknown",
+                        "content_type": content_mime or "unknown",
                     }
                 )
         return results, scan

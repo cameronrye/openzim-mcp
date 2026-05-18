@@ -615,9 +615,16 @@ class IntentParser:
             9,
         ),
         (r"\b(binary|raw)\s+(content|data)\s+(for|from|of)\b", "binary", 0.9, 9),
-        # Suggestions - moderately specific
+        # Suggestions - moderately specific. The trailing assertion
+        # accepts a word boundary (``autocomplete evol``) OR a quote
+        # character (``autocomplete "evol"``) so the quoted form
+        # advertised in the missing-arg hint actually routes to this
+        # intent (P3-D4). Pre-fix, the bare ``\b`` after the optional
+        # ``(for|of)?`` group failed before a quote char and the query
+        # silently fell through to the ``search`` general fallback.
         (
-            r"\b(suggestions?|autocomplete|complete|hints?)\s+(for|of)?\b",
+            r"\b(suggestions?|autocomplete|complete|hints?)\s+(for|of)?"
+            r"(?=\b|['\"‘’“”])",
             "suggestions",
             0.85,
             7,

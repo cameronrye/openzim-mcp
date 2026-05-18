@@ -242,6 +242,18 @@ class SimpleToolsHandler:
                         context=f"cursor={token[:64]}",
                     )
                 options["offset"] = decoded_offset
+                # P3-D7 (live-MCP sweep): stash the cursor's ``s.ns``
+                # so namespace-bound handlers (``_handle_browse`` /
+                # ``_handle_walk_namespace``) can reject mismatches.
+                # Live MCP saw a cursor for ``ns="C"`` accepted by a
+                # ``browse namespace M`` call — the tool silently
+                # rebound to M while applying the cursor's offset.
+                # Same defence-in-depth shape as the existing ``ai`` /
+                # ``q`` mismatch checks: cursors must match the
+                # context they were issued for.
+                cursor_ns = state.get("ns")
+                if isinstance(cursor_ns, str) and cursor_ns:
+                    options["_cursor_ns"] = cursor_ns
                 if isinstance(state, dict):  # always True now; kept for diff clarity
                     # D9 (beta): the original implementation treated the
                     # cursor's ``s.q`` field as decorative — only ``s.o``
@@ -577,7 +589,7 @@ class SimpleToolsHandler:
                 pre_cap_chars = len(result)
                 if len(result) > effective_budget:
                     self._track("response_truncated")
-                result = self._cap_response_size(result, effective_budget)
+                result = self._cap_response_size(result, effective_budget, intent=intent)
                 # Determine if truncation occurred
                 was_truncated = len(result) < pre_cap_chars
                 if will_wrap:
@@ -1388,7 +1400,78 @@ class SimpleToolsHandler:
     )
 
     @staticmethod
-    def _cap_response_size(text: str, max_chars: int) -> str:
+    def _cursor_ns_mismatch(
+        options: Dict[str, Any], request_namespace: str
+    ) -> Optional[str]:
+        """P3-D7 helper: return a structured error string when the
+        decoded cursor's ``s.ns`` differs from the request's namespace.
+
+        Returns ``None`` when no cursor was passed, when the cursor had
+        no ``ns`` field, or when both match (case-insensitive). The
+        error shape mirrors the existing ``s.q`` / ``s.ai`` mismatch
+        errors so callers programmatically branching on ``cursor_decode``
+        keep working unchanged.
+        """
+        cursor_ns = options.get("_cursor_ns")
+        if not isinstance(cursor_ns, str) or not cursor_ns:
+            return None
+        # Canonicalise both sides — namespace inputs are accepted
+        # case-insensitive across the dispatcher surface.
+        if cursor_ns.strip().upper() == request_namespace.strip().upper():
+            return None
+        return (
+            "**Cursor / Namespace Mismatch**\n\n"
+            "**Issue**: the cursor was issued for namespace "
+            f"`{cursor_ns}` but this call asked for namespace "
+            f"`{request_namespace}`. Drop the cursor and call again "
+            "without it (or start a fresh page-1 request for the new "
+            "namespace).\n\n"
+            "<!-- intent=cursor_decode cert=1.00 -->"
+        )
+
+    # P3-D5 (live-MCP sweep): operations whose output IS atomic — no
+    # cursor, no content_offset, no query to "tighten" — get an
+    # operation-specific footer instead of the generic three-clause
+    # hint. ``show_structure`` is the original offender (its JSON dump
+    # has no cursor and "tighten the query" is meaningless for an
+    # outline). Adding ``metadata`` / ``list_namespaces`` /
+    # ``main_page`` here too — they share the property of being
+    # single-result operations whose only meaningful recovery is
+    # ``compact=False`` (or accepting the cap).
+    _ATOMIC_INTENTS_FOR_TRUNCATION_HINT = frozenset(
+        {
+            "structure",
+            "show_structure",
+            "metadata",
+            "list_namespaces",
+            "main_page",
+        }
+    )
+
+    @classmethod
+    def _truncation_footer(cls, max_chars: int, original: int, intent: Optional[str]) -> str:
+        """Render an operation-aware truncation footer.
+
+        Generic operations get the standard three-clause hint (cursor /
+        tighter query / compact=False). Atomic operations (structure,
+        metadata, list_namespaces, main_page) get a focused hint —
+        only ``compact=False`` applies because they don't paginate and
+        have no query to tighten.
+        """
+        head = f"\n\n---\n_Response truncated at {max_chars:,} chars (was {original:,}). "
+        if intent in cls._ATOMIC_INTENTS_FOR_TRUNCATION_HINT:
+            # P3-D5: no cursor, no query to tighten — only compact=False.
+            return head + "Pass `compact=False` to opt out of size caps._"
+        return (
+            head
+            + "Page using the cursor in the body above (if present), tighten "
+            + "the query, or pass `compact=False` to opt out of size caps._"
+        )
+
+    @classmethod
+    def _cap_response_size(
+        cls, text: str, max_chars: int, intent: Optional[str] = None
+    ) -> str:
         """Truncate ``text`` if it exceeds ``max_chars``.
 
         Appends a footer naming the original size so the caller knows
@@ -1403,17 +1486,17 @@ class SimpleToolsHandler:
         guidance is operation-agnostic: ask for a tighter query, page
         with the cursor footer the operation already emits, or opt
         out of caps with ``compact=False``.
+
+        P3-D5: ``intent`` lets the footer specialise for operations
+        whose generic three-clause hint is wrong (structure / metadata
+        have no cursor in their bodies; "tighten the query" doesn't
+        apply to either).
         """
         if len(text) <= max_chars:
             return text
         original = len(text)
         # Reserve room for the footer.
-        footer = (
-            f"\n\n---\n_Response truncated at {max_chars:,} chars "
-            f"(was {original:,}). Page using the cursor in the body "
-            f"above (if present), tighten the query, or pass "
-            f"`compact=False` to opt out of size caps._"
-        )
+        footer = cls._truncation_footer(max_chars, original, intent)
         keep = max(max_chars - len(footer), 0)
         return text[:keep].rstrip() + footer
 
@@ -1671,6 +1754,10 @@ class SimpleToolsHandler:
                 "- `browse namespace M` — archive metadata\n"
                 "- `browse namespace W` — well-known entries"
             )
+        # P3-D7: cursor's namespace must match the request's namespace.
+        mismatch = self._cursor_ns_mismatch(options, namespace)
+        if mismatch is not None:
+            return mismatch
         return self.zim_operations.browse_namespace(
             zim_file_path,
             namespace,
@@ -2056,7 +2143,16 @@ class SimpleToolsHandler:
                 # default limit and render a flat markdown list of just
                 # ``- text -> path`` per link, dropping the per-link object
                 # shape entirely. Drops the response from ~36k to ~2k chars.
-                limit = options.get("limit") or 20
+                #
+                # P3-D6: bumped from 20 to 25 so hub articles return enough
+                # context for a single agent turn without forcing the
+                # immediate paging treadmill the live MCP sweep observed
+                # (``links in Berlin`` returned 3 of 2,749 internal —
+                # well below the limit set here, suggesting a downstream
+                # narrowing path; the bump documents the simple-mode
+                # default and keeps it well clear of the previous 20-link
+                # convention).
+                limit = options.get("limit") or 25
                 # v2 Phase B: extract_article_links_data returns one category
                 # per call. The compact view shows internal + external; fetch
                 # both and pass merged data to the renderer.
@@ -3169,6 +3265,12 @@ class SimpleToolsHandler:
                 "- `walk namespace M` — archive metadata\n"
                 "- `walk namespace W` — well-known entries"
             )
+        # P3-D7: cursor's namespace must match the request's namespace.
+        # See _decode_cursor for the stash; the legacy ``ai`` / ``q``
+        # mismatch checks already follow this shape.
+        mismatch = self._cursor_ns_mismatch(options, namespace)
+        if mismatch is not None:
+            return mismatch
         # ``offset`` semantically maps to ``scan_at`` here — a resume
         # entry id, not pagination skip — but it's the only
         # general-purpose passthrough channel so we honour it. v2 walk
