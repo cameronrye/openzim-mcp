@@ -1667,14 +1667,16 @@ class SimpleToolsHandler:
     # The duplicated-H1 pattern runs on the output of the preamble strip,
     # which is also a fresh string start for the H1 match.
     #
-    # Whitespace classes use ``[ \t]`` instead of ``\s`` so the newline
-    # boundaries between fields stay unambiguous — ``\s`` includes ``\n``,
-    # which SonarCloud's S5852 polynomial-backtracking detector flags as
-    # ambiguous against the explicit ``\n`` boundaries. ``[ \t]`` matches
-    # the same intra-line whitespace shape without overlapping the
-    # field separators.
+    # Patterns use a literal single space after ``#`` / ``##`` rather than
+    # ``\s+`` or ``[ \t]+``. The ZIM renderer always emits exactly one
+    # space after the hash; allowing a repeated whitespace class adjacent
+    # to ``[^\n]*`` (which also matches spaces) gives the regex engine
+    # ambiguous splits and trips SonarCloud's S5852 polynomial-backtracking
+    # detector. A literal single space keeps the boundary unambiguous —
+    # ``[^\n]*`` is the sole repetition per field, bounded by an explicit
+    # ``\n`` literal at each field separator.
     _LEAD_PREAMBLE_RE = re.compile(
-        r"\A#[ \t]+[^\n]*\nPath:[^\n]*\nType:[^\n]*\n##[ \t]+Content[ \t]*\n+"
+        r"\A# [^\n]*\nPath:[^\n]*\nType:[^\n]*\n## Content[^\n]*\n+"
     )
     # The trailing ``(?:\n+|\Z)`` lets the H1 strip succeed even when the
     # duplicated-H1 line is the last line of ``pre_h2`` (callers
@@ -1684,7 +1686,7 @@ class SimpleToolsHandler:
     # Title`` (no inter-H1/H2 content) would leave ``# Title`` unstripped
     # and inflate density to title-length, defeating the empty-lead
     # threshold.
-    _DUPLICATED_H1_RE = re.compile(r"\A#[ \t]+\S[^\n]*(?:\n+|\Z)")
+    _DUPLICATED_H1_RE = re.compile(r"\A# \S[^\n]*(?:\n+|\Z)")
 
     # Empty-lead detection threshold: lead is "effectively empty"
     # when ``_lead_density`` returns ``< 5`` substantive chars after
