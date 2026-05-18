@@ -1619,6 +1619,38 @@ class TestLeadSectionFetchInTellMeAbout:
         assert "Sections in this article" in result
         assert "Other animals" in result
 
+    def test_empty_lead_advance_hedge_fires_even_without_sections(
+        self, handler, mock_zim_operations
+    ):
+        """When structure data has no usable level-2 headings (only
+        wrapper or only deeper levels) but the body has two H2s for
+        the advance to fire, sections is empty but empty_lead_advanced
+        is True. The hedge must still fire so the LLM knows the lead
+        was substituted.
+        """
+        # Structure has only the wrapper and a deep H3 — no real H2s.
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 1, "text": "Tiger"},
+                {"level": 2, "text": "Content"},  # wrapper, filtered
+                {"level": 3, "text": "subsection"},  # wrong level, filtered
+            ]
+        }
+        # Body has two H2s so advance fires.
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\n## First\n\nPromoted body here.\n\n## Second\n\nMore."
+        )
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        assert "Promoted body here." in result
+        assert "Lead was empty" in result
+        # TOC is NOT in result because sections list is empty.
+        assert "Sections in this article" not in result
+
 
 class TestCompactMarkdownRenderingForJsonIntents:
     """v1.2.0 small-LLM optimization: in compact mode, the four
