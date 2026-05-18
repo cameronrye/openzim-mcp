@@ -1511,6 +1511,69 @@ class TestLeadSectionFetchInTellMeAbout:
         # TOC still appended.
         assert "Sections in this article" in result
 
+    def test_empty_lead_with_only_one_section_skips_cut(
+        self, handler, mock_zim_operations
+    ):
+        """When the article has an empty lead AND only one H2 in the
+        body, there's no second H2 to advance to. Fall back to no-cut
+        behavior so the single section's content is preserved.
+        """
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\n## Only section\n\nOnly section content here."
+        )
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 1, "text": "Tiger"},
+                {"level": 2, "text": "Content"},
+                {"level": 2, "text": "Only section"},
+            ]
+        }
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        assert "Only section content here." in result
+        assert "Lead was empty" not in result
+
+    def test_disambig_page_with_thin_pre_h2_does_not_advance(
+        self, handler, mock_zim_operations
+    ):
+        """Disambiguation pages (Mercury, Martin) have thin pre-H2
+        content too, but their content IS the disambig list — advancing
+        the cut would render two unrelated category dumps. The existing
+        ``_is_disambig_lead`` guard must fire BEFORE the empty-lead
+        check.
+        """
+        mock_zim_operations.search_zim_file_data.return_value = {
+            "results": [
+                {"path": "Mercury", "title": "Mercury", "snippet": "..."},
+            ],
+        }
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Mercury\nPath: Mercury\nType: text/html\n## Content\n\n"
+            "# Mercury\n\n**Mercury** may refer to:\n\n"
+            "## Science\n\n- Mercury (element)\n- Mercury (planet)\n\n"
+            "## Other\n\n- Mercury (mythology)"
+        )
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 1, "text": "Mercury"},
+                {"level": 2, "text": "Content"},
+                {"level": 2, "text": "Science"},
+                {"level": 2, "text": "Other"},
+            ]
+        }
+        result = handler.handle_zim_query(
+            "tell me about Mercury",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        assert "may refer to" in result
+        assert "Lead was empty" not in result
+        assert "Science" in result
+
     def test_non_compact_returns_full_body_unchanged(
         self, handler, mock_zim_operations
     ):
