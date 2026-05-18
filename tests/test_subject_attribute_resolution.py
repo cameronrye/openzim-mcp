@@ -124,3 +124,94 @@ class TestResolveSectionForSubject:
         }
         target = handler._resolve_section_for_subject(structure, "philosopher")
         assert target is None
+
+
+class TestEndToEndSubjectAttributeRouting:
+    """Integration coverage: a query like ``famous musician from big
+    rapids michigan`` should fetch the ``Notable people`` (or
+    ``Music``) section of the resolved place article instead of the
+    empty lead.
+    """
+
+    @pytest.fixture
+    def mock_zim_operations(self):
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/zim/test.zim"}]
+        mock.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "path": "Big_Rapids,_Michigan",
+                    "title": "Big Rapids, Michigan",
+                    "snippet": "...",
+                },
+            ],
+        }
+        def _find(zim_path, title, **kw):
+            t_lower = title.strip().lower()
+            if t_lower in {
+                "big rapids michigan",
+                "big rapids, michigan",
+                "michigan",
+                "rapids michigan",
+            }:
+                return {
+                    "results": [
+                        {
+                            "path": "Big_Rapids,_Michigan",
+                            "title": "Big Rapids, Michigan",
+                            "score": 1.0,
+                        }
+                    ]
+                }
+            return {"results": []}
+        mock.find_entry_by_title_data.side_effect = _find
+        mock.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 1, "text": "Big Rapids, Michigan", "id": "h1"},
+                {"level": 2, "text": "Content", "id": "content"},
+                {"level": 2, "text": "History", "id": "history"},
+                {"level": 2, "text": "Notable people", "id": "notable"},
+                {"level": 2, "text": "Education", "id": "education"},
+            ]
+        }
+        mock.get_section_data.return_value = {
+            "section": {"text": "Notable people", "id": "notable", "level": 2},
+            "content_markdown": (
+                "May Erlewine (born 1983) is an American singer-songwriter "
+                "from Big Rapids."
+            ),
+        }
+        mock.search_zim_file.return_value = "fallback search response"
+        mock.get_zim_entry.return_value = (
+            "# Big Rapids, Michigan\nPath: Big_Rapids,_Michigan\n"
+            "Type: text/html\n## Content\n\n"
+            "# Big Rapids, Michigan\n\n"
+            "## History\n\nHistory body.\n\n"
+            "## Notable people\n\nNotable people body."
+        )
+        return mock
+
+    @pytest.fixture
+    def handler(self, mock_zim_operations):
+        return SimpleToolsHandler(mock_zim_operations)
+
+    def test_subject_query_fetches_notable_people_section(
+        self, handler, mock_zim_operations
+    ):
+        result = handler.handle_zim_query(
+            "famous musician from big rapids michigan",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        assert "May Erlewine" in result
+        assert "Notable people" in result
+        mock_zim_operations.get_section_data.assert_called_once()
+        called_args = mock_zim_operations.get_section_data.call_args
+        positional = called_args.args
+        kwargs = called_args.kwargs
+        # Section id "notable" must appear somewhere in args/kwargs.
+        found_section_id = (
+            "notable" in positional
+            or kwargs.get("section_id") == "notable"
+        )
+        assert found_section_id

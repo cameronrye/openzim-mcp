@@ -484,6 +484,8 @@ class SimpleToolsHandler:
                     "\n<!-- intent=chained_intent_rejected cert=1.00 -->"
                 )
             intent, params, confidence = self.intent_parser.parse_intent(query)
+            if isinstance(params, dict):
+                params["_intent_confidence"] = confidence
             # A11 B2: ``tell me about <empty>`` (trailing-space input,
             # punctuation-only topic) used to fall through to a topic
             # of ``"tell me about"`` and disambiguate to article titles
@@ -2992,6 +2994,24 @@ class SimpleToolsHandler:
             self._track("disambiguation_returned")
             return self._render_disambiguation(topic, strong_matches)
 
+        # Subject-attribute decomposition (2026-05-18): when the
+        # original topic carried a subject category hint
+        # (``musician``, ``actor``, ``notable people``, ...) and the
+        # resolved entity's article has a section that maps to that
+        # hint, return the section body instead of the (often empty)
+        # lead. Motivating case: ``famous musician from big rapids
+        # michigan`` from the 2026-05-18 live transcript.
+        subject_section_result = self._maybe_render_subject_section(
+            zim_file_path=zim_file_path,
+            topic=topic,
+            top_path=top_path,
+            top_title=top_title,
+            params=params,
+            options=options,
+        )
+        if subject_section_result is not None:
+            return subject_section_result
+
         article_body = self._fetch_topic_article_body(
             zim_file_path, top_path, max_content_length, options
         )
@@ -3176,6 +3196,97 @@ class SimpleToolsHandler:
                 if cand_lower in (h.get("text") or "").lower():
                     return h
         return None
+
+    def _maybe_render_subject_section(
+        self,
+        *,
+        zim_file_path: str,
+        topic: str,
+        top_path: str,
+        top_title: str,
+        params: Dict[str, Any],
+        options: Dict[str, Any],
+    ) -> Optional[str]:
+        """Try the subject-attribute decomposition path. Returns the
+        rendered response string on a successful subject-section match,
+        or ``None`` to signal "fall through to the normal lead-fetch
+        path."
+
+        Gates:
+          (a) ``compact=True`` and ``content_offset == 0`` — both
+              required for the section-replacement behavior to make
+              sense.
+          (b) The topic carries a subject hint residual that doesn't
+              appear in the resolved entity's title.
+          (c) The resolved article's structure has a section matching
+              the subject hint.
+          (d) The matched section's content fetches successfully and
+              is non-empty.
+
+        Skips when the explicit-phrasing intent path was used (the
+        intent classifier reports confidence >= 0.85 for explicit
+        ``tell me about X`` phrasings; the bare-topic fallback hits at
+        confidence 0.7 — that's the path subject-decomposition should
+        enhance).
+        """
+        if not options.get("compact", False):
+            return None
+        if self._coerce_content_offset(options.get("content_offset")) != 0:
+            return None
+        if params.get("_intent_confidence", 0.0) >= 0.85:
+            return None
+        subject = self._extract_subject_hint(topic, top_title or top_path)
+        if subject is None:
+            return None
+        try:
+            structure = self.zim_operations.get_article_structure_data(
+                zim_file_path, top_path
+            )
+        except Exception:
+            return None
+        target = self._resolve_section_for_subject(structure, subject)
+        if target is None:
+            return None
+        section_id = target.get("id") or ""
+        if not section_id:
+            return None
+        try:
+            section_payload = self.zim_operations.get_section_data(
+                zim_file_path, top_path, section_id, include_subsections=True
+            )
+        except Exception:
+            return None
+        if not isinstance(section_payload, dict):
+            return None
+        if section_payload.get("error"):
+            return None
+        body_text = section_payload.get("content_markdown") or ""
+        if not isinstance(body_text, str):
+            return None
+        body_text = body_text.strip()
+        if not body_text:
+            return None
+        max_len = options.get("max_content_length")
+        truncated = False
+        if isinstance(max_len, int) and max_len > 0 and len(body_text) > max_len:
+            body_text = body_text[:max_len]
+            truncated = True
+        self._track("subject_attribute_section_returned")
+        section_text = target.get("text") or section_id
+        result = (
+            f"# {top_title or topic}\n\n"
+            f"_Source: `{top_path}` (section: {section_text})_\n\n"
+            f"_Showing **{section_text}** section because your query "
+            f"asked about ``{subject}``. Use `tell me about "
+            f"{top_path}` for the full article._\n\n"
+            f"{body_text}"
+        )
+        if truncated:
+            result = result + (
+                f"\n\n_Section truncated at {len(body_text):,} chars. "
+                "Re-run with a larger `max_content_length` for more._"
+            )
+        return result
 
     @staticmethod
     def _coerce_content_offset(raw: Any) -> int:
