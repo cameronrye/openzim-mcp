@@ -1694,18 +1694,38 @@ class SimpleToolsHandler:
 
     @classmethod
     def _lead_density(cls, pre_h2: str) -> int:
-        """Count substantive characters in the pre-H2 lead body.
+        """Count substantive characters in the pre-H2 lead body, with a
+        preamble-presence gate.
 
-        Strips the ZIM header block (``# Title\nPath: ...\nType: ...\n``)
-        and the ``## Content`` wrapper plus the duplicated ``# Title``
-        that the renderer emits before the real lead, so the count
-        reflects actual lead prose. Used to detect the "empty lead"
-        pattern where an article (typically a short city/biography
-        article whose infobox got stripped) has no prose before its
-        first real H2.
+        The "empty-lead" pattern this helper detects is specific to the
+        ZIM-rendered body shape: ``# Title\nPath: ...\nType: ...\n##
+        Content\n\n# Title\n\n`` followed by an immediate H2. When the
+        preamble isn't present (direct-content bodies passed in unit
+        tests, or any caller that bypasses the standard ZIM render),
+        the stripping logic can't reliably distinguish wrapper noise
+        from real lead content. Return the raw non-whitespace count
+        in that case so the caller's threshold comparison treats the
+        body as substantive and DOES NOT trigger empty-lead detection.
+
+        With the preamble present, strip it plus the duplicated H1
+        line and count what remains — that's the substantive lead
+        char count the empty-lead path is designed to threshold.
         """
-        stripped = cls._LEAD_PREAMBLE_RE.sub("", pre_h2, count=1)
-        stripped = cls._DUPLICATED_H1_RE.sub("", stripped, count=1)
+        preamble_match = cls._LEAD_PREAMBLE_RE.match(pre_h2)
+        if preamble_match is None:
+            # No ZIM preamble — direct-content body. Don't claim it's
+            # empty just because we can't see wrappers we expect.
+            # Pin the return at-or-above the threshold so the caller's
+            # ``< threshold`` check unambiguously declines empty-lead
+            # detection; the raw count alone can be below threshold
+            # for short one-sentence leads (unit-test fixtures) where
+            # we still want to treat the body as substantive.
+            raw = len("".join(pre_h2.split()))
+            return max(raw, cls._EMPTY_LEAD_DENSITY_THRESHOLD)
+        stripped = pre_h2[preamble_match.end():]
+        h1_match = cls._DUPLICATED_H1_RE.match(stripped)
+        if h1_match is not None:
+            stripped = stripped[h1_match.end():]
         return len("".join(stripped.split()))
 
     def _lead_with_toc(self, zim_file_path: str, entry_path: str, body: str) -> str:

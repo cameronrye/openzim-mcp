@@ -1574,6 +1574,52 @@ class TestLeadSectionFetchInTellMeAbout:
         assert "Lead was empty" not in result
         assert "Science" in result
 
+    def test_direct_content_body_without_preamble_does_not_trigger_empty_lead(
+        self, handler, mock_zim_operations
+    ):
+        """When _lead_with_toc receives a body that doesn't have the
+        ZIM preamble (direct-content unit-test fixtures, or any caller
+        that bypasses the standard ZIM render), empty-lead detection
+        must NOT fire — _lead_density can't reliably distinguish
+        wrapper noise from real lead content without the preamble
+        shape, so the gate defaults to "this body has substantive
+        content."
+
+        Motivating regression: test_simple_tools_typo_trailer_
+        canonical_path.py broke because the lead "Biology is the
+        scientific study of life..." (62 chars) tripped the < 80
+        threshold under the original implementation, suppressing
+        the standard trailer.
+        """
+        mock_zim_operations.get_zim_entry.return_value = (
+            "**Biology** is the scientific study of life and living "
+            "organisms.\n\n## Etymology\n\nThe word *biology* derives from..."
+        )
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 2, "text": "Etymology"},
+                {"level": 2, "text": "History"},
+            ]
+        }
+        # Use a search result whose path matches the topic so the
+        # tell_me_about handler reaches _lead_with_toc.
+        mock_zim_operations.search_zim_file_data.return_value = {
+            "results": [
+                {"path": "Biology", "title": "Biology", "snippet": "..."},
+            ],
+        }
+        result = handler.handle_zim_query(
+            "tell me about Biology",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        # The body content IS in the result (cut at H2, lead preserved).
+        assert "scientific study of life" in result
+        # The standard trailer fires (lead-section hedge, not empty-lead).
+        assert "Lead section shown" in result
+        # The empty-lead hedge does NOT fire.
+        assert "Lead was empty" not in result
+
     def test_non_compact_returns_full_body_unchanged(
         self, handler, mock_zim_operations
     ):
