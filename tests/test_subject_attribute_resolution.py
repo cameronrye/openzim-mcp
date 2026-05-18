@@ -215,3 +215,22 @@ class TestEndToEndSubjectAttributeRouting:
             or kwargs.get("section_id") == "notable"
         )
         assert found_section_id
+
+    def test_explicit_phrasing_skips_subject_decomposition(
+        self, handler, mock_zim_operations
+    ):
+        """An explicit ``tell me about <entity>`` phrasing (confidence
+        0.85+) is an unambiguous entity request — don't decompose it,
+        even if a stray subject token like ``musician`` appears in
+        the phrasing. The bare-topic fallback at confidence 0.7 is
+        the path subject-decomposition should fire on.
+        """
+        result = handler.handle_zim_query(
+            "tell me about famous musician from big rapids michigan",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        # The hedge from subject-decomposition is NOT present.
+        assert "asked about" not in result
+        # get_section_data was NOT called.
+        mock_zim_operations.get_section_data.assert_not_called()
