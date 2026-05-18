@@ -5,6 +5,154 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a17] — 2026-05-18 (alpha pre-release) — post-a16 sweep + empty-lead fallback + subject-attribute decomposition (four waves)
+
+Sixteen commits across four sweep waves on top of `v2.0.0a16`. Waves
+1–3 fixed 10 + 7 user-facing defects + 2 opportunities surfaced by
+unit-mocked adversarial probes and the new live-MCP probing surface;
+wave 4 added two behavioural improvements driven by a 2026-05-18 live
+transcript where a small Qwen3-8B-Q4 model hallucinated when
+`zim_query` returned section-headings-only responses for short
+city/biography articles whose infobox got stripped. Wave 4's own work
+went through a pass-2 self-audit that surfaced three more real
+defects in the wave-4 code itself (the recurring pattern: each pass's
+own fixes have leftover defects). One follow-on test-assertion fix
+(PR #143) was required after the merge when the Comprehensive Testing
+job tripped on a fixture-drift issue PR #136 missed when it fixed
+the parallel test.
+
+### Added
+
+- **Subject-attribute decomposition in `_handle_tell_me_about`**
+  (wave 4). Queries like `famous musician from big rapids michigan`,
+  `notable people from detroit`, `actors from new york` now route
+  to the matching section of the resolved entity's article
+  (`Notable people`, `Music`, `Film`, etc.) instead of the (often
+  empty) lead. Subject hints (`musician`, `actor`, `athlete`,
+  `notable people`, etc.) are extracted from the residual after
+  entity-name tokens are subtracted from the topic; the candidate
+  section is found via whole-word regex match against H2 headings
+  (so `film` matches `Film and television` but not `Microfilm`).
+  Strong hints win over weak ones (`famous`/`notable` alone don't
+  fire). Soft-connector ambiguity footer fires for multi-entity
+  variants like `musicians from Berlin and Paris` so the LLM
+  knows the other entity was dropped. The original confidence-gate
+  approach was removed by the self-audit (over-blocked legitimate
+  explicit-phrasing queries like `who is a famous musician from X`
+  classified at 0.85) — `_extract_subject_hint` is now the sole
+  gate.
+- **Empty-lead fallback in `_lead_with_toc`** (wave 4). When the
+  pre-H2 lead is empty (after stripping the ZIM preamble +
+  duplicated H1), advance the cut to the second non-wrapper H2 so
+  the response includes the first real section's prose instead of
+  just a TOC list. Motivating case: `Big_Rapids,_Michigan` from
+  the 2026-05-18 live transcript — empty lead before
+  `## Notable people` caused the LLM to invent facts. Gated to
+  bodies in the ZIM-preamble shape; direct-content unit fixtures
+  stay unchanged via a preamble-presence check.
+
+### Fixed
+
+- **D1: chained-intent detector false-fires on `and`/`or`/`&`/
+  `,`/`/` connectors that are part of legitimate article titles**
+  (`Romeo and Juliet`, `TCP/IP`, etc.). Wave 1 added the soft-
+  connector ambiguity layer at `_soft_connector_footer` with a
+  strict `_is_substantive_topic` filter so single-token English
+  sentence-words don't trip the right-promote branch. Caught by
+  wave 2 self-audit and refined to the current shape.
+- **D2 + D3: `walk_namespace` on empty new-scheme `B`/`X`/`Z`
+  namespaces omitted `namespace_entry_count` while
+  `walk_namespace M`/`W` included it** — schema inconsistency
+  between sibling aggregators (post-a15 D7 family). Now uniform.
+- **D4: `find article titled M/Title` silently returned `0_hits`**
+  because the title index only stores titles, not paths — no
+  signal to the caller. Now returns a clear error pointing at
+  `get article M/Title`.
+- **D5: politeness modal lead-in (`could you`/`can you`/`would
+  you`/`will you`) leaked into the parsed topic** for chained
+  intents because the chain detector ran before the modal-strip.
+  The D5 modal-strip now lives in a shared scaffold-strip that
+  runs at the top of `_chained_intent_guidance` too.
+- **D6 + D7: silent default `params.get("namespace", "C")`** in
+  `walk_namespace` allowed garbage namespace input (empty, `AB`,
+  `1`, `_`) to walk C silently. Added an input-validation guard
+  matching sibling tools.
+- **D8 + D9 + D10: aggregator-disagreement family** — `browse
+  namespace M` reported 13 entries (including the binary
+  `Illustration_*` entry) while `list namespaces` / `walk
+  namespace M` / `metadata for <file>` all reported 12. Wave 3's
+  P3-D3 applies the same `is_human_readable_metadata_key` filter
+  to `_enumerate_new_scheme_metadata` so all four aggregators
+  agree. Also pins C namespace total to `archive.entry_count`
+  (was drifting ±1 due to sampling projection).
+- **P3-D2: walk_namespace cursor encoded `s.scan_at` on the wire
+  but the universal top-level cursor decoder only accepts `s.o`**.
+  The mismatch made walk_namespace cursors round-trip-broken
+  (`cursor_decode` error when replaying the tool's own cursor).
+  Caught only by live-MCP probing the tool's own cursor advice;
+  unit tests of either module in isolation looked correct.
+- **P3-D5 + P3-D6: surface crashes on filtered-search**
+  (`KeyError: 'namespace'` on certain compact filtered-search
+  branches; missing dict key in the response builder). Both
+  caught by live-MCP probing the deployed server, not the
+  unit-mocked test set.
+- **P6-D1 + P6-D2 + P6-D3: leading-politeness probes + source-
+  level sibling audits** caught three more defects in the
+  `browse_namespace` family that the live-query passes hadn't
+  reached. New methodology angle.
+- **Self-audit fix-ups for wave 4** (caught by pass-2 self-audit
+  of wave 4 itself, BEFORE the PR landed): (a) confidence gate
+  over-blocked `tell me about famous musicians from X` (removed
+  the gate; `_extract_subject_hint` is the sole filter);
+  (b) empty-lead density threshold of 80 false-fired on real
+  one-sentence leads (~11 chars after preamble strip) — lowered
+  to 5; (c) `_DUPLICATED_H1_RE` required trailing `\n+` but
+  callers `rstrip()` `pre_h2` before passing it in, so the
+  duplicated `# Title` was never being stripped — the 80
+  threshold was masking the bug; fix changed to accept
+  `(?:\n+|\Z)`.
+- **PR #143 follow-on: M-namespace browse-total fixture drift**
+  (post-merge fix). The P3-D3 metadata-key filter dropped the
+  fixture's M-namespace count from 10 to 9, tripping a sibling
+  exact-count assertion (`assert result["total"] == 10`) that
+  PR #136 missed when it fixed the parallel
+  `test_metadata_namespace_from_metadata_keys`. Mirrored PR
+  #136's pattern: `>= 5` floor with cross-referenced docstring.
+
+### Refactored
+
+- **Hoisted regex constants out of method bodies** for the
+  empty-lead path (`_LEAD_PREAMBLE_RE`, `_DUPLICATED_H1_RE`,
+  `_EMPTY_LEAD_DENSITY_THRESHOLD`) matching the project pattern
+  for SonarCloud-safe regex declaration. Patterns tightened to
+  use literal single space + `[^\n]*` (the ZIM renderer emits
+  exactly one space after `#`/`##`) rather than `\s+` adjacent
+  to `[^\n]*`, eliminating the polynomial-backtracking
+  ambiguity SonarCloud's S5852 detector flagged.
+- **Whole-word matching in `_resolve_section_for_subject`**
+  (`\bcand\b` instead of substring) prevents false-positives
+  like `film` matching `Microfilm` or `science` matching
+  `Conscience`.
+
+### Methodology
+
+Pass-4 of the sweep introduced **source-level sibling audits**
+as a new angle. After a fix lands for a defect class, grep the
+codebase for the same shape and audit every sibling. P6-D1 and
+P6-D2 in `browse_namespace` were caught instantly this way;
+pass-2 of wave-4 confirmed there are no other regex patterns
+in `simple_tools.py` requiring trailing `\n+` that could be
+defeated by rstrip, and no other confidence-based gates of the
+same shape as the one removed.
+
+Wave 4 also added **adversarial self-audit BEFORE the PR
+lands** rather than as a post-merge gate. The original 12-commit
+wave-4 push went through a pass-2 self-audit that caught three
+real defects in its own work (confidence gate, density
+threshold, latent H1-strip bug — the latter unmasked when
+fixing the threshold). All landed before the PR was opened for
+human review.
+
 ## [2.0.0a16] — 2026-05-17 (alpha pre-release) — post-a15 beta-test sweep — 10 live-Wikipedia defects across seven passes
 
 The multi-pass live sweep of a15 against
