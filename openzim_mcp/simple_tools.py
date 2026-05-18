@@ -490,8 +490,6 @@ class SimpleToolsHandler:
                     "\n<!-- intent=chained_intent_rejected cert=1.00 -->"
                 )
             intent, params, confidence = self.intent_parser.parse_intent(query)
-            if isinstance(params, dict):
-                params["_intent_confidence"] = confidence
             # A11 B2: ``tell me about <empty>`` (trailing-space input,
             # punctuation-only topic) used to fall through to a topic
             # of ``"tell me about"`` and disambiguate to article titles
@@ -1669,14 +1667,25 @@ class SimpleToolsHandler:
     _LEAD_PREAMBLE_RE = re.compile(
         r"\A#\s+[^\n]*\nPath:[^\n]*\nType:[^\n]*\n##\s+Content\s*\n+"
     )
-    _DUPLICATED_H1_RE = re.compile(r"\A#\s+\S[^\n]*\n+")
+    # The trailing ``(?:\n+|\Z)`` lets the H1 strip succeed even when the
+    # duplicated-H1 line is the last line of ``pre_h2`` (callers
+    # ``rstrip()`` ``pre_h2`` before passing it in, which removes the
+    # trailing newline that would otherwise terminate the line). Without
+    # the ``\Z`` branch, a tightly-cut empty-lead like ``## Content\n\n#
+    # Title`` (no inter-H1/H2 content) would leave ``# Title`` unstripped
+    # and inflate density to title-length, defeating the empty-lead
+    # threshold.
+    _DUPLICATED_H1_RE = re.compile(r"\A#\s+\S[^\n]*(?:\n+|\Z)")
 
-    # Threshold for the "empty lead" heuristic in ``_lead_with_toc``.
-    # Motivating case: ``Big_Rapids,_Michigan`` (2026-05-18 live transcript)
-    # has an empty pre-H2 lead whose density runs in the single digits.
-    # Legitimate one-paragraph leads typically exceed 200 chars, so 80
-    # leaves a comfortable margin without misfiring on short stubs.
-    _EMPTY_LEAD_DENSITY_THRESHOLD = 80
+    # Empty-lead detection threshold: lead is "effectively empty"
+    # when ``_lead_density`` returns ``< 5`` substantive chars after
+    # preamble + duplicated-H1 strip. The motivating case
+    # (Big_Rapids,_Michigan with infobox-stripped lead) has density
+    # 0; any real one-sentence lead like "Foo is a bar." (>=10 chars)
+    # stays well above this and is preserved by the standard
+    # lead-cut path. Tunable from live-MCP probe data if real
+    # articles produce density 1-4 placeholder-only leads.
+    _EMPTY_LEAD_DENSITY_THRESHOLD = 5
 
     @classmethod
     def _is_disambig_lead(cls, pre_h2: str) -> bool:
@@ -3032,7 +3041,6 @@ class SimpleToolsHandler:
             topic=topic,
             top_path=top_path,
             top_title=top_title,
-            params=params,
             options=options,
         )
         if subject_section_result is not None:
@@ -3232,7 +3240,6 @@ class SimpleToolsHandler:
         topic: str,
         top_path: str,
         top_title: str,
-        params: Dict[str, Any],
         options: Dict[str, Any],
     ) -> Optional[str]:
         """Try the subject-attribute decomposition path. Returns the
@@ -3245,23 +3252,18 @@ class SimpleToolsHandler:
               required for the section-replacement behavior to make
               sense.
           (b) The topic carries a subject hint residual that doesn't
-              appear in the resolved entity's title.
+              appear in the resolved entity's title. This is the sole
+              gate that filters out unambiguous entity requests like
+              ``tell me about Berlin``: ``_extract_subject_hint`` returns
+              ``None`` for empty residuals.
           (c) The resolved article's structure has a section matching
               the subject hint.
           (d) The matched section's content fetches successfully and
               is non-empty.
-
-        Skips when the explicit-phrasing intent path was used (the
-        intent classifier reports confidence >= 0.85 for explicit
-        ``tell me about X`` phrasings; the bare-topic fallback hits at
-        confidence 0.7 — that's the path subject-decomposition should
-        enhance).
         """
         if not options.get("compact", False):
             return None
         if self._coerce_content_offset(options.get("content_offset")) != 0:
-            return None
-        if params.get("_intent_confidence", 0.0) >= 0.85:
             return None
         subject = self._extract_subject_hint(topic, top_title or top_path)
         if subject is None:

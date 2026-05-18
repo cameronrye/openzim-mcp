@@ -269,23 +269,69 @@ class TestEndToEndSubjectAttributeRouting:
         )
         assert found_section_id
 
-    def test_explicit_phrasing_skips_subject_decomposition(
+    def test_explicit_phrasing_with_subject_hint_still_decomposes(
         self, handler, mock_zim_operations
     ):
-        """An explicit ``tell me about <entity>`` phrasing (confidence
-        0.85+) is an unambiguous entity request — don't decompose it,
-        even if a stray subject token like ``musician`` appears in
-        the phrasing. The bare-topic fallback at confidence 0.7 is
-        the path subject-decomposition should fire on.
+        """An explicit 'tell me about' phrasing that ALSO carries a
+        subject hint (musician, actor, ...) should still route through
+        subject-attribute decomposition. The original confidence-gate
+        implementation skipped these, breaking queries like
+        'tell me about famous musicians from Detroit' even though
+        they have the same subject-attribute shape as the bare-topic
+        version 'famous musicians from Detroit'.
+
+        The subject-hint extraction is the sole gate; explicit
+        phrasing is irrelevant.
         """
         result = handler.handle_zim_query(
             "tell me about famous musician from big rapids michigan",
             zim_file_path="/zim/test.zim",
             options={"compact": True, "max_content_length": 8000},
         )
-        # The hedge from subject-decomposition is NOT present.
+        # Subject-decomposition fired.
+        assert "May Erlewine" in result
+        assert "Notable people" in result
+        # get_section_data was called with the right section.
+        mock_zim_operations.get_section_data.assert_called_once()
+        called_args = mock_zim_operations.get_section_data.call_args
+        positional = called_args.args
+        kwargs = called_args.kwargs
+        assert (
+            "notable" in positional
+            or kwargs.get("section_id") == "notable"
+        )
+
+    def test_bare_entity_request_skips_decomposition_via_no_hint(
+        self, handler, mock_zim_operations
+    ):
+        """An explicit 'tell me about <entity>' phrasing without any
+        subject hint in the residual must NOT trigger subject-
+        decomposition. The subject-hint extraction returns None for
+        empty residuals, which is the gate that protects bare entity
+        requests from being decomposed.
+
+        Lock the contract: _extract_subject_hint is the sole gate.
+        Without confidence-based filtering, the test must show that
+        absence-of-hint correctly suppresses subject-decomposition.
+        """
+        # Override search to resolve to "Big Rapids, Michigan" exactly.
+        mock_zim_operations.search_zim_file_data.return_value = {
+            "results": [
+                {
+                    "path": "Big_Rapids,_Michigan",
+                    "title": "Big Rapids, Michigan",
+                    "snippet": "...",
+                },
+            ],
+        }
+        result = handler.handle_zim_query(
+            "tell me about Big Rapids, Michigan",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        # No subject-decomposition hedge in result.
         assert "asked about" not in result
-        # get_section_data was NOT called.
+        # get_section_data NOT called.
         mock_zim_operations.get_section_data.assert_not_called()
 
     def test_multi_entity_subject_query_emits_soft_connector_hint(

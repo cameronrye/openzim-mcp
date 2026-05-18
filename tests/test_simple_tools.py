@@ -1574,6 +1574,43 @@ class TestLeadSectionFetchInTellMeAbout:
         assert "Lead was empty" not in result
         assert "Science" in result
 
+    def test_short_real_lead_does_not_trigger_empty_lead(
+        self, handler, mock_zim_operations
+    ):
+        """A real one-sentence lead like 'Foo is a bar.' has density
+        ~11 after preamble strip, well above the < 5 empty-lead
+        threshold. The standard lead-cut path must fire, preserving
+        the brief lead. Without the threshold being tight enough,
+        short-but-substantive leads would be misclassified as empty
+        and silently substituted with the first section.
+        """
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\nThe tiger is large.\n\n"
+            "## Other animals\n\nFirst section content.\n\n"
+            "## More\n\nSecond section content."
+        )
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 1, "text": "Tiger"},
+                {"level": 2, "text": "Content"},
+                {"level": 2, "text": "Other animals"},
+                {"level": 2, "text": "More"},
+            ]
+        }
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        # Short lead IS preserved.
+        assert "The tiger is large." in result
+        # First section's body is NOT included (cut at first H2).
+        assert "First section content." not in result
+        # Standard hedge fires, not the empty-lead variant.
+        assert "Lead section shown" in result
+        assert "Lead was empty" not in result
+
     def test_direct_content_body_without_preamble_does_not_trigger_empty_lead(
         self, handler, mock_zim_operations
     ):
