@@ -191,8 +191,28 @@ class _NamespaceMixin:
         if has_new_scheme:
             self._add_new_scheme_metadata_namespace(archive, namespaces)
             self._add_new_scheme_well_known_namespace(archive, namespaces)
+            # P3-D3 (live-MCP sweep): for new-scheme archives the
+            # iterable entry surface IS the C namespace, so
+            # ``archive.entry_count`` is authoritative for C. The
+            # sampling projection at ``_finalise_sampled`` derives an
+            # estimate that drifts by ±1 for archives over the
+            # ``MAX_SAMPLE_SIZE`` threshold; pin C to the exact total so
+            # ``list_namespaces`` agrees with ``walk_namespace C`` /
+            # ``metadata for <file>`` (all three now report the same
+            # ``entry_count`` value).
+            if "C" in namespaces:
+                namespaces["C"]["total"] = total_entries
+                namespaces["C"]["estimated_total"] = total_entries
+                namespaces["C"]["is_authoritative"] = True
 
-        result = {
+        # P3-D3 / Op2: surface both documented archive totals so the
+        # per-namespace-sum-vs-total relationship is legible to readers.
+        # ``entry_count`` is the user-facing canonical count (returned in
+        # ``metadata for <file>``); ``all_entry_count`` includes
+        # well-knowns / redirects / indexes that ``entry_count`` excludes.
+        all_entry_count = getattr(archive, "all_entry_count", None)
+
+        result: Dict[str, Any] = {
             "total_entries": total_entries,
             "sampled_entries": len(seen_entries),
             "has_new_namespace_scheme": has_new_scheme,
@@ -200,6 +220,8 @@ class _NamespaceMixin:
             "discovery_method": "full_iteration" if full_iteration else "sampling",
             "namespaces": namespaces,
         }
+        if all_entry_count is not None:
+            result["all_entry_count"] = int(all_entry_count)
         return result
 
     @staticmethod
@@ -1248,12 +1270,23 @@ class _NamespaceMixin:
 
     @staticmethod
     def _enumerate_new_scheme_metadata(archive: Archive) -> List[str]:
-        """Build M/<key> paths from archive.metadata_keys for new-scheme."""
+        """Build M/<key> paths from archive.metadata_keys for new-scheme.
+
+        P3-D3 (live-MCP sweep): apply the same
+        ``is_human_readable_metadata_key`` filter that
+        ``_add_new_scheme_metadata_namespace`` and the M-walker already
+        use. Without this, ``browse namespace M`` reported 13 entries
+        (including the binary ``Illustration_*`` entry) while
+        ``list namespaces`` / ``walk namespace M`` /
+        ``metadata for <file>`` all reported 12 — same aggregator-
+        disagreement family as the post-a10 / post-a11 sweeps.
+        """
         try:
-            keys = list(getattr(archive, "metadata_keys", []) or [])
+            raw_keys = list(getattr(archive, "metadata_keys", []) or [])
         except Exception as e:
             logger.debug(f"Unable to read metadata_keys: {e}")
             return []
+        keys = [k for k in raw_keys if is_human_readable_metadata_key(k)]
         return [f"M/{k}" for k in keys]
 
     def _enumerate_namespace_entries(
@@ -1609,10 +1642,17 @@ class _NamespaceMixin:
                 if not done:
                     from openzim_mcp.pagination import archive_identity
 
+                    # P3-D2 (live-MCP sweep): use ``s.o`` on the wire so
+                    # the universal top-level cursor decoder accepts the
+                    # cursor we just issued. ``scan_at`` is the internal
+                    # libzim entry-id semantics; the dispatcher in
+                    # simple_tools.py maps offset back into the
+                    # ``scan_at`` key on cursor_state before calling
+                    # walk_namespace_data.
                     next_cursor = Cursor.encode(
                         tool="walk_namespace",
                         state={
-                            "scan_at": entry_id,
+                            "o": entry_id,
                             "l": limit,
                             "ns": namespace,
                             "ai": archive_identity(validated),
@@ -1744,8 +1784,11 @@ class _NamespaceMixin:
             # ``scan_at`` here is an index into ``metadata_keys``, not an
             # entry ID. The cursor's ``ns="M"`` discriminator + the
             # archive's new-scheme bit are enough for the consumer to
-            # know which interpretation to use; see #17.
-            state: Dict[str, Any] = {"scan_at": end, "l": limit, "ns": "M"}
+            # know which interpretation to use; see #17. P3-D2: ``o``
+            # is the universal wire key — the dispatcher remaps it
+            # back to ``scan_at`` on the cursor_state passed into the
+            # walker.
+            state: Dict[str, Any] = {"o": end, "l": limit, "ns": "M"}
             if validated_path is not None:
                 state["ai"] = archive_identity(validated_path)
             next_cursor = Cursor.encode(
@@ -1805,7 +1848,7 @@ class _NamespaceMixin:
         done = end >= total
         next_cursor: Optional[str] = None
         if not done:
-            state: Dict[str, Any] = {"scan_at": end, "l": limit, "ns": "W"}
+            state: Dict[str, Any] = {"o": end, "l": limit, "ns": "W"}
             if validated_path is not None:
                 state["ai"] = archive_identity(validated_path)
             next_cursor = Cursor.encode(

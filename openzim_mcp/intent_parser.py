@@ -150,13 +150,22 @@ def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
     if search_match:
         params["query"] = search_match.group(1).strip()
 
+    # A16 post-a16 D6: tighten the namespace regex to a single letter
+    # with a word boundary so ``search foo in namespace AB`` / ``... 1``
+    # / ``... _`` fails to match and the handler's validation guard
+    # fires consistently — matching the input-validation parity that
+    # P6-D1/D2 added to ``browse_namespace`` and ``walk_namespace`` in
+    # a16. Pre-fix, the regex accepted ``[A-Za-z0-9_.-]+`` and silently
+    # passed the malformed argument through to the backend, which
+    # returned ``No filtered matches`` with no signal that the
+    # namespace itself was invalid.
     namespace_match = safe_regex_search(
-        rf"namespace\s+{_QUOTE_OPEN}?([A-Za-z0-9_.-]+){_QUOTE_OPEN}?",
+        rf"namespace\s+{_QUOTE_OPEN}?([A-Za-z])\b{_QUOTE_OPEN}?",
         query,
         re.IGNORECASE,
     )
     if namespace_match:
-        params["namespace"] = namespace_match.group(1)
+        params["namespace"] = namespace_match.group(1).upper()
 
     type_match = safe_regex_search(
         rf"type\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?",
@@ -417,6 +426,32 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
         ).strip()
         if topic == before:
             break
+    # A16 post-a16 D2: strip orphan trailing chain connectors. ``tell
+    # me about Apollo 11 also`` with no right-hand topic used to leave
+    # ``Apollo 11 also`` as the search topic, where the fuzzy ranker
+    # promoted the unrelated ``Also`` disambig article above Apollo 11
+    # (the word ``also`` is a stronger exact-title-token match than the
+    # full phrase). The chained-intent guidance can't help here — the
+    # connector regex requires a right-hand operand. Strip the orphan
+    # tail before the search sees it.
+    #
+    # Pass-2 self-audit: ``then`` deliberately NOT in the strip list.
+    # Real article titles end with ``Then`` (``Now and Then``,
+    # ``Back Then``, ``Once Upon a Time ... Then ...``) often enough
+    # that stripping it would mangle valid topics. ``then`` orphans
+    # (``Apollo 11 then``) are rare and the search ranker degrades
+    # gracefully.
+    for _ in range(3):
+        before = topic
+        topic = safe_regex_sub(
+            r"\s+(?:and|or|also|plus)\s*$",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        ).strip()
+        topic = safe_regex_sub(r"\s*[,&]\s*$", "", topic).strip()
+        if topic == before:
+            break
     params["topic"] = topic
 
 
@@ -580,9 +615,16 @@ class IntentParser:
             9,
         ),
         (r"\b(binary|raw)\s+(content|data)\s+(for|from|of)\b", "binary", 0.9, 9),
-        # Suggestions - moderately specific
+        # Suggestions - moderately specific. The trailing assertion
+        # accepts a word boundary (``autocomplete evol``) OR a quote
+        # character (``autocomplete "evol"``) so the quoted form
+        # advertised in the missing-arg hint actually routes to this
+        # intent (P3-D4). Pre-fix, the bare ``\b`` after the optional
+        # ``(for|of)?`` group failed before a quote char and the query
+        # silently fell through to the ``search`` general fallback.
         (
-            r"\b(suggestions?|autocomplete|complete|hints?)\s+(for|of)?\b",
+            r"\b(suggestions?|autocomplete|complete|hints?)\s+(for|of)?"
+            r"(?=\b|['\"‘’“”])",
             "suggestions",
             0.85,
             7,

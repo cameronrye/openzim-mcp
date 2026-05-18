@@ -1481,6 +1481,182 @@ class TestLeadSectionFetchInTellMeAbout:
         assert "- Content\n" not in result
         assert "subsection" not in result
 
+    def test_empty_lead_advances_cut_to_second_h2(self, handler, mock_zim_operations):
+        """When pre-H2 body is empty (after wrappers/H1 stripping), the cut
+        advances to the second non-wrapper H2 so the LLM gets the first
+        real section's body instead of just a list of section names.
+
+        Motivating case: ``Big_Rapids,_Michigan`` from the 2026-05-18 live
+        transcript — empty lead before "## Notable people", model
+        hallucinated when given headings only.
+        """
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\n## Other animals\n\nFirst real section content here.\n\n"
+            "## Arts, entertainment, and media\n\nSecond section content."
+        )
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        # First real section's body IS included.
+        assert "First real section content here." in result
+        # Second section's body is NOT (cut still applied, just at the
+        # second H2 instead of the first).
+        assert "Second section content." not in result
+        # The substitution hedge fires so the LLM knows it's reading a
+        # promoted section rather than a true lead.
+        assert "Lead was empty" in result
+        # TOC still appended.
+        assert "Sections in this article" in result
+
+    def test_empty_lead_with_only_one_section_skips_cut(
+        self, handler, mock_zim_operations
+    ):
+        """When the article has an empty lead AND only one H2 in the
+        body, there's no second H2 to advance to. Fall back to no-cut
+        behavior so the single section's content is preserved.
+        """
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\n## Only section\n\nOnly section content here."
+        )
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 1, "text": "Tiger"},
+                {"level": 2, "text": "Content"},
+                {"level": 2, "text": "Only section"},
+            ]
+        }
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        assert "Only section content here." in result
+        assert "Lead was empty" not in result
+
+    def test_disambig_page_with_thin_pre_h2_does_not_advance(
+        self, handler, mock_zim_operations
+    ):
+        """Disambiguation pages (Mercury, Martin) have thin pre-H2
+        content too, but their content IS the disambig list — advancing
+        the cut would render two unrelated category dumps. The existing
+        ``_is_disambig_lead`` guard must fire BEFORE the empty-lead
+        check.
+        """
+        mock_zim_operations.search_zim_file_data.return_value = {
+            "results": [
+                {"path": "Mercury", "title": "Mercury", "snippet": "..."},
+            ],
+        }
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Mercury\nPath: Mercury\nType: text/html\n## Content\n\n"
+            "# Mercury\n\n**Mercury** may refer to:\n\n"
+            "## Science\n\n- Mercury (element)\n- Mercury (planet)\n\n"
+            "## Other\n\n- Mercury (mythology)"
+        )
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 1, "text": "Mercury"},
+                {"level": 2, "text": "Content"},
+                {"level": 2, "text": "Science"},
+                {"level": 2, "text": "Other"},
+            ]
+        }
+        result = handler.handle_zim_query(
+            "tell me about Mercury",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        assert "may refer to" in result
+        assert "Lead was empty" not in result
+        assert "Science" in result
+
+    def test_short_real_lead_does_not_trigger_empty_lead(
+        self, handler, mock_zim_operations
+    ):
+        """A real one-sentence lead like 'Foo is a bar.' has density
+        ~11 after preamble strip, well above the < 5 empty-lead
+        threshold. The standard lead-cut path must fire, preserving
+        the brief lead. Without the threshold being tight enough,
+        short-but-substantive leads would be misclassified as empty
+        and silently substituted with the first section.
+        """
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\nThe tiger is large.\n\n"
+            "## Other animals\n\nFirst section content.\n\n"
+            "## More\n\nSecond section content."
+        )
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 1, "text": "Tiger"},
+                {"level": 2, "text": "Content"},
+                {"level": 2, "text": "Other animals"},
+                {"level": 2, "text": "More"},
+            ]
+        }
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        # Short lead IS preserved.
+        assert "The tiger is large." in result
+        # First section's body is NOT included (cut at first H2).
+        assert "First section content." not in result
+        # Standard hedge fires, not the empty-lead variant.
+        assert "Lead section shown" in result
+        assert "Lead was empty" not in result
+
+    def test_direct_content_body_without_preamble_does_not_trigger_empty_lead(
+        self, handler, mock_zim_operations
+    ):
+        """When _lead_with_toc receives a body that doesn't have the
+        ZIM preamble (direct-content unit-test fixtures, or any caller
+        that bypasses the standard ZIM render), empty-lead detection
+        must NOT fire — _lead_density can't reliably distinguish
+        wrapper noise from real lead content without the preamble
+        shape, so the gate defaults to "this body has substantive
+        content."
+
+        Motivating regression: test_simple_tools_typo_trailer_
+        canonical_path.py broke because the lead "Biology is the
+        scientific study of life..." (62 chars) tripped the < 80
+        threshold under the original implementation, suppressing
+        the standard trailer.
+        """
+        mock_zim_operations.get_zim_entry.return_value = (
+            "**Biology** is the scientific study of life and living "
+            "organisms.\n\n## Etymology\n\nThe word *biology* derives from..."
+        )
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 2, "text": "Etymology"},
+                {"level": 2, "text": "History"},
+            ]
+        }
+        # Use a search result whose path matches the topic so the
+        # tell_me_about handler reaches _lead_with_toc.
+        mock_zim_operations.search_zim_file_data.return_value = {
+            "results": [
+                {"path": "Biology", "title": "Biology", "snippet": "..."},
+            ],
+        }
+        result = handler.handle_zim_query(
+            "tell me about Biology",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        # The body content IS in the result (cut at H2, lead preserved).
+        assert "scientific study of life" in result
+        # The standard trailer fires (lead-section hedge, not empty-lead).
+        assert "Lead section shown" in result
+        # The empty-lead hedge does NOT fire.
+        assert "Lead was empty" not in result
+
     def test_non_compact_returns_full_body_unchanged(
         self, handler, mock_zim_operations
     ):
@@ -1525,6 +1701,38 @@ class TestLeadSectionFetchInTellMeAbout:
         # in this failure-path test.
         assert "Sections in this article" in result
         assert "Other animals" in result
+
+    def test_empty_lead_advance_hedge_fires_even_without_sections(
+        self, handler, mock_zim_operations
+    ):
+        """When structure data has no usable level-2 headings (only
+        wrapper or only deeper levels) but the body has two H2s for
+        the advance to fire, sections is empty but empty_lead_advanced
+        is True. The hedge must still fire so the LLM knows the lead
+        was substituted.
+        """
+        # Structure has only the wrapper and a deep H3 — no real H2s.
+        mock_zim_operations.get_article_structure_data.return_value = {
+            "headings": [
+                {"level": 1, "text": "Tiger"},
+                {"level": 2, "text": "Content"},  # wrapper, filtered
+                {"level": 3, "text": "subsection"},  # wrong level, filtered
+            ]
+        }
+        # Body has two H2s so advance fires.
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\n## First\n\nPromoted body here.\n\n## Second\n\nMore."
+        )
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        assert "Promoted body here." in result
+        assert "Lead was empty" in result
+        # TOC is NOT in result because sections list is empty.
+        assert "Sections in this article" not in result
 
 
 class TestCompactMarkdownRenderingForJsonIntents:
