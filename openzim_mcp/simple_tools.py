@@ -3316,6 +3316,23 @@ class SimpleToolsHandler:
                 f"(was {full_len:,}). Re-run with a larger "
                 "`max_content_length` for more._"
             )
+        # Honor the soft-connector ambiguity footer so multi-entity
+        # subject queries ("musicians from Berlin and Paris" resolving
+        # to Paris with a Notable people section) still surface a hint
+        # that the OTHER entity was dropped. Without this, the subject-
+        # attribute early-return at the call site (_handle_tell_me_about
+        # before _soft_connector_footer fires) would silently swallow
+        # the drop.
+        soft_footer = self._soft_connector_footer(topic, top_title or top_path)
+        if soft_footer:
+            result = result + soft_footer
+        # Double-marker is intentional: the outer handle_zim_query will
+        # append a second <!-- intent=tell_me_about cert=0.70 --> comment
+        # based on the bare-topic-fallback classification. The inner
+        # subject-attribute marker is required for a calling LLM to
+        # distinguish "subject section route" from "low-confidence
+        # entity match, lead returned" — both end with the same outer
+        # marker. Same convention as namespace_path_redirect.
         result = result + "\n<!-- intent=subject_attribute_section cert=1.00 -->"
         return result
 
