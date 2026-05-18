@@ -33,11 +33,28 @@ class TestExtractSubjectHint:
         assert hint == "musician"
 
     def test_notable_people_residual_extracts_people_hint(self, handler):
+        """Strong-hint precedence: 'notable' is weak and gets skipped;
+        'people' is strong and is returned. Pin the actual algorithmic
+        output rather than allowing both possible answers, so a
+        regression that returns 'notable' instead of 'people' would
+        be caught.
+        """
         hint = handler._extract_subject_hint(
             topic="notable people from big rapids michigan",
             resolved_title="Big Rapids, Michigan",
         )
-        assert hint in {"people", "notable"}
+        assert hint == "people"
+
+    def test_weak_hint_skipped_in_favor_of_strong_hint(self, handler):
+        """When a residual contains both a weak hint ('notable') and a
+        strong hint ('athletes'), the strong hint wins regardless of
+        token order in the topic.
+        """
+        hint = handler._extract_subject_hint(
+            topic="notable athletes from detroit",
+            resolved_title="Detroit",
+        )
+        assert hint == "athletes"
 
     def test_weak_hint_alone_returns_none(self, handler):
         hint = handler._extract_subject_hint(
@@ -124,6 +141,42 @@ class TestResolveSectionForSubject:
         }
         target = handler._resolve_section_for_subject(structure, "philosopher")
         assert target is None
+
+    def test_substring_collisions_do_not_match(self, handler):
+        """Whole-word matching prevents false positives like 'film'
+        matching 'Microfilm' or 'science' matching 'Conscience'.
+        """
+        structure = {
+            "headings": [
+                {"level": 2, "text": "Microfilm collection", "id": "microfilm"},
+                {"level": 2, "text": "Conscience and ethics", "id": "conscience"},
+            ]
+        }
+        # "actor" candidate "Film" must NOT match "Microfilm collection".
+        assert handler._resolve_section_for_subject(structure, "actor") is None
+        # "scientist" candidate "Science" must NOT match
+        # "Conscience and ethics".
+        assert handler._resolve_section_for_subject(structure, "scientist") is None
+
+    def test_word_boundary_inside_heading_still_matches(self, handler):
+        """Whole-word matching still picks up the candidate when it's
+        part of a multi-word heading like 'Music and dance' or
+        'Film and television'.
+        """
+        structure = {
+            "headings": [
+                {"level": 2, "text": "Music and dance", "id": "music-dance"},
+                {"level": 2, "text": "Film and television", "id": "film-tv"},
+            ]
+        }
+        # "musician" -> "Music" candidate matches at word boundary.
+        target = handler._resolve_section_for_subject(structure, "musician")
+        assert target is not None
+        assert target["text"] == "Music and dance"
+        # "actor" -> "Film" candidate matches at word boundary.
+        target = handler._resolve_section_for_subject(structure, "actor")
+        assert target is not None
+        assert target["text"] == "Film and television"
 
 
 class TestEndToEndSubjectAttributeRouting:

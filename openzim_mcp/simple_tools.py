@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 # Tuple ordering matters: more-specific candidates first ("Musicians"
 # beats "Music" beats "Notable people"), so a music-specific section
 # wins over the generic notable-people fallback when both exist.
+#
+# NOTE on candidate strings: matching uses whole-word regex
+# (\bcand\b), so a candidate like "Music" matches "Music and
+# dance" but NOT "Microfilm". Still, keep candidates >=4 chars
+# and avoid English-common substrings (e.g. "art") that may
+# appear as standalone words in unrelated section names.
 _SUBJECT_HINT_TO_SECTION: Dict[str, "tuple[str, ...]"] = {
     "musician": ("Musicians", "Music", "Notable people"),
     "musicians": ("Musicians", "Music", "Notable people"),
@@ -3189,11 +3195,12 @@ class SimpleToolsHandler:
         candidate section names appear as substrings of any H2 in the
         article.
 
-        Matching is case-insensitive substring against the heading
-        text. Candidate priority is the tuple order from
-        ``_SUBJECT_HINT_TO_SECTION``: a more-specific candidate
-        (``Music``) wins over a generic fallback (``Notable people``)
-        when both exist.
+        Matching is case-insensitive whole-word regex (``\bcand\b``)
+        against the heading text so a candidate like ``Music`` matches
+        ``Music and dance`` but NOT ``Microfilm``. Candidate priority
+        is the tuple order from ``_SUBJECT_HINT_TO_SECTION``: a
+        more-specific candidate (``Music``) wins over a generic
+        fallback (``Notable people``) when both exist.
         """
         if subject not in _SUBJECT_HINT_TO_SECTION:
             return None
@@ -3211,9 +3218,10 @@ class SimpleToolsHandler:
                 continue
             h2s.append(h)
         for cand in candidates:
-            cand_lower = cand.lower()
+            cand_pattern = re.compile(r"\b" + re.escape(cand.lower()) + r"\b")
             for h in h2s:
-                if cand_lower in (h.get("text") or "").lower():
+                text = (h.get("text") or "").lower()
+                if cand_pattern.search(text):
                     return h
         return None
 
@@ -3288,7 +3296,8 @@ class SimpleToolsHandler:
             return None
         max_len = options.get("max_content_length")
         truncated = False
-        if isinstance(max_len, int) and max_len > 0 and len(body_text) > max_len:
+        full_len = len(body_text)
+        if isinstance(max_len, int) and max_len > 0 and full_len > max_len:
             body_text = body_text[:max_len]
             truncated = True
         self._track("subject_attribute_section_returned")
@@ -3297,15 +3306,17 @@ class SimpleToolsHandler:
             f"# {top_title or topic}\n\n"
             f"_Source: `{top_path}` (section: {section_text})_\n\n"
             f"_Showing **{section_text}** section because your query "
-            f"asked about ``{subject}``. Use `tell me about "
+            f"asked about `{subject}`. Use `tell me about "
             f"{top_path}` for the full article._\n\n"
             f"{body_text}"
         )
         if truncated:
             result = result + (
-                f"\n\n_Section truncated at {len(body_text):,} chars. "
-                "Re-run with a larger `max_content_length` for more._"
+                f"\n\n_Section truncated at {len(body_text):,} chars "
+                f"(was {full_len:,}). Re-run with a larger "
+                "`max_content_length` for more._"
             )
+        result = result + "\n<!-- intent=subject_attribute_section cert=1.00 -->"
         return result
 
     @staticmethod
