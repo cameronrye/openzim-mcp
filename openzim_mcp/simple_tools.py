@@ -3184,11 +3184,11 @@ class SimpleToolsHandler:
         Token matching is whole-word, case-insensitive, alphanumeric-
         only.
         """
-        topic_tokens = tuple(_TOKEN_RE.findall(topic.lower()))
-        title_tokens = set(_TOKEN_RE.findall(resolved_title.lower()))
+        topic_tokens: tuple[str, ...] = tuple(_TOKEN_RE.findall(topic.lower()))
+        title_tokens: set[str] = set(_TOKEN_RE.findall(resolved_title.lower()))
         if not topic_tokens or not title_tokens:
             return None
-        residual = [t for t in topic_tokens if t not in title_tokens]
+        residual: List[str] = [t for t in topic_tokens if t not in title_tokens]
         if not residual:
             return None
         for tok in residual:
@@ -3198,7 +3198,7 @@ class SimpleToolsHandler:
 
     @classmethod
     def _resolve_section_for_subject(
-        cls, structure: Dict[str, Any], subject: str
+        cls, structure: Any, subject: str
     ) -> Optional[Dict[str, Any]]:
         """Find the best-matching H2 heading for a subject hint.
 
@@ -3222,7 +3222,7 @@ class SimpleToolsHandler:
         candidates = _SUBJECT_HINT_TO_SECTION[subject]
         if not isinstance(structure, dict):
             return None
-        h2s: list = []
+        h2s: List[Dict[str, Any]] = []
         for h in structure.get("headings") or []:
             if not isinstance(h, dict):
                 continue
