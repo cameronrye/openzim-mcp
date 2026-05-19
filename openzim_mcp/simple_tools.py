@@ -1235,7 +1235,13 @@ class SimpleToolsHandler:
           * ≥2 tokens (multi-word proper nouns / titles),
           * ≥5 characters in the longest token (real proper nouns
             tend to be longer than short adverbials),
-          * contains a digit (``Apollo 12``, ``1969`` etc.).
+          * contains a digit (``Apollo 12``, ``1969`` etc.),
+          * contains a non-ASCII letter and length ≥2 (CJK ideograms,
+            German umlaut city names like ``Köln``, Greek toponyms
+            like ``Αθήνα`` — a single CJK ideogram or accented vowel
+            carries roughly a syllable of lexical weight, so the
+            5-ASCII-char threshold systematically over-rejects real
+            non-Latin proper nouns).
         """
         stripped = text.strip()
         if not stripped:
@@ -1245,7 +1251,21 @@ class SimpleToolsHandler:
             return True
         if any(ch.isdigit() for ch in stripped):
             return True
-        return len(stripped) >= 5
+        if len(stripped) >= 5:
+            return True
+        # Post-a19 P1-D3: the ASCII-length-5 threshold was tuned for
+        # English particles like ``Now`` / ``Both`` / ``Here``, but it
+        # also rejects real non-Latin proper nouns (``東京`` = 2 chars,
+        # ``Köln`` = 4 chars, ``北京`` = 2 chars). The post-a17 Unicode
+        # tail-tokenisation fix (a18) lets the resolver REACH these
+        # topics; this fix lets the chain detector + soft-connector
+        # footer recognise them as substantive. Restrict the relaxed
+        # threshold to strings carrying a non-ASCII *letter* so we
+        # don't accidentally accept ASCII abbreviations like ``Dr.`` or
+        # punctuation tokens like ``--``.
+        if any(not ch.isascii() and ch.isalpha() for ch in stripped):
+            return len(stripped) >= 2
+        return False
 
     @classmethod
     def _is_topic_shaped(cls, text: str) -> bool:
@@ -2466,6 +2486,17 @@ class SimpleToolsHandler:
                 "**Example**: 'links in Biology' or "
                 "'links from \"C/Evolution\"'"
             )
+        # Post-a19 P1-D2 (widened cross-tool guard): reject cursors
+        # issued by a different cursor-emitting tool. The current
+        # handler hardcodes offset=0 internally, but defending the
+        # boundary keeps the guard consistent with the sibling
+        # cursor-consuming handlers (``_handle_browse`` /
+        # ``_handle_walk_namespace`` / ``_handle_search`` /
+        # ``_handle_filtered_search``) so a future offset-reading
+        # change can't silently regress into a cross-tool walk.
+        tool_mismatch = self._cursor_tool_mismatch(options, "extract_article_links")
+        if tool_mismatch is not None:
+            return tool_mismatch
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         try:
             if options.get("compact", False):
@@ -2574,6 +2605,18 @@ class SimpleToolsHandler:
                 "- `search Counter in namespace M` — archive metadata\n"
                 "<!-- intent=filtered_search cert=0.80 -->"
             )
+        # Post-a19 P1-D2: reject cursors issued by a different
+        # cursor-emitting tool. Pre-fix, a ``walk_namespace`` cursor
+        # passed to ``search foo in namespace C`` was silently
+        # decoded; ``options["offset"]`` got the walk cursor's
+        # ``s.o`` and filtered search returned page-2-of-walk-offset
+        # results instead of the search's page 1. The advanced
+        # ``search_with_filters`` tool enforces tool-binding via
+        # ``Cursor.decode(expected_tool=...)``; this restores it at
+        # the simple-tools handler edge.
+        tool_mismatch = self._cursor_tool_mismatch(options, "search_with_filters")
+        if tool_mismatch is not None:
+            return tool_mismatch
         # A11 post-a11 H2: route to the canonical-title-match-aware
         # variant so ``search for berlin in namespace C`` surfaces
         # the canonical ``Berlin`` article instead of dropping it
@@ -2662,6 +2705,19 @@ class SimpleToolsHandler:
         named after Albert Einstein`` instead of ``Albert_Einstein``).
         Only applied at ``offset=0`` so paged results stay stable.
         """
+        # Post-a19 P1-D1: reject cursors issued by a different
+        # cursor-emitting tool. Pre-fix, a ``walk_namespace`` /
+        # ``browse_namespace`` cursor passed to ``search for X`` was
+        # silently decoded; ``options["offset"]`` got the cursor's
+        # ``s.o`` and search returned page-2-of-cursor-offset results
+        # instead of page 1 of the search. The advanced
+        # ``search_zim_file`` tool enforces tool-binding via
+        # ``Cursor.decode(expected_tool=...)``; this restores it at
+        # the simple-tools handler edge. Same shape as the post-a18
+        # P1-D4 fix that landed for browse / walk_namespace.
+        tool_mismatch = self._cursor_tool_mismatch(options, "search_zim_file")
+        if tool_mismatch is not None:
+            return tool_mismatch
         search_query = params.get("query", query)
         limit = options.get("limit")
         offset = options.get("offset", 0)
