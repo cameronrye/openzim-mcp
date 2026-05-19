@@ -152,7 +152,9 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
             options={"compact": True, "cursor": cursor_token},
         )
         # Must NOT route through the misleading q-mismatch shape.
-        assert not (isinstance(out, dict) and out.get("operation") == "cursor_decode"), (
+        assert not (
+            isinstance(out, dict) and out.get("operation") == "cursor_decode"
+        ), (
             f"dispatcher fired q-mismatch when handler tool-mismatch was correct: "
             f"{out!r}"
         )
@@ -601,18 +603,14 @@ class TestPD21TrailingPolitenessStrip:
     def test_search_strips_trailing_please(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
 
-        intent, params, _conf = IntentParser.parse_intent(
-            "search for biology please"
-        )
+        intent, params, _conf = IntentParser.parse_intent("search for biology please")
         assert intent == "search"
         assert params.get("query") == "biology"
 
     def test_search_strips_trailing_thanks(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
 
-        intent, params, _conf = IntentParser.parse_intent(
-            "search for biology thanks"
-        )
+        intent, params, _conf = IntentParser.parse_intent("search for biology thanks")
         assert intent == "search"
         assert params.get("query") == "biology"
 
@@ -628,9 +626,7 @@ class TestPD21TrailingPolitenessStrip:
     def test_search_strips_trailing_kindly(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
 
-        intent, params, _conf = IntentParser.parse_intent(
-            "search for biology kindly"
-        )
+        intent, params, _conf = IntentParser.parse_intent("search for biology kindly")
         assert intent == "search"
         assert params.get("query") == "biology"
 
@@ -638,9 +634,7 @@ class TestPD21TrailingPolitenessStrip:
         # ``biology, please`` — comma-then-politeness shape.
         from openzim_mcp.intent_parser import IntentParser
 
-        intent, params, _conf = IntentParser.parse_intent(
-            "search for biology, please"
-        )
+        intent, params, _conf = IntentParser.parse_intent("search for biology, please")
         assert intent == "search"
         assert params.get("query") == "biology"
 
@@ -693,18 +687,14 @@ class TestPD21TrailingPolitenessStrip:
     def test_get_article_strips_trailing_please(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
 
-        intent, params, _conf = IntentParser.parse_intent(
-            "get article Berlin please"
-        )
+        intent, params, _conf = IntentParser.parse_intent("get article Berlin please")
         assert intent == "get_article"
         assert params.get("entry_path") == "Berlin"
 
     def test_suggestions_strips_trailing_please(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
 
-        intent, params, _conf = IntentParser.parse_intent(
-            "suggestions for ber please"
-        )
+        intent, params, _conf = IntentParser.parse_intent("suggestions for ber please")
         assert intent == "suggestions"
         assert params.get("partial_query") == "ber"
 
@@ -714,9 +704,7 @@ class TestPD21TrailingPolitenessStrip:
         # idempotent).
         from openzim_mcp.intent_parser import IntentParser
 
-        intent, params, _conf = IntentParser.parse_intent(
-            "tell me about Berlin please"
-        )
+        intent, params, _conf = IntentParser.parse_intent("tell me about Berlin please")
         assert intent == "tell_me_about"
         assert params.get("topic") == "Berlin"
 
@@ -726,9 +714,7 @@ class TestPD21TrailingPolitenessStrip:
         # must not change this behaviour.
         from openzim_mcp.intent_parser import IntentParser
 
-        intent, params, _conf = IntentParser.parse_intent(
-            "walk namespace M please"
-        )
+        intent, params, _conf = IntentParser.parse_intent("walk namespace M please")
         assert intent == "walk_namespace"
         assert params.get("namespace") == "M"
 
@@ -797,14 +783,8 @@ class TestPD21TrailingPolitenessStrip:
             IntentParser._strip_trailing_politeness("biology, please, thanks")
             == "biology"
         )
-        assert (
-            IntentParser._strip_trailing_politeness("biology")
-            == "biology"
-        )
-        assert (
-            IntentParser._strip_trailing_politeness("")
-            == ""
-        )
+        assert IntentParser._strip_trailing_politeness("biology") == "biology"
+        assert IntentParser._strip_trailing_politeness("") == ""
 
     def test_helper_does_not_swallow_legitimate_content(self) -> None:
         # ``Photosynthesis`` ends in nothing that resembles politeness;
@@ -825,22 +805,10 @@ class TestPD21TrailingPolitenessStrip:
         # ``please!`` / ``please.``) should still strip cleanly.
         from openzim_mcp.intent_parser import IntentParser
 
-        assert (
-            IntentParser._strip_trailing_politeness("biology please.")
-            == "biology"
-        )
-        assert (
-            IntentParser._strip_trailing_politeness("biology please!")
-            == "biology"
-        )
-        assert (
-            IntentParser._strip_trailing_politeness("biology please?")
-            == "biology"
-        )
-        assert (
-            IntentParser._strip_trailing_politeness("biology, please.")
-            == "biology"
-        )
+        assert IntentParser._strip_trailing_politeness("biology please.") == "biology"
+        assert IntentParser._strip_trailing_politeness("biology please!") == "biology"
+        assert IntentParser._strip_trailing_politeness("biology please?") == "biology"
+        assert IntentParser._strip_trailing_politeness("biology, please.") == "biology"
 
     def test_helper_mid_query_politeness_word_unaffected(self) -> None:
         # ``thanks giving`` mid-phrase is content (Thanksgiving holiday).
@@ -890,6 +858,7 @@ class TestPD22DocstringExampleNoLongerBait:
         # ``server.py``; we extract it from the source rather than
         # standing up a live server.
         import inspect
+
         import openzim_mcp.server as server_mod
 
         source = inspect.getsource(server_mod)
@@ -903,6 +872,7 @@ class TestPD22DocstringExampleNoLongerBait:
         self,
     ) -> None:
         import inspect
+
         import openzim_mcp.server as server_mod
 
         source = inspect.getsource(server_mod)
@@ -959,9 +929,7 @@ class TestPD23NormalizerSingleArchiveAutoSelect:
         # The canonical small-model hallucination — the literal example
         # path from the (pre-PD2-2) tool docstring.
         handler, mock = self._handler_single_archive()
-        result = handler._normalize_zim_file_path(
-            "/data/wikipedia_en_all_maxi.zim"
-        )
+        result = handler._normalize_zim_file_path("/data/wikipedia_en_all_maxi.zim")
         assert result == "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"
 
     def test_arbitrary_slashed_hallucination_auto_selects_single_archive(
@@ -981,9 +949,7 @@ class TestPD23NormalizerSingleArchiveAutoSelect:
         # Regression guard: a bare filename matching the real basename
         # still resolves through the existing case-1 path.
         handler, mock = self._handler_single_archive()
-        result = handler._normalize_zim_file_path(
-            "wikipedia_en_all_maxi_2026-02.zim"
-        )
+        result = handler._normalize_zim_file_path("wikipedia_en_all_maxi_2026-02.zim")
         assert result == "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"
 
     def test_real_full_path_passes_through(self) -> None:
@@ -1131,9 +1097,7 @@ class TestPD24FileNotFoundRecoveryHint:
         mock.list_zim_files_data.return_value = [
             {"path": "/var/lib/zim/the-only-one.zim"},
         ]
-        mock.list_zim_files.return_value = (
-            '[{"path": "/var/lib/zim/the-only-one.zim"}]'
-        )
+        mock.list_zim_files.return_value = '[{"path": "/var/lib/zim/the-only-one.zim"}]'
         mock.get_main_page.return_value = "main page text"
         mock.config.meta.footer_enabled = False
         handler = SimpleToolsHandler(mock)

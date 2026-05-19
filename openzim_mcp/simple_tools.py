@@ -1294,9 +1294,7 @@ class SimpleToolsHandler:
                 # title-resolves to its own disambig article, not to
                 # Tokyo.
                 if not left_in:
-                    left_in = self._half_resolves_to_top(
-                        zim_file_path, left, top_path
-                    )
+                    left_in = self._half_resolves_to_top(zim_file_path, left, top_path)
                 if not right_in:
                     right_in = self._half_resolves_to_top(
                         zim_file_path, right, top_path
@@ -1711,9 +1709,7 @@ class SimpleToolsHandler:
     # ``s.q``, the field is adversarial or vestigial. The dispatcher's
     # q-overlap check skips that case so the handler-level
     # ``_cursor_tool_mismatch`` can fire with the correct diagnosis.
-    _Q_EMITTING_CURSOR_TOOLS = frozenset(
-        {"search_zim_file", "search_with_filters"}
-    )
+    _Q_EMITTING_CURSOR_TOOLS = frozenset({"search_zim_file", "search_with_filters"})
 
     @staticmethod
     def _cursor_tool_mismatch(

@@ -100,9 +100,7 @@ class TestP1D1TitleSpansConnectorSuppression:
             q = (title or "").lower()
             if q == top_title_lower or top_title_lower in q:
                 return {
-                    "results": [
-                        {"path": path, "title": top_title, "score": 1.0}
-                    ],
+                    "results": [{"path": path, "title": top_title, "score": 1.0}],
                     "total": 1,
                 }
             return {"results": [], "total": 0}
