@@ -362,7 +362,37 @@ class SimpleToolsHandler:
                     # has no ≥3-char tokens fall back to a bidirectional
                     # substring check.
                     cursor_q = state.get("q")
-                    if isinstance(cursor_q, str) and cursor_q.strip():
+                    # Post-a20 P1-D1: only ``search_zim_file`` /
+                    # ``search_with_filters`` legitimately emit ``s.q``
+                    # in their cursors (see ``Cursor.encode`` callsites
+                    # in zim/search.py). When ``_cursor_t`` claims a
+                    # non-q-emitting tool (``walk_namespace`` /
+                    # ``browse_namespace`` / ``extract_article_links``)
+                    # but the payload still carries ``s.q``, the field
+                    # is adversarial or vestigial — skipping the
+                    # dispatcher q-overlap check here lets the
+                    # handler-level ``_cursor_tool_mismatch`` fire
+                    # with the correct ``Cursor / Tool Mismatch``
+                    # diagnosis instead of the misleading
+                    # ``Cursor was issued for query X; current request
+                    # shares no terms`` shape (which advises starting
+                    # the search over — useless when the real fault
+                    # is cross-tool reuse).
+                    cursor_t_for_q = (
+                        decoded_payload.get("t")
+                        if isinstance(decoded_payload, dict)
+                        else None
+                    )
+                    cursor_t_emits_q = (
+                        not isinstance(cursor_t_for_q, str)
+                        or not cursor_t_for_q
+                        or cursor_t_for_q in self._Q_EMITTING_CURSOR_TOOLS
+                    )
+                    if (
+                        isinstance(cursor_q, str)
+                        and cursor_q.strip()
+                        and cursor_t_emits_q
+                    ):
                         import re as _re
 
                         cursor_tokens = {
@@ -1160,17 +1190,44 @@ class SimpleToolsHandler:
             title_lower = top_title.lower()
             left_in = left.lower() in title_lower
             right_in = right.lower() in title_lower
-            if not left_in and not right_in and zim_file_path and top_path:
+            if not (left_in and right_in) and zim_file_path and top_path:
                 # Post-a18 P3-D2: substring check fails when the
                 # resolved title is an English-aliased form of a
                 # non-Latin half (München → Munich). Fall back to
                 # title-alias resolution: probe the title index for
                 # each half and treat any half whose top-scored hit
                 # equals ``top_path`` as "in title". Cheap (in-memory
-                # title-index hit) and only fires on the rare
-                # both-missed branch.
-                left_in = self._half_resolves_to_top(zim_file_path, left, top_path)
-                right_in = self._half_resolves_to_top(zim_file_path, right, top_path)
+                # title-index hit).
+                #
+                # Post-a20 P1-D2: previously gated on
+                # ``not left_in and not right_in`` (only ran when BOTH
+                # halves missed the substring check), which left the
+                # asymmetric alias case unsuppressed —
+                # ``tell me about Köln or Cologne`` returned the
+                # Cologne article with a footer suggesting
+                # ``tell me about Köln`` even though Köln's title-index
+                # entry redirects right back to Cologne, sending the
+                # user on a 2-hop journey. Same shape for
+                # ``京都 or Kyoto``, ``上海 or Shanghai``,
+                # ``München or Munich`` (and the reverse-order forms).
+                # Widen the gate to ``not (left_in and right_in)`` so
+                # the alias probe runs whenever EITHER half is missing
+                # in substring; the probe still only upgrades a half's
+                # ``_in`` to True when its top-scored title-index hit
+                # equals ``top_path`` (so unrelated halves like
+                # ``Berlin and 東京`` still drop correctly — Berlin
+                # resolves to Berlin, not to 東京). The irreducible
+                # ``東京 or Tokyo`` case stays unfixed because 東京
+                # title-resolves to its own disambig article, not to
+                # Tokyo.
+                if not left_in:
+                    left_in = self._half_resolves_to_top(
+                        zim_file_path, left, top_path
+                    )
+                if not right_in:
+                    right_in = self._half_resolves_to_top(
+                        zim_file_path, right, top_path
+                    )
             if left_in == right_in:
                 # Both in title → returned article is the full
                 # phrase (``Romeo and Juliet``); neither in title →
@@ -1570,6 +1627,19 @@ class SimpleToolsHandler:
     # search-fallback path (when no strong title match).
     _SEARCH_RENDER_INTENTS = frozenset(
         {"search", "filtered_search", "search_all", "tell_me_about"}
+    )
+
+    # Post-a20 P1-D1: the set of cursor-emitting tools that legitimately
+    # carry an ``s.q`` field in their cursor payload (``search_zim_file``
+    # / ``search_with_filters`` — see ``Cursor.encode`` callsites in
+    # ``zim/search.py``). Other cursor-emitting tools (``walk_namespace``
+    # / ``browse_namespace`` / ``extract_article_links``) never emit
+    # ``s.q``; if a cursor claims one of those tools but still carries
+    # ``s.q``, the field is adversarial or vestigial. The dispatcher's
+    # q-overlap check skips that case so the handler-level
+    # ``_cursor_tool_mismatch`` can fire with the correct diagnosis.
+    _Q_EMITTING_CURSOR_TOOLS = frozenset(
+        {"search_zim_file", "search_with_filters"}
     )
 
     @staticmethod
