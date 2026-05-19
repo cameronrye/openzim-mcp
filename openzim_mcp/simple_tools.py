@@ -318,6 +318,21 @@ class SimpleToolsHandler:
                 cursor_ai = state.get("ai")
                 if isinstance(cursor_ai, str) and cursor_ai:
                     options["_cursor_ai"] = cursor_ai
+                # Post-a18 P1-D4: stash the cursor's tool name so the
+                # simple-tools dispatcher can reject cross-tool reuse
+                # (e.g. a ``walk_namespace`` cursor passed to
+                # ``browse namespace M`` silently walked browse from
+                # walk's offset). The advanced tools already enforce
+                # tool-binding via ``Cursor.decode(expected_tool=...)``;
+                # the simple-tools layer decoded the cursor in-place
+                # earlier in this block, bypassing that check. The
+                # ``_cursor_tool_mismatch`` helper fires in each
+                # cursor-consuming handler (``_handle_browse`` /
+                # ``_handle_walk_namespace``) so the user sees a clear
+                # rejection instead of a silent wrong-result.
+                cursor_t = decoded_payload.get("t")
+                if isinstance(cursor_t, str) and cursor_t:
+                    options["_cursor_t"] = cursor_t
                 if isinstance(state, dict):  # always True now; kept for diff clarity
                     # D9 (beta): the original implementation treated the
                     # cursor's ``s.q`` field as decorative — only ``s.o``
@@ -1069,7 +1084,14 @@ class SimpleToolsHandler:
         r"\s*/\s*",
     )
 
-    def _soft_connector_footer(self, topic: str, top_title: str) -> Optional[str]:
+    def _soft_connector_footer(
+        self,
+        topic: str,
+        top_title: str,
+        *,
+        zim_file_path: Optional[str] = None,
+        top_path: Optional[str] = None,
+    ) -> Optional[str]:
         """A16 post-a16 D1 (pass-2): when ``topic`` contains an ambiguous
         connector between two substantive proper-noun-shaped halves
         AND the returned ``top_title`` only includes one of them,
@@ -1087,6 +1109,18 @@ class SimpleToolsHandler:
         the dropped half without raising a hard chain warning that
         would force the caller to re-run for the obvious-single
         topic cases.
+
+        Post-a18 P3-D2: ``zim_file_path`` / ``top_path`` (optional)
+        unlock title-alias resolution as a fallback for the
+        "neither half is a substring" branch. The substring check is
+        unreliable when the resolved title is an English-aliased form
+        of a non-Latin topic half (``München`` resolves to
+        ``Munich`` via the title-alias index; substring matching
+        can't see through that). When both halves miss the substring
+        check, probe the title index for each half; if a half
+        resolves to ``top_path``, treat it as "in title"
+        semantically. Without these kwargs the function falls back
+        to the legacy substring-only behaviour.
         """
         if not topic or not top_title:
             return None
@@ -1126,6 +1160,17 @@ class SimpleToolsHandler:
             title_lower = top_title.lower()
             left_in = left.lower() in title_lower
             right_in = right.lower() in title_lower
+            if not left_in and not right_in and zim_file_path and top_path:
+                # Post-a18 P3-D2: substring check fails when the
+                # resolved title is an English-aliased form of a
+                # non-Latin half (München → Munich). Fall back to
+                # title-alias resolution: probe the title index for
+                # each half and treat any half whose top-scored hit
+                # equals ``top_path`` as "in title". Cheap (in-memory
+                # title-index hit) and only fires on the rare
+                # both-missed branch.
+                left_in = self._half_resolves_to_top(zim_file_path, left, top_path)
+                right_in = self._half_resolves_to_top(zim_file_path, right, top_path)
             if left_in == right_in:
                 # Both in title → returned article is the full
                 # phrase (``Romeo and Juliet``); neither in title →
@@ -1142,6 +1187,37 @@ class SimpleToolsHandler:
                 f"with `tell me about {dropped}`._"
             )
         return None
+
+    def _half_resolves_to_top(
+        self, zim_file_path: str, half: str, top_path: str
+    ) -> bool:
+        """Post-a18 P3-D2 helper: probe the title index for ``half`` and
+        return True iff its top-scored title-index hit's path equals
+        ``top_path``. The fallback substring check in
+        ``_soft_connector_footer`` uses this to recognise non-Latin
+        topic halves that resolve to English-aliased titles
+        (``München`` -> ``Munich``).
+
+        Errors in the backend are swallowed (return False) so a
+        transient failure can't widen the footer's behaviour
+        accidentally — the substring check stays authoritative when
+        title-alias probing can't help.
+        """
+        try:
+            data = self.zim_operations.find_entry_by_title_data(
+                zim_file_path, half, cross_file=False, limit=1
+            )
+        except Exception:
+            return False
+        if not isinstance(data, dict):
+            return False
+        results = data.get("results") or []
+        if not results:
+            return False
+        first = results[0]
+        if not isinstance(first, dict):
+            return False
+        return str(first.get("path") or "") == top_path
 
     @classmethod
     def _is_substantive_topic(cls, text: str) -> bool:
@@ -1477,6 +1553,38 @@ class SimpleToolsHandler:
     )
 
     @staticmethod
+    def _cursor_tool_mismatch(
+        options: Dict[str, Any], request_tool: str
+    ) -> Optional[str]:
+        """Post-a18 P1-D4: return a structured error when the decoded
+        cursor's ``s.t`` (issuing tool) differs from the handler's
+        own tool name. The simple-tools dispatcher decodes cursors
+        in-place earlier, bypassing the advanced tools'
+        ``Cursor.decode(expected_tool=...)`` enforcement; this helper
+        restores cross-tool rejection at the handler edge.
+
+        Returns ``None`` when no cursor was passed, when the cursor
+        had no ``t`` field, or when both match. The error shape
+        mirrors the existing ``s.ns`` / ``s.q`` / ``s.ai`` mismatch
+        errors so callers programmatically branching on
+        ``cursor_decode`` keep working unchanged.
+        """
+        cursor_t = options.get("_cursor_t")
+        if not isinstance(cursor_t, str) or not cursor_t:
+            return None
+        if cursor_t == request_tool:
+            return None
+        return (
+            "**Cursor / Tool Mismatch**\n\n"
+            "**Issue**: the cursor was issued by "
+            f"`{cursor_t}` but this call routes to "
+            f"`{request_tool}`. Drop the cursor and call again "
+            "without it (or restart the paginated call with the "
+            "tool that issued the cursor).\n\n"
+            "<!-- intent=cursor_decode cert=1.00 -->"
+        )
+
+    @staticmethod
     def _cursor_ns_mismatch(
         options: Dict[str, Any], request_namespace: str
     ) -> Optional[str]:
@@ -1726,6 +1834,23 @@ class SimpleToolsHandler:
     # articles produce density 1-4 placeholder-only leads.
     _EMPTY_LEAD_DENSITY_THRESHOLD = 5
 
+    # Post-a18 P3-D1: compact-mode table placeholder emitted by
+    # ``ContentProcessor.replace_oversized_tables`` (see
+    # ``openzim_mcp/content_processor.py`` ~line 819) when a table
+    # exceeds the row/char threshold. The bundle that
+    # ``get_section_data`` reads is always built with ``compact=True``
+    # (see ``openzim_mcp/bundle.py`` ~line 307), so a section that
+    # only contains oversized tables returns to the subject-attribute
+    # path as a string dominated by these placeholders.
+    # ``_maybe_render_subject_section`` detects placeholder dominance
+    # and substitutes a ``compact=False`` recovery pointer to avoid
+    # surfacing zero-content responses to small LLMs (the same
+    # hallucination shape wave 4 was designed to prevent).
+    _TABLE_PLACEHOLDER_RE = re.compile(
+        r"\[Table\s+\d+:\s+\d+\s+rows\s+x\s+\d+\s+cols\s+-\s+"
+        r"pass compact=False to expand\]"
+    )
+
     @classmethod
     def _is_disambig_lead(cls, pre_h2: str) -> bool:
         """Return True when ``pre_h2`` looks like a disambig-page lead.
@@ -1952,6 +2077,16 @@ class SimpleToolsHandler:
                 "- `browse namespace M` — archive metadata\n"
                 "- `browse namespace W` — well-known entries"
             )
+        # Post-a18 P1-D4: cursor's tool must match this handler.
+        # Walk-namespace's cursor previously walked browse silently
+        # because the simple-tools dispatcher only read ``s.o`` and
+        # ``s.ns`` from the decoded cursor — neither encoded the
+        # issuing tool. The advanced tools already enforce this via
+        # ``Cursor.decode(expected_tool=...)``; this restores the
+        # check at the simple-tools handler edge.
+        tool_mismatch = self._cursor_tool_mismatch(options, "browse_namespace")
+        if tool_mismatch is not None:
+            return tool_mismatch
         # P3-D7: cursor's namespace must match the request's namespace.
         mismatch = self._cursor_ns_mismatch(options, namespace)
         if mismatch is not None:
@@ -3147,7 +3282,12 @@ class SimpleToolsHandler:
         # picked vs. dropped. Suppressed when the returned title
         # already contains both halves (``Romeo and Juliet`` is one
         # article whose title spans the connector — no footer needed).
-        soft_footer = self._soft_connector_footer(topic, top_title)
+        soft_footer = self._soft_connector_footer(
+            topic,
+            top_title,
+            zim_file_path=zim_file_path,
+            top_path=top_path,
+        )
         if soft_footer:
             result = result + soft_footer
         return result
@@ -3333,6 +3473,37 @@ class SimpleToolsHandler:
         body_text = body_text.strip()
         if not body_text:
             return None
+        # Post-a18 P3-D1: detect table-dominated sections (compact mode
+        # strips oversized tables to ``[Table N: M rows x P cols - pass
+        # compact=False to expand]`` placeholders, leaving the LLM with
+        # zero substantive content). Munich's ``Notable people`` section
+        # is two H3 sub-tables — pre-fix, ``musicians from München``
+        # returned just the two placeholders, exactly the content-less-
+        # response shape that triggers small-model hallucination. The
+        # bundle is always built with ``compact=True`` (see bundle.py),
+        # so ``get_section_data`` can't re-emit the expanded tables;
+        # instead, surface a direct pointer to the ``compact=False``
+        # recovery call so the caller knows what to do.
+        section_text = target.get("text") or section_id
+        placeholder_count = len(self._TABLE_PLACEHOLDER_RE.findall(body_text))
+        stripped_for_density = self._TABLE_PLACEHOLDER_RE.sub("", body_text)
+        substantive_chars = len("".join(stripped_for_density.split()))
+        if placeholder_count >= 1 and substantive_chars < 100:
+            self._track("subject_attribute_table_dominated")
+            tables_word = "table" if placeholder_count == 1 else "tables"
+            return (
+                f"# {top_title or topic}\n\n"
+                f"_Source: `{top_path}` (section: {section_text})_\n\n"
+                f"_The **{section_text}** section of `{top_path}` "
+                f"is rendered as {placeholder_count} {tables_word} "
+                f"that compact mode strips. "
+                f"Re-issue `tell me about {top_path}` with "
+                f"`compact=False` to see the full article including "
+                f"table bodies, or `get section {section_id} of "
+                f"{top_path}` with `compact=False` for just this "
+                f"section._\n"
+                f"<!-- intent=subject_attribute_section cert=1.00 -->"
+            )
         max_len = options.get("max_content_length")
         truncated = False
         full_len = len(body_text)
@@ -3340,7 +3511,6 @@ class SimpleToolsHandler:
             body_text = body_text[:max_len]
             truncated = True
         self._track("subject_attribute_section_returned")
-        section_text = target.get("text") or section_id
         result = (
             f"# {top_title or topic}\n\n"
             f"_Source: `{top_path}` (section: {section_text})_\n\n"
@@ -3362,7 +3532,12 @@ class SimpleToolsHandler:
         # attribute early-return at the call site (_handle_tell_me_about
         # before _soft_connector_footer fires) would silently swallow
         # the drop.
-        soft_footer = self._soft_connector_footer(topic, top_title or top_path)
+        soft_footer = self._soft_connector_footer(
+            topic,
+            top_title or top_path,
+            zim_file_path=zim_file_path,
+            top_path=top_path,
+        )
         if soft_footer:
             result = result + soft_footer
         # Double-marker is intentional: the outer handle_zim_query will
@@ -3661,6 +3836,13 @@ class SimpleToolsHandler:
                 "- `walk namespace M` — archive metadata\n"
                 "- `walk namespace W` — well-known entries"
             )
+        # Post-a18 P1-D4 (defence-in-depth): walk's own handler
+        # rejects cursors issued by other tools (browse / search /
+        # links) for the same reason ``_handle_browse`` does — see
+        # the comment there.
+        tool_mismatch = self._cursor_tool_mismatch(options, "walk_namespace")
+        if tool_mismatch is not None:
+            return tool_mismatch
         # P3-D7: cursor's namespace must match the request's namespace.
         # See _decode_cursor for the stash; the legacy ``ai`` / ``q``
         # mismatch checks already follow this shape.
