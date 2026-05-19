@@ -856,3 +856,293 @@ class TestPD21TrailingPolitenessStrip:
             IntentParser._strip_trailing_politeness("biology kindly remind me")
             == "biology kindly remind me"
         )
+
+
+# ---------------------------------------------------------------------------
+# PD2-2 / PD2-3 / PD2-4: small-model hallucinated zim_file_path recovery
+# ---------------------------------------------------------------------------
+
+
+class TestPD22DocstringExampleNoLongerBait:
+    """PD2-2: the ``zim_query`` tool docstring used to contain a
+    literal-looking example path (``/data/wikipedia_en_all_maxi.zim``).
+    Small models with weak instruction-following parse "e.g." as
+    illustrative inconsistently and frequently copy the example as
+    the actual ``zim_file_path`` value. Real archives in production
+    are date-suffixed (``wikipedia_en_all_maxi_2026-02.zim``) so the
+    basename doesn't match either, and the previous "trust slashed
+    paths" branch dropped the model into a ``File does not exist``
+    retry loop with no recovery signal.
+
+    The docstring no longer contains a literal-looking path example;
+    the description leads with "Omit entirely (recommended)" so
+    auto-select is the natural choice the model latches onto.
+    """
+
+    def test_zim_query_docstring_does_not_contain_literal_path_example(
+        self,
+    ) -> None:
+        # The bait was the literal example ``/data/wikipedia_en_all_maxi.zim``
+        # appearing in the docstring. Pin its removal — any reappearance
+        # should fail this test and remind future maintainers that
+        # docstring example paths get copied by small models.
+        # The tool docstring lives on ``zim_query`` registered in
+        # ``server.py``; we extract it from the source rather than
+        # standing up a live server.
+        import inspect
+        import openzim_mcp.server as server_mod
+
+        source = inspect.getsource(server_mod)
+        assert "/data/wikipedia_en_all_maxi.zim" not in source, (
+            "Docstring example reintroduced the literal-looking path "
+            "small models copy verbatim. Use a generic placeholder or "
+            "drop the example entirely."
+        )
+
+    def test_zim_query_docstring_emphasises_omit_to_auto_select(
+        self,
+    ) -> None:
+        import inspect
+        import openzim_mcp.server as server_mod
+
+        source = inspect.getsource(server_mod)
+        # Match phrasing that primes the model toward the canonical
+        # omit-to-auto-select default rather than path invention.
+        assert "Omit entirely" in source, (
+            "Docstring should lead with 'Omit entirely' for the "
+            "zim_file_path parameter to nudge small models toward the "
+            "canonical default."
+        )
+
+
+class TestPD23NormalizerSingleArchiveAutoSelect:
+    """PD2-3: ``_normalize_zim_file_path`` auto-selects when exactly
+    one archive is loaded — even when the candidate has a path
+    separator. Pre-fix, slashed paths fell through "trust it" (H14)
+    and reached the backend, which errored. In single-archive setups
+    there is no ambiguity to surface; silent substitution is the
+    right UX. Multi-archive setups still trust the candidate and let
+    the backend error surface with PD2-4's recovery hint.
+    """
+
+    def _handler_single_archive(self) -> tuple[Any, MagicMock]:
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [
+            {
+                "path": "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim",
+                "name": "wikipedia_en_all_maxi_2026-02.zim",
+            },
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"}]'
+        )
+        mock.get_main_page.return_value = "main page text"
+        return SimpleToolsHandler(mock), mock
+
+    def _handler_multi_archive(self) -> tuple[Any, MagicMock]:
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"},
+            {"path": "/var/lib/zim/wiktionary_en_all_maxi_2026-02.zim"},
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"}, '
+            '{"path": "/var/lib/zim/wiktionary_en_all_maxi_2026-02.zim"}]'
+        )
+        return SimpleToolsHandler(mock), mock
+
+    def test_docstring_example_path_auto_selects_single_archive(self) -> None:
+        # The canonical small-model hallucination — the literal example
+        # path from the (pre-PD2-2) tool docstring.
+        handler, mock = self._handler_single_archive()
+        result = handler._normalize_zim_file_path(
+            "/data/wikipedia_en_all_maxi.zim"
+        )
+        assert result == "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"
+
+    def test_arbitrary_slashed_hallucination_auto_selects_single_archive(
+        self,
+    ) -> None:
+        handler, mock = self._handler_single_archive()
+        result = handler._normalize_zim_file_path("/totally/made/up.zim")
+        assert result == "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"
+
+    def test_bare_filename_hallucination_still_auto_selects(self) -> None:
+        # Regression guard for the original bare-filename auto-select.
+        handler, mock = self._handler_single_archive()
+        result = handler._normalize_zim_file_path("wikipedia.zim")
+        assert result == "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"
+
+    def test_basename_match_still_resolves(self) -> None:
+        # Regression guard: a bare filename matching the real basename
+        # still resolves through the existing case-1 path.
+        handler, mock = self._handler_single_archive()
+        result = handler._normalize_zim_file_path(
+            "wikipedia_en_all_maxi_2026-02.zim"
+        )
+        assert result == "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"
+
+    def test_real_full_path_passes_through(self) -> None:
+        # Regression guard: the real full path matches case 1 and is
+        # returned verbatim.
+        handler, mock = self._handler_single_archive()
+        real = "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"
+        assert handler._normalize_zim_file_path(real) == real
+
+    def test_multi_archive_slashed_path_no_match_preserves_h14(self) -> None:
+        # H14 narrowed: with multiple archives loaded, we can't
+        # silently pick one — preserve the candidate so the backend
+        # error surfaces and PD2-4 enriches it with the actual listing.
+        handler, mock = self._handler_multi_archive()
+        candidate = "/totally/made/up.zim"
+        assert handler._normalize_zim_file_path(candidate) == candidate
+
+    def test_multi_archive_bare_filename_no_match_preserves_h14(
+        self,
+    ) -> None:
+        # Same shape for bare filenames in multi-archive setups: the
+        # ambiguity blocks auto-select.
+        handler, mock = self._handler_multi_archive()
+        candidate = "totally-fake.zim"
+        assert handler._normalize_zim_file_path(candidate) == candidate
+
+    def test_zero_archives_loaded_returns_candidate_unchanged(self) -> None:
+        # Edge case: no archives loaded → auto-select returns None →
+        # we return the candidate, backend errors, error handler
+        # surfaces "no archives loaded".
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = []
+        mock.list_zim_files.return_value = "[]"
+        handler = SimpleToolsHandler(mock)
+        candidate = "/whatever.zim"
+        assert handler._normalize_zim_file_path(candidate) == candidate
+
+
+class TestPD24FileNotFoundRecoveryHint:
+    """PD2-4: when ``validate_zim_file`` raises a path-error, the
+    catch-all in ``handle_zim_query`` now emits a targeted recovery
+    hint listing real archive paths and the canonical "omit to
+    auto-select" fix. Pre-fix, the generic 4-step "Troubleshooting"
+    template gave no learning signal.
+    """
+
+    def test_recovery_hint_single_archive_says_omit(self) -> None:
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim"},
+        ]
+        handler = SimpleToolsHandler(mock)
+        hint = handler._zim_path_recovery_hint()
+        assert hint is not None
+        assert "Omit" in hint or "omit" in hint
+        assert "/var/lib/zim/wikipedia_en_all_maxi_2026-02.zim" in hint
+
+    def test_recovery_hint_multi_archive_lists_paths(self) -> None:
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/var/lib/zim/wikipedia.zim"},
+            {"path": "/var/lib/zim/wiktionary.zim"},
+        ]
+        handler = SimpleToolsHandler(mock)
+        hint = handler._zim_path_recovery_hint()
+        assert hint is not None
+        assert "/var/lib/zim/wikipedia.zim" in hint
+        assert "/var/lib/zim/wiktionary.zim" in hint
+        assert "verbatim" in hint or "Loaded archives" in hint
+
+    def test_recovery_hint_zero_archives_returns_none(self) -> None:
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = []
+        handler = SimpleToolsHandler(mock)
+        assert handler._zim_path_recovery_hint() is None
+
+    def test_recovery_hint_backend_failure_returns_none(self) -> None:
+        # Defensive: backend listing failure must not block the error
+        # path. Returning None makes the caller fall back to the
+        # generic troubleshooting block.
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.side_effect = RuntimeError("listing failed")
+        handler = SimpleToolsHandler(mock)
+        assert handler._zim_path_recovery_hint() is None
+
+    def test_recovery_hint_malformed_listing_returns_none(self) -> None:
+        # Defensive: listing returns something other than a list of
+        # dicts with path strings (e.g. None / wrong shape).
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = "not-a-list"
+        handler = SimpleToolsHandler(mock)
+        assert handler._zim_path_recovery_hint() is None
+
+    def test_multi_archive_path_error_surfaces_hint_end_to_end(self) -> None:
+        # End-to-end: multi-archive setup, bogus slashed path passed,
+        # backend raises ``File does not exist``, catch-all wraps it
+        # in the PD2-4 recovery markdown with the actual paths listed.
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/var/lib/zim/wikipedia.zim"},
+            {"path": "/var/lib/zim/wiktionary.zim"},
+        ]
+        # Make the backend raise to drive the catch-all.
+        mock.get_main_page.side_effect = Exception(
+            "File does not exist: /totally/fake.zim"
+        )
+        mock.config.meta.footer_enabled = False
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query(
+            "show main page",
+            zim_file_path="/totally/fake.zim",
+        )
+        assert isinstance(out, str)
+        # New error shape.
+        assert "**ZIM File Not Found**" in out
+        # Real paths surfaced.
+        assert "/var/lib/zim/wikipedia.zim" in out
+        assert "/var/lib/zim/wiktionary.zim" in out
+        # Generic troubleshooting block is replaced.
+        assert "Check server logs" not in out
+
+    def test_single_archive_path_error_falls_through_to_pd23_auto_select(
+        self,
+    ) -> None:
+        # End-to-end: single-archive setup MUST never reach the
+        # catch-all for a bogus zim_file_path — PD2-3 auto-selects
+        # before the backend sees it. Pin this contract.
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/var/lib/zim/the-only-one.zim"},
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/var/lib/zim/the-only-one.zim"}]'
+        )
+        mock.get_main_page.return_value = "main page text"
+        mock.config.meta.footer_enabled = False
+        handler = SimpleToolsHandler(mock)
+        handler.handle_zim_query(
+            "show main page",
+            zim_file_path="/some/other/fake.zim",
+        )
+        # Backend was invoked with the auto-selected path, not the
+        # hallucinated one.
+        mock.get_main_page.assert_called_once_with(
+            "/var/lib/zim/the-only-one.zim", compact=False
+        )

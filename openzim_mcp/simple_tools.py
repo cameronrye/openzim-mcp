@@ -756,16 +756,89 @@ class SimpleToolsHandler:
                     message=f"Synthesize pipeline failed: {safe_error}",
                     context=f"Query: {safe_query}",
                 )
+            # Post-a20 PD2-4: when ``validate_zim_file`` raises (file
+            # does not exist / not a file / wrong extension), the
+            # generic four-step "Troubleshooting" block gives small
+            # models no learning signal — they just retry the same
+            # call. Replace with a targeted recovery hint that lists
+            # the actual loaded archive paths and points at the
+            # canonical fix ("omit `zim_file_path` to auto-select" or
+            # "use one of these paths verbatim"). PD2-3's auto-select
+            # already handles single-archive setups silently; this
+            # branch is the multi-archive recovery surface (and
+            # defence-in-depth if PD2-3's backend listing ever fails).
+            error_lower = str(e).lower()
+            looks_like_zim_path_error = any(
+                marker in error_lower
+                for marker in (
+                    "file does not exist",
+                    "path is not a file",
+                    "is not a zim file",
+                    "access denied",
+                )
+            )
+            if looks_like_zim_path_error:
+                hint = self._zim_path_recovery_hint()
+                if hint is not None:
+                    return (
+                        f"**ZIM File Not Found**\n\n"
+                        f"**Query**: {safe_query}\n"
+                        f"**Issue**: the `zim_file_path` value passed "
+                        f"doesn't match any loaded archive.\n\n"
+                        f"{hint}\n\n"
+                        f"<!-- intent=zim_path_not_found cert=1.00 -->"
+                    )
             return (
                 f"**Error Processing Query**\n\n"
                 f"**Query**: {safe_query}\n"
                 f"**Error**: {safe_error}\n\n"
                 f"**Troubleshooting**:\n"
-                f"1. Check that the ZIM file path is correct\n"
+                f"1. Omit `zim_file_path` to auto-select the loaded "
+                f"archive (single-archive setups), or call "
+                f"`list available ZIM files` to see real paths\n"
                 f"2. Verify the query format\n"
                 f"3. Try a simpler query\n"
                 f"4. Check server logs for details"
             )
+
+    def _zim_path_recovery_hint(self) -> Optional[str]:
+        """Post-a20 PD2-4: render the recovery hint surfaced by the
+        catch-all when ``validate_zim_file`` raises. Returns a
+        Markdown fragment listing real archive paths plus the
+        canonical "omit to auto-select" fix, or ``None`` if the
+        backend listing can't be fetched (caller falls back to the
+        generic troubleshooting block).
+
+        Defensive against backend failures: ``list_zim_files_data``
+        going sideways should never block the error path itself.
+        """
+        try:
+            files = self.zim_operations.list_zim_files_data()
+        except Exception:
+            return None
+        if not isinstance(files, list) or not files:
+            return None
+        paths: List[str] = []
+        for entry in files:
+            if isinstance(entry, dict):
+                p = entry.get("path")
+                if isinstance(p, str) and p:
+                    paths.append(p)
+        if not paths:
+            return None
+        if len(paths) == 1:
+            return (
+                "**Recovery**: this archive is the only one loaded — "
+                "omit the `zim_file_path` parameter entirely and the "
+                "tool will auto-select it.\n\n"
+                f"**Loaded archive**: `{paths[0]}`"
+            )
+        bullets = "\n".join(f"  - `{p}`" for p in paths)
+        return (
+            "**Recovery**: pass one of the paths below verbatim, or "
+            "use `list available ZIM files` for the same listing.\n\n"
+            f"**Loaded archives**:\n{bullets}"
+        )
 
     # A11 B1: connector tokens that split a chained query into two
     # halves. Each connector is a whole-word match (surrounded by
@@ -4375,22 +4448,34 @@ class SimpleToolsHandler:
     def _normalize_zim_file_path(self, candidate: str) -> str:
         """Resolve hallucinated ZIM file paths or fall back to auto-select.
 
-        Returns the (possibly rewritten) path. Three cases — matches the
-        policy that previously lived inline in ``handle_zim_query`` for
-        the intent-classification branch only:
+        Returns the (possibly rewritten) path. Resolution policy:
 
           1. ``candidate`` matches a real ZIM file's full path or basename:
              return the real path. Basename-only matches normalize bare-
              filename hallucinations like ``"wikipedia.zim"`` to whatever
              directory the file actually lives in.
 
-          2. ``candidate`` is a bare filename (no path separator) and
-             matches nothing: treat it as a hallucination and substitute
-             the auto-selected archive when exactly one is loaded.
+          2. ``candidate`` doesn't match anything AND exactly one ZIM
+             file is loaded: auto-select that one. Catches bare-filename
+             hallucinations (``"wikipedia.zim"``) and — post-a20 PD2-3
+             — also fully-qualified path hallucinations like
+             ``/data/wikipedia_en_all_maxi.zim`` (small models routinely
+             copy this literally from the tool's own docstring example;
+             the real archive is date-suffixed and won't match by
+             basename either). In single-archive setups the explicit
+             path is functionally redundant — there is no second
+             archive to disambiguate against — so silent substitution
+             is the right UX and unlocks small-model recovery instead
+             of dropping them into a "File does not exist" loop.
 
-          3. ``candidate`` has a path separator and matches nothing: trust
-             it (H14: explicit paths must reach the backend, which will
-             surface a clearer error than silent replacement).
+          3. ``candidate`` doesn't match anything AND multiple archives
+             are loaded: trust the candidate. The backend surfaces a
+             clean ``File does not exist`` error which
+             ``handle_zim_query``'s catch-all then enriches with the
+             list of real archive paths (post-a20 PD2-4). H14's rule
+             that "explicit paths must reach the backend" only matters
+             when there's genuine ambiguity about which archive the
+             caller wanted — single-archive setups have none.
         """
         resolved = self._resolve_zim_path(candidate)
         if resolved is not None:
@@ -4401,15 +4486,20 @@ class SimpleToolsHandler:
                     f"'{candidate}' to '{resolved}' via basename match."
                 )
             return resolved
-        if "/" not in candidate and "\\" not in candidate:
-            auto_selected = self._auto_select_zim_file()
-            if auto_selected:
-                self._track("zim_path_replaced_with_auto_select")
-                logger.info(
-                    f"Discarded hallucinated zim_file_path "
-                    f"'{candidate}'; auto-selected '{auto_selected}'."
-                )
-                return auto_selected
+        auto_selected = self._auto_select_zim_file()
+        if auto_selected:
+            has_separator = "/" in candidate or "\\" in candidate
+            self._track(
+                "zim_path_replaced_with_auto_select_separator"
+                if has_separator
+                else "zim_path_replaced_with_auto_select"
+            )
+            logger.info(
+                f"Discarded hallucinated zim_file_path "
+                f"'{candidate}' (no match, single archive loaded); "
+                f"auto-selected '{auto_selected}'."
+            )
+            return auto_selected
         return candidate
 
     def _resolve_zim_path(self, candidate: str) -> Optional[str]:

@@ -963,20 +963,36 @@ class TestGetZimEntriesDispatch:
 
 
 class TestExplicitZimPathHonored:
-    """Regression: H14 - explicit zim_file_path must not be overwritten."""
+    """Regression: H14 (narrowed post-a20) - explicit zim_file_path must
+    not be overwritten when multiple archives are loaded.
+
+    The original H14 contract was "any explicit slashed path reaches the
+    backend verbatim". Post-a20 PD2-3 narrowed this: single-archive
+    setups auto-select even for slashed paths (no ambiguity to surface),
+    but multi-archive setups still preserve the explicit path so the
+    backend can produce a clean error pointing at the right path. This
+    fixture loads two archives so the H14 preservation case fires for
+    every parameterised intent.
+    """
 
     @pytest.fixture
     def mock_zim_operations(self):
-        """Create mock ZimOperations that records the zim path it receives."""
+        """Create mock ZimOperations that records the zim path it receives.
+
+        Multi-archive setup: with PD2-3, auto-select only kicks in when
+        exactly one archive is loaded, so we need ≥2 to exercise the
+        H14 preservation branch.
+        """
         mock = Mock()
-        # Auto-select would return a different path; if the fix is wrong and
-        # the intent branch calls _auto_select_zim_file, this is what would
-        # be passed through to the backend.
+        # Two loaded archives: auto-select returns None (ambiguous),
+        # so the normalizer falls through to "trust the candidate".
         mock.list_zim_files_data.return_value = [
-            {"path": "/auto/selected.zim", "name": "selected.zim"}
+            {"path": "/auto/selected.zim", "name": "selected.zim"},
+            {"path": "/auto/secondary.zim", "name": "secondary.zim"},
         ]
         mock.list_zim_files.return_value = (
-            '[{"path": "/auto/selected.zim", "name": "selected.zim"}]'
+            '[{"path": "/auto/selected.zim", "name": "selected.zim"}, '
+            '{"path": "/auto/secondary.zim", "name": "secondary.zim"}]'
         )
         mock.walk_namespace.return_value = "{}"
         mock.find_entry_by_title.return_value = "{}"
@@ -2188,18 +2204,45 @@ class TestZimPathHallucinationHandling:
             "/var/lib/zim/wikipedia_en_all_maxi.zim", compact=False
         )
 
-    def test_slashed_path_is_trusted_even_when_unknown(
+    def test_slashed_path_no_match_single_archive_auto_selects(
         self, handler, mock_zim_operations
     ):
-        """A slashed path that doesn't match the listing is trusted —
-        the caller knew enough to write a path, so we let it reach the
-        backend (which has its own validation and clearer error
-        messages than silent auto-replacement). H14 regression.
+        """Post-a20 PD2-3: a slashed path that doesn't match the listing
+        auto-selects when exactly one archive is loaded. Small models
+        routinely copy the docstring example
+        (``/data/wikipedia_en_all_maxi.zim``) verbatim — that path
+        won't match a date-suffixed real archive by basename either,
+        so the previous "trust the candidate" branch dropped them into
+        a ``File does not exist`` retry loop with no recovery signal.
+        In single-archive setups there's nothing to disambiguate against,
+        so silent substitution is the right UX.
         """
         explicit = "/some/other/wikipedia.zim"
         handler.handle_zim_query("show main page", zim_file_path=explicit)
+        # The hallucinated slashed path was discarded; auto-select
+        # supplied the real path.
         mock_zim_operations.get_main_page.assert_called_once_with(
-            explicit, compact=False
+            "/var/lib/zim/wikipedia_en_all_maxi.zim", compact=False
+        )
+
+    def test_slashed_path_docstring_example_auto_selects(
+        self, handler, mock_zim_operations
+    ):
+        """Post-a20 PD2-3: the exact docstring example
+        ``/data/wikipedia_en_all_maxi.zim`` is the canonical small-model
+        hallucination — it appears literally in the tool description
+        and weak instruction-followers copy it verbatim. The basename
+        ``wikipedia_en_all_maxi.zim`` won't match the real archive
+        (date-suffixed in production), so without auto-select the model
+        gets dropped into a ``File does not exist`` loop. With
+        single-archive auto-select on, it just works.
+        """
+        # The docstring's example path — copied verbatim from the
+        # tool's own description in server.py.
+        explicit = "/data/wikipedia_en_all_maxi.zim"
+        handler.handle_zim_query("show main page", zim_file_path=explicit)
+        mock_zim_operations.get_main_page.assert_called_once_with(
+            "/var/lib/zim/wikipedia_en_all_maxi.zim", compact=False
         )
 
     def test_slashed_path_matching_full_path_is_used_verbatim(
@@ -2316,14 +2359,27 @@ class TestZimPathHallucinationHandling:
             compact=False,
         )
 
-    def test_synthesize_slashed_unmatched_path_passed_through(
-        self, handler, mock_zim_operations
-    ):
-        """A14: a deliberate slashed path that doesn't match the listing
-        must still reach the synthesize pipeline verbatim — same H14
-        rule as the intent branch. The backend path validator can then
-        surface a clearer error than silent replacement.
+    def test_synthesize_slashed_unmatched_path_single_archive_auto_selects(
+        self,
+    ) -> None:
+        """Post-a20 PD2-3: a slashed path that doesn't match the listing
+        auto-selects when only one archive is loaded — same rule for
+        the synthesize branch as the intent branch. Pre-PD2-3 (legacy
+        H14 contract on this single-archive fixture), the slashed path
+        reached synthesize verbatim and the backend errored. Now the
+        normalizer substitutes the only loaded archive before the
+        synthesize dispatcher sees the path.
         """
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = Mock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/var/lib/zim/wikipedia_en_all_maxi.zim"},
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/var/lib/zim/wikipedia_en_all_maxi.zim"}]'
+        )
+        handler = SimpleToolsHandler(mock)
         explicit = "/some/other/wikipedia.zim"
         with patch.object(handler, "_handle_synthesize_query") as mock_synth:
             mock_synth.return_value = {
@@ -2337,7 +2393,55 @@ class TestZimPathHallucinationHandling:
                 zim_file_path=explicit,
                 options={"synthesize": True},
             )
-        mock_synth.assert_called_once_with("berlin", explicit, compact=False)
+        # The synthesize dispatcher receives the auto-selected real
+        # path, not the hallucinated slashed candidate.
+        mock_synth.assert_called_once_with(
+            "berlin",
+            "/var/lib/zim/wikipedia_en_all_maxi.zim",
+            compact=False,
+        )
+
+    def test_synthesize_slashed_unmatched_path_multi_archive_preserved(
+        self,
+    ) -> None:
+        """Post-a20 PD2-3 H14 narrowing: multi-archive setups still
+        preserve the explicit slashed path verbatim — the synthesize
+        dispatcher gets to surface its own error about the path.
+        """
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = Mock()
+        mock.list_zim_files_data.return_value = [
+            {"path": "/var/lib/zim/wikipedia.zim"},
+            {"path": "/var/lib/zim/wiktionary.zim"},
+        ]
+        mock.list_zim_files.return_value = (
+            '[{"path": "/var/lib/zim/wikipedia.zim"}, '
+            '{"path": "/var/lib/zim/wiktionary.zim"}]'
+        )
+        handler = SimpleToolsHandler(mock)
+        # Basename ``ghost.zim`` doesn't match either loaded archive,
+        # so case 1 (basename match) doesn't fire. With two archives
+        # loaded, auto-select returns None → candidate preserved.
+        explicit = "/some/other/ghost.zim"
+        with patch.object(handler, "_handle_synthesize_query") as mock_synth:
+            mock_synth.return_value = {
+                "answer_markdown": "ok",
+                "passages": [],
+                "citations": [],
+                "archives_searched": [],
+            }
+            handler.handle_zim_query(
+                "berlin",
+                zim_file_path=explicit,
+                options={"synthesize": True},
+            )
+        # Multi-archive: auto-select returns None (ambiguous) →
+        # candidate preserved. H14 still holds when there's something
+        # to disambiguate against.
+        mock_synth.assert_called_once_with(
+            "berlin", "/some/other/ghost.zim", compact=False
+        )
 
     def test_synthesize_no_path_skips_resolver(self, handler, mock_zim_operations):
         """A14: when ``zim_file_path`` is None, the resolver is
