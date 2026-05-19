@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1](https://github.com/cameronrye/openzim-mcp/compare/v2.0.0...v2.0.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* **v2:** post-a20 beta-test sweep — 6 defects across three passes ([#152](https://github.com/cameronrye/openzim-mcp/issues/152)) ([1d0daa4](https://github.com/cameronrye/openzim-mcp/commit/1d0daa46cba28fd442bc09fdab79dc73321987dc))
+
 ## [2.0.0a20] — 2026-05-19 (alpha pre-release) — post-a19 beta-test sweep — 3 live-Wikipedia defects across one pass
 
 Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
