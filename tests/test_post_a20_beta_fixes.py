@@ -1,10 +1,14 @@
 """Regression tests for the post-a20 beta-test sweep (a21 candidate fixes).
 
 The post-a20 live-MCP sweep against the 118 GB Wikipedia ZIM after
-v2.0.0a20 deployed surfaced two new user-facing defects, both shaped
-by the recurring "fix unlocks new paths" pattern that has held
-across a17 → a18 → a19 → a20: each release's fixes reach code paths
-earlier defects had intercepted, exposing the NEXT layer's bugs.
+v2.0.0a20 deployed surfaced three user-facing defects across two
+passes. Pass-1 caught P1-D1 + P1-D2 (the "fix unlocks new paths"
+shape: a20's three landed fixes opened up the surfaces probed). Pass-2
+caught PD2-1 by widening probe coverage to politeness wrappers across
+all simple-mode intents — only ``tell_me_about`` was stripping
+trailing politeness; every other extractor with a greedy
+end-anchored capture was silently swallowing ``please`` / ``thanks``
+/ ``thank you`` into the search term, title lookup, or entry path.
 
 - P1-D1: the dispatcher's cursor-decode block (simple_tools.py
   ``handle_zim_query``) runs the cursor's ``s.q`` overlap check
@@ -54,6 +58,39 @@ earlier defects had intercepted, exposing the NEXT layer's bugs.
   irreducible ``東京 or Tokyo`` case stays unfixed because 東京
   title-resolves to its own disambig article path, not to Tokyo;
   the fallback correctly leaves it alone.
+
+- PD2-1: trailing politeness markers (``please``, ``kindly``,
+  ``thanks``, ``thank you``) leaked into every simple-mode intent
+  EXCEPT ``tell_me_about`` and a few that capture by a tight tail
+  token (filtered_search ends at the namespace letter; walk/browse
+  capture only the letter). Only ``_extract_tell_me_about`` had a
+  trailing-politeness strip (post-a11 B3); the sibling extractors
+  (``_extract_search``, ``_extract_search_all``,
+  ``_extract_find_by_title``, ``_extract_related``,
+  ``_extract_suggestions``, ``_extract_entry_path_keyworded`` —
+  feeding get_article / links / structure / toc / summary, plus
+  ``_extract_get_zim_entries`` / ``_extract_get_section``) capture
+  with greedy patterns terminated only by end-of-string and
+  silently swallowed the politeness into the captured value:
+
+    * ``search for biology please`` → query ``"biology please"``,
+      ranks ``Thanks Maa`` etc. above the canonical ``Biology``.
+    * ``find article titled Berlin please`` → ``"Berlin please"``,
+      not found.
+    * ``links in Photosynthesis please`` → tries to fetch
+      ``"Photosynthesis please"``, not found.
+    * Comma forms (``"biology, please"``) and other tail words
+      (``thanks``, ``thank you``) showed the same shape.
+
+  Fix: lift the trailing-politeness strip into
+  ``IntentParser.parse_intent`` at the entry point — a single
+  end-anchored strip on the query string, looped so combinations
+  (``biology, thanks please``) peel cleanly, runs before pattern
+  matching + extractor dispatch. Every extractor now sees the
+  cleaned query. Legitimate content uses
+  (``search for "Please Understand Me"`` — song title) are
+  unaffected: the strip is end-anchored, so it only peels tokens
+  appearing after the close-quote at end-of-string.
 
 Each test pins one defect; failures here mean a regression on the
 specific bug.
@@ -540,3 +577,282 @@ class TestEndToEndA20Gates:
         # (extract_article_links is non-q-emitting). The handler
         # then walks normally (offset=0 hardcoded).
         assert "Cursor / Tool Mismatch" not in out
+
+
+# ---------------------------------------------------------------------------
+# PD2-1: trailing politeness leaks into intents other than tell_me_about
+# ---------------------------------------------------------------------------
+
+
+class TestPD21TrailingPolitenessStrip:
+    """PD2-1: every extractor with a greedy end-anchored capture
+    silently swallowed trailing politeness (``please`` / ``kindly`` /
+    ``thanks`` / ``thank you``) into the captured value. Only
+    ``_extract_tell_me_about`` had a strip. Fix lifts the strip into
+    ``IntentParser.parse_intent`` so every extractor sees a cleaned
+    query.
+
+    These tests assert at the parsed-params level (the contract
+    extractors expose), not at the end-to-end response level — that
+    isolates the fix to the intent parser and keeps the tests fast
+    regardless of which backend each intent then routes to.
+    """
+
+    def test_search_strips_trailing_please(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "search for biology please"
+        )
+        assert intent == "search"
+        assert params.get("query") == "biology"
+
+    def test_search_strips_trailing_thanks(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "search for biology thanks"
+        )
+        assert intent == "search"
+        assert params.get("query") == "biology"
+
+    def test_search_strips_trailing_thank_you(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "search for biology thank you"
+        )
+        assert intent == "search"
+        assert params.get("query") == "biology"
+
+    def test_search_strips_trailing_kindly(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "search for biology kindly"
+        )
+        assert intent == "search"
+        assert params.get("query") == "biology"
+
+    def test_search_strips_comma_please(self) -> None:
+        # ``biology, please`` — comma-then-politeness shape.
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "search for biology, please"
+        )
+        assert intent == "search"
+        assert params.get("query") == "biology"
+
+    def test_search_strips_combined_thanks_please(self) -> None:
+        # Loop pass: ``biology thanks please`` peels both tails.
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "search for biology thanks please"
+        )
+        assert intent == "search"
+        assert params.get("query") == "biology"
+
+    def test_find_by_title_strips_trailing_please(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "find article titled Berlin please"
+        )
+        assert intent == "find_by_title"
+        assert params.get("title") == "Berlin"
+
+    def test_find_by_title_strips_trailing_thanks(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "find article titled Photosynthesis thanks"
+        )
+        assert intent == "find_by_title"
+        assert params.get("title") == "Photosynthesis"
+
+    def test_links_strips_trailing_please(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "links in Photosynthesis please"
+        )
+        assert intent == "links"
+        assert params.get("entry_path") == "Photosynthesis"
+
+    def test_structure_strips_trailing_please(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "show structure of Photosynthesis please"
+        )
+        assert intent == "structure"
+        assert params.get("entry_path") == "Photosynthesis"
+
+    def test_get_article_strips_trailing_please(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "get article Berlin please"
+        )
+        assert intent == "get_article"
+        assert params.get("entry_path") == "Berlin"
+
+    def test_suggestions_strips_trailing_please(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "suggestions for ber please"
+        )
+        assert intent == "suggestions"
+        assert params.get("partial_query") == "ber"
+
+    def test_tell_me_about_already_stripped_still_works(self) -> None:
+        # Regression guard: the original tell_me_about strip continues
+        # to work (the lifted strip is upstream, so this should be
+        # idempotent).
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "tell me about Berlin please"
+        )
+        assert intent == "tell_me_about"
+        assert params.get("topic") == "Berlin"
+
+    def test_walk_namespace_unaffected_by_trailing_please(self) -> None:
+        # Walk's extractor captures only the namespace letter, so
+        # trailing politeness never affected it pre-fix. The strip
+        # must not change this behaviour.
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "walk namespace M please"
+        )
+        assert intent == "walk_namespace"
+        assert params.get("namespace") == "M"
+
+    def test_filtered_search_unaffected_by_trailing_please(self) -> None:
+        # Filtered search's regex ends at the namespace letter, so
+        # the trailing politeness was already harmless. Defence-in-
+        # depth: the strip must not break this case either.
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "search Berlin in namespace C please"
+        )
+        assert intent == "filtered_search"
+        assert params.get("query") == "Berlin"
+        assert (params.get("namespace") or "").upper() == "C"
+
+    def test_quoted_inner_please_not_stripped(self) -> None:
+        # Legitimate content uses with ``please`` as a query word
+        # MUST not be touched. Quoted form encloses the content; the
+        # strip is end-anchored after the close-quote.
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            'search for "Please Understand Me"'
+        )
+        assert intent == "search"
+        # The quoted phrase remains intact (with or without enclosing
+        # quotes is up to the extractor — what matters is "Please" is
+        # still present as a content token).
+        captured = (params.get("query") or "").lower()
+        assert "please understand me" in captured
+
+    def test_search_quoted_inner_please_with_outer_please_strip(self) -> None:
+        # Hybrid: quoted content uses "please" AND trailing politeness
+        # appears outside the quotes. Only the outside ``please`` peels.
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            'search for "Please Understand Me" please'
+        )
+        assert intent == "search"
+        captured = (params.get("query") or "").lower()
+        assert "please understand me" in captured
+        # The trailing ``please`` outside the quotes is gone.
+        assert not captured.rstrip().endswith("please")
+
+    def test_no_politeness_unchanged(self) -> None:
+        # Regression guard: queries without any politeness tail must
+        # parse exactly as before (the strip is a no-op).
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent("search for biology")
+        assert intent == "search"
+        assert params.get("query") == "biology"
+
+    def test_helper_idempotent(self) -> None:
+        # _strip_trailing_politeness is exposed for unit testing the
+        # loop behaviour directly.
+        from openzim_mcp.intent_parser import IntentParser
+
+        assert (
+            IntentParser._strip_trailing_politeness("biology please thanks")
+            == "biology"
+        )
+        assert (
+            IntentParser._strip_trailing_politeness("biology, please, thanks")
+            == "biology"
+        )
+        assert (
+            IntentParser._strip_trailing_politeness("biology")
+            == "biology"
+        )
+        assert (
+            IntentParser._strip_trailing_politeness("")
+            == ""
+        )
+
+    def test_helper_does_not_swallow_legitimate_content(self) -> None:
+        # ``Photosynthesis`` ends in nothing that resembles politeness;
+        # ``please`` inside a quoted phrase is content and must stay.
+        from openzim_mcp.intent_parser import IntentParser
+
+        assert (
+            IntentParser._strip_trailing_politeness("Photosynthesis")
+            == "Photosynthesis"
+        )
+        assert (
+            IntentParser._strip_trailing_politeness('"Please Understand Me"')
+            == '"Please Understand Me"'
+        )
+
+    def test_helper_handles_trailing_punctuation(self) -> None:
+        # Trailing punctuation after the politeness (``please?`` /
+        # ``please!`` / ``please.``) should still strip cleanly.
+        from openzim_mcp.intent_parser import IntentParser
+
+        assert (
+            IntentParser._strip_trailing_politeness("biology please.")
+            == "biology"
+        )
+        assert (
+            IntentParser._strip_trailing_politeness("biology please!")
+            == "biology"
+        )
+        assert (
+            IntentParser._strip_trailing_politeness("biology please?")
+            == "biology"
+        )
+        assert (
+            IntentParser._strip_trailing_politeness("biology, please.")
+            == "biology"
+        )
+
+    def test_helper_mid_query_politeness_word_unaffected(self) -> None:
+        # ``thanks giving`` mid-phrase is content (Thanksgiving holiday).
+        # ``kindly remind me`` mid-phrase is content. Strip is
+        # end-anchored, so neither matches.
+        from openzim_mcp.intent_parser import IntentParser
+
+        assert (
+            IntentParser._strip_trailing_politeness("biology thanks giving")
+            == "biology thanks giving"
+        )
+        assert (
+            IntentParser._strip_trailing_politeness("biology kindly remind me")
+            == "biology kindly remind me"
+        )
