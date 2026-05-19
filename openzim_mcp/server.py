@@ -256,12 +256,17 @@ class OpenZimMcpServer:
             Args:
                 query: REQUIRED. Translated from user intent — never the
                     user's raw message.
-                zim_file_path: Optional. The on-disk path of a .zim file
-                    (e.g. `/data/wikipedia_en_all_maxi.zim`) — NOT an
-                    article title, topic, or made-up filename. Omit
-                    entirely and the tool auto-selects the one loaded
-                    archive (or opens all of them when `synthesize=True`).
-                    Use `list available ZIM files` to see real paths.
+                zim_file_path: Optional. **Omit entirely (recommended)** —
+                    the tool auto-selects the loaded archive (or opens
+                    all of them when `synthesize=True`). Pass a real
+                    path ONLY when multiple archives are loaded and you
+                    need to target a specific one; call `list available
+                    ZIM files` first to see the real paths. NEVER pass
+                    an article title, topic, or made-up filename here,
+                    and do NOT invent a path from this docstring —
+                    paths that don't match a loaded archive are silently
+                    auto-corrected when only one archive is loaded, and
+                    surface a path-listing error otherwise.
                 limit: Max search/browse results (default: 3).
                 offset: Pagination offset (default: 0).
                 max_content_length: Article body cap (default: 4000).

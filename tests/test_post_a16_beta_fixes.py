@@ -218,6 +218,17 @@ class TestD1SoftFooter:
         path. Title-promotion needs a score-1.0 title-index hit so
         ``_promote_topic_via_title_index`` succeeds when the search's
         top hit isn't a strong token-match for the topic.
+
+        Post-a20 P1-D2: the alias-fallback in ``_soft_connector_footer``
+        now also calls ``find_entry_by_title_data`` to check whether a
+        connector half title-resolves to ``top_path``. A blanket
+        ``return_value`` would falsely report that every half (incl.
+        ``Berlin`` / ``Mozart``) resolves to ``top_path``, silently
+        suppressing footers that real archives would still emit. Use
+        a ``side_effect`` that only returns the score-1.0 hit when
+        the queried title case-insensitively contains ``top_title``
+        (covers the title-promotion path for the original chained
+        topic) and falls back to empty for unrelated half-lookups.
         """
         path = top_path or top_title
         mock = MagicMock()
@@ -229,14 +240,29 @@ class TestD1SoftFooter:
         }
         mock.get_zim_entry.return_value = "stub-body"
         # Title-promotion + disambig-twin probe both call this. Returning
-        # a score-1.0 hit for the title-promotion path lets the handler
-        # reach the article-fetch + footer-append code. The disambig
-        # twin probe rejects the same path because it doesn't end with
-        # ``_(disambiguation)``.
-        mock.find_entry_by_title_data.return_value = {
-            "results": [{"path": path, "title": top_title, "score": 1.0}],
-            "total": 1,
-        }
+        # a score-1.0 hit when the queried title is ``top_title`` (or
+        # the full chained topic that the title-promotion path probes)
+        # lets the handler reach the article-fetch + footer-append code.
+        # Unrelated half-lookups (Berlin / Mozart / etc.) get an empty
+        # result so the alias-fallback doesn't falsely upgrade them.
+        top_title_lower = top_title.lower()
+
+        def _title_lookup(
+            _zim: str,
+            title: str,
+            *,
+            cross_file: bool = False,
+            limit: int = 1,
+        ) -> dict[str, Any]:
+            q = (title or "").lower()
+            if q == top_title_lower or top_title_lower in q:
+                return {
+                    "results": [{"path": path, "title": top_title, "score": 1.0}],
+                    "total": 1,
+                }
+            return {"results": [], "total": 0}
+
+        mock.find_entry_by_title_data.side_effect = _title_lookup
         return SimpleToolsHandler(mock)
 
     def test_one_half_in_title_emits_footer(self) -> None:

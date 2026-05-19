@@ -704,6 +704,57 @@ class IntentParser:
         ),
     ]
 
+    # Post-a20 PD2-1: trailing politeness markers ("please", "thanks",
+    # "thank you", "kindly") were stripped only by
+    # ``_extract_tell_me_about``. Every other extractor that captures
+    # the topic / search-terms with a greedy tail
+    # ((``_extract_search``, ``_extract_search_all``, ``_extract_find_by_title``,
+    # ``_extract_related``, ``_extract_suggestions``,
+    # ``_extract_entry_path_keyworded`` — feeding get_article / links /
+    # structure / toc / summary, ``_extract_get_zim_entries``,
+    # ``_extract_get_section``) silently swallowed the politeness as
+    # part of the captured value:
+    #
+    #   * ``search for biology please`` → ``query="biology please"`` →
+    #     ranks ``Thanks Maa`` etc. above ``Biology``.
+    #   * ``find article titled Berlin please`` → looks up
+    #     ``Berlin please`` (not found).
+    #   * ``links in Photosynthesis please`` → tries to fetch
+    #     ``Photosynthesis please`` (not found).
+    #
+    # Strip universally at the top of ``parse_intent`` so every
+    # extractor sees the cleaned query. The strip is end-anchored
+    # (``\s*$``), so legitimate uses of the politeness word as content
+    # (``search for "Please Understand Me"`` — song title; the quoted
+    # form fully encloses the content phrase, and the trailing ``please``
+    # after the close-quote is what gets stripped) are unaffected. Loop
+    # the strip so combinations like ``biology, thanks please`` peel
+    # cleanly.
+    _TRAILING_POLITENESS_RE = (
+        r"\s*[,;.!?]?\s*"
+        r"(?:please|kindly|thanks(?:\s+a\s+lot)?|thank\s+(?:you|u))"
+        r"\s*[,;.!?]*\s*$"
+    )
+
+    @classmethod
+    def _strip_trailing_politeness(cls, query: str) -> str:
+        """Peel trailing politeness tokens (``please`` / ``thanks`` /
+        ``thank you`` / ``kindly``) off ``query``. Idempotent; loops
+        until a pass produces no change so combinations like
+        ``biology, thanks please`` strip in one call.
+        """
+        for _ in range(4):
+            before = query
+            query = safe_regex_sub(
+                cls._TRAILING_POLITENESS_RE,
+                "",
+                query,
+                flags=re.IGNORECASE,
+            ).strip()
+            if query == before:
+                break
+        return query
+
     @classmethod
     def parse_intent(cls, query: str) -> Tuple[str, Dict[str, Any], float]:
         """Parse a natural language query to determine intent.
@@ -718,6 +769,11 @@ class IntentParser:
         Returns:
             Tuple of (intent_type, extracted_params, confidence_score)
         """
+        # Post-a20 PD2-1: peel trailing politeness BEFORE pattern
+        # matching + extraction so every extractor sees the cleaned
+        # query. See ``_TRAILING_POLITENESS_RE`` above for rationale +
+        # sibling-defect enumeration.
+        query = cls._strip_trailing_politeness(query)
         query_lower = query.lower()
 
         # Collect all matching patterns

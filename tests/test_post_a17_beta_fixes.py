@@ -69,6 +69,16 @@ class TestP1D1TitleSpansConnectorSuppression:
     """
 
     def _make_handler(self, top_title: str) -> SimpleToolsHandler:
+        """Post-a20 P1-D2: the alias-fallback in
+        ``_soft_connector_footer`` now also calls
+        ``find_entry_by_title_data`` to check whether a connector half
+        title-resolves to ``top_path``. A blanket ``return_value`` would
+        falsely report that every half (incl. ``Berlin``, ``Mozart``)
+        resolves to ``top_path``, silently suppressing footers that real
+        archives would still emit. Use a ``side_effect`` so only lookups
+        for ``top_title`` (or the full chained topic) hit the score-1.0
+        path — unrelated half-lookups fall back to empty.
+        """
         path = top_title.replace(" ", "_")
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
@@ -78,10 +88,24 @@ class TestP1D1TitleSpansConnectorSuppression:
             "total": 1,
         }
         mock.get_zim_entry.return_value = "stub-body"
-        mock.find_entry_by_title_data.return_value = {
-            "results": [{"path": path, "title": top_title, "score": 1.0}],
-            "total": 1,
-        }
+        top_title_lower = top_title.lower()
+
+        def _title_lookup(
+            _zim: str,
+            title: str,
+            *,
+            cross_file: bool = False,
+            limit: int = 1,
+        ) -> dict[str, Any]:
+            q = (title or "").lower()
+            if q == top_title_lower or top_title_lower in q:
+                return {
+                    "results": [{"path": path, "title": top_title, "score": 1.0}],
+                    "total": 1,
+                }
+            return {"results": [], "total": 0}
+
+        mock.find_entry_by_title_data.side_effect = _title_lookup
         return SimpleToolsHandler(mock)
 
     def test_comma_title_with_subject_attribute_prefix_suppresses(self) -> None:
