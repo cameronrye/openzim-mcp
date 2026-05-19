@@ -145,6 +145,39 @@ class TestP1D1TitleSpansConnectorSuppression:
         )
         assert "query contained" not in out
 
+    def test_pass2_slash_connector_in_title_suppresses(self) -> None:
+        # Pass-2 self-audit: same shape with a different connector
+        # — ``TCP/IP stack tutorial`` resolved to ``TCP/IP`` (title
+        # spans the slash). Pre-fix: would fire because "stack
+        # tutorial" isn't in the title. Post-fix: title contains
+        # ``/`` → suppress.
+        handler = self._make_handler(top_title="TCP/IP")
+        out = handler.handle_zim_query(
+            "tell me about TCP/IP stack tutorial",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert "query contained" not in out
+
+    def test_pass2_topic_with_no_connector_in_title_still_fires(
+        self,
+    ) -> None:
+        # Pass-2: defensive — when the title lacks the topic's
+        # connector entirely, the new suppression must NOT swallow
+        # the legitimate footer. ``Beethoven and Mozart`` resolved
+        # to ``Beethoven`` (no ``and`` in title) → substring tests
+        # fire normally → footer surfaces the dropped ``Mozart``
+        # half.
+        handler = self._make_handler(top_title="Beethoven")
+        out = handler.handle_zim_query(
+            "tell me about Beethoven and Mozart",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        # Title "Beethoven" doesn't span the connector → fires as before.
+        assert "query contained" in out
+        assert "Mozart" in out
+
 
 # ---------------------------------------------------------------------------
 # P1-D2: Unicode-aware tail / window tokenisation
@@ -211,6 +244,32 @@ class TestP1D2UnicodeTailTokenisation:
         # Regression guard: numeric tokens still form their own tokens.
         tails = list(iter_query_tails("Apollo 11"))
         assert tails == ["apollo 11", "11"]
+
+    def test_pass2_empty_topic_returns_no_tails(self) -> None:
+        # Pass-2 defensive: empty / whitespace topic must not yield
+        # tails to probe.
+        assert list(iter_query_tails("")) == []
+        assert list(iter_query_tails("   ")) == []
+
+    def test_pass2_mixed_latin_unicode_topic(self) -> None:
+        # Pass-2: mixed ASCII + non-Latin topic. ``New München``
+        # tokenises to two tokens (``new``, ``münchen``) so tail-
+        # probing tries "new münchen" then "münchen" — both Unicode-
+        # preserving.
+        tails = list(iter_query_tails("New München"))
+        assert tails == ["new münchen", "münchen"]
+
+    def test_pass2_single_unicode_char_topic(self) -> None:
+        # Pass-2: a topic that is JUST a single non-Latin character
+        # ("ñ") tokenises to one token preserving the character.
+        tails = list(iter_query_tails("ñ"))
+        assert tails == ["ñ"]
+
+    def test_pass2_punctuation_preserved_as_boundary_not_token(self) -> None:
+        # Pass-2: punctuation other than underscore still acts as a
+        # boundary (hyphens, apostrophes, commas, periods).
+        assert list(iter_query_tails("O'Brien")) == ["o brien", "brien"]
+        assert list(iter_query_tails("Coca-Cola")) == ["coca cola", "cola"]
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +423,69 @@ class TestP1D3WalkNamespaceCursorRoundTrip:
         assert cursor_state["ai"] == "deadbeefcafe"
         assert cursor_state["ns"] == "M"
         assert cursor_state["scan_at"] == 5
+
+    def test_pass2_cross_archive_cursor_still_rejected(self) -> None:
+        """Pass-2 self-audit: preserving ``ai`` must NOT weaken
+        cross-archive enforcement. When a cursor's ``ai`` is preserved
+        but doesn't match the current archive, the data-layer
+        ``verify_archive_identity`` should now raise the proper
+        "different archive" error (whereas pre-fix it raised
+        "missing archive-identity field"). The shape of the error
+        message is what changes; rejection still happens.
+
+        We exercise the dispatcher path here — when the rebuilt
+        cursor_state carries an ``ai`` field, the data layer's check
+        sees it. Production behaviour (raising
+        CursorMismatchError) is covered by the existing
+        walk_namespace_data tests in tests/test_pagination.py and
+        below by inspection of the rebuilt state.
+        """
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        captured: dict[str, Any] = {}
+
+        def fake_walk(
+            zim_file_path: str,
+            namespace: str,
+            *,
+            cursor_state: Any = None,
+            limit: int = 200,
+        ) -> dict[str, Any]:
+            captured["cursor_state"] = cursor_state
+            return {
+                "namespace": namespace,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 0, "limit": limit, "returned_count": 0},
+                "discovery_method": "full_iteration",
+                "sampling_based": False,
+                "results_may_be_incomplete": False,
+            }
+
+        mock.walk_namespace_data.side_effect = fake_walk
+        handler = SimpleToolsHandler(mock)
+        cursor_token = self._encode_walk_cursor(
+            offset=3, limit=3, namespace="M", ai="WRONG_ARCHIVE"
+        )
+        handler.handle_zim_query(
+            "walk namespace M",
+            zim_file_path="/x.zim",
+            options={"compact": True, "cursor": cursor_token},
+        )
+        # The wrong-archive ``ai`` is still propagated through; the
+        # data layer (not under test here — only the dispatcher
+        # contract is) raises CursorMismatchError on the mismatch.
+        cursor_state = captured["cursor_state"]
+        assert cursor_state is not None
+        assert cursor_state["ai"] == "WRONG_ARCHIVE", (
+            "Dispatcher must preserve the cursor's ai verbatim — the "
+            "data layer is the only place that knows the expected ai "
+            "for the resolved archive path, so the check must run "
+            "there with the real value."
+        )
 
     def test_no_cursor_means_no_cursor_state(self) -> None:
         """Regression guard: when no cursor is passed and offset=0,
