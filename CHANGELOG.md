@@ -5,6 +5,177 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a21] — 2026-05-19 (alpha pre-release) — post-a20 beta-test sweep — 6 live-Wikipedia defects across three passes
+
+Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
+the freshly-deployed `v2.0.0a20` build, plus a live small-model
+failure transcript review. Pass 1 confirmed all nine prior fixes
+(post-a17 P1-D1/P1-D2/P1-D3, post-a18 P3-D1/P3-D2/P1-D4, post-a19
+P1-D1/P1-D2/P1-D3) still work as designed in production, then
+surfaced two new defects. Pass 2 wave 1 widened probe coverage to
+politeness wrappers across all simple-mode intents (one defect).
+Pass 2 wave 2 reviewed a Qwen3-8B-Q4 failure transcript and
+surfaced three more defects — a docstring-bait hallucinated path
+that dropped small models into a retry loop. Pass 3 source-level
+audit found zero new siblings across all six fix sites.
+
+All six defects follow either the recurring **"fixes unlock
+previously-broken code paths"** pattern (P1-D1, P1-D2, PD2-1
+landed on surfaces a20's three landed fixes opened up) or the
+**"weak-instruction-follower defect class"** pattern (PD2-2/3/4 —
+small-model behaviour that adversarial query probes structurally
+can't reach). The latter shape is new to the methodology and is
+captured in the post-a20 refinement: live-transcript review should
+join live-MCP probing as a recurring sweep input.
+
+### Fixed
+
+- **Cross-tool cursor reuse with stuffed `s.q` now reports
+  tool-mismatch instead of q-mismatch** (P1-D1). The dispatcher's
+  cursor-decode block runs the cursor's `s.q` overlap check before
+  any handler-level `_cursor_tool_mismatch` guard fires. When a
+  cross-tool cursor carries an `s.q` field (a hand-stuffed
+  walk_namespace cursor with `s.q="biology"` passed to `search for
+  photosynthesis`, or a real search cursor reused with a different
+  tool), the dispatcher previously emitted the misleading "Cursor
+  was issued for query X; current request shares no terms" error
+  and advised the user to start the search over — even though the
+  cursor was from a different tool entirely. Fix: scope the
+  dispatcher's q-overlap check to cursors whose `t` claims a
+  q-emitting tool (`search_zim_file` / `search_with_filters` — the
+  only `Cursor.encode` callsites that put `s.q` in their envelope).
+  Cursors claiming `walk_namespace` / `browse_namespace` /
+  `extract_article_links` now pass through the dispatcher's
+  q-check; the handler-edge guard emits the correct
+  `Cursor / Tool Mismatch` diagnosis.
+
+- **Soft-connector footer now suppresses for asymmetric alias
+  cases** (P1-D2). `_soft_connector_footer`'s post-a18 P3-D2
+  alias-fallback was gated on `not left_in and not right_in` — it
+  only ran when BOTH halves missed the substring check. The
+  asymmetric case (one half matches substring, the other matches
+  only via title alias) slipped through:
+  `tell me about Köln or Cologne` returned the Cologne article
+  with a footer suggesting `tell me about Köln`, but Köln's
+  title-index entry redirects back to Cologne — a 2-hop journey
+  to the same article. Same shape reproduced for `京都 or Kyoto`,
+  `上海 or Shanghai`, `München or Munich`, `Москва or Moscow`,
+  `Αθήνα or Athens`, and their reverse-order variants. Fix:
+  widen the gate to `not (left_in and right_in)` so the alias
+  probe runs whenever either half misses substring. The probe
+  still only upgrades a half whose top-scored title-index hit
+  equals `top_path`, so genuinely different chain halves
+  (`Berlin and 東京`) still surface the footer correctly. The
+  irreducible `東京 or Tokyo` case stays unsuppressed — `東京`
+  has its own disambig article that doesn't alias to `Tokyo`.
+
+- **Trailing politeness now strips across all simple-mode
+  intents** (PD2-1). Pre-fix, `tell_me_about` was the only
+  intent that stripped trailing `please` / `kindly` / `thanks` /
+  `thank you`. Every other extractor that captured the topic with
+  a greedy end-anchored pattern (`_extract_search`,
+  `_extract_search_all`, `_extract_find_by_title`,
+  `_extract_related`, `_extract_suggestions`,
+  `_extract_entry_path_keyworded` — feeding get_article / links /
+  structure / toc / summary, plus `_extract_get_zim_entries` /
+  `_extract_get_section`) silently swallowed the politeness:
+  `search for biology please` searched for `"biology please"`
+  (ranking `Thanks Maa` above `Biology`); `find article titled
+  Berlin please` looked up `"Berlin please"` (not found);
+  `links in Photosynthesis please` and `show structure of
+  Photosynthesis please` showed the same shape. Comma forms
+  (`"biology, please"`) and combinations
+  (`"biology, thanks please"`) reproduced too. Fix: lift the
+  trailing-politeness strip into `IntentParser.parse_intent` at
+  the entry point — a single end-anchored regex, looped so
+  combinations peel cleanly, runs before pattern matching +
+  extractor dispatch. Legitimate content uses
+  (`search for "Please Understand Me"` — song title) are
+  unaffected because the strip is end-anchored and quoted phrases
+  enclose the content.
+
+- **`zim_query` tool docstring no longer contains a literal-
+  looking path example** (PD2-2). The parameter description for
+  `zim_file_path` previously included
+  `(e.g. /data/wikipedia_en_all_maxi.zim)` as an illustrative
+  path. Small models with weak instruction-following parse "e.g."
+  inconsistently and routinely copied the example as the actual
+  `zim_file_path` value. Real archives are date-suffixed in
+  production (`wikipedia_en_all_maxi_2026-02.zim`) so the
+  basename doesn't match either. Live transcript captured
+  Qwen3-8B-Q4 doing exactly this and dropping into a
+  `File does not exist` retry loop with no recovery signal.
+  Fix: rewrote the docstring to lead with
+  **Omit entirely (recommended)**, dropped the literal path
+  example, added an explicit "do NOT invent a path from this
+  docstring" line. A regression test pins the absence of the
+  bait string so any future docstring edit reintroducing it
+  fails CI.
+
+- **`_normalize_zim_file_path` auto-selects when single archive
+  loaded, even for slashed candidates** (PD2-3). The previous
+  contract (H14: "explicit paths must reach the backend so it can
+  surface a clearer error") only made sense when there was
+  genuine ambiguity about which archive the caller wanted —
+  single-archive setups have none. Pre-fix, a slashed candidate
+  that didn't match anything still fell through to the backend in
+  single-archive setups, producing the same `File does not exist`
+  error that small models can't act on. Fix: when the candidate
+  matches nothing via path-or-basename AND exactly one archive
+  is loaded, auto-select regardless of separator. Multi-archive
+  setups still preserve the candidate so the backend error
+  surfaces and PD2-4 enriches it with the actual listing — H14
+  narrowed but intact for the case it was actually defending.
+
+- **"ZIM File Not Found" error now surfaces real archive paths
+  and the omit-to-auto-select recovery** (PD2-4). The catch-all
+  in `handle_zim_query` previously emitted a generic four-step
+  troubleshooting block that gave small models no learning
+  signal — they just retried with the same args. Fix: detect the
+  `validate_zim_file` exception family (`File does not exist` /
+  `Path is not a file` / `is not a zim file` / `Access denied`)
+  and replace the template with a `ZIM File Not Found` shape:
+  single-archive setups get "omit the parameter — only one
+  archive loaded" + the actual path (defence-in-depth alongside
+  PD2-3); multi-archive setups get a bulleted listing of real
+  archive paths with "pass one verbatim" guidance. The generic
+  template's step 1 was also rewritten to suggest
+  "omit `zim_file_path`" as the canonical fix.
+
+### Tests
+
+- 65 new regression tests in `tests/test_post_a20_beta_fixes.py`
+  covering all six defects plus the edge cases probed live
+  (reverse-order alias variants, irreducible Tokyo disambig,
+  multi-archive H14 preservation, zero archives edge case,
+  defence-in-depth backend-failure paths, quoted-inner-please
+  content preservation, etc.).
+- 4 existing H14 tests updated to reflect the narrowed-to-multi-
+  archive contract (single-archive auto-select + multi-archive
+  preserve split into separate cases).
+- 4 mock-realism updates in post-a16 / post-a17 test files (the
+  widened P1-D2 alias-fallback calls the title backend for
+  connector halves, so the blanket `return_value` mocks that
+  reported every half resolves to `top_path` now use per-title
+  `side_effect`).
+
+Full suite: 1902 passed, 50 skipped.
+
+### Methodology refinement (post-a20)
+
+Live-transcript review is a distinct test surface from live-MCP
+probing. The Qwen3-8B-Q4 transcript captured PD2-2 (a
+docstring-bait hallucination source) that adversarial query
+probes structurally couldn't reach — the bait was in the TOOL
+DESCRIPTION, not in any user query. The transcript also exposed
+PD2-4 ("no learning signal on retry" failure mode) that mocked
+tests can't easily catch. Future sweeps should incorporate
+small-model transcript review when available — the marginal
+cost is low and the defect class it catches
+(tool-self-described hallucination sources + error-message-
+quality issues for weak-instruction-follower models) is
+otherwise invisible.
+
 ## [2.0.0a20] — 2026-05-19 (alpha pre-release) — post-a19 beta-test sweep — 3 live-Wikipedia defects across one pass
 
 Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
