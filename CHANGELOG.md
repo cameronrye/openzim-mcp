@@ -5,6 +5,140 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a18] — 2026-05-18 (alpha pre-release) — post-a17 beta-test sweep — 3 live-Wikipedia defects across two passes
+
+Pass 1 (live-MCP, against the freshly-shipped `v2.0.0a17` build on
+`wikipedia_en_all_maxi_2026-02.zim`) surfaced three user-facing
+defects. Pass 2 source-level self-audit (sibling grep for the
+landed fix shapes + edge-case unit tests) found zero new defects.
+
+A live-MCP pass-3 reprobe is deferred until this release deploys — the
+MCP server in the sweep environment couldn't be restarted mid-session
+to load the new build. The recent post-a16 methodology refinement
+(live-MCP catches a defect class unit tests structurally cannot)
+should still apply for that follow-up pass.
+
+### Fixed
+
+- **`_soft_connector_footer` false-fires on titles that
+  structurally span the connector** (P1-D1). Queries like
+  `notable people from Big Rapids, Michigan` resolved correctly to
+  the `Big_Rapids,_Michigan` article (a single entity whose title
+  literally contains the comma) but the footer claimed the article
+  for `Michigan` was returned and told the caller to query
+  separately for `notable people from Big Rapids`. Same shape for
+  `musicians from Romeo and Juliet` → "for Juliet". The existing
+  `left_in == right_in` suppression only catches the
+  both-halves-in-title case; a subject-attribute prefix
+  (`notable people from`, `musicians from`) leaves the left half
+  longer than the title and defeats it. Fix adds an earlier
+  title-spans-connector suppression: when `top_title` matches the
+  same connector regex as the topic, the connector is structural
+  to the title and the footer is suppressed. The docstring already
+  named `Vienna, Austria` as a case this should fire for; the new
+  guard makes it work in the prefixed-topic shape too.
+- **Non-Latin topic strings resolved to wrong articles at
+  cert=0.85** (P1-D2 — critical). `tell me about München` returned
+  the `M` letter article; `tell me about Zürich` returned the
+  `Rich` disambig; `tell me about Köln` returned the `LN`
+  abbreviation. Root cause: `_TAIL_TOKEN_RE = [a-z0-9]+` in
+  `openzim_mcp/title_promotion.py` stripped non-ASCII characters,
+  so `iter_query_tails("München")` yielded `["m", "nchen"]` and
+  `iter_query_windows` then yielded `"m"`, which
+  `find_title_match("m")` cleanly resolved to the `M` letter
+  article at score 1.0. The backend `find_entry_by_title_data`
+  natively handles Unicode topics (`find article titled München`
+  resolves to Munich at score 1.00) — only the tokenisation layer
+  destroyed the topic before the backend saw it. Fix: switch
+  `_TAIL_TOKEN_RE` to `[^\W_]+` (Unicode-aware `\w` minus
+  underscore, so underscore still acts as a token boundary for
+  path-form input like `Big_Rapids,_Michigan`).
+- **`walk namespace M` cursor round-trip false-failed with
+  "missing archive-identity field"** (P1-D3). Paging walk_namespace
+  by passing back the `next_cursor` it just emitted produced
+  `Error: Cursor for 'walk_namespace' missing archive-identity
+  field. Re-issue the request without a cursor.` even though the
+  cursor (decoded) carried `{"v":2,"t":"walk_namespace","s":
+  {"o":3,"l":3,"ns":"M","ai":"e048666a9e92"}}`. The simple-tools
+  cursor dispatcher decoded the cursor and stashed only
+  `state["o"]` (as `options["offset"]`) and `state["ns"]` (as
+  `options["_cursor_ns"]`), dropping `ai`.
+  `_handle_walk_namespace` then rebuilt cursor_state as
+  `{scan_at, l}` without `ai`; downstream `walk_namespace_data`
+  called `verify_archive_identity` unconditionally and raised
+  "missing" because the field was gone. Fix: stash `state["ai"]`
+  (and re-stash `state["ns"]`) into options at decode time;
+  `_handle_walk_namespace` includes them in the rebuilt
+  cursor_state when present. The data-layer guard now has the real
+  `ai` to compare against and properly distinguishes "missing"
+  from "cross-archive mismatch". Browse_namespace didn't surface
+  the same failure because its handler passes `offset` directly
+  (no cursor_state envelope) and the browse data layer only
+  verifies archive identity when an explicit
+  `cursor_archive_identity` kwarg is passed — which the
+  simple-tools handler doesn't pass.
+
+### Tests
+
+21 regression tests in `tests/test_post_a17_beta_fixes.py`:
+
+- **P1-D1** (6): comma title with subject-attribute prefix
+  suppresses; `and` title with subject-attribute prefix
+  suppresses; genuine two-entity query still emits the footer;
+  pre-fix both-halves-in-title still suppresses; slash-connector
+  title-spans suppression (pass-2); no-connector-in-title still
+  fires (pass-2).
+- **P1-D2** (11): München / Zürich / Köln tokenise as single
+  Unicode tokens; multi-word Unicode topic preserved; ASCII path
+  unchanged (regression guard for the original `big rapids
+  michigan` example); underscore boundary preserved; digits
+  preserved; empty topic (pass-2); mixed Latin + non-Latin
+  (pass-2); single non-Latin char (pass-2); punctuation as
+  boundary (pass-2).
+- **P1-D3** (4): end-to-end cursor round-trip carries `ai`;
+  dispatcher stashes `_cursor_ai` into options; no-cursor case
+  preserved (cursor_state stays None); cross-archive `ai`
+  mismatch propagated correctly (pass-2 — preserving `ai` must
+  not weaken the cross-archive enforcement guard).
+
+Full test suite: **1814 passed, 50 skipped**.
+
+### Deferred
+
+- **P1-D4** (lower priority): `browse_namespace` silently accepts
+  cursors emitted by `walk_namespace` (cross-tool reuse at the
+  simple-tools dispatcher layer; the advanced tools already
+  enforce). Not user-facing critical — simple-tools reads
+  `state["o"]` and walks browse from that offset, which for the
+  metadata namespace coincidentally produces a continuation page.
+  A defence-in-depth follow-up would stash `state["t"]` and add a
+  `_cursor_t_mismatch` check alongside the existing
+  `_cursor_ns_mismatch`. Filed as follow-up rather than bundled
+  here to keep the sweep tight.
+
+### Methodology
+
+Two passes (rather than the recent 3–7) because the three landed
+fixes were narrow, well-characterised, and had no live-only
+surfaces that source-level self-audit couldn't cover.
+`_AFFINITY_TOKEN_RE` in `synthesize.py` and
+`_tokenize_for_relevance` in `zim/search.py` use the same ASCII
+pattern as `_TAIL_TOKEN_RE` but are **symmetric** tokenisers (same
+regex applied to both sides of the comparison) — the P1-D2 shape
+is a **unidirectional probe** that destroys the topic before the
+backend sees it, which is structurally different. No siblings.
+`verify_archive_identity` is also called from
+`browse_namespace_data`, `extract_article_links_data`, search
+cursor paths, and structure cursors, but all gate on an explicit
+`cursor_archive_identity` kwarg that the simple-tools handlers
+don't pass; only walk_namespace builds a cursor_state envelope
+whose `ai` the data layer unconditionally checks. No siblings.
+
+PR: [#145](https://github.com/cameronrye/openzim-mcp/pull/145).
+Commits on the sweep branch: `d42213b` (pass-1 fixes + 14 tests),
+`8f8a44e` (pass-2 self-audit + 7 edge-case tests), `e59b953` /
+`2f71bba` (CI lint fixes — F401 unused-imports / isort).
+
 ## [2.0.0a17] — 2026-05-18 (alpha pre-release) — post-a16 sweep + empty-lead fallback + subject-attribute decomposition (four waves)
 
 Sixteen commits across four sweep waves on top of `v2.0.0a16`. Waves
