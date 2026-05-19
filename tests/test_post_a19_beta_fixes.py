@@ -49,6 +49,18 @@ from unittest.mock import MagicMock
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.simple_tools import SimpleToolsHandler
 
+
+def _encode_cursor(tool: str, **state_fields: Any) -> str:
+    """Encode a v2 cursor for ``tool`` from arbitrary ``s.*`` fields.
+
+    A single parameterised helper keeps cursor-shape knowledge in one
+    place — the test surface mirrors the production encoder, where
+    every cursor-emitting tool calls ``Cursor.encode(tool=..., state=...)``
+    with its own ``s.*`` envelope.
+    """
+    return Cursor.encode(tool=tool, state=state_fields)  # type: ignore[arg-type]
+
+
 # ---------------------------------------------------------------------------
 # P1-D1: search silently consumes cross-tool cursor's offset
 # ---------------------------------------------------------------------------
@@ -61,38 +73,6 @@ class TestP1D1SearchCrossToolCursorRejection:
     cursor-offset results instead of its own page 1.
     """
 
-    def _encode_walk_cursor(
-        self, *, offset: int, limit: int, namespace: str, ai: str
-    ) -> str:
-        state: dict[str, Any] = {
-            "o": offset,
-            "l": limit,
-            "ns": namespace,
-            "ai": ai,
-        }
-        return Cursor.encode(tool="walk_namespace", state=state)  # type: ignore[arg-type]
-
-    def _encode_browse_cursor(
-        self, *, offset: int, limit: int, namespace: str, ai: str
-    ) -> str:
-        state: dict[str, Any] = {
-            "o": offset,
-            "l": limit,
-            "ns": namespace,
-            "ai": ai,
-        }
-        return Cursor.encode(tool="browse_namespace", state=state)  # type: ignore[arg-type]
-
-    def _encode_search_cursor(
-        self, *, offset: int, ai: str, query: str = "photosynthesis"
-    ) -> str:
-        state: dict[str, Any] = {
-            "o": offset,
-            "q": query,
-            "ai": ai,
-        }
-        return Cursor.encode(tool="search_zim_file", state=state)  # type: ignore[arg-type]
-
     def test_walk_cursor_passed_to_search_is_rejected(self) -> None:
         # Pre-fix: silently applied walk's offset to the search;
         # search backend returned results 4-6 instead of 1-3.
@@ -100,8 +80,8 @@ class TestP1D1SearchCrossToolCursorRejection:
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.config.meta.footer_enabled = False
         handler = SimpleToolsHandler(mock)
-        cursor_token = self._encode_walk_cursor(
-            offset=3, limit=3, namespace="M", ai="e048666a9e92"
+        cursor_token = _encode_cursor(
+            "walk_namespace", o=3, l=3, ns="M", ai="e048666a9e92"
         )
         out = handler.handle_zim_query(
             "search for Photosynthesis",
@@ -121,8 +101,8 @@ class TestP1D1SearchCrossToolCursorRejection:
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.config.meta.footer_enabled = False
         handler = SimpleToolsHandler(mock)
-        cursor_token = self._encode_browse_cursor(
-            offset=3, limit=3, namespace="M", ai="e048666a9e92"
+        cursor_token = _encode_cursor(
+            "browse_namespace", o=3, l=3, ns="M", ai="e048666a9e92"
         )
         out = handler.handle_zim_query(
             "search for Berlin",
@@ -161,8 +141,8 @@ class TestP1D1SearchCrossToolCursorRejection:
 
         mock.search_zim_file_data.side_effect = fake_search
         handler = SimpleToolsHandler(mock)
-        cursor_token = self._encode_search_cursor(
-            offset=3, ai="e048666a9e92", query="photosynthesis"
+        cursor_token = _encode_cursor(
+            "search_zim_file", o=3, q="photosynthesis", ai="e048666a9e92"
         )
         out = handler.handle_zim_query(
             "search for photosynthesis",
@@ -213,24 +193,13 @@ class TestP1D2FilteredSearchAndLinksCrossToolCursorRejection:
     offset-reading is ever added).
     """
 
-    def _encode_walk_cursor(
-        self, *, offset: int, limit: int, namespace: str, ai: str
-    ) -> str:
-        state: dict[str, Any] = {
-            "o": offset,
-            "l": limit,
-            "ns": namespace,
-            "ai": ai,
-        }
-        return Cursor.encode(tool="walk_namespace", state=state)  # type: ignore[arg-type]
-
     def test_walk_cursor_passed_to_filtered_search_is_rejected(self) -> None:
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.config.meta.footer_enabled = False
         handler = SimpleToolsHandler(mock)
-        cursor_token = self._encode_walk_cursor(
-            offset=3, limit=3, namespace="M", ai="e048666a9e92"
+        cursor_token = _encode_cursor(
+            "walk_namespace", o=3, l=3, ns="M", ai="e048666a9e92"
         )
         out = handler.handle_zim_query(
             "search Berlin in namespace C",
@@ -250,8 +219,8 @@ class TestP1D2FilteredSearchAndLinksCrossToolCursorRejection:
         # Make natural-language path resolution a no-op.
         mock.find_entry_by_title_data.return_value = {"hits": []}
         handler = SimpleToolsHandler(mock)
-        cursor_token = self._encode_walk_cursor(
-            offset=3, limit=3, namespace="M", ai="e048666a9e92"
+        cursor_token = _encode_cursor(
+            "walk_namespace", o=3, l=3, ns="M", ai="e048666a9e92"
         )
         out = handler.handle_zim_query(
             "links in Photosynthesis",
