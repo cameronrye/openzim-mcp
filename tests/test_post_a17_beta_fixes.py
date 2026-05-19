@@ -52,7 +52,6 @@ from openzim_mcp.pagination import Cursor
 from openzim_mcp.simple_tools import SimpleToolsHandler
 from openzim_mcp.title_promotion import iter_query_tails, iter_query_windows
 
-
 # ---------------------------------------------------------------------------
 # P1-D1: title-spans-connector suppresses soft-connector footer
 # ---------------------------------------------------------------------------
