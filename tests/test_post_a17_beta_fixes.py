@@ -45,13 +45,10 @@ Each test pins one defect; failures here mean a regression on the
 specific bug.
 """
 
-import base64
-import json
-import re
 from typing import Any
 from unittest.mock import MagicMock
 
-from openzim_mcp.pagination import Cursor, archive_identity
+from openzim_mcp.pagination import Cursor
 from openzim_mcp.simple_tools import SimpleToolsHandler
 from openzim_mcp.title_promotion import iter_query_tails, iter_query_windows
 
