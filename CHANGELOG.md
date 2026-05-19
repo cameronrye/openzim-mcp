@@ -5,6 +5,111 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a19] — 2026-05-19 (alpha pre-release) — post-a18 beta-test sweep — 3 live-Wikipedia defects across two passes
+
+Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
+the freshly-deployed `v2.0.0a18` build. Pass 1 confirmed all three
+a18 fixes (P1-D1 soft-connector title-spans, P1-D2 Unicode tail
+tokenisation, P1-D3 walk-namespace cursor `ai` preservation) work
+as designed in production, then surfaced three new user-facing
+defects. Pass 2 source-level self-audit found zero new defects.
+
+Both P3-D1 and P3-D2 are **examples of a recurring pattern**: fixes
+that unlock previously-broken code paths surface new defects in
+those paths. Neither was reachable from the canonical reproducers
+before a18 because the Unicode tokenisation defect intercepted
+every non-Latin topic earlier in the pipeline.
+
+### Fixed
+
+- **Subject-attribute section dominated by table placeholders falls
+  back to recovery pointer** (P3-D1). `musicians from München`
+  resolved correctly via the new Unicode tail probe to Munich,
+  then subject-attribute decomposition fired on the Notable people
+  section. But that section is two H3 sub-tables
+  (`Born in Munich` / `Notable residents`) which compact mode
+  renders as `[Table N: M rows x P cols - pass compact=False to
+  expand]` placeholders. The LLM got zero substantive content
+  from a query that should list musicians — exactly the
+  content-less-response shape wave 4's empty-lead fallback was
+  designed to prevent. The bundle `get_section_data` reads is
+  always built with `compact=True` (`openzim_mcp/bundle.py:307`),
+  so the section can't be re-emitted with tables expanded.
+  `_maybe_render_subject_section` now detects placeholder
+  dominance (≥1 placeholder AND <100 chars of substantive prose
+  after stripping them) and substitutes a `compact=False`
+  recovery pointer that names the exact call to make. Telemetry
+  counter `subject_attribute_table_dominated` for future tuning.
+- **Soft-connector footer recognises non-Latin halves via title-
+  alias fallback** (P3-D2). `tell me about Berlin and München`
+  resolved correctly to Munich (right-promote), but the soft-
+  connector footer was silently suppressed. The substring check
+  `"berlin" in "munich"` is False; `"münchen" in "munich"` is
+  also False because the title-alias index crosses the Unicode +
+  language boundary (München → Munich) and substring matching
+  can't see through that. So `left_in == right_in == False` hit
+  the "neither in title — unclear which was picked" suppression
+  branch. User never learned Berlin was dropped. Fix: when both
+  halves fail substring, fall back to title-alias probing — probe
+  the title index for each half, and if a half's top-scored hit
+  resolves to `top_path`, treat that half as "in title"
+  semantically. Cheap (in-memory title-index lookup) and only
+  fires on the rare both-missed branch. The legacy positional-only
+  call signature (without `zim_file_path` / `top_path` kwargs)
+  continues to work — alias fallback is gated on those kwargs.
+- **Cross-tool cursor reuse rejected at simple-tools handler
+  edge** (P1-D4 — deferred from the post-a17 sweep).
+  `walk namespace M` emits a cursor; passing that cursor to
+  `browse namespace M` previously walked browse silently from
+  walk's offset (=3 in the canonical reproducer), returning
+  entries 4-6 and emitting a fresh `browse_namespace` cursor as
+  if nothing was wrong. The simple-tools dispatcher had decoded
+  only `s.o` and `s.ns` from any received cursor, ignoring `s.t`
+  (issuing tool). The advanced tools already enforce tool-binding
+  via `Cursor.decode(expected_tool=...)`. Fix: stash
+  `decoded_payload.get("t")` into `options["_cursor_t"]` at decode
+  time; add the `_cursor_tool_mismatch` helper alongside the
+  existing `_cursor_ns_mismatch`; fire it at the top of both
+  `_handle_browse` and `_handle_walk_namespace` (defence-in-depth
+  for the symmetric direction). User now sees a clear
+  `Cursor / Tool Mismatch` rejection before any backend call.
+
+### Tests
+
+9 regression tests in `tests/test_post_a18_beta_fixes.py`:
+
+- **P3-D1** (3): table-dominated falls back to recovery pointer;
+  prose + 1 table returns body unchanged; zero tables unchanged.
+- **P3-D2** (3): alias-resolved half makes the footer fire;
+  neither-half-resolves still suppresses; legacy positional-only
+  call signature still works.
+- **P1-D4** (3): walk cursor passed to browse → rejected; browse
+  cursor passed to walk → rejected; same-tool round-trip preserves
+  the post-a17 P1-D3 fix.
+
+Full test suite: **1823 passed, 50 skipped** (up from 1814 in a18).
+
+### Pass-2 source-level audit (no siblings)
+
+- **P3-D1**: the table-placeholder shape is unique to subject-
+  attribute decomposition. Other content-fetch paths surface
+  tables embedded in larger prose bodies; the defect class is
+  the "single section, all-tables" shape.
+- **P3-D2**: `_soft_connector_footer` is the only substring-in-
+  title site in the codebase. Other footers (disambig twin probe,
+  related extends paths) use exact path/title matching from search
+  results.
+- **P1-D4**: `_handle_search` / `_handle_links` /
+  `_handle_filtered_search` also read `options["offset"]` from any
+  decoded cursor, but they use search-tool offsets that aren't
+  cross-tool meaningful in the same way as walk/browse's shared
+  namespace-offset semantics. Filed as a follow-up opportunity to
+  widen the tool-mismatch guard later if a live probe ever
+  surfaces the issue.
+
+PR: [#147](https://github.com/cameronrye/openzim-mcp/pull/147).
+Commit on the sweep branch: `7be575e` (pass-1 fixes + 9 tests).
+
 ## [2.0.0a18] — 2026-05-18 (alpha pre-release) — post-a17 beta-test sweep — 3 live-Wikipedia defects across two passes
 
 Pass 1 (live-MCP, against the freshly-shipped `v2.0.0a17` build on
