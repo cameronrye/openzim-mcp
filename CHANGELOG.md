@@ -5,6 +5,123 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a20] — 2026-05-19 (alpha pre-release) — post-a19 beta-test sweep — 3 live-Wikipedia defects across one pass
+
+Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
+the freshly-deployed `v2.0.0a19` build. Pass 1 confirmed all six
+prior fixes (post-a17 P1-D1/P1-D2/P1-D3 and post-a18 P3-D1/P3-D2/
+P1-D4) still work as designed in production, then surfaced three
+new user-facing defects. Pass 2 source-level self-audit found
+zero new siblings.
+
+All three defects follow the recurring **"fixes unlock previously-
+broken code paths"** pattern: a17's Unicode tail-tokenisation fix
+made non-Latin topics REACHABLE; a18's soft-connector alias
+fallback + table-dominated subject-attribute fix landed on those
+paths; THIS sweep found that the substantiveness filter guarding
+the soft-connector footer wasn't Unicode-aware (P1-D3) AND that
+the cross-tool cursor guard from a18's P1-D4 hadn't widened to
+the search/filtered-search/links siblings (P1-D1, P1-D2 — the
+deferred follow-up explicitly flagged by post-a18).
+
+### Fixed
+
+- **`search for X` rejects cross-tool cursors** (P1-D1). A
+  `walk_namespace` or `browse_namespace` cursor passed to
+  `search for Photosynthesis` previously decoded `s.o=3` into
+  `options["offset"]` and search returned `showing 4-6 of 4237`
+  instead of `showing 1-3`. Simple-tools-layer mirror of the
+  post-a18 P1-D4 fix that landed for `_handle_browse` /
+  `_handle_walk_namespace`. The advanced `search_zim_file` tool
+  already enforces tool-binding via
+  `Cursor.decode(expected_tool=...)`; this restores the check at
+  the simple-tools handler edge with
+  `_cursor_tool_mismatch(options, "search_zim_file")` at the
+  top of `_handle_search`. User now sees the structured
+  `Cursor / Tool Mismatch` rejection before any backend call.
+- **`search X in namespace C` and `links in X` reject cross-tool
+  cursors** (P1-D2). Same shape in `_handle_filtered_search`:
+  `_cursor_tool_mismatch(options, "search_with_filters")` guard
+  added. Defence-in-depth: `_handle_links` hardcodes `offset=0`
+  today so the live shape didn't reproduce, but it IS a cursor-
+  emitting handler and the guard
+  (`_cursor_tool_mismatch(options, "extract_article_links")`)
+  keeps the boundary consistent with sibling handlers and
+  prevents a future offset-reading change from regressing
+  silently. All four `options.get("offset")` sites in
+  `simple_tools.py` (`_handle_browse`, `_handle_walk_namespace`,
+  `_handle_search`, `_handle_filtered_search`) are now guarded.
+- **Soft-connector footer recognises short non-Latin proper nouns
+  as substantive** (P1-D3). `tell me about Berlin and 東京`
+  resolved correctly to 東京 (right-promote via a18's Unicode
+  tail fix), but the soft-connector footer was silently
+  suppressed because `_is_substantive_topic("東京")` returned
+  False. The ASCII-length-5 heuristic was tuned for English
+  particles (`Then` / `Both` / `Here` / `Now`) and didn't
+  account for non-Latin scripts where each character carries
+  syllable-level lexical weight — `東京` is 2 chars but names
+  the capital of Japan; `Köln` is 4 chars but names Germany's
+  fourth-largest city. Same shape for `京都` / `北京` / `上海`.
+  Fix: keep the original ASCII path (multi-token OR len≥5 OR
+  digit-containing), and add a relaxed branch — when the string
+  contains a non-ASCII letter, accept at len≥2. ASCII
+  abbreviations (`Dr.` / `St.` / `Mt.`) remain rejected because
+  they have no non-ASCII characters; single CJK ideograms (`京`)
+  remain rejected because of the len≥2 floor. Both the chain
+  detector and the soft-connector footer now fire correctly for
+  non-Latin halves.
+
+### Tests
+
+19 regression tests in `tests/test_post_a19_beta_fixes.py`:
+
+- **P1-D1** (4): walk-cursor-to-search rejected; browse-cursor-to-
+  search rejected; same-tool search-cursor round-trips cleanly;
+  no-cursor passthrough unaffected.
+- **P1-D2** (3): walk-cursor-to-filtered-search rejected; walk-
+  cursor-to-links rejected; filtered-search no-cursor passthrough
+  unaffected.
+- **P1-D3** (12): CJK 2-char accept (`東京` / `北京` / `京都` /
+  `上海`); umlaut 4-char accept (`Köln`); ASCII particles still
+  rejected (`Then` / `Both` / `Here` / `Now` / `This`);
+  abbreviations still rejected (`Dr.` / `St.` / `Mt.` / `Jr.`);
+  single CJK char still rejected (`京` / `北`); regression guards
+  for ASCII long topics, multi-token, digit topics, empty /
+  whitespace; Cyrillic short topic via existing 5-char path +
+  relaxed branch; end-to-end soft-connector footer fires with
+  CJK dropped half + umlaut dropped half.
+
+Full test suite: **1842 passed, 50 skipped** (up from 1823 in a19).
+
+### Pass-2 source-level audit (no siblings)
+
+- **P1-D1 / P1-D2**: all 4 sites in `simple_tools.py` that read
+  `options.get("offset", 0)` (`_handle_browse`,
+  `_handle_walk_namespace`, `_handle_search`,
+  `_handle_filtered_search`) are now guarded by
+  `_cursor_tool_mismatch`. `_handle_search_all` and
+  `_handle_related` don't read `options["offset"]` at all. No
+  siblings remaining.
+- **P1-D3**: `_is_substantive_topic` is called from two sites —
+  the chain detector right-promote branch
+  (`simple_tools.py:983-984`) and `_soft_connector_footer`
+  (`simple_tools.py:1156`). Both benefit from the fix. Searched
+  for other `len(stripped) >= N` ASCII-length heuristics across
+  `simple_tools.py` / `intent_parser.py` / `title_promotion.py` /
+  `synthesize.py`; `intent_parser.py:1012` already has explicit
+  Unicode handling for the analogous `_looks_like_topic_ask`
+  check. No other ASCII-only thresholds on user-provided strings.
+
+Pass-3 live re-probe deferred following the post-a17 methodology:
+the three fixes are narrow handler-edge guards + a pure-function
+heuristic with no cross-module contract changes, no cursor codec
+/ serialization changes. The 19 mock-based regression tests
+cover the exact surfaces a live re-probe would.
+
+PR: [#149](https://github.com/cameronrye/openzim-mcp/pull/149).
+Commits on the sweep branch: `cc9eb64` (pass-1 fixes + tests),
+`8745012` (dedupe cursor encode helpers — Sonar quality gate).
+
 ## [2.0.0a19] — 2026-05-19 (alpha pre-release) — post-a18 beta-test sweep — 3 live-Wikipedia defects across two passes
 
 Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
