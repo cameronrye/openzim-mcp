@@ -107,10 +107,8 @@ guard to every analogue site before merging.
 
 from __future__ import annotations
 
-import inspect
 import re
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -149,7 +147,7 @@ class TestP1D1MultiEntityFirstWordConjunction:
     from a split mid-string — never on the original-leading half.
     """
 
-    def test_split_preserves_first_word_And(self) -> None:
+    def test_split_preserves_first_word_and_literal(self) -> None:
         result = SimpleToolsHandler._split_multi_entity(
             "And Then There Were None and Hercule Poirot and Murder on the Orient Express"
         )
@@ -164,7 +162,7 @@ class TestP1D1MultiEntityFirstWordConjunction:
         assert result[1] == "Hercule Poirot"
         assert result[2] == "Murder on the Orient Express"
 
-    def test_split_preserves_first_word_Or(self) -> None:
+    def test_split_preserves_first_word_or_literal(self) -> None:
         result = SimpleToolsHandler._split_multi_entity(
             "Or Else and Death and Taxes and Pride and Prejudice"
         )
@@ -182,7 +180,7 @@ class TestP1D1MultiEntityFirstWordConjunction:
         assert "Pride" in result
         assert "Prejudice" in result
 
-    def test_split_preserves_first_word_Ampersand(self) -> None:
+    def test_split_preserves_first_word_ampersand_literal(self) -> None:
         # Defensive: an ``& X and Y and Z`` topic shouldn't mangle the
         # leading ``& `` either. The current pattern order doesn't
         # produce this organically, but the exemption should hold for
@@ -297,7 +295,7 @@ class TestP1D2PolitenessSmsVariants:
         ],
     )
     def test_sms_variants_in_full_parse(self, raw: str, expected_query: str) -> None:
-        intent, params, _conf = IntentParser.parse_intent(raw)
+        _intent, params, _conf = IntentParser.parse_intent(raw)
         v = params.get("query") or params.get("title") or ""
         assert (
             v == expected_query
@@ -329,7 +327,68 @@ class TestP1D3QEmittingDriftGuardWiderScope:
     """
 
     @staticmethod
-    def _scan_q_emitting_tools_in_zim() -> set[str]:
+    def _find_call_body(text: str, start: int) -> str | None:
+        """Given ``text`` and ``start`` (position just after the
+        opening ``(`` of a balanced call), return the body up to but
+        not including the matching close paren. Returns None on
+        unbalanced input.
+        """
+        depth = 1
+        i = start
+        while i < len(text) and depth > 0:
+            ch = text[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            i += 1
+        if depth != 0:
+            return None
+        return text[start : i - 1]
+
+    @staticmethod
+    def _state_var_carries_q(text: str, var_name: str, encode_pos: int) -> bool:
+        """Backward-scan up to ~80 lines before ``encode_pos`` for a
+        construction or mutation of ``var_name`` that sets a ``"q"``
+        key. Accepts:
+          * ``var["q"] = ...`` mutation
+          * ``var = {..., "q": ..., ...}`` plain assignment
+          * ``var: Type = {..., "q": ..., ...}`` PEP 526 annotation
+        """
+        line_start = text.rfind("\n", 0, encode_pos)
+        line_no = text.count("\n", 0, line_start)
+        window_start_line = max(0, line_no - 80)
+        lines = text.splitlines()
+        window = "\n".join(lines[window_start_line : line_no + 1])
+        mutation_re = rf'{re.escape(var_name)}\s*\[\s*["\']q["\']\s*\]'
+        if re.search(mutation_re, window):
+            return True
+        # ``var = {...}`` OR ``var: Type = {...}`` (PEP 526 inline
+        # annotation). ``[\s\S]`` allows newlines without enabling
+        # global DOTALL.
+        decl_re = (
+            rf"{re.escape(var_name)}"
+            r"(?:\s*:\s*[^=\n]+?)?"
+            r"\s*=\s*\{[\s\S]*?[\"\']q[\"\']\s*:"
+        )
+        return bool(re.search(decl_re, window))
+
+    @classmethod
+    def _encode_call_emits_q(cls, text: str, body: str, encode_pos: int) -> bool:
+        """Decide whether a single ``Cursor.encode(...)`` body emits a
+        cursor whose state carries a ``"q"`` field. Either the state
+        literal in the body has ``"q":`` directly, or the state
+        references a variable whose construction adds ``"q"``.
+        """
+        if re.search(r'["\']q["\']\s*:', body):
+            return True
+        state_m = re.search(r"state\s*=\s*(?:cast\([^,]+,\s*)?(\w+)", body)
+        if not state_m:
+            return False
+        return cls._state_var_carries_q(text, state_m.group(1), encode_pos)
+
+    @classmethod
+    def _scan_q_emitting_tools_in_zim(cls) -> set[str]:
         """Walk every ``openzim_mcp/zim/*.py`` source file, find
         ``Cursor.encode(tool="X", state={..., "q": ..., ...})``
         callsites, and return the set of tool names whose state
@@ -345,64 +404,15 @@ class TestP1D3QEmittingDriftGuardWiderScope:
         q_emitting: set[str] = set()
         for py in sorted(zim_dir.glob("*.py")):
             text = py.read_text(encoding="utf-8")
-            # Find every "Cursor.encode(" occurrence and walk forward
-            # to the matching close paren.
             for m in re.finditer(r"Cursor\.encode\(", text):
-                start = m.end()
-                depth = 1
-                i = start
-                while i < len(text) and depth > 0:
-                    ch = text[i]
-                    if ch == "(":
-                        depth += 1
-                    elif ch == ")":
-                        depth -= 1
-                    i += 1
-                if depth != 0:
-                    continue  # unmatched — skip
-                body = text[start : i - 1]
-                # Extract tool name.
+                body = cls._find_call_body(text, m.end())
+                if body is None:
+                    continue
                 tool_m = re.search(r'tool\s*=\s*"(\w+)"', body)
                 if not tool_m:
                     continue
-                tool_name = tool_m.group(1)
-                # Check whether the state literal/dict carries "q".
-                # The state can be a literal dict, a variable
-                # (``cursor_state``), or a cast. When it's a variable,
-                # scan backward in the file for the variable's
-                # construction to check for "q" assignment.
-                if re.search(r'["\']q["\']\s*:', body):
-                    q_emitting.add(tool_name)
-                else:
-                    # State is a variable reference — scan a window of
-                    # ~80 lines BEFORE the encode for the variable's
-                    # construction or mutation that sets "q".
-                    state_m = re.search(r"state\s*=\s*(?:cast\([^,]+,\s*)?(\w+)", body)
-                    if not state_m:
-                        continue
-                    var_name = state_m.group(1)
-                    # Bounded backward search.
-                    line_start = text.rfind("\n", 0, m.start())
-                    line_no = text.count("\n", 0, line_start)
-                    window_start_line = max(0, line_no - 80)
-                    lines = text.splitlines()
-                    window = "\n".join(lines[window_start_line : line_no + 1])
-                    if re.search(
-                        rf'{re.escape(var_name)}\s*\[\s*["\']q["\']\s*\]', window
-                    ):
-                        q_emitting.add(tool_name)
-                    else:
-                        # Accept ``var = {...}`` AND ``var: Type = {...}``
-                        # (PEP 526 inline annotation). Allow newlines
-                        # inside the dict literal (re.DOTALL on the
-                        # ``[\s\S]`` class).
-                        decl_re = (
-                            rf"{re.escape(var_name)}"
-                            r"(?:\s*:\s*[^=\n]+?)?"
-                            r"\s*=\s*\{[\s\S]*?[\"\']q[\"\']\s*:"
-                        )
-                        if re.search(decl_re, window):
-                            q_emitting.add(tool_name)
+                if cls._encode_call_emits_q(text, body, m.start()):
+                    q_emitting.add(tool_m.group(1))
         return q_emitting
 
     def test_scan_finds_known_q_emitting_tools(self) -> None:
@@ -479,6 +489,23 @@ class TestP1D4EntryPathDocstringBaitSweep:
             "``<entry_path>`` placeholder convention used elsewhere."
         )
 
+    @staticmethod
+    def _is_legacy_a_namespace_bait_line(line: str) -> bool:
+        """True iff ``line`` is an ``entry_path`` docstring example
+        carrying a legacy ``'A/<word>'`` namespace bait that isn't
+        the special-case ``A/B`` Wikipedia testing article and isn't
+        explicitly documenting the legacy/modern distinction.
+        """
+        line_lower = line.lower()
+        if "entry_path" not in line_lower:
+            return False
+        if "e.g." not in line_lower and "example" not in line_lower:
+            return False
+        m = re.search(r"['\"]A/(\w+)['\"]", line)
+        if not m or m.group(1) == "B":
+            return False
+        return "legacy" not in line_lower and "modern" not in line_lower
+
     def test_no_legacy_a_namespace_entry_path_example(self) -> None:
         # Pass-2 source-level audit (P2-D1 within this sweep): the
         # ``get_section`` docstring originally used ``'A/Berlin'`` as
@@ -501,17 +528,8 @@ class TestP1D4EntryPathDocstringBaitSweep:
         for py in sorted(tools_dir.glob("*.py")):
             text = py.read_text(encoding="utf-8")
             for line_no, line in enumerate(text.splitlines(), start=1):
-                if "entry_path" not in line.lower():
-                    continue
-                if "e.g." not in line.lower() and "example" not in line.lower():
-                    continue
-                m = re.search(r"['\"]A/(\w+)['\"]", line)
-                if m and m.group(1) != "B":
-                    # Allow lines that explicitly document the
-                    # legacy / modern distinction (which is what
-                    # the post-a22 P2-D1 replacement does).
-                    if "legacy" not in line.lower() and "modern" not in line.lower():
-                        offenders.append((py.name, line_no, line.strip()))
+                if self._is_legacy_a_namespace_bait_line(line):
+                    offenders.append((py.name, line_no, line.strip()))
         assert not offenders, (
             "Found legacy ``A/<title>`` namespace bait in tools/ "
             "docstrings — modern ZIMs use ``C/``. Same weak-instruction-"
@@ -564,29 +582,35 @@ class TestP1D5LimitNudgeEnumeratesAllAtomicIntents:
     """
 
     def test_summary_intent_listed(self) -> None:
-        from openzim_mcp.server import OpenZimMcpServer
-
-        # Find the zim_query tool docstring via inspect on the
-        # registration. The docstring lives on the inner async def
-        # zim_query; the easiest entrypoint is to read the server
-        # source directly and assert the enumeration text contains
-        # the three new intents.
+        # The zim_query tool docstring lives on an inner async def
+        # registered at runtime; easiest entrypoint is reading
+        # server.py source directly and asserting the ``limit:``
+        # enumeration block lists the three new atomic-intent markers.
         src_path = Path(__file__).resolve().parents[1] / "openzim_mcp" / "server.py"
         src = src_path.read_text(encoding="utf-8")
-        # Find the "limit:" docstring block.
-        limit_match = re.search(
-            r"limit:\s+Max search/browse results.+?(?=\n\s+\w+:)",
-            src,
-            re.DOTALL,
-        )
-        assert limit_match is not None, (
+        # Anchor on the docstring entry (``limit: Max search/browse
+        # results``) rather than the bare ``limit:`` literal — the
+        # latter also matches the parameter signature ``limit:
+        # Optional[int] = None,`` earlier in the file. Slice forward
+        # to the next ``\n<whitespace><word>:`` parameter label. Two
+        # non-overlapping find()/search() calls instead of a single
+        # regex with ``.+?(?=...)`` so SonarCloud's S6019 (reluctant
+        # quantifier) stays quiet — the regex equivalent works fine
+        # but the explicit two-step is plainer to read.
+        anchor = "limit: Max search/browse results"
+        limit_idx = src.find(anchor)
+        assert limit_idx != -1, (
             "Could not locate `limit:` docstring block in server.py — "
             "did the parameter docstring shape change?"
         )
+        # Search the suffix for the next docstring parameter label.
+        tail_start = limit_idx + len(anchor)
+        next_label = re.search(r"\n\s+\w+:", src[tail_start:])
+        end = tail_start + next_label.start() if next_label is not None else len(src)
         # Normalise whitespace so multi-line wrapping doesn't break
         # substring assertions (``section <X>\n  of <name>`` →
         # ``section <X> of <name>``).
-        block = re.sub(r"\s+", " ", limit_match.group(0))
+        block = re.sub(r"\s+", " ", src[limit_idx:end])
         for marker in (
             "summary of",
             "table of contents",
@@ -633,9 +657,8 @@ class TestP1D6DispatcherEdgeStripWiderFields:
         # The defence-in-depth strip block lives in handle_zim_query
         # just after parse_intent. Look for the field tuple.
         block_match = re.search(
-            r"# Post-a21 P1-D1: defence-in-depth.+?" r"for _key in \(([^)]+)\):",
+            r"# Post-a21 P1-D1: defence-in-depth[\s\S]+?for _key in \(([^)]+)\):",
             src,
-            re.DOTALL,
         )
         assert block_match is not None, (
             "Could not locate dispatcher-edge politeness strip "
@@ -651,9 +674,9 @@ class TestP1D6DispatcherEdgeStripWiderFields:
             "partial_query",
             "section_name",
         ):
-            assert f'"{field}"' in fields, (
-                f"Dispatcher-edge strip missing field ``{field}``: " f"{fields!r}"
-            )
+            assert (
+                f'"{field}"' in fields
+            ), f"Dispatcher-edge strip missing field ``{field}``: {fields!r}"
 
     def test_entries_list_strip_present(self) -> None:
         # The list-typed ``entries`` field gets its own loop because
