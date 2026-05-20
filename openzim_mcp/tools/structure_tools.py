@@ -573,7 +573,11 @@ def _register_get_section(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file.
-            entry_path: Entry path (e.g., 'A/Berlin').
+            entry_path: Entry path (e.g., 'C/Berlin'). Use the
+                namespace convention from the archive's actual paths
+                (modern Wikipedia ZIMs use ``C/``; legacy ZIMs use
+                ``A/``) — call ``find_entry_by_title`` first to
+                discover the real namespace before copying.
             section_id: Section identifier from TOC.
             max_chars: Optional cap on section body chars (default uses
                        config.content.max_content_length).

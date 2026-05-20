@@ -479,6 +479,46 @@ class TestP1D4EntryPathDocstringBaitSweep:
             "``<entry_path>`` placeholder convention used elsewhere."
         )
 
+    def test_no_legacy_a_namespace_entry_path_example(self) -> None:
+        # Pass-2 source-level audit (P2-D1 within this sweep): the
+        # ``get_section`` docstring originally used ``'A/Berlin'`` as
+        # the ``entry_path`` example. The legacy ``A/`` namespace is
+        # the pre-2018 single-namespace ZIM convention; modern multi-
+        # namespace ZIMs (Wikipedia 2026-02, the live target) use
+        # ``C/``. A small model copying ``A/Berlin`` verbatim hits
+        # entry-not-found on a modern archive and drops into a retry
+        # loop — same weak-instruction-follower defect class as P1-D4
+        # but the bait was active wrong-guidance, not placeholder.
+        #
+        # Scan every ``Args:`` block in ``tools/*.py`` for an
+        # ``entry_path`` line whose example uses bare ``'A/`` or
+        # ``"A/`` followed by a real word — the legacy-namespace
+        # bait. ``A/B`` (the Wikipedia testing article whose real
+        # path is genuinely ``A/B``) is the only legitimate
+        # exception; the test allows it explicitly.
+        tools_dir = Path(__file__).resolve().parents[1] / "openzim_mcp" / "tools"
+        offenders: list[tuple[str, int, str]] = []
+        for py in sorted(tools_dir.glob("*.py")):
+            text = py.read_text(encoding="utf-8")
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                if "entry_path" not in line.lower():
+                    continue
+                if "e.g." not in line.lower() and "example" not in line.lower():
+                    continue
+                m = re.search(r"['\"]A/(\w+)['\"]", line)
+                if m and m.group(1) != "B":
+                    # Allow lines that explicitly document the
+                    # legacy / modern distinction (which is what
+                    # the post-a22 P2-D1 replacement does).
+                    if "legacy" not in line.lower() and "modern" not in line.lower():
+                        offenders.append((py.name, line_no, line.strip()))
+        assert not offenders, (
+            "Found legacy ``A/<title>`` namespace bait in tools/ "
+            "docstrings — modern ZIMs use ``C/``. Same weak-instruction-"
+            "follower defect class as P1-D4. Sites: "
+            f"{offenders}. Update to ``C/`` or document both conventions."
+        )
+
     def test_replacement_uses_entry_path_placeholder(self) -> None:
         # Defensive: confirm the post-a22 replacement landed and uses
         # the ``<entry_path>`` placeholder convention (mirrors the
