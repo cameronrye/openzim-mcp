@@ -237,10 +237,12 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
             returns a ``ToolErrorPayload`` envelope (see
             ``responses.tool_error``).
 
-        Examples:
-            - Quick overview: get_entry_summary("/path/to/wiki.zim", "Biology")
-            - Longer summary: get_entry_summary(..., "Evolution", max_words=500)
-            - Compact body: get_entry_summary(..., "Tiger", compact=True)
+        Examples (call ``list_zim_files`` first for the real ``zim_file_path``;
+        the placeholder ``<zim_path>`` below must be replaced with that
+        real path, never copied verbatim):
+            - Quick overview: get_entry_summary(<zim_path>, "Biology")
+            - Longer summary: get_entry_summary(<zim_path>, "Evolution", max_words=500)
+            - Compact body: get_entry_summary(<zim_path>, "Tiger", compact=True)
         """
         try:
             try:
@@ -333,8 +335,9 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
               or ``"slug"`` (generated from heading text).
             - children: Nested subheadings
 
-        Examples:
-            - Get TOC: get_table_of_contents("/path/to/wiki.zim", "Biology")
+        Examples (replace ``<zim_path>`` with the real path returned by
+        ``list_zim_files`` — never copy the placeholder verbatim):
+            - Get TOC: get_table_of_contents(<zim_path>, "Biology")
         """
         try:
             try:
@@ -406,10 +409,11 @@ def _register_get_binary_entry(server: "OpenZimMcpServer") -> None:
             On failure, returns a ``{"error": True, ...}`` envelope (see
             ``responses.tool_error``).
 
-        Examples:
-            - Get a PDF: get_binary_entry("/path/file.zim", "I/document.pdf")
-            - Image metadata: get_binary_entry(..., "I/logo.png", include_data=False)
-            - Large video: get_binary_entry(..., "I/video.mp4", 100000000)
+        Examples (replace ``<zim_path>`` with the real path returned by
+        ``list_zim_files`` — never copy the placeholder verbatim):
+            - Get a PDF: get_binary_entry(<zim_path>, "I/document.pdf")
+            - Image metadata: get_binary_entry(<zim_path>, "I/logo.png", include_data=False)
+            - Large video: get_binary_entry(<zim_path>, "I/video.mp4", 100000000)
         """
         try:
             try:

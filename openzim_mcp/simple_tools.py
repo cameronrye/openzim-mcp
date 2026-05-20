@@ -548,6 +548,33 @@ class SimpleToolsHandler:
                     "\n<!-- intent=chained_intent_rejected cert=1.00 -->"
                 )
             intent, params, confidence = self.intent_parser.parse_intent(query)
+            # Post-a21 P1-D1: defence-in-depth strip of trailing
+            # politeness on user-supplied content fields in ``params``.
+            # Idempotent when ``parse_intent`` already cleaned them
+            # (the post-a20 PD2-1 strip lives there), and a belt-and-
+            # suspenders catch for any future regression that returns
+            # ``params`` with politeness still attached (the live a21
+            # sweep observed ``Found N matches for "biology please"``
+            # despite the source-side ``parse_intent`` strip working
+            # correctly under direct unit test — the most likely cause
+            # was an in-process module cache on the live server that
+            # loaded only part of PR #152, but the user-visible defect
+            # is the same shape regardless of root cause). Idempotent
+            # by construction — the strip's regex is end-anchored and
+            # leaves clean content untouched.
+            if isinstance(params, dict):
+                for _key in (
+                    "query",
+                    "topic",
+                    "title",
+                    "entry_path",
+                    "partial_query",
+                ):
+                    _v = params.get(_key)
+                    if isinstance(_v, str) and _v:
+                        _v_clean = IntentParser._strip_trailing_politeness(_v).strip()
+                        if _v_clean != _v:
+                            params[_key] = _v_clean
             # A11 B2: ``tell me about <empty>`` (trailing-space input,
             # punctuation-only topic) used to fall through to a topic
             # of ``"tell me about"`` and disambiguate to article titles
@@ -575,7 +602,20 @@ class SimpleToolsHandler:
                 # nothing followed "search for", the result equals the
                 # original query — accept that case only when there are
                 # ≥1 non-stopword content tokens. Otherwise reject.
+                #
+                # Post-a21 P1-D8: peel trailing politeness from the
+                # tail before the empty-check. Pre-fix, ``search for
+                # please`` (and ``search for ta`` after the P1-D6
+                # extension) returned tail=``"please"`` (non-empty),
+                # the guard didn't fire, ``_extract_search`` captured
+                # ``"for"`` as the search term and the user got a
+                # 200k-hit response dominated by the literal verb
+                # word. The strip is idempotent — when the tail
+                # carries real content the politeness substring is
+                # never trailing.
                 tail = self._search_query_tail(query)
+                if tail is not None:
+                    tail = IntentParser._strip_trailing_politeness(tail).strip()
                 if tail is not None and not tail:
                     return (
                         "**Search Terms Required**\n\n"
@@ -624,6 +664,23 @@ class SimpleToolsHandler:
             # the caller deliberately wrote (H14: explicit paths must reach
             # the backend and surface a clear error there, not a silent
             # auto-replacement).
+
+            # Post-a21 P1-D2 / P1-D3 / P1-D4: detect bare-topic chains
+            # of 3+ substantive proper-noun-shaped halves joined by soft
+            # connectors (``and`` / ``or`` / ``,`` / ``&`` / ``vs`` /
+            # ``/``). The post-a20 P1-D2 alias-fallback widening only
+            # addresses the 2-entity asymmetric case (``Köln or Cologne``).
+            # 3+ entity queries either silently dropped halves
+            # (``Berlin and München and Köln`` → Cologne, no footer
+            # about Berlin or München) or produced a footer suggesting
+            # a still-chained re-query (``Köln, München, and Berlin``
+            # → footer ``tell me about Köln, München,``).
+            multi_entity_warning = self._multi_entity_chain_guidance(
+                intent, params, zim_file_path
+            )
+            if multi_entity_warning is not None:
+                self._track("multi_entity_chain_rejected")
+                return multi_entity_warning
 
             handler = self._INTENT_HANDLERS.get(
                 intent, SimpleToolsHandler._handle_search
@@ -780,11 +837,27 @@ class SimpleToolsHandler:
             if looks_like_zim_path_error:
                 hint = self._zim_path_recovery_hint()
                 if hint is not None:
+                    # Post-a21 P1-D10: surface the original exception
+                    # message alongside the recovery hint. Pre-fix the
+                    # detector matched ``"access denied"`` substring,
+                    # which the security validator's
+                    # ``OpenZimMcpSecurityError`` ("Access denied -
+                    # Path is outside allowed directories") triggered
+                    # in addition to the intended file-not-found
+                    # ``OpenZimMcpValidationError``. The replacement
+                    # body dropped the security-specific reason on
+                    # the floor and emitted only the generic "doesn't
+                    # match any loaded archive" message — confusing
+                    # the caller about why their path actually failed
+                    # (path outside allowed tree vs typoed filename).
+                    # Including ``**Reason**`` keeps the diagnostic
+                    # context while still surfacing the recovery hint.
                     return (
                         f"**ZIM File Not Found**\n\n"
                         f"**Query**: {safe_query}\n"
                         f"**Issue**: the `zim_file_path` value passed "
-                        f"doesn't match any loaded archive.\n\n"
+                        f"doesn't match any loaded archive.\n"
+                        f"**Reason**: {safe_error}\n\n"
                         f"{hint}\n\n"
                         f"<!-- intent=zim_path_not_found cert=1.00 -->"
                     )
@@ -1315,6 +1388,143 @@ class SimpleToolsHandler:
                 f"with `tell me about {dropped}`._"
             )
         return None
+
+    # Post-a21 P1-D2/D3/D4: combined soft-connector pattern for
+    # multi-entity bare-topic chain detection. Same set as
+    # ``_SOFT_CHAIN_CONNECTOR_PATS`` but joined with alternation so a
+    # single ``re.split`` can chop a topic into ALL its halves in one
+    # pass (rather than the connector-by-connector loop in
+    # ``_soft_connector_footer``, which only ever splits on the FIRST
+    # match and leaves the rest of the chain stuffed into one half).
+    _COMBINED_SOFT_CONNECTOR_RE = re.compile(
+        r"\s+and\s+|\s+or\s+|\s+vs\.?\s+|\s*,\s+|\s+&\s+|\s*/\s*",
+        re.IGNORECASE,
+    )
+    # Post-a21 P1-D2/D3/D4: after a comma-split the next half can lead
+    # with a conjunction word (``, and Bears`` → comma-split eats
+    # ``", "`` but leaves ``"and Bears"`` because ``\s+and\s+`` requires
+    # leading whitespace and the half starts at the ``"a"``). Strip
+    # the leading conjunction post-split so ``Lions, Tigers, and Bears``
+    # → ``["Lions", "Tigers", "Bears"]`` rather than
+    # ``["Lions", "Tigers", "and Bears"]``.
+    _LEADING_CONJUNCTION_RE = re.compile(
+        r"^(?:and|or|vs\.?|&)\s+", re.IGNORECASE
+    )
+
+    @classmethod
+    def _split_multi_entity(cls, topic: str) -> Optional[List[str]]:
+        """Split ``topic`` into N substantive halves on any soft
+        connector. Returns the list iff N ≥ 3 AND every half passes
+        ``_is_substantive_topic``; otherwise None.
+
+        Used by ``_multi_entity_chain_guidance`` to decide whether a
+        topic deserves the structured ``Multi-Entity Chain Detected``
+        rejection. The 2-entity case stays with the existing
+        ``_soft_connector_footer`` post-resolution path (post-a18
+        P3-D2 + post-a20 P1-D2).
+        """
+        if not topic or not topic.strip():
+            return None
+        parts = cls._COMBINED_SOFT_CONNECTOR_RE.split(topic.strip())
+        cleaned: List[str] = []
+        for raw in parts:
+            p = raw.strip() if raw else ""
+            if not p:
+                continue
+            p = cls._LEADING_CONJUNCTION_RE.sub("", p).strip()
+            if p:
+                cleaned.append(p)
+        if len(cleaned) < 3:
+            return None
+        if not all(cls._is_substantive_topic(p) for p in cleaned):
+            return None
+        return cleaned
+
+    @staticmethod
+    def _path_matches_topic_loosely(path: str, topic: str) -> bool:
+        """True when an article-path (underscored, possibly punctuated)
+        normalises to the same word sequence as ``topic``. Used to
+        suppress the multi-entity chain warning for real multi-entity
+        article titles (``Earth, Wind & Fire`` /
+        ``Lions, Tigers, and Bears`` / etc.) — the title-index probe
+        returns a path that, once normalised, equals the topic.
+        """
+        if not path or not topic:
+            return False
+
+        def _norm(s: str) -> str:
+            s = s.lower().replace("_", " ")
+            # \w in Python re is Unicode by default; this keeps
+            # letters / digits / underscores → spaces and drops the
+            # rest (commas, ampersands, etc.).
+            s = re.sub(r"[^\w\s]+", " ", s, flags=re.UNICODE)
+            s = re.sub(r"\s+", " ", s).strip()
+            return s
+
+        return _norm(path) == _norm(topic)
+
+    def _multi_entity_chain_guidance(
+        self,
+        intent: str,
+        params: Dict[str, Any],
+        zim_file_path: str,
+    ) -> Optional[str]:
+        """Post-a21 P1-D2/D3/D4: return a structured chain rejection
+        when ``intent`` is ``tell_me_about`` and the topic names 3+
+        substantive entities joined by soft connectors, UNLESS the
+        whole-topic title-index probe resolves to a path that loosely
+        matches the topic (real multi-entity titles like
+        ``Earth, Wind & Fire``).
+
+        Returns None to fall through to normal resolution; returns a
+        structured Markdown body when the chain should be rejected.
+        """
+        if intent != "tell_me_about":
+            return None
+        topic = (params.get("topic") or "").strip() if isinstance(params, dict) else ""
+        if not topic:
+            return None
+        halves = self._split_multi_entity(topic)
+        if not halves:
+            return None
+        # Probe the title index for the whole topic — if it resolves
+        # cleanly to a single article whose path loosely matches the
+        # topic, the user meant a real multi-entity title (band name,
+        # movie title, idiom) and the chain warning would false-fire.
+        try:
+            data = self.zim_operations.find_entry_by_title_data(
+                zim_file_path, topic, cross_file=False, limit=1
+            )
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            results = data.get("results") or []
+            if results and isinstance(results[0], dict):
+                hit = results[0]
+                hit_path = str(hit.get("path") or "")
+                try:
+                    score = float(hit.get("score") or 0)
+                except (TypeError, ValueError):
+                    score = 0.0
+                # Score >= 1.0 from the title index means an exact
+                # canonical-title hit; loose-path match catches cases
+                # where the score is fuzzy but the path obviously
+                # spans every entity (``Earth,_Wind_&_Fire`` for
+                # ``Earth, Wind & Fire``).
+                if score >= 1.0 or self._path_matches_topic_loosely(hit_path, topic):
+                    return None
+        bullets = "\n".join(f"  - `tell me about {h}`" for h in halves)
+        return (
+            "**Multi-Entity Chain Detected**\n\n"
+            f"**Issue**: your query names {len(halves)} entities joined "
+            "by soft connectors (`and` / `or` / `,` / `&` / `vs` / `/`). "
+            "The intent parser returns one article at a time — silently "
+            f"dropping {len(halves) - 1} of them would be confusing.\n\n"
+            f"**Detected entities**:\n{bullets}\n\n"
+            "**Fix**: issue each as a separate `zim_query` call so "
+            "every entity gets its own response.\n\n"
+            "<!-- intent=multi_entity_chain_rejected cert=1.00 -->"
+        )
 
     def _half_resolves_to_top(
         self, zim_file_path: str, half: str, top_path: str
