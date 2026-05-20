@@ -5,6 +5,174 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a22] — 2026-05-19 (alpha pre-release) — post-a21 beta-test sweep — 11 live-Wikipedia defects across two passes
+
+Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
+the freshly-deployed `v2.0.0a21` build, plus a small-model failure
+transcript review. Smoke gates landed 3/4 green pre-fix; the
+politeness-strip gate (`search for biology please` →
+`Found 5000 matches for "biology please"`) leaked on the live MCP
+despite the source-side `parse_intent` strip working correctly
+under direct unit test — most likely cause is an in-process
+module cache on the live server that loaded only part of PR #152's
+diff. The user-visible defect class is the same regardless of
+root cause; defence-in-depth dispatcher-edge strip lands here
+(P1-D1).
+
+Pass 2 source-level audit found no new sibling defects across the
+landed fix sites. The recurring **"fix unlocks new paths"** cycle
+reproduced again three times: post-a20 P1-D2 (alias-fallback
+widening to 2-entity asymmetric chains) didn't address 3+ entity
+chains (this sweep's P1-D2/D3/D4 catch them); post-a20 PD2-1
+(`parse_intent` politeness strip) didn't widen the token set
+(P1-D6/D7 add British/texting/multilang variants); post-a20
+PD2-2 (`zim_query` docstring de-bait) didn't sweep the sibling
+advanced-tool docstrings (P1-D9 widens the regression net).
+Live-transcript review remains a distinct test surface (T-D1
+came from a Qwen3-8B-Q4 transcript; not reachable via adversarial
+query probing alone).
+
+### Fixed
+
+- **Multi-entity chain warning for 3+ entity bare-topic chains**
+  (P1-D2 / P1-D3 / P1-D4). Three observed shapes that bypass the
+  existing 2-entity `_soft_connector_footer` alias-fallback:
+  `tell me about Köln, München, and Berlin` returned Berlin + a
+  footer suggesting `tell me about Köln, München,` (still-chained
+  recursive suggestion — re-running it re-triggers the same
+  defect); `tell me about Berlin or 東京 or Tokyo` silently fell
+  through to "No search results found"; `tell me about Berlin
+  and München and Köln` returned Cologne (Köln alias) with no
+  footer about the dropped Berlin / München. Fix: new
+  `_multi_entity_chain_guidance` detects 3+ substantive halves
+  split by combined soft connectors (`and` / `or` / `,` / `&` /
+  `vs` / `/`) AND probes the title index for the whole topic —
+  clean single-title hits (`Earth, Wind & Fire` band;
+  `Lions, Tigers, and Bears` idiom) suppress the warning; no
+  clean hit fires a structured `Multi-Entity Chain Detected`
+  rejection naming each entity. Iterative single-pattern splits
+  (no combined alternation regex) keep SonarCloud's S5852
+  polynomial-backtracking flag quiet; string-prefix/-suffix
+  scans (not regex) handle leftover leading/trailing conjunctions
+  for the same reason.
+
+- **Trailing politeness regex extended to British/texting and
+  multi-language tokens** (P1-D6 / P1-D7). Post-a20 PD2-1
+  enumerated only `please` / `kindly` / `thanks` / `thank you|u`.
+  Live probes showed `ta` / `cheers` / `thx` / `ty` / `pls`
+  (British/texting) and `bitte` / `danke` / `merci` / `gracias` /
+  `por favor` (multi-language) all leaked into search query /
+  topic / title silently. Several new tokens are short (`ta` /
+  `ty` are 2 chars) so the leading anchor tightens from
+  `\s*[,;.!?]?\s*` to `(?:^|\s+|[,;.!?]\s*)` — embedded
+  substrings in longer words (`cantata` / `feta` / `Dante`) no
+  longer get their last two chars eaten.
+
+- **`Search Terms Required` B4 guard now peels politeness from
+  the tail before the empty-check** (P1-D8). Pre-fix,
+  `_search_query_tail(query)` ran on the ORIGINAL query, so
+  trailing politeness wasn't stripped before the empty-tail
+  check; `search for please` silently dispatched with
+  `query="for"` (the literal verb word) and returned a 200k-hit
+  response dominated by stop-word collisions. Same shape for any
+  `search for <politeness>` after the P1-D6 extension. Fix:
+  apply `IntentParser._strip_trailing_politeness` to the tail
+  before the B4 emptiness check.
+
+- **Defence-in-depth dispatcher-edge politeness strip on params**
+  (P1-D1). The live-MCP sweep observed
+  `Found 5000 matches for "biology please"` for the query
+  `search for biology please` despite the post-a20 PD2-1 fix.
+  Source-side, the strip works correctly under direct unit test;
+  the most likely cause is an in-process module cache on the
+  live server that loaded only part of PR #152. Fix: in
+  `handle_zim_query`, after the `parse_intent` call, apply
+  `IntentParser._strip_trailing_politeness` to each of the
+  user-supplied content fields in `params` (`query` / `topic` /
+  `title` / `entry_path` / `partial_query`). Idempotent when
+  `parse_intent` already cleaned them; belt-and-suspenders catch
+  for any future regression that bypasses `parse_intent`.
+
+- **`_Q_EMITTING_CURSOR_TOOLS` drift guard** (P1-D5). The
+  post-a20 P1-D1 fix introduced
+  `SimpleToolsHandler._Q_EMITTING_CURSOR_TOOLS` as a hand-
+  maintained frozenset of tool names whose cursors legitimately
+  carry an `s.q` field. If a future contributor adds a new
+  q-emitting tool (a new `Cursor.encode(state={..., "q": ...})`
+  callsite) but forgets to update the set, the dispatcher's
+  q-overlap guard silently degrades to no-op for that tool —
+  paginating with the wrong query proceeds silently. New
+  regression test scans every `Cursor.encode(tool=...)` callsite
+  in `zim/search.py` and pins membership equality with the set;
+  encode-callsite comments updated to point at the set so the
+  cross-module link is greppable from either side.
+
+- **PD2-2 sibling docstring path-bait sweep** (P1-D9). Post-a20
+  PD2-2 only pinned the `zim_query` docstring in `server.py`.
+  Sibling literal path examples lived in advanced tool docstrings
+  — `structure_tools.get_entry_summary` ("/path/to/wiki.zim"),
+  `structure_tools.get_table_of_contents` ("/path/to/wiki.zim"),
+  `structure_tools.get_binary_entry` ("/path/file.zim"), and
+  `content_tools.get_zim_entries` ("/path/x.zim"). Small models
+  copy these verbatim too — the same weak-instruction-follower
+  class PD2-2 was designed to break. Fix: replace literal paths
+  with `<zim_path>` placeholders that don't validate as
+  filesystem paths; widen the regression test to scan every
+  `openzim_mcp/tools/*.py` for `/path/...\.zim` or
+  `/data/...\.zim` shapes.
+
+- **PD2-4 recovery hint now preserves the original error reason**
+  (P1-D10). The PD2-4 detector substring-matched `"access denied"`
+  in the exception message and fired on `OpenZimMcpSecurityError`'s
+  "Access denied - Path is outside allowed directories" message
+  in addition to the intended file-not-found
+  `OpenZimMcpValidationError`. The replacement body dropped the
+  security-specific reason on the floor; callers saw only the
+  generic "doesn't match any loaded archive" hint. Fix: surface
+  the original exception message as a new `**Reason**` line
+  alongside the recovery hint so the security-specific context
+  isn't lost.
+
+- **`limit` docstring nudge for atomic intents** (T-D1). Live
+  small-model transcript (Qwen3-8B-Q4) showed the model passing
+  `limit=5` on a `tell_me_about` query. The pre-fix docstring
+  said "Max search/browse results (default: 3)" — silent about
+  whether `limit` applies to atomic intents. Fix: docstring
+  nudge explicitly enumerating the atomic intents that ignore
+  `limit` (`tell me about` / `get article` / `show structure` /
+  `links in` / `articles related to` / `main_page` /
+  `list_namespaces` / `metadata for` / `list_files`).
+
+### Testing
+
+- 54 new regression tests in `tests/test_post_a21_beta_fixes.py`
+  covering all eleven defects:
+  `TestP1D6P1D7TrailingPolitenessExtensions` (29 parametric strip
+  cases + word-boundary safety + full-parse integration);
+  `TestP1D8SearchTermsRequiredAfterPolitenessStrip` (8 parametric
+  guard-fires); `TestP1D1DispatcherEdgePolitenessStrip` (buggy-
+  parse-stub regression); `TestMultiEntityChainGuidance` (8
+  cases — 3-entity AND/OR/4-entity chains, 2-entity guard,
+  real-title suppression via title-index probe, search-intent
+  isolation, leading-conjunction split, Lions/Tigers/Bears idiom
+  suppression); `TestP1D5QEmittingCursorToolsDrift` (3 cases —
+  set value, search-encode comment hook, parametric
+  `Cursor.encode` scan); `TestP1D9DocstringPathBaitSiblings`
+  (directory-wide scan of `tools/*.py`);
+  `TestP1D10RecoveryHintMarkerDiscriminatesSecurityError` (1
+  case — surfaces original `OpenZimMcpSecurityError` reason);
+  `TestTD1LimitDocstringClarifiesAtomicIntents` (1 case —
+  docstring contract pin).
+- Full suite: **1954 passed, 50 skipped**. mypy clean across all
+  45 source files.
+
+### Release process
+
+After this changelog lands on `main`, push the `v2.0.0a22` tag
+on `main` to trigger `.github/workflows/release.yml` — PyPI
+publish + GitHub release notes auto-extracted from the matching
+CHANGELOG section.
+
 ## [2.0.0a21] — 2026-05-19 (alpha pre-release) — post-a20 beta-test sweep — 6 live-Wikipedia defects across three passes
 
 Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
