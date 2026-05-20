@@ -185,11 +185,14 @@ class TestP1D1MultiEntityAllCapsAndSlashedAcronyms:
         assert not SimpleToolsHandler._looks_like_slashed_compound("Foo/Bar/Baz")
         assert not SimpleToolsHandler._looks_like_slashed_compound("TCP/IP/HTTP")
 
-    def test_slashed_compound_helper_rejects_digit_halves(self) -> None:
-        # ``9/11`` is a date-shape, not a slashed acronym. Letter-only
-        # check rejects it.
-        assert not SimpleToolsHandler._looks_like_slashed_compound("9/11")
+    def test_slashed_compound_helper_rejects_mixed_alphanumeric_halves(self) -> None:
+        # Mixed letter+digit halves (``A/4``) still split — the post-a24
+        # widening only accepts all-letter OR all-digit halves, not
+        # mixed shapes. ``9/11`` is now treated as compound (post-a24
+        # P1-D1 sibling fix — see post-a24 test suite for the digit-only
+        # date/ratio shape coverage).
         assert not SimpleToolsHandler._looks_like_slashed_compound("A/4")
+        assert not SimpleToolsHandler._looks_like_slashed_compound("X/12")
 
     # ---- end-to-end split behaviour ----
 

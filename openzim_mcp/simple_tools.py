@@ -1022,6 +1022,20 @@ class SimpleToolsHandler:
         """
         if not query:
             return None
+        # Post-a24 P1-D6: peel leaked ``param=value`` suffixes before the
+        # chained-operation detector runs. ``parse_intent``'s strip
+        # (intent_parser.py:_strip_param_leaks) runs on the FULL query
+        # at parse time, but the dispatcher calls
+        # ``_chained_intent_guidance(query)`` upstream of that —
+        # ``query`` here is still the raw user input. Without this
+        # mirror-strip, live ``tell me about Berlin limit=5 then list
+        # namespaces`` surfaced a chained-intent rejection whose
+        # ``**First op (left)**: tell me about Berlin limit=5`` carried
+        # the leaked param verbatim, confusing the user who'd then copy
+        # the suggested left-op and re-dispatch with the same leak.
+        # Idempotent with ``parse_intent``'s downstream strip — both
+        # produce identical output on a clean query.
+        query = IntentParser._strip_param_leaks(query)
         # A15 post-a15 P4-D2 + P6-D3: strip leading politeness
         # (``please``, ``kindly``, ``could you``, ``can you``,
         # ``would you``, ``will you``) before splitting on the
@@ -1444,33 +1458,69 @@ class SimpleToolsHandler:
         """Post-a23 P1-D1: return True iff ``text`` looks like a single-
         entity slashed compound that the chain detector should NOT split.
 
-        Heuristic: exactly one ``/``, both halves are letter-only (Unicode-
-        aware), and at least one half is ≤2 characters. The short-half
-        signal distinguishes acronyms / 2-letter conjunctions (``TCP/IP``,
-        ``AC/DC``, ``Either/Or``, ``A/B``) from genuinely separable
-        proper nouns like ``Berlin/Munich`` (min half 6 chars). Without
-        this guard, the ``\\s*/\\s*`` pass in ``_SOFT_CHAIN_CONNECTOR_PATS``
-        fragmented ``TCP/IP and HTTP and HTTPS`` into ``["TCP", "IP",
-        "HTTP", "HTTPS"]`` — the substantive filter then rejected the
-        short ALL-CAPS halves (pre-fix; addressed by the ALL-CAPS clause
-        in ``_is_substantive_topic``) AND mis-identified the user's
-        single TCP/IP entity as two separate ones.
+        Heuristic: exactly one ``/`` between two halves; either
+          * both halves are letter-only (Unicode-aware, ``&`` allowed for
+            acronyms like ``R&B``) AND ``min(len) ≤ 4`` — covers acronyms
+            like ``TCP/IP``, ``AC/DC``, ``Either/Or``, ``A/B`` AND short
+            paired-concept compounds like ``Yin/Yang``, ``Hot/Cold``,
+            ``Wet/Dry``, ``Light/Dark``, ``Mac/Cheese``, OR
+          * both halves are digit-only AND ``min(len) ≤ 2`` — covers
+            date / ratio / sports-season shapes like ``9/11``, ``24/7``,
+            ``5/4``, ``12/24``, ``2024/25``.
+
+        Mixed alphanumeric halves (``A/4``) split — those are typically
+        two separate entities. Longer proper-noun pairs
+        (``Berlin/Munich`` min=6, ``Lions/Tigers`` min=5,
+        ``2024/2025`` min=4-digit) split too.
+
+        Post-a24 P1-D1 / P1-D2 widen-out: the original ≤2 letter floor
+        was tuned for short ALL-CAPS acronyms and silently dropped two
+        sibling classes. Live a24 sweep observed:
+          * ``9/11 and World War II`` decomposed to ``["9", "11", "World
+            War II"]`` chain rejection — but ``9/11`` is a single event.
+            Same shape: ``24/7``, ``5/4``.
+          * ``Yin/Yang and the Tao`` decomposed to ``["Yin", "Yang", "the
+            Tao"]`` — Yin and Yang both failed substantive (3-4 char
+            mixed-case ASCII), chain abandoned silently, returned Tao
+            with the user's paired concept Yin/Yang silently dropped.
+            Same shape: ``Hot/Cold``, ``Wet/Dry``, ``On/Off`` (when
+            followed by another half).
+
+        Original ``\\s*/\\s*`` pass in ``_SOFT_CHAIN_CONNECTOR_PATS``
+        fragments before the substantive check; this helper is the
+        compound-guard called from ``_split_multi_entity`` to skip the
+        slash pass for shapes that look like a single entity.
         """
         parts = text.split("/")
         if len(parts) != 2:
             return False
-        for part in parts:
-            stripped = part.strip()
-            # Letter-only (no spaces, no digits, no punctuation other
-            # than ampersand which appears in some acronyms like R&B).
-            # ``isalpha`` is Unicode-aware in Python 3 so accented
-            # acronyms work too.
-            if not stripped:
-                return False
-            for ch in stripped:
-                if not (ch.isalpha() or ch == "&"):
-                    return False
-        return min(len(p.strip()) for p in parts) <= 2
+        stripped_parts = [p.strip() for p in parts]
+        if not all(stripped_parts):
+            return False
+
+        # Shape detection: both halves all-letter (Unicode-aware) or
+        # both halves all-digit. Mixed shapes don't get compound
+        # treatment. ``isalpha`` is Unicode-aware in Python 3 so
+        # accented acronyms / non-Latin halves work.
+        all_letter = all(
+            all(ch.isalpha() or ch == "&" for ch in p) for p in stripped_parts
+        )
+        all_digit = all(all(ch.isdigit() for ch in p) for p in stripped_parts)
+
+        if all_digit:
+            # Digit halves: ≤2 chars per half is the date/ratio shape
+            # (9/11, 24/7, 5/4, 12/24, 2024/25 — the last has min=2 even
+            # though max=4). Excludes 2024/2025 (min=4) which is more
+            # naturally two distinct years.
+            return min(len(p) for p in stripped_parts) <= 2
+        if all_letter:
+            # Letter halves: ≤4 picks up the post-a24 sibling class of
+            # short paired-concept compounds (Yin/Yang min=3, Hot/Cold
+            # min=3, Wet/Dry min=3, Mac/Cheese min=3, Salt/Pepper min=4)
+            # without affecting longer proper-noun pairs (Berlin/Munich
+            # min=6, Tokyo/Kyoto min=5).
+            return min(len(p) for p in stripped_parts) <= 4
+        return False
 
     @classmethod
     def _split_multi_entity(cls, topic: str) -> Optional[List[str]]:

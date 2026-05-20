@@ -772,6 +772,32 @@ class IntentParser:
     # tightened post-a21) so it can't eat the last two chars of
     # embedded words; word-anchored 2-char tokens are still safer than
     # mid-word matches.
+    # Post-a24 P1-D3 / P1-D4: third-wave multilingual extensions.
+    # P1-D3 — multi-word counterparts of the existing single-word
+    # multilingual tokens (``merci beaucoup``, ``vielen dank``,
+    # ``muchas gracias``, ``arigatou gozaimasu``, ``domo arigato``,
+    # ``terima kasih``). Pre-fix, the regex only matched the single-word
+    # form, leaving the leading qualifier behind (``muchas gracias`` →
+    # ``gracias`` peeled, ``muchas`` left → ``"biology muchas"`` searched).
+    # P1-D4 — more single-word tokens live-observed in post-a24 probes:
+    # ``mahalo`` (Hawaiian), ``xie xie``/``xièxie`` (Chinese romaji),
+    # ``shukran`` (Arabic), ``kiitos`` (Finnish), ``tack`` (Swedish),
+    # ``gomawo``/``kamsahamnida`` (Korean romaji), ``dhanyavad`` (Hindi
+    # romaji), ``domo`` (Japanese), ``gozaimasu`` (Japanese formal
+    # suffix). Same narrow-scope sibling pattern as a23 → a24 — each
+    # sweep has shipped the politeness regex narrower than the natural
+    # family.
+    #
+    # Embedded-token safety: every new token preserves the leading
+    # ``(?:^|\s+|[,;.!?]\s*)`` anchor, so ``tack`` inside ``attack`` /
+    # ``thumbtack`` and ``domo`` inside ``domoic`` / ``Komodo`` don't
+    # match — there's no whitespace / punctuation between the embedding
+    # word's prefix and the politeness candidate. Multi-word entries are
+    # listed BEFORE their single-word counterparts so the alternation
+    # engine matches the maximal phrase even though Python's regex is
+    # leftmost-first (the end-anchor + backtracking would still find the
+    # longer match, but explicit ordering keeps the pattern's intent
+    # readable).
     _TRAILING_POLITENESS_RE = (
         r"(?:^|\s+|[,;.!?]\s*)"
         r"(?:please|kindly|"
@@ -791,13 +817,34 @@ class IntentParser:
         r"tyvm|tysm|ty|"
         r"thnks|thanx|thnx|thxx|thx|"
         r"pls|ta|cheers|txs|tx|"
+        # Post-a24 P1-D3: multi-word multilingual variants — listed
+        # before their single-word forms so the longer phrase wins. The
+        # single-word forms still match alone when the qualifier is
+        # absent.
+        r"merci\s+beaucoup|"
+        r"vielen\s+dank|"
+        r"muchas\s+gracias|"
+        r"arigatou?\s+gozaimasu|"
+        r"domo\s+arigatou?|"
+        r"terima\s+kasih|"
+        r"por\s+favor|"
         # Multilingual politeness — Latin family + Asian-language
         # romaji. The Cyrillic ``спасибо`` and Devanagari forms aren't
         # included because they don't appear in ASCII-leaked queries
         # from current small models; revisit if live transcripts show
         # them.
-        r"bitte|danke|merci|gracias|por\s+favor|"
-        r"obrigad[oa]|arigatou?|spasibo)"
+        r"bitte|danke|merci|gracias|"
+        r"obrigad[oa]|arigatou?|spasibo|"
+        # Post-a24 P1-D4: third-wave single-word multilingual tokens.
+        # ``xie\s*xie`` handles ``xie xie`` (space) and ``xiexie`` (no
+        # space); ``xièxie`` listed separately because ``[eè]`` would
+        # bloat the prior alternation. ``gozaimasu`` / ``domo`` are
+        # listed for the post-strip remainders of ``arigatou
+        # gozaimasu`` / ``domo arigato`` chains (the multi-word forms
+        # above peel the whole pair in one match).
+        r"mahalo|xi[eè]\s*xie|shukran|kiitos|tack|"
+        r"gomawo|kamsahamnida|dhanyavad|"
+        r"gozaimasu|domo)"
         r"\s*[,;.!?]*\s*$"
     )
 
@@ -846,11 +893,20 @@ class IntentParser:
     # and we require ``=`` so prose mentions of these words stay
     # intact). The value side matches ``\S+`` so quoted strings,
     # paths, numbers, and booleans all peel cleanly.
+    # Post-a24 P1-D5: ``query`` was the only missing argument from the
+    # public ``zim_query`` parameter set. Live a24 probe of
+    # ``tell me about Photosynthesis query=biology`` returned the
+    # ``Biology`` disambiguation page (the ``=biology`` suffix prevented
+    # the title-promotion tokeniser from matching ``Photosynthesis``
+    # cleanly; ``Biology`` won via fuzzy match on the trailing tokens).
+    # Adding ``query`` closes the loop — every public ``zim_query``
+    # parameter name now strips when a model leaks it as a query suffix.
     _PARAM_LEAK_RE = (
         r"\s+"
         r"(?:limit|offset|content_offset|max_content_length|"
         r"max_words|compact_budget|compact|synthesize|cursor|"
-        r"zim_file_path|entry_path|namespace|partial_query)"
+        r"zim_file_path|entry_path|namespace|partial_query|"
+        r"query)"
         r"\s*=\s*\S+"
     )
 
