@@ -17,9 +17,11 @@ __all__ = [
     "CacheConfig",
     "ContentConfig",
     "LoggingConfig",
+    "MLConfig",
     "MetaConfig",
     "OpenZimMcpConfig",
     "RateLimitConfig",
+    "RerankerConfig",
     "SearchConfig",
     "SynthesizeConfig",
 ]
@@ -134,6 +136,89 @@ class SynthesizeConfig(BaseModel):
     )
 
 
+class RerankerConfig(BaseModel):
+    """Phase D sub-D-1: cross-encoder reranker config.
+
+    Only applies when the `[reranker]` optional extra is installed.
+    All knobs respect the kill switch in `ml_fallback` — if the model
+    fails to load once, every subsequent search bypasses rerank for
+    the rest of the process."""
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Master kill switch. Set False (or env OPENZIM_RERANKER_DISABLE=1) "
+            "to skip rerank even when the [reranker] extra is importable."
+        ),
+    )
+    model_id: str = Field(
+        default="Xenova/bge-reranker-base-onnx",
+        description=(
+            "FastEmbed model identifier. Default targets English-first "
+            "archives. Multilingual archives can override via "
+            "OPENZIM_RERANKER_MODEL env var (e.g., jina-reranker-v3)."
+        ),
+    )
+    candidate_pool_size: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description=(
+            "Xapian top-N to rerank. Larger pool = more recall, more "
+            "rerank cost. 50 is the sweet spot per FastEmbed benchmarks."
+        ),
+    )
+    final_top_k: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description=(
+            "Default response cap after rerank. Caller-supplied `limit` "
+            "overrides this when smaller."
+        ),
+    )
+    max_query_length: int = Field(default=256, ge=1, le=4096)
+    max_passage_length: int = Field(default=512, ge=1, le=8192)
+    min_query_tokens: int = Field(
+        default=4,
+        ge=0,
+        le=64,
+        description=(
+            "Skip-on-short-query gate: queries with fewer than this many "
+            "word tokens bypass rerank. Single-word entity queries (e.g., "
+            "`Berlin`) already get a Xapian-score-1.0 canonical-title hit; "
+            "the cross-encoder adds cost without value there. Set 0 to "
+            "disable the gate."
+        ),
+    )
+    first_call_timeout_seconds: float = Field(
+        default=5.0,
+        ge=0.1,
+        le=120.0,
+        description=(
+            "Timeout for the first model load (covers HuggingFace download). "
+            "When exceeded, the kill switch fires and search falls back to "
+            "Xapian-only. Pre-stage with `openzim-mcp download-models` to "
+            "avoid this path."
+        ),
+    )
+    cache_dir: Path | None = Field(
+        default=None,
+        description=(
+            "Override the FastEmbed model cache directory. None → "
+            "$OPENZIM_MODEL_CACHE_DIR/fastembed, fallback "
+            "~/.cache/openzim-mcp/models/fastembed."
+        ),
+    )
+
+
+class MLConfig(BaseModel):
+    """Phase D umbrella config. Sized to today's scope (sub-D-1 only);
+    deferred sub-Ds add their sub-configs when they ship."""
+
+    reranker: RerankerConfig = Field(default_factory=RerankerConfig)
+
+
 class LoggingConfig(BaseModel):
     """Logging configuration."""
 
@@ -160,6 +245,7 @@ class OpenZimMcpConfig(BaseSettings):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     content: ContentConfig = Field(default_factory=ContentConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    ml: MLConfig = Field(default_factory=MLConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     meta: MetaConfig = Field(default_factory=MetaConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
