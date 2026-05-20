@@ -276,9 +276,9 @@ class TestP1D2PolitenessSecondWave:
     )
     def test_token_strips_cleanly(self, token: str) -> None:
         cleaned = IntentParser._strip_trailing_politeness(f"biology {token}")
-        assert cleaned == "biology", (
-            f"Politeness token {token!r} should strip cleanly; " f"got {cleaned!r}"
-        )
+        assert (
+            cleaned == "biology"
+        ), f"Politeness token {token!r} should strip cleanly; got {cleaned!r}"
 
     def test_existing_tokens_still_strip(self) -> None:
         # Defensive: every token from the post-a22 set must continue
