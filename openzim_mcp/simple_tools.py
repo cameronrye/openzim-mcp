@@ -1400,8 +1400,14 @@ class SimpleToolsHandler:
     # but the leftover is ``"and Bears"`` because the comma-pass split
     # eats the ``", "`` and leaves ``"and"`` as a leading-conjunction
     # prefix. Strip both shapes per-half so the final list is clean.
-    _LEADING_CONJUNCTION_RE = re.compile(r"^(?:and|or|vs\.?|&)\s+", re.IGNORECASE)
-    _TRAILING_CONJUNCTION_RE = re.compile(r"\s+(?:and|or|vs\.?|&)$", re.IGNORECASE)
+    #
+    # String-based (not regex) so SonarCloud's S5852 polynomial-
+    # backtracking flag stays quiet — alternation + ``\s+``/``$`` in
+    # one pattern keeps tripping the static analyzer despite the
+    # actual runtime being linear in the half length. Longest-first
+    # ordering so ``vs.`` matches before ``vs``.
+    _CONJUNCTION_SUFFIXES = (" and", " or", " vs.", " vs", " &")
+    _CONJUNCTION_PREFIXES = ("and ", "or ", "vs. ", "vs ", "& ")
 
     @classmethod
     def _split_multi_entity(cls, topic: str) -> Optional[List[str]]:
@@ -1449,8 +1455,23 @@ class SimpleToolsHandler:
             p = raw.strip(" \t,;.")
             if not p:
                 continue
-            p = cls._LEADING_CONJUNCTION_RE.sub("", p).strip()
-            p = cls._TRAILING_CONJUNCTION_RE.sub("", p).strip(" \t,;.")
+            # Strip leading conjunction word + whitespace
+            # (case-insensitive). String-prefix scan rather than
+            # regex so S5852 stays quiet.
+            lower_p = p.lower()
+            for prefix in cls._CONJUNCTION_PREFIXES:
+                if lower_p.startswith(prefix):
+                    p = p[len(prefix) :].lstrip()
+                    break
+            # Strip trailing conjunction word preceded by whitespace
+            # (case-insensitive); rstrip stray punctuation that
+            # follows.
+            p = p.rstrip(" \t,;.")
+            lower_p = p.lower()
+            for suffix in cls._CONJUNCTION_SUFFIXES:
+                if lower_p.endswith(suffix):
+                    p = p[: -len(suffix)].rstrip(" \t,;.")
+                    break
             if p:
                 cleaned.append(p)
         if len(cleaned) < 3:
