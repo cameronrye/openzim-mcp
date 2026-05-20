@@ -14,7 +14,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 from pathlib import Path
-from typing import (  # noqa: F401 — List/Sequence/Tuple used by Task 5
+from typing import (
     Any,
     List,
     Optional,
@@ -61,6 +61,75 @@ class BGEReranker:
         """For tests only."""
         with cls._instance_lock:
             cls._instance = None
+
+    def score_pairs(self, pairs: Sequence[Tuple[str, str]]) -> List[float]:
+        """Batch-score (query, passage) pairs.
+
+        Empty input → empty output. Query and passage are truncated at
+        the configured max lengths before being passed to FastEmbed."""
+        if not pairs:
+            return []
+        # Group by query so we make one rerank call per distinct query.
+        # In practice all pairs share the same query (rerank is called
+        # per search), so this collapses to a single batch.
+        by_query: dict[str, List[int]] = {}
+        truncated_passages: List[str] = []
+        for idx, (q, p) in enumerate(pairs):
+            q_trim = q[: self._config.max_query_length]
+            p_trim = p[: self._config.max_passage_length]
+            by_query.setdefault(q_trim, []).append(idx)
+            truncated_passages.append(p_trim)
+        scores: List[float] = [0.0] * len(pairs)
+        for q, idxs in by_query.items():
+            passages = [truncated_passages[i] for i in idxs]
+            batch_scores = list(self._model.rerank(q, passages))
+            for i, s in zip(idxs, batch_scores):
+                scores[i] = float(s)
+        return scores
+
+    def rerank(
+        self,
+        query: str,
+        candidates: List[dict[str, Any]],
+        top_k: int,
+    ) -> List[dict[str, Any]]:
+        """Rerank candidate envelopes against `query`, slice top_k.
+
+        Skip rules:
+          * Query has fewer than `min_query_tokens` whitespace-separated
+            tokens → return candidates unchanged (input order preserved),
+            no `rerank_score` added.
+          * Empty candidates → empty result.
+
+        On rerank, each candidate gains a `rerank_score: float` field.
+        The original `xapian_score` (if present) is preserved."""
+        if not candidates:
+            return []
+        # Skip-on-short-query gate.
+        if self._config.min_query_tokens > 0:
+            token_count = len(query.split())
+            if token_count < self._config.min_query_tokens:
+                logger.debug(
+                    "reranker skipped: query has %d tokens (min %d)",
+                    token_count,
+                    self._config.min_query_tokens,
+                )
+                return candidates[:top_k]
+        # Build pairs.
+        pairs: List[Tuple[str, str]] = []
+        for c in candidates:
+            passage = c.get("snippet") or c.get("path", "")
+            pairs.append((query, str(passage)))
+        scores = self.score_pairs(pairs)
+        # Decorate + sort.
+        decorated = list(zip(candidates, scores))
+        decorated.sort(key=lambda x: x[1], reverse=True)
+        result: List[dict[str, Any]] = []
+        for cand, score in decorated[:top_k]:
+            new_cand = dict(cand)  # shallow copy preserves original envelope
+            new_cand["rerank_score"] = float(score)
+            result.append(new_cand)
+        return result
 
     @classmethod
     def get(cls, config: Optional[RerankerConfig] = None) -> Optional["BGEReranker"]:
