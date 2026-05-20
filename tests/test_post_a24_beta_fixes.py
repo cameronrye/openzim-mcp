@@ -582,3 +582,172 @@ class TestRegressionGuards:
     def test_a16_english_sentence_words_still_rejected(self) -> None:
         for token in ("Now", "Both", "Here", "Then", "Many", "Some"):
             assert not SimpleToolsHandler._is_substantive_topic(token)
+
+
+# ===========================================================================
+# Pass-2 source-level audit: cross-feature integration + sibling shapes
+# ===========================================================================
+
+
+class TestPass2CrossFeatureIntegration:
+    """Pass-2 source-level audit: the six pass-1 fixes ride on independent
+    code paths but interact via the dispatcher's call order:
+
+      1. ``_chained_intent_guidance`` runs FIRST on the raw query and
+         (post-fix) strips params before splitting on the connector.
+      2. If no chain detected, ``parse_intent`` runs and strips params
+         + politeness in order before pattern matching.
+      3. ``_handle_zim_query`` then runs the multi-entity chain
+         detection on the extracted topic via
+         ``_multi_entity_chain_guidance`` → ``_split_multi_entity``
+         (which uses ``_looks_like_slashed_compound``).
+
+    Cross-feature probes ensure the strip → chain → split chain
+    composes correctly on queries that exercise multiple fixes at
+    once.
+    """
+
+    def test_param_leak_then_multi_entity_chain(self) -> None:
+        # Param strip runs first, leaving a clean chain query that fires
+        # multi-entity rejection.
+        intent, params, _conf = IntentParser.parse_intent(
+            "tell me about TCP/IP and HTTP and HTTPS limit=10"
+        )
+        assert intent == "tell_me_about"
+        assert params.get("topic") == "TCP/IP and HTTP and HTTPS", (
+            f"Expected clean chain topic after limit strip; "
+            f"got {params.get('topic')!r}"
+        )
+
+    def test_digit_compound_in_three_entity_chain(self) -> None:
+        # Cross-feature: digit-compound + chain. ``9/11`` stays compound,
+        # the other two halves are real proper nouns.
+        result = SimpleToolsHandler._split_multi_entity(
+            "9/11 and Pearl Harbor and Hiroshima"
+        )
+        assert result is not None
+        assert result == ["9/11", "Pearl Harbor", "Hiroshima"]
+
+    def test_mixed_short_compound_in_three_entity_chain(self) -> None:
+        # Cross-feature: short letter-compound + chain. ``Yin/Yang`` stays
+        # compound; the chain detector handles the 3-entity case.
+        result = SimpleToolsHandler._split_multi_entity("Yin/Yang and Sun and Moon")
+        # "Sun" (3 chars TitleCase ASCII no digit, NOT ALL-CAPS) fails
+        # substantive — pre/post-a24 unchanged. So _split returns None.
+        # This is expected: not every chain fires; substantive halves
+        # mixing with non-substantive halves remains a tight gate.
+        assert result is None
+
+    def test_three_entity_chain_with_short_allcaps_and_compound(self) -> None:
+        # ``TCP/IP and AC/DC and HTTP`` — three slashed compounds, all
+        # halves ALL-CAPS short. Pre-a24 (a23 fix landed) this fires
+        # correctly. Post-a24 (sibling fix landed) still fires — the
+        # widened ≤4 letter floor is strictly looser than ≤2.
+        result = SimpleToolsHandler._split_multi_entity("TCP/IP and AC/DC and HTTP")
+        assert result == ["TCP/IP", "AC/DC", "HTTP"]
+
+    def test_politeness_then_param_then_topic(self) -> None:
+        # All three strips compose: politeness peels first, then params
+        # (or vice versa — both runs in parse_intent), then topic
+        # extraction sees the clean phrase. Order matters because the
+        # politeness regex's leading anchor is ``(?:^|\s+|[,;.!?]\s*)``;
+        # a trailing param leak could in principle disrupt the leading
+        # boundary if processed after a partial strip — but
+        # ``_strip_param_leaks`` runs FIRST so the politeness regex
+        # always sees a clean tail.
+        intent, params, _conf = IntentParser.parse_intent(
+            "tell me about Berlin limit=5 thanks a million"
+        )
+        assert intent == "tell_me_about"
+        assert params.get("topic") == "Berlin", (
+            f"Expected clean topic 'Berlin' after both strips; "
+            f"got {params.get('topic')!r}"
+        )
+
+    def test_chained_intent_with_politeness_and_params(self) -> None:
+        # End-to-end: chained-intent guidance strips params + politeness
+        # (politeness only at the leading position; trailing politeness
+        # gets peeled by the strip after the chain rejection fires? no —
+        # the chained-intent rejection text just echoes the cleaned
+        # halves). Verify the rejection message doesn't carry params.
+        result = SimpleToolsHandler._chained_intent_guidance(
+            "please tell me about Berlin limit=5 then list namespaces"
+        )
+        assert result is not None
+        assert "limit=5" not in result
+        # The leading "please" gets peeled before the connector split
+        # so the left-op displays cleanly.
+        assert "tell me about Berlin" in result
+
+
+class TestPass2SiblingAudits:
+    """Pass-2 source-level sibling audits: each pass-1 fix gets a sibling
+    grep across the codebase to confirm no analogous code path silently
+    inherits the pre-fix shape.
+    """
+
+    def test_politeness_regex_is_canonical_source(self) -> None:
+        # Source-level guard: only one ``_TRAILING_POLITENESS_RE`` regex
+        # exists in openzim_mcp/. The dispatcher-edge defence-in-depth
+        # strip in simple_tools.py calls
+        # ``IntentParser._strip_trailing_politeness`` rather than
+        # re-declaring the regex — so the new tokens added in P1-D3/D4
+        # automatically propagate to that fallback. This test pins the
+        # singleton.
+        from pathlib import Path
+
+        pkg_dir = Path(__file__).resolve().parent.parent / "openzim_mcp"
+        hits = []
+        for py in pkg_dir.rglob("*.py"):
+            text = py.read_text(encoding="utf-8")
+            if "_TRAILING_POLITENESS_RE" in text and "intent_parser.py" not in str(py):
+                # Allow comments / docstrings that reference the name
+                # (intent_parser is the only declaration site).
+                for line in text.splitlines():
+                    if (
+                        "_TRAILING_POLITENESS_RE" in line
+                        and "=" in line
+                        and "#" not in line.split("_TRAILING_POLITENESS_RE")[0]
+                    ):
+                        hits.append((py.name, line))
+        assert hits == [], (
+            f"_TRAILING_POLITENESS_RE redeclared outside intent_parser.py: " f"{hits!r}"
+        )
+
+    def test_param_leak_regex_is_canonical_source(self) -> None:
+        # Same shape as politeness audit — ``_PARAM_LEAK_RE`` should
+        # only be declared in intent_parser.py.
+        from pathlib import Path
+
+        pkg_dir = Path(__file__).resolve().parent.parent / "openzim_mcp"
+        hits = []
+        for py in pkg_dir.rglob("*.py"):
+            text = py.read_text(encoding="utf-8")
+            if "_PARAM_LEAK_RE" in text and "intent_parser.py" not in str(py):
+                for line in text.splitlines():
+                    if (
+                        "_PARAM_LEAK_RE" in line
+                        and "=" in line
+                        and "#" not in line.split("_PARAM_LEAK_RE")[0]
+                    ):
+                        hits.append((py.name, line))
+        assert (
+            hits == []
+        ), f"_PARAM_LEAK_RE redeclared outside intent_parser.py: {hits!r}"
+
+    def test_slashed_compound_helper_is_canonical_source(self) -> None:
+        # Single declaration of ``_looks_like_slashed_compound`` —
+        # widening the threshold in one place is enough.
+        from pathlib import Path
+
+        pkg_dir = Path(__file__).resolve().parent.parent / "openzim_mcp"
+        defines = []
+        for py in pkg_dir.rglob("*.py"):
+            text = py.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if "def _looks_like_slashed_compound" in line:
+                    defines.append((py.name, line.strip()))
+        assert (
+            len(defines) == 1
+        ), f"Expected exactly one definition site; got {defines!r}"
+        assert defines[0][0] == "simple_tools.py"
