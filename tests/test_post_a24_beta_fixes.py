@@ -110,17 +110,21 @@ class TestP1D1SlashedDigitCompounds:
     @pytest.mark.parametrize(
         "compound",
         [
-            "9/11",  # single event
-            "24/7",  # single phrase
-            "5/4",  # time signature / fraction
-            "3/4",  # fraction
-            "1/2",  # fraction
-            "12/24",  # date (December 24)
-            "2024/25",  # sports season notation (min=2, max=4 — still compound)
-            "1980/81",  # season
+            "9/11",
+            "24/7",
+            "5/4",
+            "3/4",
+            "1/2",
+            "12/24",
+            "2024/25",
+            "1980/81",
         ],
     )
     def test_digit_compound_detected(self, compound: str) -> None:
+        # Single-entity digit shapes: events (9/11), phrases (24/7),
+        # fractions / time signatures (5/4, 3/4, 1/2), date (12/24),
+        # sports seasons (2024/25, 1980/81). All have at least one
+        # half ≤ 2 chars so they trip the new digit-only branch.
         assert SimpleToolsHandler._looks_like_slashed_compound(
             compound
         ), f"{compound!r} should be treated as a single-entity slashed compound"
@@ -128,12 +132,14 @@ class TestP1D1SlashedDigitCompounds:
     @pytest.mark.parametrize(
         "compound",
         [
-            "2024/2025",  # both halves 4-digit — splits to two years
-            "1000/2000",  # min=4, splits
-            "12345/67890",  # both halves 5+ digits
+            "2024/2025",
+            "1000/2000",
+            "12345/67890",
         ],
     )
     def test_long_digit_pair_still_splits(self, compound: str) -> None:
+        # Both halves > 2 digits — naturally two distinct numbers /
+        # years, not a single date/ratio shape.
         assert not SimpleToolsHandler._looks_like_slashed_compound(
             compound
         ), f"{compound!r} should split (both halves > 2 digits)"
@@ -155,9 +161,9 @@ class TestP1D1SlashedDigitCompounds:
         result = SimpleToolsHandler._split_multi_entity("9/11 and World War II")
         # After fix: "9/11" stays compound, only one connector → 2 halves
         # → < 3 substantive → returns None.
-        assert result is None, (
-            f"Expected None (only 2 halves once 9/11 is preserved); " f"got {result!r}"
-        )
+        assert (
+            result is None
+        ), f"Expected None (only 2 halves once 9/11 is preserved); got {result!r}"
 
     def test_24_7_chain_treats_compound_as_single_entity(self) -> None:
         # ``24/7 and 9 to 5`` → halves are ``["24/7", "9 to 5"]``. Both
@@ -203,21 +209,25 @@ class TestP1D2SlashedShortLetterCompounds:
     @pytest.mark.parametrize(
         "compound",
         [
-            "Yin/Yang",  # min=3
-            "Hot/Cold",  # min=3
-            "Wet/Dry",  # min=3
-            "Up/Down",  # min=2 — already covered by old ≤2
-            "On/Off",  # min=2
-            "Day/Night",  # min=3 (Day=3, Night=5)
-            "Light/Dark",  # min=4 (Light=5, Dark=4)
-            "Mac/Cheese",  # min=3 (Mac=3, Cheese=6)
-            "Salt/Pepper",  # min=4 (Salt=4, Pepper=6)
-            "Sandy/Hook",  # min=4
-            "Cat/Dog",  # min=3
-            "Lock/Key",  # min=3
+            "Yin/Yang",
+            "Hot/Cold",
+            "Wet/Dry",
+            "Up/Down",
+            "On/Off",
+            "Day/Night",
+            "Light/Dark",
+            "Mac/Cheese",
+            "Salt/Pepper",
+            "Sandy/Hook",
+            "Cat/Dog",
+            "Lock/Key",
         ],
     )
     def test_short_letter_compound_detected(self, compound: str) -> None:
+        # Short paired-concept compounds: both halves letter-only with
+        # min length 2-4. Up/Down and On/Off (min 2) were already
+        # covered by the pre-a24 floor; Yin/Yang, Hot/Cold, Wet/Dry,
+        # Mac/Cheese et al. (min 3-4) need the widened floor.
         assert SimpleToolsHandler._looks_like_slashed_compound(
             compound
         ), f"{compound!r} should be treated as a single-entity compound"
@@ -225,14 +235,17 @@ class TestP1D2SlashedShortLetterCompounds:
     @pytest.mark.parametrize(
         "pair",
         [
-            "Berlin/Munich",  # min=6 — real 2-entity chain
-            "Tokyo/Kyoto",  # min=5
-            "Apple/Microsoft",  # min=5
-            "Lions/Tigers",  # min=5
-            "London/Paris",  # min=5
+            "Berlin/Munich",
+            "Tokyo/Kyoto",
+            "Apple/Microsoft",
+            "Lions/Tigers",
+            "London/Paris",
         ],
     )
     def test_long_letter_pair_still_splits(self, pair: str) -> None:
+        # Both halves are real proper nouns (min ≥ 5 chars). The
+        # widened ≤4 floor still excludes these so they correctly
+        # split as 2-entity chains.
         assert not SimpleToolsHandler._looks_like_slashed_compound(
             pair
         ), f"{pair!r} should split (both halves are real proper nouns)"
@@ -710,9 +723,9 @@ class TestPass2SiblingAudits:
                         and "#" not in line.split("_TRAILING_POLITENESS_RE")[0]
                     ):
                         hits.append((py.name, line))
-        assert hits == [], (
-            f"_TRAILING_POLITENESS_RE redeclared outside intent_parser.py: " f"{hits!r}"
-        )
+        assert (
+            hits == []
+        ), f"_TRAILING_POLITENESS_RE redeclared outside intent_parser.py: {hits!r}"
 
     def test_param_leak_regex_is_canonical_source(self) -> None:
         # Same shape as politeness audit — ``_PARAM_LEAK_RE`` should
