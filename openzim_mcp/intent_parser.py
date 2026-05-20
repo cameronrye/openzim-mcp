@@ -730,9 +730,26 @@ class IntentParser:
     # after the close-quote is what gets stripped) are unaffected. Loop
     # the strip so combinations like ``biology, thanks please`` peel
     # cleanly.
+    # Post-a21 P1-D6 + P1-D7: widen the politeness token list to cover
+    # British/texting variants (``ta`` / ``cheers`` / ``thx`` / ``ty``
+    # / ``pls``) and the obvious multi-language tokens (``bitte`` /
+    # ``danke`` / ``merci`` / ``gracias`` / ``por favor``). Live
+    # transcripts show small models speculatively appending these
+    # too — same shape as the post-a20 PD2-1 ``please``/``thanks``
+    # leak. Several of the new tokens are short (``ta`` is 2 chars,
+    # ``ty`` is 2 chars) so the leading anchor must guarantee a
+    # word boundary or ``cantata`` / ``feta`` / ``Dante`` would get
+    # their last 2 chars eaten. Pre-extension, the leading anchor
+    # was ``\s*[,;.!?]?\s*`` — zero-or-more whitespace lets the
+    # regex match mid-word. The extension tightens to
+    # ``(?:^|\s+|[,;.!?]\s*)`` — start-of-string OR at least one
+    # whitespace OR punctuation + optional whitespace. Embedded
+    # ``ta`` / ``ty`` substrings inside other words no longer match.
     _TRAILING_POLITENESS_RE = (
-        r"\s*[,;.!?]?\s*"
-        r"(?:please|kindly|thanks(?:\s+a\s+lot)?|thank\s+(?:you|u))"
+        r"(?:^|\s+|[,;.!?]\s*)"
+        r"(?:please|kindly|thanks(?:\s+a\s+lot)?|thank\s+(?:you|u)|"
+        r"pls|thx|ty|ta|cheers|"
+        r"bitte|danke|merci|gracias|por\s+favor)"
         r"\s*[,;.!?]*\s*$"
     )
 

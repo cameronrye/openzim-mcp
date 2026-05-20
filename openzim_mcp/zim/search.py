@@ -654,6 +654,15 @@ class _SearchMixin:
         done = last_index >= total_results
         next_cursor: Optional[str] = None
         if not done:
+            # Post-a20 P1-D1 / post-a21 P1-D5 contract: any tool whose
+            # cursor state carries ``"q"`` must also appear in
+            # ``simple_tools.SimpleToolsHandler._Q_EMITTING_CURSOR_TOOLS``
+            # so the dispatcher's q-overlap guard knows to run for
+            # legitimate pagination AND to skip when a cursor's ``t``
+            # claims a non-q-emitting tool. Add a new ``Cursor.encode``
+            # callsite here? Update that set in lockstep — the post-a21
+            # ``TestP1D5QEmittingCursorToolsDrift`` regression pins the
+            # contract via a parametric scan of these encode sites.
             cursor_state: Dict[str, Any] = {
                 "o": last_index,
                 "l": limit,

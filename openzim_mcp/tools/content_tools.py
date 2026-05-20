@@ -143,7 +143,9 @@ def _register_get_zim_entries(server: "OpenZimMcpServer") -> None:
         Two accepted shapes for ``entries``:
 
         1. **List of strings** — entry paths in ``zim_file_path`` (required).
-           Example: ``entries=["C/Foo", "C/Bar"], zim_file_path="/path/x.zim"``
+           Example: ``entries=["C/Foo", "C/Bar"], zim_file_path=<zim_path>``
+           (replace ``<zim_path>`` with the real path from
+           ``list_zim_files`` — never copy the placeholder verbatim).
         2. **List of dicts** — ``{"zim_file_path": "...", "entry_path": "..."}``
            per entry. Use this when batching across archives. ``zim_file_path``
            kwarg becomes the default for any dict that omits its own.
