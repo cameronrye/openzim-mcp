@@ -557,3 +557,56 @@ class TestRerankerWiredToHandleSearchAll:
             )
         mock_reranker.rerank.assert_not_called()
         assert handler.get_telemetry().get("reranker_engaged", 0) == 0
+
+    def test_handle_search_all_cross_archive_ordering_preserved(self) -> None:
+        """Redistribution: hit B1 outscores A1 — B1 must survive top_k=1 and
+        A1's archive bucket must end up empty after rerank+regrouping."""
+        mock_reranker = MagicMock()
+        # Score B1=0.9, A1=0.1; top_k honours the value passed by the handler
+        # (driven by final_top_k=1 on the config); only B1 survives.
+        mock_reranker.rerank = MagicMock(
+            side_effect=lambda query, candidates, top_k: sorted(
+                [
+                    {**c, "rerank_score": 0.9 if c["path"] == "B1" else 0.1}
+                    for c in candidates
+                ],
+                key=lambda x: x["rerank_score"],
+                reverse=True,
+            )[:top_k]
+        )
+        handler = self._make_handler()
+        # Override final_top_k to 1 so the reranker keeps only the top hit
+        # globally — this is the eviction scenario we want to exercise.
+        handler.zim_operations.config.ml.reranker = RerankerConfig(final_top_k=1)
+        with patch(
+            "openzim_mcp.ml.reranker.BGEReranker.get",
+            return_value=mock_reranker,
+        ):
+            result = handler._handle_search_all(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": True},
+            )
+        # Reranker called exactly once with both archives' hits flattened.
+        mock_reranker.rerank.assert_called_once()
+        call_kwargs = mock_reranker.rerank.call_args.kwargs
+        assert call_kwargs["query"] == "what year was Marie Curie born"
+        candidate_paths = {c["path"] for c in call_kwargs["candidates"]}
+        assert candidate_paths == {
+            "A1",
+            "B1",
+        }, "Both archive hits must be flattened into the candidates list"
+
+        # _rerank_src_idx must not leak into the rendered body or hit dicts.
+        assert "_rerank_src_idx" not in result.body
+
+        # B1 (high score) must appear in the rendered output.
+        assert "B1" in result.body, "High-scored hit B1 must survive top_k eviction"
+
+        # A1 (low score, evicted) must not appear — its archive bucket is empty
+        # and render_search_all skips archives with no results.
+        assert "A1" not in result.body, "Low-scored hit A1 must be evicted"
+
+        # Reranker engagement was tracked.
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 1
