@@ -655,16 +655,24 @@ class TestP1D6DispatcherEdgeStripWiderFields:
         )
         src = src_path.read_text(encoding="utf-8")
         # The defence-in-depth strip block lives in handle_zim_query
-        # just after parse_intent. Look for the field tuple.
-        block_match = re.search(
-            r"# Post-a21 P1-D1: defence-in-depth[\s\S]+?for _key in \(([^)]+)\):",
-            src,
-        )
-        assert block_match is not None, (
-            "Could not locate dispatcher-edge politeness strip "
-            "block — the comment/structure may have changed."
-        )
-        fields = block_match.group(1)
+        # just after parse_intent. Anchor on the post-a21 comment
+        # marker, then find the ``for _key in (...):`` tuple after
+        # it. Two-step find()/search() instead of a single combined
+        # regex with ``[\s\S]+?`` so SonarCloud's S5852 (ReDoS-shape
+        # backtracking) stays quiet — the reluctant-greedy + literal
+        # match pattern is a known polynomial-backtracking shape the
+        # static analyzer flags even when the actual runtime is fine.
+        marker = "# Post-a21 P1-D1: defence-in-depth"
+        marker_idx = src.find(marker)
+        assert (
+            marker_idx != -1
+        ), "Could not locate dispatcher-edge politeness strip marker."
+        tail = src[marker_idx + len(marker) :]
+        tuple_match = re.search(r"for _key in \(([^)]+)\):", tail)
+        assert (
+            tuple_match is not None
+        ), "Could not locate ``for _key in (...)`` tuple after marker."
+        fields = tuple_match.group(1)
         # Pin the expected field set.
         for field in (
             "query",
