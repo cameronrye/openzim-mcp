@@ -3319,6 +3319,35 @@ class SimpleToolsHandler:
                         search_query,
                     ),
                 )
+            # Phase D sub-D-1: cross-encoder rerank if available.
+            from openzim_mcp.ml.reranker import BGEReranker
+
+            reranker = BGEReranker.get(self.zim_operations.config.ml.reranker)
+            if reranker is not None:
+                candidates = payload.get("results", [])
+                if candidates:
+                    reranker_cfg = self.zim_operations.config.ml.reranker
+                    effective_top_k = (
+                        min(limit, reranker_cfg.final_top_k)
+                        if limit is not None
+                        else reranker_cfg.final_top_k
+                    )
+                    payload = cast(
+                        SearchResponse,
+                        {
+                            **cast(Dict[str, Any], payload),
+                            "results": reranker.rerank(
+                                query=search_query,
+                                candidates=candidates,
+                                top_k=effective_top_k,
+                            ),
+                        },
+                    )
+                    self._track("reranker_engaged")
+                else:
+                    self._track("reranker_skipped:no_results")
+            else:
+                self._track("reranker_skipped:not_installed")
             # Non-empty results: render via the legacy text formatter so the
             # markdown shape is identical to the non-compact path.
             return self.zim_operations._format_search_text(payload)

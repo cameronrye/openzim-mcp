@@ -205,3 +205,95 @@ class TestRerank:
         assert [c["path"] for c in result] == ["A", "B"]
         assert all("rerank_score" not in c for c in result)
         reset_kill_switches()  # leave state clean for the next test
+
+
+class TestRerankerWiredToHandleSearch:
+    """Verify that _handle_search routes results through the reranker when
+    available, and degrades gracefully when it is not."""
+
+    def _make_handler(self):  # type: ignore[return]
+        """Build a SimpleToolsHandler backed by a MagicMock ZimOperations.
+
+        The mock is pre-wired with the compact-path data shape so
+        _handle_search's compact branch (the only path where structured
+        results are available for reranking) runs end-to-end.
+        """
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock_ops = MagicMock()
+        mock_ops.config.ml.reranker = RerankerConfig()
+        # Compact path: search_zim_file_data returns a non-empty payload.
+        mock_ops.search_zim_file_data.return_value = {
+            "query": "what year was Marie Curie born",
+            "results": [
+                {"path": "A", "title": "Marie Curie", "snippet": "polonium"},
+                {"path": "B", "title": "Curie (unit)", "snippet": "radioactivity"},
+            ],
+            "next_cursor": None,
+            "total": 2,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 2},
+        }
+        mock_ops._format_search_text.return_value = "rendered results"
+        # _splice_title_match_into_search calls find_title_match internally;
+        # short-circuit it so the test doesn't need a real ZIM archive.
+        mock_ops.get_search_suggestions.return_value = []
+        return SimpleToolsHandler(mock_ops)
+
+    def test_handle_search_uses_reranker_when_available(self) -> None:
+        """When BGEReranker.get() returns a reranker, _handle_search routes
+        results through rerank() and tracks 'reranker_engaged'."""
+        mock_reranker = MagicMock()
+        mock_reranker.rerank = MagicMock(
+            side_effect=lambda query, candidates, top_k: [
+                {**c, "rerank_score": 0.5} for c in candidates[:top_k]
+            ]
+        )
+        handler = self._make_handler()
+        with (
+            patch(
+                "openzim_mcp.ml.reranker.BGEReranker.get",
+                return_value=mock_reranker,
+            ),
+            # _splice_title_match_into_search uses find_title_match which
+            # calls into the archive; stub it to return None (no promotion).
+            patch(
+                "openzim_mcp.simple_tools.find_title_match",
+                return_value=None,
+            ),
+        ):
+            result = handler._handle_search(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": True},
+            )
+        mock_reranker.rerank.assert_called_once()
+        call_kwargs = mock_reranker.rerank.call_args
+        assert call_kwargs.kwargs["query"] == "what year was Marie Curie born"
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 1
+        assert result == "rendered results"
+
+    def test_handle_search_passthrough_when_reranker_absent(self) -> None:
+        """When BGEReranker.get() returns None, _handle_search skips rerank
+        and tracks 'reranker_skipped:not_installed'. Result shape is unchanged."""
+        handler = self._make_handler()
+        with (
+            patch(
+                "openzim_mcp.ml.reranker.BGEReranker.get",
+                return_value=None,
+            ),
+            patch(
+                "openzim_mcp.simple_tools.find_title_match",
+                return_value=None,
+            ),
+        ):
+            result = handler._handle_search(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": True},
+            )
+        assert handler.get_telemetry().get("reranker_skipped:not_installed", 0) == 1
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 0
+        assert result == "rendered results"
