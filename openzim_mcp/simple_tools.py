@@ -1389,25 +1389,19 @@ class SimpleToolsHandler:
             )
         return None
 
-    # Post-a21 P1-D2/D3/D4: combined soft-connector pattern for
-    # multi-entity bare-topic chain detection. Same set as
-    # ``_SOFT_CHAIN_CONNECTOR_PATS`` but joined with alternation so a
-    # single ``re.split`` can chop a topic into ALL its halves in one
-    # pass (rather than the connector-by-connector loop in
-    # ``_soft_connector_footer``, which only ever splits on the FIRST
-    # match and leaves the rest of the chain stuffed into one half).
-    _COMBINED_SOFT_CONNECTOR_RE = re.compile(
-        r"\s+and\s+|\s+or\s+|\s+vs\.?\s+|\s*,\s+|\s+&\s+|\s*/\s*",
-        re.IGNORECASE,
-    )
-    # Post-a21 P1-D2/D3/D4: after a comma-split the next half can lead
-    # with a conjunction word (``, and Bears`` → comma-split eats
-    # ``", "`` but leaves ``"and Bears"`` because ``\s+and\s+`` requires
-    # leading whitespace and the half starts at the ``"a"``). Strip
-    # the leading conjunction post-split so ``Lions, Tigers, and Bears``
-    # → ``["Lions", "Tigers", "Bears"]`` rather than
-    # ``["Lions", "Tigers", "and Bears"]``.
+    # Post-a21 P1-D2/D3/D4: when the iterative single-pattern split
+    # below applies one connector pattern before the next, a half can
+    # end up with a leftover leading conjunction OR a leftover trailing
+    # comma. ``Köln, München, and Berlin`` after the ``\s+and\s+`` pass
+    # is ``["Köln, München,", "Berlin"]``; the subsequent ``\s*,\s+``
+    # pass over ``"Köln, München,"`` yields ``["Köln", "München,"]``
+    # because the regex requires whitespace AFTER the comma and there's
+    # none at end-of-string. ``Lions, Tigers, and Bears`` — same shape
+    # but the leftover is ``"and Bears"`` because the comma-pass split
+    # eats the ``", "`` and leaves ``"and"`` as a leading-conjunction
+    # prefix. Strip both shapes per-half so the final list is clean.
     _LEADING_CONJUNCTION_RE = re.compile(r"^(?:and|or|vs\.?|&)\s+", re.IGNORECASE)
+    _TRAILING_CONJUNCTION_RE = re.compile(r"\s+(?:and|or|vs\.?|&)$", re.IGNORECASE)
 
     @classmethod
     def _split_multi_entity(cls, topic: str) -> Optional[List[str]]:
@@ -1420,16 +1414,43 @@ class SimpleToolsHandler:
         rejection. The 2-entity case stays with the existing
         ``_soft_connector_footer`` post-resolution path (post-a18
         P3-D2 + post-a20 P1-D2).
+
+        Implementation note: applies each entry of
+        ``_SOFT_CHAIN_CONNECTOR_PATS`` as a SEPARATE ``re.split``
+        pass over the running parts list, rather than joining them
+        into one alternation regex. The combined-alternation form
+        (``\\s+and\\s+|\\s*,\\s+|...``) trips SonarCloud's S5852
+        polynomial-backtracking flag because every alternative
+        starts with a ``\\s+`` or ``\\s*`` quantifier and the
+        engine could in principle try many overlapping prefixes at
+        each position. Iterative single-pattern splits match the
+        existing codebase convention (see ``_search_query_tail``'s
+        three-token decomposition for the same defensive shape) and
+        avoid the static-analysis flag entirely. Cost is O(N · P)
+        per topic where P ≤ 6 — a constant — so the runtime cost is
+        identical in practice.
         """
         if not topic or not topic.strip():
             return None
-        parts = cls._COMBINED_SOFT_CONNECTOR_RE.split(topic.strip())
+        parts: List[str] = [topic.strip()]
+        for pat in cls._SOFT_CHAIN_CONNECTOR_PATS:
+            next_parts: List[str] = []
+            for part in parts:
+                next_parts.extend(re.split(pat, part, flags=re.IGNORECASE))
+            parts = next_parts
         cleaned: List[str] = []
         for raw in parts:
-            p = raw.strip() if raw else ""
+            if not raw:
+                continue
+            # Strip whitespace + leftover punctuation that the
+            # iterative connector splits couldn't trim (trailing
+            # commas / semicolons / periods that end a half because
+            # the comma-pattern wanted a trailing ``\s+``).
+            p = raw.strip(" \t,;.")
             if not p:
                 continue
             p = cls._LEADING_CONJUNCTION_RE.sub("", p).strip()
+            p = cls._TRAILING_CONJUNCTION_RE.sub("", p).strip(" \t,;.")
             if p:
                 cleaned.append(p)
         if len(cleaned) < 3:
