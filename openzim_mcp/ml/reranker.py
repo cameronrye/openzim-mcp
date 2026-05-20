@@ -106,16 +106,23 @@ class BGEReranker:
     @classmethod
     def _load_with_timeout(cls, cfg: RerankerConfig) -> "BGEReranker":
         timeout = cfg.first_call_timeout_seconds
-        with ThreadPoolExecutor(max_workers=1) as pool:
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
             future = pool.submit(_load_model, cfg.model_id, cfg.cache_dir)
             try:
                 model = future.result(timeout=timeout)
             except FuturesTimeout:
+                # Don't wait for the worker — the whole point of the timeout
+                # is to bound the caller's wall-clock wait. The worker thread
+                # leaks (it'll finish eventually); pool.shutdown(wait=False)
+                # doesn't block.
                 future.cancel()
                 raise TimeoutError(
                     f"reranker model load exceeded {timeout}s timeout. "
                     f"Run `openzim-mcp download-models` to pre-stage."
                 )
+        finally:
+            pool.shutdown(wait=False)
         # First-load audit log: model id + library version.
         try:
             import fastembed  # type: ignore[import-not-found]

@@ -49,3 +49,31 @@ class TestBGEGet:
             assert a is not None
             assert a is b  # same singleton
             assert mock_load.call_count == 1
+
+    def test_timeout_returns_none_within_bounded_time(self) -> None:
+        """Regression: a slow _load_model must not block the caller past timeout."""
+        import threading
+        import time
+
+        event = threading.Event()
+
+        def slow_load(model_id: str, cache_dir: object) -> object:
+            # Simulate a hung download that takes much longer than timeout.
+            event.wait(timeout=30)
+            return MagicMock()
+
+        with (
+            patch("openzim_mcp.ml.importlib.util.find_spec") as mock_spec,
+            patch("openzim_mcp.ml.reranker._load_model", side_effect=slow_load),
+        ):
+            mock_spec.return_value = object()
+            cfg = RerankerConfig(first_call_timeout_seconds=0.5)
+            start = time.monotonic()
+            result = BGEReranker.get(cfg)
+            elapsed = time.monotonic() - start
+        # Unblock the leaked background thread before exiting the test.
+        event.set()
+
+        assert result is None
+        # 2.0s gives generous slack over the 0.5s timeout for CI jitter.
+        assert elapsed < 2.0, f"get() blocked for {elapsed:.2f}s past timeout"
