@@ -1439,6 +1439,39 @@ class SimpleToolsHandler:
     _CONJUNCTION_SUFFIXES = (" and", " or", " vs.", " vs", " &")
     _CONJUNCTION_PREFIXES = ("and ", "or ", "vs. ", "vs ", "& ")
 
+    @staticmethod
+    def _looks_like_slashed_compound(text: str) -> bool:
+        """Post-a23 P1-D1: return True iff ``text`` looks like a single-
+        entity slashed compound that the chain detector should NOT split.
+
+        Heuristic: exactly one ``/``, both halves are letter-only (Unicode-
+        aware), and at least one half is ≤2 characters. The short-half
+        signal distinguishes acronyms / 2-letter conjunctions (``TCP/IP``,
+        ``AC/DC``, ``Either/Or``, ``A/B``) from genuinely separable
+        proper nouns like ``Berlin/Munich`` (min half 6 chars). Without
+        this guard, the ``\\s*/\\s*`` pass in ``_SOFT_CHAIN_CONNECTOR_PATS``
+        fragmented ``TCP/IP and HTTP and HTTPS`` into ``["TCP", "IP",
+        "HTTP", "HTTPS"]`` — the substantive filter then rejected the
+        short ALL-CAPS halves (pre-fix; addressed by the ALL-CAPS clause
+        in ``_is_substantive_topic``) AND mis-identified the user's
+        single TCP/IP entity as two separate ones.
+        """
+        parts = text.split("/")
+        if len(parts) != 2:
+            return False
+        for part in parts:
+            stripped = part.strip()
+            # Letter-only (no spaces, no digits, no punctuation other
+            # than ampersand which appears in some acronyms like R&B).
+            # ``isalpha`` is Unicode-aware in Python 3 so accented
+            # acronyms work too.
+            if not stripped:
+                return False
+            for ch in stripped:
+                if not (ch.isalpha() or ch == "&"):
+                    return False
+        return min(len(p.strip()) for p in parts) <= 2
+
     @classmethod
     def _split_multi_entity(cls, topic: str) -> Optional[List[str]]:
         """Split ``topic`` into N substantive halves on any soft
@@ -1471,7 +1504,15 @@ class SimpleToolsHandler:
         parts: List[str] = [topic.strip()]
         for pat in cls._SOFT_CHAIN_CONNECTOR_PATS:
             next_parts: List[str] = []
+            is_slash_pat = pat == r"\s*/\s*"
             for part in parts:
+                # Post-a23 P1-D1: don't split slashed compounds whose
+                # halves look like a single acronym / 2-letter
+                # conjunction (TCP/IP, AC/DC, Either/Or, A/B). See
+                # ``_looks_like_slashed_compound`` for the heuristic.
+                if is_slash_pat and cls._looks_like_slashed_compound(part):
+                    next_parts.append(part)
+                    continue
                 next_parts.extend(re.split(pat, part, flags=re.IGNORECASE))
             parts = next_parts
         cleaned: List[str] = []
@@ -1710,6 +1751,24 @@ class SimpleToolsHandler:
         # punctuation tokens like ``--``.
         if any(not ch.isascii() and ch.isalpha() for ch in stripped):
             return len(stripped) >= 2
+        # Post-a23 P1-D1: short ALL-CAPS tokens are real proper-noun
+        # acronyms (``HTTP``, ``TCP``, ``IP``, ``R&B``, ``AC``, ``DC``),
+        # not English sentence-words. Live probe sweep:
+        # ``tell me about TCP/IP and HTTP and HTTPS`` silently returned
+        # ``HTTPS`` because ``TCP`` / ``IP`` / ``HTTP`` all failed the
+        # ASCII-length-5 threshold, the substantive check rejected the
+        # half list, ``_split_multi_entity`` returned None, and the chain
+        # rejection never fired. Same shape for ``AC/DC and Iron Maiden
+        # and Metallica`` and ``R&B and Hip Hop``. ``isupper()`` returns
+        # True only when ≥1 cased character exists AND every cased
+        # character is uppercase — so it accepts ``TCP`` / ``R&B`` /
+        # ``M&Ms`` (the ``&`` and ``s`` don't disqualify a topic whose
+        # cased letters are all uppercase, but ``M&Ms`` has lowercase
+        # ``s`` so it correctly stays in the multi-token branch above).
+        # The threshold len ≥ 2 mirrors the non-ASCII branch — single
+        # letters (``A``, ``B``) almost never name an article.
+        if stripped.isupper() and len(stripped) >= 2:
+            return True
         return False
 
     @classmethod
