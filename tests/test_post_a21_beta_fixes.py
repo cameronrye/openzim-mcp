@@ -102,7 +102,6 @@ import pytest
 from openzim_mcp.intent_parser import IntentParser
 from openzim_mcp.simple_tools import SimpleToolsHandler
 
-
 # ===========================================================================
 # P1-D6 + P1-D7: trailing politeness regex extension
 # ===========================================================================
@@ -181,9 +180,9 @@ class TestP1D6P1D7TrailingPolitenessExtensions:
     )
     def test_extended_tokens_in_full_parse(self, raw: str, expected_query: str) -> None:
         intent, params, _conf = IntentParser.parse_intent(raw)
-        assert "ta" not in (params.get("query", "") + params.get("title", "")).lower(), (
-            f"Leftover token in params for {raw!r}: {params}"
-        )
+        assert (
+            "ta" not in (params.get("query", "") + params.get("title", "")).lower()
+        ), f"Leftover token in params for {raw!r}: {params}"
         v = params.get("query") or params.get("title") or ""
         assert v == expected_query, f"Expected {expected_query!r}, got {v!r}"
 
@@ -229,8 +228,7 @@ class TestP1D8SearchTermsRequiredAfterPolitenessStrip:
         handler, _mock = self._handler_single_archive()
         result = handler.handle_zim_query(query=query, zim_file_path="/x.zim")
         assert "Search Terms Required" in str(result), (
-            f"Expected the B4 guard to fire for {query!r}, got: "
-            f"{str(result)[:300]}"
+            f"Expected the B4 guard to fire for {query!r}, got: " f"{str(result)[:300]}"
         )
 
 
@@ -372,13 +370,13 @@ class TestMultiEntityChainGuidance:
             zim_file_path="/x.zim",
         )
         body = str(result)
-        assert "Multi-Entity Chain Detected" in body, (
-            f"Expected chain warning; got: {body[:400]}"
-        )
+        assert (
+            "Multi-Entity Chain Detected" in body
+        ), f"Expected chain warning; got: {body[:400]}"
         # Each entity should be enumerated in the warning.
-        assert "Köln" in body and "München" in body and "Berlin" in body, (
-            f"Entities not enumerated: {body[:400]}"
-        )
+        assert (
+            "Köln" in body and "München" in body and "Berlin" in body
+        ), f"Entities not enumerated: {body[:400]}"
 
     def test_three_entity_or_chain_with_non_latin_fires_warning(self) -> None:
         handler, _mock = self._handler(title_resolves={})
@@ -429,9 +427,9 @@ class TestMultiEntityChainGuidance:
             query="tell me about Earth, Wind & Fire", zim_file_path="/x.zim"
         )
         body = str(result)
-        assert "Multi-Entity Chain Detected" not in body, (
-            f"False-fire on real multi-entity title: {body[:400]}"
-        )
+        assert (
+            "Multi-Entity Chain Detected" not in body
+        ), f"False-fire on real multi-entity title: {body[:400]}"
 
     def test_lions_tigers_and_bears_suppressed_via_title_probe(self) -> None:
         # ``Lions, Tigers, and Bears`` is a real idiom / film
@@ -450,20 +448,20 @@ class TestMultiEntityChainGuidance:
             zim_file_path="/x.zim",
         )
         body = str(result)
-        assert "Multi-Entity Chain Detected" not in body, (
-            f"False-fire on real multi-entity idiom: {body[:400]}"
-        )
+        assert (
+            "Multi-Entity Chain Detected" not in body
+        ), f"False-fire on real multi-entity idiom: {body[:400]}"
 
     def test_comma_then_and_strips_leading_conjunction(self) -> None:
         # Regression: pre-strip-leading-conjunction the comma-split
         # left ``"and Berlin"`` as the third half. Verify the strip
         # collapses ``", and "`` to a clean entity boundary.
-        halves = SimpleToolsHandler._split_multi_entity(
-            "Köln, München, and Berlin"
-        )
-        assert halves == ["Köln", "München", "Berlin"], (
-            f"Leading conjunction not stripped: {halves}"
-        )
+        halves = SimpleToolsHandler._split_multi_entity("Köln, München, and Berlin")
+        assert halves == [
+            "Köln",
+            "München",
+            "Berlin",
+        ], f"Leading conjunction not stripped: {halves}"
 
     def test_search_intent_not_affected(self) -> None:
         # Multi-entity check is gated on tell_me_about — ``search for
@@ -655,8 +653,7 @@ class TestP1D10RecoveryHintMarkerDiscriminatesSecurityError:
         # floor. Either preserve the original message OR mention
         # "outside allowed directories".
         assert (
-            "outside allowed directories" in body.lower()
-            or "Path is outside" in body
+            "outside allowed directories" in body.lower() or "Path is outside" in body
         ), (
             f"P1-D10: security-specific error reason was dropped by the "
             f"PD2-4 recovery hint. Got: {body[:500]}"
@@ -690,9 +687,8 @@ class TestTD1LimitDocstringClarifiesAtomicIntents:
         # We can't grep for the exact wording (style choice) but the
         # docstring must say something about ``limit`` being ignored
         # or no-op for atomic intents.
-        assert (
-            "limit" in source.lower()
-            and ("ignored" in source.lower() or "atomic" in source.lower())
+        assert "limit" in source.lower() and (
+            "ignored" in source.lower() or "atomic" in source.lower()
         ), (
             "zim_query docstring should clarify that ``limit`` is "
             "ignored for atomic intents (tell_me_about / get article / "

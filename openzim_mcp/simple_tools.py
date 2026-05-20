@@ -1407,9 +1407,7 @@ class SimpleToolsHandler:
     # the leading conjunction post-split so ``Lions, Tigers, and Bears``
     # → ``["Lions", "Tigers", "Bears"]`` rather than
     # ``["Lions", "Tigers", "and Bears"]``.
-    _LEADING_CONJUNCTION_RE = re.compile(
-        r"^(?:and|or|vs\.?|&)\s+", re.IGNORECASE
-    )
+    _LEADING_CONJUNCTION_RE = re.compile(r"^(?:and|or|vs\.?|&)\s+", re.IGNORECASE)
 
     @classmethod
     def _split_multi_entity(cls, topic: str) -> Optional[List[str]]:
