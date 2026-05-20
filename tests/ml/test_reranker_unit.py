@@ -76,6 +76,28 @@ class TestBGEGet:
         # 2.0s gives generous slack over the 0.5s timeout for CI jitter.
         assert elapsed < 2.0, f"get() blocked for {elapsed:.2f}s past timeout"
 
+    def test_load_failure_trips_kill_switch(self) -> None:
+        """Regression: after a load failure, subsequent get() calls must NOT retry."""
+        call_count = 0
+
+        def failing_load(model_id: str, cache_dir: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("simulated load failure")
+
+        with (
+            patch("openzim_mcp.ml.importlib.util.find_spec") as mock_spec,
+            patch("openzim_mcp.ml.reranker._load_model", side_effect=failing_load),
+        ):
+            mock_spec.return_value = object()
+            cfg = RerankerConfig(first_call_timeout_seconds=2.0)
+            assert BGEReranker.get(cfg) is None
+            assert BGEReranker.get(cfg) is None
+            assert BGEReranker.get(cfg) is None
+        assert (
+            call_count == 1
+        ), f"_load_model should be called once and never retried; got {call_count}"
+
 
 class TestScorePairs:
     def _make_reranker_with_scores(self, scores: List[float]) -> BGEReranker:
@@ -160,3 +182,26 @@ class TestRerank:
     def test_empty_candidates_returns_empty(self) -> None:
         r = self._make_reranker_with_scores([])
         assert r.rerank("any long enough query string", [], top_k=10) == []
+
+    def test_inference_failure_falls_back_to_passthrough(self) -> None:
+        """Regression: a mid-inference raise must return candidates[:top_k] via ml_fallback."""
+        from openzim_mcp.ml.fallback import reset_kill_switches
+
+        reset_kill_switches()
+        mock_model = MagicMock()
+        mock_model.rerank = MagicMock(side_effect=RuntimeError("OOM"))
+        r = BGEReranker(model=mock_model, config=RerankerConfig())
+        candidates = [
+            {"path": "A", "snippet": "...", "xapian_score": 1.0},
+            {"path": "B", "snippet": "...", "xapian_score": 0.9},
+            {"path": "C", "snippet": "...", "xapian_score": 0.8},
+        ]
+        result = r.rerank(
+            "what year did Marie Curie discover radium",
+            candidates,
+            top_k=2,
+        )
+        # Falls back to original order, sliced to top_k, no rerank_score
+        assert [c["path"] for c in result] == ["A", "B"]
+        assert all("rerank_score" not in c for c in result)
+        reset_kill_switches()  # leave state clean for the next test

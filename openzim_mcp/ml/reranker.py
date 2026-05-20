@@ -24,7 +24,7 @@ from typing import (
 
 from openzim_mcp.config import RerankerConfig
 from openzim_mcp.ml import detect
-from openzim_mcp.ml.fallback import ml_fallback  # noqa: F401 — used by Task 5
+from openzim_mcp.ml.fallback import ml_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,21 @@ def _load_model(model_id: str, cache_dir: Optional[Path]) -> Any:
     return TextCrossEncoder(**kwargs)
 
 
+def _rerank_passthrough(
+    _self: "BGEReranker",
+    query: str,
+    candidates: List[dict[str, Any]],
+    top_k: int,
+) -> List[dict[str, Any]]:
+    """Fallback for `BGEReranker.rerank` inference failures.
+
+    Returns candidates sliced to top_k without rerank_score, preserving
+    Xapian's original ordering. Matches the skip-on-short-query gate's
+    response shape so callers see identical behavior on both bypass paths.
+    """
+    return candidates[:top_k]
+
+
 class BGEReranker:
     """Singleton wrapper around FastEmbed's cross-encoder reranker.
 
@@ -51,6 +66,9 @@ class BGEReranker:
 
     _instance: Optional["BGEReranker"] = None
     _instance_lock: threading.Lock = threading.Lock()
+    _load_failed: bool = (
+        False  # Tripped on first load failure; never cleared except by reset_instance.
+    )
 
     def __init__(self, model: Any, config: RerankerConfig) -> None:
         self._model = model
@@ -61,6 +79,7 @@ class BGEReranker:
         """For tests only."""
         with cls._instance_lock:
             cls._instance = None
+            cls._load_failed = False
 
     def score_pairs(self, pairs: Sequence[Tuple[str, str]]) -> List[float]:
         """Batch-score (query, passage) pairs.
@@ -87,6 +106,10 @@ class BGEReranker:
                 scores[i] = float(s)
         return scores
 
+    @ml_fallback(
+        feature="reranker_inference",
+        on_failure=_rerank_passthrough,
+    )
     def rerank(
         self,
         query: str,
@@ -137,8 +160,10 @@ class BGEReranker:
 
         The first call attempts to import FastEmbed + load the model
         with a `first_call_timeout_seconds` wall-clock cap. On timeout
-        or failure, logs a structured WARNING and returns None for
-        every subsequent call this process makes."""
+        or failure, logs a structured WARNING, trips a per-process kill
+        switch, and returns None for every subsequent call this process
+        makes (the retry storm the spec's Risk Mitigations section
+        guarantees is prevented)."""
         # 1. Extra installed?
         if not detect().reranker:
             return None
@@ -153,10 +178,15 @@ class BGEReranker:
         # 4. Cached instance?
         if cls._instance is not None:
             return cls._instance
-        # 5. Load with timeout.
+        # 5. Kill switch tripped on a prior load failure?
+        if cls._load_failed:
+            return None
+        # 6. Load with timeout.
         with cls._instance_lock:
             if cls._instance is not None:
                 return cls._instance
+            if cls._load_failed:
+                return None
             try:
                 cls._instance = cls._load_with_timeout(cfg)
             except Exception as exc:  # noqa: BLE001
@@ -169,6 +199,7 @@ class BGEReranker:
                     ),
                     exc,
                 )
+                cls._load_failed = True
                 return None
             return cls._instance
 
