@@ -3322,32 +3322,32 @@ class SimpleToolsHandler:
             # Phase D sub-D-1: cross-encoder rerank if available.
             from openzim_mcp.ml.reranker import BGEReranker
 
-            reranker = BGEReranker.get(self.zim_operations.config.ml.reranker)
-            if reranker is not None:
-                candidates = payload.get("results", [])
-                if candidates:
-                    reranker_cfg = self.zim_operations.config.ml.reranker
-                    effective_top_k = (
-                        min(limit, reranker_cfg.final_top_k)
-                        if limit is not None
-                        else reranker_cfg.final_top_k
-                    )
-                    payload = cast(
-                        SearchResponse,
-                        {
-                            **cast(Dict[str, Any], payload),
-                            "results": reranker.rerank(
-                                query=search_query,
-                                candidates=candidates,
-                                top_k=effective_top_k,
-                            ),
-                        },
-                    )
+            reranker_cfg = self.zim_operations.config.ml.reranker
+            reranker = BGEReranker.get(reranker_cfg)
+            candidates = payload.get("results", [])
+
+            if reranker is None:
+                self._track("reranker_skipped.not_installed")
+            elif not candidates:
+                self._track("reranker_skipped.no_results")
+            else:
+                if limit is not None and limit > 0:
+                    effective_top_k = min(limit, reranker_cfg.final_top_k)
+                else:
+                    effective_top_k = reranker_cfg.final_top_k
+                reranked = reranker.rerank(
+                    query=search_query,
+                    candidates=candidates,
+                    top_k=effective_top_k,
+                )
+                payload = cast(
+                    SearchResponse,
+                    {**cast(Dict[str, Any], payload), "results": reranked},
+                )
+                if reranked and "rerank_score" in reranked[0]:
                     self._track("reranker_engaged")
                 else:
-                    self._track("reranker_skipped:no_results")
-            else:
-                self._track("reranker_skipped:not_installed")
+                    self._track("reranker_skipped.passthrough")
             # Non-empty results: render via the legacy text formatter so the
             # markdown shape is identical to the non-compact path.
             return self.zim_operations._format_search_text(payload)

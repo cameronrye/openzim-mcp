@@ -271,6 +271,10 @@ class TestRerankerWiredToHandleSearch:
         mock_reranker.rerank.assert_called_once()
         call_kwargs = mock_reranker.rerank.call_args
         assert call_kwargs.kwargs["query"] == "what year was Marie Curie born"
+        assert call_kwargs.kwargs["candidates"] == [
+            {"path": "A", "title": "Marie Curie", "snippet": "polonium"},
+            {"path": "B", "title": "Curie (unit)", "snippet": "radioactivity"},
+        ]
         assert handler.get_telemetry().get("reranker_engaged", 0) == 1
         assert result == "rendered results"
 
@@ -294,6 +298,37 @@ class TestRerankerWiredToHandleSearch:
                 params={},
                 options={"compact": True},
             )
-        assert handler.get_telemetry().get("reranker_skipped:not_installed", 0) == 1
+        assert handler.get_telemetry().get("reranker_skipped.not_installed", 0) == 1
         assert handler.get_telemetry().get("reranker_engaged", 0) == 0
+        assert result == "rendered results"
+
+    def test_handle_search_emits_passthrough_when_rerank_returns_unscored(
+        self,
+    ) -> None:
+        """Regression: short-query bypass + ml_fallback inference failure both return
+        unscored candidates. The handler must NOT count those as reranker_engaged."""
+        handler = self._make_handler()
+        mock_reranker = MagicMock()
+        mock_reranker.rerank = MagicMock(
+            side_effect=lambda query, candidates, top_k: candidates[:top_k]
+        )
+        with (
+            patch(
+                "openzim_mcp.ml.reranker.BGEReranker.get",
+                return_value=mock_reranker,
+            ),
+            patch(
+                "openzim_mcp.simple_tools.find_title_match",
+                return_value=None,
+            ),
+        ):
+            result = handler._handle_search(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": True},
+            )
+        telemetry = handler.get_telemetry()
+        assert telemetry.get("reranker_skipped.passthrough", 0) == 1
+        assert telemetry.get("reranker_engaged", 0) == 0
         assert result == "rendered results"
