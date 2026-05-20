@@ -5,6 +5,171 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a24] — 2026-05-20 (alpha pre-release) — post-a23 beta-test sweep — 4 live-Wikipedia defects across one pass
+
+Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
+the freshly-deployed `v2.0.0a23` build. Smoke gates 4/4 green
+pre-fix; the live MCP session dropped after ~30 probes (same long-
+session connection timeout pattern observed in the post-a22 sweep)
+so pass-2 ran as a source-level sibling audit per the post-a17
+methodology refinement — zero new defects surfaced. **"Narrow-scope
+sibling" pattern holds for the 4th sweep running: 3 of 4 defects
+this sweep are narrower-than-needed enumerations on the matching
+a23 fix shape** (politeness regex missed a second wave of SMS /
+multi-word / multilingual tokens, q-emitting drift-guard used
+non-recursive glob, substantive filter rejected short ALL-CAPS
+acronyms). The fourth defect (P1-D3) is a new defect class — the
+title-promotion path silently resolves leaked `<param>=<value>`
+suffixes to wildly unrelated articles.
+
+### Multi-entity chain ALL-CAPS / slashed-acronym silent abandonment (P1-D1)
+
+The post-a22 `_split_multi_entity` / `_is_substantive_topic` pair
+correctly handles long bare-topic chains (Berlin / Munich / Köln)
+and non-Latin shorts (東京 / Köln, post-a19 P1-D3). But two
+interacting failures left short ALL-CAPS acronym chains silently
+abandoned:
+
+- The slash splitter (`\s*/\s*` in `_SOFT_CHAIN_CONNECTOR_PATS`)
+  fragmented slashed acronyms — `TCP/IP` → `["TCP", "IP"]`,
+  `AC/DC` → `["AC", "DC"]`, `Either/Or` → `["Either", "Or"]`.
+- `_is_substantive_topic` rejected the fragments because they fail
+  every existing clause (HTTP=4, TCP=3, IP=2, AC=2, DC=2 — none
+  ≥5 chars, no digit, no non-ASCII letter). With every half
+  failing substantive, `_split_multi_entity` returned None and
+  the chain rejection silently abandoned.
+
+Two live failures observed:
+
+- `tell me about TCP/IP and HTTP and HTTPS` → silently returned
+  the `HTTPS` article (matching-tail short-circuit picks the
+  longest substantive ASCII tail), dropping TCP/IP and HTTP.
+- `tell me about AC/DC and Iron Maiden and Metallica` → silently
+  returned `Metallica`. Same path.
+
+Two coordinated fixes:
+
+- New `_looks_like_slashed_compound` helper protects slashed
+  compounds whose halves are letter-only with a ≤2-char half
+  (TCP/IP, AC/DC, Either/Or, A/B). `Berlin / Munich` (min half 6
+  chars) still splits as a genuine 2-entity chain.
+- New ALL-CAPS clause in `_is_substantive_topic`:
+  `isupper() and len ≥ 2` accepts HTTP, TCP, IP, USA, EU, R&B
+  etc. Mirrors the post-a19 P1-D3 non-Latin clause — short tokens
+  with a clear proper-noun signal aren't English sentence-words.
+  Mixed-case `Now` / `Both` / `Here` / `Then` stay rejected.
+
+### Politeness regex second-wave family (P1-D2)
+
+The post-a22 P1-D2 SMS extension added `thnx` / `thanx` / `tysm`
+/ `kthx` / `kthxbai` but missed a second wave of live-observed
+variants:
+
+- 1-2 char compressions: `tx`, `txs`
+- longer SMS: `tyvm`, `thnks`, `thxx`, `kthxbye`
+- multi-word: `thanks a million`, `thank (you|u) (so|very) much`
+- multilingual second tier: `obrigado(a)` (Portuguese),
+  `arigato(u)` (Japanese romaji), `spasibo` (Russian)
+
+Same narrow-scope sibling pattern as a22 P1-D2 → a23 P1-D2 — each
+sweep so far has shipped narrower than the natural politeness
+family. The word-boundary anchor (post-a21) already protects
+short tokens from mid-word matches (`manta` / `pasta` / `vista` /
+`cantata` stay intact).
+
+### `<param>=<value>` query-suffix silent fragmentation (P1-D3) — NEW defect class
+
+Live: `tell me about Photosynthesis limit=10` returns the article
+for the number `10` (Wikipedia's number article). Same shape for
+`compact_budget=200` (returns the year 200 article),
+`content_offset=100` (returns 100), `offset=5` (returns 5). Root
+cause: a small model that doesn't know to pass `limit` as the
+typed MCP parameter occasionally leaks `limit=N` INTO the query
+text; the title-promotion tokeniser sees `"10"` as a clean ASCII
+digit tail and scores it cleanly against the number-article
+title index, returning a wildly unrelated body that masks the
+model's actual topic.
+
+Distinct from a23 P1-D5 (docstring nudge for atomic intents that
+ignore `limit`). The docstring tells the model not to pass
+`limit` as text on atomic intents, but it can't prevent a model
+that's confused about parameter-passing semantics from typing
+`limit=10` as text anyway. Fix: new
+`IntentParser._strip_param_leaks` peels `\s+<param>=<value>`
+shapes BEFORE the politeness loop runs. Token list covers every
+`zim_query` argument (`limit`, `offset`, `content_offset`,
+`max_content_length`, `max_words`, `compact_budget`, `compact`,
+`synthesize`, `cursor`, `zim_file_path`, `entry_path`,
+`namespace`, `partial_query`). Idempotent loop handles multiple
+leaks in one call. The `\s+` leading anchor protects prose
+mentions (`offset printing`, `cursor algorithms`, `the compact
+disc`) from accidental strip.
+
+### Q-emitting drift scanner non-recursive glob (P1-D4)
+
+The post-a22 P1-D3 widening from `zim/search.py` to all of
+`zim/*.py` used `Path.glob` (direct children only). The current
+`openzim_mcp/zim/` tree is flat (no subdirectories) so behaviour
+is unchanged today, but a future contributor adding
+`openzim_mcp/zim/cursor/encoder.py` or any subdirectory with
+q-emitting `Cursor.encode` callsites would have those silently
+missed by the scan, breaking the drift guard's promise. Same
+narrow-scope sibling shape as the a22 P1-D3 widening from one
+file to all direct-child files in the directory — the next
+widening is naturally to all files in the tree. Fix: switch to
+`rglob`.
+
+### Methodology
+
+The recurring **"fix unlocks new paths"** + **"narrow-scope
+sibling"** pair held for the 4th sweep running. Three of four
+defects this sweep are narrow-scope siblings of a23's own fixes
+(P1-D1 narrow substantive filter + narrow slash split, P1-D2
+narrow politeness enumeration, P1-D4 narrow scanner glob). The
+fourth (P1-D3) is a new defect class — a small-model-leaked
+parameter shape that silently fragments to an unrelated article
+via title-promotion. The post-a22 lint-leak refinement (`make
+lint` locally before push; check SonarCloud findings via API
+before merging; avoid `[\s\S]+?` + literal regex shapes) was
+followed cleanly — only one SonarCloud finding emerged
+(implicit-concat strings from black auto-format, S6571), fixed
+in a single follow-up commit before merge. **The methodology is
+stabilising**: the structural defect classes the sweep catches
+remain consistent across alphas, and the lint discipline now
+catches static-analyzer noise pre-merge rather than letting it
+leak to CI.
+
+### Testing
+
+- **73 regression tests** in `tests/test_post_a23_beta_fixes.py`:
+  `TestP1D1MultiEntityAllCapsAndSlashedAcronyms` (12 cases —
+  short ALL-CAPS substantive, R&B with ampersand, mixed-case
+  rejected, slashed-compound helper identifies acronyms, rejects
+  proper-noun pairs / 3-part slashes / digit halves, end-to-end
+  split for TCP/IP, AC/DC, Berlin / Munich, ALL-CAPS chain);
+  `TestP1D2PolitenessSecondWave` (~30 parameterized cases — every
+  new token + chained + word-boundary safety + case-insensitive +
+  regression guards on every post-a22 token);
+  `TestP1D3ParamLeakSuffix` (~20 cases — every param-name × value
+  shape strips, end-to-end parse_intent, multi-param chains, mix
+  with politeness, prose-mention preservation, idempotence);
+  `TestP1D4QEmittingScannerRecursive` (3 cases — source-level
+  rglob check + scanner returns expected pinned set);
+  `TestLiveMcpReproduction` (6 end-to-end probes mirroring the
+  live-MCP queries the sweep observed); `TestRegressionGuards`
+  (6 cases pinning post-a17 / a18 / a19 / a22 fixes that share
+  code with the changed paths).
+- Full suite: **2053 passed, 50 skipped**. mypy clean across all
+  45 source files. `make lint` (flake8 + isort + black) clean.
+  SonarCloud quality gate passed with 0 open issues post-merge.
+
+### Release process
+
+After this changelog lands on `main`, push the `v2.0.0a24` tag
+on `main` to trigger `.github/workflows/release.yml` — PyPI
+publish + GitHub release notes auto-extracted from the matching
+CHANGELOG section.
+
 ## [2.0.0a23] — 2026-05-19 (alpha pre-release) — post-a22 beta-test sweep — 7 live-Wikipedia defects across two passes
 
 Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
