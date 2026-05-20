@@ -389,7 +389,7 @@ class TestP1D3QEmittingDriftGuardWiderScope:
 
     @classmethod
     def _scan_q_emitting_tools_in_zim(cls) -> set[str]:
-        """Walk every ``openzim_mcp/zim/*.py`` source file, find
+        """Walk every ``openzim_mcp/zim/**/*.py`` source file, find
         ``Cursor.encode(tool="X", state={..., "q": ..., ...})``
         callsites, and return the set of tool names whose state
         contains a ``"q"`` key.
@@ -397,12 +397,21 @@ class TestP1D3QEmittingDriftGuardWiderScope:
         Robust against multi-line encode calls — captures the entire
         encode call body up to the matching close paren (depth-1
         scan).
+
+        Post-a23 P1-D4: ``rglob`` (recursive) rather than ``glob``
+        (direct children only). The current zim/ tree is flat, but a
+        future contributor adding ``openzim_mcp/zim/cursor/encoder.py``
+        (or any subdirectory) would have q-emitting callsites silently
+        missed by a non-recursive scan. Same narrow-scope sibling
+        shape as the post-a22 P1-D3 widening from one file to all
+        files in the directory — the next widening is naturally to
+        all files in the tree.
         """
         zim_dir = Path(__file__).resolve().parents[1] / "openzim_mcp" / "zim"
         assert zim_dir.is_dir(), f"zim/ not found at {zim_dir}"
 
         q_emitting: set[str] = set()
-        for py in sorted(zim_dir.glob("*.py")):
+        for py in sorted(zim_dir.rglob("*.py")):
             text = py.read_text(encoding="utf-8")
             for m in re.finditer(r"Cursor\.encode\(", text):
                 body = cls._find_call_body(text, m.end())

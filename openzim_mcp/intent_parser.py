@@ -759,16 +759,45 @@ class IntentParser:
     # is — and the existing anchor already handles that). All new
     # tokens are also ≥4 chars except ``kthx``, which is still
     # word-anchored.
+    #
+    # Post-a23 P1-D2: narrow-scope sibling sweep widened the SMS family
+    # to cover live-observed misses — ``tx`` / ``txs`` / ``tyvm`` /
+    # ``thnks`` / ``thxx`` / ``kthxbye``, multi-word ``thanks a million``
+    # and ``thank (you|u) (so|very) much``, and the second wave of
+    # multilingual tokens ``obrigado(a)?`` (Portuguese), ``arigatou?``
+    # (Japanese romaji), ``spasibo`` (Russian). Same narrow-enumeration
+    # shape as the a22 → a23 progression — every politeness sweep so
+    # far has shipped narrower than the natural family. The 2-char
+    # token ``tx`` keeps the leading word-boundary anchor (already
+    # tightened post-a21) so it can't eat the last two chars of
+    # embedded words; word-anchored 2-char tokens are still safer than
+    # mid-word matches.
     _TRAILING_POLITENESS_RE = (
         r"(?:^|\s+|[,;.!?]\s*)"
-        r"(?:please|kindly|thanks(?:\s+a\s+lot)?|thank\s+(?:you|u)|"
+        r"(?:please|kindly|"
+        # ``thanks (a lot|a million)`` — multi-word extensions of the
+        # base ``thanks`` token.
+        r"thanks(?:\s+a\s+(?:lot|million))?|"
+        # ``thank (you|u) (so|very) much`` + plain ``thank (you|u)``.
+        # Optional ``(so|very) much`` tail captures the heavier
+        # politeness wrap small models emit.
+        r"thank\s+(?:you|u)(?:\s+(?:so|very)\s+much)?|"
         # Longest-first within each family so the regex engine matches
         # the maximal token even though Python's alternation is
         # leftmost-first (backtracking would still find the longer
         # match thanks to the end-anchor, but explicit ordering keeps
         # the pattern readable and avoids relying on backtracking).
-        r"pls|thanx|thnx|thx|tysm|ty|kthxbai|kthx|ta|cheers|"
-        r"bitte|danke|merci|gracias|por\s+favor)"
+        r"kthxbai|kthxbye|kthx|"
+        r"tyvm|tysm|ty|"
+        r"thnks|thanx|thnx|thxx|thx|"
+        r"pls|ta|cheers|txs|tx|"
+        # Multilingual politeness — Latin family + Asian-language
+        # romaji. The Cyrillic ``спасибо`` and Devanagari forms aren't
+        # included because they don't appear in ASCII-leaked queries
+        # from current small models; revisit if live transcripts show
+        # them.
+        r"bitte|danke|merci|gracias|por\s+favor|"
+        r"obrigad[oa]|arigatou?|spasibo)"
         r"\s*[,;.!?]*\s*$"
     )
 
@@ -791,6 +820,59 @@ class IntentParser:
                 break
         return query
 
+    # Post-a23 P1-D3: small models occasionally leak MCP tool parameters
+    # INTO the natural-language query as text — ``tell me about
+    # Photosynthesis limit=10`` or ``Berlin compact_budget=200`` instead
+    # of passing them as the typed ``limit`` / ``compact_budget`` kwargs.
+    # The title-promotion tokeniser then sees ``"10"`` / ``"200"`` as
+    # clean ASCII digit tails, scores them against the title index, and
+    # silently returns the ``10`` / ``200`` number article (or year
+    # article) — a wildly unrelated body that masks the model's actual
+    # topic.
+    #
+    # Live a23 sweep reproduced for ``limit=N`` (returns ``"N"``),
+    # ``content_offset=N`` (returns ``"N"``), ``compact_budget=N``
+    # (returns year ``"N"`` article), ``offset=N`` (returns ``"N"``)
+    # on ``tell me about <topic> <param>=<value>``. Strip these BEFORE
+    # the politeness loop / pattern matching so every downstream
+    # extractor sees the cleaned query. Token list mirrors the public
+    # ``zim_query`` argument set; covers the param names live a23
+    # sweep observed plus their obvious neighbours.
+    #
+    # Word-boundary anchored at the front so we don't eat the leading
+    # part of a multi-word topic (``offsetting`` / ``compactor`` /
+    # ``cursor`` mid-topic are protected by the ``\s+`` requirement —
+    # we only strip when the param keyword is preceded by whitespace,
+    # and we require ``=`` so prose mentions of these words stay
+    # intact). The value side matches ``\S+`` so quoted strings,
+    # paths, numbers, and booleans all peel cleanly.
+    _PARAM_LEAK_RE = (
+        r"\s+"
+        r"(?:limit|offset|content_offset|max_content_length|"
+        r"max_words|compact_budget|compact|synthesize|cursor|"
+        r"zim_file_path|entry_path|namespace|partial_query)"
+        r"\s*=\s*\S+"
+    )
+
+    @classmethod
+    def _strip_param_leaks(cls, query: str) -> str:
+        """Peel leaked ``param=value`` suffixes off ``query``. Idempotent;
+        loops until stable so a query carrying multiple params
+        (``Photosynthesis limit=10 compact_budget=200``) strips in one
+        call.
+        """
+        for _ in range(4):
+            before = query
+            query = safe_regex_sub(
+                cls._PARAM_LEAK_RE,
+                "",
+                query,
+                flags=re.IGNORECASE,
+            ).strip()
+            if query == before:
+                break
+        return query
+
     @classmethod
     def parse_intent(cls, query: str) -> Tuple[str, Dict[str, Any], float]:
         """Parse a natural language query to determine intent.
@@ -805,6 +887,13 @@ class IntentParser:
         Returns:
             Tuple of (intent_type, extracted_params, confidence_score)
         """
+        # Post-a23 P1-D3: peel leaked ``param=value`` suffixes BEFORE
+        # politeness so the politeness regex (and every downstream
+        # extractor) sees the clean topic. See ``_PARAM_LEAK_RE`` for
+        # the live-observed defect class. Order matters: politeness
+        # then runs over the cleaned topic without ``limit=10`` /
+        # ``offset=5`` confusing its leading word-boundary anchor.
+        query = cls._strip_param_leaks(query)
         # Post-a20 PD2-1: peel trailing politeness BEFORE pattern
         # matching + extraction so every extractor sees the cleaned
         # query. See ``_TRAILING_POLITENESS_RE`` above for rationale +
