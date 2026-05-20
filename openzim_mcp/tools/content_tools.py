@@ -37,7 +37,9 @@ def _register_get_zim_entry(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file
-            entry_path: Entry path, e.g., 'A/Some_Article'
+            entry_path: Entry path; replace ``<entry_path>`` with a real path
+                from ``find_entry_by_title`` or ``browse_namespace`` (e.g.
+                ``"C/Biology"``). Never copy ``<entry_path>`` verbatim.
             max_content_length: Maximum length of content to return
             content_offset: Character offset to start reading from (default 0).
                 Combine with max_content_length to page through long articles

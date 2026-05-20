@@ -745,10 +745,29 @@ class IntentParser:
     # ``(?:^|\s+|[,;.!?]\s*)`` — start-of-string OR at least one
     # whitespace OR punctuation + optional whitespace. Embedded
     # ``ta`` / ``ty`` substrings inside other words no longer match.
+    #
+    # Post-a22 P1-D2: further extend with the SMS / chat variants the
+    # post-a21 enumeration didn't cover — ``thnx`` / ``thanx`` /
+    # ``tysm`` / ``kthx`` / ``kthxbai``. Live a22 sweep observed
+    # ``search for biology thnx`` searching for ``"biology thnx"``
+    # (3 irrelevant matches), and ``search for biology thanx``
+    # searching for ``"biology thanx"`` — same shape as the missed
+    # ``ta`` / ``cheers`` class in the post-a21 sweep. The leading
+    # word-boundary anchor still protects against in-word matches
+    # (``thank`` ends ``cathank``? no, but ``thnx`` inside another
+    # word is structurally unlikely; ``ty`` inside ``cantata``
+    # is — and the existing anchor already handles that). All new
+    # tokens are also ≥4 chars except ``kthx``, which is still
+    # word-anchored.
     _TRAILING_POLITENESS_RE = (
         r"(?:^|\s+|[,;.!?]\s*)"
         r"(?:please|kindly|thanks(?:\s+a\s+lot)?|thank\s+(?:you|u)|"
-        r"pls|thx|ty|ta|cheers|"
+        # Longest-first within each family so the regex engine matches
+        # the maximal token even though Python's alternation is
+        # leftmost-first (backtracking would still find the longer
+        # match thanks to the end-anchor, but explicit ordering keeps
+        # the pattern readable and avoids relying on backtracking).
+        r"pls|thanx|thnx|thx|tysm|ty|kthxbai|kthx|ta|cheers|"
         r"bitte|danke|merci|gracias|por\s+favor)"
         r"\s*[,;.!?]*\s*$"
     )

@@ -53,7 +53,9 @@ def _register_get_article_structure(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file
-            entry_path: Entry path, e.g., 'C/Some_Article'
+            entry_path: Entry path; replace ``<entry_path>`` with a real path
+                from ``find_entry_by_title`` or ``browse_namespace`` (e.g.
+                ``"C/Biology"``). Never copy ``<entry_path>`` verbatim.
 
         Returns:
             Dict containing article structure (title, path, headings, sections,
@@ -114,7 +116,9 @@ def _register_extract_article_links(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file
-            entry_path: Entry path, e.g., 'C/Some_Article'
+            entry_path: Entry path; replace ``<entry_path>`` with a real path
+                from ``find_entry_by_title`` or ``browse_namespace`` (e.g.
+                ``"C/Biology"``). Never copy ``<entry_path>`` verbatim.
             limit: Max items per page (1-500, default 100).
             offset: Starting offset within the requested category (default 0).
             kind: Which category — ``"internal"`` (default), ``"external"``,
@@ -224,7 +228,9 @@ def _register_get_entry_summary(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file
-            entry_path: Entry path, e.g., 'C/Some_Article'
+            entry_path: Entry path; replace ``<entry_path>`` with a real path
+                from ``find_entry_by_title`` or ``browse_namespace`` (e.g.
+                ``"C/Biology"``). Never copy ``<entry_path>`` verbatim.
             max_words: Maximum number of words in the summary (default: 200, max: 1000)
             compact: Op2 — when True, render the summary with compact
                 semantics (infoboxes extracted, oversized tables
@@ -311,7 +317,9 @@ def _register_get_table_of_contents(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file
-            entry_path: Entry path, e.g., 'C/Some_Article'
+            entry_path: Entry path; replace ``<entry_path>`` with a real path
+                from ``find_entry_by_title`` or ``browse_namespace`` (e.g.
+                ``"C/Biology"``). Never copy ``<entry_path>`` verbatim.
 
         Returns:
             Dict containing:
@@ -486,7 +494,9 @@ def _register_get_related_articles(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file
-            entry_path: Source entry, e.g. 'C/Some_Article'
+            entry_path: Source entry path; replace ``<entry_path>`` with a real
+                path from ``find_entry_by_title`` or ``browse_namespace``
+                (e.g. ``"C/Biology"``). Never copy ``<entry_path>`` verbatim.
             limit: Max results (1-100, default: 10)
 
         Returns:
@@ -563,7 +573,11 @@ def _register_get_section(server: "OpenZimMcpServer") -> None:
 
         Args:
             zim_file_path: Path to the ZIM file.
-            entry_path: Entry path (e.g., 'A/Berlin').
+            entry_path: Entry path (e.g., 'C/Berlin'). Use the
+                namespace convention from the archive's actual paths
+                (modern Wikipedia ZIMs use ``C/``; legacy ZIMs use
+                ``A/``) — call ``find_entry_by_title`` first to
+                discover the real namespace before copying.
             section_id: Section identifier from TOC.
             max_chars: Optional cap on section body chars (default uses
                        config.content.max_content_length).
