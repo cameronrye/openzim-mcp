@@ -32,7 +32,12 @@ from .title_promotion import (
     iter_query_tails,
     iter_query_windows,
 )
-from .tool_schemas import SearchResponse, SynthesizeResponse
+from .tool_schemas import (
+    SearchAllResponse,
+    SearchResponse,
+    SearchWithFiltersResponse,
+    SynthesizeResponse,
+)
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
@@ -3182,6 +3187,58 @@ class SimpleToolsHandler:
         tool_mismatch = self._cursor_tool_mismatch(options, "search_with_filters")
         if tool_mismatch is not None:
             return tool_mismatch
+        search_query = params.get("query", query)
+        limit = options.get("limit")
+        offset = options.get("offset", 0)
+        if options.get("compact", False):
+            # Phase D sub-D-1: compact path gives us a structured payload
+            # to rerank before rendering. The canonical-title-match splice
+            # lives in ``search_with_filters_with_canonical_splice`` (legacy
+            # path); compact mode skips it and lets the reranker handle
+            # ordering — consistent with how _handle_search treats its
+            # compact vs. legacy paths.
+            payload = self.zim_operations.search_with_filters_data(
+                zim_file_path,
+                search_query,
+                params.get("namespace"),
+                params.get("content_type"),
+                limit,
+                offset,
+            )
+            from openzim_mcp.ml.reranker import BGEReranker
+
+            reranker_cfg = self.zim_operations.config.ml.reranker
+            reranker = BGEReranker.get(reranker_cfg)
+            candidates = payload.get("results", [])
+
+            if reranker is None:
+                self._track("reranker_skipped.not_installed")
+            elif not candidates:
+                self._track("reranker_skipped.no_results")
+            else:
+                if limit is not None and limit > 0:
+                    effective_top_k = min(limit, reranker_cfg.final_top_k)
+                else:
+                    effective_top_k = reranker_cfg.final_top_k
+                reranked = reranker.rerank(
+                    query=search_query,
+                    candidates=candidates,
+                    top_k=effective_top_k,
+                )
+                payload = cast(
+                    SearchWithFiltersResponse,
+                    {**cast(Dict[str, Any], payload), "results": reranked},
+                )
+                if reranked and "rerank_score" in reranked[0]:
+                    self._track("reranker_engaged")
+                else:
+                    self._track("reranker_skipped.passthrough")
+            # SearchWithFiltersResponse has the same core keys as SearchResponse
+            # (query, total, page_info, results, done, next_cursor) so the
+            # text formatter accepts it structurally.
+            return self.zim_operations._format_search_text(
+                cast(SearchResponse, cast(Dict[str, Any], payload))
+            )
         # A11 post-a11 H2: route to the canonical-title-match-aware
         # variant so ``search for berlin in namespace C`` surfaces
         # the canonical ``Berlin`` article instead of dropping it
@@ -3189,11 +3246,11 @@ class SimpleToolsHandler:
         # offset=0 — see the wrapper for paging-stability rationale.
         return self.zim_operations.search_with_filters_with_canonical_splice(
             zim_file_path,
-            params.get("query", query),
+            search_query,
             params.get("namespace"),
             params.get("content_type"),
-            options.get("limit"),
-            options.get("offset", 0),
+            limit,
+            offset,
         )
 
     def _handle_get_article(
@@ -4436,6 +4493,63 @@ class SimpleToolsHandler:
                 actual_query,
                 limit_per_file=options.get("limit", 5),
             )
+            # Phase D sub-D-1: cross-encoder rerank across all archives.
+            # Hits are flattened into a single candidate list (tagged with
+            # their source archive index so they can be redistributed after
+            # reranking), reranked globally so the best hits win regardless
+            # of which archive they come from, then grouped back into the
+            # per-archive structure that ``render_search_all`` expects.
+            from openzim_mcp.ml.reranker import BGEReranker
+
+            reranker_cfg = self.zim_operations.config.ml.reranker
+            reranker = BGEReranker.get(reranker_cfg)
+            per_file: List[Dict[str, Any]] = [
+                cast(Dict[str, Any], e) for e in (data.get("results") or [])
+            ]
+
+            # Build a flat list of tagged candidates from non-error archives.
+            tagged_hits: List[Dict[str, Any]] = []
+            for entry_idx, entry in enumerate(per_file):
+                if not entry.get("error") and isinstance(entry.get("result"), dict):
+                    for hit in entry["result"].get("results") or []:
+                        tagged_hits.append({**hit, "_rerank_src_idx": entry_idx})
+
+            if reranker is None:
+                self._track("reranker_skipped.not_installed")
+            elif not tagged_hits:
+                self._track("reranker_skipped.no_results")
+            else:
+                effective_top_k = reranker_cfg.final_top_k
+                reranked_tagged = reranker.rerank(
+                    query=actual_query,
+                    candidates=tagged_hits,
+                    top_k=effective_top_k,
+                )
+                # Group reranked hits back by source archive, stripping the
+                # temporary ``_rerank_src_idx`` tag from each result dict.
+                grouped: Dict[int, List[Dict[str, Any]]] = {}
+                for hit in reranked_tagged:
+                    src_idx = hit.get("_rerank_src_idx", -1)
+                    clean = {k: v for k, v in hit.items() if k != "_rerank_src_idx"}
+                    grouped.setdefault(src_idx, []).append(clean)
+                # Rebuild each archive entry's results in the reranked order.
+                for entry_idx, entry in enumerate(per_file):
+                    if not entry.get("error") and isinstance(entry.get("result"), dict):
+                        new_hits = grouped.get(entry_idx, [])
+                        entry["result"] = {
+                            **entry["result"],
+                            "results": new_hits,
+                        }
+                        entry["has_hits"] = bool(new_hits)
+                if reranked_tagged and "rerank_score" in reranked_tagged[0]:
+                    self._track("reranker_engaged")
+                else:
+                    self._track("reranker_skipped.passthrough")
+
+            data = cast(
+                SearchAllResponse,
+                {**cast(Dict[str, Any], data), "results": per_file},
+            )
             body = compact_renderers.render_search_all(data, actual_query)
             # H10: surface the aggregate ``reason`` / ``suggestions`` from
             # _meta so the footer renders structured recovery hints in
@@ -4449,7 +4563,6 @@ class SimpleToolsHandler:
             # All-archives-failed signal (Op4): if every per-file entry
             # carries an error, flag with ``archive_unavailable`` so the
             # caller knows the issue is structural, not query-shape.
-            per_file = data.get("results") or []
             if per_file and all(
                 isinstance(e, dict) and e.get("error") for e in per_file
             ):

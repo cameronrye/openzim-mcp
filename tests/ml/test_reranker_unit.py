@@ -332,3 +332,228 @@ class TestRerankerWiredToHandleSearch:
         assert telemetry.get("reranker_skipped.passthrough", 0) == 1
         assert telemetry.get("reranker_engaged", 0) == 0
         assert result == "rendered results"
+
+
+class TestRerankerWiredToHandleFilteredSearch:
+    """Verify that _handle_filtered_search (compact mode) routes results
+    through the reranker when available, and degrades gracefully when not."""
+
+    def _make_handler(self):  # type: ignore[return]
+        """Build a SimpleToolsHandler backed by a MagicMock ZimOperations.
+
+        Pre-wired so the compact path (search_with_filters_data +
+        _format_search_text) runs end-to-end.
+        """
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock_ops = MagicMock()
+        mock_ops.config.ml.reranker = RerankerConfig()
+        mock_ops.search_with_filters_data.return_value = {
+            "query": "what year was Marie Curie born",
+            "results": [
+                {"path": "A", "title": "Marie Curie", "snippet": "polonium"},
+                {"path": "B", "title": "Curie (unit)", "snippet": "radioactivity"},
+            ],
+            "next_cursor": None,
+            "total": 2,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 2},
+            "namespace_filter": None,
+            "content_type_filter": None,
+        }
+        mock_ops._format_search_text.return_value = "rendered filtered results"
+        return SimpleToolsHandler(mock_ops)
+
+    def test_handle_filtered_search_engages_reranker(self) -> None:
+        """When BGEReranker.get() returns a reranker, _handle_filtered_search
+        (compact mode) routes results through rerank() and tracks
+        'reranker_engaged'."""
+        mock_reranker = MagicMock()
+        mock_reranker.rerank = MagicMock(
+            side_effect=lambda query, candidates, top_k: [
+                {**c, "rerank_score": 0.5} for c in candidates[:top_k]
+            ]
+        )
+        handler = self._make_handler()
+        with patch(
+            "openzim_mcp.ml.reranker.BGEReranker.get",
+            return_value=mock_reranker,
+        ):
+            result = handler._handle_filtered_search(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": True},
+            )
+        mock_reranker.rerank.assert_called_once()
+        call_kwargs = mock_reranker.rerank.call_args
+        assert call_kwargs.kwargs["query"] == "what year was Marie Curie born"
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 1
+        assert result == "rendered filtered results"
+
+    def test_handle_filtered_search_skips_reranker_when_absent(self) -> None:
+        """When BGEReranker.get() returns None, compact filtered search skips
+        rerank and tracks 'reranker_skipped.not_installed'."""
+        handler = self._make_handler()
+        with patch(
+            "openzim_mcp.ml.reranker.BGEReranker.get",
+            return_value=None,
+        ):
+            result = handler._handle_filtered_search(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": True},
+            )
+        assert handler.get_telemetry().get("reranker_skipped.not_installed", 0) == 1
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 0
+        assert result == "rendered filtered results"
+
+    def test_handle_filtered_search_legacy_path_bypasses_reranker(self) -> None:
+        """Non-compact mode takes the legacy string path — reranker is not
+        called and no telemetry is emitted."""
+        handler = self._make_handler()
+        mock_reranker = MagicMock()
+        handler.zim_operations.search_with_filters_with_canonical_splice.return_value = (
+            "legacy filtered results"
+        )
+        with patch(
+            "openzim_mcp.ml.reranker.BGEReranker.get",
+            return_value=mock_reranker,
+        ):
+            result = handler._handle_filtered_search(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": False},
+            )
+        mock_reranker.rerank.assert_not_called()
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 0
+        assert result == "legacy filtered results"
+
+
+class TestRerankerWiredToHandleSearchAll:
+    """Verify that _handle_search_all (compact mode) routes results through
+    the reranker globally across archives."""
+
+    def _make_handler(self):  # type: ignore[return]
+        """Build a SimpleToolsHandler with two-archive search_all_data shape."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock_ops = MagicMock()
+        mock_ops.config.ml.reranker = RerankerConfig()
+        mock_ops.search_all_data.return_value = {
+            "query": "what year was Marie Curie born",
+            "results": [
+                {
+                    "zim_file_path": "/a.zim",
+                    "name": "archive_a",
+                    "has_hits": True,
+                    "error": False,
+                    "result": {
+                        "query": "what year was Marie Curie born",
+                        "results": [
+                            {
+                                "path": "A1",
+                                "title": "Marie Curie",
+                                "snippet": "polonium",
+                            },
+                        ],
+                        "total": 1,
+                        "done": True,
+                        "next_cursor": None,
+                        "page_info": {"offset": 0, "limit": 5, "returned_count": 1},
+                    },
+                },
+                {
+                    "zim_file_path": "/b.zim",
+                    "name": "archive_b",
+                    "has_hits": True,
+                    "error": False,
+                    "result": {
+                        "query": "what year was Marie Curie born",
+                        "results": [
+                            {
+                                "path": "B1",
+                                "title": "Curie (unit)",
+                                "snippet": "radioactivity",
+                            },
+                        ],
+                        "total": 1,
+                        "done": True,
+                        "next_cursor": None,
+                        "page_info": {"offset": 0, "limit": 5, "returned_count": 1},
+                    },
+                },
+            ],
+            "_meta": {"reason": None, "suggestions": None},
+            "files_searched": 2,
+            "files_with_hits": 2,
+            "files_failed": 0,
+            "budget_exceeded": False,
+            "done": True,
+        }
+        return SimpleToolsHandler(mock_ops)
+
+    def test_handle_search_all_engages_reranker(self) -> None:
+        """When BGEReranker.get() returns a reranker, _handle_search_all
+        (compact mode) routes aggregated results through rerank() and tracks
+        'reranker_engaged'."""
+        mock_reranker = MagicMock()
+        mock_reranker.rerank = MagicMock(
+            side_effect=lambda query, candidates, top_k: [
+                {**c, "rerank_score": 0.5} for c in candidates[:top_k]
+            ]
+        )
+        handler = self._make_handler()
+        with patch(
+            "openzim_mcp.ml.reranker.BGEReranker.get",
+            return_value=mock_reranker,
+        ):
+            handler._handle_search_all(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": True},
+            )
+        mock_reranker.rerank.assert_called_once()
+        call_kwargs = mock_reranker.rerank.call_args
+        # Both archive hits should be in the flattened candidates list.
+        assert call_kwargs.kwargs["query"] == "what year was Marie Curie born"
+        assert len(call_kwargs.kwargs["candidates"]) == 2
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 1
+
+    def test_handle_search_all_skips_reranker_when_absent(self) -> None:
+        """When BGEReranker.get() returns None, compact search_all skips
+        rerank and tracks 'reranker_skipped.not_installed'."""
+        handler = self._make_handler()
+        with patch(
+            "openzim_mcp.ml.reranker.BGEReranker.get",
+            return_value=None,
+        ):
+            handler._handle_search_all(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": True},
+            )
+        assert handler.get_telemetry().get("reranker_skipped.not_installed", 0) == 1
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 0
+
+    def test_handle_search_all_legacy_path_bypasses_reranker(self) -> None:
+        """Non-compact mode takes the legacy string path — reranker is not called."""
+        handler = self._make_handler()
+        mock_reranker = MagicMock()
+        handler.zim_operations.search_all.return_value = '{"results": []}'
+        with patch(
+            "openzim_mcp.ml.reranker.BGEReranker.get",
+            return_value=mock_reranker,
+        ):
+            handler._handle_search_all(
+                query="what year was Marie Curie born",
+                zim_file_path="/fake/wiki.zim",
+                params={},
+                options={"compact": False},
+            )
+        mock_reranker.rerank.assert_not_called()
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 0
