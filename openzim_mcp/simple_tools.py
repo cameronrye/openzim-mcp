@@ -563,18 +563,48 @@ class SimpleToolsHandler:
             # by construction — the strip's regex is end-anchored and
             # leaves clean content untouched.
             if isinstance(params, dict):
+                # Post-a22 P1-D6: widen the defence-in-depth strip
+                # to ``section_name`` (carries user-content for
+                # ``section <X> of <Y>`` queries) — every other field
+                # set by an extractor that captures with a greedy tail
+                # is at risk if ``parse_intent``'s universal strip ever
+                # fails (in-process module cache, future regression).
+                # ``entries`` is a list of strings handled separately
+                # below because the universal scalar-string strip can't
+                # iterate it.
                 for _key in (
                     "query",
                     "topic",
                     "title",
                     "entry_path",
                     "partial_query",
+                    "section_name",
                 ):
                     _v = params.get(_key)
                     if isinstance(_v, str) and _v:
                         _v_clean = IntentParser._strip_trailing_politeness(_v).strip()
                         if _v_clean != _v:
                             params[_key] = _v_clean
+                # ``entries`` is a list of entry-path strings (from
+                # batched ``get N entries`` parses). Strip per-element
+                # so a trailing politeness on the last entry doesn't
+                # become part of the path.
+                _entries = params.get("entries")
+                if isinstance(_entries, list) and _entries:
+                    _cleaned_entries: List[Any] = []
+                    _changed = False
+                    for _entry in _entries:
+                        if isinstance(_entry, str) and _entry:
+                            _entry_clean = IntentParser._strip_trailing_politeness(
+                                _entry
+                            ).strip()
+                            if _entry_clean != _entry:
+                                _changed = True
+                            _cleaned_entries.append(_entry_clean)
+                        else:
+                            _cleaned_entries.append(_entry)
+                    if _changed:
+                        params["entries"] = _cleaned_entries
             # A11 B2: ``tell me about <empty>`` (trailing-space input,
             # punctuation-only topic) used to fall through to a topic
             # of ``"tell me about"`` and disambiguate to article titles
@@ -1445,6 +1475,37 @@ class SimpleToolsHandler:
                 next_parts.extend(re.split(pat, part, flags=re.IGNORECASE))
             parts = next_parts
         cleaned: List[str] = []
+        # Post-a22 P1-D1: the leading-conjunction strip exists to clean
+        # leftover ``and ``/``or ``/``& `` prefixes that the iterative
+        # split CAN produce when the comma-pass runs before the and-pass
+        # (e.g. ``Lions, Tigers, and Bears`` under a reordered pattern
+        # list would leave ``and Bears`` as a half). The CURRENT pattern
+        # order (``and`` → ``or`` → ``vs`` → ``,`` → ``&`` → ``/``)
+        # consumes leading conjunctions in pass 1, so the leftover-
+        # prefix shape doesn't arise organically — but the strip is
+        # kept as defensive code against future reorderings.
+        #
+        # The defensive strip MUST NOT apply to the half that occupies
+        # the START of the original topic, where a leading ``And`` /
+        # ``Or`` / ``&`` is real title content (``tell me about And
+        # Then There Were None and Hercule Poirot and Murder on the
+        # Orient Express`` produced rejection bullets ``Then There
+        # Were None`` / ``Hercule Poirot`` / ``Murder on the Orient
+        # Express`` — the leading "And" got mangled away. Worse,
+        # ``Or Else and Death and Taxes and Pride and Prejudice``
+        # stripped ``Or Else`` to ``Else`` which failed
+        # ``_is_substantive_topic`` (4 chars, single token, no digit,
+        # no non-ASCII letter), aborting the multi-entity rejection
+        # silently and dropping 4 of 5 entities through to
+        # ``tell_me_about`` resolution).
+        #
+        # Skipping the FIRST non-empty half preserves the defensive
+        # strip for hypothetical reordered futures while protecting
+        # legitimate first-word conjunctions in the original topic.
+        # Iterative ``re.split`` preserves order, so the first non-
+        # empty entry in ``parts`` corresponds to the leading prefix
+        # of the original topic — even after multiple split passes.
+        seen_first_half = False
         for raw in parts:
             if not raw:
                 continue
@@ -1455,17 +1516,23 @@ class SimpleToolsHandler:
             p = raw.strip(" \t,;.")
             if not p:
                 continue
+            is_first_half = not seen_first_half
+            seen_first_half = True
             # Strip leading conjunction word + whitespace
-            # (case-insensitive). String-prefix scan rather than
-            # regex so S5852 stays quiet.
-            lower_p = p.lower()
-            for prefix in cls._CONJUNCTION_PREFIXES:
-                if lower_p.startswith(prefix):
-                    p = p[len(prefix) :].lstrip()
-                    break
+            # (case-insensitive) on every half EXCEPT the first —
+            # see P1-D1 explanation above. String-prefix scan rather
+            # than regex so S5852 stays quiet.
+            if not is_first_half:
+                lower_p = p.lower()
+                for prefix in cls._CONJUNCTION_PREFIXES:
+                    if lower_p.startswith(prefix):
+                        p = p[len(prefix) :].lstrip()
+                        break
             # Strip trailing conjunction word preceded by whitespace
             # (case-insensitive); rstrip stray punctuation that
-            # follows.
+            # follows. Applied to every half (including the first) —
+            # a trailing conjunction is always split leftover, never
+            # part of a real article title at the END of a topic.
             p = p.rstrip(" \t,;.")
             lower_p = p.lower()
             for suffix in cls._CONJUNCTION_SUFFIXES:

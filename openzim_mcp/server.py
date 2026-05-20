@@ -273,8 +273,10 @@ class OpenZimMcpServer:
                     `get article <name>`, `show structure of <name>`,
                     `links in <name>`, `articles related to <name>`,
                     `show main page`, `list namespaces`, `metadata for
-                    <file>`, `list available ZIM files`. Setting it
-                    there has no effect; omit it on those calls.
+                    <file>`, `list available ZIM files`, `summary of
+                    <name>`, `table of contents <name>`, `section <X>
+                    of <name>`. Setting it there has no effect; omit
+                    it on those calls.
                 offset: Pagination offset (default: 0).
                 max_content_length: Article body cap (default: 4000).
                 content_offset: Character offset to start reading the
