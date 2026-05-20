@@ -5,6 +5,151 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a23] — 2026-05-19 (alpha pre-release) — post-a22 beta-test sweep — 7 live-Wikipedia defects across two passes
+
+Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
+the freshly-deployed `v2.0.0a22` build. Smoke gates 4/4 green
+pre-fix; the live MCP session dropped mid pass-1 (long-session
+connection timeout) so pass-2 ran as a source-level sibling audit
+per the post-a17 methodology refinement. **Strong "narrow-scope
+sibling" signal this sweep: 4 of 7 defects were narrower-than-needed
+enumerations on the matching a22 fix shape** (politeness regex
+missed SMS variants, drift-guard scanned one file instead of the
+whole zim/ tree, docstring-bait sweep skipped entry_path
+placeholders, limit-nudge enumeration missing three atomic intents).
+
+### Multi-entity chain first-word conjunction strip (P1-D1)
+
+The post-a21 `_split_multi_entity` helper applied a defensive
+`_CONJUNCTION_PREFIXES` strip to every cleaned half — including
+the half that occupies the START of the original topic, where a
+leading `And` / `Or` / `&` is real title content. Two live
+failures observed:
+
+- `tell me about And Then There Were None and Hercule Poirot and Murder on the Orient Express`
+  → rejection bullets read `tell me about Then There Were None`
+  (leading "And" mangled).
+- `tell me about Or Else and Death and Taxes and Pride and Prejudice`
+  → first half stripped from `Or Else` to `Else` (4 chars, fails
+  `_is_substantive_topic`) → multi-entity rejection silently
+  abandoned → `tell_me_about` resolved Pride and Prejudice,
+  dropping 4 of 5 entities with no warning.
+
+Fix: skip leading-conjunction strip on the FIRST non-empty half
+(`parts[0]` after iterative `re.split` preserves order). Subsequent
+halves retain the defensive strip — they can only get a leading
+conjunction prefix from a hypothetical reordered pattern list,
+never from the user's typed input.
+
+### Politeness regex SMS variants (P1-D2)
+
+The post-a21 P1-D6/D7 widening (`ta`/`cheers`/`thx`/`ty`/`pls` +
+`bitte`/`danke`/`merci`/`gracias`/`por favor`) didn't cover
+common chat / SMS spellings: `thnx`, `thanx`, `tysm`, `kthx`,
+`kthxbai`. Live: `search for biology thnx` searches for
+`"biology thnx"` (3 irrelevant matches). Same shape as the
+post-a21 missed-token class. All new tokens are ≥4 chars except
+`kthx`, which is word-anchored. No new `\s+` quantifiers —
+ReDoS-safe.
+
+### Q-emitting cursor tools drift guard scope (P1-D3)
+
+The post-a21 P1-D5 regression test scanned ONLY `zim/search.py`
+for `Cursor.encode` callsites. But callsites also exist in
+`zim/namespace.py` (4 sites) and `zim/structure.py` (1 site) — a
+future contributor adding a q-emitting tool there would silently
+pass the test while breaking the dispatcher's q-overlap guard.
+Widened the scan to all of `openzim_mcp/zim/*.py` with state-dict
+introspection (handles literal-dict shape AND variable-reference
+shape including PEP 526 type-annotated assignments like
+`cursor_state: Dict[str, Any] = { ..., "q": ..., ... }`).
+
+### entry_path docstring placeholder bait (P1-D4 + P2-D1)
+
+The post-a21 P1-D9 widened the PD2-2 path-bait sweep to every
+`tools/*.py` but only scanned for `/path/...\.zim` /
+`/data/...\.zim` shapes. The `entry_path` parameter docstrings
+used `'A/Some_Article'` and `'C/Some_Article'` as literal-looking
+placeholders (6 sites: 1 in `content_tools.py`, 5 in
+`structure_tools.py`). Same weak-instruction-follower defect
+class — a small model copying `Some_Article` verbatim hits an
+entry-not-found error and drops into a retry loop. The PD2-3 /
+PD2-4 recovery hints only trigger on ZIM PATH errors, not
+entry-path errors, so the bait was unreachable by the existing
+safety net. Fix: replace with `<entry_path>` placeholder pointing
+at real MCP tool names (`find_entry_by_title` / `browse_namespace`).
+
+Pass-2 sibling audit found one more entry_path bait site (P2-D1):
+`get_section` docstring (`structure_tools.py:576`) used
+`'A/Berlin'` as the entry_path example. The legacy `A/` namespace
+is the pre-2018 single-namespace ZIM convention; modern multi-
+namespace ZIMs (Wikipedia 2026-02 and similar) use `C/`. A small
+model copying `A/Berlin` verbatim hits entry-not-found on a
+modern archive. Active wrong-guidance rather than obvious
+placeholder. Fix: replace with `'C/Berlin'` + document the
+legacy/modern distinction inline. Regression test scans
+`tools/*.py` for `'A/<word>'` examples (allowing the legitimate
+`A/B` Wikipedia testing article and lines that explicitly
+document the distinction).
+
+### `limit` docstring nudge — missing atomic intents (P1-D5)
+
+The post-a21 T-D1 nudge enumerated 9 atomic intents that ignore
+`limit` in the `zim_query` docstring. Three more atomic intents
+whose handlers don't reference `options.get("limit", ...)` were
+missing from the enumeration: `summary of <name>`, `table of
+contents <name>`, `section <X> of <name>`. Same shape as T-D1 —
+small models passing `limit=5` on those calls get no doc signal
+that the parameter is ignored. Extended the enumeration.
+
+### Dispatcher-edge politeness strip — additional fields (P1-D6)
+
+The post-a21 P1-D1 defence-in-depth strip covered
+`{query, topic, title, entry_path, partial_query}` but not
+`section_name` (from `section <X> of <Y>` parses) or `entries`
+(list of entry paths from batched parses). Same belt-and-
+suspenders rationale: idempotent when `parse_intent`'s universal
+strip works upstream, defence-in-depth when it doesn't
+(in-process module cache, future regression). Added both fields
+(scalar strip for `section_name`, per-element list strip for
+`entries`).
+
+### Methodology
+
+The recurring **"fix unlocks new paths"** pattern reproduced again,
+and the **"narrow-scope sibling"** pattern is now strong enough
+to flag preemptively. Four of seven defects this sweep were
+sibling shapes of a22's own fixes that landed at narrower-than-
+needed scope (P1-D2 missed SMS politeness, P1-D3 narrow drift-
+guard scope, P1-D4 + P2-D1 narrow docstring-bait scope, P1-D5
+narrow limit-nudge enumeration). Future fixes should preemptively
+widen each new guard to every analogue site before merging.
+
+### Testing
+
+- **34 regression tests** in `tests/test_post_a22_beta_fixes.py`:
+  `TestP1D1MultiEntityFirstWordConjunction` (5 cases — first-word
+  And/Or/Ampersand preserved, Unicode first word, mixed
+  substantive halves); `TestP1D2PolitenessSmsVariants`
+  (~22 parameterized cases — strip + word-boundary + full parse);
+  `TestP1D3QEmittingDriftGuardWiderScope` (2 cases — scanner
+  finds known tools + set membership pin across all zim/
+  modules); `TestP1D4EntryPathDocstringBaitSweep` (3 cases —
+  no `Some_Article` bait, `<entry_path>` placeholder convention,
+  no legacy `A/<word>` bait); `TestP1D5LimitNudgeEnumeratesAllAtomicIntents`
+  (1 case — docstring enumeration pin); `TestP1D6DispatcherEdgeStripWiderFields`
+  (3 cases — `section_name` in field tuple, `entries` list
+  strip wired, end-to-end politeness peel).
+- Full suite: **1988 passed, 50 skipped**. mypy clean across all
+  45 source files.
+
+### Release process
+
+After this changelog lands on `main`, push the `v2.0.0a23` tag
+on `main` to trigger `.github/workflows/release.yml` — PyPI
+publish + GitHub release notes auto-extracted from the matching
+CHANGELOG section.
+
 ## [2.0.0a22] — 2026-05-19 (alpha pre-release) — post-a21 beta-test sweep — 11 live-Wikipedia defects across two passes
 
 Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
