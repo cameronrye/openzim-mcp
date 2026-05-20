@@ -5,6 +5,145 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0a25] — 2026-05-20 (alpha pre-release) — post-a24 beta-test sweep — 6 live-Wikipedia defects across two passes
+
+Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
+the freshly-deployed `v2.0.0a24` build. Smoke gates 4/4 green
+pre-fix; pass-1 surfaced 6 defects across 4 surfaces, pass-2 source-
+level audit surfaced zero new defects. **"Narrow-scope sibling"
+pattern is now 5 sweeps strong: ALL SIX defects this sweep are
+narrower-than-needed shapes on the matching a24 fix** — two on
+`_looks_like_slashed_compound` (digit halves, mixed-case short
+halves), two on `_TRAILING_POLITENESS_RE` (multi-word multilingual,
+third-wave single-word multilingual), one on `_PARAM_LEAK_RE`
+(missing `query` token), one on `_chained_intent_guidance`
+(param strip not applied before chained-intent detection). The
+post-a24 sweep continues to validate the "narrow scope, widen
+preemptively" methodology refinement.
+
+### Slashed-compound helper digit-half widening (P1-D1)
+
+The a24-shipped `_looks_like_slashed_compound` accepts letter-only
+halves with `min ≤ 2` — tuned for short ALL-CAPS acronyms
+(`TCP/IP`, `AC/DC`). Digit halves slipped through:
+
+- `tell me about 9/11 and World War II` → 3-entity chain rejection
+  naming `9`, `11`, `World War II`. But `9/11` is a single event.
+- `tell me about 24/7 and 9 to 5` → 3-entity chain naming `24`,
+  `7`, `9 to 5`. But `24/7` is a single phrase.
+
+Same shape for `5/4` (time signature / fraction), `12/24` (date),
+`2024/25` (sports season). All are conceptual single entities with
+small-digit halves.
+
+Fix: detect all-digit halves and accept the compound when both
+halves are ≤ 2 chars. Catches the common date / ratio / sports-
+season shapes; rejects `2024/2025` (min=4) which is more naturally
+two distinct years. Mixed letter+digit halves (`A/4`, `X/12`)
+still split.
+
+### Slashed-compound helper short mixed-case widening (P1-D2)
+
+Sibling shape: paired-concept TitleCase compounds like `Yin/Yang`,
+`Hot/Cold`, `Wet/Dry`, `Mac/Cheese`, `Salt/Pepper` have letter-only
+halves of 3-4 chars. Pre-fix:
+
+- `tell me about Yin/Yang and the Tao` → slash split into
+  `["Yin", "Yang", "the Tao"]`; Yin and Yang both failed
+  substantive (3-4 char ASCII TitleCase, no digit, no non-Latin);
+  `_split_multi_entity` returned None and the chain abandoned
+  silently, returning the Tao article with Yin/Yang silently
+  dropped.
+
+Same shape for `Hot/Cold and Wet/Dry`, `Light/Dark`, etc. Fix:
+widen letter floor from `min ≤ 2` to `min ≤ 4`. Catches the short
+paired-concept compounds without affecting `Berlin/Munich`
+(min=6), `Tokyo/Kyoto` (min=5), and other longer proper-noun
+pairs that genuinely benefit from splitting.
+
+### Politeness regex multi-word multilingual extension (P1-D3)
+
+The a24 multi-word politeness additions (`thanks a million`,
+`thank you very much`) were English-only. Multi-word counterparts
+in other languages leaked or partially-peeled:
+
+- `merci beaucoup` (French) — leaked entirely
+- `vielen dank` (German) — leaked entirely (`dank` without `e`
+  not in the prior single-word token list)
+- `muchas gracias` (Spanish) — `gracias` peeled, `muchas` left
+- `arigatou gozaimasu` (Japanese formal) — leaked entirely
+- `domo arigato` (Mr. Roboto era) — `arigato` peeled, `domo` left
+- `terima kasih` (Malay / Indonesian) — leaked entirely
+
+Fix: each multi-word phrase listed as an explicit alternation
+entry before the single-word forms (so the maximal phrase wins).
+
+### Politeness regex third-wave single-word multilingual (P1-D4)
+
+Sibling shape: more single-word multilingual tokens live-observed:
+`mahalo` (Hawaiian), `xie xie` / `xièxie` (Chinese romaji),
+`shukran` (Arabic), `kiitos` (Finnish), `tack` (Swedish — 4-char,
+leading word-boundary anchor protects against embedded matches in
+`attack` / `thumbtack`), `gomawo` / `kamsahamnida` (Korean romaji),
+`dhanyavad` (Hindi romaji), `domo` / `gozaimasu` (Japanese
+remainder fragments). Defence-in-depth via the canonical
+`_TRAILING_POLITENESS_RE` propagates to every site that calls
+`IntentParser._strip_trailing_politeness`.
+
+### Param-leak strip `query` token (P1-D5)
+
+The a24-shipped `_strip_param_leaks` covered 13 of the 14 public
+`zim_query` arguments. The 14th — `query` itself — was missing.
+Live: `tell me about Photosynthesis query=biology` returned the
+`Biology` disambiguation page (the `=biology` suffix prevented
+title promotion from cleanly resolving Photosynthesis; the
+fuzzy-match path then resolved to `Biology` instead). Fix: add
+`query` to the strip token set.
+
+### Param-leak strip not applied before chained-intent detection (P1-D6)
+
+The a24-shipped `_strip_param_leaks` runs inside `parse_intent`,
+but the dispatcher's `_chained_intent_guidance(query)` call runs
+upstream of that on the RAW user query. Live: `tell me about
+Berlin limit=5 then list namespaces` surfaced a chained-intent
+rejection whose `**First op (left)**: tell me about Berlin
+limit=5` carried the leaked param verbatim — a user copying the
+suggested left-op back into the tool would re-leak the param at
+the same point.
+
+Fix: mirror the existing leading-politeness strip pattern in
+`_chained_intent_guidance` with a `IntentParser._strip_param_leaks`
+call at the same point. Idempotent with `parse_intent`'s
+downstream strip — both produce identical output on a clean query.
+
+### What's in this release
+
+- Slashed-compound helper widening (digit halves + short letter
+  halves) lands in `openzim_mcp/simple_tools.py:_looks_like_slashed
+  _compound`.
+- Politeness regex third-wave extension (multi-word multilingual +
+  more single-word multilingual) lands in
+  `openzim_mcp/intent_parser.py:_TRAILING_POLITENESS_RE`.
+- Param-leak strip `query` token + chained-intent param strip
+  defence-in-depth lands in
+  `openzim_mcp/intent_parser.py:_PARAM_LEAK_RE` and
+  `openzim_mcp/simple_tools.py:_chained_intent_guidance`.
+- 90 regression tests in `tests/test_post_a24_beta_fixes.py`
+  (6 defect classes × multiple shape variants + 9 cross-feature
+  pass-2 integration tests + 3 sibling-audit pins + 11 prior-alpha
+  regression guards). One a23 test updated to reflect the new
+  digit-compound policy.
+- Full suite: **2143 passed, 50 skipped**. mypy clean across all
+  45 source files. `make lint` (flake8 + isort + black) clean.
+  SonarCloud quality gate passed with 0 open issues post-merge.
+
+### Release process
+
+After this changelog lands on `main`, push the `v2.0.0a25` tag
+on `main` to trigger `.github/workflows/release.yml` — PyPI
+publish + GitHub release notes auto-extracted from the matching
+CHANGELOG section.
+
 ## [2.0.0a24] — 2026-05-20 (alpha pre-release) — post-a23 beta-test sweep — 4 live-Wikipedia defects across one pass
 
 Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
