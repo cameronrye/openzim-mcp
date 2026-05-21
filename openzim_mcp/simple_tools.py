@@ -15,7 +15,7 @@ from collections import Counter
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 import openzim_mcp.zim_operations as _zim_ops_mod
 
@@ -97,6 +97,11 @@ _RERANKER_ENGAGED = "reranker_engaged"
 _RERANKER_SKIPPED_NOT_INSTALLED = "reranker_skipped.not_installed"
 _RERANKER_SKIPPED_NO_RESULTS = "reranker_skipped.no_results"
 _RERANKER_SKIPPED_PASSTHROUGH = "reranker_skipped.passthrough"
+
+# Phase D sub-D-2 query-rewrite telemetry events.
+_QUERY_REWRITE_MISSPELLING = "query_rewrite.misspelling"
+_QUERY_REWRITE_STOPWORD_PHRASE = "query_rewrite.stopword_phrase"
+_QUERY_REWRITE_X_OF_Y = "query_rewrite.x_of_y"
 
 
 @dataclass
@@ -197,6 +202,37 @@ class SimpleToolsHandler:
         if isinstance(raw, int):
             return max(cls._COMPACT_BUDGET_MIN, min(raw, cls._COMPACT_BUDGET_MAX))
         return default
+
+    def _build_title_probe(
+        self, zim_file_path: Optional[str]
+    ) -> Optional[Callable[[str], bool]]:
+        """Sub-D-2: build a callable that probes the title index for a
+        canonical (score >= 0.95) hit, returning True/False.
+
+        Returns None when no archive path is in scope (rules 2 and 3
+        will run in degraded mode). Returns a closure over the
+        zim_operations + path otherwise."""
+        if not zim_file_path:
+            return None
+
+        def probe(token: str) -> bool:
+            try:
+                # min_score=0.95 catches both exact (1.0) and fuzzy
+                # (0.95+) title hits — broad enough to suppress rule 2
+                # substitutions where the original is plausibly a real
+                # entity name.
+                match = find_title_match(
+                    self.zim_operations,
+                    zim_file_path,
+                    token,
+                    min_score=0.95,
+                )
+                return match is not None
+            except Exception:
+                # Probe failures degrade the gate, not the search.
+                return False
+
+        return probe
 
     def handle_zim_query(
         self,
@@ -557,7 +593,34 @@ class SimpleToolsHandler:
                 return chained_warning + (
                     "\n<!-- intent=chained_intent_rejected cert=1.00 -->"
                 )
-            intent, params, confidence = self.intent_parser.parse_intent(query)
+            # Sub-D-2: build the title probe (returns None when no archive
+            # is in scope; rules 2 and 3 degrade gracefully). Snapshot
+            # intermediate stages by running the rules individually to emit
+            # per-rule telemetry. This keeps parse_intent's responsibilities
+            # clean (it doesn't know about _track); the cost is two extra
+            # rule passes worth of CPU per query.
+            if self.zim_operations.config.query_rewrite.enabled:
+                title_probe = self._build_title_probe(zim_file_path)
+                after_lower = IntentParser._normalize_topic_case(query)
+                after_misspell = IntentParser._apply_misspelling_map(
+                    after_lower, title_probe=title_probe
+                )
+                if after_misspell != after_lower:
+                    self._track(_QUERY_REWRITE_MISSPELLING)
+                after_stopword = IntentParser._detect_stopword_phrase(
+                    after_misspell, title_probe=title_probe
+                )
+                if after_stopword != after_misspell:
+                    self._track(_QUERY_REWRITE_STOPWORD_PHRASE)
+                _, hint_probe = IntentParser._decompose_x_of_y(after_stopword)
+                if hint_probe is not None:
+                    self._track(_QUERY_REWRITE_X_OF_Y)
+            else:
+                title_probe = None
+
+            intent, params, confidence = self.intent_parser.parse_intent(
+                query, title_probe=title_probe
+            )
             # Post-a21 P1-D1: defence-in-depth strip of trailing
             # politeness on user-supplied content fields in ``params``.
             # Idempotent when ``parse_intent`` already cleaned them
@@ -4962,8 +5025,35 @@ class SimpleToolsHandler:
         # it as a topic ask — for plain ``search`` intents (the user
         # typed "berlin wall" directly), the raw query IS the search
         # query.
+        # Sub-D-2: build the title probe (returns None when no archive
+        # is in scope; rules 2 and 3 degrade gracefully). Snapshot
+        # intermediate stages by running the rules individually to emit
+        # per-rule telemetry. This keeps parse_intent's responsibilities
+        # clean (it doesn't know about _track); the cost is two extra
+        # rule passes worth of CPU per query.
+        if self.zim_operations.config.query_rewrite.enabled:
+            title_probe = self._build_title_probe(zim_file_path)
+            after_lower = IntentParser._normalize_topic_case(query)
+            after_misspell = IntentParser._apply_misspelling_map(
+                after_lower, title_probe=title_probe
+            )
+            if after_misspell != after_lower:
+                self._track(_QUERY_REWRITE_MISSPELLING)
+            after_stopword = IntentParser._detect_stopword_phrase(
+                after_misspell, title_probe=title_probe
+            )
+            if after_stopword != after_misspell:
+                self._track(_QUERY_REWRITE_STOPWORD_PHRASE)
+            _, hint_probe = IntentParser._decompose_x_of_y(after_stopword)
+            if hint_probe is not None:
+                self._track(_QUERY_REWRITE_X_OF_Y)
+        else:
+            title_probe = None
+
         try:
-            intent, params, _confidence = self.intent_parser.parse_intent(query)
+            intent, params, _confidence = self.intent_parser.parse_intent(
+                query, title_probe=title_probe
+            )
         except Exception as e:  # pragma: no cover — defensive
             logger.debug("intent_parser failed in synthesize prelude: %s", e)
             intent, params = "search", {}
