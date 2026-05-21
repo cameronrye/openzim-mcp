@@ -1405,3 +1405,29 @@ class IntentParser:
                 continue
             out.append(replacement)
         return "".join(out)
+
+    _LEADING_ARTICLE_RE = re.compile(r"^(the|a|an|of)\s+", re.IGNORECASE)
+
+    @classmethod
+    def _detect_stopword_phrase(
+        cls,
+        query: str,
+        *,
+        title_probe: Optional[Callable[[str], bool]],
+    ) -> str:
+        """Sub-D-2 rule 3: strip a leading article unless the full
+        query (with article) is a canonical title.
+
+        Probe-gated: the probe is called ONCE per query on the full
+        query string. If the probe says yes → keep the article (e.g.
+        ``The Beatles``). If no, or if ``title_probe`` is None → strip.
+
+        Idempotent: stripping a leading article doesn't introduce a
+        new one."""
+        match = cls._LEADING_ARTICLE_RE.match(query)
+        if not match:
+            return query
+        if title_probe is not None and title_probe(query):
+            # Real canonical title — keep the article.
+            return query
+        return query[match.end() :]

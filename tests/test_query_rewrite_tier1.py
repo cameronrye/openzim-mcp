@@ -119,3 +119,78 @@ class TestApplyMisspellingMap:
             "recieve  a  letter", title_probe=None
         )
         assert result == "receive  a  letter"
+
+
+class TestDetectStopwordPhrase:
+    def test_strips_leading_the_without_probe(self) -> None:
+        # No probe → strip (degraded mode favors cleaner query).
+        result = IntentParser._detect_stopword_phrase(
+            "the population of berlin", title_probe=None
+        )
+        assert result == "population of berlin"
+
+    def test_strips_leading_a(self) -> None:
+        result = IntentParser._detect_stopword_phrase(
+            "a list of countries", title_probe=None
+        )
+        assert result == "list of countries"
+
+    def test_strips_leading_an(self) -> None:
+        result = IntentParser._detect_stopword_phrase("an apple tree", title_probe=None)
+        assert result == "apple tree"
+
+    def test_strips_leading_of(self) -> None:
+        result = IntentParser._detect_stopword_phrase(
+            "of mice and men", title_probe=None
+        )
+        # No probe → strip (we miss this is a real title; that's the
+        # degraded-mode tradeoff documented in the spec).
+        assert result == "mice and men"
+
+    def test_no_leading_article_is_no_op(self) -> None:
+        result = IntentParser._detect_stopword_phrase(
+            "population of berlin", title_probe=None
+        )
+        assert result == "population of berlin"
+
+    def test_probe_keeps_canonical_title(self) -> None:
+        # Probe returns True for the full query → keep article.
+        def probe(token: str) -> bool:
+            return token == "the beatles"
+
+        result = IntentParser._detect_stopword_phrase("the beatles", title_probe=probe)
+        assert result == "the beatles"
+
+    def test_probe_strips_when_no_canonical(self) -> None:
+        def probe(token: str) -> bool:
+            return False
+
+        result = IntentParser._detect_stopword_phrase(
+            "the population of berlin", title_probe=probe
+        )
+        assert result == "population of berlin"
+
+    def test_only_one_probe_call_per_query(self) -> None:
+        call_count = [0]
+
+        def probe(token: str) -> bool:
+            call_count[0] += 1
+            return False
+
+        IntentParser._detect_stopword_phrase(
+            "the population of berlin", title_probe=probe
+        )
+        assert call_count[0] == 1
+
+    def test_idempotent(self) -> None:
+        once = IntentParser._detect_stopword_phrase("the population", title_probe=None)
+        twice = IntentParser._detect_stopword_phrase(once, title_probe=None)
+        assert once == twice == "population"
+
+    def test_case_insensitive_article_detection(self) -> None:
+        # Sub-D-2 typically runs after rule 1, but the rule itself
+        # should still handle uppercase input correctly.
+        result = IntentParser._detect_stopword_phrase(
+            "The Population", title_probe=None
+        )
+        assert result == "Population"
