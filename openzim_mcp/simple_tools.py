@@ -4779,7 +4779,6 @@ class SimpleToolsHandler:
                 and len(title) >= 4
                 and title[0].isascii()
                 and title[0].isalpha()
-                and not title[0].isupper()
                 and title[1] == "/"
                 and len(title[2:].strip()) >= 3
             ):
