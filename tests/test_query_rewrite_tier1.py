@@ -194,3 +194,49 @@ class TestDetectStopwordPhrase:
             "The Population", title_probe=None
         )
         assert result == "Population"
+
+
+class TestDecomposeXOfY:
+    def test_x_of_y_matches(self) -> None:
+        text, hint = IntentParser._decompose_x_of_y("population of berlin")
+        assert text == "berlin population"
+        assert hint == {"entity": "berlin", "attribute": "population"}
+
+    def test_possessive_matches(self) -> None:
+        text, hint = IntentParser._decompose_x_of_y("berlin's population")
+        assert text == "berlin population"
+        assert hint == {"entity": "berlin", "attribute": "population"}
+
+    def test_no_match_returns_unchanged_and_none(self) -> None:
+        text, hint = IntentParser._decompose_x_of_y("just a regular query")
+        assert text == "just a regular query"
+        assert hint is None
+
+    def test_multi_word_entity_in_of_form(self) -> None:
+        text, hint = IntentParser._decompose_x_of_y("capital of new south wales")
+        assert text == "new south wales capital"
+        assert hint == {
+            "entity": "new south wales",
+            "attribute": "capital",
+        }
+
+    def test_idempotent(self) -> None:
+        once_text, once_hint = IntentParser._decompose_x_of_y("population of berlin")
+        twice_text, twice_hint = IntentParser._decompose_x_of_y(once_text)
+        # Second pass produces no hint (already rewritten); text is stable.
+        assert once_text == twice_text == "berlin population"
+        assert once_hint is not None
+        assert twice_hint is None
+
+    def test_of_form_requires_attr_to_be_single_word(self) -> None:
+        # Reject "annual revenue of Berlin" so we don't mis-decompose
+        # multi-word attributes (a deferred Tier 2 / sub-D-3 concern).
+        text, hint = IntentParser._decompose_x_of_y("annual revenue of berlin")
+        assert text == "annual revenue of berlin"
+        assert hint is None
+
+    def test_possessive_requires_single_word_attr(self) -> None:
+        # Same: "berlin's annual revenue" stays a search.
+        text, hint = IntentParser._decompose_x_of_y("berlin's annual revenue")
+        assert text == "berlin's annual revenue"
+        assert hint is None

@@ -1431,3 +1431,39 @@ class IntentParser:
             # Real canonical title — keep the article.
             return query
         return query[match.end() :]
+
+    # Rule 4 regex shapes. Both require a single-word attribute so we
+    # don't mis-decompose multi-word phrases — multi-hop / multi-word
+    # attribute decomposition is a deferred sub-D-3 concern.
+    _X_OF_Y_RE = re.compile(
+        r"^(?P<attr>\w+)\s+of\s+(?P<entity>.+)$",
+        re.IGNORECASE,
+    )
+    _POSSESSIVE_RE = re.compile(
+        r"^(?P<entity>\w+)'s\s+(?P<attr>\w+)$",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _decompose_x_of_y(cls, query: str) -> tuple[str, Optional[dict[str, str]]]:
+        """Sub-D-2 rule 4: decompose `<attr> of <entity>` and
+        `<entity>'s <attr>` shapes.
+
+        Returns ``(rewritten_query, hint_or_None)``:
+        - ``rewritten_query`` collapses to ``<entity> <attr>`` when
+          decomposition matches; otherwise returns input unchanged.
+        - ``hint_or_None`` is ``{"entity": ..., "attribute": ...}`` on
+          match, else None. The hint rides inside ``params`` in the
+          parse_intent return value; ``_handle_tell_me_about`` reads it
+          to skip its own extraction.
+
+        Idempotent: a rewritten ``berlin population`` no longer matches
+        either regex."""
+        m = cls._X_OF_Y_RE.match(query)
+        if not m:
+            m = cls._POSSESSIVE_RE.match(query)
+        if not m:
+            return query, None
+        entity = m.group("entity").strip()
+        attr = m.group("attr").strip()
+        return f"{entity} {attr}", {"entity": entity, "attribute": attr}
