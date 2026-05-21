@@ -206,13 +206,15 @@ class TestRerankerWiringInSynthesizeQuery:
 
     def test_short_query_passthrough_does_not_crash(self) -> None:
         """A single-token query hits the skip-on-short-query gate inside reranker.rerank.
-        The synthesize pipeline must complete cleanly with passages intact."""
+        The synthesize pipeline must complete cleanly with passages intact and
+        the original BM25 order preserved."""
         hits = [
             {"path": "A/Cats", "snippet": "cats are mammals", "score": 0.9},
+            {"path": "A/Dogs", "snippet": "dogs are mammals", "score": 0.7},
         ]
         cfg = RerankerConfig(min_query_tokens=4)  # "cats" is 1 token → passthrough
         # Build reranker with the same min_query_tokens so gate fires.
-        reranker = _make_reranker([0.8], min_query_tokens=4)
+        reranker = _make_reranker([0.8, 0.6], min_query_tokens=4)
 
         with (
             patch("openzim_mcp.ml.reranker.BGEReranker.get", return_value=reranker),
@@ -222,3 +224,111 @@ class TestRerankerWiringInSynthesizeQuery:
 
         # Pipeline completes; no exception.
         assert "query" in response
+        passages = response.get("passages", [])
+        assert passages, "passthrough must not drop passages"
+        # In the short-query bypass, Xapian BM25 order is preserved: Cats first.
+        assert "Cats" in passages[0]["cite_id"], (
+            "Short-query passthrough should preserve original BM25 order; "
+            f"got cite_id={passages[0]['cite_id']!r}"
+        )
+
+    def test_reranker_ordering_survives_affinity_boost(self) -> None:
+        """Regression: affinity-sort step must respect rerank scores, not BM25.
+
+        Constructs a synthetic bundle so _attribute_sections appends #section_id
+        to both passages, enabling _boost_by_section_affinity to fire. Then
+        verifies the rerank ordering (B > A) is preserved after the affinity
+        pass — i.e. the p["score"] = rerank_score propagation line is effective.
+
+        If that line were deleted, _boost_by_section_affinity would sort by the
+        original Xapian BM25 scores and A (BM25=0.9) would beat B (BM25=0.7).
+        """
+        # BM25 order: A (score=0.9) first, B (score=0.7) second.
+        # Reranker inverts: B gets 0.9, A gets 0.1.
+        hits = [
+            {
+                "path": "A/PageA",
+                "snippet": "chlorophyll absorbs sunlight for energy",
+                "score": 0.9,
+            },
+            {
+                "path": "A/PageB",
+                "snippet": "photosynthesis converts light into glucose",
+                "score": 0.7,
+            },
+        ]
+        cfg = RerankerConfig(min_query_tokens=1)
+
+        # Reranker returns B with score 0.9, A with score 0.1 — inverted BM25 order.
+        def _inverted_rerank(
+            query: str, candidates: list[dict], top_k: int
+        ) -> list[dict]:
+            scored = [
+                {
+                    **c,
+                    "rerank_score": 0.9 if "PageB" in c["path"] else 0.1,
+                }
+                for c in candidates
+            ]
+            return sorted(scored, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
+
+        mock_reranker = MagicMock(spec=BGEReranker)
+        mock_reranker.rerank = MagicMock(side_effect=_inverted_rerank)
+
+        # Build a synthetic bundle so _attribute_sections assigns #section_id
+        # to both passages and _boost_by_section_affinity actually fires.
+        # The bundle's rendered_markdown must contain both passage texts so
+        # _locate_passage succeeds and assigns the section.
+        passage_a_text = "chlorophyll absorbs sunlight for energy"
+        passage_b_text = "photosynthesis converts light into glucose"
+        # Section spans: sec_a covers the first passage (pos 0..len(a)+1),
+        # sec_b covers the second passage, title includes a query token.
+        sec_a_text = passage_a_text + "\n"
+        sec_b_text = passage_b_text + "\n"
+        rendered_md = sec_a_text + sec_b_text
+        len_a = len(sec_a_text)
+        fake_bundle = {
+            "title": "Plants",
+            "rendered_markdown": rendered_md,
+            "sections": [
+                {
+                    "id": "sec_a",
+                    "title": "Chlorophyll",  # contains "chlorophyll" — query token
+                    "char_start": 0,
+                    "char_end": len_a,
+                },
+                {
+                    "id": "sec_b",
+                    "title": "Photosynthesis",  # contains query token
+                    "char_start": len_a,
+                    "char_end": len(rendered_md),
+                },
+            ],
+        }
+
+        with (
+            patch(
+                "openzim_mcp.ml.reranker.BGEReranker.get",
+                return_value=mock_reranker,
+            ),
+            patch(
+                "openzim_mcp.bundle.get_or_build_bundle",
+                return_value=fake_bundle,
+            ),
+        ):
+            response = self._call_synthesize(
+                hits,
+                cfg,
+                query="photosynthesis chlorophyll",
+            )
+
+        passages = response.get("passages", [])
+        assert passages, "passages must not be empty"
+        # B had the highest rerank_score (0.9); it must appear first.
+        # If p["score"] = rerank_score propagation is missing, the affinity sort
+        # reverts to Xapian BM25 and A (0.9 BM25) wins instead.
+        assert "PageB" in passages[0]["cite_id"], (
+            "PageB had rerank_score=0.9 but lost the top slot — "
+            "affinity sort must use rerank_score not BM25. "
+            f"Got cite_id={passages[0]['cite_id']!r}"
+        )

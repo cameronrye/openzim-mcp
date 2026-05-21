@@ -1432,9 +1432,17 @@ def synthesize_query(
                     f"{archive_name}/{hit['path']}": (archive_name, hit["path"])
                     for archive_name, hit in top_hits
                 }
-                hit_keys = [
-                    cite_id_to_hit_key.get(p["cite_id"], ("", "")) for p in all_passages
-                ]
+                hit_keys = []
+                for p in all_passages:
+                    hit_key = cite_id_to_hit_key.get(p["cite_id"])
+                    if hit_key is None:
+                        logger.warning(
+                            "synthesize: hit_key miss for cite_id %r; "
+                            "section attribution will degrade for this passage",
+                            p["cite_id"],
+                        )
+                        hit_key = ("", "")
+                    hit_keys.append(hit_key)
             else:
                 # Short query or inference failure — passthrough.
                 logger.debug("synthesize: reranker_skipped.passthrough")
