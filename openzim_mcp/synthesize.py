@@ -1265,6 +1265,98 @@ def _zero_hits_response(
     )
 
 
+def _maybe_rerank_synthesize_passages(
+    all_passages: list[SynthesizePassage],
+    hit_keys: list[tuple[str, str]],
+    *,
+    query: str,
+    top_hits: list[tuple[str, dict[str, Any]]],
+    reranker_config: "Optional[RerankerConfig]",
+) -> tuple[list[SynthesizePassage], list[tuple[str, str]]]:
+    """Apply cross-encoder rerank to synthesize passage candidates.
+
+    Wraps ``BGEReranker.get()`` and returns ``(reranked_passages,
+    parallel_hit_keys)``.  When the [reranker] extra is absent, disabled,
+    or ``reranker_config`` is ``None``, returns the inputs unchanged.
+    """
+    if reranker_config is None:
+        return all_passages, hit_keys
+
+    from openzim_mcp.ml.reranker import BGEReranker
+
+    reranker = BGEReranker.get(reranker_config)
+    if reranker is None:
+        logger.debug("synthesize: reranker_skipped.not_installed")
+        return all_passages, hit_keys
+    if not all_passages:
+        logger.debug("synthesize: reranker_skipped.no_results")
+        return all_passages, hit_keys
+
+    # Build path→passage index for round-trip mapping. cite_id
+    # is "archive_name/entry_path"; use it as the envelope path
+    # key (unique per passage within this pipeline run).
+    envelopes = [
+        {
+            "path": p["cite_id"],
+            "snippet": p["text_markdown"][: reranker_config.max_passage_length],
+            "xapian_score": float(p.get("score", 0.0)),
+        }
+        for p in all_passages
+    ]
+    # Rerank ALL passages (top_k = len); top-K trim happens later
+    # via _enforce_budget after deduplication/attribution steps.
+    reranked_envelopes = reranker.rerank(
+        query=query,
+        candidates=envelopes,
+        top_k=len(all_passages),
+    )
+    if not (reranked_envelopes and "rerank_score" in reranked_envelopes[0]):
+        # Short query or inference failure — passthrough.
+        logger.debug("synthesize: reranker_skipped.passthrough")
+        return all_passages, hit_keys
+
+    # Build a lookup from cite_id → rerank_score for sorting.
+    score_by_cite_id = {e["path"]: e["rerank_score"] for e in reranked_envelopes}
+    # Preserve only passages that survived the reranker
+    # (in case of dedup inside rerank); sort descending.
+    all_passages = [p for p in all_passages if p["cite_id"] in score_by_cite_id]
+    all_passages.sort(
+        key=lambda p: score_by_cite_id[p["cite_id"]],
+        reverse=True,
+    )
+    # Propagate rerank_score into the passage's score field so
+    # the downstream _boost_by_section_affinity sort (which
+    # uses p["score"]) preserves the rerank ordering rather
+    # than reverting to Xapian BM25 scores.
+    for p in all_passages:
+        p["score"] = score_by_cite_id[p["cite_id"]]
+    # Re-number ranks to reflect new ordering.
+    for i, p in enumerate(all_passages, start=1):
+        p["rank"] = i
+    logger.debug(
+        "synthesize: reranker_engaged — reranked %d passages for query %r",
+        len(all_passages),
+        query,
+    )
+    # Also re-order hit_keys to stay parallel with all_passages.
+    cite_id_to_hit_key = {
+        f"{archive_name}/{hit['path']}": (archive_name, hit["path"])
+        for archive_name, hit in top_hits
+    }
+    new_hit_keys: list[tuple[str, str]] = []
+    for p in all_passages:
+        hit_key = cite_id_to_hit_key.get(p["cite_id"])
+        if hit_key is None:
+            logger.warning(
+                "synthesize: hit_key miss for cite_id %r; "
+                "section attribution will degrade for this passage",
+                p["cite_id"],
+            )
+            hit_key = ("", "")
+        new_hit_keys.append(hit_key)
+    return all_passages, new_hit_keys
+
+
 def synthesize_query(
     query: str,
     *,
@@ -1367,85 +1459,13 @@ def synthesize_query(
     # Synthesize is the primary content-fragment-query surface; reranking
     # here re-orders passages by semantic relevance before the attribution
     # and budget-enforcement stages commit to a final ordering.
-    #
-    # Telemetry: synthesize.py has no _track() plumbing (it's a standalone
-    # module, not a handler class). Log at DEBUG only; operators can
-    # correlate via log context. Events mirror the simple_tools names
-    # (reranker_engaged / reranker_skipped.*) in the log message.
-    if reranker_config is not None:
-        from openzim_mcp.ml.reranker import BGEReranker
-
-        reranker = BGEReranker.get(reranker_config)
-        if reranker is None:
-            logger.debug("synthesize: reranker_skipped.not_installed")
-        elif not all_passages:
-            logger.debug("synthesize: reranker_skipped.no_results")
-        else:
-            # Build path→passage index for round-trip mapping. cite_id
-            # is "archive_name/entry_path"; use it as the envelope path
-            # key (unique per passage within this pipeline run).
-            envelopes = [
-                {
-                    "path": p["cite_id"],
-                    "snippet": p["text_markdown"][: reranker_config.max_passage_length],
-                    "xapian_score": float(p.get("score", 0.0)),
-                }
-                for p in all_passages
-            ]
-            # Rerank ALL passages (top_k = len); top-K trim happens later
-            # via _enforce_budget after deduplication/attribution steps.
-            reranked_envelopes = reranker.rerank(
-                query=query,
-                candidates=envelopes,
-                top_k=len(all_passages),
-            )
-            if reranked_envelopes and "rerank_score" in reranked_envelopes[0]:
-                # Build a lookup from cite_id → rerank_score for sorting.
-                score_by_cite_id = {
-                    e["path"]: e["rerank_score"] for e in reranked_envelopes
-                }
-                # Preserve only passages that survived the reranker
-                # (in case of dedup inside rerank); sort descending.
-                all_passages = [
-                    p for p in all_passages if p["cite_id"] in score_by_cite_id
-                ]
-                all_passages.sort(
-                    key=lambda p: score_by_cite_id[p["cite_id"]],
-                    reverse=True,
-                )
-                # Propagate rerank_score into the passage's score field so
-                # the downstream _boost_by_section_affinity sort (which
-                # uses p["score"]) preserves the rerank ordering rather
-                # than reverting to Xapian BM25 scores.
-                for p in all_passages:
-                    p["score"] = score_by_cite_id[p["cite_id"]]
-                # Re-number ranks to reflect new ordering.
-                for i, p in enumerate(all_passages, start=1):
-                    p["rank"] = i
-                logger.debug(
-                    "synthesize: reranker_engaged — reranked %d passages for query %r",
-                    len(all_passages),
-                    query,
-                )
-                # Also re-order hit_keys to stay parallel with all_passages.
-                cite_id_to_hit_key = {
-                    f"{archive_name}/{hit['path']}": (archive_name, hit["path"])
-                    for archive_name, hit in top_hits
-                }
-                hit_keys = []
-                for p in all_passages:
-                    hit_key = cite_id_to_hit_key.get(p["cite_id"])
-                    if hit_key is None:
-                        logger.warning(
-                            "synthesize: hit_key miss for cite_id %r; "
-                            "section attribution will degrade for this passage",
-                            p["cite_id"],
-                        )
-                        hit_key = ("", "")
-                    hit_keys.append(hit_key)
-            else:
-                # Short query or inference failure — passthrough.
-                logger.debug("synthesize: reranker_skipped.passthrough")
+    all_passages, hit_keys = _maybe_rerank_synthesize_passages(
+        all_passages,
+        hit_keys,
+        query=query,
+        top_hits=top_hits,
+        reranker_config=reranker_config,
+    )
 
     if strip_links:
         all_passages = [_strip_links_in_passage(p) for p in all_passages]

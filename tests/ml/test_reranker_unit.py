@@ -161,8 +161,8 @@ class TestRerank:
         )
         # B now wins (rerank_score=0.9 > 0.1)
         assert [c["path"] for c in result] == ["B", "A"]
-        assert result[0]["rerank_score"] == 0.9
-        assert result[1]["rerank_score"] == 0.1
+        assert result[0]["rerank_score"] == pytest.approx(0.9)
+        assert result[1]["rerank_score"] == pytest.approx(0.1)
 
     def test_top_k_slices_result(self) -> None:
         r = self._make_reranker_with_scores([0.9, 0.5, 0.1])

@@ -19,7 +19,7 @@ class TestRerankerConfig:
         assert cfg.max_query_length == 256
         assert cfg.max_passage_length == 512
         assert cfg.min_query_tokens == 4
-        assert cfg.first_call_timeout_seconds == 5.0
+        assert cfg.first_call_timeout_seconds == pytest.approx(5.0)
         assert cfg.cache_dir is None
 
     def test_pool_size_bounds(self) -> None:
