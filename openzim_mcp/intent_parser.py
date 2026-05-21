@@ -8,10 +8,12 @@ or any I/O, which makes it cheap to unit-test in isolation.
 
 import logging
 import re
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from .constants import REGEX_TIMEOUT_SECONDS
 from .exceptions import RegexTimeoutError
+from .query_rewrite_data import load_exclusions, load_misspellings
 from .timeout_utils import run_with_timeout
 
 logger = logging.getLogger(__name__)
@@ -458,10 +460,14 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
 def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:
     """Extract namespace/path tokens like ``A/Foo`` or ``M/Image.png``.
 
-    Uppercase namespace letter is required, which excludes file paths
-    like ``wikipedia.zim`` but matches ZIM entry paths.
+    Both uppercase and lowercase namespace letters are accepted so that
+    Sub-D-2 Rule 1 (which lowercases the query before extraction) does
+    not suppress matches. The single-letter + ``/`` + non-dot-only suffix
+    shape is specific enough to exclude bare file paths like
+    ``wikipedia.zim`` while matching ZIM entry paths (``a/foo``,
+    ``m/image.png``, etc.).
     """
-    entries = safe_regex_findall(r"[A-Z]/[\w\-./%]+", query)
+    entries = safe_regex_findall(r"[A-Za-z]/[\w\-./%]+", query)
     if entries:
         # Strip trailing sentence punctuation that the character class
         # greedily captures (e.g. "A/Bar." -> "A/Bar").
@@ -930,7 +936,47 @@ class IntentParser:
         return query
 
     @classmethod
-    def parse_intent(cls, query: str) -> Tuple[str, Dict[str, Any], float]:
+    def _apply_tier1_rewrites(
+        cls,
+        query: str,
+        *,
+        title_probe: Optional[Callable[[str], bool]],
+        enabled: bool,
+    ) -> Tuple[str, Optional[Dict[str, str]]]:
+        """Sub-D-2: run all four Tier 1 rules in fixed order
+        (1 → 2 → 3 → 4). Returns ``(rewritten_query, hint_or_None)``.
+
+        Master kill switch: when ``enabled=False``, all four rules
+        skip — the query is returned unchanged, hint is None.
+        Operators set ``QueryRewriteConfig.enabled=False`` to bypass
+        every rule including Rule 1's lowercasing."""
+        if not enabled:
+            return query, None
+        query = cls._normalize_topic_case(query)
+        query = cls._apply_misspelling_map(query, title_probe=title_probe)
+        query = cls._detect_stopword_phrase(query, title_probe=title_probe)
+        return cls._decompose_x_of_y(query)
+
+    @staticmethod
+    def _attach_decomposition_hint(
+        params: Dict[str, Any],
+        hint: Optional[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """Sub-D-2: attach the rule-4 decomposition hint to a params
+        dict in-place when present. No-op when hint is None. Returns
+        the same params dict for chaining."""
+        if hint is not None:
+            params["decomposition_hint"] = hint
+        return params
+
+    @classmethod
+    def parse_intent(
+        cls,
+        query: str,
+        *,
+        title_probe: Optional[Callable[[str], bool]] = None,
+        query_rewrite_enabled: bool = True,
+    ) -> Tuple[str, Dict[str, Any], float]:
         """Parse a natural language query to determine intent.
 
         This method collects ALL matching patterns and uses a weighted scoring
@@ -939,10 +985,34 @@ class IntentParser:
 
         Args:
             query: Natural language query string
+            title_probe: Optional callback for rules 2 and 3 to suppress
+                false-positive rewrites. When ``None``, those rules run in
+                degraded mode.
+            query_rewrite_enabled: Master kill switch. When ``False``, all
+                four Sub-D-2 Tier 1 rules are skipped entirely — the query
+                reaches the existing intent-regex chain unmodified. Mirrors
+                ``QueryRewriteConfig.enabled`` so operators who set
+                ``OPENZIM_MCP_QUERY_REWRITE__ENABLED=false`` get a true
+                opt-out rather than only bypassing telemetry.
 
         Returns:
             Tuple of (intent_type, extracted_params, confidence_score)
+
+        Sub-D-2: a ``title_probe`` callback may be passed. When
+        provided, rules 2 and 3 consult it to suppress false-positive
+        rewrites (real proper nouns, canonical titles). When ``None``,
+        rules 2 and 3 run in degraded mode (substitute without
+        probing, strip without probing).
         """
+        # Sub-D-2 Tier 1 rewrites — runs BEFORE the existing _strip_*
+        # chain so downstream regexes see a normalized query. Master
+        # kill switch is honored inside _apply_tier1_rewrites.
+        query, decomposition_hint = cls._apply_tier1_rewrites(
+            query,
+            title_probe=title_probe,
+            enabled=query_rewrite_enabled,
+        )
+
         # Post-a23 P1-D3: peel leaked ``param=value`` suffixes BEFORE
         # politeness so the politeness regex (and every downstream
         # extractor) sees the clean topic. See ``_PARAM_LEAK_RE`` for
@@ -995,13 +1065,25 @@ class IntentParser:
             #
             # * Anything else — keep the legacy bare-search fallback.
             if cls._looks_like_bare_topic(query):
-                return "tell_me_about", {"topic": query.strip()}, 0.7
-            return "search", {"query": query}, 0.5
+                params = cls._attach_decomposition_hint(
+                    {"topic": query.strip()}, decomposition_hint
+                )
+                return "tell_me_about", params, 0.7
+            params = cls._attach_decomposition_hint(
+                {"query": query}, decomposition_hint
+            )
+            return "search", params, 0.5
 
         # Select best match using weighted scoring
         # Primary: confidence, Secondary: specificity
         best_match = cls._select_best_match(matches)
-        return best_match[0], best_match[1], best_match[2]
+        intent_type, params, confidence = (
+            best_match[0],
+            best_match[1],
+            best_match[2],
+        )
+        cls._attach_decomposition_hint(params, decomposition_hint)
+        return intent_type, params, confidence
 
     # Words that signal an explicit verb-shaped intent. If a query contains
     # one of these (case-insensitive, whole-word), it isn't "bare-topic" — it
@@ -1126,6 +1208,26 @@ class IntentParser:
             "if",
             "then",
             "else",
+            # Common prepositions / particles (added for Sub-D-2 Rule 1
+            # compatibility: lowercasing removes the capitalization signal
+            # so short non-filler tokens now need explicit coverage to
+            # prevent e.g. ``"go on"`` from being a bare topic because
+            # ``"on"`` is 2 chars and not in the filler set).
+            "on",
+            "at",
+            "in",
+            "by",
+            "up",
+            "to",
+            "as",
+            "of",
+            "so",
+            "not",
+            "yet",
+            "for",
+            "nor",
+            "per",
+            "via",
             # Common short verbs (non-intent)
             "do",
             "does",
@@ -1213,9 +1315,13 @@ class IntentParser:
            structure the intent classifier should have caught).
 
         2. Positive — at least one token is *distinctive*: not common
-           filler AND either capitalized in the original query
-           (proper-noun signal) or at least five characters long
-           (content-word signal).
+           filler AND either capitalized in the (pre-Rule-1) query
+           (proper-noun signal) OR at least 2 characters long
+           (content-word signal). The 2-char floor exists because
+           Sub-D-2 Rule 1 unconditionally lowercases the query before
+           this gate fires, so short acronyms like ``dna`` / ``pi`` /
+           ``ai`` lose their capitalization signal and must qualify on
+           length alone. Single-char inputs are still excluded.
 
         The positive layer is what stops conversational fragments like
         ``"do both"`` / ``"try again"`` / ``"test"`` / ``"help"`` from
@@ -1226,9 +1332,11 @@ class IntentParser:
         ``"try again"`` -> 105k-char Aaliyah article body trap).
 
         Examples:
-          * ``"Martin Luther King Jr."`` qualifies (proper-noun cap).
-          * ``"biology"`` qualifies (>=5 chars, not filler).
-          * ``"DNA"`` qualifies (cap, not filler — even at 3 chars).
+          * ``"martin luther king jr."`` qualifies (multiple non-filler
+            tokens, all ≥2 chars).
+          * ``"biology"`` qualifies (7 chars, not filler).
+          * ``"dna"`` qualifies (3 chars, not filler — post-Rule-1).
+          * ``"pi"`` qualifies (2 chars, not filler — minimum length).
           * ``"量子力学"`` qualifies (non-Latin script — Chinese, Arabic,
             Russian, etc. — is treated as inherently distinctive since
             those scripts don't have casing or short ASCII filler).
@@ -1262,11 +1370,17 @@ class IntentParser:
         if any(t in cls._BARE_TOPIC_VERB_TOKENS for t in lower_tokens):
             return False
         # Positive check: any single token that is non-filler AND either
-        # capitalized in the original query or content-word-length is
-        # enough evidence that this is a topic ask.
+        # capitalized in the original query, content-word-length (≥5), OR
+        # at least 2 characters is enough evidence that this is a topic
+        # ask. The 2-char floor exists because Sub-D-2 Rule 1 lowercases
+        # the query before this check fires, removing the capitalization
+        # signal — short acronyms like ``dna`` / ``pi`` / ``ai`` / ``rna``
+        # are still valid topics that must not fall through to search.
+        # Single-char inputs are excluded (len(t) >= 2) to stop bare
+        # single letters from qualifying.
         return any(
             t.lower() not in cls._COMMON_FILLER_TOKENS
-            and (t[0].isupper() or len(t) >= 5)
+            and (t[0].isupper() or len(t) >= 2)
             for t in raw_tokens
         )
 
@@ -1343,3 +1457,205 @@ class IntentParser:
             return {}
 
         return params
+
+    # ----- sub-D-2 Tier 1 query rewriting rules -----
+
+    @classmethod
+    def _normalize_topic_case(cls, query: str) -> str:
+        """Sub-D-2 rule 1: lowercase the query.
+
+        Replaces scattered `.lower()` calls in the relevance pipeline
+        with a named pass. Idempotent. No telemetry — fires on
+        essentially every query."""
+        return query.lower()
+
+    # Class-level overridable paths (None = use bundled defaults).
+    # Tests can monkeypatch these to swap in fixture files.
+    _misspellings_path: Optional["Path"] = None
+    _exclusions_path: Optional["Path"] = None
+
+    @classmethod
+    def _apply_misspelling_map(
+        cls,
+        query: str,
+        *,
+        title_probe: Optional[Callable[[str], bool]],
+    ) -> str:
+        """Sub-D-2 rule 2: substitute known misspellings token-by-token.
+
+        Probe-gated when ``title_probe`` is provided: if the original
+        token canonically resolves to a real entity, the substitution
+        is suppressed. Degrades to ``substitute-without-probe`` when
+        ``title_probe`` is None.
+
+        Idempotent: a corrected word is never itself a key in the map.
+        Telemetry (``query_rewrite.misspelling``) is emitted by the
+        caller (simple_tools.py wiring) based on the before/after diff."""
+        mapping = load_misspellings(cls._misspellings_path)
+        exclusions = load_exclusions(cls._exclusions_path)
+        if not mapping:
+            return query
+
+        # Split on whitespace; preserve runs of whitespace between tokens.
+        # re.split with a captured group keeps the separators in the list.
+        parts = re.split(r"(\s+)", query)
+        out: list[str] = []
+        for part in parts:
+            if not part or part.isspace():
+                out.append(part)
+                continue
+            lower = part.lower()
+            replacement = mapping.get(lower)
+            if replacement is None:
+                out.append(part)
+                continue
+            if lower in exclusions:
+                out.append(part)
+                continue
+            if title_probe is not None and title_probe(part):
+                out.append(part)
+                continue
+            out.append(replacement)
+        return "".join(out)
+
+    _LEADING_ARTICLE_RE = re.compile(r"^(the|a|an|of)\s+", re.IGNORECASE)
+
+    # Guard: patterns where a leading article is PART of the command
+    # signal, not a standalone article to strip. The primary case is
+    # ``the X section of Y`` (``get_section`` intent) where stripping
+    # ``the`` leaves ``X section of Y`` which matches the generic
+    # ``structure`` pattern instead. Both surface-forms use
+    # ``\bsection\b`` but the second (``the X section of Y``) requires
+    # ``the`` to be present for the intent regex to fire.
+    _RULE3_SECTION_COMMAND_RE = re.compile(
+        r"^the\s+\S+(?:\s+\S+){0,8}\s+section\s+(?:of|in|from)\s+\S+",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _detect_stopword_phrase(
+        cls,
+        query: str,
+        *,
+        title_probe: Optional[Callable[[str], bool]],
+    ) -> str:
+        """Sub-D-2 rule 3: strip a leading article unless the full
+        query (with article) is a canonical title.
+
+        Probe-gated: the probe is called ONCE per query on the full
+        query string. If the probe says yes → keep the article (e.g.
+        ``The Beatles``). If no, or if ``title_probe`` is None → strip.
+
+        Idempotent: stripping a leading article doesn't introduce a
+        new one.
+
+        Guard: ``the X section of Y`` / ``the X section in Y`` is a
+        ``get_section`` command where ``the`` is syntactically load-
+        bearing. Stripping it would break the intent regex. Skip the
+        strip when the query matches this shape."""
+        match = cls._LEADING_ARTICLE_RE.match(query)
+        if not match:
+            return query
+        # Guard: ``the X section of/in/from Y`` is a get_section command.
+        if cls._RULE3_SECTION_COMMAND_RE.match(query):
+            return query
+        if title_probe is not None and title_probe(query):
+            # Real canonical title — keep the article.
+            return query
+        return query[match.end() :]
+
+    # Rule 4 regex shapes. Both require a single-word attribute so we
+    # don't mis-decompose multi-word phrases — multi-hop / multi-word
+    # attribute decomposition is a deferred sub-D-3 concern.
+    _X_OF_Y_RE = re.compile(
+        # Entity capture is bounded at 200 chars to eliminate any
+        # polynomial-backtracking risk on adversarial inputs.
+        # Legitimate entity names fit comfortably; anything longer is
+        # not a real query. Single-char-class `.` keeps the analyzer
+        # happy about quantifier nesting.
+        r"^(?P<attr>\w+)\s+of\s+(?P<entity>.{1,200})$",
+        re.IGNORECASE,
+    )
+    _POSSESSIVE_RE = re.compile(
+        r"^(?P<entity>\w+)'s\s+(?P<attr>\w+)$",
+        re.IGNORECASE,
+    )
+
+    # Rule 4 guard: attribute words that are recognised intent keywords.
+    # When the attr group matches one of these, the query is a structured
+    # command (e.g. ``structure of Biology``, ``sections of Protein``)
+    # rather than a factual decomposition (``population of Berlin``).
+    # Decomposing these would rewrite them into bare noun phrases that
+    # lose the command signal and misroute to ``search`` / ``tell_me_about``.
+    _DECOMPOSE_SKIP_ATTRS: frozenset[str] = frozenset(
+        {
+            # Structure/TOC intent keywords (INTENT_PATTERNS, specificity 8–10)
+            "structure",
+            "outline",
+            "sections",
+            "section",
+            "headings",
+            "heading",
+            "toc",
+            "contents",
+            # ``table`` as in ``table of contents`` — the multi-word phrase
+            # ``table of contents for X`` starts with ``table``, so Rule 4
+            # must not consume it before the toc intent regex can see it.
+            "table",
+            # Metadata intent keywords
+            "metadata",
+            "info",
+            "details",
+            "detail",
+            # Summary intent keywords
+            "summary",
+            "overview",
+            "brief",
+            # Links intent keywords
+            "links",
+            "link",
+            "references",
+            "related",
+            # Browse intent keywords
+            "list",
+            "browse",
+            # Binary intent keywords
+            "binary",
+            # Search / find command verbs
+            "find",
+            "search",
+            "get",
+        }
+    )
+
+    @classmethod
+    def _decompose_x_of_y(cls, query: str) -> tuple[str, Optional[dict[str, str]]]:
+        """Sub-D-2 rule 4: decompose `<attr> of <entity>` and
+        `<entity>'s <attr>` shapes.
+
+        Returns ``(rewritten_query, hint_or_None)``:
+        - ``rewritten_query`` collapses to ``<entity> <attr>`` when
+          decomposition matches; otherwise returns input unchanged.
+        - ``hint_or_None`` is ``{"entity": ..., "attribute": ...}`` on
+          match, else None. The hint rides inside ``params`` in the
+          parse_intent return value; ``_handle_tell_me_about`` reads it
+          to skip its own extraction.
+
+        Idempotent: a rewritten ``berlin population`` no longer matches
+        either regex.
+
+        Guard: when the attr word is a recognised intent keyword (e.g.
+        ``structure``, ``sections``, ``metadata``), the query is a
+        structured command and must NOT be decomposed — decomposing
+        would destroy the command signal and misroute the query."""
+        m = cls._X_OF_Y_RE.match(query)
+        if not m:
+            m = cls._POSSESSIVE_RE.match(query)
+        if not m:
+            return query, None
+        entity = m.group("entity").strip()
+        attr = m.group("attr").strip()
+        # Guard: do not decompose known command-keyword attributes.
+        if attr.lower() in cls._DECOMPOSE_SKIP_ATTRS:
+            return query, None
+        return f"{entity} {attr}", {"entity": entity, "attribute": attr}

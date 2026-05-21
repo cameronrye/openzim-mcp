@@ -655,7 +655,7 @@ class TestPD21TrailingPolitenessStrip:
             "find article titled Berlin please"
         )
         assert intent == "find_by_title"
-        assert params.get("title") == "Berlin"
+        assert params.get("title") == "berlin"  # Sub-D-2 Rule 1 lowercases
 
     def test_find_by_title_strips_trailing_thanks(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
@@ -664,7 +664,7 @@ class TestPD21TrailingPolitenessStrip:
             "find article titled Photosynthesis thanks"
         )
         assert intent == "find_by_title"
-        assert params.get("title") == "Photosynthesis"
+        assert params.get("title") == "photosynthesis"  # Sub-D-2 Rule 1 lowercases
 
     def test_links_strips_trailing_please(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
@@ -673,7 +673,7 @@ class TestPD21TrailingPolitenessStrip:
             "links in Photosynthesis please"
         )
         assert intent == "links"
-        assert params.get("entry_path") == "Photosynthesis"
+        assert params.get("entry_path") == "photosynthesis"  # Sub-D-2 Rule 1 lowercases
 
     def test_structure_strips_trailing_please(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
@@ -682,14 +682,14 @@ class TestPD21TrailingPolitenessStrip:
             "show structure of Photosynthesis please"
         )
         assert intent == "structure"
-        assert params.get("entry_path") == "Photosynthesis"
+        assert params.get("entry_path") == "photosynthesis"  # Sub-D-2 Rule 1 lowercases
 
     def test_get_article_strips_trailing_please(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
 
         intent, params, _conf = IntentParser.parse_intent("get article Berlin please")
         assert intent == "get_article"
-        assert params.get("entry_path") == "Berlin"
+        assert params.get("entry_path") == "berlin"  # Sub-D-2 Rule 1 lowercases
 
     def test_suggestions_strips_trailing_please(self) -> None:
         from openzim_mcp.intent_parser import IntentParser
@@ -706,7 +706,7 @@ class TestPD21TrailingPolitenessStrip:
 
         intent, params, _conf = IntentParser.parse_intent("tell me about Berlin please")
         assert intent == "tell_me_about"
-        assert params.get("topic") == "Berlin"
+        assert params.get("topic") == "berlin"  # Sub-D-2 Rule 1 lowercases
 
     def test_walk_namespace_unaffected_by_trailing_please(self) -> None:
         # Walk's extractor captures only the namespace letter, so
@@ -728,7 +728,7 @@ class TestPD21TrailingPolitenessStrip:
             "search Berlin in namespace C please"
         )
         assert intent == "filtered_search"
-        assert params.get("query") == "Berlin"
+        assert params.get("query") == "berlin"  # Sub-D-2 Rule 1 lowercases
         assert (params.get("namespace") or "").upper() == "C"
 
     def test_quoted_inner_please_not_stripped(self) -> None:

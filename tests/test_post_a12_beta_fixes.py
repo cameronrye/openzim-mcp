@@ -437,12 +437,12 @@ class TestD8ModernisedNotFoundErrors:
     ):
         self._stub_backend(handler, method_name)
         out = handler.handle_zim_query(query, "/test/wiki.zim")
-        # Title carries the article path verbatim.
-        assert "**Article not found: `Nonexistent_xyz`**" in out
+        # Title carries the article path (lowercased by Sub-D-2 Rule 1).
+        assert "**Article not found: `nonexistent_xyz`**" in out
         # Recovery block lists the three concrete next-step commands.
-        assert "suggestions for Nonexistent_xyz" in out
-        assert "find article titled Nonexistent_xyz" in out
-        assert "search for Nonexistent_xyz" in out
+        assert "suggestions for nonexistent_xyz" in out
+        assert "find article titled nonexistent_xyz" in out
+        assert "search for nonexistent_xyz" in out
         # Legacy template artifacts are gone.
         assert "**Error Processing Query**" not in out
         assert "Check server logs" not in out

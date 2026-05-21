@@ -290,8 +290,8 @@ class TestP1D2PolitenessSmsVariants:
             ("search for biology thnx", "biology"),
             ("search for biology thanx", "biology"),
             ("search for biology tysm", "biology"),
-            ("find article titled Berlin thnx", "Berlin"),
-            ("find article titled Berlin tysm", "Berlin"),
+            ("find article titled Berlin thnx", "berlin"),  # Sub-D-2 Rule 1 lowercases
+            ("find article titled Berlin tysm", "berlin"),  # Sub-D-2 Rule 1 lowercases
         ],
     )
     def test_sms_variants_in_full_parse(self, raw: str, expected_query: str) -> None:

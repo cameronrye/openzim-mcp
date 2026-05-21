@@ -20,6 +20,7 @@ __all__ = [
     "MLConfig",
     "MetaConfig",
     "OpenZimMcpConfig",
+    "QueryRewriteConfig",
     "RateLimitConfig",
     "RerankerConfig",
     "SearchConfig",
@@ -219,6 +220,36 @@ class MLConfig(BaseModel):
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
 
 
+class QueryRewriteConfig(BaseModel):
+    """Phase D sub-D-2: Tier 1 rule-based query rewriting config.
+
+    Always in the base install — no opt-in extras required. Four
+    idempotent rules run before the intent regex chain. See the
+    sub-D-2 design spec for per-rule behavior."""
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Master switch. False short-circuits all four rules; "
+            "queries pass through to the regex chain unchanged."
+        ),
+    )
+    misspelling_map_path: Path | None = Field(
+        default=None,
+        description=(
+            "Override the bundled misspellings.txt path. None = use "
+            "the package-bundled default."
+        ),
+    )
+    misspelling_exclusion_path: Path | None = Field(
+        default=None,
+        description=(
+            "Override the bundled exclusions list. None = use the "
+            "package-bundled default."
+        ),
+    )
+
+
 class LoggingConfig(BaseModel):
     """Logging configuration."""
 
@@ -246,6 +277,7 @@ class OpenZimMcpConfig(BaseSettings):
     content: ContentConfig = Field(default_factory=ContentConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     ml: MLConfig = Field(default_factory=MLConfig)
+    query_rewrite: QueryRewriteConfig = Field(default_factory=QueryRewriteConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     meta: MetaConfig = Field(default_factory=MetaConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)

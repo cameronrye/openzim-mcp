@@ -38,49 +38,58 @@ class TestEntryPathExtractor:
     def test_multi_word_title_captured_get_article(self, parser):
         intent, params, _ = parser.parse_intent("get article United States")
         assert intent == "get_article"
-        assert params["entry_path"] == "United States"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["entry_path"] == "united states"
 
     def test_multi_word_title_captured_structure(self, parser):
         intent, params, _ = parser.parse_intent("show structure of World War II")
         assert intent == "structure"
-        assert params["entry_path"] == "World War II"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["entry_path"] == "world war ii"
 
     def test_multi_word_title_captured_summary(self, parser):
         intent, params, _ = parser.parse_intent("summary of Albert Einstein")
         assert intent == "summary"
-        assert params["entry_path"] == "Albert Einstein"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["entry_path"] == "albert einstein"
 
     def test_multi_word_title_captured_links(self, parser):
         intent, params, _ = parser.parse_intent("links in Albert Einstein")
         assert intent == "links"
-        assert params["entry_path"] == "Albert Einstein"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["entry_path"] == "albert einstein"
 
     def test_at_suffix_preserved_for_metadata_path(self, parser):
         intent, params, _ = parser.parse_intent("get article M/Illustration_48x48@1")
         assert intent == "get_article"
-        assert params["entry_path"] == "M/Illustration_48x48@1"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["entry_path"] == "m/illustration_48x48@1"
 
     def test_apostrophe_preserved(self, parser):
         intent, params, _ = parser.parse_intent("get article Newton's_laws")
         assert intent == "get_article"
-        assert params["entry_path"] == "Newton's_laws"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["entry_path"] == "newton's_laws"
 
     def test_table_of_contents_for_target(self, parser):
         # ``of contents for Biology`` should pick the trailing target,
         # not capture ``contents``.
         intent, params, _ = parser.parse_intent("table of contents for Biology")
         assert intent == "toc"
-        assert params["entry_path"] == "Biology"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["entry_path"] == "biology"
 
     def test_quoted_path_still_overrides_keyword_capture(self, parser):
         intent, params, _ = parser.parse_intent('get article "C/Foo bar"')
         assert intent == "get_article"
-        assert params["entry_path"] == "C/Foo bar"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["entry_path"] == "c/foo bar"
 
     def test_trailing_question_mark_stripped(self, parser):
         intent, params, _ = parser.parse_intent("get article United States?")
         assert intent == "get_article"
-        assert params["entry_path"] == "United States"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["entry_path"] == "united states"
 
 
 # ---------------------------------------------------------------------------

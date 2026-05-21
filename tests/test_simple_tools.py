@@ -286,7 +286,8 @@ class TestIntentParser:
         query = 'get article "C/Biology"'
         intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "get_article"
-        assert params.get("entry_path") == "C/Biology"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params.get("entry_path") == "c/biology"
 
     def test_extract_search_query_with_filters(self):
         """Test extracting search query and filters."""
@@ -326,14 +327,16 @@ class TestIntentParser:
         query = 'get binary content from "I/my-image.png"'
         intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "binary"
-        assert params.get("entry_path") == "I/my-image.png"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params.get("entry_path") == "i/my-image.png"
 
     def test_extract_binary_entry_path_unquoted(self):
         """Test extracting entry path from unquoted strings for binary intent."""
         query = "extract pdf I/document.pdf"
         intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "binary"
-        assert params.get("entry_path") == "I/document.pdf"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params.get("entry_path") == "i/document.pdf"
 
     def test_binary_metadata_only_mode(self):
         """Test detecting metadata only mode for binary intent."""
@@ -371,7 +374,8 @@ class TestIntentParser:
         """
         intent, params, conf = IntentParser.parse_intent("table of contents of Biology")
         assert intent == "toc"
-        assert params.get("entry_path") == "Biology"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params.get("entry_path") == "biology"
         # toc has base 0.95 — no boost should apply because base >= 0.8.
         assert conf == pytest.approx(
             0.95
@@ -607,7 +611,8 @@ class TestNewIntentPatterns:
             "find article titled Photosynthesis"
         )
         assert intent == "find_by_title"
-        assert "Photosynthesis" in str(params.get("title", ""))
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert "photosynthesis" in str(params.get("title", "")).lower()
 
     def test_related_intent(self):
         """Test that 'articles related to X' routes to related."""
@@ -846,7 +851,8 @@ class TestIntentParserBatchEntries:
             "fetch entries A/Foo and A/Bar from wikipedia.zim"
         )
         assert intent == "get_zim_entries"
-        assert params.get("entries") == ["A/Foo", "A/Bar"]
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params.get("entries") == ["a/foo", "a/bar"]
 
     def test_get_zim_entries_extracts_multiple_namespaces(self):
         """Path extraction handles realistic comma-and-and joined lists."""
@@ -856,7 +862,8 @@ class TestIntentParserBatchEntries:
             "fetch articles A/Foo, A/Bar, and M/Image.png"
         )
         assert intent == "get_zim_entries"
-        assert params.get("entries") == ["A/Foo", "A/Bar", "M/Image.png"]
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params.get("entries") == ["a/foo", "a/bar", "m/image.png"]
 
     def test_get_zim_entries_strips_trailing_sentence_punctuation(self):
         """Trailing sentence punctuation must not glue onto the last path."""
@@ -864,7 +871,8 @@ class TestIntentParserBatchEntries:
 
         intent, params, _ = IntentParser.parse_intent("fetch entries A/Foo and A/Bar.")
         assert intent == "get_zim_entries"
-        assert params.get("entries") == ["A/Foo", "A/Bar"]
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params.get("entries") == ["a/foo", "a/bar"]
 
     def test_get_zim_entries_strips_various_trailing_punctuation(self):
         """Other trailing punctuation (?, !, ,, ;, :) is also stripped."""
@@ -874,7 +882,8 @@ class TestIntentParserBatchEntries:
             "fetch entries A/Foo? and A/Bar! and A/Baz;"
         )
         assert intent == "get_zim_entries"
-        assert params.get("entries") == ["A/Foo", "A/Bar", "A/Baz"]
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params.get("entries") == ["a/foo", "a/bar", "a/baz"]
 
     def test_get_zim_entries_preserves_internal_dots(self):
         """Stripping must not eat legitimate internal dots (e.g. file extensions)."""
@@ -884,7 +893,8 @@ class TestIntentParserBatchEntries:
             "fetch entries A/Foo and M/Image.png."
         )
         assert intent == "get_zim_entries"
-        assert params.get("entries") == ["A/Foo", "M/Image.png"]
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params.get("entries") == ["a/foo", "m/image.png"]
 
 
 class TestGetZimEntriesDispatch:
@@ -932,7 +942,8 @@ class TestGetZimEntriesDispatch:
         )
         assert isinstance(entries_arg, list) and len(entries_arg) == 2
         assert all(isinstance(e, dict) for e in entries_arg)
-        assert [e["entry_path"] for e in entries_arg] == ["A/Foo", "A/Bar"]
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert [e["entry_path"] for e in entries_arg] == ["a/foo", "a/bar"]
         assert all(e["zim_file_path"] == "/test/wikipedia.zim" for e in entries_arg)
 
     def test_get_zim_entries_intent_with_no_paths_returns_help(
@@ -3416,15 +3427,17 @@ class TestSectionLevelFollowup:
     @pytest.mark.parametrize(
         "query,section,article",
         [
-            ("section Evolution of Biology", "Evolution", "Biology"),
-            ("the Evolution section of Biology", "Evolution", "Biology"),
+            # Sub-D-2 Rule 1 lowercases the query before param extraction,
+            # so section_name and entry_path are now lowercase.
+            ("section Evolution of Biology", "evolution", "biology"),
+            ("the Evolution section of Biology", "evolution", "biology"),
             (
                 "section 'Cellular respiration' of Biology",
-                "Cellular respiration",
-                "Biology",
+                "cellular respiration",
+                "biology",
             ),
-            ("section 3 of Biology", "3", "Biology"),
-            ("the History section of World_War_II", "History", "World_War_II"),
+            ("section 3 of Biology", "3", "biology"),
+            ("the History section of World_War_II", "history", "world_war_ii"),
         ],
     )
     def test_parse_section_intent(self, query, section, article):
@@ -3511,7 +3524,9 @@ class TestSectionLevelFollowup:
         )
         assert "# Evolution" in out
         assert "change in heritable traits" in out
-        assert "From `Biology`" in out
+        # Sub-D-2 Rule 1 lowercases the query before param extraction,
+        # so the article path in the output is now lowercase.
+        assert "From `biology`" in out
 
     def test_handler_supports_numeric_position(self, section_handler):
         h, _ = section_handler
@@ -4229,11 +4244,13 @@ class TestA11IntentParserFixes:
         """
         intent, params, _conf = IntentParser.parse_intent("explain Berlin to me")
         assert intent == "tell_me_about"
-        assert params["topic"] == "Berlin"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["topic"] == "berlin"
 
         intent2, params2, _ = IntentParser.parse_intent("describe DNA for me please")
         assert intent2 == "tell_me_about"
-        assert params2["topic"] == "DNA"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params2["topic"] == "dna"
 
         intent3, params3, _ = IntentParser.parse_intent("tell me about cats please")
         assert intent3 == "tell_me_about"

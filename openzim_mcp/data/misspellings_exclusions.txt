@@ -1,0 +1,11 @@
+# openzim-mcp Tier 1 query-rewrite misspelling exclusions.
+#
+# Words listed here are NEVER substituted by rule 2, even if they
+# appear in misspellings.txt. Grows reactively when a real proper noun
+# (a surname, band name, place, etc.) gets misrouted to a different
+# word.
+#
+# Format: one lowercase token per line. Comments begin with `#`.
+# Hard cap: 200 entries (rare class).
+
+# (empty — entries added as they're observed)

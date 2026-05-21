@@ -423,7 +423,7 @@ class TestP1D5ParamLeakQuery:
             "tell me about Photosynthesis query=biology"
         )
         assert intent == "tell_me_about"
-        assert params.get("topic") == "Photosynthesis", (
+        assert params.get("topic") == "photosynthesis", (  # Sub-D-2 Rule 1 lowercases
             f"Pre-fix topic was 'Photosynthesis query=biology' → title-"
             f"promotion resolved to 'Biology' (fuzzy match); got "
             f"{params.get('topic')!r}"
@@ -627,7 +627,9 @@ class TestPass2CrossFeatureIntegration:
             "tell me about TCP/IP and HTTP and HTTPS limit=10"
         )
         assert intent == "tell_me_about"
-        assert params.get("topic") == "TCP/IP and HTTP and HTTPS", (
+        assert (
+            params.get("topic") == "tcp/ip and http and https"
+        ), (  # Sub-D-2 Rule 1 lowercases
             f"Expected clean chain topic after limit strip; "
             f"got {params.get('topic')!r}"
         )
@@ -672,8 +674,8 @@ class TestPass2CrossFeatureIntegration:
             "tell me about Berlin limit=5 thanks a million"
         )
         assert intent == "tell_me_about"
-        assert params.get("topic") == "Berlin", (
-            f"Expected clean topic 'Berlin' after both strips; "
+        assert params.get("topic") == "berlin", (  # Sub-D-2 Rule 1 lowercases
+            f"Expected clean topic 'berlin' after both strips; "
             f"got {params.get('topic')!r}"
         )
 
