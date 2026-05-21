@@ -193,14 +193,16 @@ class RerankerConfig(BaseModel):
         ),
     )
     first_call_timeout_seconds: float = Field(
-        default=5.0,
+        default=15.0,
         ge=0.1,
         le=120.0,
         description=(
             "Timeout for the first model load (covers HuggingFace download). "
             "When exceeded, the kill switch fires and search falls back to "
             "Xapian-only. Pre-stage with `openzim-mcp download-models` to "
-            "avoid this path."
+            "avoid this path. Default sized for ONNX session creation on a "
+            "warm cache (~7–10 s on modest hardware); raise for cold-cache "
+            "downloads."
         ),
     )
     cache_dir: Path | None = Field(

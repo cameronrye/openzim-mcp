@@ -1286,10 +1286,10 @@ def _maybe_rerank_synthesize_passages(
 
     reranker = BGEReranker.get(reranker_config)
     if reranker is None:
-        logger.debug("synthesize: reranker_skipped.not_installed")
+        logger.info("telemetry: reranker_skipped.not_installed")
         return all_passages, hit_keys
     if not all_passages:
-        logger.debug("synthesize: reranker_skipped.no_results")
+        logger.info("telemetry: reranker_skipped.no_results")
         return all_passages, hit_keys
 
     # Build path→passage index for round-trip mapping. cite_id
@@ -1312,7 +1312,7 @@ def _maybe_rerank_synthesize_passages(
     )
     if not (reranked_envelopes and "rerank_score" in reranked_envelopes[0]):
         # Short query or inference failure — passthrough.
-        logger.debug("synthesize: reranker_skipped.passthrough")
+        logger.info("telemetry: reranker_skipped.passthrough")
         return all_passages, hit_keys
 
     # Build a lookup from cite_id → rerank_score for sorting.
@@ -1333,8 +1333,8 @@ def _maybe_rerank_synthesize_passages(
     # Re-number ranks to reflect new ordering.
     for i, p in enumerate(all_passages, start=1):
         p["rank"] = i
-    logger.debug(
-        "synthesize: reranker_engaged — reranked %d passages for query %r",
+    logger.info(
+        "telemetry: reranker_engaged — reranked %d passages for query %r",
         len(all_passages),
         query,
     )

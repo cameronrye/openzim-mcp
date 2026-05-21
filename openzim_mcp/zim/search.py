@@ -172,8 +172,16 @@ def _format_filtered_response(
     total_results: int,
     offset: int,
     limit: int,
+    *,
+    display_query: Optional[str] = None,
 ) -> str:
-    """Render the human-readable response body, header, and pagination footer."""
+    """Render the human-readable response body, header, and pagination footer.
+
+    Post-b1 P3-D1: ``display_query`` overrides ``query`` in the user-
+    facing echo string. ``query`` is the matched form (lowercased by
+    Sub-D-2 Rule 1); ``display_query`` is the original-case form so
+    the caller sees the casing they typed.
+    """
     capped_note = (
         f" (filtered from first {scan.scanned} of " f"~{total_results} unfiltered hits)"
         if scan.scan_cap_hit
@@ -186,9 +194,10 @@ def _format_filtered_response(
         if scan.total_filtered_is_lower_bound
         else str(scan.filtered_count)
     )
+    echo_query = display_query if display_query else query
 
     parts: List[str] = [
-        f'Found {total_filtered_text} filtered matches for "{query}"'
+        f'Found {total_filtered_text} filtered matches for "{echo_query}"'
         f"{filter_text}, "
         f"showing {offset + 1}-{offset + len(results)}{capped_note}:\n\n",
     ]
@@ -324,6 +333,8 @@ class _SearchMixin:
         query: str,
         limit: Optional[int] = None,
         offset: int = 0,
+        *,
+        display_query: Optional[str] = None,
     ) -> str:
         """Markdown-rendered search result (legacy surface).
 
@@ -333,9 +344,14 @@ class _SearchMixin:
 
         Args:
             zim_file_path: Path to the ZIM file
-            query: Search query term
+            query: Search query term (lowercased upstream by Sub-D-2 Rule 1)
             limit: Maximum number of results to return
             offset: Result starting offset (for pagination)
+            display_query: Optional original-case form of ``query`` for
+                user-facing echo strings (post-b1 P3-D1). The search
+                backend matches case-insensitively, so this only
+                affects the rendered ``Found N matches for "X"`` /
+                ``No results found for "X"`` strings.
 
         Returns:
             Search result text
@@ -345,7 +361,7 @@ class _SearchMixin:
             OpenZimMcpArchiveError: If search operation fails
         """
         payload = self.search_zim_file_data(zim_file_path, query, limit, offset)
-        return self._format_search_text(payload)
+        return self._format_search_text(payload, display_query=display_query)
 
     def search_zim_file_data(
         self,
@@ -691,13 +707,29 @@ class _SearchMixin:
             total_results,
         )
 
-    def _format_search_text(self, payload: "SearchResponse") -> str:
+    def _format_search_text(
+        self,
+        payload: "SearchResponse",
+        *,
+        display_query: Optional[str] = None,
+    ) -> str:
         """Render a structured search payload as the legacy markdown text.
 
         Mirrors the original ``_perform_search`` output exactly so callers
         (and tests) that consume the rendered text keep working unchanged.
+
+        Post-b1 P3-D1: ``display_query`` (optional) overrides
+        ``payload["query"]`` in the user-facing echo strings (``Found N
+        matches for "X"``, ``No search results found for "X"``, recovery
+        hints). The search backend itself is case-insensitive (Xapian),
+        so ``payload["query"]`` stays as the matched form for cache
+        keys / cursor encoding; only the rendered echoes change.
+        Pre-fix, ``search for Biology`` (after Rule 1 lowercase) showed
+        ``Found N matches for "biology"`` — sibling of the post-b1
+        P1-D2 / P2-D1 / P2-D2 lowercase-leak family.
         """
         query = payload["query"]
+        echo_query = display_query if display_query else query
         total_results = payload["total"] or 0
         page_info = payload["page_info"]
         offset = page_info["offset"]
@@ -715,11 +747,11 @@ class _SearchMixin:
             #   * tell_me_about runs a structured search + auto-fetch
             #     for any reasonably-named topic.
             return (
-                f'No search results found for "{query}".\n\n'
+                f'No search results found for "{echo_query}".\n\n'
                 f"**Try one of these:**\n"
-                f"- `suggestions for {query[:30]}` — autocomplete to "
+                f"- `suggestions for {echo_query[:30]}` — autocomplete to "
                 f"catch typos or partial names\n"
-                f"- `tell me about {query[:30]}` — structured topic "
+                f"- `tell me about {echo_query[:30]}` — structured topic "
                 f"lookup with auto article fetch\n"
                 f"- A shorter or differently-cased query"
             )
@@ -728,12 +760,12 @@ class _SearchMixin:
         # detect via ``total < offset`` plus an empty results list.
         if not results and offset >= total_results:
             return (
-                f'Found {total_results} matches for "{query}", '
+                f'Found {total_results} matches for "{echo_query}", '
                 f"but offset {offset} exceeds total results."
             )
 
         result_text = (
-            f'Found {total_results} matches for "{query}", '
+            f'Found {total_results} matches for "{echo_query}", '
             f"showing {offset + 1}-{offset + len(results)}:\n\n"
         )
 
@@ -809,6 +841,8 @@ class _SearchMixin:
         content_type: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        *,
+        display_query: Optional[str] = None,
     ) -> str:
         """A11 post-a11 H2: ``search_with_filters`` plus the canonical-
         title-match splice that plain ``search`` already gets through
@@ -834,6 +868,7 @@ class _SearchMixin:
                 content_type,
                 limit,
                 offset,
+                display_query=display_query,
             )
         if limit is None:
             limit = self.config.content.default_search_limit
@@ -860,6 +895,7 @@ class _SearchMixin:
                 content_type,
                 limit,
                 offset,
+                display_query=display_query,
             )
 
         canonical_path = canonical["path"]
@@ -880,6 +916,7 @@ class _SearchMixin:
                     content_type,
                     limit,
                     offset,
+                    display_query=display_query,
                 )
         # Same content-type gate when applicable; the title-index probe
         # doesn't carry mimetype info, so skip the splice rather than
@@ -892,6 +929,7 @@ class _SearchMixin:
                 content_type,
                 limit,
                 offset,
+                display_query=display_query,
             )
 
         # Get the structured payload, splice, then render via the same
@@ -1022,6 +1060,7 @@ class _SearchMixin:
             total_results=filtered_count,
             offset=offset,
             limit=limit,
+            display_query=display_query,
         )
 
     def search_with_filters(
@@ -1032,6 +1071,8 @@ class _SearchMixin:
         content_type: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        *,
+        display_query: Optional[str] = None,
     ) -> str:
         """Markdown-rendered filtered search (legacy surface).
 
@@ -1078,9 +1119,13 @@ class _SearchMixin:
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
         # Check cache (legacy markdown cache, separate from the v2b dict cache).
+        # Post-b1 P3-D1: include display_query in the cache key. Two calls
+        # with the same matched query but different display forms must
+        # render different text; a stale cache would echo the wrong
+        # casing back to the second caller.
         cache_key = (
             f"search_filtered:{validated_path}:{query}:{namespace}:"
-            f"{content_type}:{limit}:{offset}"
+            f"{content_type}:{limit}:{offset}:dq={display_query or ''}"
         )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
@@ -1090,7 +1135,13 @@ class _SearchMixin:
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 result, total_filtered = self._perform_filtered_search(
-                    archive, query, namespace, content_type, limit, offset
+                    archive,
+                    query,
+                    namespace,
+                    content_type,
+                    limit,
+                    offset,
+                    display_query=display_query,
                 )
 
             # Don't cache zero-result responses: libzim's lazy index warm-up
@@ -1419,6 +1470,8 @@ class _SearchMixin:
         content_type: Optional[str],
         limit: int,
         offset: int,
+        *,
+        display_query: Optional[str] = None,
     ) -> Tuple[str, int]:
         """Perform filtered search operation.
 
@@ -1426,7 +1479,14 @@ class _SearchMixin:
             (result_text, total_filtered) — caller uses total_filtered to decide
             whether the response is safe to cache. ``total_filtered`` is 0 for
             both the unfiltered no-results and the post-filter no-matches cases.
+
+        Post-b1 P3-D1: ``display_query`` (when set) replaces ``query``
+        in user-facing echo strings (``No search results found for "X"``,
+        ``No filtered matches for "X"``, ``Found N filtered matches for
+        "X"``). Matching uses ``query`` unchanged; only the rendered
+        echo changes.
         """
+        echo_query = display_query if display_query else query
         # Canonicalise user-supplied namespace ("c" -> "C", "content" -> "C")
         # so the comparison against namespace prefixes derived from libzim
         # paths (which always surface in canonical form) does not silently
@@ -1439,7 +1499,7 @@ class _SearchMixin:
         search = searcher.search(query_obj)
         total_results = search.getEstimatedMatches()
         if total_results == 0:
-            return f'No search results found for "{query}"', 0
+            return f'No search results found for "{echo_query}"', 0
 
         page, scan = self._scan_filtered_search(
             archive, search, total_results, namespace, content_type, limit, offset
@@ -1447,16 +1507,23 @@ class _SearchMixin:
 
         filter_text = _format_filter_text(namespace, content_type)
         if scan.filtered_count == 0:
-            return f'No filtered matches for "{query}"{filter_text}', 0
+            return f'No filtered matches for "{echo_query}"{filter_text}', 0
         if offset >= scan.filtered_count:
             return (
-                f'Found {scan.filtered_count} filtered matches for "{query}"'
+                f'Found {scan.filtered_count} filtered matches for "{echo_query}"'
                 f"{filter_text}, but offset {offset} exceeds total results."
             ), scan.filtered_count
 
         results = self._build_filtered_results(page, content_type, offset, query=query)
         result_text = _format_filtered_response(
-            query, filter_text, results, scan, total_results, offset, limit
+            query,
+            filter_text,
+            results,
+            scan,
+            total_results,
+            offset,
+            limit,
+            display_query=display_query,
         )
         return result_text, scan.filtered_count
 

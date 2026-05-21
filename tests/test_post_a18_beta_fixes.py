@@ -287,9 +287,9 @@ class TestP3D2SoftConnectorAliasFallback:
             "soft-connector footer must fire when one half resolves "
             "via title alias to the returned top_path"
         )
-        # Sub-D-2 Rule 1 lowercases topics before the footer is built.
-        assert "berlin" in out
-        assert "tell me about berlin" in out
+        # Post-b1 P1-D2: footer echoes entities in caller's original case.
+        assert "Berlin" in out
+        assert "tell me about Berlin" in out
 
     def test_neither_half_resolves_via_alias_still_suppresses(self) -> None:
         # Defensive: when neither half's title-alias resolves to
