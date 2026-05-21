@@ -3514,9 +3514,23 @@ class SimpleToolsHandler:
             # SearchWithFiltersResponse has the same core keys as SearchResponse
             # (query, total, page_info, results, done, next_cursor) so the
             # text formatter accepts it structurally.
+            #
+            # Post-b2 D4: pass ``filter_text`` so the compact filtered
+            # echo reads ``Found N filtered matches for "X" (filters:
+            # namespace=C)`` — matching the non-compact filtered
+            # path's wording. Pre-fix, both paths shared the
+            # unfiltered ``Found N matches for "X"`` line because
+            # ``_format_search_text`` had no filter awareness.
+            from .zim.search import _format_filter_text
+
+            compact_filter_text = _format_filter_text(
+                params.get("namespace"),
+                params.get("content_type"),
+            )
             return self.zim_operations._format_search_text(
                 cast(SearchResponse, payload),
                 display_query=display_query,
+                filter_text=compact_filter_text or "",
             )
         # A11 post-a11 H2: route to the canonical-title-match-aware
         # variant so ``search for berlin in namespace C`` surfaces
@@ -3653,6 +3667,21 @@ class SimpleToolsHandler:
                 # for use by the backend renderers (P3-D1); reuse it
                 # here so the no-results echo also reflects the
                 # caller's original casing.
+                # Post-b2 D2: invoke the rerank apply so its no-results
+                # / not-installed counter bumps even on this early-
+                # return path. Without this, the in-band
+                # ``<!-- reranker=... -->`` comment is silently
+                # suppressed for every no-results search — the b1
+                # D-1 telemetry contract promised the comment on
+                # every multi-token search. ``_maybe_rerank_compact``
+                # is a no-op on empty ``results`` aside from the
+                # counter bump (the rerank singleton is also cached,
+                # so the call is cheap).
+                self._maybe_rerank_compact(
+                    payload=cast(Dict[str, Any], payload),
+                    query=search_query,
+                    limit=limit,
+                )
                 meta = payload.get("_meta", {})
                 return _HandlerResult(
                     body=f'No results for "{display_query}".',
@@ -3916,6 +3945,43 @@ class SimpleToolsHandler:
                 # may want to focus extraction on a specific attribute.
                 # No active consumer today — that's a future-work hook.
                 topic = entity_hint
+        # Post-b2 D3: when parse_intent didn't attach a decomposition
+        # hint, retry Rule 4's POSSESSIVE shape on the EXTRACTED
+        # topic. Rule 4's ``_POSSESSIVE_RE`` / ``_X_OF_Y_RE`` are
+        # ``^...$``-anchored and run against the FULL query at
+        # parse_intent time. For ``tell me about <entity>'s
+        # <attr>`` shapes the verb prefix prevented the match; the
+        # corrected possessive form arrived here intact and the
+        # downstream auto-resolve silently picked the trailing
+        # token. Sibling shape: ``Photosythesis's reproduction``
+        # (after Rule 2 → ``photosynthesis's reproduction``) used
+        # to return the ``Reproduction`` article instead of
+        # ``Photosynthesis``.
+        #
+        # Scope narrowed to the possessive shape (``X's Y``) only.
+        # The ``X of Y`` shape is intentionally NOT retried at the
+        # handler edge because the existing title-promotion path
+        # already resolves canonical multi-word titles (``lord of
+        # the rings`` → ``The_Lord_of_the_Rings``); a handler-side
+        # retry would re-introduce the pre-b1-P1-D3 family of
+        # decomposition mishaps for non-canonical ``X of Y``
+        # queries. Possessive shapes are unambiguous: ``<entity>'s
+        # <attribute>`` is grammatically a noun-phrase about the
+        # entity.
+        elif topic and "'s " in topic.lower():
+            _title_probe = self._build_title_probe(
+                self._probe_archive_path(zim_file_path)
+            )
+            _, _retry_hint = IntentParser._decompose_x_of_y(
+                topic.lower(), title_probe=_title_probe
+            )
+            if isinstance(_retry_hint, dict):
+                _retry_entity = _retry_hint.get("entity")
+                if _retry_entity:
+                    topic = _retry_entity
+                    # Surface the hint so downstream consumers see
+                    # the same shape Rule 4 would have produced.
+                    params["decomposition_hint"] = _retry_hint
         # A16 post-a16 D3: a topic like ``M/Title`` or ``c/Berlin`` is a
         # ZIM namespace path the caller pasted into ``tell me about``.
         # The downstream search either silently strips the prefix (libzim

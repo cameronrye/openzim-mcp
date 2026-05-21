@@ -412,6 +412,18 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     # ``for me`` (``DNA for me please``), so strip ``please`` FIRST,
     # then strip the bare ``to/for me`` tail. Loop both strips until
     # idempotent in case an unusual phrasing carries both forms.
+    # Post-b2 D1: trailing modal politeness — ``tell me about Tokyo
+    # if you would``, ``... if you could``, ``... would you``,
+    # ``... could you``. Pre-fix the trailing strip only matched
+    # ``please`` / ``to me`` / ``for me``; the modal class
+    # (``could/would/will/can`` + ``you``, with optional leading
+    # ``if you``) was handled at the LEADING site (line ~374) but
+    # not the trailing one — the two regexes drifted out of sync.
+    # Falling through left the trailing modal in the topic, which
+    # then resolved to the stub article for the trailing word
+    # (``Would`` / ``Could`` / ``Would_You``). Require an ``if you``
+    # OR a trailing ``you`` so a single ``would`` (rare but possible
+    # in real article titles) isn't stripped.
     for _ in range(3):
         before = topic
         topic = safe_regex_sub(
@@ -422,6 +434,13 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
         ).strip()
         topic = safe_regex_sub(
             r"\s+(?:to|for)\s+(?:me|us)\s*$",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        ).strip()
+        topic = safe_regex_sub(
+            r"\s+(?:if\s+you\s+(?:could|would|will|can)"
+            r"|(?:could|would|will|can)\s+you)\s*$",
             "",
             topic,
             flags=re.IGNORECASE,

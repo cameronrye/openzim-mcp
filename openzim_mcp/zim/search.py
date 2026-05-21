@@ -712,6 +712,7 @@ class _SearchMixin:
         payload: "SearchResponse",
         *,
         display_query: Optional[str] = None,
+        filter_text: Optional[str] = None,
     ) -> str:
         """Render a structured search payload as the legacy markdown text.
 
@@ -727,6 +728,17 @@ class _SearchMixin:
         Pre-fix, ``search for Biology`` (after Rule 1 lowercase) showed
         ``Found N matches for "biology"`` — sibling of the post-b1
         P1-D2 / P2-D1 / P2-D2 lowercase-leak family.
+
+        Post-b2 D4: ``filter_text`` (optional) marks the rendered echo
+        as a FILTERED search. When provided, the count line reads
+        ``Found N filtered matches for "X"<filter_text>`` instead of
+        ``Found N matches for "X"`` — matching the wording the
+        non-compact filtered path emits via ``_format_filtered_response``
+        (``zim/search.py:199-203``). Pre-fix, the compact filtered
+        path silently dropped the ``filtered`` qualifier because both
+        compact and unfiltered paths share this formatter. Callers
+        pass a leading-space-prefixed filter description (e.g.
+        ``" in namespace C"``) produced by ``_format_filter_text``.
         """
         query = payload["query"]
         echo_query = display_query if display_query else query
@@ -737,6 +749,13 @@ class _SearchMixin:
         results = payload["results"]
         done = payload["done"]
         next_cursor = payload.get("next_cursor")
+        # Post-b2 D4: render the filtered-search wording when the caller
+        # tagged this as a filtered echo. The qualifier word lands
+        # between the count and the ``for "<query>"`` echo so the
+        # filtered and unfiltered forms read symmetrically.
+        is_filtered = filter_text is not None
+        match_qualifier = " filtered" if is_filtered else ""
+        filter_suffix = filter_text if is_filtered else ""
 
         if total_results == 0:
             # Append actionable next-step hints so an LLM caller knows
@@ -746,6 +765,12 @@ class _SearchMixin:
             #     names ("Photosynthsis" → "Photosynthesis").
             #   * tell_me_about runs a structured search + auto-fetch
             #     for any reasonably-named topic.
+            if is_filtered:
+                # Mirror the non-compact filtered path's terse no-results
+                # echo (``zim/search.py:1510``) — recovery hints don't
+                # apply to a filter mismatch (the typo path doesn't help
+                # when the filter excluded the hits).
+                return f'No filtered matches for "{echo_query}"{filter_suffix}'
             return (
                 f'No search results found for "{echo_query}".\n\n'
                 f"**Try one of these:**\n"
@@ -760,12 +785,14 @@ class _SearchMixin:
         # detect via ``total < offset`` plus an empty results list.
         if not results and offset >= total_results:
             return (
-                f'Found {total_results} matches for "{echo_query}", '
+                f"Found {total_results}{match_qualifier} matches for "
+                f'"{echo_query}"{filter_suffix}, '
                 f"but offset {offset} exceeds total results."
             )
 
         result_text = (
-            f'Found {total_results} matches for "{echo_query}", '
+            f"Found {total_results}{match_qualifier} matches for "
+            f'"{echo_query}"{filter_suffix}, '
             f"showing {offset + 1}-{offset + len(results)}:\n\n"
         )
 
