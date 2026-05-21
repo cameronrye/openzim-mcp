@@ -936,6 +936,40 @@ class IntentParser:
         return query
 
     @classmethod
+    def _apply_tier1_rewrites(
+        cls,
+        query: str,
+        *,
+        title_probe: Optional[Callable[[str], bool]],
+        enabled: bool,
+    ) -> Tuple[str, Optional[Dict[str, str]]]:
+        """Sub-D-2: run all four Tier 1 rules in fixed order
+        (1 → 2 → 3 → 4). Returns ``(rewritten_query, hint_or_None)``.
+
+        Master kill switch: when ``enabled=False``, all four rules
+        skip — the query is returned unchanged, hint is None.
+        Operators set ``QueryRewriteConfig.enabled=False`` to bypass
+        every rule including Rule 1's lowercasing."""
+        if not enabled:
+            return query, None
+        query = cls._normalize_topic_case(query)
+        query = cls._apply_misspelling_map(query, title_probe=title_probe)
+        query = cls._detect_stopword_phrase(query, title_probe=title_probe)
+        return cls._decompose_x_of_y(query)
+
+    @staticmethod
+    def _attach_decomposition_hint(
+        params: Dict[str, Any],
+        hint: Optional[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """Sub-D-2: attach the rule-4 decomposition hint to a params
+        dict in-place when present. No-op when hint is None. Returns
+        the same params dict for chaining."""
+        if hint is not None:
+            params["decomposition_hint"] = hint
+        return params
+
+    @classmethod
     def parse_intent(
         cls,
         query: str,
@@ -970,19 +1004,14 @@ class IntentParser:
         rules 2 and 3 run in degraded mode (substitute without
         probing, strip without probing).
         """
-        # Sub-D-2 Tier 1 rewrites — must run BEFORE the existing
-        # _strip_* chain so downstream regexes see a normalized query.
-        # Order is fixed: lowercase → misspellings → stopword phrase →
-        # decomposition. Each rule is idempotent; we don't need a loop.
-        # Master kill switch: when query_rewrite_enabled=False, skip
-        # all four rules entirely — query reaches the existing chain
-        # unmodified.
-        decomposition_hint: Optional[Dict[str, str]] = None
-        if query_rewrite_enabled:
-            query = cls._normalize_topic_case(query)
-            query = cls._apply_misspelling_map(query, title_probe=title_probe)
-            query = cls._detect_stopword_phrase(query, title_probe=title_probe)
-            query, decomposition_hint = cls._decompose_x_of_y(query)
+        # Sub-D-2 Tier 1 rewrites — runs BEFORE the existing _strip_*
+        # chain so downstream regexes see a normalized query. Master
+        # kill switch is honored inside _apply_tier1_rewrites.
+        query, decomposition_hint = cls._apply_tier1_rewrites(
+            query,
+            title_probe=title_probe,
+            enabled=query_rewrite_enabled,
+        )
 
         # Post-a23 P1-D3: peel leaked ``param=value`` suffixes BEFORE
         # politeness so the politeness regex (and every downstream
@@ -1036,13 +1065,13 @@ class IntentParser:
             #
             # * Anything else — keep the legacy bare-search fallback.
             if cls._looks_like_bare_topic(query):
-                params = {"topic": query.strip()}
-                if decomposition_hint is not None:
-                    params["decomposition_hint"] = decomposition_hint
+                params = cls._attach_decomposition_hint(
+                    {"topic": query.strip()}, decomposition_hint
+                )
                 return "tell_me_about", params, 0.7
-            params = {"query": query}
-            if decomposition_hint is not None:
-                params["decomposition_hint"] = decomposition_hint
+            params = cls._attach_decomposition_hint(
+                {"query": query}, decomposition_hint
+            )
             return "search", params, 0.5
 
         # Select best match using weighted scoring
@@ -1053,8 +1082,7 @@ class IntentParser:
             best_match[1],
             best_match[2],
         )
-        if decomposition_hint is not None:
-            params["decomposition_hint"] = decomposition_hint
+        cls._attach_decomposition_hint(params, decomposition_hint)
         return intent_type, params, confidence
 
     # Words that signal an explicit verb-shaped intent. If a query contains
@@ -1500,7 +1528,7 @@ class IntentParser:
     # ``\bsection\b`` but the second (``the X section of Y``) requires
     # ``the`` to be present for the intent regex to fire.
     _RULE3_SECTION_COMMAND_RE = re.compile(
-        r"^the\s+\S+.*\s+section\s+(?:of|in|from)\s+\S+",
+        r"^the\s+\S+(?:\s+\S+){0,8}\s+section\s+(?:of|in|from)\s+\S+",
         re.IGNORECASE,
     )
 
@@ -1540,7 +1568,7 @@ class IntentParser:
     # don't mis-decompose multi-word phrases — multi-hop / multi-word
     # attribute decomposition is a deferred sub-D-3 concern.
     _X_OF_Y_RE = re.compile(
-        r"^(?P<attr>\w+)\s+of\s+(?P<entity>.+)$",
+        r"^(?P<attr>\w+)\s+of\s+(?P<entity>[\w\s'\-]+)$",
         re.IGNORECASE,
     )
     _POSSESSIVE_RE = re.compile(

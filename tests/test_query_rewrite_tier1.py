@@ -248,16 +248,14 @@ class TestParseIntentIntegration:
         # misspelling fix → `receive a letter`.
         # The existing intent regex chain then matches whatever it
         # would have matched for `receive a letter`.
-        intent, params, conf = IntentParser.parse_intent(
-            "RECIEVE A LETTER", title_probe=None
-        )
+        _, params, _ = IntentParser.parse_intent("RECIEVE A LETTER", title_probe=None)
         # We don't pin the resulting intent (depends on regex chain),
         # just confirm the query was normalized.
         assert "recieve" not in params.get("query", "")
         assert "recieve" not in params.get("topic", "")
 
     def test_decomposition_hint_attached_to_params(self) -> None:
-        intent, params, conf = IntentParser.parse_intent(
+        _, params, _ = IntentParser.parse_intent(
             "population of berlin", title_probe=None
         )
         # The hint rides inside `params` — backward-compat: callers
@@ -275,7 +273,7 @@ class TestParseIntentIntegration:
         # parse_intent itself doesn't read the config — the caller
         # (simple_tools wiring in Task 8) does. With title_probe=None
         # and no rules triggering, behavior matches pre-sub-D-2.
-        intent_a, params_a, _ = IntentParser.parse_intent("berlin", title_probe=None)
+        _, params_a, _ = IntentParser.parse_intent("berlin", title_probe=None)
         # `berlin` shouldn't decompose, shouldn't misspell, shouldn't
         # have a leading article. Should pass through to whatever the
         # legacy chain produced.
@@ -304,7 +302,7 @@ class TestParseIntentIntegration:
         # ENABLED (default), this gets lowercased and `recieve` → `receive`.
         # With rules DISABLED, the query reaches the regex chain in its
         # original form.
-        intent_off, params_off, _ = IntentParser.parse_intent(
+        _, params_off, _ = IntentParser.parse_intent(
             "RECIEVE A LETTER",
             title_probe=None,
             query_rewrite_enabled=False,
@@ -316,7 +314,7 @@ class TestParseIntentIntegration:
         assert "decomposition_hint" not in params_off
 
         # Sanity: with the flag default (True), the rules DO fire.
-        intent_on, params_on, _ = IntentParser.parse_intent(
+        _, params_on, _ = IntentParser.parse_intent(
             "RECIEVE A LETTER", title_probe=None
         )
         surfaced_on = " ".join(str(v) for v in params_on.values())
@@ -356,7 +354,7 @@ class TestRuleComposition:
     def test_lowercase_then_misspelling(self) -> None:
         # Rule 1 must run before rule 2 — misspellings.txt entries
         # are lowercase keys. `RECIEVE` only matches after lowercasing.
-        intent, params, _ = IntentParser.parse_intent("RECIEVE", title_probe=None)
+        _, params, _ = IntentParser.parse_intent("RECIEVE", title_probe=None)
         # The query has been rewritten — `recieve` shouldn't survive
         # anywhere in the resulting params.
         for v in params.values():
@@ -365,9 +363,7 @@ class TestRuleComposition:
     def test_misspelling_then_stopword_phrase(self) -> None:
         # Rule 2 runs per-token; rule 3 looks at the cleaned phrase.
         # `the recieve list` → `the receive list` → `receive list`.
-        intent, params, _ = IntentParser.parse_intent(
-            "the recieve list", title_probe=None
-        )
+        _, params, _ = IntentParser.parse_intent("the recieve list", title_probe=None)
         # No surviving `recieve`, no surviving leading `the`.
         joined = " ".join(str(v) for v in params.values()).lower()
         assert "recieve" not in joined
@@ -376,7 +372,7 @@ class TestRuleComposition:
     def test_stopword_phrase_then_decomposition(self) -> None:
         # `the population of berlin` → `population of berlin` →
         # decomposes to entity=`berlin`, attr=`population`.
-        intent, params, _ = IntentParser.parse_intent(
+        _, params, _ = IntentParser.parse_intent(
             "the population of berlin", title_probe=None
         )
         hint = params.get("decomposition_hint")
@@ -393,7 +389,7 @@ class TestRuleComposition:
         # misspellings file. The test pins the SHAPE of the result
         # (hint present, no leading `the`) without depending on the
         # specific misspelling.
-        intent, params, _ = IntentParser.parse_intent(
+        _, params, _ = IntentParser.parse_intent(
             "The Population of Berlin", title_probe=None
         )
         # Shouldn't lead with `the` in any param value.
@@ -410,6 +406,6 @@ class TestRuleComposition:
         # parse_intent ITSELF doesn't read config — that's the wrapper's
         # job. So this test verifies the rules can be invoked directly
         # with their defaults intact (probe=None semantics).
-        intent, params, _ = IntentParser.parse_intent("berlin", title_probe=None)
+        _, params, _ = IntentParser.parse_intent("berlin", title_probe=None)
         # A bare entity name shouldn't trigger rule 4 decomposition.
         assert "decomposition_hint" not in params
