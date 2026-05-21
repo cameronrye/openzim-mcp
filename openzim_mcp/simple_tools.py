@@ -4487,6 +4487,40 @@ class SimpleToolsHandler:
         )
         return "\n".join(lines)
 
+    @staticmethod
+    def _flatten_archive_hits(
+        per_file: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Flatten per-archive hits into a single tagged list for global rerank."""
+        tagged: List[Dict[str, Any]] = []
+        for entry_idx, entry in enumerate(per_file):
+            if entry.get("error") or not isinstance(entry.get("result"), dict):
+                continue
+            for hit in entry["result"].get("results") or []:
+                tagged.append({**hit, "_rerank_src_idx": entry_idx})
+        return tagged
+
+    @staticmethod
+    def _redistribute_reranked_hits(
+        per_file: List[Dict[str, Any]],
+        reranked_tagged: List[Dict[str, Any]],
+    ) -> None:
+        """Group reranked tagged hits back into per-archive buckets in place.
+
+        Strips the ``_rerank_src_idx`` tag and updates each entry's ``results``
+        + ``has_hits`` fields. Mutates ``per_file``."""
+        grouped: Dict[int, List[Dict[str, Any]]] = {}
+        for hit in reranked_tagged:
+            src_idx = hit.get("_rerank_src_idx", -1)
+            clean = {k: v for k, v in hit.items() if k != "_rerank_src_idx"}
+            grouped.setdefault(src_idx, []).append(clean)
+        for entry_idx, entry in enumerate(per_file):
+            if entry.get("error") or not isinstance(entry.get("result"), dict):
+                continue
+            new_hits = grouped.get(entry_idx, [])
+            entry["result"] = {**entry["result"], "results": new_hits}
+            entry["has_hits"] = bool(new_hits)
+
     def _maybe_rerank_search_all(
         self,
         *,
@@ -4506,13 +4540,7 @@ class SimpleToolsHandler:
 
         reranker_cfg = self.zim_operations.config.ml.reranker
         reranker = BGEReranker.get(reranker_cfg)
-
-        # Build a flat list of tagged candidates from non-error archives.
-        tagged_hits: List[Dict[str, Any]] = []
-        for entry_idx, entry in enumerate(per_file):
-            if not entry.get("error") and isinstance(entry.get("result"), dict):
-                for hit in entry["result"].get("results") or []:
-                    tagged_hits.append({**hit, "_rerank_src_idx": entry_idx})
+        tagged_hits = self._flatten_archive_hits(per_file)
 
         if reranker is None:
             self._track(_RERANKER_SKIPPED_NOT_INSTALLED)
@@ -4526,23 +4554,9 @@ class SimpleToolsHandler:
             candidates=tagged_hits,
             top_k=reranker_cfg.final_top_k,
         )
-        # Group reranked hits back by source archive, stripping the
-        # temporary ``_rerank_src_idx`` tag from each result dict.
-        grouped: Dict[int, List[Dict[str, Any]]] = {}
-        for hit in reranked_tagged:
-            src_idx = hit.get("_rerank_src_idx", -1)
-            clean = {k: v for k, v in hit.items() if k != "_rerank_src_idx"}
-            grouped.setdefault(src_idx, []).append(clean)
-        # Rebuild each archive entry's results in the reranked order.
-        for entry_idx, entry in enumerate(per_file):
-            if not entry.get("error") and isinstance(entry.get("result"), dict):
-                new_hits = grouped.get(entry_idx, [])
-                entry["result"] = {**entry["result"], "results": new_hits}
-                entry["has_hits"] = bool(new_hits)
-        if reranked_tagged and "rerank_score" in reranked_tagged[0]:
-            self._track(_RERANKER_ENGAGED)
-        else:
-            self._track(_RERANKER_SKIPPED_PASSTHROUGH)
+        self._redistribute_reranked_hits(per_file, reranked_tagged)
+        scored = bool(reranked_tagged and "rerank_score" in reranked_tagged[0])
+        self._track(_RERANKER_ENGAGED if scored else _RERANKER_SKIPPED_PASSTHROUGH)
         return per_file
 
     def _handle_search_all(
