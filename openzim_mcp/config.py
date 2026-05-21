@@ -152,7 +152,7 @@ class RerankerConfig(BaseModel):
         ),
     )
     model_id: str = Field(
-        default="Xenova/bge-reranker-base-onnx",
+        default="BAAI/bge-reranker-base",
         description=(
             "FastEmbed model identifier. Default targets English-first "
             "archives. Multilingual archives can override via "

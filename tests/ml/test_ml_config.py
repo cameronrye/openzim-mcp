@@ -13,7 +13,7 @@ class TestRerankerConfig:
     def test_defaults(self) -> None:
         cfg = RerankerConfig()
         assert cfg.enabled is True
-        assert cfg.model_id == "Xenova/bge-reranker-base-onnx"
+        assert cfg.model_id == "BAAI/bge-reranker-base"
         assert cfg.candidate_pool_size == 50
         assert cfg.final_top_k == 10
         assert cfg.max_query_length == 256
