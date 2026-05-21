@@ -38,7 +38,7 @@ openzim-mcp download-models
 ```
 
 Idempotent — safe to re-run. Without pre-staging, the first MCP query
-that triggers rerank has a 5-second timeout; on timeout the reranker
+that triggers rerank has a 15-second timeout; on timeout the reranker
 falls back to Xapian-only ranking for the rest of the process and logs
 a structured warning.
 
@@ -78,7 +78,7 @@ Set via environment variables with the `OPENZIM_MCP_` prefix:
 export OPENZIM_MCP_ML__RERANKER__ENABLED=true
 export OPENZIM_MCP_ML__RERANKER__MIN_QUERY_TOKENS=4
 export OPENZIM_MCP_ML__RERANKER__FINAL_TOP_K=10
-export OPENZIM_MCP_ML__RERANKER__FIRST_CALL_TIMEOUT_SECONDS=5.0
+export OPENZIM_MCP_ML__RERANKER__FIRST_CALL_TIMEOUT_SECONDS=15.0
 ```
 
 (The `__` double-underscore delimits nested config sections.)
@@ -100,6 +100,12 @@ event names (all use dot-separator):
   - A mid-inference failure tripped the `ml_fallback` decorator, which
     returned input candidates sliced to `top_k` (Xapian order preserved)
 
+Each reranker event also emits a single INFO-level log line per call
+of the form `telemetry: <event>`. This makes engagement observable to
+operators running in simple tool mode, who don't have access to
+`get_server_health` to read the counter directly. Set the logger to
+WARNING or higher to suppress them.
+
 A model-load failure (timeout, network error) logs a one-line WARNING
 to the configured logger and trips a process-wide kill switch via
 `ml_fallback` — subsequent search calls emit
@@ -110,9 +116,11 @@ None) until the process restarts.
 
 **"reranker model load failed: timeout"**
 The first-call download exceeded the configured
-`first_call_timeout_seconds` (default 5s). Run
-`openzim-mcp download-models` once to pre-stage, then the next server
-start will use the cached model.
+`first_call_timeout_seconds` (default 15s — sized for ONNX session
+creation on a warm cache). Run `openzim-mcp download-models` once to
+pre-stage; the next server start will use the cached model. On slower
+hardware or cold-cache fetches, raise the timeout via
+`OPENZIM_MCP_ML__RERANKER__FIRST_CALL_TIMEOUT_SECONDS`.
 
 **Install fails with "no wheel for fastembed"**
 The platform isn't in the supported matrix (see above). Use the base

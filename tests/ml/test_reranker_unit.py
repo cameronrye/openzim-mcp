@@ -333,6 +333,31 @@ class TestRerankerWiredToHandleSearch:
         assert telemetry.get("reranker_engaged", 0) == 0
         assert result == "rendered results"
 
+    def test_track_emits_info_log_for_reranker_events(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Sweep-PR: reranker events must hit the operator log at INFO so
+        simple-mode users (no ``get_server_health``) can observe engagement.
+        Non-reranker telemetry events stay counter-only."""
+        handler = self._make_handler()
+        with caplog.at_level("INFO", logger="openzim_mcp.simple_tools"):
+            handler._track("reranker_engaged")
+            handler._track("reranker_skipped.not_installed")
+            handler._track("reranker_skipped.no_results")
+            handler._track("reranker_skipped.passthrough")
+            handler._track("some_other_event")
+        info_messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "INFO" and r.name == "openzim_mcp.simple_tools"
+        ]
+        assert "telemetry: reranker_engaged" in info_messages
+        assert "telemetry: reranker_skipped.not_installed" in info_messages
+        assert "telemetry: reranker_skipped.no_results" in info_messages
+        assert "telemetry: reranker_skipped.passthrough" in info_messages
+        # Counter-only event must NOT log.
+        assert all("some_other_event" not in m for m in info_messages)
+
 
 class TestRerankerWiredToHandleFilteredSearch:
     """Verify that _handle_filtered_search (compact mode) routes results

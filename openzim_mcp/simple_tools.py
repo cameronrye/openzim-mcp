@@ -98,6 +98,20 @@ _RERANKER_SKIPPED_NOT_INSTALLED = "reranker_skipped.not_installed"
 _RERANKER_SKIPPED_NO_RESULTS = "reranker_skipped.no_results"
 _RERANKER_SKIPPED_PASSTHROUGH = "reranker_skipped.passthrough"
 
+# Telemetry events that also emit an INFO log on every increment. The
+# in-memory counter is only visible via ``get_server_health`` (advanced
+# tool mode); operators running in simple mode have no other way to see
+# reranker engagement. Keep this set small — every entry is a per-query
+# INFO line.
+_INFO_LEVEL_TELEMETRY_EVENTS: "frozenset[str]" = frozenset(
+    {
+        _RERANKER_ENGAGED,
+        _RERANKER_SKIPPED_NOT_INSTALLED,
+        _RERANKER_SKIPPED_NO_RESULTS,
+        _RERANKER_SKIPPED_PASSTHROUGH,
+    }
+)
+
 # Phase D sub-D-2 query-rewrite telemetry events.
 _QUERY_REWRITE_MISSPELLING = "query_rewrite.misspelling"
 _QUERY_REWRITE_STOPWORD_PHRASE = "query_rewrite.stopword_phrase"
@@ -142,8 +156,15 @@ class SimpleToolsHandler:
         self._telemetry: Counter[str] = Counter()
 
     def _track(self, event: str) -> None:
-        """Increment the named telemetry counter."""
+        """Increment the named telemetry counter.
+
+        Events in ``_INFO_LEVEL_TELEMETRY_EVENTS`` also emit a single
+        INFO log line per call so simple-mode operators (who don't have
+        ``get_server_health``) can observe them in the server log.
+        """
         self._telemetry[event] += 1
+        if event in _INFO_LEVEL_TELEMETRY_EVENTS:
+            logger.info("telemetry: %s", event)
 
     def get_telemetry(self) -> Dict[str, int]:
         """Return a snapshot of the in-memory telemetry counters.

@@ -10,10 +10,32 @@ import argparse
 import logging
 from typing import List, Optional
 
-from openzim_mcp.config import RerankerConfig
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from openzim_mcp.config import MLConfig, RerankerConfig
 from openzim_mcp.ml import detect
 
 logger = logging.getLogger(__name__)
+
+
+class _StagingSettings(BaseSettings):
+    """Env-var-aware loader for the download-models CLI.
+
+    Mirrors ``OpenZimMcpConfig``'s env prefix + nested delimiter so the
+    CLI honours ``OPENZIM_MCP_ML__RERANKER__*`` (notably
+    ``CACHE_DIR``) — the same vars the runtime uses. ``OpenZimMcpConfig``
+    itself requires ``allowed_directories`` and isn't appropriate here
+    (the CLI doesn't need a ZIM directory to pre-stage model files).
+    """
+
+    ml: MLConfig = Field(default_factory=MLConfig)
+
+    model_config = SettingsConfigDict(
+        env_prefix="OPENZIM_MCP_",
+        env_nested_delimiter="__",
+        case_sensitive=False,
+    )
 
 
 def _stage_reranker(cfg: RerankerConfig) -> None:
@@ -24,7 +46,7 @@ def _stage_reranker(cfg: RerankerConfig) -> None:
     _load_model(cfg.model_id, cfg.cache_dir)
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(default_model_id: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="openzim-mcp download-models",
         description=(
@@ -38,17 +60,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reranker-model-id",
         default=None,
-        help=(
-            f"Override the reranker model id "
-            f"(default: {RerankerConfig().model_id})."
-        ),
+        help=f"Override the reranker model id (default: {default_model_id}).",
     )
     return parser
 
 
 def download_models_main(argv: Optional[List[str]] = None) -> int:
     """Entry point. Returns process exit code (0 success, 1 failure)."""
-    parser = _build_parser()
+    cfg = _StagingSettings().ml.reranker
+    parser = _build_parser(default_model_id=cfg.model_id)
     args = parser.parse_args(argv)
 
     features = detect()
@@ -60,7 +80,6 @@ def download_models_main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     print("Staging reranker model... ", end="", flush=True)
-    cfg = RerankerConfig()
     if args.reranker_model_id:
         cfg = cfg.model_copy(update={"model_id": args.reranker_model_id})
     try:
