@@ -39,8 +39,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reranker-model-id",
         default=None,
         help=(
-            "Override the reranker model id (default: "
-            "Xenova/bge-reranker-base-onnx)."
+            f"Override the reranker model id "
+            f"(default: {RerankerConfig().model_id})."
         ),
     )
     return parser
