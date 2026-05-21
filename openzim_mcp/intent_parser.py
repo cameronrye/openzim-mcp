@@ -1462,18 +1462,44 @@ class IntentParser:
 
     # ----- sub-D-2 Tier 1 query rewriting rules -----
 
-    # Post-b1 P1-D5 / P1-D6: split a token into (leading-non-word,
-    # core, trailing-non-word) for misspelling-map retry. ``^`` and
-    # ``$`` anchors plus lazy ``(.*?)`` ensure the match always
-    # succeeds, with all three groups potentially empty. ``\W``
-    # includes the apostrophe so leading/trailing single quotes get
-    # stripped (covers ``'recieve'``), while interior possessive
-    # ``'s`` stays attached to the core — the subsequent
-    # possessive-strip step in ``_apply_misspelling_map`` peels
-    # it off and reattaches on map hit. Underscores aren't in ``\W``
-    # so they survive in the core (rare in queries; matches the
-    # rest of the codebase's tokenization choices).
-    _MISSPELL_AFFIX_RE = re.compile(r"^(\W*)(.*?)(\W*)$")
+    @staticmethod
+    def _split_misspelling_affixes(token: str) -> Tuple[str, str, str]:
+        """Post-b1 P1-D5 / P1-D6: split ``token`` into
+        ``(leading_affix, core, trailing_affix)`` where affix
+        characters are non-word (``\\W`` equivalent).
+
+        Linear-time, no regex backtracking — replaces the original
+        ``^(\\W*)(.*?)(\\W*)$`` regex that SonarCloud's S5852
+        ReDoS detector flagged (lazy ``.*?`` between two greedy
+        ``\\W*`` quantifiers tripped the static analyzer despite
+        the actual runtime being bounded-linear on token-length
+        inputs). Same precedent-rewrite pattern the post-a22 sweep
+        applied to the implicit-concat regex in
+        ``_chained_intent_guidance``.
+
+        Word chars: ``\\w`` equivalent — alphanumerics +
+        underscore. Underscore handled explicitly because
+        ``str.isalnum`` excludes it (whereas ``\\w`` includes it).
+        Unicode letters / digits flow through unchanged
+        (``str.isalnum`` is Unicode-aware), so non-Latin tokens
+        like ``München.`` split correctly to ``("", "München",
+        ".")`` — matching the original regex semantics.
+
+        Apostrophes are non-word, so leading/trailing single
+        quotes get stripped (``'recieve'`` → ``("'", "recieve",
+        "'")``) while interior possessive ``'s`` stays attached
+        to the core (``photosythesis's`` → ``("", "photosythesis's",
+        "")``) — the caller's subsequent possessive-strip step
+        peels ``'s`` off and reattaches on map hit.
+        """
+        n = len(token)
+        i = 0
+        while i < n and not (token[i].isalnum() or token[i] == "_"):
+            i += 1
+        j = n
+        while j > i and not (token[j - 1].isalnum() or token[j - 1] == "_"):
+            j -= 1
+        return token[:i], token[i:j], token[j:]
 
     @classmethod
     def _normalize_topic_case(cls, query: str) -> str:
@@ -1491,7 +1517,6 @@ class IntentParser:
 
     @classmethod
     def _apply_misspelling_map(  # noqa: C901
-
         cls,
         query: str,
         *,
@@ -1538,20 +1563,18 @@ class IntentParser:
             suffix_chars = ""
             possessive = ""
             if replacement is None:
-                core_match = cls._MISSPELL_AFFIX_RE.match(lower)
-                if core_match is not None:
-                    prefix_chars = core_match.group(1)
-                    lookup_core = core_match.group(2)
-                    suffix_chars = core_match.group(3)
-                    if lookup_core.endswith("'s"):
-                        possessive = "'s"
-                        lookup_core = lookup_core[:-2]
-                    if lookup_core and lookup_core != lower:
-                        replacement = mapping.get(lookup_core)
-                        if replacement is not None:
-                            replacement = (
-                                prefix_chars + replacement + possessive + suffix_chars
-                            )
+                prefix_chars, lookup_core, suffix_chars = (
+                    cls._split_misspelling_affixes(lower)
+                )
+                if lookup_core.endswith("'s"):
+                    possessive = "'s"
+                    lookup_core = lookup_core[:-2]
+                if lookup_core and lookup_core != lower:
+                    replacement = mapping.get(lookup_core)
+                    if replacement is not None:
+                        replacement = (
+                            prefix_chars + replacement + possessive + suffix_chars
+                        )
             if replacement is None:
                 out.append(part)
                 continue

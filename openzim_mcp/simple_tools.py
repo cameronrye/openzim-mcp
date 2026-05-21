@@ -175,9 +175,7 @@ class SimpleToolsHandler:
         """
         return dict(self._telemetry)
 
-    def _compute_rerank_state(
-        self, before: Dict[str, int]
-    ) -> Optional[str]:
+    def _compute_rerank_state(self, before: Dict[str, int]) -> Optional[str]:
         """Post-b1: compute the per-request reranker engagement state
         from a pre-call snapshot of the four reranker counters.
 
@@ -1929,9 +1927,7 @@ class SimpleToolsHandler:
             return None
         # Post-b1 P1-D2: recase each half against the original query.
         original_query = (
-            params.get("_pre_rewrite_query")
-            if isinstance(params, dict)
-            else None
+            params.get("_pre_rewrite_query") if isinstance(params, dict) else None
         )
         if isinstance(original_query, str) and original_query:
             halves = [self._recase_from_original(h, original_query) for h in halves]
@@ -3487,9 +3483,7 @@ class SimpleToolsHandler:
         # ``No filtered matches for "X"`` echoes show the caller's
         # casing. Same shape as the _handle_search hoisting above.
         pre_rewrite = (
-            params.get("_pre_rewrite_query")
-            if isinstance(params, dict)
-            else None
+            params.get("_pre_rewrite_query") if isinstance(params, dict) else None
         )
         display_query = (
             self._recase_from_original(search_query, pre_rewrite)
@@ -3636,9 +3630,7 @@ class SimpleToolsHandler:
         # lowercased extraction. Search matching uses ``search_query``
         # unchanged — Xapian is case-insensitive.
         pre_rewrite = (
-            params.get("_pre_rewrite_query")
-            if isinstance(params, dict)
-            else None
+            params.get("_pre_rewrite_query") if isinstance(params, dict) else None
         )
         display_query = (
             self._recase_from_original(search_query, pre_rewrite)
@@ -4222,17 +4214,13 @@ class SimpleToolsHandler:
             # so the disambig heading echoes the caller's casing
             # instead of Rule 1's lowercased topic.
             disambig_original = (
-                params.get("_pre_rewrite_query")
-                if isinstance(params, dict)
-                else None
+                params.get("_pre_rewrite_query") if isinstance(params, dict) else None
             )
             return self._render_disambiguation(
                 topic,
                 strong_matches,
                 original_query=(
-                    disambig_original
-                    if isinstance(disambig_original, str)
-                    else None
+                    disambig_original if isinstance(disambig_original, str) else None
                 ),
             )
 
@@ -4335,9 +4323,7 @@ class SimpleToolsHandler:
             top_title,
             zim_file_path=zim_file_path,
             top_path=top_path,
-            original_query=original_query
-            if isinstance(original_query, str)
-            else None,
+            original_query=original_query if isinstance(original_query, str) else None,
         )
         if soft_footer:
             result = result + soft_footer

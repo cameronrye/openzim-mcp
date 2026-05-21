@@ -276,9 +276,7 @@ class TestP1D3Rule4ProbeGate:
             "rise of the planet of the apes",
         ],
     )
-    def test_probe_hit_suppresses_decomposition(
-        self, canonical_query: str
-    ) -> None:
+    def test_probe_hit_suppresses_decomposition(self, canonical_query: str) -> None:
         # Probe returns True for the full query → no decomposition.
         probe = _probe_factory(canonical_query)
         rewritten, hint = IntentParser._decompose_x_of_y(
@@ -387,16 +385,10 @@ class TestP1D5PossessiveMisspelling:
 
         import tempfile
 
-
-
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".txt", delete=False
-        ) as f_map:
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f_map:
             f_map.write("photosythesis=photosynthesis\n")
             mp = f_map.name
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".txt", delete=False
-        ) as f_excl:
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f_excl:
             f_excl.write("photosythesis\n")
             ep = f_excl.name
         _OverrideParser._misspellings_path = mp  # type: ignore[assignment]
@@ -405,11 +397,12 @@ class TestP1D5PossessiveMisspelling:
             out = _OverrideParser._apply_misspelling_map(
                 "photosythesis's reproduction", title_probe=None
             )
-            assert out == "photosythesis's reproduction", (
-                f"Exclusion should suppress possessive too; got {out!r}"
-            )
+            assert (
+                out == "photosythesis's reproduction"
+            ), f"Exclusion should suppress possessive too; got {out!r}"
         finally:
             import os
+
             os.unlink(mp)
             os.unlink(ep)
 
@@ -439,9 +432,7 @@ class TestP1D6PunctuationMisspelling:
     def test_punctuation_attached_misspelling_corrected(
         self, before: str, after: str
     ) -> None:
-        assert (
-            IntentParser._apply_misspelling_map(before, title_probe=None) == after
-        )
+        assert IntentParser._apply_misspelling_map(before, title_probe=None) == after
 
     def test_punctuation_then_possessive_combined(self) -> None:
         # ``"photosythesis's"`` — leading quote, possessive, trailing
@@ -478,9 +469,7 @@ class TestP1D6PunctuationMisspelling:
         def probe(token: str) -> bool:
             return token == "Bilogy."  # contrived canonical title
 
-        out = IntentParser._apply_misspelling_map(
-            "Bilogy.", title_probe=probe
-        )
+        out = IntentParser._apply_misspelling_map("Bilogy.", title_probe=probe)
         assert out == "Bilogy."  # probe suppression wins
 
 
@@ -498,16 +487,11 @@ class TestP1D2RecaseHelper:
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         original = "tell me about Köln, München, and Berlin"
+        assert SimpleToolsHandler._recase_from_original("köln", original) == "Köln"
         assert (
-            SimpleToolsHandler._recase_from_original("köln", original) == "Köln"
+            SimpleToolsHandler._recase_from_original("münchen", original) == "München"
         )
-        assert (
-            SimpleToolsHandler._recase_from_original("münchen", original)
-            == "München"
-        )
-        assert (
-            SimpleToolsHandler._recase_from_original("berlin", original) == "Berlin"
-        )
+        assert SimpleToolsHandler._recase_from_original("berlin", original) == "Berlin"
 
     def test_simple_recase_articles_preserved(self) -> None:
         from openzim_mcp.simple_tools import SimpleToolsHandler
@@ -518,9 +502,7 @@ class TestP1D2RecaseHelper:
             == "The Beatles"
         )
         assert (
-            SimpleToolsHandler._recase_from_original(
-                "the rolling stones", original
-            )
+            SimpleToolsHandler._recase_from_original("the rolling stones", original)
             == "The Rolling Stones"
         )
 
@@ -531,10 +513,7 @@ class TestP1D2RecaseHelper:
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         original = "Tell me about Berlin"
-        assert (
-            SimpleToolsHandler._recase_from_original("munich", original)
-            == "munich"
-        )
+        assert SimpleToolsHandler._recase_from_original("munich", original) == "munich"
 
     def test_empty_inputs_handled(self) -> None:
         from openzim_mcp.simple_tools import SimpleToolsHandler
@@ -575,8 +554,8 @@ class TestRerankerStateComment:
     def test_no_event_returns_none(self) -> None:
         from openzim_mcp.simple_tools import (
             _RERANKER_ENGAGED,
-            _RERANKER_SKIPPED_NOT_INSTALLED,
             _RERANKER_SKIPPED_NO_RESULTS,
+            _RERANKER_SKIPPED_NOT_INSTALLED,
             _RERANKER_SKIPPED_PASSTHROUGH,
         )
 
@@ -604,9 +583,7 @@ class TestRerankerStateComment:
         stub = self._make_handler_stub()
         before = {_RERANKER_SKIPPED_NOT_INSTALLED: 5}
         stub._telemetry[_RERANKER_SKIPPED_NOT_INSTALLED] = 6
-        assert (
-            stub.compute(before) == "skipped:not_installed"
-        )
+        assert stub.compute(before) == "skipped:not_installed"
 
     def test_skipped_no_results_detected(self) -> None:
         from openzim_mcp.simple_tools import _RERANKER_SKIPPED_NO_RESULTS
@@ -622,9 +599,7 @@ class TestRerankerStateComment:
         stub = self._make_handler_stub()
         before = {_RERANKER_SKIPPED_PASSTHROUGH: 0}
         stub._telemetry[_RERANKER_SKIPPED_PASSTHROUGH] = 1
-        assert (
-            stub.compute(before) == "skipped:passthrough"
-        )
+        assert stub.compute(before) == "skipped:passthrough"
 
     def test_engaged_priority_over_skip(self) -> None:
         # If both ``engaged`` and a skip counter bump (rare; cross-
@@ -1048,18 +1023,14 @@ class TestRegressionGuards:
         # Without a probe, Rule 4 decomposes (legacy behaviour). This
         # is the path the integration tests in test_query_rewrite_tier1
         # already pin; the post-b1 fix must not regress it.
-        rewritten, hint = IntentParser._decompose_x_of_y(
-            "population of berlin"
-        )
+        rewritten, hint = IntentParser._decompose_x_of_y("population of berlin")
         assert rewritten == "berlin population"
         assert hint == {"entity": "berlin", "attribute": "population"}
 
     def test_existing_misspelling_lookup_still_idempotent(self) -> None:
         # A corrected word ("biology") is never itself a key in the
         # map. Running Rule 2 a second time is a no-op.
-        once = IntentParser._apply_misspelling_map(
-            "bilogy", title_probe=None
-        )
+        once = IntentParser._apply_misspelling_map("bilogy", title_probe=None)
         twice = IntentParser._apply_misspelling_map(once, title_probe=None)
         assert once == "biology"
         assert twice == "biology"
@@ -1068,9 +1039,9 @@ class TestRegressionGuards:
         # The helper still takes (intent, params, zim_file_path). New
         # behaviour reads params["_pre_rewrite_query"] but doesn't
         # require it (legacy callers see legacy output).
-        from openzim_mcp.simple_tools import SimpleToolsHandler
-
         import inspect
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
 
         sig = inspect.signature(SimpleToolsHandler._multi_entity_chain_guidance)
         assert list(sig.parameters) == [
