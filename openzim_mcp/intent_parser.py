@@ -941,6 +941,7 @@ class IntentParser:
         query: str,
         *,
         title_probe: Optional[Callable[[str], bool]] = None,
+        query_rewrite_enabled: bool = True,
     ) -> Tuple[str, Dict[str, Any], float]:
         """Parse a natural language query to determine intent.
 
@@ -950,6 +951,15 @@ class IntentParser:
 
         Args:
             query: Natural language query string
+            title_probe: Optional callback for rules 2 and 3 to suppress
+                false-positive rewrites. When ``None``, those rules run in
+                degraded mode.
+            query_rewrite_enabled: Master kill switch. When ``False``, all
+                four Sub-D-2 Tier 1 rules are skipped entirely — the query
+                reaches the existing intent-regex chain unmodified. Mirrors
+                ``QueryRewriteConfig.enabled`` so operators who set
+                ``OPENZIM_MCP_QUERY_REWRITE__ENABLED=false`` get a true
+                opt-out rather than only bypassing telemetry.
 
         Returns:
             Tuple of (intent_type, extracted_params, confidence_score)
@@ -964,10 +974,15 @@ class IntentParser:
         # _strip_* chain so downstream regexes see a normalized query.
         # Order is fixed: lowercase → misspellings → stopword phrase →
         # decomposition. Each rule is idempotent; we don't need a loop.
-        query = cls._normalize_topic_case(query)
-        query = cls._apply_misspelling_map(query, title_probe=title_probe)
-        query = cls._detect_stopword_phrase(query, title_probe=title_probe)
-        query, decomposition_hint = cls._decompose_x_of_y(query)
+        # Master kill switch: when query_rewrite_enabled=False, skip
+        # all four rules entirely — query reaches the existing chain
+        # unmodified.
+        decomposition_hint: Optional[Dict[str, str]] = None
+        if query_rewrite_enabled:
+            query = cls._normalize_topic_case(query)
+            query = cls._apply_misspelling_map(query, title_probe=title_probe)
+            query = cls._detect_stopword_phrase(query, title_probe=title_probe)
+            query, decomposition_hint = cls._decompose_x_of_y(query)
 
         # Post-a23 P1-D3: peel leaked ``param=value`` suffixes BEFORE
         # politeness so the politeness regex (and every downstream

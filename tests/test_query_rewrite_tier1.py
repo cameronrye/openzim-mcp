@@ -296,6 +296,34 @@ class TestParseIntentIntegration:
         # exercised it.
         assert len(seen) >= 2
 
+    def test_query_rewrite_disabled_skips_all_rules(self) -> None:
+        """Regression: when query_rewrite_enabled=False, all four rules
+        must skip — including Rule 1 lowercasing. The query passes through
+        to the regex chain unchanged."""
+        # `RECIEVE A LETTER` — uppercase + known misspelling. With rules
+        # ENABLED (default), this gets lowercased and `recieve` → `receive`.
+        # With rules DISABLED, the query reaches the regex chain in its
+        # original form.
+        intent_off, params_off, _ = IntentParser.parse_intent(
+            "RECIEVE A LETTER",
+            title_probe=None,
+            query_rewrite_enabled=False,
+        )
+        # Either `topic` or `query` will carry the original casing.
+        surfaced = " ".join(str(v) for v in params_off.values())
+        assert "RECIEVE" in surfaced or "recieve" in surfaced
+        # No decomposition_hint because Rule 4 didn't run.
+        assert "decomposition_hint" not in params_off
+
+        # Sanity: with the flag default (True), the rules DO fire.
+        intent_on, params_on, _ = IntentParser.parse_intent(
+            "RECIEVE A LETTER", title_probe=None
+        )
+        surfaced_on = " ".join(str(v) for v in params_on.values())
+        # Rule 1 lowercased, Rule 2 fixed the misspelling.
+        assert "RECIEVE" not in surfaced_on
+        assert "recieve" not in surfaced_on
+
 
 class TestDecompositionHintHandoff:
     def test_handler_reads_hint_when_present(self) -> None:

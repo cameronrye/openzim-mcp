@@ -277,7 +277,9 @@ class TestP1D1DispatcherEdgePolitenessStrip:
 
         original_parse = IP.parse_intent
 
-        def buggy_parse(query: str, *, title_probe=None):
+        def buggy_parse(
+            query: str, *, title_probe=None, query_rewrite_enabled: bool = True
+        ):
             # Pretend parse_intent forgot to strip. Return the search
             # extractor's output without the strip — params["query"]
             # carries the trailing politeness.

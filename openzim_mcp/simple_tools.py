@@ -619,7 +619,9 @@ class SimpleToolsHandler:
                 title_probe = None
 
             intent, params, confidence = self.intent_parser.parse_intent(
-                query, title_probe=title_probe
+                query,
+                title_probe=title_probe,
+                query_rewrite_enabled=self.zim_operations.config.query_rewrite.enabled,
             )
             # Post-a21 P1-D1: defence-in-depth strip of trailing
             # politeness on user-supplied content fields in ``params``.
@@ -5066,7 +5068,9 @@ class SimpleToolsHandler:
 
         try:
             intent, params, _confidence = self.intent_parser.parse_intent(
-                query, title_probe=title_probe
+                query,
+                title_probe=title_probe,
+                query_rewrite_enabled=self.zim_operations.config.query_rewrite.enabled,
             )
         except Exception as e:  # pragma: no cover — defensive
             logger.debug("intent_parser failed in synthesize prelude: %s", e)

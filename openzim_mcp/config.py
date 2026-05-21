@@ -248,15 +248,6 @@ class QueryRewriteConfig(BaseModel):
             "package-bundled default."
         ),
     )
-    stopword_phrase_probe: bool = Field(
-        default=True,
-        description=(
-            "Allow rule 3 (stopword phrase) to call the title-index "
-            "probe. False skips the probe and never strips leading "
-            "articles (preserves titles like 'The Beatles' but loses "
-            "cleanup on `the population of Berlin`)."
-        ),
-    )
 
 
 class LoggingConfig(BaseModel):

@@ -13,7 +13,6 @@ class TestQueryRewriteConfig:
         assert cfg.enabled is True
         assert cfg.misspelling_map_path is None
         assert cfg.misspelling_exclusion_path is None
-        assert cfg.stopword_phrase_probe is True
 
     def test_disable_master_switch(self) -> None:
         cfg = QueryRewriteConfig(enabled=False)
