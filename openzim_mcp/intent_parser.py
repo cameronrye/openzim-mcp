@@ -8,10 +8,12 @@ or any I/O, which makes it cheap to unit-test in isolation.
 
 import logging
 import re
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from .constants import REGEX_TIMEOUT_SECONDS
 from .exceptions import RegexTimeoutError
+from .query_rewrite_data import load_exclusions, load_misspellings
 from .timeout_utils import run_with_timeout
 
 logger = logging.getLogger(__name__)
@@ -1354,3 +1356,52 @@ class IntentParser:
         with a named pass. Idempotent. No telemetry — fires on
         essentially every query."""
         return query.lower()
+
+    # Class-level overridable paths (None = use bundled defaults).
+    # Tests can monkeypatch these to swap in fixture files.
+    _misspellings_path: Optional["Path"] = None
+    _exclusions_path: Optional["Path"] = None
+
+    @classmethod
+    def _apply_misspelling_map(
+        cls,
+        query: str,
+        *,
+        title_probe: Optional[Callable[[str], bool]],
+    ) -> str:
+        """Sub-D-2 rule 2: substitute known misspellings token-by-token.
+
+        Probe-gated when ``title_probe`` is provided: if the original
+        token canonically resolves to a real entity, the substitution
+        is suppressed. Degrades to ``substitute-without-probe`` when
+        ``title_probe`` is None.
+
+        Idempotent: a corrected word is never itself a key in the map.
+        Telemetry (``query_rewrite.misspelling``) is emitted by the
+        caller (simple_tools.py wiring) based on the before/after diff."""
+        mapping = load_misspellings(cls._misspellings_path)
+        exclusions = load_exclusions(cls._exclusions_path)
+        if not mapping:
+            return query
+
+        # Split on whitespace; preserve runs of whitespace between tokens.
+        # re.split with a captured group keeps the separators in the list.
+        parts = re.split(r"(\s+)", query)
+        out: list[str] = []
+        for part in parts:
+            if not part or part.isspace():
+                out.append(part)
+                continue
+            lower = part.lower()
+            replacement = mapping.get(lower)
+            if replacement is None:
+                out.append(part)
+                continue
+            if lower in exclusions:
+                out.append(part)
+                continue
+            if title_probe is not None and title_probe(part):
+                out.append(part)
+                continue
+            out.append(replacement)
+        return "".join(out)
