@@ -175,6 +175,41 @@ class SimpleToolsHandler:
         """
         return dict(self._telemetry)
 
+    def _compute_rerank_state(
+        self, before: Dict[str, int]
+    ) -> Optional[str]:
+        """Post-b1: compute the per-request reranker engagement state
+        from a pre-call snapshot of the four reranker counters.
+
+        Returns one of ``engaged`` / ``skipped:not_installed`` /
+        ``skipped:no_results`` / ``skipped:passthrough`` when the
+        current request bumped a counter, else ``None`` (non-search
+        intent, no rerank attempt). Surfaced as
+        ``<!-- reranker=<state> -->`` in the response envelope so
+        callers using the simple-tool surface alone (without access
+        to ``get_server_health``) can confirm whether D-1's
+        cross-encoder rerank actually engaged. Priority order
+        favours ``engaged`` then the more specific skip reasons so
+        a request that hits both ``no_results`` and ``passthrough``
+        (rare; multi-archive partial failure) is summarised
+        unambiguously."""
+        order = (
+            _RERANKER_ENGAGED,
+            _RERANKER_SKIPPED_NOT_INSTALLED,
+            _RERANKER_SKIPPED_NO_RESULTS,
+            _RERANKER_SKIPPED_PASSTHROUGH,
+        )
+        labels = {
+            _RERANKER_ENGAGED: "engaged",
+            _RERANKER_SKIPPED_NOT_INSTALLED: "skipped:not_installed",
+            _RERANKER_SKIPPED_NO_RESULTS: "skipped:no_results",
+            _RERANKER_SKIPPED_PASSTHROUGH: "skipped:passthrough",
+        }
+        for event in order:
+            if self._telemetry.get(event, 0) > before.get(event, 0):
+                return labels[event]
+        return None
+
     # Named profiles for ``compact_budget``. ``medium`` matches the
     # legacy hardcoded 6000-char cap so callers that don't pass a
     # ``compact_budget`` see no behavior change. The bracketing values
@@ -223,6 +258,45 @@ class SimpleToolsHandler:
         if isinstance(raw, int):
             return max(cls._COMPACT_BUDGET_MIN, min(raw, cls._COMPACT_BUDGET_MAX))
         return default
+
+    @staticmethod
+    def _recase_from_original(token: str, original_query: str) -> str:
+        """Post-b1 P1-D2: return ``token`` in the casing it appears
+        with in ``original_query`` (case-insensitive substring search).
+
+        Falls back to ``token`` unchanged when the lookup misses (e.g.,
+        when the topic was reshaped by a rewrite step that doesn't
+        preserve a clean substring — Rule 2 misspelling substitution,
+        Rule 4 entity-attribute reorder). The original-case form is
+        used in user-facing guidance text (chain rejection bullets,
+        soft-connector footer) so the caller's recovery copy-paste
+        path keeps the diacritics and casing they originally typed."""
+        if not original_query or not token:
+            return token
+        idx = original_query.lower().find(token.lower())
+        if idx < 0:
+            return token
+        return original_query[idx : idx + len(token)]
+
+    def _probe_archive_path(self, zim_file_path: Optional[str]) -> Optional[str]:
+        """Post-b1 P1-D1: resolve the archive the query-rewrite title
+        probe should consult.
+
+        ``handle_zim_query`` auto-selects the single loaded archive
+        downstream (line ~776) when ``zim_file_path`` is omitted — the
+        recommended calling pattern per the tool's own docstring. The
+        probe was previously built BEFORE that resolution, so a
+        ``None`` caller-supplied path produced a ``None`` probe and
+        rules 2/3/4 ran in degraded mode for the overwhelming majority
+        of real calls. Mirror the same auto-select policy so the probe
+        sees the same archive the search will actually run against
+        (single-archive case). In multi-archive mode without an
+        explicit path, ``_auto_select_zim_file()`` returns ``None`` and
+        the probe stays degraded — that's the only genuinely ambiguous
+        case where falling back to "no probe" is the right answer."""
+        if zim_file_path:
+            return zim_file_path
+        return self._auto_select_zim_file()
 
     def _build_title_probe(
         self, zim_file_path: Optional[str]
@@ -557,6 +631,29 @@ class SimpleToolsHandler:
                     operation="synthesize_pipeline_error",
                     message=f"Synthesize pipeline failed: {e}",
                 )
+        # Post-b1: snapshot reranker telemetry counters so the response
+        # envelope can surface whether rerank engaged for this specific
+        # request. The four counters (engaged / skipped.not_installed /
+        # skipped.no_results / skipped.passthrough) live in
+        # ``self._telemetry`` and are advanced-mode-only via
+        # ``get_server_health``; HTTP-MCP hosts that filter that tool
+        # out leave simple-tool callers with no in-band visibility.
+        # The delta-based check is best-effort and matches the existing
+        # telemetry-Counter concurrency model (Counter mutations are not
+        # atomic across threads, so a parallel request could leak its
+        # event in — same tradeoff the post-b1 INFO log already accepts).
+        _RERANK_EVENTS_BEFORE = {
+            _RERANKER_ENGAGED: self._telemetry.get(_RERANKER_ENGAGED, 0),
+            _RERANKER_SKIPPED_NOT_INSTALLED: self._telemetry.get(
+                _RERANKER_SKIPPED_NOT_INSTALLED, 0
+            ),
+            _RERANKER_SKIPPED_NO_RESULTS: self._telemetry.get(
+                _RERANKER_SKIPPED_NO_RESULTS, 0
+            ),
+            _RERANKER_SKIPPED_PASSTHROUGH: self._telemetry.get(
+                _RERANKER_SKIPPED_PASSTHROUGH, 0
+            ),
+        }
         try:
             # Reject empty / whitespace-only queries upfront. The router
             # would otherwise classify the input as a low-confidence search
@@ -621,7 +718,15 @@ class SimpleToolsHandler:
             # clean (it doesn't know about _track); the cost is two extra
             # rule passes worth of CPU per query.
             if self.zim_operations.config.query_rewrite.enabled:
-                title_probe = self._build_title_probe(zim_file_path)
+                # Post-b1 P1-D1: resolve the probe archive BEFORE
+                # building the probe so it sees the same archive
+                # ``handle_zim_query`` will auto-select downstream
+                # (single-archive case). Pre-fix, ``zim_file_path``
+                # was passed straight through and produced a None
+                # probe whenever the caller omitted the path — the
+                # documented-as-recommended pattern.
+                probe_path = self._probe_archive_path(zim_file_path)
+                title_probe = self._build_title_probe(probe_path)
                 after_lower = IntentParser._normalize_topic_case(query)
                 after_misspell = IntentParser._apply_misspelling_map(
                     after_lower, title_probe=title_probe
@@ -633,7 +738,13 @@ class SimpleToolsHandler:
                 )
                 if after_stopword != after_misspell:
                     self._track(_QUERY_REWRITE_STOPWORD_PHRASE)
-                _, hint_probe = IntentParser._decompose_x_of_y(after_stopword)
+                # Post-b1 P1-D3: pass the same probe so Rule 4 can
+                # suppress decomposition when the full query is itself
+                # a canonical title (``lord of the rings``,
+                # ``the art of war``, ``history of rome``).
+                _, hint_probe = IntentParser._decompose_x_of_y(
+                    after_stopword, title_probe=title_probe
+                )
                 if hint_probe is not None:
                     self._track(_QUERY_REWRITE_X_OF_Y)
             else:
@@ -644,6 +755,15 @@ class SimpleToolsHandler:
                 title_probe=title_probe,
                 query_rewrite_enabled=self.zim_operations.config.query_rewrite.enabled,
             )
+            # Post-b1 P1-D2: stash the pre-rewrite, original-case query
+            # in params so user-facing guidance (multi-entity chain
+            # rejection, soft-connector footer) can echo entities back
+            # in the caller's casing instead of Rule 1's lowercased
+            # form. The leading underscore marks this as a wiring-layer
+            # hint — consumers should treat its absence as the legacy
+            # behaviour (use the lowercase value as-is).
+            if isinstance(params, dict):
+                params.setdefault("_pre_rewrite_query", query)
             # Post-a21 P1-D1: defence-in-depth strip of trailing
             # politeness on user-supplied content fields in ``params``.
             # Idempotent when ``parse_intent`` already cleaned them
@@ -859,6 +979,17 @@ class SimpleToolsHandler:
             # ``cert``.
             if isinstance(result, str):
                 result = result + (f"\n<!-- intent={intent} cert={confidence:.2f} -->")
+                # Post-b1: surface reranker engagement state in-band so
+                # simple-tool callers (the default mode) can confirm
+                # whether D-1's cross-encoder rerank actually engaged
+                # for this request. Mirrors the intent telemetry shape
+                # (HTML comment, invisible to humans, addressable by a
+                # calling LLM). Emitted only when the request actually
+                # touched a search path — non-search intents leave the
+                # counter untouched and the comment is suppressed.
+                _rerank_state = self._compute_rerank_state(_RERANK_EVENTS_BEFORE)
+                if _rerank_state is not None:
+                    result = result + f"\n<!-- reranker={_rerank_state} -->"
             if options.get("compact", False):
                 # Belt-and-suspenders cap: even after every per-intent
                 # trim, a backend can return more than the simple-mode
@@ -1407,6 +1538,7 @@ class SimpleToolsHandler:
         *,
         zim_file_path: Optional[str] = None,
         top_path: Optional[str] = None,
+        original_query: Optional[str] = None,
     ) -> Optional[str]:
         """A16 post-a16 D1 (pass-2): when ``topic`` contains an ambiguous
         connector between two substantive proper-noun-shaped halves
@@ -1520,6 +1652,12 @@ class SimpleToolsHandler:
                 return None
             picked = left if left_in else right
             dropped = right if left_in else left
+            # Post-b1 P1-D2: recase picked/dropped against the
+            # original pre-Rule-1-lowercase query so the footer echoes
+            # the caller's casing.
+            if original_query:
+                picked = self._recase_from_original(picked, original_query)
+                dropped = self._recase_from_original(dropped, original_query)
             connector_display = m.group(0).strip() or "(connector)"
             return (
                 f"\n\n_Note: your query contained `{connector_display}` "
@@ -1772,6 +1910,14 @@ class SimpleToolsHandler:
 
         Returns None to fall through to normal resolution; returns a
         structured Markdown body when the chain should be rejected.
+
+        Post-b1 P1-D2: when ``params["_pre_rewrite_query"]`` is set
+        (the original, pre-Rule-1-lowercase query), bullets echo each
+        entity in the caller's original casing instead of Rule 1's
+        lowercased form. Pre-fix, ``tell me about Köln, München, and
+        Berlin`` returned bullets reading ``tell me about köln`` /
+        ``münchen`` / ``berlin`` — corrupted diacritics + casing that
+        broke the user's recovery copy-paste path.
         """
         if intent != "tell_me_about":
             return None
@@ -1781,6 +1927,14 @@ class SimpleToolsHandler:
         halves = self._split_multi_entity(topic)
         if not halves:
             return None
+        # Post-b1 P1-D2: recase each half against the original query.
+        original_query = (
+            params.get("_pre_rewrite_query")
+            if isinstance(params, dict)
+            else None
+        )
+        if isinstance(original_query, str) and original_query:
+            halves = [self._recase_from_original(h, original_query) for h in halves]
         # Probe the title index for the whole topic — if it resolves
         # cleanly to a single article whose path loosely matches the
         # topic, the user meant a real multi-entity title (band name,
@@ -4027,12 +4181,22 @@ class SimpleToolsHandler:
         # hint, return the section body instead of the (often empty)
         # lead. Motivating case: ``famous musician from big rapids
         # michigan`` from the 2026-05-18 live transcript.
+        # Post-b1 P1-D2: thread the original-case query through so the
+        # nested soft-connector footer can recase its entity references.
+        original_query_for_subject = (
+            params.get("_pre_rewrite_query") if isinstance(params, dict) else None
+        )
         subject_section_result = self._maybe_render_subject_section(
             zim_file_path=zim_file_path,
             topic=topic,
             top_path=top_path,
             top_title=top_title,
             options=options,
+            original_query=(
+                original_query_for_subject
+                if isinstance(original_query_for_subject, str)
+                else None
+            ),
         )
         if subject_section_result is not None:
             return subject_section_result
@@ -4099,11 +4263,19 @@ class SimpleToolsHandler:
         # picked vs. dropped. Suppressed when the returned title
         # already contains both halves (``Romeo and Juliet`` is one
         # article whose title spans the connector — no footer needed).
+        # Post-b1 P1-D2: thread the original-case query through so the
+        # footer echoes entity names in the caller's casing.
+        original_query = (
+            params.get("_pre_rewrite_query") if isinstance(params, dict) else None
+        )
         soft_footer = self._soft_connector_footer(
             topic,
             top_title,
             zim_file_path=zim_file_path,
             top_path=top_path,
+            original_query=original_query
+            if isinstance(original_query, str)
+            else None,
         )
         if soft_footer:
             result = result + soft_footer
@@ -4235,6 +4407,7 @@ class SimpleToolsHandler:
         top_path: str,
         top_title: str,
         options: Dict[str, Any],
+        original_query: Optional[str] = None,
     ) -> Optional[str]:
         """Try the subject-attribute decomposition path. Returns the
         rendered response string on a successful subject-section match,
@@ -4354,6 +4527,7 @@ class SimpleToolsHandler:
             top_title or top_path,
             zim_file_path=zim_file_path,
             top_path=top_path,
+            original_query=original_query,
         )
         if soft_footer:
             result = result + soft_footer
@@ -5069,7 +5243,11 @@ class SimpleToolsHandler:
         # clean (it doesn't know about _track); the cost is two extra
         # rule passes worth of CPU per query.
         if self.zim_operations.config.query_rewrite.enabled:
-            title_probe = self._build_title_probe(zim_file_path)
+            # Post-b1 P1-D1: mirror of the simple-branch fix at line
+            # ~624 — pre-resolve zim_file_path so the probe sees the
+            # single auto-selected archive when the caller omits it.
+            probe_path = self._probe_archive_path(zim_file_path)
+            title_probe = self._build_title_probe(probe_path)
             after_lower = IntentParser._normalize_topic_case(query)
             after_misspell = IntentParser._apply_misspelling_map(
                 after_lower, title_probe=title_probe
@@ -5081,7 +5259,11 @@ class SimpleToolsHandler:
             )
             if after_stopword != after_misspell:
                 self._track(_QUERY_REWRITE_STOPWORD_PHRASE)
-            _, hint_probe = IntentParser._decompose_x_of_y(after_stopword)
+            # Post-b1 P1-D3: pass probe to Rule 4 (mirror of the
+            # simple-branch wiring).
+            _, hint_probe = IntentParser._decompose_x_of_y(
+                after_stopword, title_probe=title_probe
+            )
             if hint_probe is not None:
                 self._track(_QUERY_REWRITE_X_OF_Y)
         else:

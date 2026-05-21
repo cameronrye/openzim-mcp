@@ -376,10 +376,14 @@ class TestMultiEntityChainGuidance:
             "Multi-Entity Chain Detected" in body
         ), f"Expected chain warning; got: {body[:400]}"
         # Each entity should be enumerated in the warning.
-        # Sub-D-2 Rule 1 lowercases everything before chain detection.
+        # Post-b1 P1-D2: chain rejection bullets now echo each entity
+        # in the caller's original casing (recased via the pre-rewrite
+        # query stashed in params["_pre_rewrite_query"]). Pre-fix the
+        # bullets were lowercased and broke the user's copy-paste
+        # recovery path.
         assert (
-            "köln" in body and "münchen" in body and "berlin" in body
-        ), f"Entities not enumerated: {body[:400]}"
+            "Köln" in body and "München" in body and "Berlin" in body
+        ), f"Entities not enumerated in original case: {body[:400]}"
 
     def test_three_entity_or_chain_with_non_latin_fires_warning(self) -> None:
         handler, _mock = self._handler(title_resolves={})
@@ -389,8 +393,8 @@ class TestMultiEntityChainGuidance:
         )
         body = str(result)
         assert "Multi-Entity Chain Detected" in body
-        # Sub-D-2 Rule 1 lowercases ASCII; non-Latin codepoints are untouched.
-        assert "berlin" in body and "東京" in body and "tokyo" in body
+        # Post-b1 P1-D2: entities echo in original case.
+        assert "Berlin" in body and "東京" in body and "Tokyo" in body
 
     def test_four_entity_chain_fires_warning(self) -> None:
         handler, _mock = self._handler(title_resolves={})

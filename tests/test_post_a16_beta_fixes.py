@@ -275,10 +275,10 @@ class TestD1SoftFooter:
             options={"compact": False},
         )
         assert "query contained" in out
-        # Sub-D-2 Rule 1 lowercases the query; footer mentions lowercase names.
-        assert "berlin" in out
-        assert "paris" in out
-        assert "tell me about berlin" in out
+        # Post-b1 P1-D2: footer echoes entities in caller's original case.
+        assert "Berlin" in out
+        assert "Paris" in out
+        assert "tell me about Berlin" in out
 
     def test_both_halves_in_title_suppresses_footer(self) -> None:
         # ``Romeo and Juliet`` resolved to ``Romeo and Juliet`` → no
@@ -322,8 +322,8 @@ class TestD1SoftFooter:
             options={"compact": False},
         )
         assert "query contained" in out
-        # Sub-D-2 Rule 1 lowercases the query; footer mentions lowercase names.
-        assert "berlin" in out
+        # Post-b1 P1-D2: footer echoes entities in caller's original case.
+        assert "Berlin" in out
 
 
 class TestD1RealTopicWithLowercaseRightUnchanged:

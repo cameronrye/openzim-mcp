@@ -955,7 +955,9 @@ class IntentParser:
         query = cls._normalize_topic_case(query)
         query = cls._apply_misspelling_map(query, title_probe=title_probe)
         query = cls._detect_stopword_phrase(query, title_probe=title_probe)
-        return cls._decompose_x_of_y(query)
+        # Post-b1 P1-D3: Rule 4 now also consults the probe so it can
+        # suppress decomposition of canonical multi-word titles.
+        return cls._decompose_x_of_y(query, title_probe=title_probe)
 
     @staticmethod
     def _attach_decomposition_hint(
@@ -1460,6 +1462,19 @@ class IntentParser:
 
     # ----- sub-D-2 Tier 1 query rewriting rules -----
 
+    # Post-b1 P1-D5 / P1-D6: split a token into (leading-non-word,
+    # core, trailing-non-word) for misspelling-map retry. ``^`` and
+    # ``$`` anchors plus lazy ``(.*?)`` ensure the match always
+    # succeeds, with all three groups potentially empty. ``\W``
+    # includes the apostrophe so leading/trailing single quotes get
+    # stripped (covers ``'recieve'``), while interior possessive
+    # ``'s`` stays attached to the core — the subsequent
+    # possessive-strip step in ``_apply_misspelling_map`` peels
+    # it off and reattaches on map hit. Underscores aren't in ``\W``
+    # so they survive in the core (rare in queries; matches the
+    # rest of the codebase's tokenization choices).
+    _MISSPELL_AFFIX_RE = re.compile(r"^(\W*)(.*?)(\W*)$")
+
     @classmethod
     def _normalize_topic_case(cls, query: str) -> str:
         """Sub-D-2 rule 1: lowercase the query.
@@ -1475,7 +1490,8 @@ class IntentParser:
     _exclusions_path: Optional["Path"] = None
 
     @classmethod
-    def _apply_misspelling_map(
+    def _apply_misspelling_map(  # noqa: C901
+
         cls,
         query: str,
         *,
@@ -1506,10 +1522,44 @@ class IntentParser:
                 continue
             lower = part.lower()
             replacement = mapping.get(lower)
+            # Post-b1 P1-D5 / P1-D6: when the raw token misses the map,
+            # retry with a stripped form. Two real defect classes:
+            #   * trailing/leading punctuation (``bilogy.``,
+            #     ``"photosythesis"``) — the period/quote attached to
+            #     the misspelling defeats the lookup.
+            #   * possessive ``'s`` (``photosythesis's reproduction``)
+            #     — the suffix changes the lookup key.
+            # The retry strips a leading/trailing non-word boundary
+            # AND a possessive suffix, reattaching them to the
+            # substitution on hit. ``re.match`` always returns a match
+            # here (the pattern can match the empty string).
+            lookup_core = lower
+            prefix_chars = ""
+            suffix_chars = ""
+            possessive = ""
+            if replacement is None:
+                core_match = cls._MISSPELL_AFFIX_RE.match(lower)
+                if core_match is not None:
+                    prefix_chars = core_match.group(1)
+                    lookup_core = core_match.group(2)
+                    suffix_chars = core_match.group(3)
+                    if lookup_core.endswith("'s"):
+                        possessive = "'s"
+                        lookup_core = lookup_core[:-2]
+                    if lookup_core and lookup_core != lower:
+                        replacement = mapping.get(lookup_core)
+                        if replacement is not None:
+                            replacement = (
+                                prefix_chars + replacement + possessive + suffix_chars
+                            )
             if replacement is None:
                 out.append(part)
                 continue
-            if lower in exclusions:
+            # Honor exclusions against the same key that matched (the
+            # stripped core when the retry hit, else the original
+            # lowercased token).
+            exclusion_key = lookup_core if lookup_core != lower else lower
+            if exclusion_key in exclusions or lower in exclusions:
                 out.append(part)
                 continue
             if title_probe is not None and title_probe(part):
@@ -1629,7 +1679,12 @@ class IntentParser:
     )
 
     @classmethod
-    def _decompose_x_of_y(cls, query: str) -> tuple[str, Optional[dict[str, str]]]:
+    def _decompose_x_of_y(
+        cls,
+        query: str,
+        *,
+        title_probe: Optional[Callable[[str], bool]] = None,
+    ) -> tuple[str, Optional[dict[str, str]]]:
         """Sub-D-2 rule 4: decompose `<attr> of <entity>` and
         `<entity>'s <attr>` shapes.
 
@@ -1644,10 +1699,21 @@ class IntentParser:
         Idempotent: a rewritten ``berlin population`` no longer matches
         either regex.
 
-        Guard: when the attr word is a recognised intent keyword (e.g.
+        Guard 1: when the attr word is a recognised intent keyword (e.g.
         ``structure``, ``sections``, ``metadata``), the query is a
         structured command and must NOT be decomposed — decomposing
-        would destroy the command signal and misroute the query."""
+        would destroy the command signal and misroute the query.
+
+        Guard 2 (post-b1 P1-D3): probe-gated — when ``title_probe`` is
+        provided and the FULL query canonically resolves to a real
+        article (``lord of the rings``, ``the art of war``, ``history
+        of rome``, ``birth of venus``), decomposition is suppressed.
+        Without this guard, every ``X of Y`` canonical title was
+        torn apart into ``Y X`` and looked up as ``Y``, returning
+        wrong articles (``Lord_of_the_Rings`` → ``The_Rings`` Iranian
+        horror film; ``The_Art_of_War`` → ``War``; ``History_of_Rome``
+        → ``Rome``). Degrades to substitute-without-probe when
+        ``title_probe`` is None (legacy behaviour)."""
         m = cls._X_OF_Y_RE.match(query)
         if not m:
             m = cls._POSSESSIVE_RE.match(query)
@@ -1655,7 +1721,11 @@ class IntentParser:
             return query, None
         entity = m.group("entity").strip()
         attr = m.group("attr").strip()
-        # Guard: do not decompose known command-keyword attributes.
+        # Guard 1: do not decompose known command-keyword attributes.
         if attr.lower() in cls._DECOMPOSE_SKIP_ATTRS:
+            return query, None
+        # Guard 2 (post-b1 P1-D3): suppress decomposition when the
+        # full query is itself a canonical title.
+        if title_probe is not None and title_probe(query):
             return query, None
         return f"{entity} {attr}", {"entity": entity, "attribute": attr}
