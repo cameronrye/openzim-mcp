@@ -81,9 +81,29 @@ class TestRerankerIntegration:
         assert reranker is not None
         pairs = [
             ("query about cats", "Cats are small carnivorous mammals."),
-            ("query about cats", "The sun is the star at the center of the solar system."),
+            (
+                "query about cats",
+                "The sun is the star at the center of the solar system.",
+            ),
         ]
         scores = reranker.score_pairs(pairs)
         assert len(scores) == 2
         # First pair (relevant) should score higher than second (irrelevant).
         assert scores[0] > scores[1]
+
+    def test_production_default_model_is_supported_by_fastembed(self) -> None:
+        """Guard: the model ID baked into RerankerConfig must remain in
+        FastEmbed's supported-models registry. If FastEmbed renames or
+        drops `BAAI/bge-reranker-base`, users hit a hard load failure
+        on first MCP query — catch the regression here instead."""
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+        supported = TextCrossEncoder.list_supported_models()
+        # list_supported_models() returns a list of dicts; extract the model names
+        supported_names = {entry["model"] for entry in supported}
+        prod_default = RerankerConfig().model_id
+        assert prod_default in supported_names, (
+            f"RerankerConfig.model_id default ({prod_default!r}) is not in "
+            f"FastEmbed's supported models list. Either FastEmbed dropped it "
+            f"or the default needs updating in openzim_mcp/config.py."
+        )
