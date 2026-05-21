@@ -4994,6 +4994,12 @@ class SimpleToolsHandler:
                 cache=self.zim_operations.cache,
                 content_processor=self.zim_operations.content_processor,
                 config=self.zim_operations.config.synthesize,
+                # Phase D sub-D-1: pass the reranker config so the
+                # synthesize pipeline can rerank passage candidates
+                # before section attribution. Passage ordering pays
+                # off most here — this is the deepest content-
+                # fragment-query surface.
+                reranker_config=self.zim_operations.config.ml.reranker,
                 # The original natural-language query goes in the
                 # response so callers can correlate the synthesized
                 # answer with what they actually asked. Without this,
