@@ -85,6 +85,9 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["openzim_mcp*"]
 
+[tool.setuptools.package-data]
+openzim_mcp = ["data/*.txt"]
+
 
 
 [tool.black]

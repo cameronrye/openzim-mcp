@@ -1,0 +1,55 @@
+# openzim-mcp Tier 1 query-rewrite misspelling map.
+#
+# Source: https://en.wikipedia.org/wiki/Wikipedia:Lists_of_common_misspellings/For_machines
+# Upstream revision pulled: 2026-05-20 (record actual revision URL when re-pulled)
+#
+# Format: one entry per line as `wrong=right`. Comments begin with `#`.
+# Tokens are lowercased before lookup, so entries should be lowercase.
+# The runtime title-index probe gates substitutions to suppress false
+# positives on real proper nouns. See sub-D-2 spec for selection criteria.
+#
+# Hard cap: 500 entries. Grow reactively from beta-test observations.
+
+# Common English typos
+acommodate=accommodate
+accomodate=accommodate
+recieve=receive
+seperate=separate
+occured=occurred
+occurence=occurrence
+neccessary=necessary
+neccesary=necessary
+truely=truly
+embarass=embarrass
+embarrasing=embarrassing
+goverment=government
+independant=independent
+maintainance=maintenance
+mispell=misspell
+priviledge=privilege
+publically=publicly
+referal=referral
+succesful=successful
+tomatos=tomatoes
+
+# Encyclopedia-domain frequent misspellings
+photosythesis=photosynthesis
+photosythesise=photosynthesise
+bilogy=biology
+mediterranian=mediterranean
+mediterrean=mediterranean
+egiptian=egyptian
+brittish=british
+arithmatic=arithmetic
+asssassination=assassination
+beggining=beginning
+millenium=millennium
+parralel=parallel
+tommorow=tomorrow
+tuesdsay=tuesday
+wedensday=wednesday
+wikipedia=wikipedia
+hierachy=hierarchy
+existance=existence
+inteligence=intelligence
+ressurection=resurrection
