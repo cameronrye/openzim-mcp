@@ -1568,7 +1568,11 @@ class IntentParser:
     # don't mis-decompose multi-word phrases — multi-hop / multi-word
     # attribute decomposition is a deferred sub-D-3 concern.
     _X_OF_Y_RE = re.compile(
-        r"^(?P<attr>\w+)\s+of\s+(?P<entity>[\w\s'\-]+)$",
+        # Entity capture is bounded at 200 chars to eliminate any
+        # polynomial-backtracking risk on adversarial inputs.
+        # Legitimate entity names fit comfortably; anything longer is
+        # not a real query.
+        r"^(?P<attr>\w+)\s+of\s+(?P<entity>[\w\s'\-]{1,200})$",
         re.IGNORECASE,
     )
     _POSSESSIVE_RE = re.compile(
