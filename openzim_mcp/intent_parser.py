@@ -1571,8 +1571,9 @@ class IntentParser:
         # Entity capture is bounded at 200 chars to eliminate any
         # polynomial-backtracking risk on adversarial inputs.
         # Legitimate entity names fit comfortably; anything longer is
-        # not a real query.
-        r"^(?P<attr>\w+)\s+of\s+(?P<entity>[\w\s'\-]{1,200})$",
+        # not a real query. Single-char-class `.` keeps the analyzer
+        # happy about quantifier nesting.
+        r"^(?P<attr>\w+)\s+of\s+(?P<entity>.{1,200})$",
         re.IGNORECASE,
     )
     _POSSESSIVE_RE = re.compile(
