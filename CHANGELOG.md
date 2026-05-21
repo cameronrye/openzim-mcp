@@ -5,6 +5,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b1] — 2026-05-21 (beta pre-release) — Phase D sub-D-2 — Tier 1 query rewriting
+
+First b-series release. Ships Phase D sub-D-2: four idempotent rule-based
+query rewrites that run before the existing intent regex chain. Zero new
+dependencies — every user gets the lift on the next install. Per the spec
+([sub-D-2 design](docs/superpowers/specs/2026-05-20-v2-phase-d-sub-d-2-query-rewriting-design.md)),
+the four rules are:
+
+- **Rule 1 — lowercase topic normalization.** `_normalize_topic_case`
+  consolidates scattered `.lower()` calls into a single named pass that
+  runs first on every query.
+- **Rule 2 — misspelling map.** `_apply_misspelling_map` substitutes
+  tokens from a bundled `dict[str, str]` (~40 starter entries from
+  Wikipedia's "List of common misspellings (for machines)"). An optional
+  title-index probe suppresses substitutions where the original token is
+  itself a canonical entity name. Operators can override the bundled
+  list via `query_rewrite.misspelling_map_path` and pin exceptions in
+  the companion exclusions file. Hard-capped at 500 entries.
+- **Rule 3 — stopword phrase detection.** `_detect_stopword_phrase`
+  strips leading articles (`the`, `a`, `an`, `of`) unless the full query
+  is itself a canonical title (`The Beatles`, `Of Mice and Men`).
+  Title-probe-gated; one probe call per query maximum.
+- **Rule 4 — `X of Y` decomposition.** `_decompose_x_of_y` recognises
+  `population of berlin` and `berlin's population` shapes, returning
+  both a cleaner query string (`berlin population`) and a structured
+  `{"entity": ..., "attribute": ...}` hint that rides inside
+  `params["decomposition_hint"]`. `_handle_tell_me_about` consumes the
+  hint and uses the structured entity directly, skipping its own
+  topic-extraction logic.
+
+### Config
+
+```python
+class QueryRewriteConfig(BaseModel):
+    enabled: bool = True
+    misspelling_map_path: Path | None = None
+    misspelling_exclusion_path: Path | None = None
+```
+
+`enabled = False` short-circuits all four rules — queries reach the
+existing regex chain unchanged.
+
+### Telemetry
+
+Three new dot-separated events surface via the existing `_track()`
+mechanism and `get_server_health`:
+
+- `query_rewrite.misspelling` — Rule 2 substituted at least one token.
+- `query_rewrite.stopword_phrase` — Rule 3 stripped a leading article.
+- `query_rewrite.x_of_y` — Rule 4 matched and emitted a hint.
+
+Rule 1 has no event (fires on essentially every query — zero signal).
+
+### Risk mitigations baked in
+
+- **Master kill switch** (`config.query_rewrite.enabled=False`) actually
+  skips all four rules, not just the telemetry/probe wrapping.
+- **Title-index probe** (when an archive is in scope) suppresses
+  false-positive rewrites on real proper nouns.
+- **Hard cap** of 500 entries in the misspellings map keeps the lookup
+  cheap and the file reviewable.
+- **Exclusions file** ships empty and grows reactively when sweeps
+  observe a real proper noun getting misrouted (e.g., a surname or
+  band name that happens to match a misspelling entry).
+- **Idempotent rules** — running any rule twice produces the same
+  output as running it once; rule order (1 → 2 → 3 → 4) is fixed.
+- **Several ripple-effect compensations** in the existing intent chain
+  for code paths that depended on case-preserving inputs (regex
+  anchors with `[A-Z]`, `isupper()` checks, length-based bare-topic
+  thresholds, namespace-path extraction).
+
+### Tests
+
+- 43 new tests in `tests/test_query_rewrite_tier1.py` (per-rule fix /
+  no-op / boundary triads, integration, composition, hint handoff).
+- 13 pre-existing test files updated for the lowercase ripple
+  (assertions changed from `"Proper Case"` → `"lowercase"` to match
+  Rule 1's unconditional normalization).
+- Full suite: 2245 passing, 54 skipped — sub-D-1 reranker integration
+  untouched.
+
+### Not in Tier 1
+
+- Multi-hop questions (`what year did the inventor of X die`) — deferred
+  to a potential sub-D-3 if live evidence warrants.
+- HyDE / hypothetical document synthesis — locked-in non-goal.
+- Algorithmic spell-correction libraries (`pyspellchecker`, `autocorrect`)
+  — wrong precision/recall tradeoff for encyclopedia search.
+
+---
+
 ## [2.0.0a25] — 2026-05-20 (alpha pre-release) — post-a24 beta-test sweep — 6 live-Wikipedia defects across two passes
 
 Live-MCP beta sweep against `wikipedia_en_all_maxi_2026-02.zim` on
