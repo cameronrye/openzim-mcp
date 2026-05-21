@@ -5,6 +5,178 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b3] — 2026-05-21 (beta pre-release) — post-b2 beta-test sweep shipped — 6 defects across 3 passes
+
+Post-b2 sweep packaged from PR #167 (commits `45de8da` → `cc26b3d`).
+Sweep shape: **4 → 1 → 1** across pass-1, pass-2, pass-3. All eight b2
+user-facing fix families verified clean on live MCP first; sweep then
+probed the adversarial shapes the b2 fixes unlocked. Both pass-2 and
+pass-3 surfaced single narrow-scope siblings of pass-1 fixes —
+consistent with the "narrow-scope sibling" pattern (now 8 sweeps
+strong) and the "fix unlocks new paths" pattern (now 9 sweeps strong).
+
+### Pass-1 defects (4, `45de8da`)
+
+- **D1 — trailing modal politeness ≥2 words falls through.** The
+  trailing-politeness regex in `_extract_tell_me_about` only matched
+  `please` / `to me` / `for me`; the LEADING regex (line ~374)
+  recognised the modal class (`could/can/would/will` + `you`) but
+  the trailing twin was missing. Live: `tell me about Tokyo if you
+  would` → `Would` (verb stub); `... if you could` → `Could`; `...
+  would you` → `Would_You` disambig. Fix: add a trailing pattern
+  symmetric to the leading one (both branches require a `you` so a
+  bare trailing modal verb in real article titles isn't stripped).
+- **D2 — reranker telemetry comment suppressed on no-results.** The
+  b1 D-1 in-band telemetry contract promised `<!-- reranker=<state> -->`
+  on every multi-token search. `_handle_search` compact path
+  early-returned on `total == 0` BEFORE reaching
+  `_maybe_rerank_compact`, so neither `_RERANKER_SKIPPED_NO_RESULTS`
+  nor `_RERANKER_SKIPPED_NOT_INSTALLED` bumped and the envelope
+  writer skipped the comment. Live: `search for asdfqwerzxcv
+  nonexistent` → no reranker comment. Fix: invoke
+  `_maybe_rerank_compact` on the empty payload before the bail
+  (no-op aside from the counter bump; the rerank singleton is
+  cached).
+- **D3 — Rule 2 + multi-token possessive picks wrong token.** Live:
+  `tell me about Photosythesis's reproduction` → `Reproduction`
+  article (expected `Photosynthesis`). Rule 2's affix retry
+  correctly fires (`Photosythesis's` → `Photosynthesis's`), but
+  the b1 P1-D5 fix unlocked the path — pre-fix returned `No
+  search results found`, post-fix returns a SILENT WRONG ANSWER.
+  Root cause: Rule 4's `_POSSESSIVE_RE` is `^...$`-anchored and
+  runs against the FULL query at parse time; the verb prefix
+  prevents the match. Fix: in `_handle_tell_me_about`, when no
+  decomposition hint was attached AND the topic carries an
+  apostrophe-s followed by another token, retry
+  `_decompose_x_of_y` on the bare topic. Scope narrowed to
+  the possessive shape ONLY (NOT `X of Y`) to avoid regressing
+  non-canonical X-of-Y queries.
+- **D4 — compact filtered search drops "filtered" qualifier.**
+  Live: `search Berlin in namespace C` → `Found 3 matches for
+  "Berlin"` (legacy non-compact path emits `Found N filtered
+  matches for "X"<filter_text>`). Both paths shared
+  `_format_search_text`; pre-fix the formatter had no filter
+  awareness. Fix: add optional `filter_text` kwarg to
+  `_format_search_text` (mirrors `display_query`); compact filtered
+  call site threads through `_format_filter_text` helper. Symmetric
+  treatment for filtered no-results.
+
+### Pass-2 sibling (1, `ed674b5`)
+
+- **D1 universal-layer mirror.** Pass-1 added the modal-politeness
+  strip inside `_extract_tell_me_about` only, but the universal
+  `_TRAILING_POLITENESS_RE` (called by `_strip_trailing_politeness`
+  at `parse_intent` line 1048) was added by the post-a20 PD2-1
+  sweep specifically so every extractor sees the cleaned query.
+  Every NON-tell_me_about intent kept leaking the modal class:
+  `search for biology if you would` → `query="biology if you
+  would"`; `find article titled Berlin if you would` → looks up
+  `Berlin if you would` (not found). Fix: lift the modal class into
+  `_TRAILING_POLITENESS_RE`. Pass-1 extractor-level strip kept as
+  defense-in-depth. New invariant pinned:
+  `TestD1RegexSync.test_leading_and_trailing_share_modal_class` —
+  leading + trailing politeness regexes must share the modal class.
+
+### Pass-3 sibling (1, `cc26b3d`)
+
+- **Chained-intent trailing-politeness leak.**
+  `_chained_intent_guidance` runs UPSTREAM of `parse_intent` on the
+  raw user query. The post-a24 P1-D6 sweep mirrored the param-leak
+  strip there; the equivalent mirror of `_strip_trailing_politeness`
+  was never added. Pre-fix every trailing-politeness token (the
+  full set, including the pass-2 modal class) leaked into chain
+  rejection bullets — `tell me about Tokyo if you would then list
+  namespaces` produced a rejection whose left bullet read
+  `tell me about Tokyo if you would` verbatim, modal politeness and
+  all. Caller would copy the suggested left half back,
+  re-introducing the politeness on every iteration. Same structural
+  sibling pattern as the post-a24 P1-D6 param-leak version. Fix:
+  apply `_strip_trailing_politeness` to BOTH chain halves after the
+  existing connector / punct trim loop, before bullets render.
+  Per-half rather than full-query because the politeness can appear
+  inside the chain (not just at the very end). Structurally safe —
+  `_CHAINED_OPERATION_PREFIX_RE` checks the LEADING op verb, which
+  the trailing strip never touches.
+
+### Out of scope (deferred design call)
+
+- **D5 — `death of stalin` → `Death_and_state_funeral_of_Joseph_Stalin`
+  instead of the 2017 Iannucci film.** P1-D3 probe-gate correctly
+  suppressed the Stalin disambig misroute; title-probe picked a
+  different canonical X-related title rather than the film
+  (canonical is `The_Death_of_Stalin`). Picking the film would
+  require a prefix-widening probe (`The <query>`) — unwanted side
+  effects on arbitrary bare topics — or a popularity ranker. Both
+  are design choices beyond the b2 sweep scope.
+
+### D2 / D3 / D4 sibling audits clean
+
+- **D2**: `_handle_filtered_search` always routes through
+  `_maybe_rerank_compact`; `_handle_search_all` uses its own
+  rerank apply that bumps a counter on every path. `_handle_search`
+  was the only early-return gap.
+- **D3**: `_handle_tell_me_about` is the only handler that
+  auto-fetches a single article based on the extracted topic.
+  Other intents take the topic literally; synthesize uses RAG-style
+  passage retrieval where decomposition would lose the attribute
+  context (pre-existing design out of scope).
+- **D4**: `_format_search_text` has three call sites — only the
+  compact filtered one needed `filter_text`.
+  `search_with_filters_with_canonical_splice` (non-compact filtered)
+  already uses `_format_filtered_response` which natively emits
+  the qualifier.
+
+### Cross-feature composition verified
+
+- `search for Photosythesis's reproduction in namespace C if you
+  would` → universal trailing strip peels `if you would` → intent
+  = filtered_search → `_maybe_rerank_compact` bumps counter →
+  `_format_search_text` renders with `filter_text`. D1+D2+D4
+  compose.
+- `tell me about Photosythesis's reproduction if you would` →
+  universal strip peels `if you would` → intent = tell_me_about
+  → D3 retry fires on possessive topic → `photosynthesis`. D1+D3
+  compose.
+
+### Tests
+
+- 40 new tests in `tests/test_post_b2_beta_fixes.py` across 10
+  classes (`TestD1TrailingModalPoliteness`,
+  `TestD1ParseIntentEndToEnd`, `TestD1SiblingUniversalTrailingModal`,
+  `TestD1RegexSync`, `TestD1Pass3ChainedIntentPolitenessLeak`,
+  `TestD2RerankerCounterOnNoResults`,
+  `TestD3PossessiveDecompositionRetry`,
+  `TestD4FilteredSearchEchoQualifier`, `TestRegressionGuards`).
+- Full suite: **2360 passing, 54 skipped, 38 deselected**. mypy
+  clean across 52 source files. black + flake8 clean. CI checks
+  all green (CodeQL, SonarCloud, bandit, security scanning,
+  6 OS × Python matrix, both `[reranker]`-extra suites,
+  performance benchmarks).
+
+### Methodology evolution
+
+- **"Narrow-scope sibling" pattern** — now 8 sweeps strong. Both
+  pass-2 and pass-3 surfaced a single sibling of pass-1's D1
+  fix-family: pass-2 caught the universal-layer mirror (modal
+  class missing from `_TRAILING_POLITENESS_RE`); pass-3 caught the
+  upstream-chained-guidance mirror (trailing-politeness strip
+  missing from `_chained_intent_guidance`). Both are STRUCTURAL
+  mirrors of fixes already shipped — pass-2's sibling mirrors the
+  post-a20 PD2-1 universal-strip extension, pass-3's sibling
+  mirrors the post-a24 P1-D6 param-leak strip placement.
+- **"Fix unlocks new paths"** — 9th consecutive sweep. D3 is
+  particularly nasty because the failure mode changed from
+  explicit `No search results found` (pre-b1 P1-D5) to silent
+  wrong answer (post-b1 P1-D5 affix retry → post-b2 D3 retry).
+- **New invariants pinned via canonical-source tests** — two
+  feature-level guards: (a) leading + trailing politeness regexes
+  must share the modal class; (b) the no-results early-return path
+  in `_handle_search` must route through `_maybe_rerank_compact`.
+  These pin the "added X to one side, forgot the other side"
+  drift class that drove both pass-2 and pass-3 defects.
+
+---
+
 ## [2.0.0b2] — 2026-05-21 (beta pre-release) — post-b1 beta-test sweep shipped — operational fixes + 8 D-2 user-facing defects + D-1 in-band telemetry
 
 Post-b1 sweep packaged from PR #165 (commits `bbda863` → `261412b`).
