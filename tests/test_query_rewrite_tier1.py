@@ -8,10 +8,6 @@ Per-rule unit tests with three sides each:
 
 from __future__ import annotations
 
-from typing import Callable, Optional  # noqa: F401 — used by Tasks 4-5
-
-import pytest  # noqa: F401 — used by test decorators
-
 from openzim_mcp.intent_parser import IntentParser
 
 
