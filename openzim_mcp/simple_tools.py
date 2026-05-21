@@ -1340,6 +1340,22 @@ class SimpleToolsHandler:
                     break
             if not left:
                 continue
+            # Post-b2 pass-3 (D1 sibling): peel trailing politeness from
+            # EACH chain half before the rejection bullets render. The
+            # universal ``_strip_trailing_politeness`` lives in
+            # ``parse_intent`` (which runs DOWNSTREAM of this method);
+            # without per-half mirroring, modal politeness inside a
+            # chain (``tell me about Tokyo if you would then list
+            # namespaces``) leaks into ``**First op (left):**
+            # tell me about Tokyo if you would`` — the same UX leak
+            # the post-a24 P1-D6 param-leak strip above was added to
+            # plug. Stripping each half is structurally safe: the
+            # ``_CHAINED_OPERATION_PREFIX_RE`` test checks the LEADING
+            # verb, which the trailing strip can't touch.
+            left = IntentParser._strip_trailing_politeness(left)
+            right = IntentParser._strip_trailing_politeness(right)
+            if not left or not right:
+                continue
             # a13 D3 negative-case guard: append a space before the
             # prefix match so the regex's trailing ``\s+`` is satisfied
             # even when a half is JUST an operation verb prefix with

@@ -343,6 +343,105 @@ class TestD1RegexSync:
         assert "if\\s+you\\s+" in trailing
 
 
+class TestD1Pass3ChainedIntentPolitenessLeak:
+    """Pass-3 sibling audit of D1: ``_chained_intent_guidance`` runs
+    UPSTREAM of ``parse_intent`` on the raw user query (per the
+    post-a24 P1-D6 commentary at simple_tools.py:1250-1262). The
+    upstream call site already mirrored the param-leak strip, but
+    the trailing-politeness strip was never mirrored — so trailing
+    politeness inside a chain half leaks into the rejection bullets.
+
+    Pass-2's universal modal-politeness extension widened the
+    UX leak class. Live shape: ``tell me about Tokyo if you would
+    then list namespaces`` correctly fires the chain rejection but
+    its ``**First op (left):**`` bullet reads ``tell me about
+    Tokyo if you would`` — a cosmetic leak the caller would copy-
+    paste back into the recovery flow. Same structural sibling
+    pattern as the post-a24 P1-D6 param-leak version of this defect.
+
+    Fix: peel trailing politeness from each chain half AFTER the
+    split + connector/punct trim, BEFORE the bullets render."""
+
+    def test_modal_politeness_stripped_from_left_half_in_chain_bullet(
+        self,
+    ) -> None:
+        """Live repro: ``tell me about Tokyo if you would then list
+        namespaces`` should produce a chain rejection whose left
+        bullet is the bare ``tell me about Tokyo`` — no modal
+        politeness echoed back to the user."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        out = SimpleToolsHandler._chained_intent_guidance(
+            "tell me about Tokyo if you would then list namespaces"
+        )
+        assert out is not None
+        assert "Chained Operations Detected" in out
+        # The modal politeness must NOT echo into the left bullet.
+        assert "if you would" not in out.lower()
+        # The clean topic must be present.
+        assert "tell me about Tokyo" in out
+        assert "list namespaces" in out
+
+    def test_modal_politeness_stripped_from_right_half_in_chain_bullet(
+        self,
+    ) -> None:
+        """Symmetric sibling: when the politeness sits in the right
+        half (``tell me about Tokyo then list namespaces if you
+        would``), the right bullet must also be clean."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        out = SimpleToolsHandler._chained_intent_guidance(
+            "tell me about Tokyo then list namespaces if you would"
+        )
+        assert out is not None
+        assert "if you would" not in out.lower()
+        assert "list namespaces" in out
+
+    def test_please_in_left_half_also_stripped(self) -> None:
+        """Pre-pass-3 the trailing politeness regex already covered
+        ``please`` / ``thanks``, but the chain guidance never invoked
+        the universal strip on its halves. Confirm that pass-3 lifts
+        the WHOLE token set (not just the modal class) into the chain
+        guidance."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        out = SimpleToolsHandler._chained_intent_guidance(
+            "tell me about Berlin please then list namespaces"
+        )
+        assert out is not None
+        # ``please`` is part of the existing _TRAILING_POLITENESS_RE
+        # token set; the pass-3 strip should peel it for free.
+        assert "please" not in out.lower()
+        assert "tell me about Berlin" in out
+
+    def test_chain_detection_still_fires_after_strip(self) -> None:
+        """Sanity check: the strip can't accidentally suppress the
+        chain warning. The leading op verb (``tell`` / ``list``) is
+        the gate signal; the trailing strip never touches it."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        # Worst-case: trailing politeness near the split point.
+        out = SimpleToolsHandler._chained_intent_guidance(
+            "tell me about Tokyo would you then list namespaces could you"
+        )
+        # Chain still detected.
+        assert out is not None
+        assert "Chained Operations Detected" in out
+        # Both halves clean.
+        assert "would you" not in out.lower()
+        assert "could you" not in out.lower()
+
+    def test_non_chain_query_with_trailing_politeness_unaffected(self) -> None:
+        """Sanity check: a non-chain query with trailing politeness
+        returns ``None`` (no chain to reject), regardless of strip."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        out = SimpleToolsHandler._chained_intent_guidance(
+            "tell me about Tokyo if you would"
+        )
+        assert out is None
+
+
 # ===========================================================================
 # D2 — reranker telemetry comment on no-results
 # ===========================================================================
