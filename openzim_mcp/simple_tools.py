@@ -3687,6 +3687,20 @@ class SimpleToolsHandler:
         topic = (params.get("topic") or query).strip()
         if not topic:
             topic = query
+        # Sub-D-2 rule 4 may have stashed a structured (entity,
+        # attribute) pair in params during parse_intent. When present,
+        # prefer it over re-extracting from the topic — rule 4 already
+        # did the work and the structured fields are more reliable.
+        decomposition_hint = params.get("decomposition_hint")
+        if isinstance(decomposition_hint, dict):
+            entity_hint = decomposition_hint.get("entity")
+            if entity_hint:
+                # Use the hinted entity as the topic to look up. The
+                # attribute hint (decomposition_hint["attribute"]) is
+                # preserved in `params` for downstream consumers that
+                # may want to focus extraction on a specific attribute.
+                # No active consumer today — that's a future-work hook.
+                topic = entity_hint
         # A16 post-a16 D3: a topic like ``M/Title`` or ``c/Berlin`` is a
         # ZIM namespace path the caller pasted into ``tell me about``.
         # The downstream search either silently strips the prefix (libzim
