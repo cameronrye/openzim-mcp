@@ -106,6 +106,15 @@ def _format_pydantic_error(exc: PydanticValidationError) -> str:
 
 def main() -> None:
     """Run the OpenZIM MCP server."""
+    # Phase D sub-D-1: subcommand-style dispatch for `openzim-mcp
+    # download-models`. Early-checks sys.argv to preserve the existing
+    # `openzim-mcp <directories>` invocation shape without restructuring
+    # the argparse subparser tree.
+    if len(sys.argv) >= 2 and sys.argv[1] == "download-models":
+        from openzim_mcp.ml.cli.download import download_models_main
+
+        sys.exit(download_models_main(argv=sys.argv[2:]))
+
     parser = _build_arg_parser()
 
     if len(sys.argv) == 1:

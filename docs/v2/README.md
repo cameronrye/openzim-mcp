@@ -31,7 +31,7 @@ These apply across all phases; per-phase specs do not re-litigate them.
 | **A** | Quality wins, non-breaking | #1, #2, #4, #5, #14 | **Shipped (v2.0.0a1)** | [2026-05-08-v2-phase-a-quality-wins-design.md](../superpowers/specs/2026-05-08-v2-phase-a-quality-wins-design.md) |
 | **B** | Response contract | #3, #13 | **Shipped (v2.0.0a2)** | [2026-05-08-v2-phase-b-response-contract-design.md](../superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md) |
 | **C** | New retrieval primitives | #7, #10, #11 | **Shipped (v2.0.0a4)** | [2026-05-09-v2-phase-c-retrieval-primitives-design.md](../superpowers/specs/2026-05-09-v2-phase-c-retrieval-primitives-design.md) |
-| **D** | Optional ML accelerators | #6, #8, #12, #15 | Planned | _TBD_ |
+| **D** (trimmed) | Optional ML accelerators | #6, #8 Tier 1 (others deferred) | In Design | [2026-05-20-v2-phase-d-ml-accelerators-design.md](../superpowers/specs/2026-05-20-v2-phase-d-ml-accelerators-design.md) |
 | **E** | Offline build artifacts | #16, #17 | Planned | _TBD_ |
 | **F** | Tool surface v2 | #9 | Planned | _TBD_ |
 

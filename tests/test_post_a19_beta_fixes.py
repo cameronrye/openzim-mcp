@@ -241,6 +241,19 @@ class TestP1D2FilteredSearchAndLinksCrossToolCursorRejection:
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.config.meta.footer_enabled = False
         mock.search_with_filters_with_canonical_splice.return_value = "ok"
+        # Phase D sub-D-1: compact mode now calls search_with_filters_data
+        # (the structured path) so the reranker can inspect the payload before
+        # rendering. Wire a minimal return value so _format_search_text doesn't
+        # fail on the MagicMock default.
+        mock.search_with_filters_data.return_value = {
+            "query": "Berlin",
+            "results": [],
+            "total": 0,
+            "done": True,
+            "next_cursor": None,
+            "page_info": {"offset": 0, "limit": 10, "returned_count": 0},
+        }
+        mock._format_search_text.return_value = "ok"
         handler = SimpleToolsHandler(mock)
         out = handler.handle_zim_query(
             "search Berlin in namespace C",
@@ -248,7 +261,13 @@ class TestP1D2FilteredSearchAndLinksCrossToolCursorRejection:
             options={"compact": True},
         )
         assert "Cursor / Tool Mismatch" not in out
-        assert mock.search_with_filters_with_canonical_splice.called
+        # In compact mode, search_with_filters_data is called (structured path);
+        # search_with_filters_with_canonical_splice is the non-compact path.
+        called_either = (
+            mock.search_with_filters_data.called
+            or mock.search_with_filters_with_canonical_splice.called
+        )
+        assert called_either, "filtered_search did not call any search backend"
 
 
 # ---------------------------------------------------------------------------

@@ -57,6 +57,14 @@ dependencies = [
     "tiktoken>=0.7.0,<1.0",
 ]
 
+[project.optional-dependencies]
+# Phase D sub-D-1: cross-encoder reranker via FastEmbed (ONNX-backed,
+# no torch dependency). Adds ~150 MB install footprint. Lazy-imported
+# inside openzim_mcp.ml.reranker; default install is unaffected.
+reranker = [
+    "fastembed>=0.4.0,<1.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/cameronrye/openzim-mcp"
 Repository = "https://github.com/cameronrye/openzim-mcp.git"
