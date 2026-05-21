@@ -5,6 +5,190 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b2] — 2026-05-21 (beta pre-release) — post-b1 beta-test sweep shipped — operational fixes + 8 D-2 user-facing defects + D-1 in-band telemetry
+
+Post-b1 sweep packaged from PR #165 (commits `bbda863` → `261412b`).
+The first b-series release shipped sub-D-1 (cross-encoder reranker) +
+sub-D-2 (Tier-1 query rewriting); the post-b1 sweep covers three
+distinct surfaces across two waves.
+
+### Wave 1 — D-1 operational layer (`bbda863`)
+
+Three defects/gaps surfaced operating the b1 reranker integration
+end-to-end against the air-gapped pre-stage workflow advertised in
+`docs/v2/extras-reranker.md`.
+
+- **`download-models` CLI ignored env vars.** The CLI built a bare
+  `RerankerConfig()` (`BaseModel`, not `BaseSettings`), so
+  `OPENZIM_MCP_ML__RERANKER__*` env vars (including `cache_dir`)
+  were silently dropped. Pre-staging wrote to the FastEmbed default
+  cache instead of the operator-configured directory, so the runtime
+  re-downloaded on first call. Routes the CLI through a small staging
+  `BaseSettings` that mirrors `OpenZimMcpConfig`'s env prefix +
+  delimiter and reads `ml.reranker` from env.
+- **Reranker telemetry only visible in advanced tool mode.** The four
+  reranker events (`reranker_engaged` / `reranker_skipped.*`) lived
+  only in `self._telemetry` Counter, surfaced via
+  `get_server_health`. Simple-mode operators had no way to confirm
+  rerank was actually engaging. `_track()` now also emits a one-line
+  INFO log for the four reranker events; `synthesize.py` bumps its
+  four DEBUG logs to INFO for consistency. Counter behaviour
+  unchanged.
+- **`first_call_timeout_seconds` default 5.0s too tight.** Typical
+  ONNX session creation on a warm cache takes 7-10s on modest
+  hardware; the 5s default tripped the kill switch even with
+  pre-staged models. Raised default to 15.0s; bounds (0.1-120.0)
+  unchanged.
+
+### Wave 2 — D-2 user-facing defects + D-1 in-band telemetry surface (`54e68af` → `60d8532`)
+
+Three live-MCP probe passes against `wikipedia_en_all_maxi_2026-02.zim`
+(118 GB) surfaced 8 user-facing defects in the sub-D-2 wiring plus an
+in-band visibility gap for sub-D-1. The "narrow-scope sibling" pattern
+now extends at the FEATURE level: every probe-gated rule (Rules 2, 3,
+4) shared the same `_build_title_probe(zim_file_path)`-before-auto-
+resolve flaw, defeating the suppression for the dominant calling
+pattern.
+
+#### Pass-1 defects (6, `54e68af`)
+
+- **P1-D1 — title_probe gated on caller-supplied `zim_file_path`
+  BEFORE auto-archive-resolution.** `handle_zim_query` auto-selects
+  the single loaded archive downstream (line ~776) when
+  `zim_file_path` is omitted (the recommended pattern per the tool's
+  own docstring). The probe was built earlier (line ~624) from the
+  raw caller argument, so omitted-path callers got a `None` probe —
+  Rules 2 (misspellings), 3 (article-strip), and post-fix Rule 4
+  (X-of-Y decomposition) silently degraded. Live: `the Beatles` →
+  disambig; `An American in Paris` → 🚨 `Niggas_in_Paris` (offensive
+  misroute); `A Christmas Carol` → `Christmas_carol` concept. Fix:
+  new `_probe_archive_path()` helper auto-resolves before the probe
+  is built; mirrored at the synthesize wiring site.
+- **P1-D2 — Rule 1's full-query lowercase leaked into user-facing
+  chain rejection bullets and soft-connector footer.** Bullets/
+  footer echo entities from `params["topic"]` which is extracted
+  from the lowercased query. Live: `tell me about Köln, München,
+  and Berlin` → bullets read `tell me about köln` / `münchen` /
+  `berlin` — diacritics + casing corrupted, breaking the user's
+  recovery copy-paste path. Fix: stash `params["_pre_rewrite_query"]`
+  (original-case) at the wiring layer; new
+  `_recase_from_original()` helper finds each lowercase token in
+  the original via case-insensitive substring lookup; threaded
+  into both surfaces.
+- **P1-D3 — Rule 4 `_decompose_x_of_y` had no title-probe guard at
+  all.** Every `<word> of <stuff>` whose attribute word wasn't in
+  the structural-intent skip-set decomposed unconditionally,
+  including canonical multi-word titles: `lord of the rings` →
+  `The_Rings` (1985 Iranian horror film); `the art of war` → `War`
+  concept; `wealth of nations` → `Nation`; `origin of species` →
+  `Species`; `birth of venus` → Venus disambig; `death of stalin`
+  → Stalin disambig; `history of rome` → `Rome` city. Fix: mirror
+  Rule 3's probe gate inside Rule 4 — when `title_probe(query)`
+  returns True, return `(query, None)` and suppress decomposition.
+- **P1-D5 — Rule 2 missed possessives.** Whitespace-only token
+  split meant `photosythesis's` didn't match map key
+  `photosythesis`. Live: `tell me about Photosythesis's
+  reproduction` → `No search results found`.
+- **P1-D6 — Rule 2 missed leading/trailing punctuation.** `bilogy.`
+  / `"recieve"` / `(photosythesis)` bypassed Rule 2 because the
+  lookup key included the punctuation. Combined fix: new
+  `_split_misspelling_affixes(token)` helper splits each token into
+  `(prefix, core, suffix)` via linear-time `isalnum`/`_` scanning;
+  on map miss, retry the core (after peeling trailing `'s`) and
+  reattach affixes on hit.
+- **D-1 in-band telemetry**: snapshot the four reranker counters at
+  the start of `handle_zim_query`; new `_compute_rerank_state()`
+  returns per-request engagement state (`engaged` / `skipped:not_installed`
+  / `skipped:no_results` / `skipped:passthrough`) from
+  the post-call delta; appended as `<!-- reranker=<state> -->` in
+  the response envelope (mirrors the existing `<!-- intent=... cert=... -->`
+  pattern). Solves the methodology gap where the live
+  MCP transport filters out `get_server_health`, leaving reranker
+  engagement invisible to simple-tool sweeps.
+
+#### Pass-2 sibling defects (2, `e6f320e`)
+
+- **P2-D1 — disambig heading echoed lowercase topic.** Sibling of
+  P1-D2 in `_render_disambiguation`. Pre-fix: `tell me about
+  Stalin` → `**Multiple articles match "stalin"**`. Fix: new
+  optional `original_query` kwarg; `_recase_from_original` recovers
+  the caller's casing (covers diacritics too — `tell me about
+  München` → `"München"`).
+- **P2-D2 — empty-result handler echoed lowercase query.** Sibling
+  of P1-D2 in `_handle_search` compact path's `No results for "X"`
+  body. Same recase via `_recase_from_original`; falls back to
+  `search_query` when the original isn't available.
+
+#### Pass-3 backend echo-string plumbing (`60d8532`)
+
+- **P3-D1 — search backend echo strings.** Five user-facing echo
+  sites in `zim/search.py` read the lowercased query directly:
+  `Found N matches for "X"`, `No search results found for "X"`,
+  `No filtered matches for "X"`, `Found N matches for "X", but
+  offset N exceeds...`, and the filtered-search header. New
+  optional `display_query` kwarg threaded through
+  `_format_search_text`, `search_zim_file`,
+  `_format_filtered_response`, `_perform_filtered_search`,
+  `search_with_filters`, and
+  `search_with_filters_with_canonical_splice`. Cache key in
+  `search_with_filters` includes `display_query` so two calls with
+  the same matched query but different display forms don't
+  cross-contaminate. Backend matching is unchanged — Xapian is
+  case-insensitive, `payload["query"]` keeps the lowercased form
+  for cursor/cache stability; only the rendered echoes pick up the
+  original case.
+
+### CI cleanup (`261412b`)
+
+- **flake8 E303** in test file (three blank lines before an inline
+  `import`).
+- **isort + black** drift across the three modified modules.
+- **SonarCloud S5852 (ReDoS hotspot)** — pass-1's
+  `_MISSPELL_AFFIX_RE = re.compile(r"^(\W*)(.*?)(\W*)$")` tripped
+  the polynomial-backtracking detector (lazy `.*?` between two
+  greedy `\W*`). Replaced with the linear-time
+  `_split_misspelling_affixes(token)` helper — same precedent the
+  post-a22 sweep applied to a sibling S5852 hit in
+  `_chained_intent_guidance`.
+
+### Tests
+
+- 76 new tests in `tests/test_post_b1_beta_fixes.py`, organised by
+  defect class (`TestP1D1ProbeArchiveResolution`,
+  `TestP1D3Rule4ProbeGate`, `TestP1D5PossessiveMisspelling`,
+  `TestP1D6PunctuationMisspelling`, `TestP1D2RecaseHelper`,
+  `TestRerankerStateComment`, `TestPass2SiblingDefects`,
+  `TestPass3SearchBackendEchoPlumbing`,
+  `TestPass2CrossFeatureIntegration`, `TestRegressionGuards`).
+- 6 pre-existing post-a-series test assertions updated to reflect
+  the corrected post-P1-D2 original-case echoes.
+- Full suite: **2320 passing, 54 skipped**. mypy clean across 53
+  source files. All 14 CI checks pass (SonarCloud, CodeQL, bandit,
+  security scanning, the 6 OS × Python matrix, both
+  `[reranker]`-extra suites, performance benchmarks).
+
+### Methodology evolution
+
+- **"Narrow-scope sibling" pattern at the FEATURE level** —
+  reproduced for the 7th sweep but now applies to NEW-FEATURE
+  wiring shipped in the same release: every probe-gated Tier-1
+  rule (Rules 2, 3, 4) shared the same probe-construction-before-
+  auto-resolve flaw. The probe wiring shipped narrower than the
+  recommended call pattern; the recommended pattern (omit
+  `zim_file_path`) defeated it.
+- **"Fix unlocks new paths"** — 6th consecutive sweep; D-2 Rule 4
+  LANDED (`population of berlin` decomposes cleanly) but exposed
+  the canonical-X-of-Y-title decomposition family that had no
+  guard at all.
+- **Three-wave sibling progression** — pass-1 (6 live-probed) →
+  pass-2 (2 source-audited siblings in dispatcher-edge code) →
+  pass-3 (5 backend-plumbed siblings of P2-D2) — validates the
+  "defer scope-creep items to a follow-on pass" rule. Pass-2's
+  explicit deferral let the dispatcher-edge fix ship without
+  blocking on the multi-function backend plumbing.
+
+---
+
 ## [2.0.0b1] — 2026-05-21 (beta pre-release) — Phase D sub-D-2 — Tier 1 query rewriting
 
 First b-series release. Ships Phase D sub-D-2: four idempotent rule-based
