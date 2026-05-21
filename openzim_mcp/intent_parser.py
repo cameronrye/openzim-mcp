@@ -1272,9 +1272,13 @@ class IntentParser:
            structure the intent classifier should have caught).
 
         2. Positive — at least one token is *distinctive*: not common
-           filler AND either capitalized in the original query
-           (proper-noun signal) or at least five characters long
-           (content-word signal).
+           filler AND either capitalized in the (pre-Rule-1) query
+           (proper-noun signal) OR at least 2 characters long
+           (content-word signal). The 2-char floor exists because
+           Sub-D-2 Rule 1 unconditionally lowercases the query before
+           this gate fires, so short acronyms like ``dna`` / ``pi`` /
+           ``ai`` lose their capitalization signal and must qualify on
+           length alone. Single-char inputs are still excluded.
 
         The positive layer is what stops conversational fragments like
         ``"do both"`` / ``"try again"`` / ``"test"`` / ``"help"`` from
@@ -1285,9 +1289,11 @@ class IntentParser:
         ``"try again"`` -> 105k-char Aaliyah article body trap).
 
         Examples:
-          * ``"Martin Luther King Jr."`` qualifies (proper-noun cap).
-          * ``"biology"`` qualifies (>=5 chars, not filler).
-          * ``"DNA"`` qualifies (cap, not filler — even at 3 chars).
+          * ``"martin luther king jr."`` qualifies (multiple non-filler
+            tokens, all ≥2 chars).
+          * ``"biology"`` qualifies (7 chars, not filler).
+          * ``"dna"`` qualifies (3 chars, not filler — post-Rule-1).
+          * ``"pi"`` qualifies (2 chars, not filler — minimum length).
           * ``"量子力学"`` qualifies (non-Latin script — Chinese, Arabic,
             Russian, etc. — is treated as inherently distinctive since
             those scripts don't have casing or short ASCII filler).
