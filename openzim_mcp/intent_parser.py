@@ -833,6 +833,22 @@ class IntentParser:
         # Optional ``(so|very) much`` tail captures the heavier
         # politeness wrap small models emit.
         r"thank\s+(?:you|u)(?:\s+(?:so|very)\s+much)?|"
+        # Post-b2 D1 sibling: modal politeness — ``if you (would|could
+        # |will|can)`` and ``(could|would|will|can) you``. Symmetric
+        # to the LEADING-modal regex in ``_extract_tell_me_about``
+        # (line ~374), which has handled ``could you tell me about X``
+        # since post-a15 P6-D3. The b2 D1 sweep added the modal class
+        # to the trailing strip inside ``_extract_tell_me_about``;
+        # this sibling extension lifts it to the universal layer so
+        # EVERY extractor benefits — pre-fix, ``search for biology
+        # if you would`` searched for ``"biology if you would"``,
+        # same shape as the post-a20 PD2-1 ``please`` leak that
+        # motivated the universal strip in the first place. Both
+        # alternation branches require a ``you`` so a bare trailing
+        # modal verb (``Berlin would``) isn't stripped from real
+        # article titles.
+        r"if\s+you\s+(?:could|would|will|can)|"
+        r"(?:could|would|will|can)\s+you|"
         # Longest-first within each family so the regex engine matches
         # the maximal token even though Python's alternation is
         # leftmost-first (backtracking would still find the longer

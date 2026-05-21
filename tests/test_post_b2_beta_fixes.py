@@ -238,6 +238,111 @@ class TestD1ParseIntentEndToEnd:
         assert params.get("topic") == "Tokyo"
 
 
+class TestD1SiblingUniversalTrailingModal:
+    """Pass-2 sibling audit of D1: the trailing-modal strip was
+    initially added only inside ``_extract_tell_me_about``. Every
+    OTHER extractor (search, find_by_title, related, suggestions,
+    structure, get_section…) routes through the universal
+    ``_strip_trailing_politeness`` at ``parse_intent`` line 1048,
+    which uses ``_TRAILING_POLITENESS_RE``. Pre-sibling-fix the
+    universal regex matched ``please`` / ``thanks`` / multilingual
+    variants but NOT the modal class — so ``search for biology if
+    you would`` searched for ``"biology if you would"`` (same
+    failure shape as the post-a20 PD2-1 ``please`` leak that
+    motivated the universal strip).
+
+    Fix: add ``if you (could|would|will|can)`` and
+    ``(could|would|will|can) you`` to ``_TRAILING_POLITENESS_RE``.
+    Mirrors the leading-modal class the post-a15 P6-D3 fix added
+    to the leading politeness strip — the two should always stay
+    in sync. Defense-in-depth: the extractor-level strip from D1
+    pass-1 is kept (idempotent)."""
+
+    def test_strip_trailing_politeness_handles_if_you_would(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        out = IntentParser._strip_trailing_politeness("search for biology if you would")
+        # Modal politeness peeled; ``search for biology`` left intact.
+        assert "if you" not in out.lower()
+        assert "biology" in out.lower()
+
+    def test_strip_trailing_politeness_handles_would_you(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        out = IntentParser._strip_trailing_politeness("search for biology would you")
+        assert "would" not in out.lower()
+        assert "biology" in out.lower()
+
+    def test_strip_trailing_politeness_handles_if_you_could(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        out = IntentParser._strip_trailing_politeness(
+            "find article titled Berlin if you could"
+        )
+        assert "if you" not in out.lower()
+        assert "Berlin" in out
+
+    def test_strip_trailing_politeness_handles_could_you(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        out = IntentParser._strip_trailing_politeness(
+            "links in Photosynthesis could you"
+        )
+        assert "could" not in out.lower()
+        assert "Photosynthesis" in out
+
+    def test_search_extractor_recovers_clean_query(self) -> None:
+        """End-to-end: ``search for biology if you would`` should reach
+        ``_extract_search`` with the modal already peeled, so the
+        captured query is just ``biology``."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "search for biology if you would",
+            query_rewrite_enabled=False,
+        )
+        # Should be classified as a search intent…
+        assert intent == "search"
+        # …with the modal politeness already peeled.
+        extracted = (params.get("query") or "").lower()
+        assert "if you" not in extracted
+        assert "biology" in extracted
+
+    def test_bare_modal_verb_at_end_preserved(self) -> None:
+        """The trailing-modal regex requires either an ``if you ...``
+        prefix OR a trailing ``you``. A bare ``would`` / ``could`` at
+        the end (no ``you``) is left attached so real article titles
+        ending in a modal aren't mangled."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        # ``would`` alone — left attached.
+        out = IntentParser._strip_trailing_politeness("biology would")
+        assert "would" in out.lower()
+
+
+class TestD1RegexSync:
+    """Pin the b2-D1 invariant: leading and trailing politeness
+    regexes must recognise the same modal class. Future contributors
+    who add a verb to one side must add it to the other. Failure mode
+    that motivated this guard: the post-b1 sweep widened the LEADING
+    regex (post-a15 P6-D3) to cover ``could/can/would/will + you``;
+    the trailing regex stayed narrow at ``please`` / ``to/for me``
+    for six more sweeps until the post-b2 sweep caught it."""
+
+    def test_leading_and_trailing_share_modal_class(self) -> None:
+        # The trailing regex source must contain the same modal class
+        # the leading regex (inside ``_extract_tell_me_about``)
+        # recognises. The leading regex is a literal string at
+        # intent_parser.py:374; the trailing regex is
+        # ``_TRAILING_POLITENESS_RE``.
+        from openzim_mcp.intent_parser import IntentParser
+
+        trailing = IntentParser._TRAILING_POLITENESS_RE
+        # Both alternation branches must be present.
+        assert "could|would|will|can" in trailing
+        assert "if\\s+you\\s+" in trailing
+
+
 # ===========================================================================
 # D2 — reranker telemetry comment on no-results
 # ===========================================================================
