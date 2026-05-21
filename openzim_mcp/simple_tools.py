@@ -3626,8 +3626,26 @@ class SimpleToolsHandler:
                 # Let handle_zim_query's footer step render the structured
                 # suggestion footer (format_footer empty-result variant).
                 meta = payload.get("_meta", {})
+                # Post-b1 P2-D2: recase the echoed search query against
+                # the original pre-Rule-1-lowercase query so the user
+                # sees ``No results for "Biology"`` instead of ``No
+                # results for "biology"`` when they typed ``Biology``.
+                # Sibling shape to P1-D2 (chain rejection / footer)
+                # and P2-D1 (disambig heading). Falls back to
+                # ``search_query`` unchanged when the original isn't
+                # available.
+                pre_rewrite = (
+                    params.get("_pre_rewrite_query")
+                    if isinstance(params, dict)
+                    else None
+                )
+                display_query = (
+                    self._recase_from_original(search_query, pre_rewrite)
+                    if isinstance(pre_rewrite, str) and pre_rewrite
+                    else search_query
+                )
                 return _HandlerResult(
-                    body=f'No results for "{search_query}".',
+                    body=f'No results for "{display_query}".',
                     reason=meta.get("reason", "0_hits"),
                     suggestions=meta.get("suggestions"),
                 )
@@ -4172,7 +4190,23 @@ class SimpleToolsHandler:
                         related_extends_paths.append(m_path)
         elif len(strong_matches) >= 2:
             self._track("disambiguation_returned")
-            return self._render_disambiguation(topic, strong_matches)
+            # Post-b1 P2-D1: pass the pre-rewrite original-case query
+            # so the disambig heading echoes the caller's casing
+            # instead of Rule 1's lowercased topic.
+            disambig_original = (
+                params.get("_pre_rewrite_query")
+                if isinstance(params, dict)
+                else None
+            )
+            return self._render_disambiguation(
+                topic,
+                strong_matches,
+                original_query=(
+                    disambig_original
+                    if isinstance(disambig_original, str)
+                    else None
+                ),
+            )
 
         # Subject-attribute decomposition (2026-05-18): when the
         # original topic carried a subject category hint
@@ -4720,7 +4754,12 @@ class SimpleToolsHandler:
         return None
 
     @staticmethod
-    def _render_disambiguation(topic: str, candidates: list) -> str:
+    def _render_disambiguation(
+        topic: str,
+        candidates: list,
+        *,
+        original_query: Optional[str] = None,
+    ) -> str:
         """Render a "did you mean?" list when 2+ articles strong-match
         the topic (e.g. Mercury → planet/element/mythology).
 
@@ -4730,6 +4769,13 @@ class SimpleToolsHandler:
         article <path>``) are concrete enough that a small model can
         copy them verbatim. Capped at 5 candidates — beyond that the
         list itself becomes hard to skim.
+
+        Post-b1 P2-D1: ``original_query`` (the pre-Rule-1-lowercase
+        query) lets the heading echo ``topic`` in the caller's
+        original casing. Pre-fix, ``tell me about Stalin`` returned
+        ``**Multiple articles match "stalin"**`` — same shape as the
+        post-b1 P1-D2 footer leak but in a different user-facing
+        string. Falls back to ``topic`` unchanged when not provided.
         """
         # Wrap the long subtitle in parens so the implicit-string
         # concatenation is unambiguous to readers (and to CodeQL's
@@ -4740,8 +4786,13 @@ class SimpleToolsHandler:
             "_Several archive articles strong-match this topic. "
             "Pick one explicitly:_"
         )
+        display_topic = (
+            SimpleToolsHandler._recase_from_original(topic, original_query)
+            if original_query
+            else topic
+        )
         lines = [
-            f'**Multiple articles match "{topic}"** — which one did you mean?',
+            f'**Multiple articles match "{display_topic}"** — which one did you mean?',
             "",
             subtitle,
             "",

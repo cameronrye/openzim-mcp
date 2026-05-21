@@ -748,6 +748,100 @@ class TestPass2CrossFeatureIntegration:
 # ===========================================================================
 
 
+class TestPass2SiblingDefects:
+    """Pass-2 source-level audit caught two additional lowercase-leak
+    siblings to P1-D2 (chain rejection / soft-connector footer). Both
+    echo a Rule-1-lowercased topic/query in a user-facing string. Live
+    confirmation: P2-D1 reproduced in the original pass-1 smoke gate
+    (``the Beatles`` → ``**Multiple articles match "beatles"**``); P2-D2
+    affects every empty-result search whose original-case form differs
+    from the lowercased extraction (``search for Biology xyz`` → ``No
+    results for "biology xyz"``).
+
+    Out of scope (separate change required): zim/search.py's ``Found N
+    matches for "X"`` / ``No search results found for "X"`` /
+    ``No filtered matches for "X"`` echoes (5 sites) — fixing them
+    requires plumbing a separate ``display_query`` kwarg through the
+    search backend's format functions. Higher cost, lower per-call
+    impact than the dispatcher-edge cases fixed here."""
+
+    def test_p2_d1_disambiguation_heading_recased(self) -> None:
+        # Pre-fix: ``**Multiple articles match "stalin"**``.
+        # Post-fix: ``**Multiple articles match "Stalin"**``.
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        out = SimpleToolsHandler._render_disambiguation(
+            topic="stalin",
+            candidates=[
+                {"title": "Joseph Stalin", "path": "Joseph_Stalin", "score": 1.0},
+                {
+                    "title": "Stalin: Paradoxes of Power",
+                    "path": "Stalin:_Paradoxes",
+                    "score": 0.95,
+                },
+            ],
+            original_query="tell me about Stalin",
+        )
+        assert '**Multiple articles match "Stalin"**' in out
+        assert '**Multiple articles match "stalin"**' not in out
+
+    def test_p2_d1_disambiguation_preserves_diacritics(self) -> None:
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        out = SimpleToolsHandler._render_disambiguation(
+            topic="münchen",
+            candidates=[
+                {"title": "Munich", "path": "Munich", "score": 1.0},
+                {"title": "FC München", "path": "FC_Munich", "score": 0.96},
+            ],
+            original_query="tell me about München",
+        )
+        assert '**Multiple articles match "München"**' in out
+
+    def test_p2_d1_disambiguation_falls_back_when_no_original(self) -> None:
+        # No original_query passed → legacy lowercase echo.
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        out = SimpleToolsHandler._render_disambiguation(
+            topic="stalin",
+            candidates=[
+                {"title": "Joseph Stalin", "path": "Joseph_Stalin", "score": 1.0},
+                {"title": "Stalin (film)", "path": "Stalin_(film)", "score": 0.96},
+            ],
+        )
+        assert '**Multiple articles match "stalin"**' in out
+
+    def test_p2_d1_disambiguation_falls_back_when_token_missing(self) -> None:
+        # ``original_query`` doesn't contain the topic (e.g., Rule 4
+        # reordered words) → helper returns the lowercase topic
+        # unchanged. Documented graceful-degrade case.
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        out = SimpleToolsHandler._render_disambiguation(
+            topic="population",  # decomposed entity, not in original
+            candidates=[
+                {"title": "Population", "path": "Population", "score": 1.0},
+                {"title": "Population (statistics)", "path": "P_stats", "score": 0.96},
+            ],
+            original_query="tell me about Berlin's growth",
+        )
+        # No "population" substring in the original → falls back to lowercase.
+        assert '**Multiple articles match "population"**' in out
+
+    def test_p2_d2_no_results_heading_via_recase_helper(self) -> None:
+        # Direct test of the _recase_from_original helper applied to
+        # a search_query. The full integration via _handle_search
+        # requires constructing the whole handler — the helper test
+        # exercises the same logic the handler uses.
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        original = 'search for "Biology Phylogenetics"'
+        recased = SimpleToolsHandler._recase_from_original(
+            "biology phylogenetics", original
+        )
+        assert recased == "Biology Phylogenetics"
+
+
 class TestRegressionGuards:
     """Pin the existing-contract behaviours that the post-b1 fixes
     must not regress. Each guard targets a code path the fixes
