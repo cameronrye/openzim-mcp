@@ -1343,3 +1343,14 @@ class IntentParser:
             return {}
 
         return params
+
+    # ----- sub-D-2 Tier 1 query rewriting rules -----
+
+    @classmethod
+    def _normalize_topic_case(cls, query: str) -> str:
+        """Sub-D-2 rule 1: lowercase the query.
+
+        Replaces scattered `.lower()` calls in the relevance pipeline
+        with a named pass. Idempotent. No telemetry — fires on
+        essentially every query."""
+        return query.lower()
