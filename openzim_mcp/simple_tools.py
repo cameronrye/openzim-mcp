@@ -3482,6 +3482,20 @@ class SimpleToolsHandler:
         search_query = params.get("query", query)
         limit = options.get("limit")
         offset = options.get("offset", 0)
+        # Post-b1 P3-D1: build the original-case display form so the
+        # backend's ``Found N filtered matches for "X"`` /
+        # ``No filtered matches for "X"`` echoes show the caller's
+        # casing. Same shape as the _handle_search hoisting above.
+        pre_rewrite = (
+            params.get("_pre_rewrite_query")
+            if isinstance(params, dict)
+            else None
+        )
+        display_query = (
+            self._recase_from_original(search_query, pre_rewrite)
+            if isinstance(pre_rewrite, str) and pre_rewrite
+            else search_query
+        )
         if options.get("compact", False):
             # Phase D sub-D-1: compact path gives us a structured payload
             # to rerank before rendering. The canonical-title-match splice
@@ -3507,7 +3521,8 @@ class SimpleToolsHandler:
             # (query, total, page_info, results, done, next_cursor) so the
             # text formatter accepts it structurally.
             return self.zim_operations._format_search_text(
-                cast(SearchResponse, payload)
+                cast(SearchResponse, payload),
+                display_query=display_query,
             )
         # A11 post-a11 H2: route to the canonical-title-match-aware
         # variant so ``search for berlin in namespace C`` surfaces
@@ -3521,6 +3536,7 @@ class SimpleToolsHandler:
             params.get("content_type"),
             limit,
             offset,
+            display_query=display_query,
         )
 
     def _handle_get_article(
@@ -3613,6 +3629,22 @@ class SimpleToolsHandler:
         search_query = params.get("query", query)
         limit = options.get("limit")
         offset = options.get("offset", 0)
+        # Post-b1 P3-D1: build the original-case display form once.
+        # Passed to backend renderers so user-facing echoes
+        # (``Found N matches for "X"`` / ``No search results found
+        # for "X"``) reflect the caller's casing instead of Rule 1's
+        # lowercased extraction. Search matching uses ``search_query``
+        # unchanged — Xapian is case-insensitive.
+        pre_rewrite = (
+            params.get("_pre_rewrite_query")
+            if isinstance(params, dict)
+            else None
+        )
+        display_query = (
+            self._recase_from_original(search_query, pre_rewrite)
+            if isinstance(pre_rewrite, str) and pre_rewrite
+            else search_query
+        )
 
         if options.get("compact", False):
             # Use the dict variant so we can inspect _meta.suggestions on
@@ -3625,25 +3657,11 @@ class SimpleToolsHandler:
             if payload.get("total", 0) == 0:
                 # Let handle_zim_query's footer step render the structured
                 # suggestion footer (format_footer empty-result variant).
+                # Post-b1 P2-D2: ``display_query`` was hoisted above
+                # for use by the backend renderers (P3-D1); reuse it
+                # here so the no-results echo also reflects the
+                # caller's original casing.
                 meta = payload.get("_meta", {})
-                # Post-b1 P2-D2: recase the echoed search query against
-                # the original pre-Rule-1-lowercase query so the user
-                # sees ``No results for "Biology"`` instead of ``No
-                # results for "biology"`` when they typed ``Biology``.
-                # Sibling shape to P1-D2 (chain rejection / footer)
-                # and P2-D1 (disambig heading). Falls back to
-                # ``search_query`` unchanged when the original isn't
-                # available.
-                pre_rewrite = (
-                    params.get("_pre_rewrite_query")
-                    if isinstance(params, dict)
-                    else None
-                )
-                display_query = (
-                    self._recase_from_original(search_query, pre_rewrite)
-                    if isinstance(pre_rewrite, str) and pre_rewrite
-                    else search_query
-                )
                 return _HandlerResult(
                     body=f'No results for "{display_query}".',
                     reason=meta.get("reason", "0_hits"),
@@ -3675,15 +3693,25 @@ class SimpleToolsHandler:
             )
             # Non-empty results: render via the legacy text formatter so the
             # markdown shape is identical to the non-compact path.
-            return self.zim_operations._format_search_text(payload)
+            # Post-b1 P3-D1: pass display_query so ``Found N matches
+            # for "X"`` echoes in the caller's original case.
+            return self.zim_operations._format_search_text(
+                payload, display_query=display_query
+            )
 
         # compact=False: unchanged legacy path. Title promotion is
         # applied in compact mode only (the default surface for
         # ``zim_query``). Legacy callers of the non-compact rendered
         # string keep byte-identical output, including the original
         # BM25 ranking.
+        # Post-b1 P3-D1: pass display_query so non-compact callers
+        # also get the original-case echo.
         return self.zim_operations.search_zim_file(
-            zim_file_path, search_query, limit, offset
+            zim_file_path,
+            search_query,
+            limit,
+            offset,
+            display_query=display_query,
         )
 
     @staticmethod

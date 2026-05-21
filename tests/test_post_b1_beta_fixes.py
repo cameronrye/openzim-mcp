@@ -748,6 +748,172 @@ class TestPass2CrossFeatureIntegration:
 # ===========================================================================
 
 
+class TestPass3SearchBackendEchoPlumbing:
+    """Pass-3 source-level audit followed pass-2's deferral. The 5
+    user-facing echo strings in ``zim/search.py`` (``Found N matches
+    for "X"``, ``No search results found for "X"``, recovery hints,
+    filtered variants) all read ``payload["query"]`` / the function-
+    local ``query`` arg, which the dispatcher passes as Rule-1-
+    lowercased. Pass-2 documented these as backend-plumbing work;
+    pass-3 lands the plumbing via a new optional ``display_query``
+    kwarg threaded through ``_format_search_text`` →
+    ``search_zim_file``, and ``_format_filtered_response`` →
+    ``search_with_filters`` / ``_perform_filtered_search`` /
+    ``search_with_filters_with_canonical_splice``.
+
+    Backend matching is unchanged — Xapian is case-insensitive, so
+    the query/cache key keep the lowercase form for stability; only
+    the user-facing echoes pick up the original case."""
+
+    def _make_format_payload(
+        self,
+        *,
+        query: str = "biology",
+        total: int = 0,
+        results: Optional[list] = None,
+    ) -> Dict[str, Any]:
+        """Build a minimal SearchResponse-shaped dict for
+        ``_format_search_text``. Only the keys the formatter reads
+        need to be set."""
+        return {
+            "query": query,
+            "total": total,
+            "page_info": {"offset": 0, "limit": 5},
+            "results": results or [],
+            "done": True,
+        }
+
+    def test_format_search_text_no_results_uses_display_query(self) -> None:
+        # Pre-fix: ``No search results found for "biology"``.
+        # Post-fix: ``No search results found for "Biology"``.
+        # Use _SearchMixin._format_search_text as an unbound function so
+        # we don't have to construct the full backend.
+        from openzim_mcp.zim.search import _SearchMixin
+
+        payload = self._make_format_payload(query="biology", total=0)
+
+        class _Stub:
+            pass
+
+        fn = _SearchMixin._format_search_text
+        out = fn(_Stub(), payload, display_query="Biology")  # type: ignore[arg-type]
+        assert 'No search results found for "Biology".' in out
+        assert "biology" not in out  # the lowercase form is fully replaced
+
+    def test_format_search_text_no_results_falls_back_when_no_display(
+        self,
+    ) -> None:
+        # Legacy behaviour: when display_query is None, echo uses
+        # payload["query"].
+        from openzim_mcp.zim.search import _SearchMixin
+
+        payload = self._make_format_payload(query="biology", total=0)
+
+        class _Stub:
+            pass
+
+        fn = _SearchMixin._format_search_text
+        out = fn(_Stub(), payload)  # type: ignore[arg-type]
+        assert 'No search results found for "biology".' in out
+
+    def test_format_search_text_with_results_uses_display_query(self) -> None:
+        from openzim_mcp.zim.search import _SearchMixin
+
+        payload = self._make_format_payload(
+            query="biology",
+            total=10,
+            results=[
+                {"title": "Biology", "path": "Biology", "snippet": "..."},
+            ],
+        )
+
+        class _Stub:
+            pass
+
+        fn = _SearchMixin._format_search_text
+        out = fn(_Stub(), payload, display_query="Biology")  # type: ignore[arg-type]
+        assert 'Found 10 matches for "Biology"' in out
+
+    def test_format_search_text_offset_exceeds_uses_display_query(self) -> None:
+        from openzim_mcp.zim.search import _SearchMixin
+
+        # offset >= total + empty results triggers the
+        # "offset exceeds total" echo (line ~731).
+        payload = {
+            "query": "biology",
+            "total": 5,
+            "page_info": {"offset": 100, "limit": 5},
+            "results": [],
+            "done": True,
+        }
+
+        class _Stub:
+            pass
+
+        fn = _SearchMixin._format_search_text
+        out = fn(_Stub(), payload, display_query="Biology")  # type: ignore[arg-type]
+        assert 'Found 5 matches for "Biology"' in out
+
+    def test_format_filtered_response_uses_display_query(self) -> None:
+        # _format_filtered_response is a module-level free function;
+        # call it directly with a minimal _FilteredScanState.
+        from openzim_mcp.zim.search import _FilteredScanState, _format_filtered_response
+
+        scan = _FilteredScanState(
+            filtered_count=10,
+            scanned=10,
+            scan_cap_hit=False,
+            total_filtered_is_lower_bound=False,
+        )
+        out = _format_filtered_response(
+            query="biology",
+            filter_text=" (namespace=C)",
+            results=[
+                {
+                    "title": "Biology",
+                    "path": "Biology",
+                    "snippet": "...",
+                    "namespace": "C",
+                }
+            ],
+            scan=scan,
+            total_results=10,
+            offset=0,
+            limit=5,
+            display_query="Biology",
+        )
+        assert 'Found 10 filtered matches for "Biology"' in out
+        # Original lowercase form should NOT appear in the echo header.
+        assert 'matches for "biology"' not in out
+
+    def test_format_filtered_response_falls_back_no_display(self) -> None:
+        from openzim_mcp.zim.search import _FilteredScanState, _format_filtered_response
+
+        scan = _FilteredScanState(
+            filtered_count=10,
+            scanned=10,
+            scan_cap_hit=False,
+            total_filtered_is_lower_bound=False,
+        )
+        out = _format_filtered_response(
+            query="biology",
+            filter_text="",
+            results=[
+                {
+                    "title": "Biology",
+                    "path": "Biology",
+                    "snippet": "...",
+                    "namespace": "C",
+                }
+            ],
+            scan=scan,
+            total_results=10,
+            offset=0,
+            limit=5,
+        )
+        assert 'Found 10 filtered matches for "biology"' in out
+
+
 class TestPass2SiblingDefects:
     """Pass-2 source-level audit caught two additional lowercase-leak
     siblings to P1-D2 (chain rejection / soft-connector footer). Both
