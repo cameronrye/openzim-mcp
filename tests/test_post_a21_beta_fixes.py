@@ -174,8 +174,8 @@ class TestP1D6P1D7TrailingPolitenessExtensions:
             ("search for biology cheers", "biology"),
             ("search for biology bitte", "biology"),
             ("search for biology por favor", "biology"),
-            ("find article titled Berlin ta", "Berlin"),
-            ("find article titled Berlin merci", "Berlin"),
+            ("find article titled Berlin ta", "berlin"),  # Sub-D-2 Rule 1 lowercases
+            ("find article titled Berlin merci", "berlin"),  # Sub-D-2 Rule 1 lowercases
         ],
     )
     def test_extended_tokens_in_full_parse(self, raw: str, expected_query: str) -> None:
@@ -374,8 +374,9 @@ class TestMultiEntityChainGuidance:
             "Multi-Entity Chain Detected" in body
         ), f"Expected chain warning; got: {body[:400]}"
         # Each entity should be enumerated in the warning.
+        # Sub-D-2 Rule 1 lowercases everything before chain detection.
         assert (
-            "Köln" in body and "München" in body and "Berlin" in body
+            "köln" in body and "münchen" in body and "berlin" in body
         ), f"Entities not enumerated: {body[:400]}"
 
     def test_three_entity_or_chain_with_non_latin_fires_warning(self) -> None:
@@ -386,7 +387,8 @@ class TestMultiEntityChainGuidance:
         )
         body = str(result)
         assert "Multi-Entity Chain Detected" in body
-        assert "Berlin" in body and "東京" in body and "Tokyo" in body
+        # Sub-D-2 Rule 1 lowercases ASCII; non-Latin codepoints are untouched.
+        assert "berlin" in body and "東京" in body and "tokyo" in body
 
     def test_four_entity_chain_fires_warning(self) -> None:
         handler, _mock = self._handler(title_resolves={})

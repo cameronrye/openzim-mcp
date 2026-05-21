@@ -4727,26 +4727,30 @@ class SimpleToolsHandler:
         # to ``find_entry_by_title_data`` returns silently 0 hits with
         # no signal that the user used the wrong tool. Redirect upfront
         # so the caller knows to use ``get article`` for path lookup.
-        # Strict pattern (uppercase letter + ``/`` + ≥3-char suffix)
-        # matches ZIM namespace conventions without false-positiving
-        # real short titles that legitimately contain ``/`` (the
-        # Wikipedia ``A/B`` testing article is a real entry under
-        # path ``A/B`` whose suffix is 1 char; the ≥3-char floor
-        # filters it out).
+        # Pattern: single alpha letter + ``/`` + ≥3-char suffix. Both
+        # uppercase and lowercase namespace letters are accepted because
+        # Sub-D-2 Rule 1 lowercases the query before intent parsing, so
+        # an originally uppercase ``M/Title`` arrives as ``m/title``.
+        # libzim namespace lookups are case-insensitive, so normalising
+        # to uppercase in the suggestion is still correct.
+        # The ≥3-char floor avoids false-positiving real short titles
+        # that legitimately contain ``/`` (the Wikipedia ``A/B`` testing
+        # article has a 1-char suffix).
         if (
             len(title) >= 4
             and title[0].isascii()
-            and title[0].isupper()
+            and title[0].isalpha()
             and title[1] == "/"
             and len(title[2:].strip()) >= 3
         ):
+            normalized_title = title[0].upper() + title[1:]
             return (
                 "**Namespace Path, Not a Title**\n\n"
                 f"`{title}` looks like a ZIM namespace path. The title "
                 "index only stores entry titles, so a path lookup "
                 "returns no hits.\n"
                 "**Try one of**:\n"
-                f"- `get article {title}` — direct path lookup\n"
+                f"- `get article {normalized_title}` — direct path lookup\n"
                 f"- `find article titled {title[2:].strip()}` — "
                 "title-only lookup (drops the namespace prefix)\n"
             )

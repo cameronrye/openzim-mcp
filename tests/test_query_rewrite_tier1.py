@@ -240,3 +240,58 @@ class TestDecomposeXOfY:
         text, hint = IntentParser._decompose_x_of_y("berlin's annual revenue")
         assert text == "berlin's annual revenue"
         assert hint is None
+
+
+class TestParseIntentIntegration:
+    def test_rules_run_before_existing_chain(self) -> None:
+        # `RECIEVE A LETTER` → lowercase → `recieve a letter` →
+        # misspelling fix → `receive a letter`.
+        # The existing intent regex chain then matches whatever it
+        # would have matched for `receive a letter`.
+        intent, params, conf = IntentParser.parse_intent(
+            "RECIEVE A LETTER", title_probe=None
+        )
+        # We don't pin the resulting intent (depends on regex chain),
+        # just confirm the query was normalized.
+        assert "recieve" not in params.get("query", "")
+        assert "recieve" not in params.get("topic", "")
+
+    def test_decomposition_hint_attached_to_params(self) -> None:
+        intent, params, conf = IntentParser.parse_intent(
+            "population of berlin", title_probe=None
+        )
+        # The hint rides inside `params` — backward-compat: callers
+        # that don't know about it just ignore the extra key.
+        hint = params.get("decomposition_hint")
+        assert hint == {"entity": "berlin", "attribute": "population"}
+
+    def test_no_decomposition_no_hint(self) -> None:
+        _, params, _ = IntentParser.parse_intent(
+            "just a regular query", title_probe=None
+        )
+        assert "decomposition_hint" not in params
+
+    def test_master_disable_short_circuits(self, monkeypatch) -> None:
+        # parse_intent itself doesn't read the config — the caller
+        # (simple_tools wiring in Task 8) does. With title_probe=None
+        # and no rules triggering, behavior matches pre-sub-D-2.
+        intent_a, params_a, _ = IntentParser.parse_intent("berlin", title_probe=None)
+        # `berlin` shouldn't decompose, shouldn't misspell, shouldn't
+        # have a leading article. Should pass through to whatever the
+        # legacy chain produced.
+        assert "decomposition_hint" not in params_a
+
+    def test_probe_propagates_to_rules_2_and_3(self) -> None:
+        seen: list[str] = []
+
+        def probe(token: str) -> bool:
+            seen.append(token)
+            return False
+
+        IntentParser.parse_intent("the recieve list", title_probe=probe)
+        # Probe was called: at least once by rule 2 (for `recieve`)
+        # AND at least once by rule 3 (for the full query starting
+        # with `the`). We don't pin the exact set — order may shift
+        # if implementation evolves — but both layers must have
+        # exercised it.
+        assert len(seen) >= 2

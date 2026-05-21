@@ -409,7 +409,7 @@ class TestP1D3ParamLeakSuffix:
             "tell me about Photosynthesis limit=10"
         )
         assert intent == "tell_me_about"
-        assert params.get("topic") == "Photosynthesis", (
+        assert params.get("topic") == "photosynthesis", (  # Sub-D-2 Rule 1 lowercases
             f"Pre-fix topic was 'Photosynthesis limit=10' → title-promotion "
             f"resolved '10' as the article; got {params.get('topic')!r}"
         )
@@ -428,7 +428,7 @@ class TestP1D3ParamLeakSuffix:
             "tell me about Berlin limit=5 please"
         )
         assert intent == "tell_me_about"
-        assert params.get("topic") == "Berlin"
+        assert params.get("topic") == "berlin"  # Sub-D-2 Rule 1 lowercases
 
     def test_normal_words_not_eaten_by_param_strip(self) -> None:
         # The strip requires ``\s+<param>\s*=\s*\S+`` — the ``=`` is
@@ -526,14 +526,14 @@ class TestLiveMcpReproduction:
             "tell me about Photosynthesis limit=10"
         )
         assert intent == "tell_me_about"
-        assert params.get("topic") == "Photosynthesis"
+        assert params.get("topic") == "photosynthesis"  # Sub-D-2 Rule 1 lowercases
 
     def test_berlin_compact_budget_strips_topic(self) -> None:
         intent, params, _conf = IntentParser.parse_intent(
             "tell me about Berlin compact_budget=200"
         )
         assert intent == "tell_me_about"
-        assert params.get("topic") == "Berlin"
+        assert params.get("topic") == "berlin"  # Sub-D-2 Rule 1 lowercases
 
     def test_search_biology_tyvm_strips_politeness(self) -> None:
         intent, params, _conf = IntentParser.parse_intent("search for biology tyvm")

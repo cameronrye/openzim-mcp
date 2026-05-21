@@ -150,7 +150,7 @@ class TestP1D1TitleSpansConnectorSuppression:
             options={"compact": False},
         )
         assert "query contained" in out
-        assert "Berlin" in out
+        assert "berlin" in out  # Sub-D-2 Rule 1 lowercases topic before footer is built
 
     def test_pre_fix_both_halves_in_title_still_suppresses(self) -> None:
         # Regression guard: ``Berlin and Brandenburg`` resolved to
@@ -196,7 +196,7 @@ class TestP1D1TitleSpansConnectorSuppression:
         )
         # Title "Beethoven" doesn't span the connector → fires as before.
         assert "query contained" in out
-        assert "Mozart" in out
+        assert "mozart" in out  # Sub-D-2 Rule 1 lowercases topic before footer is built
 
 
 # ---------------------------------------------------------------------------

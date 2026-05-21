@@ -275,9 +275,10 @@ class TestD1SoftFooter:
             options={"compact": False},
         )
         assert "query contained" in out
-        assert "Berlin" in out
-        assert "Paris" in out
-        assert "tell me about Berlin" in out
+        # Sub-D-2 Rule 1 lowercases the query; footer mentions lowercase names.
+        assert "berlin" in out
+        assert "paris" in out
+        assert "tell me about berlin" in out
 
     def test_both_halves_in_title_suppresses_footer(self) -> None:
         # ``Romeo and Juliet`` resolved to ``Romeo and Juliet`` → no
@@ -321,7 +322,8 @@ class TestD1SoftFooter:
             options={"compact": False},
         )
         assert "query contained" in out
-        assert "Berlin" in out
+        # Sub-D-2 Rule 1 lowercases the query; footer mentions lowercase names.
+        assert "berlin" in out
 
 
 class TestD1RealTopicWithLowercaseRightUnchanged:
@@ -370,19 +372,20 @@ class TestD2OrphanTrailingConnector:
     @pytest.mark.parametrize(
         "raw,expected",
         [
-            ("tell me about Apollo 11 also", "Apollo 11"),
-            ("tell me about Berlin and", "Berlin"),
-            ("tell me about Photosynthesis or", "Photosynthesis"),
-            ("tell me about Mars plus", "Mars"),
-            ("tell me about Berlin,", "Berlin"),
-            ("tell me about Berlin &", "Berlin"),
-            ("tell me about Berlin and also", "Berlin"),
+            # Sub-D-2 Rule 1 lowercases the query before param extraction.
+            ("tell me about Apollo 11 also", "apollo 11"),
+            ("tell me about Berlin and", "berlin"),
+            ("tell me about Photosynthesis or", "photosynthesis"),
+            ("tell me about Mars plus", "mars"),
+            ("tell me about Berlin,", "berlin"),
+            ("tell me about Berlin &", "berlin"),
+            ("tell me about Berlin and also", "berlin"),
             # Real "and" inside topic stays put: only trailing strips.
-            ("tell me about Romeo and Juliet", "Romeo and Juliet"),
+            ("tell me about Romeo and Juliet", "romeo and juliet"),
             # Pass-2 self-audit: ``then`` is NOT in the strip list,
             # so titles ending with ``Then`` (Now and Then, Then) are
             # preserved.
-            ("tell me about Now and Then", "Now and Then"),
+            ("tell me about Now and Then", "now and then"),
             ("tell me about then", "then"),
         ],
     )
@@ -434,11 +437,14 @@ class TestD3TellMeAboutNamespacePathRedirect:
             options={"compact": False},
         )
         assert "Namespace Path, Not a Topic" in out
-        # Suggests get_article with the uppercase-normalised path.
-        normalized = topic[0].upper() + topic[1:]
+        # Sub-D-2 Rule 1 lowercases the query, so the extracted topic
+        # is lowercase. The redirect normalises only the first char to
+        # uppercase. Compute expectations from the lowercased topic.
+        lowered = topic.lower()
+        normalized = lowered[0].upper() + lowered[1:]
         assert f"get article {normalized}" in out
-        # Also suggests bare-name title search.
-        assert f"tell me about {topic[2:].strip()}" in out
+        # Also suggests bare-name title search (lowercase suffix).
+        assert f"tell me about {lowered[2:].strip()}" in out
 
     def test_real_topic_unaffected(self) -> None:
         mock = MagicMock()
@@ -683,7 +689,11 @@ class TestD7FindByTitleLowercaseNamespaceRedirect:
             options={"compact": True},
         )
         assert "Namespace Path, Not a Title" in out
-        normalized = title[0].upper() + title[1:]
+        # Sub-D-2 Rule 1 lowercases the query; the redirect normalises
+        # only the first char to uppercase. Compute expectation from
+        # the lowercased title.
+        lowered = title.lower()
+        normalized = lowered[0].upper() + lowered[1:]
         assert f"get article {normalized}" in out
 
     def test_real_lowercase_title_returned_when_index_hits(self) -> None:

@@ -110,7 +110,8 @@ class TestD5PolitenessLeadIn:
     def test_modal_lead_in_stripped(self, parser: IntentParser, query: str) -> None:
         intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "tell_me_about"
-        assert params["topic"] == "Photosynthesis"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["topic"] == "photosynthesis"
 
     def test_modal_lead_in_with_trailing_politeness(self, parser: IntentParser) -> None:
         # Both ends should strip: leading "could you", trailing "please".
@@ -118,13 +119,15 @@ class TestD5PolitenessLeadIn:
             "could you tell me about Photosynthesis please"
         )
         assert intent == "tell_me_about"
-        assert params["topic"] == "Photosynthesis"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["topic"] == "photosynthesis"
 
     def test_no_modal_unchanged(self, parser: IntentParser) -> None:
         # Sanity: queries that never had a modal lead-in still work.
         intent, params, _ = IntentParser.parse_intent("tell me about Photosynthesis")
         assert intent == "tell_me_about"
-        assert params["topic"] == "Photosynthesis"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["topic"] == "photosynthesis"
 
 
 # ---------------------------------------------------------------------------
@@ -167,9 +170,14 @@ class TestD6FindByTitleNamespacePathRedirect:
             options={"compact": False},
         )
         assert "Namespace Path, Not a Title" in out
-        assert f"get article {title}" in out
-        # Suggests the title-only fallback too.
-        assert f"find article titled {title[2:]}" in out
+        # Sub-D-2 Rule 1 lowercases the query, so the extracted title
+        # is lowercase. The redirect normalises only the first char to
+        # uppercase (libzim namespace letters are case-insensitive).
+        lowered = title.lower()
+        normalized = lowered[0].upper() + lowered[1:]
+        assert f"get article {normalized}" in out
+        # Suggests the title-only fallback too (bare suffix, lowercased).
+        assert f"find article titled {lowered[2:]}" in out
 
     def test_real_title_unaffected(self) -> None:
         # ``find article titled Photosynthesis`` (no namespace prefix)
@@ -518,9 +526,10 @@ class TestP4D1SuggestionsForCapture:
         "query,expected_prefix",
         [
             ("suggestions for cat", "cat"),
-            ("suggestions for Photo", "Photo"),
-            ("suggestions Photo", "Photo"),  # no-for form
-            ('suggestions for "Photo"', "Photo"),  # quote-stripped by _QUOTE_OPEN?
+            # Sub-D-2 Rule 1 lowercases the query before param extraction.
+            ("suggestions for Photo", "photo"),
+            ("suggestions Photo", "photo"),  # no-for form
+            ('suggestions for "Photo"', "photo"),  # quote-stripped by _QUOTE_OPEN?
             ("autocomplete cat", "cat"),
             # Edge: a real prefix that starts with "for-" should still
             # be captured.
@@ -824,7 +833,8 @@ class TestP6D3LeadingPoliteness:
     def test_leading_politeness_stripped(self, query: str) -> None:
         intent, params, _ = IntentParser.parse_intent(query)
         assert intent == "tell_me_about"
-        assert params["topic"] == "Photosynthesis"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["topic"] == "photosynthesis"
 
     def test_trailing_please_still_works(self) -> None:
         # The existing trailing-politeness strip must not regress.
@@ -832,7 +842,8 @@ class TestP6D3LeadingPoliteness:
             "tell me about Photosynthesis please"
         )
         assert intent == "tell_me_about"
-        assert params["topic"] == "Photosynthesis"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["topic"] == "photosynthesis"
 
     def test_double_leading_please_loops(self) -> None:
         # Stacked politeness — the loop must peel both layers.
@@ -840,7 +851,8 @@ class TestP6D3LeadingPoliteness:
             "please please tell me about Photosynthesis"
         )
         assert intent == "tell_me_about"
-        assert params["topic"] == "Photosynthesis"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction.
+        assert params["topic"] == "photosynthesis"
 
     def test_mid_query_please_unaffected(self) -> None:
         # Sanity: "please" mentioned mid-query (in the topic itself)

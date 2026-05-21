@@ -188,8 +188,8 @@ def test_intent_parser_narrow_section_sets_flag():
     )
     assert intent == "get_section"
     assert params.get("narrow") is True
-    assert params.get("section_name") == "Geography"
-    assert params.get("entry_path") == "Berlin"
+    assert params.get("section_name") == "geography"  # Sub-D-2 Rule 1 lowercases
+    assert params.get("entry_path") == "berlin"  # Sub-D-2 Rule 1 lowercases
 
 
 def test_intent_parser_just_section_alias():
@@ -264,8 +264,8 @@ def test_synthesize_strips_tell_me_about_prefix(test_config, monkeypatch):
         compact=True,
     )
 
-    # The search-stage query has the NL prefix stripped.
-    assert captured_query["search_query"] == "Berlin"
+    # The search-stage query has the NL prefix stripped; Sub-D-2 Rule 1 lowercases it.
+    assert captured_query["search_query"] == "berlin"
     # The original NL form is preserved in original_query for echo.
     assert captured_query["original_query"] == "tell me about Berlin"
 
