@@ -5,6 +5,145 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b5] — 2026-05-22 (beta pre-release) — post-b4 beta-test sweep shipped — 4 defects across 3 audit passes
+
+Post-b4 sweep packaged from PR #171 (commits `51158e9` → `8f9628d` →
+`e6a778f`). FOUR defects + 1 latent surfaced by live-MCP probing of
+v2.0.0b4, plus TWO additional defects caught by source-level
+self-audits of the pass-1 fix itself. The "fix unlocks new paths"
+methodology reproduced THREE times within a single sweep.
+
+### D1 (HIGH) — b4 pass-0 gate can't distinguish redirect-0.95 from fuzzy-0.95
+
+`find_entry_by_title_data` scores libzim's suggestion-search results on
+a linearly-decaying rank formula capped at 0.95 (zim/search.py
+:2814-2822). The same 0.95 score covers both:
+
+- a redirect walk (suggestion returned `Plato's_cave` redirect entry;
+  `_follow_redirect_chain` walked to `Allegory_of_the_cave`)
+- a pure fuzzy title-prefix match (suggestion returned `Evolution` for
+  the query `Darwin's evolution`)
+
+The b4 `min_score=0.95` gate accepted both. Live: `tell me about
+Darwin's evolution` → `Evolution` at cert=0.85 (silent-wrong-answer).
+
+### D2 (HIGH) — pass-1 `iter_query_tails` still strips apostrophes
+
+The b4 fix only patched pass-0. Pass-1 (simple_tools.py:3925) still
+consumed `_TAIL_TOKEN_RE` at title_promotion.py:188, which treated
+apostrophes as token boundaries. `"plato's republic philosophy"` →
+`["plato", "s", "republic", "philosophy"]`; 1-tail `"philosophy"`
+matches canonical `Philosophy` at strict 1.0 → silently wins. Live
+silent-wrong-answers (cert=0.85): `Plato's republic philosophy` →
+`Philosophy`; `Einstein's theory history` → `History`; `Einstein's
+theory tourism` → `Tourism`.
+
+### D3 (HIGH) — synthesize `_promote_title_match` never got the b4 treatment
+
+PR #169 only touched `_promote_topic_via_title_index`.
+`_promote_title_match` in synthesize.py:869-950 iterated
+`iter_query_tails(query)` at line 915 without the b4 pass-0 full-query
+probe. Live (`synthesize=true`): `Einstein's theory` → rank-1 citation
+`Theory` (expected `Theory_of_relativity`); `Plato's cave` → rank-1
+`Cave` (correct article demoted to rank 2).
+
+### D5 (LATENT) — pass-2 windows + pass-3 typo-tolerant tails
+
+`iter_query_windows` and the pass-3 0.8-fuzzy tail probe share the
+same tokenizer; the apostrophe-strip shape was masked in practice
+because pass-1's strict-1.0 single-token tail short-circuited first.
+Fixed for free by the tokenizer change.
+
+### Pass-2 audit defect — synthesize pass-0 silently no-ops in production
+
+The pass-1 fix called `find_title_match(archive, ...)` passing the
+libzim `Archive` handle as arg-0. `find_title_match` calls
+`arg0.find_entry_by_title_data(...)` — `Archive` has no such method,
+so the call raised `AttributeError` inside the `except Exception`
+wrapper and silently no-op'd in production. Tests passed only because
+they `patch`-ed `find_title_match` at the import site, bypassing the
+contract entirely. Fix: `search_handler` in production IS the
+`ZimOperations` instance (simple_tools.py:5542:
+`search_handler=self.zim_operations`). Pass it as arg-0.
+
+### Pass-3 audit defect — unconditional D1 filter regressed non-possessive prose
+
+The pass-1 unconditional `match_type != "fuzzy_suggest"` gate silently
+reverted a real b4 improvement for non-possessive prose queries of the
+shape `<entity> <disambiguator>`. Trace `tell me about Berlin Germany`:
+
+| Release | Pass-0 result | Final answer |
+| --- | --- | --- |
+| pre-b4 | (no pass-0) | `Germany` (pass-1 picks trailing tail) |
+| b4 (pre-D1) | `Berlin` at fuzzy_suggest 0.95 — accepted | `Berlin` ✓ |
+| b4 + pass-1 D1 (unconditional) | rejected | `Germany` ✗ |
+
+Refine the gate: reject `fuzzy_suggest` ONLY when
+`has_apostrophe_possessive(topic)` returns True. The
+Darwin/Einstein/Plato silent-wrong-answer cases (possessive) still
+reject; the Berlin/Apollo/Paris/Tokyo b4 improvements (non-possessive)
+preserve.
+
+### Fixes
+
+1. **`match_type` annotation through find_entry_by_title_data** — each
+   result row now carries `match_type ∈ {"direct", "redirect",
+   "fuzzy_suggest", "typo_corrected"}`. `find_title_match` propagates
+   the field. Schema is non-breaking (`FindEntryHit.match_type` was
+   already `NotRequired[str]` for the pre-existing typo annotation).
+
+2. **Tokenizer fix** — `_TAIL_TOKEN_RE` keeps apostrophes (both
+   straight `'` and curly `'`) inside otherwise-alphanumeric runs so
+   `einstein's` stays one token.
+
+3. **Possessive `min_len` floor** — new
+   `has_apostrophe_possessive(topic)` helper. When True, pass-1 /
+   pass-3 / synthesize-pass-1 use `min_len=2` in `iter_query_tails` /
+   `iter_query_windows` so a generic 1-token tail can't silently
+   outrank the canonical the pass-0 probe just missed.
+
+4. **Pass-0 / pass-3 / synthesize pass-0 gate filter** — reject
+   `fuzzy_suggest` ONLY when topic carries an apostrophe-possessive.
+
+5. **Synthesize pass-0** — `_promote_title_match` mirrors the
+   `_promote_topic_via_title_index` pass-0 probe at the start, with
+   the same `match_type` filter. Receives `search_handler`
+   (ZimOperations) as arg-0, not the libzim `Archive` handle.
+
+### Tests
+
+21 new tests in `tests/test_post_b4_beta_fixes.py` across 6 classes
+(TestMatchTypePropagation, TestFuzzySuggestGateReject,
+TestPossessiveTokenizer, TestPossessiveMinLenFloor,
+TestSynthesizePromoteFullTopicProbe, TestRegressionGuards). Updated
+1 pre-existing assertion in `tests/test_post_a17_beta_fixes.py`
+(`O'Brien` tokenizes to `["o'brien"]` post-fix) and 1 in
+`tests/test_post_b3_beta_fixes.py` (tail iteration no longer strips
+apostrophes). Updated 1 golden snapshot to include
+`match_type: "direct"` on the canonical fast-path hit.
+
+Full suite: **2390 passing, 54 skipped**. mypy clean across 52 source
+files. black + flake8 clean. All 14 CI checks pass on PR #171.
+
+### Methodology evolution
+
+- **"Fix unlocks new paths" — now 13 sweeps strong, reproduced 3x in
+  this single sweep.** Pass-1 looked correct in isolation; pass-2
+  found the synthesize API misuse silently no-op'd in production
+  (tests masked it via `patch`-at-import-site); pass-3 found the
+  unconditional gate regressed a real b4 improvement for non-
+  possessive prose.
+- **Three new invariants pinned**: (a) `_TAIL_TOKEN_RE` keeps
+  apostrophes inside otherwise-alphanumeric runs; (b) at
+  `min_score=0.95`, `match_type ∈ {direct, redirect, typo_corrected}`
+  is safe to auto-fetch — `fuzzy_suggest` is only safe when the topic
+  shape would naturally produce a meaningful first-token resolution
+  (non-possessive); (c) when a new call site for `find_title_match`
+  is added, verify arg-0 is the `ZimOperations`-shaped object — the
+  `except Exception` wrapper masks `AttributeError` silently.
+
+---
+
 ## [2.0.0b4] — 2026-05-22 (beta pre-release) — post-b3 beta-test sweep shipped — X's Y auto-fetch tokenization
 
 Post-b3 sweep packaged from PR #169 (commit `f69db46`). ONE pre-existing
