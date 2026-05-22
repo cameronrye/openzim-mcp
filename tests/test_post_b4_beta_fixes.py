@@ -504,7 +504,15 @@ class TestSynthesizePromoteFullTopicProbe:
     def test_synthesize_pass_0_full_query_probe(self) -> None:
         """Live repro: ``Einstein's theory`` with ``synthesize=true``
         currently returns rank-1 ``Theory``. The new pass-0 should
-        intercept and promote ``Theory_of_relativity`` to rank 1."""
+        intercept and promote ``Theory_of_relativity`` to rank 1.
+
+        Also pins the API-contract invariant: ``find_title_match``
+        receives ``search_handler`` (a ZimOperations-shaped object —
+        wired in production at ``simple_tools._handle_synthesize_query``
+        via ``search_handler=self.zim_operations``) and the validated
+        path string. Pre-pass-2 audit, this site passed the libzim
+        ``Archive`` handle instead, which silently no-ops because
+        ``Archive`` has no ``find_entry_by_title_data`` method."""
         from openzim_mcp.synthesize import _promote_title_match
 
         # Search handler stub with a title_match_hit that uses the
@@ -532,7 +540,11 @@ class TestSynthesizePromoteFullTopicProbe:
         # target at 0.95. ``find_entry_by_title_data`` is
         # case-insensitive internally (``title_lower = title.lower()``
         # at zim/search.py:2738) so the mock lowercases the input
-        # before comparing.
+        # before comparing. Records calls so the test can assert the
+        # API-contract: arg-0 is the search_handler, arg-1 is the
+        # validated path.
+        call_log: List[tuple[Any, str, str]] = []
+
         def fake_find_title_match(
             zim_ops: Any,
             zim_file_path: str,
@@ -541,6 +553,7 @@ class TestSynthesizePromoteFullTopicProbe:
             cross_file: bool = False,
             min_score: float = 1.0,
         ) -> Optional[Dict[str, Any]]:
+            call_log.append((zim_ops, zim_file_path, topic))
             if topic.lower() == "einstein's theory":
                 return {
                     "path": "Theory_of_relativity",
@@ -572,6 +585,21 @@ class TestSynthesizePromoteFullTopicProbe:
         assert (
             top_path == "Theory_of_relativity"
         ), f"expected Theory_of_relativity at rank 1, got {top_path!r}"
+        # API contract: pass-0 must call find_title_match with the
+        # search_handler (zim_operations) and the validated PATH from
+        # the archives tuple, NOT the libzim ``Archive`` object and
+        # NOT the archive_name label.
+        assert call_log, "pass-0 probe never called find_title_match"
+        first_zim_ops, first_path, first_topic = call_log[0]
+        assert first_zim_ops is handler, (
+            f"arg-0 must be the search_handler (zim_operations); "
+            f"got {first_zim_ops!r}"
+        )
+        assert first_path == "/wiki.zim", (
+            f"arg-1 must be the validated path from archives[..][1]; "
+            f"got {first_path!r}"
+        )
+        assert first_topic == "Einstein's theory"
 
     def test_synthesize_pass_0_rejects_fuzzy_suggest(self) -> None:
         """The synthesize-side pass-0 must also apply the D1 match_type
@@ -592,7 +620,7 @@ class TestSynthesizePromoteFullTopicProbe:
             cross_file: bool = False,
             min_score: float = 1.0,
         ) -> Optional[Dict[str, Any]]:
-            if topic == "einstein's xyz":
+            if topic.lower() == "einstein's xyz":
                 return {
                     "path": "Xyz",
                     "title": "Xyz",
@@ -673,4 +701,38 @@ class TestRegressionGuards:
         assert first_find_call < first_iter_call, (
             "_promote_title_match must probe full query via "
             "find_title_match BEFORE iter_query_tails decomposes it"
+        )
+
+    def test_synthesize_promote_passes_search_handler_to_find_title_match(
+        self,
+    ) -> None:
+        """Pass-2 audit pin: ``_promote_title_match``'s call to
+        ``find_title_match`` must pass ``search_handler`` (a
+        ZimOperations-shaped object) as arg-0, NOT the libzim
+        ``Archive`` handle. ``find_title_match`` calls
+        ``zim_operations.find_entry_by_title_data(...)`` on arg-0 —
+        if arg-0 is an ``Archive`` (which has no such method) the
+        probe silently no-ops via the ``except Exception``. This
+        guard regex-locates the first ``find_title_match(`` invocation
+        inside ``_promote_title_match`` and verifies its first
+        positional argument names ``search_handler``."""
+        import inspect
+        import re as _re
+
+        from openzim_mcp.synthesize import _promote_title_match
+
+        source = inspect.getsource(_promote_title_match)
+        # Match the first multi-line call: ``find_title_match(`` then
+        # the next non-whitespace token is the first positional arg.
+        match = _re.search(
+            r"find_title_match\(\s*([A-Za-z_][A-Za-z_0-9]*)",
+            source,
+        )
+        assert match is not None, "find_title_match call missing"
+        first_arg_name = match.group(1)
+        assert first_arg_name == "search_handler", (
+            f"first arg to find_title_match must be ``search_handler`` "
+            f"(the ZimOperations-shaped object); got {first_arg_name!r}. "
+            f"Passing the libzim ``Archive`` here silently no-ops the "
+            f"probe — see post-b4 pass-2 audit finding A1."
         )

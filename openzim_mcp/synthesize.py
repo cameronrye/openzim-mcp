@@ -923,9 +923,19 @@ def _promote_title_match(
     # ``fuzzy_suggest`` filter rejects raw fuzzy title-prefix
     # suggestions at the same score (``Darwin's evolution`` ≈
     # ``Evolution``) so only canonical redirects are auto-promoted.
-    for (archive, _vp), archive_name in zip(archives, archives_searched):
+    #
+    # ``find_title_match`` expects a ``zim_operations``-shaped object
+    # (it calls ``.find_entry_by_title_data`` on it). ``search_handler``
+    # in production IS the ``ZimOperations`` instance — wired in
+    # ``simple_tools.py:_handle_synthesize_query`` via
+    # ``search_handler=self.zim_operations``. The per-archive validated
+    # path lives in the ``(archive, vp)`` tuple and is what
+    # ``find_entry_by_title_data`` expects for the single-archive call.
+    for (_archive, vp), archive_name in zip(archives, archives_searched):
         try:
-            full_probe = find_title_match(archive, archive_name, query, min_score=0.95)
+            full_probe = find_title_match(
+                search_handler, str(vp), query, min_score=0.95
+            )
         except Exception as e:
             logger.debug(
                 "_promote_title_match: pass-0 probe failed for %s on %r: %s",
