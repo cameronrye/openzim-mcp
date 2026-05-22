@@ -53,6 +53,14 @@ class FindEntryHit(TypedDict):
     score: float
     zim_file: NotRequired[str]
     match_type: NotRequired[str]
+    # Post-b6 Z1: the path emitted by libzim's suggestion search /
+    # fast-path lookup BEFORE ``_follow_redirect_chain`` resolved it
+    # to the canonical. Equals ``path`` when no redirect was walked;
+    # differs when ``match_type == "redirect"``. Callers using the
+    # 0.95 gate check whether the user's query tokens (especially
+    # possessor tokens) appear in this pre-redirect path to filter
+    # associative-not-semantic redirects.
+    pre_redirect_path: NotRequired[str]
 
 
 class SuggestionItem(TypedDict):

@@ -2765,6 +2765,10 @@ class _SearchMixin:
                         # Post-b4 D1: capture the pre-redirect path so we
                         # can annotate ``match_type`` with whether the
                         # canonical lookup actually walked a redirect.
+                        # Post-b6 Z1: propagate the pre-redirect path
+                        # itself in the result row so the D1 filter can
+                        # check whether the redirect target is
+                        # semantically related to the user's query.
                         fast_pre_path = getattr(fast_hit_entry, "path", None)
                         fast_hit_entry = self._follow_redirect_chain(fast_hit_entry)
                         fast_post_path = getattr(fast_hit_entry, "path", None)
@@ -2778,6 +2782,7 @@ class _SearchMixin:
                                 "score": 1.0,
                                 "zim_file": file_path,
                                 "match_type": fast_match_type,
+                                "pre_redirect_path": str(fast_pre_path or ""),
                             }
                         )
                         fast_path_hit = True
@@ -2853,6 +2858,16 @@ class _SearchMixin:
                                         "score": score,
                                         "zim_file": file_path,
                                         "match_type": match_type,
+                                        # Post-b6 Z1: propagate the
+                                        # pre-redirect path so the D1
+                                        # filter on possessive topics
+                                        # can detect associative
+                                        # redirects (pre-path unrelated
+                                        # to the user's possessor
+                                        # entity).
+                                        "pre_redirect_path": str(
+                                            suggest_pre_path or ""
+                                        ),
                                     }
                                 )
                     except Exception as e:

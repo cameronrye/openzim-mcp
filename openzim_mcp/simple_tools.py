@@ -27,6 +27,7 @@ from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
 from .title_promotion import (
     _TOKEN_RE,
+    accept_possessive_promotion,
     find_title_match,
     has_apostrophe_possessive,
     is_strong_title_match,
@@ -117,6 +118,14 @@ _INFO_LEVEL_TELEMETRY_EVENTS: "frozenset[str]" = frozenset(
 _QUERY_REWRITE_MISSPELLING = "query_rewrite.misspelling"
 _QUERY_REWRITE_STOPWORD_PHRASE = "query_rewrite.stopword_phrase"
 _QUERY_REWRITE_X_OF_Y = "query_rewrite.x_of_y"
+
+
+# Post-b6 Z1: the shared D1+Z1 filter lives in ``title_promotion`` as
+# ``accept_possessive_promotion`` (imported above). simple_tools and
+# synthesize both use it so the two-mode tell-me-about/synthesize
+# paths apply identical safety logic. The legacy thin wrapper kept
+# here would have duplicated the helper across modules — replaced
+# with the direct import.
 
 
 @dataclass
@@ -3918,37 +3927,8 @@ class SimpleToolsHandler:
         promoted = find_title_match(
             self.zim_operations, zim_file_path, topic, min_score=0.95
         )
-        # Post-b4 D1: reject ``fuzzy_suggest`` rows ONLY when the topic
-        # carries an apostrophe-possessive. The 0.95 suggestion-rank
-        # score covers three shapes:
-        #
-        #   * canonical redirect (``Plato's_cave`` →
-        #     ``Allegory_of_the_cave``, match_type=redirect — safe,
-        #     accepted unconditionally)
-        #   * exact-title direct hit (match_type=direct at score 1.0
-        #     via the suggestion path's exact_ci promotion — safe,
-        #     accepted unconditionally)
-        #   * fuzzy title-token prefix match (match_type=fuzzy_suggest
-        #     — meaning depends on the topic shape)
-        #
-        # For possessive prose (``Darwin's evolution`` → ``Evolution``
-        # at 0.95), the fuzzy_suggest match is structurally wrong —
-        # libzim's tokenized prefix index matched only the trailing
-        # word, dropping the possessor entirely (cert=0.85 silent-
-        # wrong-answer).
-        #
-        # For non-possessive prose (``Berlin Germany`` → ``Berlin``
-        # at 0.95), the fuzzy_suggest match IS the intended answer:
-        # libzim correctly resolved the first token to the article
-        # the user asked about, with the second token as a
-        # disambiguator. Pre-pass-2-audit my unconditional filter
-        # silently regressed this class — the refined gate keeps
-        # the b4 improvement for that shape while still solving the
-        # possessive silent-wrong-answer.
-        if promoted is not None:
-            is_fuzzy_suggest = promoted.get("match_type") == "fuzzy_suggest"
-            if not (is_fuzzy_suggest and has_apostrophe_possessive(topic)):
-                return promoted
+        if promoted is not None and accept_possessive_promotion(promoted, topic):
+            return promoted
         # Post-b4 D2: when the topic carries an apostrophe-possessive
         # (``Plato's republic philosophy`` / ``Einstein's theory
         # history``), tighten the tail-iteration floor to ``min_len=2``
@@ -3982,10 +3962,8 @@ class SimpleToolsHandler:
             promoted = find_title_match(
                 self.zim_operations, zim_file_path, tail, min_score=0.8
             )
-            if promoted is not None:
-                is_fuzzy_suggest = promoted.get("match_type") == "fuzzy_suggest"
-                if not (is_fuzzy_suggest and has_apostrophe_possessive(topic)):
-                    return promoted
+            if promoted is not None and accept_possessive_promotion(promoted, topic):
+                return promoted
         return None
 
     def _handle_tell_me_about(

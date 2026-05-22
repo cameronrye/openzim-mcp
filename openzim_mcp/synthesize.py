@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 from openzim_mcp import bundle as _bundle_mod
 from openzim_mcp.title_promotion import (
+    accept_possessive_promotion,
     find_title_match,
     has_apostrophe_possessive,
     is_strong_title_match,
@@ -871,6 +872,59 @@ def _do_per_archive_search(
     return per_archive_hits, archives_searched, archive_by_name
 
 
+def _build_pass0_promoted_hit(
+    full_probe: dict,
+    archive: Any,
+    title_match_hit: Any,
+) -> dict:
+    """Build a ``search_top_k``-shaped hit (``{path, snippet, score}``)
+    from a ``find_title_match`` result so downstream extraction and
+    score-based ranking handle the pass-0 promotion correctly.
+
+    Post-b6 Z2: pre-fix, ``_promote_title_match`` passed the raw
+    ``find_title_match`` dict (shape ``{path, title, zim_file,
+    match_type, pre_redirect_path}``) into ``top_hits``. Downstream
+    (``_extract_passages`` + ranking) reads ``snippet`` and ``score``
+    from each hit; the missing fields demoted the canonical to the
+    bottom of the citation list when it wasn't already in BM25
+    top_hits. The fix re-probes via ``title_match_hit`` using the
+    resolved title (which the fast-path lookup matches exactly now
+    that we know the canonical), so the resulting dict carries a
+    real snippet and score=1.0.
+
+    Falls back to a minimal hit (empty snippet, score=1.0) only if
+    the re-probe handler is missing or returns ``None`` — uncommon
+    in production (search_handler is always wired) but handles test
+    stubs and degraded paths gracefully.
+    """
+    full_path = str(full_probe.get("path") or "")
+    canonical_title = str(full_probe.get("title") or full_path.replace("_", " "))
+    if callable(title_match_hit):
+        try:
+            reprobed = title_match_hit(archive, canonical_title)
+        except Exception as exc:
+            logger.debug(
+                "_build_pass0_promoted_hit: title_match_hit re-probe failed "
+                "for %r: %s",
+                canonical_title,
+                exc,
+            )
+            reprobed = None
+        if isinstance(reprobed, dict) and str(reprobed.get("path") or "") == full_path:
+            # Re-probe landed on the same canonical — use its
+            # search_top_k shape directly.
+            return reprobed
+    # Fallback: minimal hit with the canonical path. Score=1.0 to
+    # match title_match_hit's promotion score; empty snippet lets
+    # downstream extraction fall back to the bundle's own lead text
+    # via the section-attribution path.
+    return {
+        "path": full_path,
+        "snippet": "",
+        "score": 1.0,
+    }
+
+
 def _promote_title_match(
     top_hits: list[tuple[str, dict]],
     *,
@@ -924,6 +978,24 @@ def _promote_title_match(
     # suggestions at the same score (``Darwin's evolution`` ≈
     # ``Evolution``) so only canonical redirects are auto-promoted.
     #
+    # Post-b6 Z1: the filter also rejects ``match_type="redirect"``
+    # rows whose pre-redirect path doesn't share any possessor token
+    # with the query — catches the live-observed ``Plato's republic
+    # philosophy`` → ``Czech_philosophy`` shape where libzim's
+    # suggestion produces an associative redirect.
+    #
+    # Post-b6 Z2: the pass-0 insert must produce a ``search_top_k``-
+    # shaped hit (``{path, snippet, score}``) so downstream
+    # ranking/extraction picks the canonical at rank 1. The previous
+    # implementation passed the raw ``find_title_match`` dict (no
+    # ``snippet`` / ``score``) → downstream sort by score demoted
+    # the canonical to the bottom when it wasn't already in
+    # ``top_hits`` (the live ``Einstein's theory`` synthesize case
+    # surfaced ``Theory_of_relativity`` at rank 6 / score 0). The fix
+    # below re-probes via ``title_match_hit`` using the resolved
+    # title — that helper produces the right shape with a real
+    # snippet.
+    #
     # ``find_title_match`` expects a ``zim_operations``-shaped object
     # (it calls ``.find_entry_by_title_data`` on it). ``search_handler``
     # in production IS the ``ZimOperations`` instance — wired in
@@ -931,7 +1003,8 @@ def _promote_title_match(
     # ``search_handler=self.zim_operations``. The per-archive validated
     # path lives in the ``(archive, vp)`` tuple and is what
     # ``find_entry_by_title_data`` expects for the single-archive call.
-    for (_archive, vp), archive_name in zip(archives, archives_searched):
+    title_match_hit = getattr(search_handler, "title_match_hit", None)
+    for (archive, vp), archive_name in zip(archives, archives_searched):
         try:
             full_probe = find_title_match(
                 search_handler, str(vp), query, min_score=0.95
@@ -944,31 +1017,36 @@ def _promote_title_match(
                 e,
             )
             continue
-        if (
-            isinstance(full_probe, dict)
-            and full_probe.get("path")
-            and not (
-                full_probe.get("match_type") == "fuzzy_suggest"
-                and has_apostrophe_possessive(query)
+        if not (isinstance(full_probe, dict) and full_probe.get("path")):
+            continue
+        if not accept_possessive_promotion(full_probe, query):
+            continue
+        full_path = str(full_probe["path"])
+        existing_paths_p0 = {(name, str(h.get("path", ""))) for name, h in top_hits}
+        if (archive_name, full_path) in existing_paths_p0:
+            # Already in BM25 top_hits — reorder the existing
+            # properly-shaped entry to first.
+            reordered_p0: list[tuple[str, dict]] = [
+                (n, h)
+                for n, h in top_hits
+                if not (n == archive_name and str(h.get("path", "")) == full_path)
+            ]
+            promoted_hit_p0 = next(
+                h
+                for n, h in top_hits
+                if n == archive_name and str(h.get("path", "")) == full_path
             )
-        ):
-            full_path = str(full_probe["path"])
-            existing_paths_p0 = {(name, str(h.get("path", ""))) for name, h in top_hits}
-            if (archive_name, full_path) in existing_paths_p0:
-                reordered_p0: list[tuple[str, dict]] = [
-                    (n, h)
-                    for n, h in top_hits
-                    if not (n == archive_name and str(h.get("path", "")) == full_path)
-                ]
-                promoted_hit_p0 = next(
-                    h
-                    for n, h in top_hits
-                    if n == archive_name and str(h.get("path", "")) == full_path
-                )
-                return [(archive_name, promoted_hit_p0), *reordered_p0]
-            return [(archive_name, full_probe), *top_hits]
+            return [(archive_name, promoted_hit_p0), *reordered_p0]
+        # Not in top_hits — construct a properly-shaped hit. Re-probe
+        # via ``title_match_hit`` using the resolved title (which the
+        # fast-path lookup can match exactly now that we know the
+        # canonical), so the resulting dict carries ``snippet`` and
+        # ``score`` per the ``search_top_k`` shape.
+        promoted_hit_built: dict = _build_pass0_promoted_hit(
+            full_probe, archive, title_match_hit
+        )
+        return [(archive_name, promoted_hit_built), *top_hits]
 
-    title_match_hit = getattr(search_handler, "title_match_hit", None)
     if not callable(title_match_hit):
         return top_hits
 
