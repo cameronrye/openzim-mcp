@@ -3891,6 +3891,34 @@ class SimpleToolsHandler:
         because the title-match boost isn't strong enough. The 1.0 gate
         promotes the canonical past that ranking.
         """
+        # Post-b3: probe the FULL topic (with original punctuation
+        # preserved) BEFORE iter_query_tails decomposes it.
+        # ``iter_query_tails`` tokenizes on alphanumeric runs, so
+        # apostrophe-bearing possessives split: ``einstein's theory``
+        # becomes the tokens ``["einstein", "s", "theory"]`` and the
+        # yielded tails (``"einstein s theory"`` / ``"s theory"`` /
+        # ``"theory"``) all lose the apostrophe. The longer tails
+        # then fail to match any canonical title-index entry (which
+        # are stored WITH the apostrophe — ``Einstein's_theory``
+        # redirects to ``Theory_of_relativity``), and the shortest
+        # tail ``"theory"`` wins via the generic ``Theory`` article.
+        # Live impact across the b3 sweep: ``Einstein's theory`` →
+        # ``Theory`` (expected ``Theory_of_relativity``); ``Plato's
+        # cave`` → ``Cave`` (expected ``Allegory_of_the_cave``);
+        # ``Plato's Republic`` → ``Republic`` (expected
+        # ``Republic_(Plato)``). Probing the original topic with
+        # punctuation at the start catches these. ``min_score=0.95``
+        # mirrors the canonical-or-fuzzy gate Rule 2/3/4's probe
+        # uses (intent_parser.py:317), accepting both direct hits
+        # (1.0) and high-confidence redirects / spelling variants
+        # (0.95). Non-possessive queries hit this probe with the same
+        # behavior they'd get from pass-1's longest tail — the new
+        # call returns redundantly on those, never less correct.
+        promoted = find_title_match(
+            self.zim_operations, zim_file_path, topic, min_score=0.95
+        )
+        if promoted is not None:
+            return promoted
         # Pass 1: strict 1.0-score gate across every trailing tail.
         # Prefer an exact title match on any tail (even a short one)
         # over a typo-tolerant fuzzy match on a longer noisier tail.
