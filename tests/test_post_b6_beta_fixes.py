@@ -376,9 +376,9 @@ class TestSynthesizePass0InsertShape:
             "pass-0 insert must include ``score`` field for "
             "downstream score-based sorting — see Z2"
         )
-        assert top_hit["score"] >= 1.0, (
-            f"pass-0 insert score must be 1.0 (highest); got " f"{top_hit.get('score')}"
-        )
+        assert (
+            top_hit["score"] >= 1.0
+        ), f"pass-0 insert score must be 1.0 (highest); got {top_hit.get('score')}"
 
     def test_fallback_to_minimal_hit_when_reprobe_misses(self) -> None:
         """If ``title_match_hit`` re-probe misses (e.g., the fast-path
@@ -461,29 +461,23 @@ class TestRegressionGuards:
         assert hasattr(title_promotion, "extract_possessor_tokens")
 
     def test_promote_function_filter_checks_pre_redirect_path(self) -> None:
-        """Structural pin: the filter helper consulted by
-        ``_promote_topic_via_title_index`` (pass-0 + pass-3) must
+        """Structural pin: the shared filter
+        ``title_promotion.accept_possessive_promotion`` consulted by
+        both ``simple_tools._promote_topic_via_title_index`` (pass-0 +
+        pass-3) and ``synthesize._promote_title_match`` (pass-0) must
         reference ``pre_redirect_path`` so an associative redirect on
         a possessive topic is rejected. The helper lives in
-        ``simple_tools`` as ``_accept_possessive_promotion`` and
-        ``synthesize`` as ``_accept_synthesize_possessive_promotion``."""
+        ``title_promotion`` (single source of truth — fixes the
+        post-b6 sweep-CI Sonar duplication finding)."""
         import inspect
 
-        from openzim_mcp import simple_tools, synthesize
+        from openzim_mcp import title_promotion
 
-        simple_source = inspect.getsource(simple_tools._accept_possessive_promotion)
-        assert "pre_redirect_path" in simple_source, (
-            "simple_tools._accept_possessive_promotion must consult "
+        source = inspect.getsource(title_promotion.accept_possessive_promotion)
+        assert "pre_redirect_path" in source, (
+            "title_promotion.accept_possessive_promotion must consult "
             "pre_redirect_path to reject associative redirects on "
             "possessive topics — see Z1"
-        )
-        synth_source = inspect.getsource(
-            synthesize._accept_synthesize_possessive_promotion
-        )
-        assert "pre_redirect_path" in synth_source, (
-            "synthesize._accept_synthesize_possessive_promotion must "
-            "consult pre_redirect_path to reject associative redirects "
-            "on possessive topics — see Z1"
         )
 
     def test_synthesize_pass_0_constructs_proper_shape(self) -> None:

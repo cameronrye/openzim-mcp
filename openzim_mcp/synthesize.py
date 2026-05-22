@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from openzim_mcp import bundle as _bundle_mod
 from openzim_mcp.title_promotion import (
-    extract_possessor_tokens,
+    accept_possessive_promotion,
     find_title_match,
     has_apostrophe_possessive,
     is_strong_title_match,
@@ -872,49 +872,6 @@ def _do_per_archive_search(
     return per_archive_hits, archives_searched, archive_by_name
 
 
-# Post-b6 Z1: token regex for pre-redirect-path token-membership
-# check. Matches ASCII alphanumerics inside path forms like
-# ``Plato's_cave`` → tokens ``{"plato", "s", "cave"}``. Apostrophes
-# and underscores act as boundaries.
-_PRE_REDIRECT_TOKEN_RE = re.compile(r"[a-z0-9]+")
-
-
-def _accept_synthesize_possessive_promotion(promoted: dict, query: str) -> bool:
-    """Return True iff ``promoted`` is safe to auto-fetch for ``query``.
-
-    Synthesize-path mirror of
-    ``simple_tools._accept_possessive_promotion``. Kept here instead
-    of imported to avoid the synthesize → simple_tools circular
-    dependency (simple_tools handles the synthesize dispatch).
-
-    See the simple_tools helper's docstring for the shape-by-shape
-    acceptance matrix. Briefly:
-      * non-possessive queries: accept all match_types (preserves
-        the b4 non-possessive disambiguator wins).
-      * possessive + direct: accept (user typed an exact title).
-      * possessive + fuzzy_suggest: reject (D1 attack surface).
-      * possessive + redirect: accept iff a query possessor token
-        appears verbatim in the pre-redirect path's tokens (Z1).
-      * missing match_type: accept (backwards-compat with older
-        callers and test mocks).
-    """
-    if not has_apostrophe_possessive(query):
-        return True
-    match_type = promoted.get("match_type")
-    if match_type == "direct":
-        return True
-    if match_type == "fuzzy_suggest":
-        return False
-    if match_type == "redirect":
-        possessors = set(extract_possessor_tokens(query))
-        if not possessors:
-            return True
-        pre_path = promoted.get("pre_redirect_path", "") or promoted.get("path", "")
-        pre_tokens = set(_PRE_REDIRECT_TOKEN_RE.findall(pre_path.lower()))
-        return bool(possessors & pre_tokens)
-    return True
-
-
 def _build_pass0_promoted_hit(
     full_probe: dict,
     archive: Any,
@@ -1062,7 +1019,7 @@ def _promote_title_match(
             continue
         if not (isinstance(full_probe, dict) and full_probe.get("path")):
             continue
-        if not _accept_synthesize_possessive_promotion(full_probe, query):
+        if not accept_possessive_promotion(full_probe, query):
             continue
         full_path = str(full_probe["path"])
         existing_paths_p0 = {(name, str(h.get("path", ""))) for name, h in top_hits}

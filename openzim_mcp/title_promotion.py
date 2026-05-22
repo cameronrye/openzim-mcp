@@ -240,7 +240,12 @@ _TAIL_TOKEN_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
 # out to check against a redirect's pre-resolution path. The
 # ``has_apostrophe_possessive`` predicate continues to use ``search``
 # on the same pattern — group 1 is harmless for existence checks.
-_POSSESSIVE_TOKEN_RE = re.compile(r"([^\W_][^\W_'’]*)['’](?:s\b|\B)", re.UNICODE)
+#
+# Inner character class is ``[^\W_]`` rather than ``[^\W_'’]`` because
+# apostrophes (both ASCII ``'`` and curly ``’``) are already excluded
+# by ``\W`` — listing them inside ``^\W`` is a redundant character
+# class member (SonarCloud S5869).
+_POSSESSIVE_TOKEN_RE = re.compile(r"([^\W_][^\W_]*)['’](?:s\b|\B)", re.UNICODE)
 
 
 def has_apostrophe_possessive(topic: str) -> bool:
@@ -280,6 +285,65 @@ def extract_possessor_tokens(topic: str) -> list[str]:
     if not topic:
         return []
     return [m.group(1).lower() for m in _POSSESSIVE_TOKEN_RE.finditer(topic)]
+
+
+def accept_possessive_promotion(promoted: Dict[str, Any], topic: str) -> bool:
+    """Return True iff ``promoted`` is safe to auto-fetch for ``topic``.
+
+    Shared filter used by both ``simple_tools._promote_topic_via_title_index``
+    (pass-0 + pass-3) and ``synthesize._promote_title_match`` pass-0 so
+    the two-mode tell-me-about/synthesize paths apply the SAME D1+Z1
+    safety logic. Lives here in ``title_promotion`` (not on either
+    handler) to keep ``simple_tools`` and ``synthesize`` decoupled from
+    each other — both already import from this module.
+
+    The libzim suggestion-search produces three relevant ``match_type``
+    shapes at the 0.95+ score band:
+
+      * ``"direct"`` — exact-title hit (post-redirect title equals
+        user input case-insensitively). Always safe.
+      * ``"redirect"`` — libzim found a redirect entry and
+        ``_follow_redirect_chain`` walked it to a canonical. SAFE iff
+        the pre-redirect path is semantically related to the user's
+        query — checked by requiring at least one possessor token to
+        appear in the pre-redirect path's tokens. Otherwise UNSAFE:
+        an associative redirect (some unrelated redirect entry whose
+        destination happens to share a user token — live observed for
+        ``"darwin's evolution"`` and ``"plato's republic philosophy"``
+        in the post-b6 sweep).
+      * ``"fuzzy_suggest"`` — libzim returned the canonical directly
+        via token-prefix matching, no redirect walked. SAFE for
+        non-possessive prose (``"Berlin Germany"`` → ``"Berlin"`` is
+        the user's intent), UNSAFE for possessives (``"Darwin's
+        evolution"`` → ``"Evolution"`` drops the possessor entirely
+        — silent-wrong-answer at cert=0.85).
+
+    For non-possessive topics, all three shapes are accepted — the b4
+    pass-0 improvements for ``<entity> <disambiguator>`` queries
+    depend on this.
+
+    Missing/unknown ``match_type`` is accepted for backwards-compat
+    with older callers and test mocks that don't annotate the row.
+    """
+    if not has_apostrophe_possessive(topic):
+        return True
+    match_type = promoted.get("match_type")
+    if match_type == "direct":
+        return True
+    if match_type == "fuzzy_suggest":
+        return False
+    if match_type == "redirect":
+        possessors = set(extract_possessor_tokens(topic))
+        if not possessors:
+            return True
+        pre_path = promoted.get("pre_redirect_path", "") or promoted.get("path", "")
+        # ``_TOKEN_RE`` is the same ASCII-alphanumerics tokenizer
+        # ``is_strong_title_match`` uses, so possessor-vs-pre-path
+        # comparison stays symmetric with the rest of the title-
+        # promotion pipeline.
+        pre_tokens = set(_TOKEN_RE.findall(pre_path.lower()))
+        return bool(possessors & pre_tokens)
+    return True
 
 
 def iter_query_tails(

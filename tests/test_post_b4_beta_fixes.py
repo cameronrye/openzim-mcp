@@ -796,15 +796,16 @@ class TestRegressionGuards:
         """Structural pin: ``_promote_topic_via_title_index`` must
         check ``match_type`` against ``"fuzzy_suggest"`` before
         accepting the pass-0 result. Post-b6 Z1: the check moved into
-        the shared ``_accept_possessive_promotion`` helper; this
-        guard now greps the helper's source instead of the method
-        body. If a refactor removes this check, the b4 D1 regression
-        returns."""
+        the shared ``title_promotion.accept_possessive_promotion``
+        helper (single source of truth for both simple_tools and
+        synthesize); this guard now greps the shared helper's source
+        instead of the method body. If a refactor removes this check,
+        the b4 D1 regression returns."""
         import inspect
 
-        from openzim_mcp import simple_tools
+        from openzim_mcp import title_promotion
 
-        source = inspect.getsource(simple_tools._accept_possessive_promotion)
+        source = inspect.getsource(title_promotion.accept_possessive_promotion)
         assert '"fuzzy_suggest"' in source or "'fuzzy_suggest'" in source, (
             "_promote_topic_via_title_index must filter fuzzy_suggest " "at pass-0"
         )
