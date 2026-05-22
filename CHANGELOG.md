@@ -5,6 +5,117 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b4] — 2026-05-22 (beta pre-release) — post-b3 beta-test sweep shipped — X's Y auto-fetch tokenization
+
+Post-b3 sweep packaged from PR #169 (commit `f69db46`). ONE pre-existing
+defect surfaced by deeper live-MCP probing of the `tell me about X's Y`
+shape — the attack surface b2 D3 partially closed. All six post-b2 fix
+families verified clean on live MCP first (D1-D4 + the pass-2/pass-3
+siblings).
+
+### Defect — `X's Y` auto-fetch silent-wrong-answer
+
+`_promote_topic_via_title_index` (simple_tools.py:3868) iterates trailing
+tails via `iter_query_tails` (title_promotion.py:191). `iter_query_tails`
+tokenizes on alphanumeric runs, so the apostrophe in `X's Y` is treated
+as a separator. The topic `"einstein's theory"` becomes the tokens
+`["einstein", "s", "theory"]`; tails yielded longest-first:
+
+- `"einstein s theory"` — no canonical match (the canonical is stored
+  WITH the apostrophe — `Einstein's_theory` is a redirect to
+  `Theory_of_relativity`)
+- `"s theory"` — no canonical match
+- `"theory"` — matches the generic `Theory` article at score 1.0 →
+  wins → wrong article fetched
+
+Live impact (post-b3 live probe):
+
+- `tell me about Einstein's theory` → `Theory` (expected
+  `Theory_of_relativity` — confirmed canonical at 1.00 via
+  `find article titled einstein's theory`)
+- `tell me about Plato's cave` → `Cave` (expected
+  `Allegory_of_the_cave` — confirmed at 1.00)
+- `tell me about Plato's Republic` → `Republic` (expected
+  `Republic_(Plato)` — confirmed at 0.95)
+- `tell me about Darwin's evolution` → `Evolution`
+
+The bug is pre-existing — it would have affected any user typing `tell
+me about X's Y` for years — but was masked because:
+
+- Pre-b1, fuzzy-search rescues at search time often surfaced the right
+  article through different ranking paths.
+- Pre-b2 D3, the retry that exposes the probe gate's True/False
+  decision didn't exist.
+- The specific repros (Einstein's theory, Plato's cave/Republic)
+  weren't in the prior adversarial set.
+
+Why b2 D3 doesn't catch this: D3's probe gate correctly suppresses
+decomposition when `title_probe(topic)` finds a canonical (because
+`Einstein's_theory` redirects to `Theory_of_relativity` at score 1.0).
+So topic stays as `einstein's theory` → the buggy old auto-fetch flow
+runs → wrong tail wins. The defect is in the older auto-fetch flow's
+tail-iteration, not in the b2 D3 retry.
+
+### Fix
+
+Probe the FULL topic (with original punctuation preserved) BEFORE
+entering the tail iteration in `_promote_topic_via_title_index`.
+`find_title_match` uses libzim's title index directly — it correctly
+handles apostrophes and redirects. The new probe uses `min_score=0.95`
+to mirror the canonical-or-fuzzy gate Rule 2/3/4 already use
+(intent_parser.py:317), accepting both direct hits (1.0) and
+high-confidence redirects (0.95). Live verification of the threshold:
+`find article titled` returns score 1.00 for Einstein's theory /
+Plato's cave; score 0.95 for Plato's Republic. All three need the 0.95
+gate.
+
+Non-possessive queries hit this new probe with the same behavior they'd
+get from pass-1's longest tail — the call returns redundantly on those,
+never less correct. The pre-existing prose-query case (`famous people
+from big rapids michigan`) still falls through to tail iteration
+cleanly because the prose phrase isn't itself canonical.
+
+### Tests
+
+9 new tests in `tests/test_post_b3_beta_fixes.py` across 3 classes:
+
+- `TestPossessiveAutofetchProbe` — verifies the full-topic probe fires
+  first, uses `min_score=0.95`, runs before tail iteration, falls
+  through cleanly on no-canonical, and preserves the apostrophe in the
+  probed topic.
+- `TestPossessivePromoteIntegration` — three end-to-end-shaped tests
+  covering the live repros (Einstein's theory → Theory_of_relativity;
+  Plato's cave → Allegory_of_the_cave; Plato's Republic →
+  Republic_(Plato) at the 0.95 threshold).
+- `TestRegressionGuards` — structural guard pinning that the first
+  `find_title_match` call inside the method must use the bare `topic`
+  argument (not a tail/window form).
+
+Full suite: **2369 passing, 54 skipped**. mypy clean across 52 source
+files. black + flake8 clean. All 14 CI checks pass.
+
+### Methodology evolution
+
+- **"Fix unlocks new paths" — now 10 sweeps strong.** Classic shape:
+  b1 P1-D5 made `Photosythesis's reproduction` REACH the auto-fetch
+  path; b2 D3 added the possessive retry to fix the immediate
+  silent-wrong-answer; the post-b3 sweep's live probing of MORE
+  possessive shapes (Einstein's theory, Plato's Republic, Plato's
+  cave) revealed that the underlying auto-fetch flow has a
+  tokenization bug for possessives where the full phrase is a
+  canonical REDIRECT to a different article. Each sweep peels back
+  another layer.
+- **Single-defect sweep.** All eight b2 fix families + b3 sweep's
+  three passes (b3 D1, pass-2 sibling, pass-3 sibling) verified
+  clean on live MCP. The adversarial set was clean. The defect
+  surfaced only via deeper probing of one specific query shape.
+  Reinforces the post-a17 methodology refinement: "live re-probe
+  is mandatory after deploy" — the auto-fetch tokenization bug
+  is structurally invisible to unit tests but trivially visible
+  to live-MCP probing of the right query shape.
+
+---
+
 ## [2.0.0b3] — 2026-05-21 (beta pre-release) — post-b2 beta-test sweep shipped — 6 defects across 3 passes
 
 Post-b2 sweep packaged from PR #167 (commits `45de8da` → `cc26b3d`).
