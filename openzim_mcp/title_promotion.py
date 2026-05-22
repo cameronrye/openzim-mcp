@@ -314,12 +314,32 @@ def accept_possessive_promotion(promoted: Dict[str, Any], topic: str) -> bool:
       * ``"redirect"`` — libzim found a redirect entry and
         ``_follow_redirect_chain`` walked it to a canonical. SAFE iff
         the pre-redirect path is semantically related to the user's
-        query — checked by requiring at least one possessor token to
-        appear in the pre-redirect path's tokens. Otherwise UNSAFE:
-        an associative redirect (some unrelated redirect entry whose
-        destination happens to share a user token — live observed for
-        ``"darwin's evolution"`` and ``"plato's republic philosophy"``
-        in the post-b6 sweep).
+        query. Post-b7 Z1.1: this check is the SUBSET RULE — the
+        pre-redirect path's tokens must be a subset of the topic's
+        tokens. Catches two distinct attack surfaces:
+
+          - **Associative redirect** (b6 Z1): pre-path is an
+            unrelated entry that happens to walk to a canonical
+            sharing one user token. ``Plato's republic philosophy``
+            → some redirect → ``Czech_philosophy``: pre-path tokens
+            don't include ``plato`` → fails subset (and fails
+            containment too) → REJECT.
+          - **Truncation redirect** (b7 Z1.1): pre-path is a LONGER
+            phrase the user truncated. ``Darwin's evolution`` →
+            ``Darwin's_Theory_of_Evolution`` → ``Evolution``:
+            pre-path contains ``darwin`` (passes the b6 containment
+            check) BUT has extras ``theory``, ``of`` not in the
+            topic → fails subset → REJECT. The post-b6 containment
+            check accepted this and produced a cert=0.85 silent-
+            wrong-answer.
+
+        The subset rule subsumes the b6 containment check: any
+        pre-path that is a subset of the topic necessarily contains
+        the possessor (which is one of the topic tokens) — so cases
+        accepted by b6 with pre ⊆ topic continue to be accepted;
+        cases accepted by b6 with pre having extras are now
+        rejected.
+
       * ``"fuzzy_suggest"`` — libzim returned the canonical directly
         via token-prefix matching, no redirect walked. SAFE for
         non-possessive prose (``"Berlin Germany"`` → ``"Berlin"`` is
@@ -342,16 +362,21 @@ def accept_possessive_promotion(promoted: Dict[str, Any], topic: str) -> bool:
     if match_type == "fuzzy_suggest":
         return False
     if match_type == "redirect":
-        possessors = set(extract_possessor_tokens(topic))
-        if not possessors:
-            return True
         pre_path = promoted.get("pre_redirect_path", "") or promoted.get("path", "")
         # ``_TOKEN_RE`` is the same ASCII-alphanumerics tokenizer
-        # ``is_strong_title_match`` uses, so possessor-vs-pre-path
+        # ``is_strong_title_match`` uses, so pre-path-vs-topic
         # comparison stays symmetric with the rest of the title-
         # promotion pipeline.
         pre_tokens = set(_TOKEN_RE.findall(pre_path.lower()))
-        return bool(possessors & pre_tokens)
+        if not pre_tokens:
+            # Empty pre-path (shouldn't happen in practice but the
+            # data layer doesn't strictly require non-empty) — fall
+            # back to the legacy possessor-containment check so we
+            # don't silently reject a row a sibling code path
+            # depends on.
+            return True
+        topic_tokens = set(_TOKEN_RE.findall(topic.lower()))
+        return pre_tokens.issubset(topic_tokens)
     return True
 
 
