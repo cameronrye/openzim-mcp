@@ -245,16 +245,18 @@ class TestPossessiveAutofetchProbe:
                 "plato's cave",
             )
         # First call (the new pass-0) sees the apostrophe-preserving
-        # form. The subsequent tail-iteration calls don't.
+        # form. Post-b4 D2 tokenizer fix: subsequent tail iteration
+        # ALSO preserves the apostrophe (``_TAIL_TOKEN_RE`` now keeps
+        # ``'`` inside otherwise-alphanumeric runs). The pre-b4
+        # apostrophe-stripping behaviour was the bug; the post-b4 fix
+        # propagates the original punctuation through all probes.
         assert topic_seen[0] == "plato's cave", (
             "full-topic probe must receive the original topic with " "apostrophe intact"
         )
-        # Tail iteration calls strip the apostrophe (yielding
-        # "plato s cave", "s cave", "cave").
-        tail_calls = topic_seen[1:]
-        assert any("'" not in t for t in tail_calls), (
-            "tail iteration is expected to yield apostrophe-less "
-            "tails (sanity check that we're hitting the legacy path)"
+        # Sanity check: at least the pass-0 probe saw the apostrophe.
+        assert any("'" in t for t in topic_seen), (
+            "at least one find_title_match call must have received the "
+            "apostrophe-preserving topic"
         )
 
 

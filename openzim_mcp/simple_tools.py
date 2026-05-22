@@ -28,6 +28,7 @@ from .security import sanitize_context_for_error
 from .title_promotion import (
     _TOKEN_RE,
     find_title_match,
+    has_apostrophe_possessive,
     is_strong_title_match,
     iter_query_tails,
     iter_query_windows,
@@ -3917,12 +3918,50 @@ class SimpleToolsHandler:
         promoted = find_title_match(
             self.zim_operations, zim_file_path, topic, min_score=0.95
         )
+        # Post-b4 D1: reject ``fuzzy_suggest`` rows ONLY when the topic
+        # carries an apostrophe-possessive. The 0.95 suggestion-rank
+        # score covers three shapes:
+        #
+        #   * canonical redirect (``Plato's_cave`` →
+        #     ``Allegory_of_the_cave``, match_type=redirect — safe,
+        #     accepted unconditionally)
+        #   * exact-title direct hit (match_type=direct at score 1.0
+        #     via the suggestion path's exact_ci promotion — safe,
+        #     accepted unconditionally)
+        #   * fuzzy title-token prefix match (match_type=fuzzy_suggest
+        #     — meaning depends on the topic shape)
+        #
+        # For possessive prose (``Darwin's evolution`` → ``Evolution``
+        # at 0.95), the fuzzy_suggest match is structurally wrong —
+        # libzim's tokenized prefix index matched only the trailing
+        # word, dropping the possessor entirely (cert=0.85 silent-
+        # wrong-answer).
+        #
+        # For non-possessive prose (``Berlin Germany`` → ``Berlin``
+        # at 0.95), the fuzzy_suggest match IS the intended answer:
+        # libzim correctly resolved the first token to the article
+        # the user asked about, with the second token as a
+        # disambiguator. Pre-pass-2-audit my unconditional filter
+        # silently regressed this class — the refined gate keeps
+        # the b4 improvement for that shape while still solving the
+        # possessive silent-wrong-answer.
         if promoted is not None:
-            return promoted
+            is_fuzzy_suggest = promoted.get("match_type") == "fuzzy_suggest"
+            if not (is_fuzzy_suggest and has_apostrophe_possessive(topic)):
+                return promoted
+        # Post-b4 D2: when the topic carries an apostrophe-possessive
+        # (``Plato's republic philosophy`` / ``Einstein's theory
+        # history``), tighten the tail-iteration floor to ``min_len=2``
+        # so a generic 1-token trailing tail (``"philosophy"`` /
+        # ``"history"`` / ``"tourism"``) can't silently win at strict
+        # 1.0. Pass-0 already covered the legitimate "full X's Y is
+        # canonical" case; further 1-token tail iteration just risks
+        # picking a generic Wikipedia title that shares the word.
+        pass_tail_min_len = 2 if has_apostrophe_possessive(topic) else 1
         # Pass 1: strict 1.0-score gate across every trailing tail.
         # Prefer an exact title match on any tail (even a short one)
         # over a typo-tolerant fuzzy match on a longer noisier tail.
-        for tail in iter_query_tails(topic):
+        for tail in iter_query_tails(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(self.zim_operations, zim_file_path, tail)
             if promoted is not None:
                 return promoted
@@ -3930,18 +3969,23 @@ class SimpleToolsHandler:
         # Catches head/middle-positioned entities like
         # ``Big Rapids Michigan tourism``. Length-decreasing so longer
         # (more specific) windows win.
-        for window in iter_query_windows(topic):
+        for window in iter_query_windows(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(self.zim_operations, zim_file_path, window)
             if promoted is not None:
                 return promoted
         # Pass 3: 0.8 typo-tolerant gate. Only fires when no strict
         # match exists at all — catches single-edit typos.
-        for tail in iter_query_tails(topic):
+        # Post-b4 D1: apply the same conditional ``fuzzy_suggest``
+        # filter as pass-0 so a fuzzy-suggest leak on a possessive
+        # topic can't sneak through the lower gate.
+        for tail in iter_query_tails(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(
                 self.zim_operations, zim_file_path, tail, min_score=0.8
             )
             if promoted is not None:
-                return promoted
+                is_fuzzy_suggest = promoted.get("match_type") == "fuzzy_suggest"
+                if not (is_fuzzy_suggest and has_apostrophe_possessive(topic)):
+                    return promoted
         return None
 
     def _handle_tell_me_about(

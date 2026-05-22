@@ -28,7 +28,12 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
 
 from openzim_mcp import bundle as _bundle_mod
-from openzim_mcp.title_promotion import is_strong_title_match, iter_query_tails
+from openzim_mcp.title_promotion import (
+    find_title_match,
+    has_apostrophe_possessive,
+    is_strong_title_match,
+    iter_query_tails,
+)
 from openzim_mcp.tool_schemas import (
     Citation,
     ConsideredArticle,
@@ -907,12 +912,73 @@ def _promote_title_match(
         if is_strong_title_match(query, top_path, top_path.replace("_", " ")):
             return top_hits
 
+    # Post-b4 D3: mirror the ``_promote_topic_via_title_index`` pass-0
+    # full-query probe at the start, so possessive queries
+    # (``Einstein's theory`` → ``Theory_of_relativity``;
+    # ``Plato's cave`` → ``Allegory_of_the_cave``) route to the
+    # canonical redirect target instead of falling through to the
+    # tail iteration below which would strip the apostrophe and
+    # promote ``Theory`` / ``Cave``.
+    # ``min_score=0.95`` matches the b4 pass-0 convention. The D1
+    # ``fuzzy_suggest`` filter rejects raw fuzzy title-prefix
+    # suggestions at the same score (``Darwin's evolution`` ≈
+    # ``Evolution``) so only canonical redirects are auto-promoted.
+    #
+    # ``find_title_match`` expects a ``zim_operations``-shaped object
+    # (it calls ``.find_entry_by_title_data`` on it). ``search_handler``
+    # in production IS the ``ZimOperations`` instance — wired in
+    # ``simple_tools.py:_handle_synthesize_query`` via
+    # ``search_handler=self.zim_operations``. The per-archive validated
+    # path lives in the ``(archive, vp)`` tuple and is what
+    # ``find_entry_by_title_data`` expects for the single-archive call.
+    for (_archive, vp), archive_name in zip(archives, archives_searched):
+        try:
+            full_probe = find_title_match(
+                search_handler, str(vp), query, min_score=0.95
+            )
+        except Exception as e:
+            logger.debug(
+                "_promote_title_match: pass-0 probe failed for %s on %r: %s",
+                archive_name,
+                query,
+                e,
+            )
+            continue
+        if (
+            isinstance(full_probe, dict)
+            and full_probe.get("path")
+            and not (
+                full_probe.get("match_type") == "fuzzy_suggest"
+                and has_apostrophe_possessive(query)
+            )
+        ):
+            full_path = str(full_probe["path"])
+            existing_paths_p0 = {(name, str(h.get("path", ""))) for name, h in top_hits}
+            if (archive_name, full_path) in existing_paths_p0:
+                reordered_p0: list[tuple[str, dict]] = [
+                    (n, h)
+                    for n, h in top_hits
+                    if not (n == archive_name and str(h.get("path", "")) == full_path)
+                ]
+                promoted_hit_p0 = next(
+                    h
+                    for n, h in top_hits
+                    if n == archive_name and str(h.get("path", "")) == full_path
+                )
+                return [(archive_name, promoted_hit_p0), *reordered_p0]
+            return [(archive_name, full_probe), *top_hits]
+
     title_match_hit = getattr(search_handler, "title_match_hit", None)
     if not callable(title_match_hit):
         return top_hits
 
+    # Post-b4 D2 mirror: tighten the tail-iteration ``min_len`` floor
+    # to 2 when the query carries an apostrophe-possessive so a
+    # generic 1-token tail (``"theory"`` / ``"cave"``) can't silently
+    # outrank the canonical the pass-0 probe just missed.
+    pass_tail_min_len = 2 if has_apostrophe_possessive(query) else 1
     existing_paths = {(name, str(h.get("path", ""))) for name, h in top_hits}
-    for tail in iter_query_tails(query):
+    for tail in iter_query_tails(query, min_len=pass_tail_min_len):
         for (archive, _vp), archive_name in zip(archives, archives_searched):
             try:
                 promoted = title_match_hit(archive, tail)
