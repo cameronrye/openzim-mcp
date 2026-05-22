@@ -5,6 +5,108 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b7] — 2026-05-22 (beta pre-release) — post-b6 beta-test sweep shipped — 2 defects (Z1 associative-redirect filter + Z2 synthesize insert shape)
+
+Post-b6 sweep packaged from PR #174. Live-MCP verification against
+v2.0.0b6 confirmed all prior fixes land cleanly (b3 Einstein's /
+Plato's canonicals, b4 non-possessive carve-out, b3 trailing-modal
+politeness, b2 D3 typo retry, all earlier b-series invariants).
+TWO new HIGH-severity defects unlocked by deeper probing of the
+``match_type="redirect"`` shape and the synthesize-path
+promotion's insert contract.
+
+### Z1 (HIGH) — D1 filter misses associative redirects
+
+The post-b4 D1 filter rejected ``fuzzy_suggest`` for possessive
+topics but accepted ``redirect`` blindly. libzim's suggestion-
+search occasionally produces an **associative redirect**: a
+redirect entry whose pre-resolution path is unrelated to the user's
+possessor entity, but whose redirect chain walks to a canonical
+that shares one user-typed token.
+
+Live silent-wrong-answers:
+
+- ``tell me about Darwin's evolution`` → ``Evolution`` (cert=0.85)
+- ``tell me about Plato's republic philosophy`` → ``Czech_philosophy``
+  (cert=0.85)
+
+### Z2 (HIGH) — Synthesize pass-0 produces malformed insert
+
+The post-b4 D3 synthesize pass-0 inserted the raw ``find_title_match``
+dict into ``top_hits``. The dict has shape ``{path, title, zim_file,
+match_type, pre_redirect_path}`` but ``top_hits`` items expect the
+``search_top_k`` shape ``{path, snippet, score}``. Downstream score-
+sort demoted the canonical to the bottom when it wasn't already in
+``top_hits``.
+
+Live impact (``synthesize=true``): ``Einstein's theory`` →
+``Theory_of_relativity`` surfaced at rank 6 with score 0 (BM25 hits
+dominate; the buggy insert was demoted). ``Plato's cave`` happened
+to work because ``Allegory_of_the_cave`` IS in BM25 top_hits — the
+reorder branch fired with the existing properly-shaped entry.
+
+### Fixes
+
+1. **``pre_redirect_path`` annotation** through
+   ``find_entry_by_title_data`` (fast-path + suggestion-search).
+   ``find_title_match`` propagates the field. Schema is
+   non-breaking (``FindEntryHit.pre_redirect_path`` is
+   ``NotRequired[str]``).
+2. **New ``extract_possessor_tokens(topic)`` helper** pulls bare
+   possessor tokens from each ``X's``/``X'`` shape.
+   ``"Plato's cave"`` → ``["plato"]``; ``"O'Brien"`` → ``[]``
+   (name, not possessive).
+3. **New shared filter ``accept_possessive_promotion``** in
+   ``title_promotion`` (single source of truth for ``simple_tools``
+   AND ``synthesize``). Acceptance matrix:
+
+   - Non-possessive topic: accept all match_types (b4 win preserved).
+   - Possessive + direct: accept.
+   - Possessive + fuzzy_suggest: REJECT (b6 D1).
+   - Possessive + redirect: accept iff any query possessor token
+     appears in the pre-redirect path's tokens.
+   - Missing match_type: accept (backwards-compat).
+
+4. **``search_top_k``-shaped pass-0 insert** in synthesize.
+   ``_build_pass0_promoted_hit`` re-probes via
+   ``search_handler.title_match_hit(archive, full_probe.title)``
+   to produce the proper ``{path, snippet, score: 1.0}`` shape.
+   Fallback to a minimal ``{path, snippet: "", score: 1.0}`` hit
+   when the re-probe handler misses.
+
+### Tests
+
+20 new tests in ``tests/test_post_b6_beta_fixes.py`` across 5
+classes (TestPreRedirectPathPropagation,
+TestPossessorTokenExtraction with 12 parametrized cases,
+TestRedirectFilterRejectsUnrelatedRedirect with 3 parametrized
+cases, TestSynthesizePass0InsertShape, TestRegressionGuards).
+Updated 2 b4 tests + 1 golden snapshot.
+
+Full suite: **2410 passing, 54 skipped**. mypy clean across 52
+source files. black + flake8 + pip-audit clean. All 14 CI checks
+pass on PR #174 (after three cleanup waves: SonarCloud S1192 /
+S5869 / S5799 deduplication; helper consolidation to
+``title_promotion``; S5852 ReDoS bound on the possessor regex).
+
+### Methodology — "fix unlocks new paths" 14 sweeps strong
+
+Each prior sweep peeled back another layer; post-b6 added two:
+
+1. ``match_type="redirect"`` was assumed semantic. The post-b6
+   live probe revealed associative redirects where libzim's fuzzy
+   token-matching produces a redirect entry whose pre-resolution
+   path is unrelated to the user's possessor.
+2. The synthesize pass-0 insert worked only when the canonical
+   was already in BM25 top_hits. Otherwise the malformed insert
+   leaked through and was demoted by score-sort.
+
+Three new invariants pinned: pre-redirect-path propagation;
+possessor-token filter for redirects; ``search_top_k`` shape for
+synthesize pass-0 inserts.
+
+---
+
 ## [2.0.0b6] — 2026-05-22 (beta pre-release) — CVE-driven lockfile bump (starlette PYSEC-2026-161)
 
 Lockfile-only release re-rolling v2.0.0b5 after the release workflow's
