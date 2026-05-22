@@ -245,9 +245,16 @@ _TAIL_TOKEN_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
 # apostrophes (both ASCII ``'`` and curly ``’``) are already excluded
 # by ``\W`` — listing them inside ``^\W`` is a redundant character
 # class member (SonarCloud S5869). The leading-letter + repeat is
-# expressed as a single ``[^\W_]+`` (S6353) — equivalent to the
-# previous ``[^\W_][^\W_]*`` two-class form.
-_POSSESSIVE_TOKEN_RE = re.compile(r"([^\W_]+)['’](?:s\b|\B)", re.UNICODE)
+# expressed as a single ``[^\W_]+`` (S6353).
+#
+# The quantifier is bounded ``{1,64}`` rather than unbounded ``+`` so
+# the static analyzer can prove linear-time worst case (SonarCloud
+# S5852 ReDoS): the engine can backtrack at most 64 positions per
+# apostrophe character — well above any natural-language possessor
+# token length (longest English name in common use is well under
+# 30 chars). Same mitigation pattern as the post-a22 sweep's
+# ``[\s\S]+?for ...`` rewrite (commit 63dac8a).
+_POSSESSIVE_TOKEN_RE = re.compile(r"([^\W_]{1,64})['’](?:s\b|\B)", re.UNICODE)
 
 
 def has_apostrophe_possessive(topic: str) -> bool:
