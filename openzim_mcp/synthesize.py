@@ -947,7 +947,10 @@ def _promote_title_match(
         if (
             isinstance(full_probe, dict)
             and full_probe.get("path")
-            and full_probe.get("match_type") != "fuzzy_suggest"
+            and not (
+                full_probe.get("match_type") == "fuzzy_suggest"
+                and has_apostrophe_possessive(query)
+            )
         ):
             full_path = str(full_probe["path"])
             existing_paths_p0 = {(name, str(h.get("path", ""))) for name, h in top_hits}

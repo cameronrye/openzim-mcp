@@ -263,6 +263,66 @@ class TestFuzzySuggestGateReject:
         assert result is not None
         assert result["path"] == "Allegory_of_the_cave"
 
+    def test_pass_0_accepts_fuzzy_suggest_on_non_possessive_topic(self) -> None:
+        """Pass-3 audit refinement: the ``fuzzy_suggest`` filter ONLY
+        applies when the topic carries an apostrophe-possessive. For
+        non-possessive prose queries (``Berlin Germany`` → ``Berlin``
+        at 0.95 via libzim's tokenized-prefix match), the fuzzy_suggest
+        IS the intended answer — libzim correctly resolved the first
+        token to the canonical, with the second as disambiguator. The
+        b4 pass-0 specifically improved this class over the pre-b4
+        pass-1 behavior (which would have picked the trailing tail
+        ``germany`` at strict 1.0 → returned the Germany article
+        instead of the Berlin one the user asked about). An
+        unconditional filter would silently revert that improvement;
+        the refined gate preserves it."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        def fake(
+            zim_ops: Any,
+            zim_file_path: str,
+            topic: str,
+            *,
+            cross_file: bool = False,
+            min_score: float = 1.0,
+        ) -> Optional[Dict[str, Any]]:
+            # Non-possessive 2-token prose: libzim returns ``Berlin``
+            # as fuzzy_suggest at 0.95. No possessive marker in the
+            # topic, so the filter does NOT reject.
+            if topic.lower() == "berlin germany" and min_score <= 0.95:
+                return {
+                    "path": "Berlin",
+                    "title": "Berlin",
+                    "zim_file": "test.zim",
+                    "match_type": "fuzzy_suggest",
+                }
+            # Tail ``germany`` would resolve at strict 1.0 if pass-0
+            # missed — pre-b4 behavior was to return Germany. The
+            # refined fix must keep Berlin (pass-0 wins) for this
+            # non-possessive shape.
+            if topic == "germany":
+                return {
+                    "path": "Germany",
+                    "title": "Germany",
+                    "zim_file": "test.zim",
+                    "match_type": "direct",
+                }
+            return None
+
+        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+            result = SimpleToolsHandler._promote_topic_via_title_index(
+                self._make_handler(),
+                "test.zim",
+                "Berlin Germany",
+            )
+        # Non-possessive: pass-0 accepts fuzzy_suggest Berlin → user
+        # gets the article they asked about.
+        assert result is not None
+        assert result["path"] == "Berlin", (
+            f"non-possessive fuzzy_suggest must be accepted (b4 "
+            f"behavior preserved); got {result!r}"
+        )
+
     def test_pass_0_accepts_missing_match_type_backwards_compat(self) -> None:
         """Pre-D1 callers / older mock fixtures don't set match_type.
         Pass-0 must still accept them so the b3 tests keep passing."""
@@ -600,6 +660,61 @@ class TestSynthesizePromoteFullTopicProbe:
             f"got {first_path!r}"
         )
         assert first_topic == "Einstein's theory"
+
+    def test_synthesize_pass_0_accepts_fuzzy_suggest_on_non_possessive(
+        self,
+    ) -> None:
+        """Synthesize mirror of the simple-mode non-possessive carve-
+        out: ``Berlin Germany`` through ``synthesize=true`` must still
+        let pass-0 accept the ``Berlin`` fuzzy_suggest hit so it's
+        promoted to rank 1, matching the b4 improvement that the
+        unconditional filter would have reverted."""
+        from openzim_mcp.synthesize import _promote_title_match
+
+        class _Archive:
+            pass
+
+        archive_obj = _Archive()
+
+        def fake_find_title_match(
+            zim_ops: Any,
+            zim_file_path: str,
+            topic: str,
+            *,
+            cross_file: bool = False,
+            min_score: float = 1.0,
+        ) -> Optional[Dict[str, Any]]:
+            if topic.lower() == "berlin germany" and min_score <= 0.95:
+                return {
+                    "path": "Berlin",
+                    "title": "Berlin",
+                    "zim_file": "wiki",
+                    "match_type": "fuzzy_suggest",
+                }
+            return None
+
+        handler = MagicMock()
+        handler.title_match_hit = lambda _a, _q: None
+
+        with patch(
+            "openzim_mcp.synthesize.find_title_match",
+            side_effect=fake_find_title_match,
+        ):
+            result_hits = _promote_title_match(
+                # Empty top_hits: pass-0 is the only path that can
+                # contribute. Without the carve-out the result would
+                # be the same empty list (silent regression vs b4).
+                [],
+                query="Berlin Germany",
+                archives=[(archive_obj, "/wiki.zim")],
+                archives_searched=["wiki"],
+                search_handler=handler,
+            )
+        # Non-possessive: pass-0 promotes Berlin to rank 1.
+        assert len(result_hits) == 1
+        top_archive, top_hit = result_hits[0]
+        assert top_archive == "wiki"
+        assert top_hit["path"] == "Berlin"
 
     def test_synthesize_pass_0_rejects_fuzzy_suggest(self) -> None:
         """The synthesize-side pass-0 must also apply the D1 match_type
