@@ -620,6 +620,12 @@ class TestSynthesizePromoteFullTopicProbe:
                     "title": "Theory of relativity",
                     "zim_file": "wiki",
                     "match_type": "redirect",
+                    # Post-b6 Z1: the synthesize filter rejects
+                    # redirects whose pre-resolution path doesn't
+                    # share a possessor token with the query. The
+                    # live ``Einstein's_theory`` redirect entry
+                    # carries the possessor ``einstein`` → ACCEPT.
+                    "pre_redirect_path": "Einstein's_theory",
                 }
             return None
 
@@ -789,13 +795,16 @@ class TestRegressionGuards:
     def test_promote_function_has_pass_0_match_type_filter(self) -> None:
         """Structural pin: ``_promote_topic_via_title_index`` must
         check ``match_type`` against ``"fuzzy_suggest"`` before
-        accepting the pass-0 result. If a refactor removes this
-        check, the b4 D1 regression returns."""
+        accepting the pass-0 result. Post-b6 Z1: the check moved into
+        the shared ``_accept_possessive_promotion`` helper; this
+        guard now greps the helper's source instead of the method
+        body. If a refactor removes this check, the b4 D1 regression
+        returns."""
         import inspect
 
-        from openzim_mcp.simple_tools import SimpleToolsHandler
+        from openzim_mcp import simple_tools
 
-        source = inspect.getsource(SimpleToolsHandler._promote_topic_via_title_index)
+        source = inspect.getsource(simple_tools._accept_possessive_promotion)
         assert '"fuzzy_suggest"' in source or "'fuzzy_suggest'" in source, (
             "_promote_topic_via_title_index must filter fuzzy_suggest " "at pass-0"
         )

@@ -16,6 +16,7 @@
     {
       "match_type": "direct",
       "path": "A/Einstein",
+      "pre_redirect_path": "A/Einstein",
       "score": 1.0,
       "title": "Einstein"
     }

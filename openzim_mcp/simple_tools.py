@@ -27,6 +27,7 @@ from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
 from .title_promotion import (
     _TOKEN_RE,
+    extract_possessor_tokens,
     find_title_match,
     has_apostrophe_possessive,
     is_strong_title_match,
@@ -117,6 +118,74 @@ _INFO_LEVEL_TELEMETRY_EVENTS: "frozenset[str]" = frozenset(
 _QUERY_REWRITE_MISSPELLING = "query_rewrite.misspelling"
 _QUERY_REWRITE_STOPWORD_PHRASE = "query_rewrite.stopword_phrase"
 _QUERY_REWRITE_X_OF_Y = "query_rewrite.x_of_y"
+
+
+# Post-b6 Z1: shared filter for ``_promote_topic_via_title_index``
+# (pass-0 + pass-3) and the synthesize-path ``_promote_title_match``
+# pass-0. Returns True iff ``promoted`` is safe to auto-fetch for the
+# given ``topic``.
+#
+# The libzim suggestion-search produces three relevant shapes at the
+# 0.95+ score band:
+#
+#   * ``match_type="direct"`` — exact-title hit (post-redirect title
+#     equals user input case-insensitively). Always safe.
+#   * ``match_type="redirect"`` — libzim found a redirect entry, and
+#     ``_follow_redirect_chain`` walked it to a canonical. SAFE iff
+#     the pre-redirect path is semantically related to the user's
+#     query — checked by requiring at least one possessor token to
+#     appear in the pre-redirect path's tokens. Otherwise UNSAFE: an
+#     associative redirect (some unrelated redirect entry whose
+#     destination happens to share a user token).
+#   * ``match_type="fuzzy_suggest"`` — libzim returned the canonical
+#     directly via token-prefix matching, no redirect walked. SAFE
+#     for non-possessive prose (``Berlin Germany`` → ``Berlin`` is
+#     the user's intent), UNSAFE for possessives (``Darwin's
+#     evolution`` → ``Evolution`` drops the possessor entirely —
+#     silent-wrong-answer cert=0.85).
+#
+# For non-possessive topics, all three shapes are accepted (the b4
+# improvements for ``<entity> <disambiguator>`` shapes are preserved).
+_POSSESSOR_PATH_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _accept_possessive_promotion(promoted: Dict[str, Any], topic: str) -> bool:
+    """Return True iff ``promoted`` is safe to auto-fetch for ``topic``.
+
+    See module-level comment above ``_POSSESSOR_PATH_TOKEN_RE`` for
+    the shape-by-shape acceptance matrix.
+    """
+    if not has_apostrophe_possessive(topic):
+        # Non-possessive: all three match_type shapes are safe; the
+        # b4 pass-0 win for ``<entity> <disambiguator>`` queries
+        # depends on this.
+        return True
+    match_type = promoted.get("match_type")
+    if match_type == "direct":
+        return True
+    if match_type == "fuzzy_suggest":
+        # Possessive + fuzzy_suggest — the D1 attack surface (Darwin's
+        # evolution → Evolution; Plato's republic philosophy →
+        # Philosophy). Reject.
+        return False
+    if match_type == "redirect":
+        # Possessive + redirect — accept only when the pre-redirect
+        # path is semantically related to the user's query. Probe:
+        # at least one possessor token appears in the pre-redirect
+        # path's tokens.
+        possessors = set(extract_possessor_tokens(topic))
+        if not possessors:
+            return True
+        pre_path = promoted.get("pre_redirect_path", "") or promoted.get("path", "")
+        pre_tokens = set(_POSSESSOR_PATH_TOKEN_RE.findall(pre_path.lower()))
+        # Accept iff any possessor appears verbatim as a token in the
+        # pre-redirect path. ``Plato's_cave`` → tokens contain
+        # ``plato`` → ACCEPT. ``Evolutionary_theory`` → no ``darwin``
+        # → REJECT.
+        return bool(possessors & pre_tokens)
+    # Unknown / missing match_type — backwards-compat for callers and
+    # mocks that don't annotate. Accept (legacy behaviour).
+    return True
 
 
 @dataclass
@@ -3918,37 +3987,8 @@ class SimpleToolsHandler:
         promoted = find_title_match(
             self.zim_operations, zim_file_path, topic, min_score=0.95
         )
-        # Post-b4 D1: reject ``fuzzy_suggest`` rows ONLY when the topic
-        # carries an apostrophe-possessive. The 0.95 suggestion-rank
-        # score covers three shapes:
-        #
-        #   * canonical redirect (``Plato's_cave`` →
-        #     ``Allegory_of_the_cave``, match_type=redirect — safe,
-        #     accepted unconditionally)
-        #   * exact-title direct hit (match_type=direct at score 1.0
-        #     via the suggestion path's exact_ci promotion — safe,
-        #     accepted unconditionally)
-        #   * fuzzy title-token prefix match (match_type=fuzzy_suggest
-        #     — meaning depends on the topic shape)
-        #
-        # For possessive prose (``Darwin's evolution`` → ``Evolution``
-        # at 0.95), the fuzzy_suggest match is structurally wrong —
-        # libzim's tokenized prefix index matched only the trailing
-        # word, dropping the possessor entirely (cert=0.85 silent-
-        # wrong-answer).
-        #
-        # For non-possessive prose (``Berlin Germany`` → ``Berlin``
-        # at 0.95), the fuzzy_suggest match IS the intended answer:
-        # libzim correctly resolved the first token to the article
-        # the user asked about, with the second token as a
-        # disambiguator. Pre-pass-2-audit my unconditional filter
-        # silently regressed this class — the refined gate keeps
-        # the b4 improvement for that shape while still solving the
-        # possessive silent-wrong-answer.
-        if promoted is not None:
-            is_fuzzy_suggest = promoted.get("match_type") == "fuzzy_suggest"
-            if not (is_fuzzy_suggest and has_apostrophe_possessive(topic)):
-                return promoted
+        if promoted is not None and _accept_possessive_promotion(promoted, topic):
+            return promoted
         # Post-b4 D2: when the topic carries an apostrophe-possessive
         # (``Plato's republic philosophy`` / ``Einstein's theory
         # history``), tighten the tail-iteration floor to ``min_len=2``
@@ -3982,10 +4022,8 @@ class SimpleToolsHandler:
             promoted = find_title_match(
                 self.zim_operations, zim_file_path, tail, min_score=0.8
             )
-            if promoted is not None:
-                is_fuzzy_suggest = promoted.get("match_type") == "fuzzy_suggest"
-                if not (is_fuzzy_suggest and has_apostrophe_possessive(topic)):
-                    return promoted
+            if promoted is not None and _accept_possessive_promotion(promoted, topic):
+                return promoted
         return None
 
     def _handle_tell_me_about(

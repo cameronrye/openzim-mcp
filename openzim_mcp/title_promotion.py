@@ -177,6 +177,21 @@ def find_title_match(
     match_type = top.get("match_type")
     if match_type:
         result["match_type"] = str(match_type)
+    # Post-b6 Z1: propagate ``pre_redirect_path`` so callers can
+    # detect "associative" redirects — libzim's suggestion-search
+    # sometimes returns a row whose pre-redirect path is unrelated to
+    # the user's possessor entity (the path libzim found via fuzzy
+    # token-prefix matching just happens to walk through a redirect
+    # to a canonical that shares one user-typed token). The D1 filter
+    # on possessive topics uses this to distinguish semantic redirects
+    # (``Plato's_cave`` → ``Allegory_of_the_cave`` — pre-path
+    # contains the possessor ``plato``) from associative ones
+    # (some unrelated-redirect → ``Evolution`` for a
+    # ``darwin's evolution`` query). Field is optional; older callers
+    # that don't set it pass through transparently.
+    pre_redirect_path = top.get("pre_redirect_path")
+    if pre_redirect_path:
+        result["pre_redirect_path"] = str(pre_redirect_path)
     return result
 
 
@@ -219,7 +234,13 @@ _TAIL_TOKEN_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
 # ``"history"`` → ``History``, ``"tourism"`` → ``Tourism``) for
 # prose-with-possessive queries where the full topic isn't canonical.
 # Matches ``X's``, ``X’s``, ``Achilles'`` (bare trailing apostrophe).
-_POSSESSIVE_TOKEN_RE = re.compile(r"[^\W_][^\W_'’]*['’](?:s\b|\B)", re.UNICODE)
+#
+# Post-b6 Z1: the regex now captures the possessor token (before the
+# apostrophe) as group 1, so ``extract_possessor_tokens`` can pull it
+# out to check against a redirect's pre-resolution path. The
+# ``has_apostrophe_possessive`` predicate continues to use ``search``
+# on the same pattern — group 1 is harmless for existence checks.
+_POSSESSIVE_TOKEN_RE = re.compile(r"([^\W_][^\W_'’]*)['’](?:s\b|\B)", re.UNICODE)
 
 
 def has_apostrophe_possessive(topic: str) -> bool:
@@ -232,6 +253,33 @@ def has_apostrophe_possessive(topic: str) -> bool:
     if not topic:
         return False
     return bool(_POSSESSIVE_TOKEN_RE.search(topic))
+
+
+def extract_possessor_tokens(topic: str) -> list[str]:
+    """Return the lowercased possessor tokens in ``topic``.
+
+    For each ``X's`` / ``X'`` / ``X’s`` shape in the topic, the
+    possessor is the bare token before the apostrophe. ``Plato's
+    cave`` yields ``["plato"]``; ``John's and Mary's books`` yields
+    ``["john", "mary"]``; ``Berlin Germany`` yields ``[]``.
+
+    Post-b6 Z1 helper: the D1 filter in
+    ``_promote_topic_via_title_index`` and ``_promote_title_match``
+    uses these tokens to detect "associative" redirects — libzim's
+    suggestion-search occasionally returns a result via a redirect
+    chain whose pre-resolution path is unrelated to the user's
+    possessor entity (e.g., ``"darwin's evolution"`` → some unrelated
+    redirect → ``Evolution``). When NONE of the possessor tokens
+    appear in the pre-redirect path's tokens, the redirect is
+    classified as associative-not-semantic and rejected.
+
+    Returns an empty list when the topic has no possessive shape.
+    Order follows left-to-right occurrence in the topic; duplicates
+    are preserved so callers that want a set can ``set(...)``-wrap.
+    """
+    if not topic:
+        return []
+    return [m.group(1).lower() for m in _POSSESSIVE_TOKEN_RE.finditer(topic)]
 
 
 def iter_query_tails(
