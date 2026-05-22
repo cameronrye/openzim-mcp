@@ -5,6 +5,96 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b8] — 2026-05-22 (beta pre-release) — post-b7 beta-test sweep shipped — Z1.1 subset rule (Darwin's evolution truncation redirect)
+
+Post-b7 sweep packaged from PR #176. Live-MCP verification against
+v2.0.0b7 confirmed all prior fixes land cleanly EXCEPT the b6 Z1
+fix for ``Darwin's evolution``: it still returned ``Evolution`` at
+cert=0.85, the silent-wrong-answer the user originally flagged.
+
+### Z1.1 (HIGH) — Pre-redirect-path containment check too lenient
+
+The post-b6 Z1 filter rejected ``match_type="redirect"`` rows whose
+pre-redirect path tokens didn't *contain* any of the topic's
+possessor tokens. That correctly caught the
+``Plato's republic philosophy`` → ``Czech_philosophy`` case (the
+pre-path didn't contain ``plato`` at all).
+
+But the post-b7 live probe surfaced a sibling shape: **2-token
+possessive queries where the user typed a TRUNCATED form of a
+longer canonical redirect**. libzim's suggestion-search returns a
+redirect entry whose pre-path includes the possessor AND extra
+tokens not in the topic; the redirect walks to a canonical that
+loses the possessor entirely.
+
+Live repro: ``tell me about Darwin's evolution`` →
+``Evolution``. libzim returns a redirect entry like
+``Darwin's_Theory_of_Evolution`` (pre-path tokens: ``{darwin, s,
+theory, of, evolution}``). The b6 containment check accepts
+because ``darwin`` IS in the pre-path — but the user's topic
+``{darwin, s, evolution}`` doesn't contain ``theory`` / ``of``,
+signalling that the user typed an abbreviated form. The resolved
+canonical (``Evolution``) drops the possessor.
+
+### Fix — subset rule
+
+Tighten ``accept_possessive_promotion`` in ``title_promotion`` from
+"any possessor token in pre-path" to "pre-path tokens ⊆ topic
+tokens":
+
+```python
+# Before (b6 containment):
+return bool(possessors & pre_tokens)
+# After (b8 subset):
+return pre_tokens.issubset(topic_tokens)
+```
+
+Strictly tighter than the containment check: any pre-path that's a
+subset of the topic necessarily contains the possessor — so all
+cases accepted by b6 with pre ⊆ topic continue to be accepted.
+Cases accepted by b6 with pre having extras (the truncation
+shape) are now rejected.
+
+Decision matrix:
+
+| Topic | Pre-path | Subset? |
+| --- | --- | --- |
+| ``Plato's cave`` | ``Plato's_cave`` | ✅ ACCEPT |
+| ``Einstein's theory`` | ``Einstein's_theory`` | ✅ ACCEPT |
+| ``Newton's gravity`` | ``Newton's_gravity`` | ✅ ACCEPT |
+| ``Darwin's evolution`` | ``Darwin's_Theory_of_Evolution`` | ❌ REJECT |
+
+Non-possessive topics, ``match_type="direct"``, and
+``match_type="fuzzy_suggest"`` decisions are unchanged from b7.
+
+### Tests
+
+13 new tests in ``tests/test_post_b7_beta_fixes.py`` across 3
+classes (TestSubsetRule with 6 parametrized + 4 standalone,
+TestPromoteIntegration with 2, TestRegressionGuards with 1).
+
+Full suite: **2423 passing, 54 skipped**. mypy clean across 52
+source files. black + flake8 + pip-audit clean. All 14 CI checks
+pass on PR #176 (first push — no cleanup waves needed, having
+internalized the post-b6 Sonar feedback).
+
+### Methodology — "fix unlocks new paths" 15 sweeps strong
+
+Each prior sweep added a more discriminating signal until the
+filter's behaviour aligns with user intent across every shape:
+
+- **b6 Z1** introduced match_type (direct/redirect/fuzzy_suggest).
+- **b6 Z1** sub-discriminates redirect via pre-path *containment*.
+- **b8 Z1.1** (this sweep) refines pre-path containment to
+  *subset*.
+
+The pattern: each layer of discrimination catches a more specific
+subset of the wrong-answer attack surface. The subset rule's
+strict-tightness guarantees no previously-accepted case regresses
+that wasn't already in the truncation-shape attack surface.
+
+---
+
 ## [2.0.0b7] — 2026-05-22 (beta pre-release) — post-b6 beta-test sweep shipped — 2 defects (Z1 associative-redirect filter + Z2 synthesize insert shape)
 
 Post-b6 sweep packaged from PR #174. Live-MCP verification against
