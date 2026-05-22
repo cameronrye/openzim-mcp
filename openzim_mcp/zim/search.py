@@ -2762,13 +2762,22 @@ class _SearchMixin:
                         # one. ``Big_Rapids_Michigan`` (comma-stripped
                         # redirect) → ``Big_Rapids,_Michigan`` keeps the
                         # cite_id stable across lookup-variant paths.
+                        # Post-b4 D1: capture the pre-redirect path so we
+                        # can annotate ``match_type`` with whether the
+                        # canonical lookup actually walked a redirect.
+                        fast_pre_path = getattr(fast_hit_entry, "path", None)
                         fast_hit_entry = self._follow_redirect_chain(fast_hit_entry)
+                        fast_post_path = getattr(fast_hit_entry, "path", None)
+                        fast_match_type = (
+                            "redirect" if fast_pre_path != fast_post_path else "direct"
+                        )
                         aggregate_results.append(
                             {
                                 "path": fast_hit_entry.path,
                                 "title": fast_hit_entry.title or title,
                                 "score": 1.0,
                                 "zim_file": file_path,
+                                "match_type": fast_match_type,
                             }
                         )
                         fast_path_hit = True
@@ -2809,23 +2818,41 @@ class _SearchMixin:
                                 # always see the same key for the same
                                 # article regardless of which redirect
                                 # the suggestion index emitted.
+                                # Post-b4 D1: track whether the
+                                # redirect chain actually walked, so
+                                # the row's ``match_type`` distinguishes
+                                # a true canonical redirect (safe to
+                                # auto-fetch at the 0.95 gate) from a
+                                # raw fuzzy title-prefix suggestion
+                                # (``Darwin's evolution`` → ``Evolution``
+                                # at 0.95 — same score, not safe).
+                                suggest_pre_path = getattr(entry, "path", None)
                                 entry = self._follow_redirect_chain(entry)
+                                suggest_post_path = getattr(entry, "path", None)
+                                redirect_walked = suggest_pre_path != suggest_post_path
                                 resolved_title = entry.title or path
                                 exact_ci = resolved_title.lower() == title_lower
                                 if exact_ci:
                                     score: float = 1.0
                                     fast_path_hit = True
+                                    match_type = "direct"
                                 else:
                                     # Linearly decaying rank-score in (0, 0.95].
                                     # Capped below 1.0 so an exact match always
                                     # outranks any prefix/partial.
                                     score = round(0.95 * (1.0 - idx / n), 4)
+                                    match_type = (
+                                        "redirect"
+                                        if redirect_walked
+                                        else "fuzzy_suggest"
+                                    )
                                 aggregate_results.append(
                                     {
                                         "path": entry.path,
                                         "title": resolved_title,
                                         "score": score,
                                         "zim_file": file_path,
+                                        "match_type": match_type,
                                     }
                                 )
                     except Exception as e:

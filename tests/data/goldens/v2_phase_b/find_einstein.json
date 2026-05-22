@@ -14,6 +14,7 @@
   "query": "Einstein",
   "results": [
     {
+      "match_type": "direct",
       "path": "A/Einstein",
       "score": 1.0,
       "title": "Einstein"

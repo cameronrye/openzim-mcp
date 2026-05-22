@@ -162,11 +162,22 @@ def find_title_match(
             candidate_path,
         )
         return None
-    return {
+    result: Dict[str, Any] = {
         "path": candidate_path,
         "title": str(top.get("title", "")),
         "zim_file": str(top.get("zim_file", zim_file_path)),
     }
+    # Post-b4 D1: propagate ``match_type`` so callers using the 0.95
+    # gate (the b4 pass-0 probe; the synthesize-path pass-0 probe)
+    # can reject ``fuzzy_suggest`` rows — the suggestion-rank top score
+    # of 0.95 covers both meaningful redirects AND incidental fuzzy
+    # title-prefix matches, and only the former is safe to auto-fetch.
+    # Field is optional — older mocks / non-annotated callers pass
+    # through transparently.
+    match_type = top.get("match_type")
+    if match_type:
+        result["match_type"] = str(match_type)
+    return result
 
 
 # Tokenizer for tail / window probe yielders. Unicode-aware so non-Latin
@@ -185,7 +196,42 @@ def find_title_match(
 # path-form input like ``"Big_Rapids,_Michigan"`` still tokenizes to
 # ``["big", "rapids", "michigan"]``. ``re.UNICODE`` is the default in
 # Python 3 — naming it here keeps the intent explicit.
-_TAIL_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+#
+# Post-b4 D2/D3/D5: apostrophes (``'`` straight, ``’`` curly) are now
+# kept INSIDE otherwise-alphanumeric runs so ``einstein's`` stays one
+# token instead of fragmenting to ``["einstein", "s"]``. Pre-fix, the
+# stub ``s`` token polluted every tail/window yielded for an
+# apostrophe-bearing topic; the trailing 1-token tail (``"theory"`` /
+# ``"philosophy"`` / ``"history"``) then strict-1.0-matched whatever
+# generic Wikipedia article shared that title and silently won.
+# ``['’]`` covers both Unicode codepoints Wikipedia uses
+# (U+0027 APOSTROPHE for ASCII titles, U+2019 RIGHT SINGLE QUOTATION
+# MARK for typographically-styled titles like ``Achilles’ heel``).
+_TAIL_TOKEN_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
+
+
+# Post-b4: detect topics carrying an apostrophe-possessive shape so
+# callers (pass-1 / pass-3 of ``_promote_topic_via_title_index`` and
+# pass-1 of ``_promote_title_match``) can tighten ``iter_query_tails``'s
+# ``min_len`` floor to 2. The b4 pass-0 probe handles the legitimate
+# "X's Y is canonical" case; without the floor, pass-1 will silently
+# promote a generic 1-token tail (``"philosophy"`` → ``Philosophy``,
+# ``"history"`` → ``History``, ``"tourism"`` → ``Tourism``) for
+# prose-with-possessive queries where the full topic isn't canonical.
+# Matches ``X's``, ``X’s``, ``Achilles'`` (bare trailing apostrophe).
+_POSSESSIVE_TOKEN_RE = re.compile(r"[^\W_][^\W_'’]*['’](?:s\b|\B)", re.UNICODE)
+
+
+def has_apostrophe_possessive(topic: str) -> bool:
+    """Return True iff ``topic`` carries an apostrophe-possessive token.
+
+    Used by promotion callers to decide whether to tighten the tail-
+    iteration ``min_len`` floor (see ``_POSSESSIVE_TOKEN_RE`` docstring
+    above).
+    """
+    if not topic:
+        return False
+    return bool(_POSSESSIVE_TOKEN_RE.search(topic))
 
 
 def iter_query_tails(

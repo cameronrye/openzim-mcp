@@ -288,9 +288,16 @@ class TestP1D2UnicodeTailTokenisation:
         assert tails == ["ñ"]
 
     def test_pass2_punctuation_preserved_as_boundary_not_token(self) -> None:
-        # Pass-2: punctuation other than underscore still acts as a
-        # boundary (hyphens, apostrophes, commas, periods).
-        assert list(iter_query_tails("O'Brien")) == ["o brien", "brien"]
+        # Pass-2: punctuation other than underscore and apostrophe
+        # still acts as a boundary (hyphens, commas, periods).
+        # Post-b4 D2/D3/D5 update: apostrophes (straight ``'`` and
+        # curly ``’``) are now KEPT inside otherwise-alphanumeric
+        # runs so ``O'Brien`` stays a single ``o'brien`` token (it
+        # IS a canonical title in Wikipedia exports). The pre-b4
+        # apostrophe-as-boundary behaviour caused the silent-wrong-
+        # answer for ``tell me about Einstein's theory`` → ``Theory``;
+        # see ``test_post_b4_beta_fixes.py`` for the full rationale.
+        assert list(iter_query_tails("O'Brien")) == ["o'brien"]
         assert list(iter_query_tails("Coca-Cola")) == ["coca cola", "cola"]
 
 

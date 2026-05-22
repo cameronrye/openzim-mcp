@@ -28,6 +28,7 @@ from .security import sanitize_context_for_error
 from .title_promotion import (
     _TOKEN_RE,
     find_title_match,
+    has_apostrophe_possessive,
     is_strong_title_match,
     iter_query_tails,
     iter_query_windows,
@@ -3917,12 +3918,27 @@ class SimpleToolsHandler:
         promoted = find_title_match(
             self.zim_operations, zim_file_path, topic, min_score=0.95
         )
-        if promoted is not None:
+        # Post-b4 D1: reject ``fuzzy_suggest`` rows. The 0.95 score
+        # covers both canonical redirects (safe — ``Plato's_cave`` →
+        # ``Allegory_of_the_cave``) AND raw fuzzy title-prefix
+        # suggestions (unsafe — ``Darwin's_evolution`` ≈ ``Evolution``
+        # at 0.95, silent-wrong-answer). Only the former is suitable
+        # for auto-fetch; the latter must fall through to pass-1.
+        if promoted is not None and promoted.get("match_type") != "fuzzy_suggest":
             return promoted
+        # Post-b4 D2: when the topic carries an apostrophe-possessive
+        # (``Plato's republic philosophy`` / ``Einstein's theory
+        # history``), tighten the tail-iteration floor to ``min_len=2``
+        # so a generic 1-token trailing tail (``"philosophy"`` /
+        # ``"history"`` / ``"tourism"``) can't silently win at strict
+        # 1.0. Pass-0 already covered the legitimate "full X's Y is
+        # canonical" case; further 1-token tail iteration just risks
+        # picking a generic Wikipedia title that shares the word.
+        pass_tail_min_len = 2 if has_apostrophe_possessive(topic) else 1
         # Pass 1: strict 1.0-score gate across every trailing tail.
         # Prefer an exact title match on any tail (even a short one)
         # over a typo-tolerant fuzzy match on a longer noisier tail.
-        for tail in iter_query_tails(topic):
+        for tail in iter_query_tails(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(self.zim_operations, zim_file_path, tail)
             if promoted is not None:
                 return promoted
@@ -3930,17 +3946,19 @@ class SimpleToolsHandler:
         # Catches head/middle-positioned entities like
         # ``Big Rapids Michigan tourism``. Length-decreasing so longer
         # (more specific) windows win.
-        for window in iter_query_windows(topic):
+        for window in iter_query_windows(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(self.zim_operations, zim_file_path, window)
             if promoted is not None:
                 return promoted
         # Pass 3: 0.8 typo-tolerant gate. Only fires when no strict
         # match exists at all — catches single-edit typos.
-        for tail in iter_query_tails(topic):
+        # Post-b4 D1: apply the ``fuzzy_suggest`` filter here too so
+        # the same leak class can't sneak through the lower gate.
+        for tail in iter_query_tails(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(
                 self.zim_operations, zim_file_path, tail, min_score=0.8
             )
-            if promoted is not None:
+            if promoted is not None and promoted.get("match_type") != "fuzzy_suggest":
                 return promoted
         return None
 
