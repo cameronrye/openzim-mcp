@@ -5,7 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0b5] — 2026-05-22 (beta pre-release) — post-b4 beta-test sweep shipped — 4 defects across 3 audit passes
+## [2.0.0b6] — 2026-05-22 (beta pre-release) — CVE-driven lockfile bump (starlette PYSEC-2026-161)
+
+Lockfile-only release re-rolling v2.0.0b5 after the release workflow's
+`pip-audit` security gate caught a new starlette CVE that landed
+between the v2.0.0b4 release and the v2.0.0b5 attempted publish.
+
+### Vulnerability
+
+- **PYSEC-2026-161** — starlette 1.0.0 → fix in 1.0.1. Transitive
+  dependency via `mcp[cli]` and `sse-starlette`. Bumped via
+  `uv lock --upgrade-package starlette`.
+
+### Behavior changes
+
+None. Code under `openzim_mcp/` and `tests/` is unchanged from the
+v2.0.0b5 attempt. The full post-b4 sweep (FOUR defects + 1 latent +
+2 audit defects, see v2.0.0b5 section below) ships in this release.
+
+### Methodology note
+
+Release workflow's `pip-audit` step at the start of "Test before
+release" is doing its job — caught a fresh CVE that landed between
+PR-time CI (which doesn't run pip-audit) and release-time publish.
+Pattern matches prior CVE-driven lockfile bumps (post-a19 idna
+PR #151, post-a24 pyjwt PR #160). The v2.0.0b5 git tag exists on the
+repo at the aborted merge commit (`385f72d`); v2.0.0b6 is the
+released artifact.
+
+---
+
+## [2.0.0b5] — 2026-05-22 (beta pre-release) — post-b4 beta-test sweep shipped — 4 defects across 3 audit passes (aborted — see v2.0.0b6)
 
 Post-b4 sweep packaged from PR #171 (commits `51158e9` → `8f9628d` →
 `e6a778f`). FOUR defects + 1 latent surfaced by live-MCP probing of
