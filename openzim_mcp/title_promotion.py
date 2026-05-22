@@ -244,8 +244,10 @@ _TAIL_TOKEN_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
 # Inner character class is ``[^\W_]`` rather than ``[^\W_'’]`` because
 # apostrophes (both ASCII ``'`` and curly ``’``) are already excluded
 # by ``\W`` — listing them inside ``^\W`` is a redundant character
-# class member (SonarCloud S5869).
-_POSSESSIVE_TOKEN_RE = re.compile(r"([^\W_][^\W_]*)['’](?:s\b|\B)", re.UNICODE)
+# class member (SonarCloud S5869). The leading-letter + repeat is
+# expressed as a single ``[^\W_]+`` (S6353) — equivalent to the
+# previous ``[^\W_][^\W_]*`` two-class form.
+_POSSESSIVE_TOKEN_RE = re.compile(r"([^\W_]+)['’](?:s\b|\B)", re.UNICODE)
 
 
 def has_apostrophe_possessive(topic: str) -> bool:

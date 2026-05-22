@@ -31,57 +31,153 @@ when the redirect target is unrelated to the user's possessive entity:
 
 The fix: tighten the filter to also reject ``redirect`` rows whose
 PRE-redirect path doesn't contain any of the topic's possessor
-tokens. For ``Plato's_cave`` → ``Allegory_of_the_cave``, the
-pre-redirect path is ``Plato's_cave`` whose tokens contain ``plato``
-(the possessor) → ACCEPT. For ``Darwin's evolution`` → some
-unrelated-redirect-path → ``Evolution``, the pre-redirect path tokens
-don't contain ``darwin`` → REJECT.
-
-Implementation:
-- ``find_entry_by_title_data`` annotates each result row with
-  ``pre_redirect_path`` (the path libzim's suggest emitted before
-  ``_follow_redirect_chain`` resolved it).
-- ``find_title_match`` propagates ``pre_redirect_path``.
-- New ``extract_possessor_tokens(topic)`` helper extracts the bare
-  possessor token from each ``X's``/``X'`` shape (e.g.,
-  ``"Plato's cave"`` → ``["plato"]``; ``"John's and Mary's books"``
-  → ``["john", "mary"]``).
-- The D1 filter in ``_promote_topic_via_title_index`` (pass-0 +
-  pass-3) and ``_promote_title_match`` (synthesize pass-0) rejects
-  when ``match_type ∈ {fuzzy_suggest, redirect}`` AND the topic has
-  a possessive AND the pre-redirect path's tokens contain NONE of
-  the possessor tokens.
+tokens. The shared filter lives in ``title_promotion`` as
+``accept_possessive_promotion`` and is consulted by both the simple-
+mode pass-0/pass-3 and the synthesize-mode pass-0.
 
 ## Z2 — Synthesize pass-0 produces malformed insert when canonical isn't in BM25 top hits
 
-``_promote_title_match`` in ``synthesize.py:_promote_title_match``
-inserts the raw ``find_title_match`` dict (shape
-``{path, title, zim_file, match_type, ...}``) into ``top_hits``,
-which expects the ``search_top_k`` shape
+``_promote_title_match`` in ``synthesize.py`` previously inserted the
+raw ``find_title_match`` dict (shape ``{path, title, zim_file,
+match_type, pre_redirect_path}``) into ``top_hits``, which expects
 ``{path, snippet, score}``. When the canonical IS in ``top_hits``
-already (the reorder branch), the existing properly-shaped entry is
-moved to first. But when the canonical is NOT in ``top_hits`` (no
-intersection with BM25), the malformed insert leaks through →
-downstream score-sort demotes it to the bottom because ``score`` is
-missing.
+already (the reorder branch), the existing properly-shaped entry was
+moved to first. But when the canonical was NOT in ``top_hits``, the
+malformed insert leaked through → downstream score-sort demoted it
+to the bottom.
 
-Live impact: ``Einstein's theory`` via ``synthesize=true`` returns
-``Theory_of_relativity`` at rank 6 with score 0 (instead of rank 1).
-``Plato's cave`` happens to work because ``Allegory_of_the_cave``
-IS in BM25 top hits (the reorder branch fires).
+Live impact: ``Einstein's theory`` via ``synthesize=true`` returned
+``Theory_of_relativity`` at rank 6 with score 0. Plato's cave worked
+because Allegory_of_the_cave WAS in BM25 top hits.
 
-The fix: when ``find_title_match`` accepts a pass-0 promotion, re-probe
-via ``search_handler.title_match_hit(archive, full_probe.title)`` to
-produce a ``{path, snippet, score: 1.0}`` shaped hit. If the
-title_match_hit re-probe misses (rare — only when fast-path can't
-find the resolved title), fall back to constructing the minimal hit
-with the canonical title's lead text as the snippet.
+The fix: re-probe via ``search_handler.title_match_hit(archive,
+full_probe.title)`` to produce a ``{path, snippet, score: 1.0}``
+shape; fall back to ``{path, snippet: "", score: 1.0}`` when the
+re-probe handler misses (test stubs / degraded paths).
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Shared fixtures / mock-builders.
+#
+# Several tests share the same scaffold: a stub ``SimpleToolsHandler``-shaped
+# object, a fake ``find_title_match`` driven by a ``{topic: result}``
+# mapping, and a synthesize ``search_handler`` whose ``title_match_hit`` is
+# also mapping-driven. Extract them once at module scope so each test only
+# carries the per-case mapping / assertions — reduces noise AND fixes the
+# Sonar new-code-duplication finding from the pass-1 push.
+# ---------------------------------------------------------------------------
+
+
+def _make_simple_handler() -> Any:
+    """Return a stub ``SimpleToolsHandler``-shaped object suitable for
+    calling ``_promote_topic_via_title_index`` unbound."""
+
+    class _StubOps:
+        pass
+
+    class _Handler:
+        zim_operations = _StubOps()
+
+    return _Handler()
+
+
+def _archive_stub() -> Any:
+    """Lightweight stub for libzim ``Archive`` — only needs identity
+    for ``zip(archives, archives_searched)`` iteration in synthesize."""
+
+    class _Archive:
+        pass
+
+    return _Archive()
+
+
+def _fake_find_title_match(
+    mapping: Dict[str, Optional[Dict[str, Any]]],
+    *,
+    min_score_floor: float = 0.0,
+) -> Callable[..., Optional[Dict[str, Any]]]:
+    """Build a ``find_title_match`` stand-in from ``{topic_lower: row}``.
+
+    Returns the mapped row when ``topic.lower()`` is a key AND the
+    caller's ``min_score`` is at or below ``min_score_floor`` (default
+    0.0 = no threshold check). Each test passes ``min_score_floor=0.95``
+    when it wants the stub to mimic the libzim suggestion-rank cap
+    (rows at score 0.95 only visible when caller requests ≤ 0.95).
+    """
+
+    def fake(
+        zim_ops: Any,
+        zim_file_path: str,
+        topic: str,
+        *,
+        cross_file: bool = False,
+        min_score: float = 1.0,
+    ) -> Optional[Dict[str, Any]]:
+        if min_score > min_score_floor and min_score_floor > 0.0:
+            return None
+        return mapping.get(topic.lower())
+
+    return fake
+
+
+def _fake_title_match_hit(
+    mapping: Dict[str, Optional[Dict[str, Any]]],
+) -> Callable[[Any, str], Optional[Dict[str, Any]]]:
+    """Build a ``title_match_hit`` stand-in from ``{title_lower: row}``."""
+
+    def fake(archive: Any, title: str) -> Optional[Dict[str, Any]]:
+        return mapping.get(title.lower())
+
+    return fake
+
+
+def _run_promote_simple(
+    topic: str, fake_find: Callable[..., Optional[Dict[str, Any]]]
+) -> Optional[Dict[str, Any]]:
+    """Drive ``SimpleToolsHandler._promote_topic_via_title_index`` with
+    ``fake_find`` patched at the import site."""
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+
+    with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake_find):
+        return SimpleToolsHandler._promote_topic_via_title_index(
+            _make_simple_handler(),
+            "test.zim",
+            topic,
+        )
+
+
+def _run_promote_synthesize(
+    query: str,
+    fake_find: Callable[..., Optional[Dict[str, Any]]],
+    *,
+    title_match_hit: Optional[Callable[[Any, str], Optional[Dict[str, Any]]]] = None,
+    top_hits: Optional[List[tuple[str, Dict[str, Any]]]] = None,
+) -> List[tuple[str, Dict[str, Any]]]:
+    """Drive ``synthesize._promote_title_match`` with the given fakes."""
+    from openzim_mcp.synthesize import _promote_title_match
+
+    handler = MagicMock()
+    handler.title_match_hit = title_match_hit or (lambda _a, _q: None)
+    with patch("openzim_mcp.synthesize.find_title_match", side_effect=fake_find):
+        return _promote_title_match(
+            top_hits or [],
+            query=query,
+            archives=[(_archive_stub(), "/wiki.zim")],
+            archives_searched=["wiki"],
+            search_handler=handler,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
 
 
 class TestPreRedirectPathPropagation:
@@ -134,39 +230,30 @@ class TestPossessorTokenExtraction:
     """``extract_possessor_tokens`` extracts the bare possessor from
     each ``X's`` / ``X'`` shape in the topic."""
 
-    def test_simple_possessive(self) -> None:
+    @pytest.mark.parametrize(
+        "topic, expected",
+        [
+            # Simple possessives
+            ("Plato's cave", ["plato"]),
+            ("Darwin's evolution", ["darwin"]),
+            ("Einstein's theory", ["einstein"]),
+            # Multiple possessives in one query
+            ("John's and Mary's books", ["john", "mary"]),
+            # Trailing apostrophe without 's
+            ("Achilles' heel", ["achilles"]),
+            # Curly apostrophe
+            ("Einstein’s theory", ["einstein"]),
+            # No possessive — names with apostrophes are not possessors
+            ("Berlin Germany", []),
+            ("Apollo 11", []),
+            ("O'Brien", []),
+            ("d'Artagnan", []),
+        ],
+    )
+    def test_extraction(self, topic: str, expected: List[str]) -> None:
         from openzim_mcp.title_promotion import extract_possessor_tokens
 
-        assert extract_possessor_tokens("Plato's cave") == ["plato"]
-        assert extract_possessor_tokens("Darwin's evolution") == ["darwin"]
-        assert extract_possessor_tokens("Einstein's theory") == ["einstein"]
-
-    def test_multiple_possessives(self) -> None:
-        from openzim_mcp.title_promotion import extract_possessor_tokens
-
-        tokens = extract_possessor_tokens("John's and Mary's books")
-        assert tokens == ["john", "mary"]
-
-    def test_trailing_apostrophe(self) -> None:
-        """``Achilles'`` (trailing apostrophe without 's') is a
-        possessor."""
-        from openzim_mcp.title_promotion import extract_possessor_tokens
-
-        assert extract_possessor_tokens("Achilles' heel") == ["achilles"]
-
-    def test_curly_apostrophe(self) -> None:
-        from openzim_mcp.title_promotion import extract_possessor_tokens
-
-        assert extract_possessor_tokens("Einstein’s theory") == ["einstein"]
-
-    def test_no_possessive(self) -> None:
-        from openzim_mcp.title_promotion import extract_possessor_tokens
-
-        assert extract_possessor_tokens("Berlin Germany") == []
-        assert extract_possessor_tokens("Apollo 11") == []
-        # ``O'Brien`` and ``d'Artagnan`` are names, not possessives.
-        assert extract_possessor_tokens("O'Brien") == []
-        assert extract_possessor_tokens("d'Artagnan") == []
+        assert extract_possessor_tokens(topic) == expected
 
 
 class TestRedirectFilterRejectsUnrelatedRedirect:
@@ -176,117 +263,78 @@ class TestRedirectFilterRejectsUnrelatedRedirect:
     libzim's suggest produces an associative redirect to an unrelated
     canonical."""
 
-    def _make_handler(self) -> Any:
-        class _StubOps:
-            pass
-
-        class _Handler:
-            zim_operations = _StubOps()
-
-        return _Handler()
-
-    def test_rejects_redirect_with_unrelated_pre_path(self) -> None:
-        """Live repro: ``darwin's evolution`` → some-unrelated-redirect
-        → ``Evolution``. Pre-redirect path doesn't contain ``darwin``
-        → filter REJECTS."""
-        from openzim_mcp.simple_tools import SimpleToolsHandler
-
-        def fake(
-            zim_ops: Any,
-            zim_file_path: str,
-            topic: str,
-            *,
-            cross_file: bool = False,
-            min_score: float = 1.0,
-        ) -> Optional[Dict[str, Any]]:
-            if topic.lower() == "darwin's evolution" and min_score <= 0.95:
-                # Simulate libzim returning a redirect that walks to
-                # Evolution but whose pre-redirect path doesn't
-                # contain the possessor token "darwin".
-                return {
-                    "path": "Evolution",
-                    "title": "Evolution",
-                    "zim_file": "test.zim",
-                    "match_type": "redirect",
-                    "pre_redirect_path": "Evolutionary_theory",
-                }
-            return None
-
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
-            result = SimpleToolsHandler._promote_topic_via_title_index(
-                self._make_handler(),
-                "test.zim",
+    @pytest.mark.parametrize(
+        "topic, mapping, expected_path",
+        [
+            # Z1 repro: redirect to ``Evolution`` via an unrelated
+            # pre-redirect path. ``darwin`` not in pre-path tokens →
+            # filter REJECTS → no promotion → returns None.
+            (
                 "darwin's evolution",
-            )
-        assert result is None, (
-            f"redirect with unrelated pre-path must be rejected for "
-            f"possessive topics; got {result!r}"
-        )
-
-    def test_accepts_redirect_with_possessor_in_pre_path(self) -> None:
-        """Live invariant: ``plato's cave`` → ``Plato's_cave`` redirect
-        → ``Allegory_of_the_cave``. Pre-redirect path ``Plato's_cave``
-        tokens contain ``plato`` → filter ACCEPTS."""
-        from openzim_mcp.simple_tools import SimpleToolsHandler
-
-        def fake(
-            zim_ops: Any,
-            zim_file_path: str,
-            topic: str,
-            *,
-            cross_file: bool = False,
-            min_score: float = 1.0,
-        ) -> Optional[Dict[str, Any]]:
-            if topic.lower() == "plato's cave" and min_score <= 0.95:
-                return {
-                    "path": "Allegory_of_the_cave",
-                    "title": "Allegory of the cave",
-                    "zim_file": "test.zim",
-                    "match_type": "redirect",
-                    "pre_redirect_path": "Plato's_cave",
-                }
-            return None
-
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
-            result = SimpleToolsHandler._promote_topic_via_title_index(
-                self._make_handler(),
-                "test.zim",
+                {
+                    "darwin's evolution": {
+                        "path": "Evolution",
+                        "title": "Evolution",
+                        "zim_file": "test.zim",
+                        "match_type": "redirect",
+                        "pre_redirect_path": "Evolutionary_theory",
+                    }
+                },
+                None,
+            ),
+            # Live invariant: ``Plato's_cave`` redirect entry → walks to
+            # ``Allegory_of_the_cave``. Pre-redirect path tokens contain
+            # ``plato`` → filter ACCEPTS.
+            (
                 "plato's cave",
-            )
-        assert result is not None
-        assert result["path"] == "Allegory_of_the_cave"
-
-    def test_accepts_direct_match_unconditionally(self) -> None:
-        """``match_type="direct"`` is always accepted — the user's
-        exact title is canonical. No possessor-token check needed."""
-        from openzim_mcp.simple_tools import SimpleToolsHandler
-
-        def fake(
-            zim_ops: Any,
-            zim_file_path: str,
-            topic: str,
-            *,
-            cross_file: bool = False,
-            min_score: float = 1.0,
-        ) -> Optional[Dict[str, Any]]:
-            if topic.lower() == "hubble's law":
-                return {
-                    "path": "Hubble's_law",
-                    "title": "Hubble's law",
-                    "zim_file": "test.zim",
-                    "match_type": "direct",
-                    "pre_redirect_path": "Hubble's_law",
-                }
-            return None
-
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
-            result = SimpleToolsHandler._promote_topic_via_title_index(
-                self._make_handler(),
-                "test.zim",
+                {
+                    "plato's cave": {
+                        "path": "Allegory_of_the_cave",
+                        "title": "Allegory of the cave",
+                        "zim_file": "test.zim",
+                        "match_type": "redirect",
+                        "pre_redirect_path": "Plato's_cave",
+                    }
+                },
+                "Allegory_of_the_cave",
+            ),
+            # ``match_type="direct"`` is always accepted — the user's
+            # exact title is canonical. No possessor-token check.
+            (
                 "Hubble's law",
-            )
-        assert result is not None
-        assert result["path"] == "Hubble's_law"
+                {
+                    "hubble's law": {
+                        "path": "Hubble's_law",
+                        "title": "Hubble's law",
+                        "zim_file": "test.zim",
+                        "match_type": "direct",
+                        "pre_redirect_path": "Hubble's_law",
+                    }
+                },
+                "Hubble's_law",
+            ),
+        ],
+        ids=[
+            "rejects_redirect_with_unrelated_pre_path",
+            "accepts_redirect_with_possessor_in_pre_path",
+            "accepts_direct_match_unconditionally",
+        ],
+    )
+    def test_filter(
+        self,
+        topic: str,
+        mapping: Dict[str, Dict[str, Any]],
+        expected_path: Optional[str],
+    ) -> None:
+        result = _run_promote_simple(
+            topic, _fake_find_title_match(mapping, min_score_floor=0.95)
+        )
+        if expected_path is None:
+            assert (
+                result is None
+            ), f"filter must reject for topic={topic!r}; got {result!r}"
+        else:
+            assert result is not None and result["path"] == expected_path
 
 
 class TestSynthesizePass0InsertShape:
@@ -294,73 +342,51 @@ class TestSynthesizePass0InsertShape:
     inserts (``{path, snippet, score}``) so downstream score-based
     sorting doesn't demote the canonical to the bottom."""
 
+    # Shared mapping the synthesize pass-0 sees for ``Einstein's theory``
+    # → ``Theory_of_relativity`` (a redirect-walked canonical).
+    _EINSTEIN_FIND_MAPPING: Dict[str, Dict[str, Any]] = {
+        "einstein's theory": {
+            "path": "Theory_of_relativity",
+            "title": "Theory of relativity",
+            "zim_file": "wiki",
+            "match_type": "redirect",
+            "pre_redirect_path": "Einstein's_theory",
+        }
+    }
+
     def test_promoted_hit_has_search_top_k_shape(self) -> None:
         """``Einstein's theory`` via synthesize → pass-0 inserts
         ``Theory_of_relativity``. The insert must have ``snippet`` and
         ``score`` fields so it survives downstream ranking."""
-        from openzim_mcp.synthesize import _promote_title_match
-
-        class _Archive:
-            pass
-
-        archive_obj = _Archive()
-
-        def fake_title_match_hit(archive: Any, title: str) -> Optional[Dict[str, Any]]:
-            # The re-probe after pass-0 accept: looks up the resolved
-            # title via fast path and returns the ``search_top_k`` shape.
-            if title.lower() == "theory of relativity":
-                return {
+        # title_match_hit re-probe lands the resolved title via fast
+        # path → returns ``{path, snippet, score: 1.0}``.
+        title_match_hit = _fake_title_match_hit(
+            {
+                "theory of relativity": {
                     "path": "Theory_of_relativity",
                     "snippet": "The theory of relativity comprises two...",
                     "score": 1.0,
                 }
-            return None
-
-        def fake_find_title_match(
-            zim_ops: Any,
-            zim_file_path: str,
-            topic: str,
-            *,
-            cross_file: bool = False,
-            min_score: float = 1.0,
-        ) -> Optional[Dict[str, Any]]:
-            if topic.lower() == "einstein's theory":
-                return {
-                    "path": "Theory_of_relativity",
-                    "title": "Theory of relativity",
-                    "zim_file": "wiki",
-                    "match_type": "redirect",
-                    "pre_redirect_path": "Einstein's_theory",
-                }
-            return None
-
-        handler = MagicMock()
-        handler.title_match_hit = fake_title_match_hit
-
-        with patch(
-            "openzim_mcp.synthesize.find_title_match",
-            side_effect=fake_find_title_match,
-        ):
-            # Top hits do NOT contain Theory_of_relativity — the only
-            # way it can end up at rank 1 is via pass-0 promotion.
-            top_hits: List[tuple[str, Dict[str, Any]]] = [
-                (
-                    "wiki",
-                    {
-                        "path": "Einstein–Cartan_theory",
-                        "snippet": "...alternative to general relativity...",
-                        "score": 1.0,
-                    },
-                ),
-            ]
-            result_hits = _promote_title_match(
-                top_hits,
-                query="Einstein's theory",
-                archives=[(archive_obj, "/wiki.zim")],
-                archives_searched=["wiki"],
-                search_handler=handler,
-            )
-        # Rank 0: must be Theory_of_relativity with search_top_k shape.
+            }
+        )
+        # Top hits do NOT contain Theory_of_relativity — the only way
+        # it can end up at rank 1 is via pass-0 promotion.
+        top_hits: List[tuple[str, Dict[str, Any]]] = [
+            (
+                "wiki",
+                {
+                    "path": "Einstein–Cartan_theory",
+                    "snippet": "...alternative to general relativity...",
+                    "score": 1.0,
+                },
+            ),
+        ]
+        result_hits = _run_promote_synthesize(
+            "Einstein's theory",
+            _fake_find_title_match(self._EINSTEIN_FIND_MAPPING),
+            title_match_hit=title_match_hit,
+            top_hits=top_hits,
+        )
         assert len(result_hits) >= 1
         top_arch, top_hit = result_hits[0]
         assert top_arch == "wiki"
@@ -378,7 +404,7 @@ class TestSynthesizePass0InsertShape:
         )
         assert (
             top_hit["score"] >= 1.0
-        ), f"pass-0 insert score must be 1.0 (highest); got {top_hit.get('score')}"
+        ), f"pass-0 insert score must be 1.0; got {top_hit.get('score')}"
 
     def test_fallback_to_minimal_hit_when_reprobe_misses(self) -> None:
         """If ``title_match_hit`` re-probe misses (e.g., the fast-path
@@ -386,58 +412,24 @@ class TestSynthesizePass0InsertShape:
         archives), pass-0 still produces a well-shaped minimal hit
         with the canonical path and an empty-but-present snippet
         rather than leaking the malformed find_title_match dict."""
-        from openzim_mcp.synthesize import _promote_title_match
-
-        class _Archive:
-            pass
-
-        archive_obj = _Archive()
-
-        def fake_title_match_hit(archive: Any, title: str) -> Optional[Dict[str, Any]]:
-            # Re-probe miss — fast path doesn't find the resolved title.
-            return None
-
-        def fake_find_title_match(
-            zim_ops: Any,
-            zim_file_path: str,
-            topic: str,
-            *,
-            cross_file: bool = False,
-            min_score: float = 1.0,
-        ) -> Optional[Dict[str, Any]]:
-            if topic.lower() == "einstein's theory":
-                return {
-                    "path": "Theory_of_relativity",
-                    "title": "Theory of relativity",
-                    "zim_file": "wiki",
-                    "match_type": "redirect",
-                    "pre_redirect_path": "Einstein's_theory",
-                }
-            return None
-
-        handler = MagicMock()
-        handler.title_match_hit = fake_title_match_hit
-
-        with patch(
-            "openzim_mcp.synthesize.find_title_match",
-            side_effect=fake_find_title_match,
-        ):
-            result_hits = _promote_title_match(
-                [
-                    (
-                        "wiki",
-                        {
-                            "path": "Some_BM25_hit",
-                            "snippet": "...",
-                            "score": 1.0,
-                        },
-                    ),
-                ],
-                query="Einstein's theory",
-                archives=[(archive_obj, "/wiki.zim")],
-                archives_searched=["wiki"],
-                search_handler=handler,
-            )
+        # Empty re-probe mapping → title_match_hit always returns None
+        # → fallback minimal-hit path engages.
+        top_hits: List[tuple[str, Dict[str, Any]]] = [
+            (
+                "wiki",
+                {
+                    "path": "Some_BM25_hit",
+                    "snippet": "...",
+                    "score": 1.0,
+                },
+            ),
+        ]
+        result_hits = _run_promote_synthesize(
+            "Einstein's theory",
+            _fake_find_title_match(self._EINSTEIN_FIND_MAPPING),
+            title_match_hit=_fake_title_match_hit({}),
+            top_hits=top_hits,
+        )
         # Top hit must STILL be Theory_of_relativity with search_top_k
         # shape — even if the re-probe missed.
         assert len(result_hits) >= 1
