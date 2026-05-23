@@ -5,6 +5,131 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b9] — 2026-05-23 (beta pre-release) — post-b8 beta-test sweep shipped — Z3 non-possessive tail-hijack + OPP-1 possessor-in-canonical carve-out
+
+Post-b8 sweep packaged from PR #178. Live-MCP verification against
+v2.0.0b8 confirmed all prior b6/b7/b8 fixes land cleanly. ONE HIGH-
+severity defect + ONE MEDIUM opportunity unlocked by deeper probing
+of the non-possessive 3+ token shape.
+
+### Z3 (HIGH) — Non-possessive multi-token tail-hijack
+
+The b4 D2 raised-``min_len`` floor protected possessive topics from
+trailing 1-token tails winning at strict 1.0. Non-possessive
+multi-token queries still leaked the same hijack at Pass 0
+(``_promote_topic_via_title_index``): libzim's title-suggest
+fuzzy-matches a STRONG single token in the topic at score 0.95 and
+returns just that token's canonical alone. The full-topic probe at
+``min_score=0.95`` (added in b3) accepts the row because
+``accept_possessive_promotion`` returned ``True`` for any
+non-possessive topic.
+
+Live silent-wrong-answer repros at v2.0.0b8 (all cert=0.85):
+
+- ``Stalin USSR Russia`` → ``Russia`` (user wanted Stalin)
+- ``Hitler Germany Berlin`` → ``Berlin`` (user wanted Hitler)
+- ``Marie Curie polonium discovery`` → ``Discovery`` (a disambig
+  page!)
+- ``Marie Curie radioactivity`` → ``Radioactive_(Redniss_book)``
+  (an obscure 2010 graphic novel surfaced via stemming match)
+- ``Big Rapids Michigan tourism`` → ``Tourism`` (contradicts the
+  ``iter_query_windows`` docstring's own canonical example,
+  ``Big_Rapids,_Michigan``)
+- ``O'Brien character 1984`` → ``1984`` (the year article)
+
+#### Fix — non-possessive fuzzy_suggest gate
+
+Two narrow rejections in the non-possessive branch when
+``match_type="fuzzy_suggest"`` and the topic has 3+ tokens:
+
+1. **Tail-token hijack** — canonical is a single token equal to
+   the topic's LAST token. The user typed
+   ``<subject> ... <generic>``; libzim returned the generic
+   article. ``Hamlet Denmark prince`` → ``Hamlet`` stays accepted
+   because the canonical sits at the HEAD position, not the tail.
+2. **Zero-overlap stemming hit** — canonical's tokens have zero
+   exact-overlap with topic's tokens (the match was via stemming
+   only). The graphic novel surfaced for ``Marie Curie
+   radioactivity`` because libzim's title index stems
+   ``radioactivity`` to ``radioactive``; no other topic token
+   matches the canonical, so the hit is one-stem-token-deep —
+   too thin a signal to auto-fetch.
+
+Topics with fewer than 3 tokens are unaffected.
+
+Counter-cases the fix preserves: ``Hamlet Denmark prince`` →
+``Hamlet``, ``Napoleon France emperor`` → ``Napoleon``,
+``Apollo 11 moon landing`` → ``Moon_landing``,
+``quantum mechanics Einstein`` → ``Albert_Einstein``,
+``Lincoln Gettysburg Address`` → ``Gettysburg_Address``,
+``Berlin Germany`` → ``Berlin``.
+
+### OPP-1 (MEDIUM) — Possessive fuzzy_suggest carve-out
+
+The b6 D1 rule REJECTS every ``match_type="fuzzy_suggest"`` row
+for a possessive topic. Live probe found this is too strict:
+``Newton's gravity`` falls to BM25 even though
+``Newton's_law_of_universal_gravitation`` is the obvious rank-1
+BM25 canonical AND contains the possessor token ``newton``
+literally.
+
+#### Refinement
+
+For possessive topics + ``fuzzy_suggest``, ACCEPT iff the
+canonical path tokens include any of the topic's possessor tokens.
+The canonical literally preserves the user's named entity,
+signalling it's a longer-form expansion rather than the
+``Darwin's evolution`` → ``Evolution`` shape that drops the
+possessor.
+
+Decision matrix for possessive + fuzzy_suggest:
+
+| Topic | Canonical | Decision |
+| --- | --- | --- |
+| ``Newton's gravity`` | ``Newton's_law_of_universal_gravitation`` | ACCEPT (OPP-1) |
+| ``Mary's lamb`` | ``Mary_Had_a_Little_Lamb`` | ACCEPT |
+| ``Darwin's evolution`` | ``Evolution`` | REJECT (b6 D1 preserved) |
+| ``Plato's republic philosophy`` | ``Czech_philosophy`` | REJECT (b6 Z1 preserved) |
+
+Tokenization uses ``_TOKEN_RE`` (apostrophe-splitting), same as
+the b8 Z1.1 subset rule for redirects, so ``newton's`` in the
+canonical surfaces as the bare token ``newton`` for comparison.
+
+### Refactor (Sonar S3776 + duplication)
+
+Quality-gate-driven follow-ups landed in the same PR:
+
+- ``accept_possessive_promotion`` extracted three per-branch
+  helpers (``_accept_non_possessive``,
+  ``_accept_possessive_fuzzy_suggest``,
+  ``_accept_possessive_redirect``) to bring cognitive complexity
+  from 21 down under the 15 threshold. No behaviour change.
+- The three shared sweep test fixtures (``_make_simple_handler``,
+  ``_fake_find_title_match``, ``_run_promote_simple``) moved to
+  ``tests/_promote_fixtures.py``. b6/b7/b8 sweep test files now
+  import from the shared module instead of duplicating locally.
+
+### Tests
+
+26 new tests in ``tests/test_post_b8_beta_fixes.py`` across 5
+classes (``TestZ3NonPossessiveTailHijack``,
+``TestZ3RegressionGuards``, ``TestOPP1PossessorInCanonical``,
+``TestZ3PromoteIntegration``, ``TestStructuralGuards``).
+
+```
+2448 passed, 54 skipped (full suite, ~28s)
+pip-audit: no known vulnerabilities
+```
+
+mypy clean across 52 source files. black + flake8 + isort clean.
+
+### Methodology — "fix unlocks new paths" 16 sweeps strong
+
+Each sweep peels back another layer; the post-b8 sweep generalised
+the b4 D2 raised-min_len protection to non-possessive multi-token
+topics, and relaxed b6 D1's blanket-reject when the canonical
+preserves the possessor literally.
+
 ## [2.0.0b8] — 2026-05-22 (beta pre-release) — post-b7 beta-test sweep shipped — Z1.1 subset rule (Darwin's evolution truncation redirect)
 
 Post-b7 sweep packaged from PR #176. Live-MCP verification against
