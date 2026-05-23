@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b11] — 2026-05-23 (beta pre-release) — post-b10 beta-test sweep shipped — probe-based multi-entity discriminator (case-independent Z3)
+
+Post-b10 sweep packaged from PR #182. Live-MCP verification against
+v2.0.0b10 confirmed OPP-1's redirect extension lands cleanly
+(``Newton's gravity`` now auto-fetches
+``Newton's_law_of_universal_gravitation``) but ALL SIX Z3 silent-
+wrong-answer repros STILL fire identically to b9.
+
+### Root cause — Tier 1 Rule 1 lowercases the topic upstream
+
+The b10 Z3 discriminator counted capitalized + digit tokens in the
+ORIGINAL-case topic. But ``IntentParser._normalize_topic_case``
+(Tier 1 Rule 1, ``intent_parser.py:1540``) lowercases the query
+BEFORE topic extraction. By the time the discriminator sees the
+topic, ``"Stalin USSR Russia"`` is ``"stalin ussr russia"`` — zero
+capitalized tokens — the discriminator never fired on live data,
+even though OPP-1 (which doesn't depend on case) worked perfectly.
+
+### Fix — case-independent probe-based discriminator
+
+Two new helpers in ``title_promotion``:
+
+- ``is_tail_hijack_shape(promoted, topic)`` — pure-logic shape check.
+- ``count_non_tail_strong_entities(topic, title_probe, limit=2)`` —
+  probe-based multi-entity counter with TWO refinements that make
+  it robust against the live data shapes:
+    - **Stop-word filter**: skip non-entity tokens (``what``,
+      ``is``, ``the``, ``of``, common auxiliaries / pronouns /
+      connectives) that often have legitimate disambiguation-page
+      matches on Wikipedia but aren't entities the user is
+      querying jointly.
+    - **Probed-token-in-canonical check**: only count a probe as
+      a "strong" match when the probed token (lowercased) appears
+      in the canonical path tokens OR the pre-redirect-path
+      tokens. Filters out fuzzy/stemming hits (libzim resolving
+      ``musicians`` to ``Musician`` via stem) AND defends against
+      overly-permissive test mocks.
+
+``_promote_topic_via_title_index`` Pass 1 / Pass 2 now consult both
+helpers via a closure-scoped ``_accept_with_multi_entity_check``
+wrapper. The multi-entity discriminator overrides
+``accept_possessive_promotion``'s unconditional tail-hijack
+rejection only when the topic probes as single-entity (filler-
+prose pattern).
+
+``_accept_non_possessive`` no longer carries the case-based
+discriminator (which never fired in production). Tail-hijack
+rejection there is unconditional; the call site is now the only
+place that runs the multi-entity discriminator.
+
+### Decision matrix
+
+| Topic | Tail-hijack? | Multi-entity? | Decision |
+| --- | --- | --- | --- |
+| Stalin USSR Russia | yes | yes (2+) | REJECT |
+| Hitler Germany Berlin | yes | yes | REJECT |
+| Marie Curie polonium discovery | yes | yes | REJECT |
+| Big Rapids Michigan tourism | yes | yes | REJECT |
+| O'Brien character 1984 | yes | yes | REJECT |
+| what is the population of detroit | yes | no (stop-filter, 1 left) | ACCEPT |
+| people who live in michigan | yes | no | ACCEPT |
+| Berlin Germany | no (<3 tk) | n/a | ACCEPT |
+
+### Tests
+
+16 new tests in ``tests/test_post_b10_beta_fixes.py``. Two b9 tests
+updated to reflect post-b10 architecture (multi-entity mock probes +
+structural pin asserts ``_accept_with_multi_entity_check`` wrapper).
+
+```
+2503 passed, 54 skipped (full suite, ~28s)
+```
+
+mypy / black / flake8 / isort all clean.
+
+### Methodology — "fix unlocks new paths" 18 sweeps strong
+
+The post-b10 sweep peeled three layers in concert:
+- b10 case-based discriminator broken by upstream Sub-D-2 Rule 1.
+- Probe-based replacement fooled by stop words that match
+  disambiguation pages.
+- Probe ALSO fooled by overly-permissive test mocks.
+
+Discriminator now has three layers — shape, stop-word filter,
+in-canonical check — each independently testable.
+
 ## [2.0.0b10] — 2026-05-23 (beta pre-release) — post-b9 beta-test sweep shipped — Z3 all match_types + Pass 1/2 gate + OPP-1 redirect extension
 
 Post-b9 sweep packaged from PR #180. Live-MCP verification against
