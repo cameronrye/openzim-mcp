@@ -32,8 +32,12 @@ from openzim_mcp.title_promotion import (
     accept_possessive_promotion,
     find_title_match,
     has_apostrophe_possessive,
+    has_digit_specificity_match,
+    has_topic_prefix_canonical_extension,
     is_strong_title_match,
+    is_tangential_multi_token_shape,
     iter_query_tails,
+    probed_head_matches_promoted,
 )
 from openzim_mcp.tool_schemas import (
     Citation,
@@ -1021,6 +1025,28 @@ def _promote_title_match(
             continue
         if not accept_possessive_promotion(full_probe, query):
             continue
+        # Post-b11 Z4 layer (symmetric to simple_tools.py Pass 0):
+        # multi-token canonical tangential check + three exemptions
+        # (biographical-canonical, digit-specificity, type-extension).
+        # The synthesize Pass 0 has the same shape as simple_tools Pass
+        # 0 and is vulnerable to the same Z4 silent-wrong-answer
+        # pattern. The local ``_probe`` closure forwards to
+        # ``find_title_match`` against the same archive so the
+        # biographical exemption can probe head/tail tokens consistently
+        # with simple_tools.
+        if not has_apostrophe_possessive(query) and is_tangential_multi_token_shape(
+            full_probe, query
+        ):
+
+            def _z4_probe(tok: str, _vp: "Path" = vp) -> Optional[dict]:
+                return find_title_match(search_handler, str(_vp), tok)
+
+            if not (
+                probed_head_matches_promoted(query, full_probe, _z4_probe)
+                or has_digit_specificity_match(full_probe, query)
+                or has_topic_prefix_canonical_extension(full_probe, query)
+            ):
+                continue
         full_path = str(full_probe["path"])
         existing_paths_p0 = {(name, str(h.get("path", ""))) for name, h in top_hits}
         if (archive_name, full_path) in existing_paths_p0:

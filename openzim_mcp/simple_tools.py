@@ -26,15 +26,21 @@ from .meta import build_meta, format_footer
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
 from .title_promotion import (
+    _DISCRIMINATOR_STOP_WORDS,
+    _TAIL_TOKEN_RE,
     _TOKEN_RE,
     accept_possessive_promotion,
     count_non_tail_strong_entities,
     find_title_match,
     has_apostrophe_possessive,
+    has_digit_specificity_match,
+    has_topic_prefix_canonical_extension,
     is_strong_title_match,
     is_tail_hijack_shape,
+    is_tangential_multi_token_shape,
     iter_query_tails,
     iter_query_windows,
+    probed_head_matches_promoted,
 )
 from .tool_schemas import (
     SearchAllResponse,
@@ -3903,7 +3909,7 @@ class SimpleToolsHandler:
         because the title-match boost isn't strong enough. The 1.0 gate
         promotes the canonical past that ranking.
         """
-        # Post-b3: probe the FULL topic (with original punctuation
+        # Pass 0: probe the FULL topic (with original punctuation
         # preserved) BEFORE iter_query_tails decomposes it.
         # ``iter_query_tails`` tokenizes on alphanumeric runs, so
         # apostrophe-bearing possessives split: ``einstein's theory``
@@ -3914,23 +3920,17 @@ class SimpleToolsHandler:
         # are stored WITH the apostrophe — ``Einstein's_theory``
         # redirects to ``Theory_of_relativity``), and the shortest
         # tail ``"theory"`` wins via the generic ``Theory`` article.
-        # Live impact across the b3 sweep: ``Einstein's theory`` →
-        # ``Theory`` (expected ``Theory_of_relativity``); ``Plato's
-        # cave`` → ``Cave`` (expected ``Allegory_of_the_cave``);
-        # ``Plato's Republic`` → ``Republic`` (expected
-        # ``Republic_(Plato)``). Probing the original topic with
-        # punctuation at the start catches these. ``min_score=0.95``
-        # mirrors the canonical-or-fuzzy gate Rule 2/3/4's probe
-        # uses (intent_parser.py:317), accepting both direct hits
-        # (1.0) and high-confidence redirects / spelling variants
-        # (0.95). Non-possessive queries hit this probe with the same
-        # behavior they'd get from pass-1's longest tail — the new
-        # call returns redundantly on those, never less correct.
+        # Probing the original topic with punctuation at the start
+        # catches these. ``min_score=0.95`` mirrors the canonical-or-
+        # fuzzy gate Rule 2/3/4's probe uses (intent_parser.py:317),
+        # accepting both direct hits (1.0) and high-confidence
+        # redirects / spelling variants (0.95). The b3 invariant
+        # (regression-guarded by test_post_b3 / test_promote_function_
+        # starts_with_full_topic_probe) requires this to be the FIRST
+        # ``find_title_match`` call in the function.
         promoted = find_title_match(
             self.zim_operations, zim_file_path, topic, min_score=0.95
         )
-        if promoted is not None and accept_possessive_promotion(promoted, topic):
-            return promoted
         # Post-b4 D2: when the topic carries an apostrophe-possessive
         # (``Plato's republic philosophy`` / ``Einstein's theory
         # history``), tighten the tail-iteration floor to ``min_len=2``
@@ -3941,46 +3941,80 @@ class SimpleToolsHandler:
         # picking a generic Wikipedia title that shares the word.
         pass_tail_min_len = 2 if has_apostrophe_possessive(topic) else 1
 
-        # Post-b10 Z3 multi-entity discriminator: the b9/b10 Z3 rule
-        # rejected the tail-hijack shape unconditionally in
-        # ``accept_possessive_promotion``. That correctly catches
-        # the silent-wrong-answer pattern (``stalin ussr russia`` →
-        # ``Russia``) but over-rejects the legitimate filler-prose +
-        # tail-entity case (``what is the population of detroit`` →
-        # ``Detroit``). The case-based discriminator b10 used broke
-        # because ``IntentParser._normalize_topic_case`` lowercases
-        # the topic upstream. The probe-based replacement counts how
-        # many non-tail topic tokens individually resolve to strong
-        # title matches; 2+ signals a multi-entity stack the user is
-        # querying jointly, < 2 signals filler-prose + entity-at-tail.
-        # The probe is wrapped once and reused across Pass 1 / Pass 2
-        # to keep the cost bounded.
+        # Token probe shared by the b10 Z3 multi-entity discriminator
+        # AND the b11 Z4 head-biographical-canonical check. Wrapped
+        # once and reused so the cost stays bounded at one libzim probe
+        # per non-tail topic token (and one per head check).
         def _probe(token_str: str) -> Optional[Dict[str, Any]]:
             return find_title_match(self.zim_operations, zim_file_path, token_str)
 
-        def _accept_with_multi_entity_check(
-            promoted: Dict[str, Any],
-        ) -> bool:
-            """Run the standard accept gate; for non-possessive
-            tail-hijack rejections, probe non-tail tokens and
-            override the rejection when single-entity is confirmed.
-            """
-            if accept_possessive_promotion(promoted, topic):
-                return True
+        # Post-b11 Z4 layer. Multi-token tangential canonicals
+        # (``Lenin Russia`` → ``Leninist_Komsomol_of_the_Russian_Federation``,
+        # ``Tesla electricity`` → ``Tesla's_Wireless_Electricity``,
+        # ``Mozart Vienna`` → ``Mozarthaus_Vienna``,
+        # ``Beethoven symphony`` → ``Symphony_No._1_(Beethoven)``,
+        # ``Marie Curie radioactivity`` → ``Radioactive_(Redniss_book)``)
+        # surface where ``is_tail_hijack_shape`` doesn't fire (canonical
+        # is multi-token). Z4 rejects them UNLESS one of three
+        # exemptions applies: biographical-canonical (head probe
+        # matches promoted), digit-specificity (numbered-instance
+        # signal), or type-extension (canonical's leading tokens are
+        # a 2+-token contiguous topic slice with extras only at
+        # suffix — preserves ``Big Rapids Michigan Ferris State`` →
+        # ``Ferris_State_University``). The Z4 check is applied at
+        # every pass (0, 1, 2, 3) so the defect class can't slip
+        # through a different gate.
+        def _passes_z4(promoted_arg: Dict[str, Any]) -> bool:
             if has_apostrophe_possessive(topic):
-                return False
-            if not is_tail_hijack_shape(promoted, topic):
-                return False
-            return count_non_tail_strong_entities(topic, _probe, limit=2) < 2
+                return True
+            if not is_tangential_multi_token_shape(promoted_arg, topic):
+                return True
+            if probed_head_matches_promoted(topic, promoted_arg, _probe):
+                return True
+            if has_digit_specificity_match(promoted_arg, topic):
+                return True
+            if has_topic_prefix_canonical_extension(promoted_arg, topic):
+                return True
+            return False
+
+        # Post-b10 Z3 multi-entity discriminator wrapper. Pass 1 / Pass 2
+        # consult this gate, which layers the b10 single-entity escape
+        # over the b9 unconditional tail-hijack rejection, then applies
+        # the b11 Z4 check on top. Pass 0 / Pass 3 use the bare
+        # ``accept_possessive_promotion`` + ``_passes_z4`` pair (no
+        # single-entity escape — that escape exists for Pass 1's
+        # 1-token-tail filler-prose pattern, not for Pass 0's full-
+        # topic probe).
+        def _accept_with_multi_entity_check(
+            promoted_arg: Dict[str, Any],
+        ) -> bool:
+            if has_apostrophe_possessive(topic):
+                return accept_possessive_promotion(promoted_arg, topic)
+            base_accept = accept_possessive_promotion(promoted_arg, topic)
+            if not base_accept:
+                if not is_tail_hijack_shape(promoted_arg, topic):
+                    return False
+                return count_non_tail_strong_entities(topic, _probe, limit=2) < 2
+            return _passes_z4(promoted_arg)
+
+        # Pass 0 acceptance: base accept gate + Z4 layer. Stalin USSR
+        # Russia → Russia (tail-hijack) is rejected here unconditionally
+        # because ``accept_possessive_promotion`` already says False —
+        # the multi-entity escape only fires at Pass 1/2. Tesla
+        # electricity → Tesla's_Wireless_Electricity is accepted by
+        # ``accept_possessive_promotion`` (2-token topic, no tail-
+        # hijack) but rejected by ``_passes_z4`` (tangential shape,
+        # head probe differs from promoted).
+        if (
+            promoted is not None
+            and accept_possessive_promotion(promoted, topic)
+            and _passes_z4(promoted)
+        ):
+            return promoted
 
         # Pass 1: strict 1.0-score gate across every trailing tail.
         # Prefer an exact title match on any tail (even a short one)
         # over a typo-tolerant fuzzy match on a longer noisier tail.
-        # Post-b9 Z3 wired the accept gate into Pass 1 / Pass 2;
-        # post-b10 layers the multi-entity discriminator on top so
-        # the documented Pass 1 1-token-tail feature
-        # (``what is the population of detroit`` → ``Detroit``) keeps
-        # working when the non-tail tokens probe as single-entity.
         for tail in iter_query_tails(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(self.zim_operations, zim_file_path, tail)
             if promoted is not None and _accept_with_multi_entity_check(promoted):
@@ -3994,15 +4028,20 @@ class SimpleToolsHandler:
             if promoted is not None and _accept_with_multi_entity_check(promoted):
                 return promoted
         # Pass 3: 0.8 typo-tolerant gate. Only fires when no strict
-        # match exists at all — catches single-edit typos.
-        # Post-b4 D1: apply the same conditional ``fuzzy_suggest``
-        # filter as pass-0 so a fuzzy-suggest leak on a possessive
-        # topic can't sneak through the lower gate.
+        # match exists at all — catches single-edit typos. The bare
+        # ``accept_possessive_promotion`` + ``_passes_z4`` pair (no
+        # multi-entity escape) is the same shape as Pass 0; the
+        # escape's filler-prose pattern doesn't apply to typo-corrected
+        # tails.
         for tail in iter_query_tails(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(
                 self.zim_operations, zim_file_path, tail, min_score=0.8
             )
-            if promoted is not None and accept_possessive_promotion(promoted, topic):
+            if (
+                promoted is not None
+                and accept_possessive_promotion(promoted, topic)
+                and _passes_z4(promoted)
+            ):
                 return promoted
         return None
 
@@ -4457,6 +4496,28 @@ class SimpleToolsHandler:
             else article_body.rstrip()
         )
         body_is_disambig_page = self._is_disambig_lead(pre_h2_in_body)
+        # Post-b11 Sub-pattern C: when the auto-picked canonical's body
+        # IS a disambig page AND the topic has 2+ meaningful (non-stop-
+        # word) tokens, the user clearly wanted a specific article (the
+        # `Lincoln slavery emancipation` → `Lincoln` disambig case at
+        # v2.0.0b11). Fall back to plain BM25 search so the LLM sees
+        # the ranked specific articles instead of the disambig list.
+        # Single-content-token topics (``tell me about Lincoln``) are
+        # the bare-head case and legitimately want the disambig — the
+        # ``len >= 2`` floor preserves that. ``has_apostrophe_possessive``
+        # bypass: possessive queries (``Lincoln's emancipation``) carry
+        # their own intent signal that's already handled by OPP-1 at
+        # the promotion layer.
+        if body_is_disambig_page and not has_apostrophe_possessive(topic):
+            disambig_content_tokens = [
+                t
+                for t in _TAIL_TOKEN_RE.findall(topic.lower())
+                if t not in _DISCRIMINATOR_STOP_WORDS
+            ]
+            if len(disambig_content_tokens) >= 2:
+                return self.zim_operations.search_zim_file(
+                    zim_file_path, topic, search_limit, 0
+                )
         if disambig_twin_path and not body_is_disambig_page:
             result = result + (
                 f"\n\n_Note: this topic also has a disambiguation page — "

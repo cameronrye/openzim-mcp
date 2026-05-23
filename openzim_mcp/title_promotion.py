@@ -671,6 +671,257 @@ def count_non_tail_strong_entities(
     return count
 
 
+def is_tangential_multi_token_shape(promoted: Dict[str, Any], topic: str) -> bool:
+    """Post-b11 Z4: shape predicate for multi-token canonical tangential
+    promotions.
+
+    Returns True iff ``promoted``'s canonical path is multi-token AND
+    its tokens are NOT a subset of the topic's tokens. The subset rule
+    preserves the b8 ``Apollo 11 moon landing`` → ``Moon_landing`` and
+    ``Lincoln Gettysburg Address`` → ``Gettysburg_Address`` invariants
+    (canonical ⊆ topic = generalization of topic, NOT tangential), while
+    flagging the silent-wrong-answer pattern at v2.0.0b11 where the
+    canonical contains the topic head as a subordinate (possessive,
+    parenthetical, stem prefix) AND adds modifier tokens that the user
+    never supplied:
+
+      * ``Tesla electricity`` → ``Tesla's_Wireless_Electricity`` (extras:
+        ``wireless``)
+      * ``Mozart Vienna`` → ``Mozarthaus_Vienna`` (extras: ``mozarthaus``)
+      * ``Lenin Russia`` → ``Leninist_Komsomol_of_the_Russian_Federation``
+        (extras: ``leninist``, ``komsomol``, ``of``, ``the``, ``russian``,
+        ``federation``)
+      * ``Beethoven symphony`` → ``Symphony_No._1_(Beethoven)`` (extras:
+        ``no``, ``1``)
+
+    Topic-size guards:
+
+      * Topics with <2 tokens: no head/modifier distinction, no Z4. The
+        bare-head case (``Picasso``) already routes through
+        ``is_strong_title_match`` at the BM25 stage.
+      * Single-token canonicals: ``is_tail_hijack_shape`` territory
+        (b9/b10 single-token-tail rule).
+
+    Sibling shape predicate to ``is_tail_hijack_shape``: the b11 b10 rule
+    catches 1-token-tail hijacks; this catches the symmetric multi-token
+    case. The discriminator at the call site layers exemptions on top
+    (biographical canonical via head probe, numbered-instance via digit
+    specificity) — this predicate is pure logic.
+    """
+    topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
+    if len(topic_tokens_seq) < 2:
+        return False
+    cand_path = str(promoted.get("path", ""))
+    cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
+    if len(cand_tokens_seq) < 2:
+        return False
+    topic_tokens = set(topic_tokens_seq)
+    # Filter function-word tokens (articles, conjunctions, prepositions)
+    # from the canonical when checking subset. These structural tokens
+    # ("of", "the", "a", "and") surface in canonical paths like
+    # ``Constitution_of_the_United_States`` or
+    # ``Assassination_of_John_F._Kennedy`` without changing the
+    # canonical's identity — they shouldn't flag the canonical as
+    # tangential just because the topic ``united states constitution``
+    # or ``john f kennedy assassination`` omits them. Verbs and pronouns
+    # stay OUT of this filter: ``Made_in_USA`` (canonical extra ``made``)
+    # for topic ``USA products`` SHOULD reject (user didn't ask for the
+    # ``Made in USA`` label specifically).
+    cand_meaningful = set(cand_tokens_seq) - _CANONICAL_FUNCTION_WORDS
+    return not cand_meaningful.issubset(topic_tokens)
+
+
+# Narrow function-word filter for the Z4 canonical-subset check —
+# articles, conjunctions, and prepositions that surface in canonical
+# paths without changing the canonical's meaning. Distinct from
+# ``_DISCRIMINATOR_STOP_WORDS`` (which is broader, used for head-
+# selection and entity-probe filtering) because we don't want to
+# filter verbs or pronouns from the canonical (``Made_in_USA`` should
+# NOT be treated as ``USA`` for the subset comparison).
+_CANONICAL_FUNCTION_WORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "nor",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "from",
+        "by",
+        "with",
+        "for",
+        "as",
+        "into",
+        "onto",
+        "over",
+        "under",
+    }
+)
+
+
+def probed_head_matches_promoted(
+    topic: str,
+    promoted: Dict[str, Any],
+    title_probe: Callable[[str], Optional[Dict[str, Any]]],
+) -> bool:
+    """Post-b11 Z4 biographical-canonical exemption: probe each non-
+    stop-word topic token; True iff ANY probe's canonical path (or
+    pre-redirect path) equals the promoted candidate's path AND the
+    probed token literally appears in the promoted canonical's tokens.
+
+    The "subject" position in a topic varies — sometimes head
+    (``Picasso Paris cubism`` → subject ``Picasso`` at position 0,
+    promoted ``Pablo_Picasso``), sometimes tail (``quantum mechanics
+    Einstein`` → subject ``Einstein`` at position 2, promoted
+    ``Albert_Einstein``). Probing only the head misses the tail-subject
+    case; probing all positions catches it.
+
+    The TOKEN-IN-CANONICAL guard prevents accidental over-acceptance:
+    ``Darwin evolution Galapagos`` → ``Galápagos_Islands`` would also
+    match if we accepted on path-only — ``galapagos`` probes to
+    ``Galápagos_Islands`` which equals promoted. But raw token
+    comparison shows ``galapagos`` ∉ canonical tokens ``{galápagos,
+    islands}`` (accent difference), so the guard correctly rejects.
+    The same guard rejects ``Lenin Russia`` →
+    ``Leninist_Komsomol_of_the_Russian_Federation`` (probes don't
+    match promoted path) and ``Tesla electricity`` →
+    ``Tesla's_Wireless_Electricity`` (probes return ``Nikola_Tesla`` /
+    ``Electricity``, neither matches promoted).
+
+    Stop-word topic tokens are skipped (``the picasso paintings``
+    skips ``the``, lands on ``picasso``). Probe exceptions are
+    swallowed for transient-error tolerance.
+    """
+    tokens = _TAIL_TOKEN_RE.findall(topic.lower())
+    promoted_path = str(promoted.get("path", "")).lower()
+    if not promoted_path:
+        return False
+    cand_tokens = set(_TAIL_TOKEN_RE.findall(promoted_path))
+    for tok in tokens:
+        if tok in _DISCRIMINATOR_STOP_WORDS:
+            continue
+        # Token-in-canonical guard runs FIRST — cheap pre-filter. A
+        # probe that wouldn't satisfy this guard is wasted work.
+        if tok not in cand_tokens:
+            continue
+        try:
+            result = title_probe(tok)
+        except Exception:
+            continue
+        if result is None:
+            continue
+        probe_path = str(result.get("path", "")).lower()
+        probe_pre = str(result.get("pre_redirect_path", "") or "").lower()
+        if probe_path == promoted_path or probe_pre == promoted_path:
+            return True
+    return False
+
+
+def has_digit_specificity_match(promoted: Dict[str, Any], topic: str) -> bool:
+    """Post-b11 Z4 digit-specificity exemption: True iff the canonical's
+    extras (tokens NOT in topic) include a digit-bearing token AND the
+    topic also has a digit-bearing token.
+
+    Without this exemption, Z4 over-rejects legitimate numbered sub-
+    article promotions — ``Beethoven 9th symphony`` →
+    ``Symphony_No._9_(Beethoven)`` has canonical extras ``{no, 9}`` and
+    the topic explicitly carries the ordinal ``9th``. The user signaled
+    they want a numbered instance; the canonical's digit matches.
+    Allow.
+
+    The asymmetric "extras digit AND topic digit" shape distinguishes
+    legitimate numbered queries from defect cases like ``Beethoven
+    symphony`` → ``Symphony_No._1_(Beethoven)`` (canonical has digit
+    extra ``1``, topic has NO digit — user never asked for symphony #1
+    specifically; this is the system silently picking one instance).
+    Subset cases (``Apollo 11`` for ``apollo 11 mission`` where the
+    canonical digit ``11`` is already in topic, so no digit extras) are
+    handled by the subset rule in ``is_tangential_multi_token_shape``
+    before reaching this check — no extras means no exemption claim.
+    """
+    cand_path = str(promoted.get("path", ""))
+    cand_tokens = set(_TAIL_TOKEN_RE.findall(cand_path.lower()))
+    topic_tokens = set(_TAIL_TOKEN_RE.findall(topic.lower()))
+    extras = cand_tokens - topic_tokens
+    return _any_token_has_digit(extras) and _any_token_has_digit(topic_tokens)
+
+
+def _any_token_has_digit(tokens: set[str]) -> bool:
+    """True iff any token in ``tokens`` contains an ASCII digit
+    character. Used by ``has_digit_specificity_match`` to detect
+    ordinal/numbered tokens like ``9th``, ``11``, ``1949``."""
+    return any(any(c.isdigit() for c in t) for t in tokens)
+
+
+def has_topic_prefix_canonical_extension(promoted: Dict[str, Any], topic: str) -> bool:
+    """Post-b11 Z4 type-extension exemption: canonical's LEADING tokens
+    form a contiguous slice of the topic's tokens (length ≥ 2), AND the
+    remaining canonical tail tokens are all extras (not in topic).
+
+    Catches the type-name extension pattern: ``Big Rapids Michigan
+    Ferris State`` (topic) → ``Ferris_State_University`` (canonical
+    starts with topic-slice ``ferris state``, adds type word
+    ``university``).  This is symmetric to the biographical-prefix
+    pattern handled by ``probed_head_matches_promoted`` (matched
+    tokens at SUFFIX of canonical, extras at prefix); the
+    type-extension case has matched tokens at PREFIX, extras at
+    suffix.
+
+    Requires the matched slice to be at least 2 tokens long. A
+    1-token slice would over-match — single-token coincidences are
+    common in tangential promotions (``Lenin Russia`` →
+    ``Leninist_Komsomol_of_the_Russian_Federation`` shares 0 raw
+    tokens; ``Mao China revolution`` shares only ``china`` at
+    canonical position 6 of 9). The 2-token floor pins the rule to
+    the "type extension" shape where the matched slice is a coherent
+    entity name.
+
+    Defect cases stay rejected — none of them have a canonical
+    starting with a contiguous 2+-token topic slice:
+
+      * ``Tesla electricity`` → ``Tesla's_Wireless_Electricity``:
+        canonical prefix ``tesla's`` ≠ topic ``tesla`` (raw token
+        comparison), so the prefix-match search fails.
+      * ``Mozart Vienna`` → ``Mozarthaus_Vienna``: canonical prefix
+        ``mozarthaus`` ≠ topic ``mozart``.
+      * ``Lenin Russia`` → ``Leninist_Komsomol_...``: canonical
+        prefix ``leninist`` ≠ topic ``lenin``.
+      * ``Beethoven symphony`` → ``Symphony_No._1_(Beethoven)``:
+        canonical prefix [``symphony``, ``no``] not contiguous in
+        topic.
+    """
+    cand_path = str(promoted.get("path", ""))
+    cand_tokens = _TAIL_TOKEN_RE.findall(cand_path.lower())
+    if len(cand_tokens) < 2:
+        return False
+    topic_tokens = _TAIL_TOKEN_RE.findall(topic.lower())
+    if len(topic_tokens) < 2:
+        return False
+    topic_set = set(topic_tokens)
+    # Try the longest canonical prefix first; the first match wins.
+    # Longest-first ensures multi-token entity names ("Ferris State")
+    # are detected before any shorter coincidental prefix.
+    for prefix_len in range(min(len(cand_tokens), len(topic_tokens)), 1, -1):
+        prefix = cand_tokens[:prefix_len]
+        suffix = cand_tokens[prefix_len:]
+        # The suffix must be all extras — if any suffix token also
+        # appears in topic, this isn't a clean type-extension shape.
+        if any(t in topic_set for t in suffix):
+            continue
+        # Look for ``prefix`` as a contiguous slice anywhere in
+        # topic_tokens.
+        for start_idx in range(len(topic_tokens) - prefix_len + 1):
+            if topic_tokens[start_idx : start_idx + prefix_len] == prefix:
+                return True
+    return False
+
+
 def _accept_possessive_fuzzy_suggest(promoted: Dict[str, Any], topic: str) -> bool:
     """Accept gate for possessive topic + ``match_type="fuzzy_suggest"``.
 
