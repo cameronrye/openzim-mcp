@@ -3941,9 +3941,16 @@ class SimpleToolsHandler:
         # Pass 1: strict 1.0-score gate across every trailing tail.
         # Prefer an exact title match on any tail (even a short one)
         # over a typo-tolerant fuzzy match on a longer noisier tail.
+        # Post-b9 Z3: gate every pass through accept_possessive_promotion
+        # so the non-possessive tail-token-hijack rule fires here too.
+        # The b9 Z3 rule was wired into accept_possessive_promotion but
+        # Pass 1 (and Pass 2) returned ``promoted`` directly without
+        # consulting the gate, so the live Stalin USSR Russia → Russia
+        # silent-wrong-answer (Pass 1's 1-token tail ``"russia"`` →
+        # direct match) sailed past unchecked.
         for tail in iter_query_tails(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(self.zim_operations, zim_file_path, tail)
-            if promoted is not None:
+            if promoted is not None and accept_possessive_promotion(promoted, topic):
                 return promoted
         # Pass 2: strict 1.0-score gate across non-trailing windows.
         # Catches head/middle-positioned entities like
@@ -3951,7 +3958,7 @@ class SimpleToolsHandler:
         # (more specific) windows win.
         for window in iter_query_windows(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(self.zim_operations, zim_file_path, window)
-            if promoted is not None:
+            if promoted is not None and accept_possessive_promotion(promoted, topic):
                 return promoted
         # Pass 3: 0.8 typo-tolerant gate. Only fires when no strict
         # match exists at all — catches single-edit typos.
