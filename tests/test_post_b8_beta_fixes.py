@@ -105,64 +105,16 @@ Direct/redirect/missing branches are unchanged.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
-from unittest.mock import patch
+from typing import Any, Dict, Optional
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Shared fixtures (mirror post-b6 / post-b7 conventions — see those
-# files for the rationale)
-# ---------------------------------------------------------------------------
-
-
-def _make_simple_handler() -> Any:
-    """Return a stub ``SimpleToolsHandler``-shaped object."""
-
-    class _StubOps:
-        pass
-
-    class _Handler:
-        zim_operations = _StubOps()
-
-    return _Handler()
-
-
-def _fake_find_title_match(
-    mapping: Dict[str, Optional[Dict[str, Any]]],
-    *,
-    min_score_floor: float = 0.0,
-) -> Callable[..., Optional[Dict[str, Any]]]:
-    """Build a ``find_title_match`` stand-in from ``{topic_lower: row}``."""
-
-    def fake(
-        zim_ops: Any,
-        zim_file_path: str,
-        topic: str,
-        *,
-        cross_file: bool = False,
-        min_score: float = 1.0,
-    ) -> Optional[Dict[str, Any]]:
-        if min_score > min_score_floor and min_score_floor > 0.0:
-            return None
-        return mapping.get(topic.lower())
-
-    return fake
-
-
-def _run_promote_simple(
-    topic: str, fake_find: Callable[..., Optional[Dict[str, Any]]]
-) -> Optional[Dict[str, Any]]:
-    """Drive ``_promote_topic_via_title_index`` with ``fake_find`` patched."""
-    from openzim_mcp.simple_tools import SimpleToolsHandler
-
-    with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake_find):
-        return SimpleToolsHandler._promote_topic_via_title_index(
-            _make_simple_handler(),
-            "test.zim",
-            topic,
-        )
-
+from tests._promote_fixtures import (
+    fake_find_title_match as _fake_find_title_match,
+)
+from tests._promote_fixtures import (
+    run_promote_simple as _run_promote_simple,
+)
 
 # ---------------------------------------------------------------------------
 # Z3: non-possessive multi-token tail-hijack — direct unit tests

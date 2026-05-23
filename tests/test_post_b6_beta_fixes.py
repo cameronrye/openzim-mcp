@@ -63,6 +63,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests._promote_fixtures import (
+    fake_find_title_match as _fake_find_title_match,
+)
+from tests._promote_fixtures import (
+    run_promote_simple as _run_promote_simple,
+)
+
 # ---------------------------------------------------------------------------
 # Shared fixtures / mock-builders.
 #
@@ -75,19 +82,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _make_simple_handler() -> Any:
-    """Return a stub ``SimpleToolsHandler``-shaped object suitable for
-    calling ``_promote_topic_via_title_index`` unbound."""
-
-    class _StubOps:
-        pass
-
-    class _Handler:
-        zim_operations = _StubOps()
-
-    return _Handler()
-
-
 def _archive_stub() -> Any:
     """Lightweight stub for libzim ``Archive`` — only needs identity
     for ``zip(archives, archives_searched)`` iteration in synthesize."""
@@ -96,35 +90,6 @@ def _archive_stub() -> Any:
         pass
 
     return _Archive()
-
-
-def _fake_find_title_match(
-    mapping: Dict[str, Optional[Dict[str, Any]]],
-    *,
-    min_score_floor: float = 0.0,
-) -> Callable[..., Optional[Dict[str, Any]]]:
-    """Build a ``find_title_match`` stand-in from ``{topic_lower: row}``.
-
-    Returns the mapped row when ``topic.lower()`` is a key AND the
-    caller's ``min_score`` is at or below ``min_score_floor`` (default
-    0.0 = no threshold check). Each test passes ``min_score_floor=0.95``
-    when it wants the stub to mimic the libzim suggestion-rank cap
-    (rows at score 0.95 only visible when caller requests ≤ 0.95).
-    """
-
-    def fake(
-        zim_ops: Any,
-        zim_file_path: str,
-        topic: str,
-        *,
-        cross_file: bool = False,
-        min_score: float = 1.0,
-    ) -> Optional[Dict[str, Any]]:
-        if min_score > min_score_floor and min_score_floor > 0.0:
-            return None
-        return mapping.get(topic.lower())
-
-    return fake
 
 
 def _fake_title_match_hit(
@@ -136,21 +101,6 @@ def _fake_title_match_hit(
         return mapping.get(title.lower())
 
     return fake
-
-
-def _run_promote_simple(
-    topic: str, fake_find: Callable[..., Optional[Dict[str, Any]]]
-) -> Optional[Dict[str, Any]]:
-    """Drive ``SimpleToolsHandler._promote_topic_via_title_index`` with
-    ``fake_find`` patched at the import site."""
-    from openzim_mcp.simple_tools import SimpleToolsHandler
-
-    with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake_find):
-        return SimpleToolsHandler._promote_topic_via_title_index(
-            _make_simple_handler(),
-            "test.zim",
-            topic,
-        )
 
 
 def _run_promote_synthesize(
