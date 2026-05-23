@@ -354,30 +354,119 @@ def accept_possessive_promotion(promoted: Dict[str, Any], topic: str) -> bool:
     Missing/unknown ``match_type`` is accepted for backwards-compat
     with older callers and test mocks that don't annotate the row.
     """
-    if not has_apostrophe_possessive(topic):
-        return True
     match_type = promoted.get("match_type")
+    if not has_apostrophe_possessive(topic):
+        return _accept_non_possessive(promoted, topic, match_type)
     if match_type == "direct":
         return True
     if match_type == "fuzzy_suggest":
-        return False
+        return _accept_possessive_fuzzy_suggest(promoted, topic)
     if match_type == "redirect":
-        pre_path = promoted.get("pre_redirect_path", "") or promoted.get("path", "")
-        # ``_TOKEN_RE`` is the same ASCII-alphanumerics tokenizer
-        # ``is_strong_title_match`` uses, so pre-path-vs-topic
-        # comparison stays symmetric with the rest of the title-
-        # promotion pipeline.
-        pre_tokens = set(_TOKEN_RE.findall(pre_path.lower()))
-        if not pre_tokens:
-            # Empty pre-path (shouldn't happen in practice but the
-            # data layer doesn't strictly require non-empty) — fall
-            # back to the legacy possessor-containment check so we
-            # don't silently reject a row a sibling code path
-            # depends on.
-            return True
-        topic_tokens = set(_TOKEN_RE.findall(topic.lower()))
-        return pre_tokens.issubset(topic_tokens)
+        return _accept_possessive_redirect(promoted, topic)
     return True
+
+
+def _accept_non_possessive(
+    promoted: Dict[str, Any], topic: str, match_type: Any
+) -> bool:
+    """Accept gate for non-possessive topics.
+
+    Post-b8 Z3: non-possessive multi-token topics can still leak a
+    hijack via Pass 0's full-topic probe at min_score=0.95 — libzim's
+    title-suggest fuzzy-matches a single strong token in the topic
+    and returns that token's canonical alone. The b4 D2 raised-
+    min_len protection covered only possessives. Live silent-wrong-
+    answers at v2.0.0b8 (cert=0.85): Stalin USSR Russia → Russia,
+    Hitler Germany Berlin → Berlin, Marie Curie polonium discovery →
+    Discovery (a disambig page!), Big Rapids Michigan tourism →
+    Tourism (contradicts iter_query_windows docstring), O'Brien
+    character 1984 → 1984 (the year), Marie Curie radioactivity →
+    Radioactive_(Redniss_book) (an obscure 2010 graphic novel
+    surfaced via stemming).
+
+    Two narrow rejections for non-possessive + fuzzy_suggest when the
+    topic has 3+ tokens:
+
+      (a) **Tail-token hijack** — canonical is a single token equal
+          to the topic's LAST token. The user typed
+          ``<subject> ... <generic>``; libzim returned the generic
+          article. ``Hamlet Denmark prince`` → ``Hamlet`` stays
+          accepted because the canonical sits at the HEAD position,
+          not the tail.
+      (b) **Zero-overlap stemming hit** — canonical's tokens have
+          zero exact-overlap with topic's tokens (the match was via
+          stemming only). The 2010 graphic novel
+          ``Radioactive_(Redniss_book)`` surfaced for ``Marie Curie
+          radioactivity`` because libzim's title index stems
+          ``radioactivity`` to ``radioactive``; no other topic token
+          matches the canonical, so the hit is one-stem-token-deep —
+          too thin a signal to auto-fetch.
+
+    Topics with <3 tokens are unaffected — ``Berlin Germany`` →
+    ``Berlin`` resolves via ``is_strong_title_match`` at the BM25
+    stage anyway, and 2-token possessive carve-outs are handled by
+    the possessive branch.
+    """
+    if match_type != "fuzzy_suggest":
+        return True
+    topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
+    if len(topic_tokens_seq) < 3:
+        return True
+    cand_path = str(promoted.get("path", ""))
+    cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
+    if len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]:
+        return False
+    if not (set(cand_tokens_seq) & set(topic_tokens_seq)):
+        return False
+    return True
+
+
+def _accept_possessive_fuzzy_suggest(promoted: Dict[str, Any], topic: str) -> bool:
+    """Accept gate for possessive topic + ``match_type="fuzzy_suggest"``.
+
+    Post-b8 OPP-1: the b6 D1 blanket-reject for possessive +
+    fuzzy_suggest is too strict when the canonical preserves the
+    user's possessor token literally. Live: ``Newton's gravity``
+    falls to BM25 even though ``Newton's_law_of_universal_gravitation``
+    is the obvious rank-1 BM25 canonical AND contains ``newton`` in
+    the path. Carve-out: ACCEPT iff the canonical path tokens include
+    any of the topic's possessor tokens. Original b6 attack surfaces
+    continue to reject — ``Darwin's evolution`` → ``Evolution`` has
+    no ``darwin`` in path, ``Plato's republic philosophy`` →
+    ``Czech_philosophy`` has no ``plato`` in path. Uses ``_TOKEN_RE``
+    (apostrophe-splitting) so ``newton's`` in the canonical surfaces
+    as the bare token ``newton`` for comparison with the possessor
+    list — the same tokenizer the redirect-branch subset rule uses,
+    keeping both branches symmetric.
+    """
+    cand_path = str(promoted.get("path", ""))
+    cand_tokens = set(_TOKEN_RE.findall(cand_path.lower()))
+    possessors = set(extract_possessor_tokens(topic))
+    return bool(possessors & cand_tokens)
+
+
+def _accept_possessive_redirect(promoted: Dict[str, Any], topic: str) -> bool:
+    """Accept gate for possessive topic + ``match_type="redirect"``.
+
+    b8 Z1.1 subset rule: pre-redirect path's tokens must be a subset
+    of the topic's tokens. Catches both b6 Z1 associative redirects
+    (pre-path unrelated to user's possessor) and b8 Z1.1 truncation
+    redirects (pre-path is a longer phrase the user truncated).
+    """
+    pre_path = promoted.get("pre_redirect_path", "") or promoted.get("path", "")
+    # ``_TOKEN_RE`` is the same ASCII-alphanumerics tokenizer
+    # ``is_strong_title_match`` uses, so pre-path-vs-topic
+    # comparison stays symmetric with the rest of the title-
+    # promotion pipeline.
+    pre_tokens = set(_TOKEN_RE.findall(pre_path.lower()))
+    if not pre_tokens:
+        # Empty pre-path (shouldn't happen in practice but the data
+        # layer doesn't strictly require non-empty) — fall back to
+        # accept so we don't silently reject a row a sibling code
+        # path depends on.
+        return True
+    topic_tokens = set(_TOKEN_RE.findall(topic.lower()))
+    return pre_tokens.issubset(topic_tokens)
 
 
 def iter_query_tails(
