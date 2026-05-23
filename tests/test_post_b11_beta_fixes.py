@@ -1096,3 +1096,303 @@ class TestHasDigitSpecificityMatch:
         # extras with digits → False (no narrowing claim to exempt).
         promoted = {"path": "Apollo_11"}
         assert has_digit_specificity_match(promoted, "apollo 11 mission") is False
+
+
+# ---------------------------------------------------------------------------
+# Synthesize Pass 0 Z4 protection — symmetric to simple_tools Pass 0.
+# synthesize.py's Pass 0 ``_promote_title_match`` calls
+# ``find_title_match`` + ``accept_possessive_promotion`` with the same
+# vulnerability shape as simple_tools. Z4 layer must apply here too.
+# ---------------------------------------------------------------------------
+
+
+def _archive_stub_synthesize() -> Any:
+    class _Archive:
+        pass
+
+    return _Archive()
+
+
+def _run_promote_synthesize(
+    query: str,
+    mapping: Dict[str, Optional[Dict[str, Any]]],
+    top_hits: Optional[list] = None,
+) -> list:
+    """Drive ``synthesize._promote_title_match`` with the mapping
+    serving as the find_title_match stand-in for both Pass 0 (full
+    query) and Z4 head/tail probes."""
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.synthesize import _promote_title_match
+
+    fake = _fake_find_title_match(mapping)
+    handler = MagicMock()
+    handler.title_match_hit = lambda _a, _q: None
+    with patch("openzim_mcp.synthesize.find_title_match", side_effect=fake):
+        return _promote_title_match(
+            top_hits or [],
+            query=query,
+            archives=[(_archive_stub_synthesize(), "/wiki.zim")],
+            archives_searched=["wiki"],
+            search_handler=handler,
+        )
+
+
+class TestSynthesizeZ4Protection:
+    """Pre-existing gap: synthesize.py Pass 0 (line 1022) consults
+    ``accept_possessive_promotion`` but lacks the b11 Z4 layer. The
+    same multi-token tangential silent-wrong-answer pattern can
+    surface via synthesize=True. This class pins the fix shape:
+    Z4 rejects in synthesize symmetrically with simple_tools."""
+
+    def test_tesla_electricity_rejected_in_synthesize(self) -> None:
+        """Synthesize Pass 0 must reject ``Tesla's_Wireless_Electricity``
+        for ``tesla electricity`` — the canonical contains the head as
+        possessive subordinate + adds modifier ``wireless`` not in topic.
+        Head probe ``tesla`` returns ``Nikola_Tesla`` ≠ promoted →
+        biographical exemption fails → reject."""
+        mapping: Dict[str, Optional[Dict[str, Any]]] = {
+            "tesla electricity": {
+                "path": "Tesla's_Wireless_Electricity",
+                "title": "Tesla's Wireless Electricity",
+                "zim_file": "/wiki.zim",
+                "match_type": "fuzzy_suggest",
+            },
+            "tesla": {
+                "path": "Nikola_Tesla",
+                "title": "Nikola Tesla",
+                "zim_file": "/wiki.zim",
+                "match_type": "redirect",
+                "pre_redirect_path": "Tesla",
+            },
+            "electricity": {
+                "path": "Electricity",
+                "title": "Electricity",
+                "zim_file": "/wiki.zim",
+                "match_type": "direct",
+            },
+        }
+        original_top = [
+            ("wiki", {"path": "Nikola_Tesla", "snippet": "...", "score": 0.7}),
+            (
+                "wiki",
+                {"path": "Electrical_engineering", "snippet": "...", "score": 0.5},
+            ),
+        ]
+        promoted = _run_promote_synthesize(
+            "tesla electricity", mapping, top_hits=original_top
+        )
+        # Z4 rejects → either top_hits unchanged OR Pass-1/2 finds a
+        # different canonical; either way Tesla's_Wireless_Electricity
+        # must NOT be at rank 0.
+        assert (
+            len(promoted) == 0
+            or promoted[0][1].get("path") != "Tesla's_Wireless_Electricity"
+        ), (
+            "Z4 must reject `Tesla's_Wireless_Electricity` in synthesize "
+            f"Pass 0; got {promoted!r}"
+        )
+
+    def test_picasso_paris_cubism_biographical_accepts_in_synthesize(self) -> None:
+        """Counter-case: biographical exemption fires in synthesize
+        too. ``picasso paris cubism`` head probe ``picasso`` resolves
+        to ``Pablo_Picasso`` = promoted candidate → exempt → accept."""
+        mapping: Dict[str, Optional[Dict[str, Any]]] = {
+            "picasso paris cubism": {
+                "path": "Pablo_Picasso",
+                "title": "Pablo Picasso",
+                "zim_file": "/wiki.zim",
+                "match_type": "redirect",
+                "pre_redirect_path": "Picasso",
+            },
+            "picasso": {
+                "path": "Pablo_Picasso",
+                "title": "Pablo Picasso",
+                "zim_file": "/wiki.zim",
+                "match_type": "redirect",
+                "pre_redirect_path": "Picasso",
+            },
+            "paris": {
+                "path": "Paris",
+                "title": "Paris",
+                "zim_file": "/wiki.zim",
+                "match_type": "direct",
+            },
+            "cubism": {
+                "path": "Cubism",
+                "title": "Cubism",
+                "zim_file": "/wiki.zim",
+                "match_type": "direct",
+            },
+        }
+        promoted = _run_promote_synthesize("picasso paris cubism", mapping)
+        # Biographical exemption accepts → Pablo_Picasso promoted to rank 0.
+        assert len(promoted) >= 1
+        assert promoted[0][1].get("path") == "Pablo_Picasso"
+
+    def test_possessive_query_unaffected_in_synthesize(self) -> None:
+        """Possessive queries bypass Z4 in synthesize (OPP-1 path):
+        ``Newton's gravity`` → ``Newton's_law_of_universal_gravitation``
+        still promotes."""
+        mapping: Dict[str, Optional[Dict[str, Any]]] = {
+            "newton's gravity": {
+                "path": "Newton's_law_of_universal_gravitation",
+                "title": "Newton's law of universal gravitation",
+                "zim_file": "/wiki.zim",
+                "match_type": "redirect",
+                "pre_redirect_path": "Newton's_law_of_gravity",
+            },
+        }
+        promoted = _run_promote_synthesize("newton's gravity", mapping)
+        assert len(promoted) >= 1
+        assert promoted[0][1].get("path") == "Newton's_law_of_universal_gravitation"
+
+
+# ---------------------------------------------------------------------------
+# Sub-pattern C: disambig promotion at tell_me_about. When the auto-
+# picked canonical's body IS a disambig page AND the topic has 2+
+# meaningful (non-stop-word) tokens, fall back to BM25 search.
+# ---------------------------------------------------------------------------
+
+
+_LINCOLN_DISAMBIG_PRE_H2 = (
+    "Look up _**Lincoln**_ in Wiktionary, the free dictionary.\n\n"
+    "**Lincoln** most commonly refers to: \n\n"
+    "  * Abraham Lincoln (1809–1865), the 16th president of the "
+    "United States\n"
+    "  * Lincoln, England, cathedral city and county town of "
+    "Lincolnshire, England\n"
+    "  * Lincoln, Nebraska, the capital of Nebraska, U.S.\n"
+    "  * Lincoln (name), a surname and given name\n"
+    "  * Lincoln Motor Company, a Ford brand\n\n"
+    "**Lincoln** may also refer to:"
+)
+
+
+class TestSubPatternCDisambigRejection:
+    """Sub-pattern C: ``Lincoln slavery emancipation`` →
+    ``Lincoln`` (disambig page). When the auto-picked canonical body
+    matches the disambig-lead pattern AND the topic has 2+
+    meaningful tokens, the user wanted a specific article — fall
+    back to BM25 search so the LLM sees the ranked specific articles
+    instead of the disambig list."""
+
+    @staticmethod
+    def _make_handler(
+        *,
+        article_body: str,
+        search_results: list,
+        title_index: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.search_zim_file_data.return_value = {"results": search_results}
+        mock.search_zim_file.return_value = "## BM25 fallback rendered\n\n..."
+        mock.get_zim_entry.return_value = article_body
+        mock.config.meta.footer_enabled = False
+        mock.find_entry_by_title_data.return_value = (
+            {"results": [title_index]} if title_index else {"results": []}
+        )
+        mock.get_article_structure_data.return_value = {"sections": []}
+        return SimpleToolsHandler(mock), mock
+
+    def test_lincoln_multi_token_falls_to_search(self) -> None:
+        """Multi-content-token topic + disambig body → fall back."""
+        disambig_body = (
+            f"# Lincoln\n\n{_LINCOLN_DISAMBIG_PRE_H2}\n\n"
+            "## Places\n  * Lincoln, Alabama\n"
+        )
+        handler, mock = self._make_handler(
+            article_body=disambig_body,
+            search_results=[
+                {"path": "Lincoln", "title": "Lincoln", "score": 100},
+            ],
+            title_index={"path": "Lincoln", "title": "Lincoln", "score": 1.0},
+        )
+        out = handler.handle_zim_query(
+            "tell me about Lincoln slavery emancipation",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        # The disambig auto-fetch must NOT win — caller sees BM25
+        # search fallback instead.
+        assert "## BM25 fallback rendered" in out
+        mock.search_zim_file.assert_called()
+
+    def test_lincoln_single_content_token_returns_disambig(self) -> None:
+        """Single-content-token topic (``tell me about Lincoln``)
+        legitimately wants the disambig — don't override."""
+        disambig_body = (
+            f"# Lincoln\n\n{_LINCOLN_DISAMBIG_PRE_H2}\n\n"
+            "## Places\n  * Lincoln, Alabama\n"
+        )
+        handler, mock = self._make_handler(
+            article_body=disambig_body,
+            search_results=[
+                {"path": "Lincoln", "title": "Lincoln", "score": 100},
+            ],
+            title_index={"path": "Lincoln", "title": "Lincoln", "score": 1.0},
+        )
+        out = handler.handle_zim_query(
+            "tell me about Lincoln",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        # Bare-head single-content-token topic: serve the disambig
+        # as the answer (the user asked for it).
+        assert "_Source: `Lincoln`_" in out
+        # Fallback search must NOT have fired for this case.
+        mock.search_zim_file.assert_not_called()
+
+    def test_lincoln_stop_words_only_filter_counts_correctly(self) -> None:
+        """Topic ``what is Lincoln`` — ``what`` and ``is`` are stop
+        words; effective content tokens = [``lincoln``] (1). Don't
+        override; serve disambig."""
+        disambig_body = (
+            f"# Lincoln\n\n{_LINCOLN_DISAMBIG_PRE_H2}\n\n"
+            "## Places\n  * Lincoln, Alabama\n"
+        )
+        handler, mock = self._make_handler(
+            article_body=disambig_body,
+            search_results=[
+                {"path": "Lincoln", "title": "Lincoln", "score": 100},
+            ],
+            title_index={"path": "Lincoln", "title": "Lincoln", "score": 1.0},
+        )
+        out = handler.handle_zim_query(
+            "what is Lincoln",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        # Effective content token count is 1 (lincoln) — keep
+        # disambig.
+        assert "_Source: `Lincoln`_" in out
+        mock.search_zim_file.assert_not_called()
+
+    def test_non_disambig_body_unaffected(self) -> None:
+        """Counter-case: when the auto-picked canonical body is NOT a
+        disambig page, the rejection logic doesn't fire even with
+        multi-content-token topics."""
+        normal_body = (
+            "# Berlin\n\n# Berlin\n\n**Berlin** is the capital of Germany.\n\n"
+            "## History\nFounded in the 13th century...\n"
+        )
+        handler, mock = self._make_handler(
+            article_body=normal_body,
+            search_results=[
+                {"path": "Berlin", "title": "Berlin", "score": 100},
+            ],
+            title_index={"path": "Berlin", "title": "Berlin", "score": 1.0},
+        )
+        out = handler.handle_zim_query(
+            "tell me about Berlin Germany capital",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        # Body isn't disambig — serve normally.
+        assert "_Source: `Berlin`_" in out
+        mock.search_zim_file.assert_not_called()

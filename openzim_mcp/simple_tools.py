@@ -26,6 +26,8 @@ from .meta import build_meta, format_footer
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
 from .title_promotion import (
+    _DISCRIMINATOR_STOP_WORDS,
+    _TAIL_TOKEN_RE,
     _TOKEN_RE,
     accept_possessive_promotion,
     count_non_tail_strong_entities,
@@ -4494,6 +4496,28 @@ class SimpleToolsHandler:
             else article_body.rstrip()
         )
         body_is_disambig_page = self._is_disambig_lead(pre_h2_in_body)
+        # Post-b11 Sub-pattern C: when the auto-picked canonical's body
+        # IS a disambig page AND the topic has 2+ meaningful (non-stop-
+        # word) tokens, the user clearly wanted a specific article (the
+        # `Lincoln slavery emancipation` → `Lincoln` disambig case at
+        # v2.0.0b11). Fall back to plain BM25 search so the LLM sees
+        # the ranked specific articles instead of the disambig list.
+        # Single-content-token topics (``tell me about Lincoln``) are
+        # the bare-head case and legitimately want the disambig — the
+        # ``len >= 2`` floor preserves that. ``has_apostrophe_possessive``
+        # bypass: possessive queries (``Lincoln's emancipation``) carry
+        # their own intent signal that's already handled by OPP-1 at
+        # the promotion layer.
+        if body_is_disambig_page and not has_apostrophe_possessive(topic):
+            disambig_content_tokens = [
+                t
+                for t in _TAIL_TOKEN_RE.findall(topic.lower())
+                if t not in _DISCRIMINATOR_STOP_WORDS
+            ]
+            if len(disambig_content_tokens) >= 2:
+                return self.zim_operations.search_zim_file(
+                    zim_file_path, topic, search_limit, 0
+                )
         if disambig_twin_path and not body_is_disambig_page:
             result = result + (
                 f"\n\n_Note: this topic also has a disambiguation page — "
