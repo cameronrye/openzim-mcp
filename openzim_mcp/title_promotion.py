@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -425,17 +425,17 @@ def _accept_non_possessive(
     redirect match by definition shares at least the matched token,
     so the rule is moot for those branches).
 
-    Discriminator — multi-entity vs filler-prose: the documented
-    Pass 1 1-token-tail feature MUST keep working for queries like
-    ``what is the population of detroit`` → ``Detroit`` and
-    ``people who live in michigan`` → ``Michigan`` (lowercase prose
-    + entity at tail). Only reject the tail-hijack when the topic
-    has 2+ "specific" tokens — tokens that are capitalized in the
-    original case OR digit-only. The silent-wrong-answer pattern is
-    distinguished by stacking multiple proper-noun-shaped tokens
-    (``Stalin USSR Russia``, ``Hitler Germany Berlin``, ``O'Brien
-    character 1984``); legitimate filler-prose queries have at most
-    one capitalized entity (the tail itself).
+    Post-b10 invariant: the b10 case-based discriminator (counting
+    capitalized + digit tokens in the original-case topic) was
+    fundamentally broken because ``IntentParser._normalize_topic_case``
+    (Tier 1 Rule 1) lowercases the query BEFORE topic extraction. By
+    the time this gate runs, the topic is uniformly lowercase — the
+    discriminator counted zero capitalized tokens and never fired on
+    live data. The multi-entity discriminator now lives at the call
+    site in ``_promote_topic_via_title_index`` as a probe-based check
+    (see ``count_non_tail_strong_entities``); this gate just emits
+    the unconditional tail-hijack rejection and lets the caller
+    override when its probe confirms the topic is single-entity.
     """
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if len(topic_tokens_seq) < 3:
@@ -443,10 +443,7 @@ def _accept_non_possessive(
     cand_path = str(promoted.get("path", ""))
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     if len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]:
-        original_tokens = _TAIL_TOKEN_RE.findall(topic)
-        specific_count = sum(1 for tok in original_tokens if _is_specific_token(tok))
-        if specific_count >= 2:
-            return False
+        return False
     if match_type == "fuzzy_suggest" and not (
         set(cand_tokens_seq) & set(topic_tokens_seq)
     ):
@@ -454,23 +451,224 @@ def _accept_non_possessive(
     return True
 
 
-def _is_specific_token(token: str) -> bool:
-    """True iff ``token`` looks like a specific entity / identifier
-    (capitalized word OR digit-only run) rather than filler prose.
+def is_tail_hijack_shape(promoted: Dict[str, Any], topic: str) -> bool:
+    """Pure-logic check: ``promoted`` is a single-token canonical
+    equal to the topic's LAST token, AND the topic has 3+ tokens.
 
-    Used by the Z3 tail-hijack discriminator to count how many
-    proper-noun-shaped tokens the topic carries before rejecting a
-    1-token-tail-equals-last-topic-token canonical. Two or more
-    "specific" tokens signal a multi-entity stack the user is
-    asking about jointly — making the trailing-tail auto-fetch a
-    silent-wrong-answer. Zero or one signals filler prose + a
-    single entity reference — making the trailing-tail auto-fetch
-    the user's actual subject.
+    The tail-hijack shape distinguishes the silent-wrong-answer
+    pattern from legitimate multi-token matches:
+
+      * ``Stalin USSR Russia`` → ``Russia``: single-token canonical
+        equal to topic[-1:] → tail-hijack shape.
+      * ``Hamlet Denmark prince`` → ``Hamlet``: single-token
+        canonical at HEAD position → NOT a tail-hijack shape.
+      * ``Apollo 11 moon landing`` → ``Moon_landing``: multi-token
+        canonical → NOT a tail-hijack shape.
+      * ``Berlin Germany`` → ``Berlin``: 2-token topic → NOT a
+        tail-hijack shape (the b4 carve-out invariant).
+
+    Callers that want the rejection to fire conditionally
+    (e.g., only when the topic ALSO probes as multi-entity) check
+    this shape predicate first and then layer on the probe.
     """
-    if not token:
+    topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
+    if len(topic_tokens_seq) < 3:
         return False
-    first = token[0]
-    return first.isupper() or token.isdigit()
+    cand_path = str(promoted.get("path", ""))
+    cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
+    return len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]
+
+
+# English stop-word inventory used by the multi-entity discriminator
+# to skip tokens that are not entities even when libzim's title index
+# happens to resolve them (``What``, ``Is``, ``The``, ``Of`` all exist
+# as articles or disambiguation pages on Wikipedia). The list is
+# conservative — only words that are clearly non-content in a
+# tell-me-about query. Domain-specific common words (``population``,
+# ``character``, ``radioactivity``) deliberately stay OUT so the
+# discriminator still catches multi-entity queries that happen to
+# include those words.
+_DISCRIMINATOR_STOP_WORDS: frozenset[str] = frozenset(
+    {
+        # Question words
+        "what",
+        "when",
+        "where",
+        "who",
+        "whom",
+        "whose",
+        "which",
+        "why",
+        "how",
+        # Articles
+        "a",
+        "an",
+        "the",
+        # Conjunctions
+        "and",
+        "or",
+        "but",
+        "nor",
+        "yet",
+        # Prepositions
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "from",
+        "by",
+        "with",
+        "as",
+        "into",
+        "onto",
+        "over",
+        "under",
+        "about",
+        # Auxiliary verbs
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "may",
+        "might",
+        "can",
+        "could",
+        # Pronouns / determiners
+        "i",
+        "me",
+        "my",
+        "we",
+        "us",
+        "our",
+        "you",
+        "your",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "it",
+        "its",
+        "they",
+        "them",
+        "their",
+        "this",
+        "that",
+        "these",
+        "those",
+        # Politeness
+        "please",
+        "kindly",
+        # Filler adverbs
+        "also",
+        "too",
+        "very",
+        "just",
+        "really",
+        # Generic verbs that appear in pure-filler prose contexts
+        # ("people who live in michigan"). Kept narrow to verbs that
+        # are pure structural connectors; nouns stay OUT.
+        "live",
+        "lived",
+        "lives",
+        "make",
+        "makes",
+        "made",
+    }
+)
+
+
+def count_non_tail_strong_entities(
+    topic: str,
+    title_probe: Callable[[str], Optional[Dict[str, Any]]],
+    *,
+    limit: int = 2,
+) -> int:
+    """Probe each non-tail topic token; count how many resolve to a
+    strong title match where the probed token actually appears in
+    the resolved canonical or pre-redirect path tokens.
+
+    Case-independent multi-entity discriminator — used by
+    ``_promote_topic_via_title_index`` to distinguish the
+    silent-wrong-answer pattern (multiple stacked proper-noun-
+    shaped tokens like ``Stalin USSR Russia``, ``Hitler Germany
+    Berlin``, ``O'Brien character 1984``) from filler-prose +
+    tail-entity (``what is the population of detroit``, ``musicians
+    from tokyo``, ``people who live in michigan``).
+
+    Two refinements over a raw probe-counting check:
+
+      1. **Stop-word filter** — non-entity tokens (``what``, ``is``,
+         ``the``, ``of``, common pronouns/auxiliaries) are skipped
+         even though they often resolve to a real Wikipedia
+         disambiguation page. Without the filter, ``what is the
+         population of detroit`` would probe to four+ false-positive
+         matches and over-reject the documented Pass 1 1-token-tail
+         feature.
+      2. **Probed-token-in-canonical check** — the probe result is
+         only counted when the probed token (lowercased) appears in
+         the canonical path tokens OR the pre-redirect-path tokens.
+         This filters out fuzzy/stemming hits where libzim's
+         suggestion-search lands on an unrelated article AND defends
+         against overly-permissive test mocks that return the same
+         row regardless of input.
+
+    The b10 discriminator counted capitalized tokens in the original-
+    case topic but ``IntentParser._normalize_topic_case`` (Tier 1
+    Rule 1, ``intent_parser.py``) lowercases the query upstream, so
+    the gate never saw any capitalized tokens on live data. Probing
+    sidesteps the case-sensitivity assumption entirely.
+
+    Stops counting at ``limit`` (default 2) to avoid wasted probes
+    when the discriminator's decision is already made.
+
+    Topics with fewer than 3 tokens return 0 immediately — the
+    tail-hijack rule those topics interact with doesn't fire for
+    them either, so probing is wasted work.
+
+    Exceptions from individual probe calls are swallowed (treated
+    as "no match") so a transient libzim error on one token doesn't
+    blow up the gate.
+    """
+    tokens = _TAIL_TOKEN_RE.findall(topic.lower())
+    if len(tokens) < 3:
+        return 0
+    non_tail = tokens[:-1]
+    count = 0
+    for tok in non_tail:
+        if tok in _DISCRIMINATOR_STOP_WORDS:
+            continue
+        try:
+            result = title_probe(tok)
+        except Exception:
+            continue
+        if result is None:
+            continue
+        cand_path = str(result.get("path", "")).lower()
+        pre_path = str(result.get("pre_redirect_path", "")).lower()
+        haystack_tokens = set(_TAIL_TOKEN_RE.findall(cand_path)) | set(
+            _TAIL_TOKEN_RE.findall(pre_path)
+        )
+        if tok not in haystack_tokens:
+            continue
+        count += 1
+        if count >= limit:
+            break
+    return count
 
 
 def _accept_possessive_fuzzy_suggest(promoted: Dict[str, Any], topic: str) -> bool:
