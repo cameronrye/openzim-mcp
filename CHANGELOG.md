@@ -5,6 +5,139 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b10] — 2026-05-23 (beta pre-release) — post-b9 beta-test sweep shipped — Z3 all match_types + Pass 1/2 gate + OPP-1 redirect extension
+
+Post-b9 sweep packaged from PR #180. Live-MCP verification against
+v2.0.0b9 confirmed the b9 Z3 + OPP-1 fixes land at the unit-test
+level but BOTH bypass the actual live silent-wrong-answer code
+paths because b9 gated on the wrong ``match_type``.
+
+### Z3-bypass (HIGH) — tail-hijack lives on direct/redirect
+
+The b9 Z3 rule only fired inside ``_accept_non_possessive`` when
+``match_type == "fuzzy_suggest"``. The live silent-wrong-answers
+route through Pass 1 ``iter_query_tails``: ``find_title_match``
+returns ``None`` for the full topic, so the next pass kicks in,
+where the 1-token tail (``"russia"``, ``"berlin"``, ``"discovery"``,
+``"tourism"``, ``"1984"``) is passed to ``find_title_match``.
+libzim sees the tail string as a case-insensitive title equal →
+returns ``match_type="direct"`` at score 1.0. The b9 short-circuit
+``if match_type != "fuzzy_suggest": return True`` bypassed the Z3
+check entirely.
+
+ALSO: Pass 1 and Pass 2 in ``_promote_topic_via_title_index``
+returned ``promoted`` directly without consulting
+``accept_possessive_promotion``. Even after extending the gate to
+direct/redirect, the Z3 rule wouldn't fire because the call site
+didn't invoke it.
+
+#### Fix — three changes in concert
+
+1. **``_accept_non_possessive``** no longer short-circuits on
+   ``match_type``. The tail-token-hijack premise is purely about
+   the topic↔canonical token relationship; it doesn't depend on
+   how libzim resolved the match. The zero-overlap stemming
+   sub-rule stays gated on ``fuzzy_suggest`` (direct/redirect by
+   definition share at least the matched token).
+2. **``_promote_topic_via_title_index`` Pass 1 (tail iter) and
+   Pass 2 (window iter)** now consult ``accept_possessive_promotion``
+   on each candidate, matching what Pass 0 (full topic) and Pass 3
+   (typo-tolerant) already did.
+3. **Discriminator** preserves the documented Pass 1 1-token-tail
+   feature. Queries like ``what is the population of detroit`` →
+   ``Detroit`` and ``people who live in michigan`` → ``Michigan``
+   keep working: the tail-hijack rejection only fires when the
+   topic has 2+ "specific" tokens — tokens that are capitalized in
+   the original case OR digit-only. The silent-wrong-answer
+   pattern stacks multiple proper-noun-shaped tokens
+   (``Stalin USSR Russia``, ``Hitler Germany Berlin``,
+   ``O'Brien character 1984``); legitimate filler-prose queries
+   have at most one capitalized entity (the tail itself).
+
+#### Live cases this fix resolves (cert=0.85 silent-wrong-answers at v2.0.0b9)
+
+- ``Stalin USSR Russia`` → ``Russia`` → BM25 / Pass 2 head probe
+- ``Hitler Germany Berlin`` → ``Berlin`` → BM25 / Pass 2 head probe
+- ``Marie Curie polonium discovery`` → ``Discovery`` (a disambig
+  page!) → BM25
+- ``Big Rapids Michigan tourism`` → ``Tourism`` → Pass 2 finds
+  ``Big_Rapids,_Michigan``
+- ``O'Brien character 1984`` → ``1984`` (the year) → BM25 /
+  Pass 2 finds ``O'Brien_(Nineteen_Eighty-Four)``
+- ``Marie Curie radioactivity`` → fuzzy-suggest stemming hit
+  unchanged from b9
+
+#### Regression guards preserved
+
+- ``Hamlet Denmark prince`` → Pass 0 / Pass 2 finds ``Hamlet``
+  (HEAD position)
+- ``Napoleon France emperor`` → Pass 0 / Pass 2 finds ``Napoleon``
+- ``Apollo 11 moon landing`` → ``Moon_landing`` (multi-token
+  canonical, tail-hijack doesn't fire)
+- ``quantum mechanics Einstein`` → ``Albert_Einstein`` (single
+  capitalized token, discriminator skips)
+- ``Lincoln Gettysburg Address`` → ``Gettysburg_Address``
+  (multi-token canonical)
+- ``Berlin Germany`` → ``Berlin`` (2-token topic, Z3 doesn't fire)
+- ``population of detroit`` / ``people who live in michigan`` —
+  legitimate Pass 1 1-token-tail feature preserved via
+  discriminator (zero capitalized tokens)
+
+### OPP-1-bypass (MEDIUM) — Newton's gravity redirect
+
+The b9 OPP-1 carve-out only fired inside
+``_accept_possessive_fuzzy_suggest``. The live ``Newton's gravity``
+case routes through ``_accept_possessive_redirect``: libzim
+returns ``Newton's_law_of_universal_gravitation`` with
+``match_type="redirect"`` and
+``pre_redirect_path="Newton_Laws_of_Gravity"``. The b7 Z1.1 subset
+rule rejects because ``{newton, laws, of, gravity} ⊄ {newton, s,
+gravity}``. OPP-1's possessor-in-canonical check never runs.
+
+#### Fix — OPP-1 extension to redirect branch
+
+When the b7 Z1.1 subset rule rejects,
+``_accept_possessive_redirect`` NOW falls back to the same
+possessor-in-canonical check OPP-1 uses for fuzzy_suggest: ACCEPT
+if any of the topic's possessor tokens appears in the
+post-redirect canonical path tokens.
+
+Decision matrix:
+
+| Topic | Resolved canonical | Decision |
+| --- | --- | --- |
+| ``Plato's cave`` | ``Allegory_of_the_cave`` via pre=``Plato's_cave`` | ACCEPT (b8 subset) |
+| ``Einstein's theory`` | ``Theory_of_relativity`` via pre=``Einstein's_theory`` | ACCEPT (b8 subset) |
+| ``Newton's gravity`` | ``Newton's_law_of_universal_gravitation`` via pre=``Newton_Laws_of_Gravity`` | ACCEPT (post-b9 OPP-1) |
+| ``Darwin's evolution`` | ``Evolution`` via pre=``Darwin's_Theory_of_Evolution`` | REJECT (b7) |
+| ``Plato's republic philosophy`` | ``Czech_philosophy`` | REJECT (b6) |
+
+### Tests
+
+39 new tests in ``tests/test_post_b9_beta_fixes.py`` across 5
+classes. One b4 test mock updated to include ``pre_redirect_path``
+reflecting the live libzim row shape since b6.
+
+```
+2487 passed, 54 skipped (full suite, ~28s)
+pip-audit: no known vulnerabilities
+```
+
+mypy clean across 52 source files. black + flake8 + isort clean.
+
+### Methodology — "fix unlocks new paths" 17 sweeps strong
+
+The post-b9 sweep demonstrates the pattern again: b9's Z3 + OPP-1
+fixes were conceptually correct but missed the actual live code
+paths because I inferred the wrong match_types from upstream
+behavior. Live diagnostic against the deployed b9 ZIM corpus
+surfaced four new invariants this sweep pins down: (a) tail-hijack
+hits direct match_type via Pass 1's tail probe, not fuzzy_suggest
+via Pass 0; (b) Pass 1 / Pass 2 didn't call the accept gate; (c)
+Newton's gravity redirect goes through a non-subset pre-path; (d)
+discriminator needed to preserve the documented Pass 1 1-token-tail
+feature.
+
 ## [2.0.0b9] — 2026-05-23 (beta pre-release) — post-b8 beta-test sweep shipped — Z3 non-possessive tail-hijack + OPP-1 possessor-in-canonical carve-out
 
 Post-b8 sweep packaged from PR #178. Live-MCP verification against
