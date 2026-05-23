@@ -28,9 +28,11 @@ from .security import sanitize_context_for_error
 from .title_promotion import (
     _TOKEN_RE,
     accept_possessive_promotion,
+    count_non_tail_strong_entities,
     find_title_match,
     has_apostrophe_possessive,
     is_strong_title_match,
+    is_tail_hijack_shape,
     iter_query_tails,
     iter_query_windows,
 )
@@ -3938,19 +3940,50 @@ class SimpleToolsHandler:
         # canonical" case; further 1-token tail iteration just risks
         # picking a generic Wikipedia title that shares the word.
         pass_tail_min_len = 2 if has_apostrophe_possessive(topic) else 1
+
+        # Post-b10 Z3 multi-entity discriminator: the b9/b10 Z3 rule
+        # rejected the tail-hijack shape unconditionally in
+        # ``accept_possessive_promotion``. That correctly catches
+        # the silent-wrong-answer pattern (``stalin ussr russia`` →
+        # ``Russia``) but over-rejects the legitimate filler-prose +
+        # tail-entity case (``what is the population of detroit`` →
+        # ``Detroit``). The case-based discriminator b10 used broke
+        # because ``IntentParser._normalize_topic_case`` lowercases
+        # the topic upstream. The probe-based replacement counts how
+        # many non-tail topic tokens individually resolve to strong
+        # title matches; 2+ signals a multi-entity stack the user is
+        # querying jointly, < 2 signals filler-prose + entity-at-tail.
+        # The probe is wrapped once and reused across Pass 1 / Pass 2
+        # to keep the cost bounded.
+        def _probe(token_str: str) -> Optional[Dict[str, Any]]:
+            return find_title_match(self.zim_operations, zim_file_path, token_str)
+
+        def _accept_with_multi_entity_check(
+            promoted: Dict[str, Any],
+        ) -> bool:
+            """Run the standard accept gate; for non-possessive
+            tail-hijack rejections, probe non-tail tokens and
+            override the rejection when single-entity is confirmed.
+            """
+            if accept_possessive_promotion(promoted, topic):
+                return True
+            if has_apostrophe_possessive(topic):
+                return False
+            if not is_tail_hijack_shape(promoted, topic):
+                return False
+            return count_non_tail_strong_entities(topic, _probe, limit=2) < 2
+
         # Pass 1: strict 1.0-score gate across every trailing tail.
         # Prefer an exact title match on any tail (even a short one)
         # over a typo-tolerant fuzzy match on a longer noisier tail.
-        # Post-b9 Z3: gate every pass through accept_possessive_promotion
-        # so the non-possessive tail-token-hijack rule fires here too.
-        # The b9 Z3 rule was wired into accept_possessive_promotion but
-        # Pass 1 (and Pass 2) returned ``promoted`` directly without
-        # consulting the gate, so the live Stalin USSR Russia → Russia
-        # silent-wrong-answer (Pass 1's 1-token tail ``"russia"`` →
-        # direct match) sailed past unchecked.
+        # Post-b9 Z3 wired the accept gate into Pass 1 / Pass 2;
+        # post-b10 layers the multi-entity discriminator on top so
+        # the documented Pass 1 1-token-tail feature
+        # (``what is the population of detroit`` → ``Detroit``) keeps
+        # working when the non-tail tokens probe as single-entity.
         for tail in iter_query_tails(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(self.zim_operations, zim_file_path, tail)
-            if promoted is not None and accept_possessive_promotion(promoted, topic):
+            if promoted is not None and _accept_with_multi_entity_check(promoted):
                 return promoted
         # Pass 2: strict 1.0-score gate across non-trailing windows.
         # Catches head/middle-positioned entities like
@@ -3958,7 +3991,7 @@ class SimpleToolsHandler:
         # (more specific) windows win.
         for window in iter_query_windows(topic, min_len=pass_tail_min_len):
             promoted = find_title_match(self.zim_operations, zim_file_path, window)
-            if promoted is not None and accept_possessive_promotion(promoted, topic):
+            if promoted is not None and _accept_with_multi_entity_check(promoted):
                 return promoted
         # Pass 3: 0.8 typo-tolerant gate. Only fires when no strict
         # match exists at all — catches single-edit typos.

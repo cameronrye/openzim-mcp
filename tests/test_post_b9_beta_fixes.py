@@ -329,8 +329,14 @@ class TestPromoteIntegration:
         """Live repro: Pass 0 (full topic at 0.95) returns None;
         Pass 1's 1-token tail probe ``"russia"`` returns
         ``Russia`` at ``match_type="direct"`` score 1.0. The
-        extended Z3 rule rejects → falls through to Pass 2 / Pass 3
-        / BM25."""
+        post-b10 multi-entity discriminator probes non-tail tokens
+        ``stalin`` + ``ussr``; both resolve strong → 2 → reject
+        Russia → falls through to Pass 2 / Pass 3 / BM25.
+
+        Post-b10 update: the mock now includes the multi-entity
+        probe entries reflecting what the live Wikipedia ZIM returns
+        for those token probes.
+        """
         mapping: Dict[str, Optional[Dict[str, Any]]] = {
             "russia": {
                 "path": "Russia",
@@ -339,15 +345,27 @@ class TestPromoteIntegration:
                 "match_type": "direct",
                 "pre_redirect_path": "Russia",
             },
-            # Pass 0 misses on the full topic, simulating the live
-            # behavior on the Wikipedia ZIM.
+            "stalin": {
+                "path": "Stalin",
+                "title": "Stalin",
+                "zim_file": "test.zim",
+                "match_type": "direct",
+            },
+            "ussr": {
+                "path": "Soviet_Union",
+                "title": "Soviet Union",
+                "zim_file": "test.zim",
+                "match_type": "redirect",
+                "pre_redirect_path": "USSR",
+            },
         }
         result = _run_promote_simple(
             "Stalin USSR Russia", _fake_find_title_match(mapping)
         )
         assert result is None or result["path"] != "Russia", (
-            f"post-b9 Z3 must reject the 1-token tail hijack "
-            f"`Russia` for topic `Stalin USSR Russia`; got {result!r}"
+            f"post-b10 Z3 multi-entity discriminator must reject "
+            f"the 1-token tail hijack `Russia` for `Stalin USSR Russia` "
+            f"when non-tail tokens probe as multi-entity; got {result!r}"
         )
 
     def test_newtons_gravity_redirect_accepted_via_opp1_extension(self) -> None:
@@ -437,21 +455,38 @@ class TestStructuralGuards:
         implementation had Pass 1 (tail-iter) and Pass 2 (window-
         iter) returning ``promoted`` unconditionally; that's the
         live Z3 silent-wrong-answer code path (1-token tail
-        ``"russia"`` → direct match → returned without gating)."""
+        ``"russia"`` → direct match → returned without gating).
+
+        Post-b10 update: Pass 1 / Pass 2 now go through the
+        ``_accept_with_multi_entity_check`` wrapper (defined inside
+        ``_promote_topic_via_title_index``) which calls
+        ``accept_possessive_promotion`` once. So the dispatcher
+        source has three direct ``accept_possessive_promotion(`` call
+        sites — Pass 0, the wrapper, and Pass 3 — plus the helper
+        invocation. The pin asserts the wrapper is wired by name AND
+        every gate path is present.
+        """
         import inspect
 
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         source = inspect.getsource(SimpleToolsHandler._promote_topic_via_title_index)
-        # At least 4 calls to accept_possessive_promotion (pass-0
-        # full-topic probe + pass-1 tails + pass-2 windows + pass-3
-        # typo-tolerant tails).
+        # Pass 0, the multi-entity wrapper (which calls
+        # accept_possessive_promotion once), and Pass 3 → 3 direct
+        # ``accept_possessive_promotion(`` callsites.
         count = source.count("accept_possessive_promotion(")
-        assert count >= 4, (
+        assert count >= 3, (
             f"_promote_topic_via_title_index must call "
             f"accept_possessive_promotion on every pass; found "
-            f"{count} call(s), expected >= 4 (pass-0, pass-1, "
-            f"pass-2, pass-3)."
+            f"{count} call(s), expected >= 3 (pass-0, multi-entity "
+            f"wrapper covering pass-1 + pass-2, pass-3)."
+        )
+        # The multi-entity wrapper must be wired by name into both
+        # Pass 1 (iter_query_tails) and Pass 2 (iter_query_windows).
+        assert "_accept_with_multi_entity_check" in source, (
+            "_promote_topic_via_title_index must define + use the "
+            "_accept_with_multi_entity_check wrapper to gate Pass 1 "
+            "and Pass 2 with the post-b10 multi-entity discriminator"
         )
 
     def test_possessive_redirect_has_canonical_possessor_fallback(self) -> None:
