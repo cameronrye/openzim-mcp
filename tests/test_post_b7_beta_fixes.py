@@ -319,17 +319,21 @@ class TestRegressionGuards:
     def test_accept_possessive_promotion_uses_subset_check(self) -> None:
         """Structural pin: the shared filter source must reference
         ``issubset`` (or equivalent subset check) so the Z1.1
-        refinement isn't accidentally reverted."""
+        refinement isn't accidentally reverted.
+
+        Post-b8 refactor: the dispatcher delegates to per-branch
+        helpers; the subset check now lives in
+        ``_accept_possessive_redirect``."""
         import inspect
 
         from openzim_mcp import title_promotion
 
-        source = inspect.getsource(title_promotion.accept_possessive_promotion)
+        source = inspect.getsource(title_promotion._accept_possessive_redirect)
         # Either ``.issubset(...)`` or ``set(...) <= set(...)``
         # qualifies as a subset check. Reject the bare ``&``
         # (containment) form alone — that was the b6 implementation
         # the Z1.1 sweep tightened.
         assert (".issubset(" in source) or ("<=" in source), (
-            "accept_possessive_promotion must use a SUBSET check on "
+            "_accept_possessive_redirect must use a SUBSET check on "
             "pre-redirect-path tokens vs topic tokens — see Z1.1"
         )

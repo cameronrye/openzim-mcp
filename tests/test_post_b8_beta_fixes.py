@@ -492,23 +492,47 @@ class TestStructuralGuards:
     """Lightweight pins that catch accidental revert of the Z3 / OPP-1
     refinements at the source level."""
 
-    def test_accept_possessive_promotion_handles_non_possessive_fuzzy_suggest(
+    def test_accept_possessive_promotion_dispatches_to_per_branch_helpers(
         self,
     ) -> None:
-        """Structural pin: ``accept_possessive_promotion`` source must
-        reference the non-possessive fuzzy_suggest branch (the Z3
-        gate). Catches an accidental revert that drops the rule back
-        to ``return True`` unconditionally for non-possessive."""
+        """Structural pin: ``accept_possessive_promotion`` dispatches
+        to dedicated per-branch helpers. Catches an accidental revert
+        that re-inlines the Z3 / OPP-1 logic (and re-raises Sonar
+        cognitive-complexity over 15).
+
+        The function should resolve the topic-shape (non-possessive
+        vs possessive) and the match_type, then delegate to the
+        helper for that combination. Each helper owns its own
+        comment block explaining the safety reasoning.
+        """
         import inspect
 
         from openzim_mcp import title_promotion
 
+        # Per-branch helpers must exist (importable from the module).
+        assert hasattr(title_promotion, "_accept_non_possessive")
+        assert hasattr(title_promotion, "_accept_possessive_fuzzy_suggest")
+        assert hasattr(title_promotion, "_accept_possessive_redirect")
+
+        # The dispatcher's source must reference each helper at least
+        # once — keeps the dispatch table from atrophying.
         source = inspect.getsource(title_promotion.accept_possessive_promotion)
-        # The Z3 rule references fuzzy_suggest in the non-possessive
-        # branch. Earlier b6 D1 references fuzzy_suggest in the
-        # possessive branch — both should remain in source.
-        assert source.count("fuzzy_suggest") >= 2, (
-            "accept_possessive_promotion must check fuzzy_suggest in "
-            "both possessive (b6 D1) and non-possessive (post-b8 Z3) "
-            "branches"
+        assert "_accept_non_possessive" in source
+        assert "_accept_possessive_fuzzy_suggest" in source
+        assert "_accept_possessive_redirect" in source
+
+    def test_non_possessive_helper_handles_fuzzy_suggest_branch(self) -> None:
+        """Structural pin: ``_accept_non_possessive`` must reference
+        ``fuzzy_suggest`` so the Z3 rule (the non-possessive branch
+        Z3 fix lives in) isn't accidentally short-circuited back to
+        ``return True``. Earlier b6 D1 reference lives in the
+        ``_accept_possessive_fuzzy_suggest`` helper."""
+        import inspect
+
+        from openzim_mcp import title_promotion
+
+        np_source = inspect.getsource(title_promotion._accept_non_possessive)
+        assert "fuzzy_suggest" in np_source, (
+            "_accept_non_possessive must check match_type=fuzzy_suggest "
+            "(the Z3 gate) — see post-b8 sweep"
         )

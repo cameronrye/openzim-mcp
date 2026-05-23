@@ -460,14 +460,18 @@ class TestRegressionGuards:
         reference ``pre_redirect_path`` so an associative redirect on
         a possessive topic is rejected. The helper lives in
         ``title_promotion`` (single source of truth — fixes the
-        post-b6 sweep-CI Sonar duplication finding)."""
+        post-b6 sweep-CI Sonar duplication finding).
+
+        Post-b8 refactor: the dispatcher delegates to per-branch
+        helpers; the pre_redirect_path check now lives in
+        ``_accept_possessive_redirect``."""
         import inspect
 
         from openzim_mcp import title_promotion
 
-        source = inspect.getsource(title_promotion.accept_possessive_promotion)
+        source = inspect.getsource(title_promotion._accept_possessive_redirect)
         assert "pre_redirect_path" in source, (
-            "title_promotion.accept_possessive_promotion must consult "
+            "title_promotion._accept_possessive_redirect must consult "
             "pre_redirect_path to reject associative redirects on "
             "possessive topics — see Z1"
         )
