@@ -63,12 +63,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests._promote_fixtures import (
-    fake_find_title_match as _fake_find_title_match,
-)
-from tests._promote_fixtures import (
-    run_promote_simple as _run_promote_simple,
-)
+from tests._promote_fixtures import fake_find_title_match as _fake_find_title_match
+from tests._promote_fixtures import run_promote_simple as _run_promote_simple
 
 # ---------------------------------------------------------------------------
 # Shared fixtures / mock-builders.
