@@ -406,19 +406,71 @@ def _accept_non_possessive(
     ``Berlin`` resolves via ``is_strong_title_match`` at the BM25
     stage anyway, and 2-token possessive carve-outs are handled by
     the possessive branch.
+
+    Post-b9 Z3 extension: the b9 rule gated the tail-hijack check on
+    ``match_type == "fuzzy_suggest"``. Live post-b9 sweep against
+    v2.0.0b9 revealed every Z3 silent-wrong-answer actually routes
+    through ``_promote_topic_via_title_index`` Pass 1's
+    ``iter_query_tails`` 1-token tail probe, where the tail string
+    (``"russia"``, ``"berlin"``, ``"discovery"``, etc.) is passed to
+    ``find_title_match``. libzim sees the tail string as a
+    case-insensitive title equal → returns ``match_type="direct"``
+    at score 1.0. The b9 short-circuit ``if match_type !=
+    "fuzzy_suggest": return True`` bypassed the Z3 check entirely.
+
+    The tail-hijack premise is purely about the topic↔canonical
+    token relationship; it doesn't depend on how libzim resolved
+    the match. Apply it regardless of match_type. The zero-overlap
+    stemming sub-rule stays gated on ``fuzzy_suggest`` (a direct or
+    redirect match by definition shares at least the matched token,
+    so the rule is moot for those branches).
+
+    Discriminator — multi-entity vs filler-prose: the documented
+    Pass 1 1-token-tail feature MUST keep working for queries like
+    ``what is the population of detroit`` → ``Detroit`` and
+    ``people who live in michigan`` → ``Michigan`` (lowercase prose
+    + entity at tail). Only reject the tail-hijack when the topic
+    has 2+ "specific" tokens — tokens that are capitalized in the
+    original case OR digit-only. The silent-wrong-answer pattern is
+    distinguished by stacking multiple proper-noun-shaped tokens
+    (``Stalin USSR Russia``, ``Hitler Germany Berlin``, ``O'Brien
+    character 1984``); legitimate filler-prose queries have at most
+    one capitalized entity (the tail itself).
     """
-    if match_type != "fuzzy_suggest":
-        return True
     topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
     if len(topic_tokens_seq) < 3:
         return True
     cand_path = str(promoted.get("path", ""))
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     if len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]:
-        return False
-    if not (set(cand_tokens_seq) & set(topic_tokens_seq)):
+        original_tokens = _TAIL_TOKEN_RE.findall(topic)
+        specific_count = sum(1 for tok in original_tokens if _is_specific_token(tok))
+        if specific_count >= 2:
+            return False
+    if match_type == "fuzzy_suggest" and not (
+        set(cand_tokens_seq) & set(topic_tokens_seq)
+    ):
         return False
     return True
+
+
+def _is_specific_token(token: str) -> bool:
+    """True iff ``token`` looks like a specific entity / identifier
+    (capitalized word OR digit-only run) rather than filler prose.
+
+    Used by the Z3 tail-hijack discriminator to count how many
+    proper-noun-shaped tokens the topic carries before rejecting a
+    1-token-tail-equals-last-topic-token canonical. Two or more
+    "specific" tokens signal a multi-entity stack the user is
+    asking about jointly — making the trailing-tail auto-fetch a
+    silent-wrong-answer. Zero or one signals filler prose + a
+    single entity reference — making the trailing-tail auto-fetch
+    the user's actual subject.
+    """
+    if not token:
+        return False
+    first = token[0]
+    return first.isupper() or token.isdigit()
 
 
 def _accept_possessive_fuzzy_suggest(promoted: Dict[str, Any], topic: str) -> bool:
@@ -452,6 +504,23 @@ def _accept_possessive_redirect(promoted: Dict[str, Any], topic: str) -> bool:
     of the topic's tokens. Catches both b6 Z1 associative redirects
     (pre-path unrelated to user's possessor) and b8 Z1.1 truncation
     redirects (pre-path is a longer phrase the user truncated).
+
+    Post-b9 OPP-1 redirect extension: when the subset rule rejects
+    (pre-path has tokens not in the topic), STILL accept if the
+    post-redirect canonical path preserves the user's possessor
+    token literally. Live: ``Newton's gravity`` resolves through
+    libzim's redirect chain ``Newton_Laws_of_Gravity`` →
+    ``Newton's_law_of_universal_gravitation``; pre-path
+    ``{newton, laws, of, gravity} ⊄ {newton, s, gravity}`` would
+    reject under b8 Z1.1, but the post-redirect canonical literally
+    contains ``newton`` — the redirect IS semantic, just one that
+    libzim happened to route via a non-subset stem path.
+
+    The b6 Z1 ``Plato's republic philosophy`` → ``Czech_philosophy``
+    attack surface continues to reject because ``plato`` is not in
+    ``Czech_philosophy``. The b7 Z1.1 ``Darwin's evolution`` →
+    ``Evolution`` attack surface continues to reject because
+    ``darwin`` is not in ``Evolution``.
     """
     pre_path = promoted.get("pre_redirect_path", "") or promoted.get("path", "")
     # ``_TOKEN_RE`` is the same ASCII-alphanumerics tokenizer
@@ -466,7 +535,12 @@ def _accept_possessive_redirect(promoted: Dict[str, Any], topic: str) -> bool:
         # path depends on.
         return True
     topic_tokens = set(_TOKEN_RE.findall(topic.lower()))
-    return pre_tokens.issubset(topic_tokens)
+    if pre_tokens.issubset(topic_tokens):
+        return True
+    cand_path = str(promoted.get("path", ""))
+    cand_tokens = set(_TOKEN_RE.findall(cand_path.lower()))
+    possessors = set(extract_possessor_tokens(topic))
+    return bool(possessors & cand_tokens)
 
 
 def iter_query_tails(

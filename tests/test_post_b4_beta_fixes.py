@@ -251,6 +251,16 @@ class TestFuzzySuggestGateReject:
                     "title": "Allegory of the cave",
                     "zim_file": "test.zim",
                     "match_type": "redirect",
+                    # Post-b6 Z1 / b8 Z1.1 require pre_redirect_path
+                    # to evaluate the redirect's semantic
+                    # relatedness. The live row libzim emits for
+                    # ``plato's cave`` carries this; the test
+                    # originally omitted it and incidentally passed
+                    # because Pass 1's no-gate fall-through
+                    # compensated. Post-b10 Z3 adds the gate to
+                    # Pass 1 / Pass 2 too, so the mock now reflects
+                    # the actual live shape.
+                    "pre_redirect_path": "Plato's_cave",
                 }
             return None
 
