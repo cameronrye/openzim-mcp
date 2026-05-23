@@ -620,6 +620,95 @@ class TestZ4PreservedCases:
             and result["path"] == "Newton's_law_of_universal_gravitation"
         )
 
+    def test_quantum_mechanics_einstein_tail_subject_accepts(self) -> None:
+        """Post-b11 second-pass: the user's pinned counter-case
+        ``quantum mechanics Einstein`` → ``Albert_Einstein`` has the
+        subject at the TAIL of the topic, not the head. The
+        biographical exemption must probe ALL non-stop-word tokens
+        (not just the first) so the tail-position ``einstein`` probe
+        catches the match. Token-in-canonical guard prevents
+        accidental over-acceptance: ``einstein`` is literally in
+        ``Albert_Einstein`` tokens, AND ``einstein`` probes to the
+        same canonical."""
+        mapping: Dict[str, Optional[Dict[str, Any]]] = {
+            "quantum mechanics einstein": {
+                "path": "Albert_Einstein",
+                "title": "Albert Einstein",
+                "zim_file": "test.zim",
+                "match_type": "fuzzy_suggest",
+            },
+            "mechanics einstein": None,
+            "einstein": {
+                "path": "Albert_Einstein",
+                "title": "Albert Einstein",
+                "zim_file": "test.zim",
+                "match_type": "redirect",
+                "pre_redirect_path": "Einstein",
+            },
+            "quantum": {
+                "path": "Quantum_mechanics",
+                "title": "Quantum mechanics",
+                "zim_file": "test.zim",
+                "match_type": "direct",
+            },
+            "mechanics": {
+                "path": "Mechanics",
+                "title": "Mechanics",
+                "zim_file": "test.zim",
+                "match_type": "direct",
+            },
+        }
+        result = _run_promote("quantum mechanics einstein", mapping)
+        assert result is not None and result["path"] == "Albert_Einstein"
+
+    def test_jfk_assassination_canonical_with_of_extra_accepts(self) -> None:
+        """Post-b11 second-pass: canonical extras of pure function
+        words (``of``, ``the``, ``and``) shouldn't flag the canonical
+        as tangential. ``Assassination_of_John_F._Kennedy`` for topic
+        ``John F Kennedy assassination`` — canonical's only extra is
+        ``of`` (a preposition); after the canonical-subset stop-word
+        filter, canonical {assassination, john, f, kennedy} ⊆ topic
+        → subset → accept via subset rule (no exemption needed)."""
+        mapping: Dict[str, Optional[Dict[str, Any]]] = {
+            "john f kennedy assassination": {
+                "path": "Assassination_of_John_F._Kennedy",
+                "title": "Assassination of John F. Kennedy",
+                "zim_file": "test.zim",
+                "match_type": "fuzzy_suggest",
+            },
+            "f kennedy assassination": None,
+            "kennedy assassination": {
+                "path": "Assassination_of_John_F._Kennedy",
+                "title": "Assassination of John F. Kennedy",
+                "zim_file": "test.zim",
+                "match_type": "fuzzy_suggest",
+            },
+            "kennedy": {
+                "path": "John_F._Kennedy",
+                "title": "John F. Kennedy",
+                "zim_file": "test.zim",
+                "match_type": "redirect",
+                "pre_redirect_path": "Kennedy",
+            },
+            "assassination": {
+                "path": "Assassination",
+                "title": "Assassination",
+                "zim_file": "test.zim",
+                "match_type": "direct",
+            },
+            "john": {
+                "path": "John",
+                "title": "John",
+                "zim_file": "test.zim",
+                "match_type": "direct",
+            },
+            "f": None,
+        }
+        result = _run_promote("john f kennedy assassination", mapping)
+        assert (
+            result is not None and result["path"] == "Assassination_of_John_F._Kennedy"
+        )
+
     def test_ferris_state_type_extension_accepts(self) -> None:
         """Type-extension exemption: ``Ferris_State_University`` for
         topic ``Big Rapids Michigan Ferris State`` — canonical's leading
@@ -782,6 +871,39 @@ class TestIsTangentialMultiTokenShape:
 
         assert is_tangential_multi_token_shape({}, "tesla electricity") is False
 
+    def test_canonical_function_word_extras_filtered(self) -> None:
+        """Function-word extras (``of``, ``the``, ``and``, ``in``) in
+        canonical don't flag the canonical as tangential — they're
+        structural tokens that smear into paths like
+        ``Constitution_of_the_United_States`` or
+        ``Assassination_of_John_F._Kennedy`` without changing the
+        canonical's identity."""
+        from openzim_mcp.title_promotion import is_tangential_multi_token_shape
+
+        # ``Assassination_of_John_F._Kennedy`` has only ``of`` as a
+        # non-topic extra; after the canonical-function-word filter,
+        # the canonical reduces to {assassination, john, f, kennedy}
+        # which IS a subset of the topic.
+        promoted = {"path": "Assassination_of_John_F._Kennedy"}
+        assert (
+            is_tangential_multi_token_shape(promoted, "john f kennedy assassination")
+            is False
+        )
+
+    def test_canonical_lexical_word_extra_stays_tangential(self) -> None:
+        """Lexical-word extras (verbs like ``made``, ``lived``) ARE
+        kept — they carry meaning. Topic ``USA products`` →
+        ``Made_in_USA`` would over-accept if we filtered ``made`` from
+        canonical; the user didn't ask for the ``Made in USA`` label
+        specifically."""
+        from openzim_mcp.title_promotion import is_tangential_multi_token_shape
+
+        promoted = {"path": "Made_in_USA"}
+        # ``in`` is filtered (preposition); ``made`` is NOT (verb).
+        # Filtered canonical = {made, usa}; topic = {usa, products};
+        # ``made`` is not in topic → NOT subset → tangential.
+        assert is_tangential_multi_token_shape(promoted, "usa products") is True
+
 
 class TestProbedHeadMatchesPromoted:
     """Biographical-canonical exemption: probe the topic's first non-
@@ -869,8 +991,58 @@ class TestProbedHeadMatchesPromoted:
             is True
         )
 
+    def test_tail_position_subject_matches(self) -> None:
+        """Subject at tail of topic (not head). ``quantum mechanics
+        einstein`` — head ``quantum`` doesn't match promoted, but
+        tail ``einstein`` probes to the same canonical AND is
+        literally in canonical tokens."""
+        from openzim_mcp.title_promotion import probed_head_matches_promoted
+
+        def probe(token: str) -> Optional[Dict[str, Any]]:
+            return {
+                "quantum": {"path": "Quantum_mechanics"},
+                "mechanics": {"path": "Mechanics"},
+                "einstein": {
+                    "path": "Albert_Einstein",
+                    "pre_redirect_path": "Einstein",
+                },
+            }.get(token)
+
+        promoted = {"path": "Albert_Einstein"}
+        assert (
+            probed_head_matches_promoted("quantum mechanics einstein", promoted, probe)
+            is True
+        )
+
+    def test_token_in_canonical_guard_blocks_accent_mismatch(self) -> None:
+        """Token-in-canonical guard: ``galapagos`` probes to
+        ``Galápagos_Islands`` (path match) BUT ``galapagos`` ≠
+        ``galápagos`` raw token → not in canonical → not exempt.
+        This is what saves ``Darwin evolution Galapagos`` from being
+        over-accepted by an accent-tolerant title-suggest hit."""
+        from openzim_mcp.title_promotion import probed_head_matches_promoted
+
+        def probe(token: str) -> Optional[Dict[str, Any]]:
+            return {
+                "darwin": {"path": "Charles_Darwin"},
+                "evolution": {"path": "Evolution"},
+                "galapagos": {"path": "Galápagos_Islands"},
+            }.get(token)
+
+        promoted = {"path": "Galápagos_Islands"}
+        # ``galapagos`` (no accent) is not in canonical tokens
+        # ``{galápagos, islands}`` due to accent → guard fails → False.
+        assert (
+            probed_head_matches_promoted("darwin evolution galapagos", promoted, probe)
+            is False
+        )
+
     def test_probe_exception_swallowed_returns_false(self) -> None:
-        """Defensive: a flaky probe must not blow up the gate."""
+        """Defensive: a flaky probe must not blow up the gate. The
+        token-in-canonical pre-filter normally short-circuits before
+        the probe is called, so this test uses a topic where a token
+        IS in canonical (``some`` in ``Some_Article``) so the probe
+        actually runs and the exception path is exercised."""
         from openzim_mcp.title_promotion import probed_head_matches_promoted
 
         def probe(token: str) -> Optional[Dict[str, Any]]:
@@ -878,7 +1050,7 @@ class TestProbedHeadMatchesPromoted:
 
         promoted = {"path": "Some_Article"}
         assert (
-            probed_head_matches_promoted("tesla electricity", promoted, probe) is False
+            probed_head_matches_promoted("some other topic", promoted, probe) is False
         )
 
 

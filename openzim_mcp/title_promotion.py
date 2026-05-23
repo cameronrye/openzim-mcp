@@ -715,9 +715,54 @@ def is_tangential_multi_token_shape(promoted: Dict[str, Any], topic: str) -> boo
     cand_tokens_seq = _TAIL_TOKEN_RE.findall(cand_path.lower())
     if len(cand_tokens_seq) < 2:
         return False
-    cand_tokens = set(cand_tokens_seq)
     topic_tokens = set(topic_tokens_seq)
-    return not cand_tokens.issubset(topic_tokens)
+    # Filter function-word tokens (articles, conjunctions, prepositions)
+    # from the canonical when checking subset. These structural tokens
+    # ("of", "the", "a", "and") surface in canonical paths like
+    # ``Constitution_of_the_United_States`` or
+    # ``Assassination_of_John_F._Kennedy`` without changing the
+    # canonical's identity — they shouldn't flag the canonical as
+    # tangential just because the topic ``united states constitution``
+    # or ``john f kennedy assassination`` omits them. Verbs and pronouns
+    # stay OUT of this filter: ``Made_in_USA`` (canonical extra ``made``)
+    # for topic ``USA products`` SHOULD reject (user didn't ask for the
+    # ``Made in USA`` label specifically).
+    cand_meaningful = set(cand_tokens_seq) - _CANONICAL_FUNCTION_WORDS
+    return not cand_meaningful.issubset(topic_tokens)
+
+
+# Narrow function-word filter for the Z4 canonical-subset check —
+# articles, conjunctions, and prepositions that surface in canonical
+# paths without changing the canonical's meaning. Distinct from
+# ``_DISCRIMINATOR_STOP_WORDS`` (which is broader, used for head-
+# selection and entity-probe filtering) because we don't want to
+# filter verbs or pronouns from the canonical (``Made_in_USA`` should
+# NOT be treated as ``USA`` for the subset comparison).
+_CANONICAL_FUNCTION_WORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "nor",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "from",
+        "by",
+        "with",
+        "for",
+        "as",
+        "into",
+        "onto",
+        "over",
+        "under",
+    }
+)
 
 
 def probed_head_matches_promoted(
@@ -725,48 +770,57 @@ def probed_head_matches_promoted(
     promoted: Dict[str, Any],
     title_probe: Callable[[str], Optional[Dict[str, Any]]],
 ) -> bool:
-    """Post-b11 Z4 biographical-canonical exemption: probe the topic's
-    first non-stop-word token; True iff that probe's canonical path OR
-    pre-redirect path equals the promoted candidate's path.
+    """Post-b11 Z4 biographical-canonical exemption: probe each non-
+    stop-word topic token; True iff ANY probe's canonical path (or
+    pre-redirect path) equals the promoted candidate's path AND the
+    probed token literally appears in the promoted canonical's tokens.
 
-    The Z4 tangential shape over-rejects when the promoted candidate IS
-    the head's biographical canonical reached via redirect — e.g.,
-    ``Picasso Paris cubism`` → ``Pablo_Picasso`` looks like a tangential
-    multi-token canonical (``pablo`` ∉ topic tokens), but probing the
-    head ``picasso`` returns the same ``Pablo_Picasso`` canonical
-    (typically via a ``Picasso`` redirect). Treat as a valid promotion.
+    The "subject" position in a topic varies — sometimes head
+    (``Picasso Paris cubism`` → subject ``Picasso`` at position 0,
+    promoted ``Pablo_Picasso``), sometimes tail (``quantum mechanics
+    Einstein`` → subject ``Einstein`` at position 2, promoted
+    ``Albert_Einstein``). Probing only the head misses the tail-subject
+    case; probing all positions catches it.
 
-    The check uses the SAME stop-word inventory as
-    ``count_non_tail_strong_entities`` so filler-prose topics
-    (``the picasso paintings``) skip ``the`` and land on ``picasso`` as
-    the effective head. The first non-stop-word token wins — compound
-    heads like ``Marie Curie`` use ``marie`` here; the rejection path
-    catches that case correctly because ``marie`` typically resolves to
-    a disambig page distinct from the (defective) promoted candidate.
+    The TOKEN-IN-CANONICAL guard prevents accidental over-acceptance:
+    ``Darwin evolution Galapagos`` → ``Galápagos_Islands`` would also
+    match if we accepted on path-only — ``galapagos`` probes to
+    ``Galápagos_Islands`` which equals promoted. But raw token
+    comparison shows ``galapagos`` ∉ canonical tokens ``{galápagos,
+    islands}`` (accent difference), so the guard correctly rejects.
+    The same guard rejects ``Lenin Russia`` →
+    ``Leninist_Komsomol_of_the_Russian_Federation`` (probes don't
+    match promoted path) and ``Tesla electricity`` →
+    ``Tesla's_Wireless_Electricity`` (probes return ``Nikola_Tesla`` /
+    ``Electricity``, neither matches promoted).
 
-    Probe exceptions are swallowed (transient libzim errors must not
-    blow up the gate) — defensive parity with
-    ``count_non_tail_strong_entities``.
+    Stop-word topic tokens are skipped (``the picasso paintings``
+    skips ``the``, lands on ``picasso``). Probe exceptions are
+    swallowed for transient-error tolerance.
     """
     tokens = _TAIL_TOKEN_RE.findall(topic.lower())
-    head = next(
-        (t for t in tokens if t not in _DISCRIMINATOR_STOP_WORDS),
-        None,
-    )
-    if not head:
-        return False
-    try:
-        result = title_probe(head)
-    except Exception:
-        return False
-    if result is None:
-        return False
     promoted_path = str(promoted.get("path", "")).lower()
     if not promoted_path:
         return False
-    probe_path = str(result.get("path", "")).lower()
-    probe_pre = str(result.get("pre_redirect_path", "") or "").lower()
-    return probe_path == promoted_path or probe_pre == promoted_path
+    cand_tokens = set(_TAIL_TOKEN_RE.findall(promoted_path))
+    for tok in tokens:
+        if tok in _DISCRIMINATOR_STOP_WORDS:
+            continue
+        # Token-in-canonical guard runs FIRST — cheap pre-filter. A
+        # probe that wouldn't satisfy this guard is wasted work.
+        if tok not in cand_tokens:
+            continue
+        try:
+            result = title_probe(tok)
+        except Exception:
+            continue
+        if result is None:
+            continue
+        probe_path = str(result.get("path", "")).lower()
+        probe_pre = str(result.get("pre_redirect_path", "") or "").lower()
+        if probe_path == promoted_path or probe_pre == promoted_path:
+            return True
+    return False
 
 
 def has_digit_specificity_match(promoted: Dict[str, Any], topic: str) -> bool:
