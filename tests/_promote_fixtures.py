@@ -77,3 +77,41 @@ def run_promote_simple(
             "test.zim",
             topic,
         )
+
+
+def make_disambig_handler(
+    *,
+    article_body: str,
+    search_results: list,
+    title_index: Optional[Dict[str, Any]] = None,
+    zim_file_path: str = "/x.zim",
+    bm25_fallback_text: str = "## BM25 fallback rendered\n\n...",
+) -> tuple[Any, Any]:
+    """Build a ``(SimpleToolsHandler, mock)`` pair for tell_me_about
+    integration tests that exercise the disambig-render-time rejection
+    path (post-b11 Sub-pattern C + post-b12 phrasing variants).
+
+    The mock supplies the standard tell_me_about dependencies:
+    BM25 search results, title-index lookup, article body fetch, the
+    fall-to-search rendering hook, and a stubbed article structure.
+    Returns the (handler, mock) tuple so callers can assert on mock
+    invocations like ``mock.search_zim_file.assert_called()``.
+
+    Extracted to share between b11 + b12 sweep test files (Sonar
+    new-code duplication threshold).
+    """
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+
+    mock = MagicMock()
+    mock.list_zim_files_data.return_value = [{"path": zim_file_path}]
+    mock.search_zim_file_data.return_value = {"results": search_results}
+    mock.search_zim_file.return_value = bm25_fallback_text
+    mock.get_zim_entry.return_value = article_body
+    mock.config.meta.footer_enabled = False
+    mock.find_entry_by_title_data.return_value = (
+        {"results": [title_index]} if title_index else {"results": []}
+    )
+    mock.get_article_structure_data.return_value = {"sections": []}
+    return SimpleToolsHandler(mock), mock

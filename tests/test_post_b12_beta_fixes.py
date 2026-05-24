@@ -44,8 +44,7 @@ extend with new phrasings if ZIM exporters ever produce them".
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-from unittest.mock import MagicMock
+from tests._promote_fixtures import make_disambig_handler as _make_disambig_handler
 
 # ---------------------------------------------------------------------------
 # Direct unit tests on the extended _DISAMBIG_LEAD_PHRASES set.
@@ -130,26 +129,7 @@ class TestPlayDisambigRejection:
     ``may refer also to`` phrasing. With the fix, the body is
     classified as disambig and the Sub-pattern C rejection fires."""
 
-    @staticmethod
-    def _make_handler(
-        *,
-        article_body: str,
-        search_results: list,
-        title_index: Optional[Dict[str, Any]] = None,
-    ) -> Any:
-        from openzim_mcp.simple_tools import SimpleToolsHandler
-
-        mock = MagicMock()
-        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
-        mock.search_zim_file_data.return_value = {"results": search_results}
-        mock.search_zim_file.return_value = "## BM25 fallback rendered\n\n..."
-        mock.get_zim_entry.return_value = article_body
-        mock.config.meta.footer_enabled = False
-        mock.find_entry_by_title_data.return_value = (
-            {"results": [title_index]} if title_index else {"results": []}
-        )
-        mock.get_article_structure_data.return_value = {"sections": []}
-        return SimpleToolsHandler(mock), mock
+    _make_handler = staticmethod(_make_disambig_handler)
 
     def test_play_style_disambig_multi_token_falls_to_search(self) -> None:
         """Topic with 3 content tokens + Play-style disambig body →
