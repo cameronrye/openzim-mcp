@@ -1038,7 +1038,7 @@ def _promote_title_match(
             full_probe, query
         ):
 
-            def _z4_probe(tok: str, _vp: "Path" = vp) -> Optional[dict]:
+            def _z4_probe(tok: str, _vp: Path = vp) -> Optional[dict]:
                 return find_title_match(search_handler, str(_vp), tok)
 
             if not (
@@ -1441,7 +1441,7 @@ def _maybe_rerank_synthesize_passages(
     *,
     query: str,
     top_hits: list[tuple[str, dict[str, Any]]],
-    reranker_config: "Optional[RerankerConfig]",
+    reranker_config: Optional[RerankerConfig],
 ) -> tuple[list[SynthesizePassage], list[tuple[str, str]]]:
     """Apply cross-encoder rerank to synthesize passage candidates.
 
@@ -1535,7 +1535,7 @@ def synthesize_query(
     cache: OpenZimMcpCache,
     content_processor: ContentProcessor,
     config: SynthesizeConfig,
-    reranker_config: "Optional[RerankerConfig]" = None,
+    reranker_config: Optional[RerankerConfig] = None,
     original_query: Optional[str] = None,
     strip_links: bool = False,
     omit_passage_text: bool = False,
