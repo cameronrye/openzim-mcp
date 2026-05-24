@@ -5,6 +5,105 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b13] — 2026-05-24 (beta pre-release) — post-b12 beta-test sweep shipped — Play-style disambig phrasing variant + CodeQL #231 + test dedupe
+
+Post-b12 live-MCP verification confirmed the Z4 multi-token canonical
+fix lands cleanly (7/8 historical defects now route correctly) and
+the Sub-pattern C disambig rejection works for Lincoln / O'Brien.
+One new silent-wrong-answer slipped through:
+``Shakespeare England plays`` at v2.0.0b12 still ships ``Play``
+(disambig page) at cert=0.85.
+
+### Root cause — phrasing variant not in ``_DISAMBIG_LEAD_PHRASES``
+
+``_is_disambig_lead`` runs a trailing-tail ``endswith`` check against
+the phrase set ``("may refer to", "may also refer to")``. The
+Wikipedia ``Play`` disambig template ends its pre-H2 with:
+
+  **Play** may refer also to:
+
+Word order: may-refer-**also**-to (NOT may-**also**-refer-to). The
+two-phrase set misses this variant, so ``_is_disambig_lead`` returns
+False, the b12 Sub-pattern C rejection doesn't fire, and the Play
+disambig page is served as the tell_me_about answer.
+
+The b11 implementation comment at ``simple_tools.py:2660`` explicitly
+anticipated this: "easier to extend with new phrasings if ZIM
+exporters ever produce them".
+
+### Fix — extend ``_DISAMBIG_LEAD_PHRASES`` with the third variant
+
+One-line tuple extension:
+
+```python
+_DISAMBIG_LEAD_PHRASES = (
+    "may refer to",
+    "may also refer to",
+    "may refer also to",  # b13 fix: Play-style word order
+)
+```
+
+No regex, no backtracking risk, no architectural change. The
+trailing-tail ``endswith`` check still position-anchors against
+false-positives where the phrase appears earlier in the body but
+not at the tail.
+
+### Verification
+
+Live-MCP probe of all documented preserved cases plus the 8 Z4
+defect repros from b11. After b13: ``Shakespeare England plays``
+falls to BM25 (Z4 + Sub-pattern C combine to reject ``Shakespeare's_Kings``
+AND ``Play`` disambig). All other 7 Z4 defects continue routing
+correctly (4 to head bios, 3 to tail concepts / BM25). 13/13
+preserved cases hold; no regressions.
+
+### CodeQL alert #231 — unquote forward refs to TYPE_CHECKING imports
+
+CodeQL's ``py/unused-import`` flagged ``RerankerConfig`` as unused
+in ``synthesize.py`` because two annotations used explicit string-
+quoting (``"Optional[RerankerConfig]"``) which the static analyzer
+treats as opaque string literals rather than deferred forward
+references.
+
+Under ``from __future__ import annotations`` (line 14 of synthesize.py),
+ALL annotations are automatically stringified at runtime — explicit
+quotes are redundant and serve only to hide the import usage from
+static analyzers. Fix: remove the redundant string quotes from three
+annotations (lines 1041 / 1444 / 1538). mypy / runtime behavior
+unchanged.
+
+### Test dedupe — extract ``make_disambig_handler`` to shared fixtures
+
+SonarCloud flagged 6.2% new-code duplication (threshold 3%) because
+the b13 sweep's ``TestPlayDisambigRejection._make_handler`` was a
+copy of b11's ``TestSubPatternCDisambigRejection._make_handler``.
+Extracted to ``tests/_promote_fixtures.make_disambig_handler``,
+both sweep files now import the shared helper. Same dedup pattern
+the post-b8 sweep used when it created ``_promote_fixtures.py``.
+
+### Tests
+
+7 new tests in ``tests/test_post_b12_beta_fixes.py``:
+
+- 5 direct unit tests on ``_is_disambig_lead`` covering all three
+  phrase variants + Play-style full pre-H2 + false-positive defense.
+- 2 integration tests: ``Shakespeare England plays`` (multi-token →
+  BM25 fallback) and ``tell me about Play`` (bare-head → preserve
+  disambig).
+
+```
+2562 passed, 54 skipped (full suite, ~28s)
+```
+
+mypy / black / flake8 / pip-audit all clean.
+
+### Methodology — "fix unlocks new paths" 20 sweeps strong
+
+Smallest sweep since b6 — one-line phrase extension. The b11
+Sub-pattern C rejection architecture was solid; only the underlying
+detection primitive needed a phrase variant added. This is the
+"easy to extend" promise of the b11 design paying off.
+
 ## [2.0.0b12] — 2026-05-23 (beta pre-release) — post-b11 beta-test sweep shipped — Z4 multi-token canonical tangential + Sub-pattern C disambig rejection
 
 Post-b11 sweep packaged from PR #184. Live-MCP verification against
