@@ -31,11 +31,19 @@ These apply across all phases; per-phase specs do not re-litigate them.
 | **A** | Quality wins, non-breaking | #1, #2, #4, #5, #14 | **Shipped (v2.0.0a1)** | [2026-05-08-v2-phase-a-quality-wins-design.md](../superpowers/specs/2026-05-08-v2-phase-a-quality-wins-design.md) |
 | **B** | Response contract | #3, #13 | **Shipped (v2.0.0a2)** | [2026-05-08-v2-phase-b-response-contract-design.md](../superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md) |
 | **C** | New retrieval primitives | #7, #10, #11 | **Shipped (v2.0.0a4)** | [2026-05-09-v2-phase-c-retrieval-primitives-design.md](../superpowers/specs/2026-05-09-v2-phase-c-retrieval-primitives-design.md) |
-| **D** (trimmed) | Optional ML accelerators | #6, #8 Tier 1 (others deferred) | In Design | [2026-05-20-v2-phase-d-ml-accelerators-design.md](../superpowers/specs/2026-05-20-v2-phase-d-ml-accelerators-design.md) |
-| **E** | Offline build artifacts | #16, #17 | Planned | _TBD_ |
-| **F** | Tool surface v2 | #9 | Planned | _TBD_ |
+| **D** (trimmed) | Optional ML accelerators | #6 reranker + #8 Tier 1 query rewriting | **Shipped (v2.0.0b1)** | [2026-05-20-v2-phase-d-ml-accelerators-design.md](../superpowers/specs/2026-05-20-v2-phase-d-ml-accelerators-design.md) |
+| _Beta polish_ | Title-promotion defect sweeps | Z1, Z2, Z3, Z4, OPP-1, Sub-pattern C | **In progress (v2.0.0b2 → b13)** | Per-sweep PRs (see CHANGELOG) |
+| **E** | Offline build artifacts | #16, #17 | **Rolled to v2.5** | [docs/v2.5/README.md](../v2.5/README.md) |
+| **F** | Tool surface v2 | #9 | Planned (next) | _TBD_ |
+| _Deferred from Phase D_ | Hybrid intent + embeddings sidecar | #8 Tier 2, #12, #15 | **Rolled to v2.5** | [docs/v2.5/README.md](../v2.5/README.md) |
 
 Each phase's spec is created via the brainstorming workflow when that phase begins. The spec link gets filled in when the design is approved.
+
+### Re-scope decision (2026-05-24)
+
+v2's remaining scope is now exactly **Phase F (tool-surface consolidation)**. Phase E (offline build artifacts) and the deferred Phase D items (#8 Tier 2, #12, #15) move to [v2.5](../v2.5/README.md) — they are all additive (extras-gated or sidecar-based) and don't require waiting for the v2.0.0 final tag. When Phase F ships, v2.0.0 cuts. v2.5 picks up E + the deferred Phase D items on its own schedule.
+
+The beta polish line (b2 → b13, 12 sweep releases) has been the de-facto Phase D maintenance follow-up — every sweep cycled defects in the Tier 1 query rewriting / title-promotion path that sub-D-2 introduced. b13's live-MCP sweep returned 25/25 cases pass with no defects, suggesting the line is converging.
 
 ---
 
@@ -135,6 +143,10 @@ Each phase's spec is created via the brainstorming workflow when that phase begi
 
 **Why fourth:** Each depends on the response shape from B and the section bundles from C to be useful. Doing ML before structure means rebuilding integration points twice.
 
+**What shipped (v2.0.0b1, trimmed scope):** #6 cross-encoder reranker (behind `[reranker]` extra) and #8 Tier 1 rules-based query rewriting (base install). See the [Phase D design spec](../superpowers/specs/2026-05-20-v2-phase-d-ml-accelerators-design.md) for the deliberate trim rationale: ship the two items that pay off regardless, instrument them, decide what's actually missing.
+
+**What deferred to [v2.5](../v2.5/README.md):** #8 Tier 2 multi-hop decomposition, #12 hybrid intent parser (regex + classifier fallback), #15 sentence-embedding sidecar. The Phase D spec captures measurable triggers that would justify designing each. The beta polish line (b2 → b13) has not surfaced live evidence that meets those triggers; they sit in v2.5 awaiting evidence.
+
 ### #6 — Cross-encoder reranker
 
 **Current state.** Pure Xapian BM25 is the only relevance signal. Wikipedia title queries are entity-driven, but content-fragment queries ("the chemical that makes leaves green") need semantic re-ranking.
@@ -163,11 +175,13 @@ Each phase's spec is created via the brainstorming workflow when that phase begi
 
 ---
 
-## Phase E — Offline build artifacts
+## Phase E — Offline build artifacts (rolled to v2.5)
 
 **Goal:** Ship an `openzim-mcp build` CLI that produces optional sidecar files at archive-load or pre-deployment time.
 
-**Why fifth:** Independent of all runtime code; can ship after D without blocking it.
+**Why deferred to [v2.5](../v2.5/README.md):** Independent of all runtime code AND additive (sidecars are optional; absence is reported gracefully). Doesn't need to block the v2.0.0 final tag. Phase F is the highest-impact remaining v2 work; Phase E ships on its own schedule afterward.
+
+The original item descriptions remain below for reference but the live tracker is [docs/v2.5/README.md](../v2.5/README.md).
 
 ### #16 — Inbound link-graph sidecar
 
