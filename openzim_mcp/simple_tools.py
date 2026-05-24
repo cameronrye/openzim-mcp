@@ -2659,7 +2659,17 @@ class SimpleToolsHandler:
     # behaviour via normalized ``endswith`` — no regex engine, no
     # backtracking risk, and easier to extend with new phrasings if
     # ZIM exporters ever produce them.
-    _DISAMBIG_LEAD_PHRASES = ("may refer to", "may also refer to")
+    # Post-b12: ``may refer also to`` added for the Play-style
+    # disambig template variant (word order: may-refer-also-to vs the
+    # may-also-refer-to of Mercury-style). Live repro at v2.0.0b12:
+    # ``Shakespeare England plays`` routed to the ``Play`` disambig at
+    # cert=0.85 because the trailing-tail ``endswith`` check missed
+    # this phrasing variant.
+    _DISAMBIG_LEAD_PHRASES = (
+        "may refer to",
+        "may also refer to",
+        "may refer also to",
+    )
 
     # ``_lead_density`` strips the ZIM-renderer preamble + duplicated H1
     # to measure substantive lead prose. Both patterns are anchored at

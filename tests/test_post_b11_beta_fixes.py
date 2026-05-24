@@ -103,6 +103,7 @@ from typing import Any, Dict, Optional
 from unittest.mock import patch
 
 from tests._promote_fixtures import fake_find_title_match as _fake_find_title_match
+from tests._promote_fixtures import make_disambig_handler as _make_disambig_handler
 from tests._promote_fixtures import make_simple_handler as _make_simple_handler
 
 
@@ -1277,28 +1278,7 @@ class TestSubPatternCDisambigRejection:
     back to BM25 search so the LLM sees the ranked specific articles
     instead of the disambig list."""
 
-    @staticmethod
-    def _make_handler(
-        *,
-        article_body: str,
-        search_results: list,
-        title_index: Optional[Dict[str, Any]] = None,
-    ) -> Any:
-        from unittest.mock import MagicMock
-
-        from openzim_mcp.simple_tools import SimpleToolsHandler
-
-        mock = MagicMock()
-        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
-        mock.search_zim_file_data.return_value = {"results": search_results}
-        mock.search_zim_file.return_value = "## BM25 fallback rendered\n\n..."
-        mock.get_zim_entry.return_value = article_body
-        mock.config.meta.footer_enabled = False
-        mock.find_entry_by_title_data.return_value = (
-            {"results": [title_index]} if title_index else {"results": []}
-        )
-        mock.get_article_structure_data.return_value = {"sections": []}
-        return SimpleToolsHandler(mock), mock
+    _make_handler = staticmethod(_make_disambig_handler)
 
     def test_lincoln_multi_token_falls_to_search(self) -> None:
         """Multi-content-token topic + disambig body → fall back."""
