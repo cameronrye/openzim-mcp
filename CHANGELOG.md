@@ -5,6 +5,179 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0b12] — 2026-05-23 (beta pre-release) — post-b11 beta-test sweep shipped — Z4 multi-token canonical tangential + Sub-pattern C disambig rejection
+
+Post-b11 sweep packaged from PR #184. Live-MCP verification against
+v2.0.0b11 confirmed the b11 probe-based multi-entity discriminator
+fully ships its target shape (4/6 historical Z3 repros now route to
+the correct head: ``Stalin USSR Russia`` → ``Joseph_Stalin``,
+``Hitler Germany Berlin`` → ``Nazi_Germany``, ``Marie Curie polonium
+discovery`` → ``Marie_Curie``, ``Big Rapids Michigan tourism`` →
+``Big_Rapids,_Michigan``). One new HIGH-severity defect class
+surfaced — Z4 multi-token canonical tangential — plus the
+Sub-pattern C disambig promotion class noted but deferred from b8.
+
+### Root cause — ``is_tail_hijack_shape`` is narrow by design
+
+The b11 ``is_tail_hijack_shape`` predicate requires **(a) single-
+token canonical AND (b) 3+-token topic**. Both preconditions are
+sound for the b8 Z3 target shape, but the silent-wrong-answer
+pattern manifests in two adjacent shapes that bypass the gate:
+
+1. **2-token topics** with multi-token canonical that contains both
+   topic tokens (head as possessive/parenthetical + extra modifier):
+   ``Tesla electricity`` → ``Tesla's_Wireless_Electricity``,
+   ``Mozart Vienna`` → ``Mozarthaus_Vienna``,
+   ``Beethoven symphony`` → ``Symphony_No._1_(Beethoven)``,
+   ``Lenin Russia`` → ``Leninist_Komsomol_of_the_Russian_Federation``.
+2. **3+-token topics** with multi-token canonical that overlaps the
+   topic only via stemming or non-head tokens:
+   ``Marie Curie radioactivity`` → ``Radioactive_(Redniss_book)``,
+   ``Darwin evolution Galapagos`` → ``Galápagos_Islands``,
+   ``Mao China revolution`` →
+   ``History_of_the_People's_Republic_of_China_(1949–1976)``,
+   ``Shakespeare England plays`` → ``Shakespeare's_Kings``.
+
+Additionally, the b8-noted Sub-pattern C cases still fire:
+``Lincoln slavery emancipation`` → ``Lincoln`` (disambig page) and
+``O'Brien character 1984`` → ``O'Brien`` (disambig page). The
+canonical is single-token (no Z3 / Z4 shape) but is itself a
+disambiguation page.
+
+### Fix — Z4 tangential check with three exemptions + Sub-pattern C disambig render-time rejection
+
+Four new helpers in ``title_promotion``:
+
+- ``is_tangential_multi_token_shape(promoted, topic)`` — pure-logic
+  shape: canonical is multi-token AND not a token-set subset of
+  topic (after filtering ``_CANONICAL_FUNCTION_WORDS`` — articles,
+  conjunctions, prepositions — from canonical). Subset preserves the
+  ``Apollo 11 moon landing`` → ``Moon_landing`` and ``Lincoln
+  Gettysburg Address`` → ``Gettysburg_Address`` invariants. The
+  function-word filter additionally preserves
+  ``Assassination_of_John_F._Kennedy`` for topic ``John F Kennedy
+  assassination`` (canonical's only extra is the preposition
+  ``of``).
+- ``probed_head_matches_promoted(topic, promoted, title_probe)`` —
+  biographical-canonical exemption: probes EACH non-stop-word topic
+  token. True iff ANY probe's canonical path (or pre-redirect path)
+  equals the promoted candidate AND the probed token literally
+  appears in the promoted canonical's tokens. The probe-all approach
+  catches tail-position subjects (``quantum mechanics Einstein`` →
+  ``Albert_Einstein`` — subject ``einstein`` at the topic tail);
+  the token-in-canonical guard prevents accidental over-acceptance
+  (``Darwin evolution Galapagos`` → ``Galápagos_Islands`` would
+  match on path-only but ``galapagos`` ≠ ``galápagos`` raw, so the
+  guard correctly rejects).
+- ``has_digit_specificity_match(promoted, topic)`` — digit
+  specificity exemption: when canonical's extras (tokens NOT in
+  topic) include a digit AND topic also has a digit-bearing token,
+  the user explicitly signaled they want a numbered instance.
+  Catches ``Beethoven 9th symphony`` → ``Symphony_No._9_(Beethoven)``
+  without over-accepting ``Beethoven symphony`` →
+  ``Symphony_No._1_(Beethoven)`` (no topic digit).
+- ``has_topic_prefix_canonical_extension(promoted, topic)`` — type-
+  extension exemption: canonical's leading tokens form a contiguous
+  2+-token slice of topic, suffix tokens are all extras. Catches the
+  b8 motivating case ``Big Rapids Michigan Ferris State`` →
+  ``Ferris_State_University`` where the topic tail is the
+  canonical's entity name without the type-word suffix.
+
+Call-site wiring in ``_promote_topic_via_title_index``:
+
+- **Pass 0 / Pass 3** consult ``accept_possessive_promotion`` AND
+  ``_passes_z4`` directly (no Z3 multi-entity escape — that escape
+  exists only for Pass 1's documented 1-token-tail filler-prose
+  feature).
+- **Pass 1 / Pass 2** consult ``_accept_with_multi_entity_check``,
+  which layers the Z3 escape over the b9 unconditional tail-hijack
+  rejection AND then applies ``_passes_z4``.
+- The b3 invariant (first ``find_title_match`` call uses bare
+  ``topic``) is preserved by hoisting the Pass 0 probe above the
+  closure definitions.
+
+Symmetric application in ``synthesize.py:_promote_title_match``
+Pass 0 — synthesize was previously vulnerable to the same Z4
+silent-wrong-answer pattern via ``zim_query(synthesize=True)``.
+
+**Sub-pattern C disambig rejection** at render-time in
+``_handle_tell_me_about``: when the auto-picked canonical's body
+matches the disambig-lead pattern (``may refer to`` / ``may also
+refer to``) AND the topic has 2+ non-stop-word content tokens, fall
+back to plain BM25 search. Detection-at-render-time avoids a
+separate content-peek round-trip (the body is already fetched for
+normal rendering). Single-content-token topics (``tell me about
+Lincoln``) legitimately want the disambig and are preserved by the
+``len >= 2`` floor. Possessive queries bypass via
+``has_apostrophe_possessive`` (OPP-1 handles those at the promotion
+layer).
+
+### Decision matrix
+
+| Topic | Multi-token tangent | Bio exem | Digit exem | Type-ext exem | Decision |
+| --- | --- | --- | --- | --- | --- |
+| Tesla electricity | yes | no | no | no | REJECT |
+| Mozart Vienna | yes | no | no | no | REJECT |
+| Beethoven symphony | yes | no | no | no | REJECT |
+| Lenin Russia | yes | no | no | no | REJECT |
+| Marie Curie radioactivity | yes | no | no | no | REJECT |
+| Shakespeare England plays | yes | no | no | no | REJECT |
+| Darwin evolution Galapagos | yes | no | no | no | REJECT |
+| Mao China revolution | yes | no | no | no | REJECT |
+| Picasso Paris cubism | yes | YES | - | - | ACCEPT |
+| Quantum mechanics Einstein | yes | YES (tail) | - | - | ACCEPT |
+| Beethoven 9th symphony | yes | no | YES | - | ACCEPT |
+| Big Rapids Michigan Ferris State | yes | no | no | YES | ACCEPT |
+| John F Kennedy assassination | no (⊆ after func-word filter) | - | - | - | ACCEPT |
+| Apollo 11 moon landing | no (⊆) | - | - | - | ACCEPT |
+| Lincoln Gettysburg Address | no (⊆) | - | - | - | ACCEPT |
+| Newton's gravity (possessive) | n/a | - | - | - | ACCEPT (OPP-1) |
+| Hamlet Denmark prince | no (1tk) | - | - | - | ACCEPT |
+| Berlin Germany | no (1tk) | - | - | - | ACCEPT |
+| what is the population of detroit | no (1tk) | - | - | - | ACCEPT |
+| Lincoln slavery emancipation | Sub-pattern C | - | - | - | REJECT (render-time, falls to BM25) |
+| O'Brien character 1984 | Sub-pattern C | - | - | - | REJECT (render-time, falls to BM25) |
+| tell me about Lincoln (1-tk) | Sub-pattern C | - | - | - | ACCEPT (single-content-token preserved) |
+
+### Tests
+
+52 new tests in ``tests/test_post_b11_beta_fixes.py`` covering:
+
+- 8 Z4 defect-repro integration tests (one per live silent-wrong-answer)
+- 9 preserved-case integration tests (Apollo / Lincoln / Hamlet / Berlin / Picasso / Newton's possessive / population-of-detroit / Ferris State / Beethoven-9th / quantum-Einstein / JFK)
+- Direct unit tests on each new helper (shape predicate; biographical via probe-all + token-in-canonical guard; digit specificity in 4 directions; type-extension prefix length floor / subset overlap / anywhere-in-topic; function-word filter / lexical-word retention)
+- 3 synthesize Z4 integration tests (Tesla reject / Picasso bio accept / possessive bypass)
+- 4 Sub-pattern C disambig integration tests (Lincoln multi-token reject / Lincoln single-content-token preserve / stop-words filter / non-disambig body unaffected)
+
+```
+2555 passed, 54 skipped (full suite, ~29s)
+```
+
+mypy / black / flake8 / pip-audit all clean.
+
+### Methodology — "fix unlocks new paths" 19 sweeps strong
+
+The post-b11 sweep peeled the b11 narrow predicate in three concentric
+layers across three commits:
+
+1. **First pass** — Z4 shape predicate plus biographical
+   (head-token-only), digit-specificity, and type-extension exemptions.
+2. **Second pass** — static code review surfaced two regressions: tail-
+   position subject (quantum mechanics Einstein) and canonical
+   function-word extras (JFK). Fixed via probe-all-tokens with token-
+   in-canonical guard, and the canonical-subset stop-word filter.
+3. **Third pass** — closed two scoping gaps: synthesize Pass 0 Z4
+   protection (symmetric to simple_tools), and Sub-pattern C disambig
+   render-time rejection.
+
+Each layer extends the b11 design without invalidating its core: the
+b11 ``count_non_tail_strong_entities`` discriminator stays in place
+for Pass 1/2's filler-prose escape; the b9 ``accept_possessive_promotion``
+Z3 rejection stays unconditional at Pass 0/3; OPP-1 possessive logic
+is untouched. b12 adds the multi-token canonical sibling of Z3 with
+the supporting exemptions needed to keep all documented preserved
+cases working.
+
 ## [2.0.0b11] — 2026-05-23 (beta pre-release) — post-b10 beta-test sweep shipped — probe-based multi-entity discriminator (case-independent Z3)
 
 Post-b10 sweep packaged from PR #182. Live-MCP verification against
