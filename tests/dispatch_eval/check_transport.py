@@ -34,6 +34,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -41,6 +42,17 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+
+
+def _secure_allow_dir() -> str:
+    """Return a fresh private tempdir for use as ``--allowed-directories``.
+
+    ``tempfile.mkdtemp`` creates the directory with mode 0o700 so other
+    users on the host cannot read or modify it — this is the
+    SonarCloud-S5443-safe replacement for a literal ``"/tmp"``. Each
+    transport probe gets its own directory; the OS reclaims them.
+    """
+    return tempfile.mkdtemp(prefix="ozm-gate0-")
 
 
 def _contains_one_of(schema_obj: Any) -> bool:
@@ -86,7 +98,7 @@ def check_in_memory() -> Dict[str, Any]:
         from openzim_mcp.config import OpenZimMcpConfig
         from openzim_mcp.server import OpenZimMcpServer
 
-        cfg = OpenZimMcpConfig(allowed_directories=["/tmp"])
+        cfg = OpenZimMcpConfig(allowed_directories=[_secure_allow_dir()])
         srv = OpenZimMcpServer(cfg)
         tool = srv.mcp._tool_manager._tools["probe_tool"]
         params = tool.parameters
@@ -160,7 +172,7 @@ def check_stdio() -> Dict[str, Any]:
                 sys.executable,
                 "-m",
                 "openzim_mcp",
-                "/tmp",
+                _secure_allow_dir(),
                 "--transport",
                 "stdio",
             ],
@@ -210,8 +222,7 @@ def check_stdio() -> Dict[str, Any]:
                 "transport": "stdio",
                 "ok": False,
                 "error": (
-                    "no JSON-RPC response with id==2 (tools/list) found in "
-                    "stdout"
+                    "no JSON-RPC response with id==2 (tools/list) found in " "stdout"
                 ),
                 "all_responses": responses,
                 "stderr_tail": stderr_bytes[-2000:].decode("utf-8", "replace"),
@@ -275,7 +286,7 @@ def check_http() -> Dict[str, Any]:
                 sys.executable,
                 "-m",
                 "openzim_mcp",
-                "/tmp",
+                _secure_allow_dir(),
                 "--transport",
                 "http",
                 "--host",
@@ -508,9 +519,7 @@ def main() -> None:
         "stdio_oneOf": results["stdio_pattern_b"].get("contains_oneOf", False),
         "http_available": results["http_pattern_b"].get("available", False),
         "http_oneOf": results["http_pattern_b"].get("contains_oneOf", False),
-        "pattern_c_oneOf": results["in_memory_pattern_c"].get(
-            "contains_oneOf", False
-        ),
+        "pattern_c_oneOf": results["in_memory_pattern_c"].get("contains_oneOf", False),
     }
     print(json.dumps(results, indent=2, default=str))
 
