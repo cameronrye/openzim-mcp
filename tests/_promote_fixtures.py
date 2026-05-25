@@ -86,6 +86,79 @@ def run_promote_simple(
         )
 
 
+def picasso_paris_cubism_mapping() -> Dict[str, Optional[Dict[str, Any]]]:
+    """Z4 biographical-exemption fixture: head probe ``picasso`` resolves
+    to the same canonical (``Pablo_Picasso``) the orchestrator is about
+    to promote, so Z4 must accept the promotion. Shared between the b11
+    sweep regression and the direct ``topic_preprocessing`` unit tests
+    (Sonar new-code duplication threshold).
+    """
+    return {
+        "picasso paris cubism": {
+            "path": "Pablo_Picasso",
+            "title": "Pablo Picasso",
+            "zim_file": "test.zim",
+            "match_type": "redirect",
+            "pre_redirect_path": "Picasso",
+        },
+        "picasso": {
+            "path": "Pablo_Picasso",
+            "title": "Pablo Picasso",
+            "zim_file": "test.zim",
+            "match_type": "redirect",
+            "pre_redirect_path": "Picasso",
+        },
+        "paris": {
+            "path": "Paris",
+            "title": "Paris",
+            "zim_file": "test.zim",
+            "match_type": "direct",
+        },
+        "cubism": {
+            "path": "Cubism",
+            "title": "Cubism",
+            "zim_file": "test.zim",
+            "match_type": "direct",
+        },
+    }
+
+
+def beethoven_9th_symphony_mapping() -> Dict[str, Optional[Dict[str, Any]]]:
+    """Z4 digit-specificity-exemption fixture: canonical extras
+    ``{no, 9}`` include a digit AND topic ``{beethoven, 9th, symphony}``
+    includes a digit token, so Z4 must accept the specific numbered
+    instance. Shared between the b11 sweep regression and the direct
+    ``topic_preprocessing`` unit tests.
+    """
+    return {
+        "beethoven 9th symphony": {
+            "path": "Symphony_No._9_(Beethoven)",
+            "title": "Symphony No. 9 (Beethoven)",
+            "zim_file": "test.zim",
+            "match_type": "fuzzy_suggest",
+        },
+        "9th symphony": {
+            "path": "Symphony_No._9_(Beethoven)",
+            "title": "Symphony No. 9 (Beethoven)",
+            "zim_file": "test.zim",
+            "match_type": "fuzzy_suggest",
+        },
+        "symphony": {
+            "path": "Symphony",
+            "title": "Symphony",
+            "zim_file": "test.zim",
+            "match_type": "direct",
+        },
+        "beethoven": {
+            "path": "Ludwig_van_Beethoven",
+            "title": "Ludwig van Beethoven",
+            "zim_file": "test.zim",
+            "match_type": "redirect",
+            "pre_redirect_path": "Beethoven",
+        },
+    }
+
+
 def make_disambig_handler(
     *,
     article_body: str,

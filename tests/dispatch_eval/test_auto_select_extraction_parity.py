@@ -62,9 +62,7 @@ def mock_handler() -> SimpleToolsHandler:
     return SimpleToolsHandler(MagicMock())
 
 
-@pytest.mark.parametrize(
-    "scenario", ["zero_files", "one_file", "n_files", "raises"]
-)
+@pytest.mark.parametrize("scenario", ["zero_files", "one_file", "n_files", "raises"])
 def test_auto_select_parity(
     scenario: str,
     mock_handler: SimpleToolsHandler,
@@ -97,12 +95,11 @@ def test_auto_select_parity(
             lambda: [{"path": "/a/b.zim"}, {"path": "/c/d.zim"}],
         )
     else:  # raises
+
         def boom() -> Any:
             raise RuntimeError("simulated")
 
-        monkeypatch.setattr(
-            mock_handler.zim_operations, "list_zim_files_data", boom
-        )
+        monkeypatch.setattr(mock_handler.zim_operations, "list_zim_files_data", boom)
 
     # Capture old-method return + logs.
     caplog.clear()
@@ -118,10 +115,9 @@ def test_auto_select_parity(
         new_result = auto_select_zim_file(mock_handler.zim_operations)
     new_records = [(r.levelname, r.message) for r in caplog.records]
 
-    assert old_result == new_result, (
-        f"divergence on {scenario}: old={old_result!r} new={new_result!r}"
-    )
+    assert (
+        old_result == new_result
+    ), f"divergence on {scenario}: old={old_result!r} new={new_result!r}"
     assert old_records == new_records, (
-        f"log divergence on {scenario}: "
-        f"old={old_records!r} new={new_records!r}"
+        f"log divergence on {scenario}: " f"old={old_records!r} new={new_records!r}"
     )

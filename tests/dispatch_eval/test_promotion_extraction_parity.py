@@ -157,6 +157,5 @@ def test_promotion_parity(probe: dict, live_handler: SimpleToolsHandler) -> None
         topic=topic,
     )
     assert old_result == new_result, (
-        f"divergence on {probe['probe_id']}: "
-        f"old={old_result!r} new={new_result!r}"
+        f"divergence on {probe['probe_id']}: " f"old={old_result!r} new={new_result!r}"
     )
