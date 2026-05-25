@@ -417,7 +417,39 @@ class OpenZimMcpServer:
         logger.info("Simple mode tools registered (zim_query only)")
 
     def _register_tools(self) -> None:
-        """Register MCP tools based on configured mode."""
+        """Register MCP tools based on configured mode.
+
+        Phase F prototype: when ``OZM_PHASE_F_PROTOTYPE=1`` is set, the
+        8-tool prototype surface is registered instead of the legacy tool
+        set. ``OZM_TOOL_MODE`` can override ``self.config.tool_mode`` so the
+        prototype can be exercised in either mode without rebuilding the
+        config model. This env-var gate exists ONLY for the Gate 0b eval
+        harness and the schema-snapshot script — it is never set on the
+        production deployment path.
+        """
+        import os as _os
+
+        if _os.environ.get("OZM_PHASE_F_PROTOTYPE") == "1":
+            proto_tool_mode = _os.environ.get("OZM_TOOL_MODE")
+            if proto_tool_mode:
+                # Pydantic v2 with the default ``validate_assignment=False``
+                # accepts the assignment without re-running model validators
+                # — important because the existing ``allowed_directories``
+                # field validator is destructive (resolves + asserts exists)
+                # and tests intentionally bypass it via list mutation.
+                self.config.tool_mode = proto_tool_mode  # type: ignore[assignment]
+            # Re-init the SimpleToolsHandler when the env var flipped us
+            # into simple mode after __init__ already ran with advanced.
+            if self.config.tool_mode == TOOL_MODE_SIMPLE and self.simple_tools_handler is None:
+                self.simple_tools_handler = SimpleToolsHandler(self.zim_operations)
+            from .tools import register_phase_f_tools
+
+            logger.info(
+                f"Registering Phase F prototype tools (mode={self.config.tool_mode})..."
+            )
+            register_phase_f_tools(self)
+            return
+
         # Check tool mode and register appropriate tools
         if self.config.tool_mode == TOOL_MODE_SIMPLE:
             logger.info("Registering simple mode tools...")
