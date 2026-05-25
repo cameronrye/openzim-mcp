@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 from typing import Any, Dict, Literal, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
@@ -118,64 +117,6 @@ class OpenZimMcpServer:
             )
         self.mcp = FastMCP(config.server_name, **fastmcp_kwargs)
         self.mcp._mcp_server.version = __version__
-
-        # Gate 0.2 (v2 Phase F) probe — verification scaffolding only.
-        # When OZM_GATE_0_PROBE=1 is set, register a single ``probe_tool``
-        # using the Gate 0.1 winning pattern (Pydantic discriminated Union
-        # via inputSchema override) and skip the normal tool registration.
-        # This branch is reverted in Task Z2 of the Gate 0 PR — it exists
-        # purely so the in-memory check and the subprocess wire checks
-        # exercise the same code path.
-        if os.environ.get("OZM_GATE_0_PROBE") == "1":
-            # Verification scaffolding only — reverted in Task Z2 of the
-            # Gate 0 PR. Registers a single probe tool with a hand-authored
-            # ``oneOf`` schema (Gate 0.1 winning Pattern B) to verify the
-            # schema round-trips through the wire transports.
-
-            @self.mcp.tool()
-            def probe_tool(
-                mode: str = "fulltext",
-                namespace: Optional[str] = None,
-                limit: Optional[int] = None,
-            ) -> str:
-                """Gate 0.2 probe — flat base with oneOf override."""
-                return f"{mode}/{namespace}/{limit}"
-
-            probe = self.mcp._tool_manager._tools["probe_tool"]
-            probe.parameters = {
-                "type": "object",
-                "oneOf": [
-                    {
-                        "title": "fulltext",
-                        "type": "object",
-                        "required": ["mode"],
-                        "properties": {
-                            "mode": {"const": "fulltext"},
-                            "namespace": {"type": "string"},
-                            "limit": {"type": "integer"},
-                        },
-                    },
-                    {
-                        "title": "title",
-                        "type": "object",
-                        "required": ["mode"],
-                        "properties": {"mode": {"const": "title"}},
-                    },
-                    {
-                        "title": "suggest",
-                        "type": "object",
-                        "required": ["mode"],
-                        "properties": {"mode": {"const": "suggest"}},
-                    },
-                ],
-            }
-            # Minimal init for transport paths that read these attrs.
-            self.subscriber_registry = None
-            logger.info(
-                "Gate 0.2 probe mode active — only probe_tool is registered"
-            )
-            return
-
         self._register_tools()
 
         # Subscription support is HTTP-only: the MtimeWatcher that emits
