@@ -115,7 +115,9 @@ def _run_promote(
     from openzim_mcp.simple_tools import SimpleToolsHandler
 
     fake = _fake_find_title_match(mapping)
-    with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+    # Phase F: live ``find_title_match`` binding moved to
+    # ``openzim_mcp.topic_preprocessing`` during the extraction refactor.
+    with patch("openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake):
         return SimpleToolsHandler._promote_topic_via_title_index(
             _make_simple_handler(),
             "test.zim",

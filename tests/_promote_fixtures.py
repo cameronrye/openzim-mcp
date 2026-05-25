@@ -71,7 +71,14 @@ def run_promote_simple(
     ``fake_find`` patched at the import site."""
     from openzim_mcp.simple_tools import SimpleToolsHandler
 
-    with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake_find):
+    # Phase F: ``_promote_topic_via_title_index`` is a thin wrapper over
+    # ``openzim_mcp.topic_preprocessing.promote_topic_via_title_index`` which
+    # imports ``find_title_match`` from ``title_promotion`` at its own module
+    # scope. Patching the symbol in ``simple_tools`` is no longer effective;
+    # the live binding sits in ``topic_preprocessing``.
+    with patch(
+        "openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake_find
+    ):
         return SimpleToolsHandler._promote_topic_via_title_index(
             make_simple_handler(),
             "test.zim",

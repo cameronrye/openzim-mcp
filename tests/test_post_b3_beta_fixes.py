@@ -115,7 +115,7 @@ class TestPossessiveAutofetchProbe:
             return None
 
         with patch(
-            "openzim_mcp.simple_tools.find_title_match",
+            "openzim_mcp.topic_preprocessing.find_title_match",
             side_effect=fake_find_title_match,
         ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
@@ -133,12 +133,16 @@ class TestPossessiveAutofetchProbe:
         ``Republic_(Plato)`` at score 0.95 via the title index.
 
         Verify by inspection: ``min_score=0.95`` appears in the new
-        call inside ``_promote_topic_via_title_index``."""
+        call inside ``promote_topic_via_title_index``.
+
+        Phase F: the orchestrator body was extracted to
+        ``openzim_mcp.topic_preprocessing``; inspect that source.
+        """
         import inspect
 
-        from openzim_mcp.simple_tools import SimpleToolsHandler
+        from openzim_mcp.topic_preprocessing import promote_topic_via_title_index
 
-        source = inspect.getsource(SimpleToolsHandler._promote_topic_via_title_index)
+        source = inspect.getsource(promote_topic_via_title_index)
         # The new call must explicitly pass min_score=0.95.
         assert "min_score=0.95" in source, (
             "post-b3 full-topic probe must use min_score=0.95 to match "
@@ -149,12 +153,16 @@ class TestPossessiveAutofetchProbe:
         """Structural guard: the full-topic ``find_title_match`` call
         must appear BEFORE the ``for tail in iter_query_tails`` loop
         in the source. Future contributors who reorder this would
-        silently re-break the apostrophe-tokenization fix."""
+        silently re-break the apostrophe-tokenization fix.
+
+        Phase F: orchestrator body lives in
+        ``openzim_mcp.topic_preprocessing.promote_topic_via_title_index``.
+        """
         import inspect
 
-        from openzim_mcp.simple_tools import SimpleToolsHandler
+        from openzim_mcp.topic_preprocessing import promote_topic_via_title_index
 
-        source = inspect.getsource(SimpleToolsHandler._promote_topic_via_title_index)
+        source = inspect.getsource(promote_topic_via_title_index)
         # Look for actual code constructs, not mentions in comments.
         # ``min_score=0.95`` is unique to the post-b3 full-topic
         # probe call site. ``for tail in iter_query_tails(`` is the
@@ -198,7 +206,7 @@ class TestPossessiveAutofetchProbe:
             return None
 
         with patch(
-            "openzim_mcp.simple_tools.find_title_match",
+            "openzim_mcp.topic_preprocessing.find_title_match",
             side_effect=fake_find_title_match,
         ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
@@ -236,7 +244,7 @@ class TestPossessiveAutofetchProbe:
             return None  # force fall-through
 
         with patch(
-            "openzim_mcp.simple_tools.find_title_match",
+            "openzim_mcp.topic_preprocessing.find_title_match",
             side_effect=fake_find_title_match,
         ):
             SimpleToolsHandler._promote_topic_via_title_index(
@@ -307,7 +315,7 @@ class TestPossessivePromoteIntegration:
             return None
 
         with patch(
-            "openzim_mcp.simple_tools.find_title_match",
+            "openzim_mcp.topic_preprocessing.find_title_match",
             side_effect=fake_find_title_match,
         ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
@@ -355,7 +363,7 @@ class TestPossessivePromoteIntegration:
             return None
 
         with patch(
-            "openzim_mcp.simple_tools.find_title_match",
+            "openzim_mcp.topic_preprocessing.find_title_match",
             side_effect=fake_find_title_match,
         ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
@@ -411,7 +419,7 @@ class TestPossessivePromoteIntegration:
             return None
 
         with patch(
-            "openzim_mcp.simple_tools.find_title_match",
+            "openzim_mcp.topic_preprocessing.find_title_match",
             side_effect=fake_find_title_match,
         ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
@@ -434,14 +442,18 @@ class TestRegressionGuards:
 
     def test_promote_function_starts_with_full_topic_probe(self) -> None:
         """The first ``find_title_match`` call inside
-        ``_promote_topic_via_title_index`` must pass the bare
+        ``promote_topic_via_title_index`` must pass the bare
         ``topic`` argument (not a tail-iterated form). If a
-        future refactor moves tail iteration up, this guard fires."""
+        future refactor moves tail iteration up, this guard fires.
+
+        Phase F: orchestrator body lives in
+        ``openzim_mcp.topic_preprocessing.promote_topic_via_title_index``.
+        """
         import inspect
 
-        from openzim_mcp.simple_tools import SimpleToolsHandler
+        from openzim_mcp.topic_preprocessing import promote_topic_via_title_index
 
-        source = inspect.getsource(SimpleToolsHandler._promote_topic_via_title_index)
+        source = inspect.getsource(promote_topic_via_title_index)
         # The first occurrence of find_title_match must be passing
         # the bare ``topic`` (not ``tail`` or ``window``).
         first_call_idx = source.find("find_title_match(")
