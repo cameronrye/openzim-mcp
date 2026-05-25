@@ -262,3 +262,27 @@ def pytest_configure(config):
         "docker: mark test as additionally requiring the docker CLI and a "
         "reachable daemon (auto-skipped otherwise)",
     )
+
+
+def pytest_addoption(parser):
+    """Register custom pytest CLI options."""
+    parser.addoption(
+        "--dispatch-eval",
+        action="store_true",
+        default=False,
+        help="Opt into tests/dispatch_eval/ — paid API calls, manual invocation only.",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-skip tests/dispatch_eval/ unless --dispatch-eval was passed."""
+    if config.getoption("--dispatch-eval", default=False):
+        return
+    skip_marker = pytest.mark.skip(
+        reason="dispatch_eval opt-in only; pass --dispatch-eval"
+    )
+    dispatch_eval_dir = Path(__file__).parent / "dispatch_eval"
+    for item in items:
+        item_path = Path(item.fspath)
+        if item_path == dispatch_eval_dir or dispatch_eval_dir in item_path.parents:
+            item.add_marker(skip_marker)

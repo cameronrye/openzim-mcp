@@ -218,7 +218,9 @@ class TestFuzzySuggestGateReject:
                 }
             return None
 
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+        with patch(
+            "openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake
+        ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
                 self._make_handler(),
                 "test.zim",
@@ -264,7 +266,9 @@ class TestFuzzySuggestGateReject:
                 }
             return None
 
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+        with patch(
+            "openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake
+        ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
                 self._make_handler(),
                 "test.zim",
@@ -319,7 +323,9 @@ class TestFuzzySuggestGateReject:
                 }
             return None
 
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+        with patch(
+            "openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake
+        ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
                 self._make_handler(),
                 "test.zim",
@@ -355,7 +361,9 @@ class TestFuzzySuggestGateReject:
                 }
             return None
 
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+        with patch(
+            "openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake
+        ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
                 self._make_handler(),
                 "test.zim",
@@ -468,7 +476,9 @@ class TestPossessiveMinLenFloor:
                 }
             return None
 
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+        with patch(
+            "openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake
+        ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
                 self._make_handler(),
                 "test.zim",
@@ -514,7 +524,9 @@ class TestPossessiveMinLenFloor:
                 }
             return None
 
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+        with patch(
+            "openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake
+        ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
                 self._make_handler(),
                 "test.zim",
@@ -551,7 +563,9 @@ class TestPossessiveMinLenFloor:
                 }
             return None
 
-        with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+        with patch(
+            "openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake
+        ):
             result = SimpleToolsHandler._promote_topic_via_title_index(
                 self._make_handler(),
                 "test.zim",

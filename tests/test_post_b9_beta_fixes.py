@@ -466,17 +466,19 @@ class TestStructuralGuards:
         invocation. The pin asserts the wrapper is wired by name AND
         every gate path is present.
         """
+        # Phase F: orchestrator body lives in
+        # ``openzim_mcp.topic_preprocessing.promote_topic_via_title_index``.
         import inspect
 
-        from openzim_mcp.simple_tools import SimpleToolsHandler
+        from openzim_mcp.topic_preprocessing import promote_topic_via_title_index
 
-        source = inspect.getsource(SimpleToolsHandler._promote_topic_via_title_index)
+        source = inspect.getsource(promote_topic_via_title_index)
         # Pass 0, the multi-entity wrapper (which calls
         # accept_possessive_promotion once), and Pass 3 → 3 direct
         # ``accept_possessive_promotion(`` callsites.
         count = source.count("accept_possessive_promotion(")
         assert count >= 3, (
-            f"_promote_topic_via_title_index must call "
+            f"promote_topic_via_title_index must call "
             f"accept_possessive_promotion on every pass; found "
             f"{count} call(s), expected >= 3 (pass-0, multi-entity "
             f"wrapper covering pass-1 + pass-2, pass-3)."
@@ -484,7 +486,7 @@ class TestStructuralGuards:
         # The multi-entity wrapper must be wired by name into both
         # Pass 1 (iter_query_tails) and Pass 2 (iter_query_windows).
         assert "_accept_with_multi_entity_check" in source, (
-            "_promote_topic_via_title_index must define + use the "
+            "promote_topic_via_title_index must define + use the "
             "_accept_with_multi_entity_check wrapper to gate Pass 1 "
             "and Pass 2 with the post-b10 multi-entity discriminator"
         )

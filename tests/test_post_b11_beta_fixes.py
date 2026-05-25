@@ -102,9 +102,15 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 from unittest.mock import patch
 
+from tests._promote_fixtures import (
+    beethoven_9th_symphony_mapping as _beethoven_9th_symphony_mapping,
+)
 from tests._promote_fixtures import fake_find_title_match as _fake_find_title_match
 from tests._promote_fixtures import make_disambig_handler as _make_disambig_handler
 from tests._promote_fixtures import make_simple_handler as _make_simple_handler
+from tests._promote_fixtures import (
+    picasso_paris_cubism_mapping as _picasso_paris_cubism_mapping,
+)
 
 
 def _run_promote(
@@ -115,7 +121,9 @@ def _run_promote(
     from openzim_mcp.simple_tools import SimpleToolsHandler
 
     fake = _fake_find_title_match(mapping)
-    with patch("openzim_mcp.simple_tools.find_title_match", side_effect=fake):
+    # Phase F: live ``find_title_match`` binding moved to
+    # ``openzim_mcp.topic_preprocessing`` during the extraction refactor.
+    with patch("openzim_mcp.topic_preprocessing.find_title_match", side_effect=fake):
         return SimpleToolsHandler._promote_topic_via_title_index(
             _make_simple_handler(),
             "test.zim",
@@ -472,69 +480,16 @@ class TestZ4PreservedCases:
     def test_picasso_paris_cubism_biographical_accepts(self) -> None:
         """Head probe ``picasso`` resolves to ``Pablo_Picasso`` = the
         promoted candidate → biographical exemption → accept."""
-        mapping: Dict[str, Optional[Dict[str, Any]]] = {
-            "picasso paris cubism": {
-                "path": "Pablo_Picasso",
-                "title": "Pablo Picasso",
-                "zim_file": "test.zim",
-                "match_type": "redirect",
-                "pre_redirect_path": "Picasso",
-            },
-            "picasso": {
-                "path": "Pablo_Picasso",
-                "title": "Pablo Picasso",
-                "zim_file": "test.zim",
-                "match_type": "redirect",
-                "pre_redirect_path": "Picasso",
-            },
-            "paris": {
-                "path": "Paris",
-                "title": "Paris",
-                "zim_file": "test.zim",
-                "match_type": "direct",
-            },
-            "cubism": {
-                "path": "Cubism",
-                "title": "Cubism",
-                "zim_file": "test.zim",
-                "match_type": "direct",
-            },
-        }
-        result = _run_promote("picasso paris cubism", mapping)
+        result = _run_promote("picasso paris cubism", _picasso_paris_cubism_mapping())
         assert result is not None and result["path"] == "Pablo_Picasso"
 
     def test_beethoven_9th_symphony_digit_accepts(self) -> None:
         """Canonical extras ``{no, 9}`` include digit AND topic
         ``{beethoven, 9th, symphony}`` includes a digit token →
         digit-specificity exemption → accept the specific symphony."""
-        mapping: Dict[str, Optional[Dict[str, Any]]] = {
-            "beethoven 9th symphony": {
-                "path": "Symphony_No._9_(Beethoven)",
-                "title": "Symphony No. 9 (Beethoven)",
-                "zim_file": "test.zim",
-                "match_type": "fuzzy_suggest",
-            },
-            "9th symphony": {
-                "path": "Symphony_No._9_(Beethoven)",
-                "title": "Symphony No. 9 (Beethoven)",
-                "zim_file": "test.zim",
-                "match_type": "fuzzy_suggest",
-            },
-            "symphony": {
-                "path": "Symphony",
-                "title": "Symphony",
-                "zim_file": "test.zim",
-                "match_type": "direct",
-            },
-            "beethoven": {
-                "path": "Ludwig_van_Beethoven",
-                "title": "Ludwig van Beethoven",
-                "zim_file": "test.zim",
-                "match_type": "redirect",
-                "pre_redirect_path": "Beethoven",
-            },
-        }
-        result = _run_promote("beethoven 9th symphony", mapping)
+        result = _run_promote(
+            "beethoven 9th symphony", _beethoven_9th_symphony_mapping()
+        )
         assert result is not None and result["path"] == "Symphony_No._9_(Beethoven)"
 
     def test_hamlet_denmark_prince_single_token_canonical(self) -> None:
