@@ -5,6 +5,100 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0rc0] — 2026-05-25 (release candidate) — Phase F Stage A: promotion-extraction refactor + Gate 0 transport verification
+
+First release candidate for v2.0.0. Two structural changes land,
+both pure refactor / architecture verification — no behavior change
+against the b13 baseline.
+
+### Phase F Gate 0 — `oneOf` transport verification (PR #189)
+
+Phase F's eight-tool surface design depends on emitting JSON Schema
+``oneOf`` branches over the MCP transport so small dispatch models
+can route on a single discriminator. Gate 0 is a two-step probe to
+confirm the wire actually carries `oneOf`:
+
+- **Gate 0.1 — emission spike.** Three FastMCP registration patterns
+  (Literal-gated signature, hand-authored ``Tool.parameters``
+  override, Pydantic discriminated Union) inspected in-process.
+  Verdict: Pattern B (``Tool.parameters`` override) is the only path
+  that emits a literal ``"oneOf"`` key in the registered tool's
+  schema.
+- **Gate 0.2 — transport round-trip.** Pattern B exercised over
+  three transports (in-memory, stdio JSON-RPC subprocess,
+  streamable-HTTP subprocess). Verdict: ``"oneOf"`` survives the
+  wire round-trip across all three transports — the design's
+  primary assumption holds.
+
+Both probes live under ``tests/dispatch_eval/`` and run only via the
+explicit ``--dispatch-eval`` pytest flag (skip-guarded against the
+default suite). No production code touched — the env-gated probe-
+tool registration block was reverted before merge so v2.0.0rc0
+ships the same surface as b13.
+
+### Phase F Stage A — extract `promote_topic_via_title_index` + `auto_select_zim_file` (PR #190)
+
+The rc0 refactor lifts two pure orchestration functions out of
+``SimpleToolsHandler`` (in ``simple_tools.py``) into a new module
+``openzim_mcp/topic_preprocessing.py``:
+
+- ``promote_topic_via_title_index`` — the four-pass promotion
+  orchestrator (full-topic, multi-entity, possessive, typo-tolerant
+  passes) that all 17 b-series sweeps have hardened.
+- ``auto_select_zim_file`` — the 0/1/N archives selection used by
+  the dispatch entry points.
+
+The original ``SimpleToolsHandler`` methods remain as thin wrappers
+over the extracted module-level functions, so the public surface is
+unchanged. Importers that patched ``openzim_mcp.simple_tools.find_title_match``
+in tests have been updated to patch the new live binding at
+``openzim_mcp.topic_preprocessing.find_title_match``.
+
+### Why extract now
+
+Phase F's eight-tool surface needs ``zim_search`` and ``zim_query``
+to share one promotion pipeline without inheriting
+``SimpleToolsHandler``. The pre-rc0 pipeline lived as a bound method
+on the simple handler, which Phase F's new tools cannot easily call.
+Lifting it to a module-level function (with the ``zim_operations``
+dependency passed in explicitly) is the smallest change that lets
+the rc1 tool implementations share the orchestrator without a
+deeper inheritance refactor.
+
+### Verification
+
+- **Promotion-extraction parity diff-test** (94 probes from b1–b13
+  cumulative set) — bound-method path and extracted-function path
+  return identical results.
+- **Auto-select-extraction parity diff-test** (4 scenarios — zero
+  files, one file, n files, exception) — log records and return
+  values match across both paths.
+- **Preprocessing-orchestration idempotency check** — calling
+  ``promote_topic_via_title_index`` twice with the same inputs
+  returns the same result (no hidden state mutation).
+- **Direct unit tests for ``topic_preprocessing``** (45 new tests
+  in ``tests/test_topic_preprocessing.py``) — documents the
+  extracted module's contract independently of its call sites
+  (Z3 probe-based discriminator, Z4 tangential rejection +
+  biographical/digit/type-extension exemptions, OPP-1 possessive,
+  auto_select_zim_file 0/1/N + exception handling).
+- Full suite: **2573 passed, 246 skipped, 38 deselected**.
+
+### Version bumps
+
+| File | From | To |
+|---|---|---|
+| ``pyproject.toml`` | 2.0.0b13 | 2.0.0rc0 |
+| ``.release-please-manifest.json`` | 2.0.0b13 | 2.0.0rc0 |
+| ``website/llms.txt`` | 2.0.0b13 | 2.0.0rc0 |
+| ``uv.lock`` | 2.0.0b13 | 2.0.0rc0 |
+
+### What's next
+
+The remaining Phase F work (Stage B + C — Gate 0b dispatch-eval
+benchmarks + the eight-tool surface implementation as v2.0.0rc1)
+proceeds on the ``v2-phase-f-prototype`` branch.
+
 ## [2.0.0b13] — 2026-05-24 (beta pre-release) — post-b12 beta-test sweep shipped — Play-style disambig phrasing variant + CodeQL #231 + test dedupe
 
 Post-b12 live-MCP verification confirmed the Z4 multi-token canonical
