@@ -281,6 +281,8 @@ def pytest_collection_modifyitems(config, items):
     skip_marker = pytest.mark.skip(
         reason="dispatch_eval opt-in only; pass --dispatch-eval"
     )
+    dispatch_eval_dir = Path(__file__).parent / "dispatch_eval"
     for item in items:
-        if "dispatch_eval" in str(item.fspath):
+        item_path = Path(item.fspath)
+        if item_path == dispatch_eval_dir or dispatch_eval_dir in item_path.parents:
             item.add_marker(skip_marker)
