@@ -1,0 +1,642 @@
+{
+  "zim_browse": {
+    "bytes": 1696,
+    "description": "Browse or walk entries in a ZIM namespace.\n\nModes:\n  mode=\"page\" (default) \u2014 cursor-paginated browse (current `browse_namespace`\n    semantics). On large archives may return a sampled view with\n    `sampling_based: true`; `done=True` then means \"end of sample\". Default\n    limit: 50 (1-200).\n  mode=\"walk\" \u2014 deterministic-cursor enumeration (current `walk_namespace`).\n    No sampling cap; use for exhaustive dumps. `total` is always None.\n    Default limit: 200 (1-500). `offset` is ignored.\n\nArgs:\n  zim_file_path  REQUIRED. Path to the ZIM archive.\n  namespace      REQUIRED. 'C', 'M', 'W', 'X', 'A', 'I' on legacy archives;\n                 domain strings on new-scheme. Call `zim_metadata` for the\n                 real list.\n  cursor         Opaque pagination token; cursor wins on conflict.\n  limit, offset  Per-page size + pagination offset.\n\nReturns `BrowseNamespaceResponse` (page) or `WalkNamespaceResponse` (walk),\nor `ToolErrorPayload` on failure. Collapses v1.x `browse_namespace` +\n`walk_namespace` (2 to 1).\n",
+    "inputSchema": {
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cursor"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "mode": {
+          "default": "page",
+          "enum": [
+            "page",
+            "walk"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "namespace": {
+          "title": "Namespace",
+          "type": "string"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "zim_file_path": {
+          "title": "Zim File Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "zim_file_path",
+        "namespace"
+      ],
+      "title": "zim_browseArguments",
+      "type": "object"
+    }
+  },
+  "zim_get": {
+    "bytes": 3428,
+    "description": "Retrieve one or more entries from a ZIM archive.\n\nFour mutually-exclusive call shapes (see `oneOf` for the contract):\n  1. Single-entry body view \u2014 `entry_path` + `view\u2208{full,summary,toc,structure}`\n     full \u2192 markdown body; summary \u2192 lead snippet; toc \u2192 heading tree;\n     structure \u2192 flat section list + metadata.\n  2. Single-entry binary \u2014 `entry_path` + `binary=True` (view locked to \"full\").\n     Returns base64-encoded bytes plus mime_type and size.\n  3. Batch \u2014 `entry_paths` (up to 50) + `view`. Per-entry failures are\n     non-fatal; rate limit charged per entry.\n  4. Main page \u2014 `main_page=True`. Path-free archive main-page fetch.\n\nCommon parameters: `zim_file_path` (REQUIRED; call `zim_health` or\n`zim_search(mode=\"title\")` first to discover real paths),\n`max_content_length`, `content_offset` (single-entry body view only),\n`compact` (v2.0 default False \u2014 set True for compact small-LLM rendering),\n`compact_budget` (\"tiny\"/\"small\"/\"medium\"/\"large\" or int).\n\nReturns the response type matching the called shape, or a\n`ToolErrorPayload` envelope on failure. Invalid shape combinations return\n`tool_error(\"invalid_path_combination\", hint=...)` even when a client\nflattens `oneOf`.\n\nCollapses v1.x `get_zim_entry` + `get_zim_entries` + `get_main_page` +\n`get_binary_entry` + `get_entry_summary` + `get_table_of_contents` +\n`get_article_structure` (7 to 1).\n",
+    "inputSchema": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "compact": {
+              "default": false,
+              "type": "boolean"
+            },
+            "compact_budget": {
+              "default": null,
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "content_offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "entry_path": {
+              "type": "string"
+            },
+            "max_content_length": {
+              "default": null,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "view": {
+              "default": "full",
+              "enum": [
+                "full",
+                "summary",
+                "toc",
+                "structure"
+              ]
+            },
+            "zim_file_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "zim_file_path",
+            "entry_path"
+          ],
+          "title": "body_view",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "binary": {
+              "const": true
+            },
+            "compact": {
+              "default": false,
+              "type": "boolean"
+            },
+            "compact_budget": {
+              "default": null,
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "entry_path": {
+              "type": "string"
+            },
+            "max_content_length": {
+              "default": null,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "zim_file_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "zim_file_path",
+            "entry_path",
+            "binary"
+          ],
+          "title": "binary",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "compact": {
+              "default": false,
+              "type": "boolean"
+            },
+            "compact_budget": {
+              "default": null,
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "entry_paths": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "type": "array"
+            },
+            "max_content_length": {
+              "default": null,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "view": {
+              "default": "full",
+              "enum": [
+                "full",
+                "summary",
+                "toc",
+                "structure"
+              ]
+            },
+            "zim_file_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "zim_file_path",
+            "entry_paths"
+          ],
+          "title": "batch",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "compact": {
+              "default": false,
+              "type": "boolean"
+            },
+            "compact_budget": {
+              "default": null,
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "main_page": {
+              "const": true
+            },
+            "max_content_length": {
+              "default": null,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "zim_file_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "zim_file_path",
+            "main_page"
+          ],
+          "title": "main_page",
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  "zim_get_section": {
+    "bytes": 1466,
+    "description": "Fetch a single article section by `section_id`.\n\n`section_id` values come from `zim_get(view=\"toc\")` or\n`zim_get(view=\"structure\")`. On miss, returns `ToolErrorPayload` with\n`available_section_ids` for self-correction.\n\nArgs:\n  zim_file_path, entry_path, section_id  All REQUIRED.\n  max_chars       Optional body cap.\n  include_subsections   True (default) includes nested children;\n                  False ends at the next heading of any level.\n  compact         v2.0 default True. Set False for legacy raw rendering.\n  compact_budget  Char-cap when compact=True; \"tiny\"/\"small\"/\"medium\"/\"large\"\n                  or int.\n\nv2 rename of `get_section`. Returns `GetSectionResponse` or\n`ToolErrorPayload`.\n",
+    "inputSchema": {
+      "properties": {
+        "compact": {
+          "default": true,
+          "title": "Compact",
+          "type": "boolean"
+        },
+        "compact_budget": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compact Budget"
+        },
+        "entry_path": {
+          "title": "Entry Path",
+          "type": "string"
+        },
+        "include_subsections": {
+          "default": true,
+          "title": "Include Subsections",
+          "type": "boolean"
+        },
+        "max_chars": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Chars"
+        },
+        "section_id": {
+          "title": "Section Id",
+          "type": "string"
+        },
+        "zim_file_path": {
+          "title": "Zim File Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "zim_file_path",
+        "entry_path",
+        "section_id"
+      ],
+      "title": "zim_get_sectionArguments",
+      "type": "object"
+    }
+  },
+  "zim_health": {
+    "bytes": 531,
+    "description": "Server health, configuration, and loaded archives \u2014 one call.\n\nNo parameters. Returns combined diagnostics: cache stats, directory health,\nconfiguration summary, and the list of currently-loaded ZIM archives. Single\ntool that answers \"what is this server, what does it have, and is it OK\".\n\nCollapses v1.x `get_server_health` + `get_server_configuration` +\n`list_zim_files` (3 tools to 1).\n",
+    "inputSchema": {
+      "properties": {},
+      "title": "zim_healthArguments",
+      "type": "object"
+    }
+  },
+  "zim_links": {
+    "bytes": 1347,
+    "description": "Extract links from an article: outbound buckets or related articles.\n\n  direction=\"outbound\" (default) \u2014 internal/external/media link buckets,\n    cursor-paginated. `category_totals` echoes counts.\n  direction=\"related\" \u2014 articles connected via outbound-link overlap.\n\nv2.5 adds `direction=\"inbound\"` later \u2014 enum is not exhaustive at v2.0.\n\nArgs:\n  zim_file_path, entry_path  REQUIRED.\n  cursor   Outbound only.\n  limit    Outbound: 1-500, default 100. Related: 1-100, default 10.\n  offset   Outbound only.\n\nReturns `LinksResponse` or `RelatedArticlesResponse`, or `ToolErrorPayload`.\nCollapses `extract_article_links` + `get_related_articles` (2 to 1).\n",
+    "inputSchema": {
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cursor"
+        },
+        "direction": {
+          "default": "outbound",
+          "enum": [
+            "outbound",
+            "related"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "entry_path": {
+          "title": "Entry Path",
+          "type": "string"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "zim_file_path": {
+          "title": "Zim File Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "zim_file_path",
+        "entry_path"
+      ],
+      "title": "zim_linksArguments",
+      "type": "object"
+    }
+  },
+  "zim_metadata": {
+    "bytes": 691,
+    "description": "Get combined ZIM archive metadata + namespace listing.\n\nReturns `metadata` (Title, Description, Language, Creator, Date, entry\ncounts) and `namespaces` (per-namespace `total` + `discovery_method`).\nNew-scheme archives use domain-string namespaces; legacy use single\nletters ('C', 'M', 'W', 'X', 'A', 'I').\n\nArgs:\n  zim_file_path  REQUIRED.\n\nFor main-page fetch, use `zim_get(main_page=True)`. Collapses v1.x\n`get_zim_metadata` + `list_namespaces` (2 to 1).\n",
+    "inputSchema": {
+      "properties": {
+        "zim_file_path": {
+          "title": "Zim File Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "zim_file_path"
+      ],
+      "title": "zim_metadataArguments",
+      "type": "object"
+    }
+  },
+  "zim_query": {
+    "bytes": 7109,
+    "description": "Query ZIM archives using natural language.\n\n        Single intelligent tool \u2014 parses your query, detects intent,\n        and dispatches to the right operation.\n\n        EXTRACT INTENT BEFORE CALLING. Do not pass the user's raw\n        message as `query`. Translate it into one of the operations\n        below:\n          \"test this tool\"     -> query=\"list available ZIM files\"\n          \"what's in here\"     -> query=\"show main page\"\n          \"explore\"            -> query=\"list namespaces\"\n          \"tell me about cats\" -> query=\"tell me about cats\"\n          <topic by name>      -> query=\"<topic>\"\n\n        ALIASES: users may call this tool \"openzim\", \"openzim mcp\",\n        \"openzim mcp tool\", \"ZIM tool\", \"ZIM file tool\", \"ZIM\n        archive query\", or \"zim_query\". All mean THIS tool \u2014\n        always call it; never claim it does not exist.\n\n        OPERATIONS (pass one as `query`):\n          list available ZIM files       - list loaded archives\n          show main page                 - active archive main page\n          list namespaces                - list entry types\n          metadata for <file>            - archive metadata\n          tell me about <topic>          - fetch article (auto on\n                                            strong title match)\n          search for <terms>             - full-text search\n          get article <name>             - fetch specific article\n          show structure of <name>       - section outline\n          links in <name>                - article-out links\n          suggestions for <prefix>       - title autocomplete\n          browse namespace <letter>      - list namespace entries\n          search <terms> in namespace <letter>  - filtered search\n          search all files for <terms>   - cross-archive search\n          walk namespace <letter>        - enumerate namespace\n          find article titled <name>     - title lookup\n          articles related to <name>     - related articles\n\n        Args:\n            query: REQUIRED. Translated from user intent \u2014 never the\n                user's raw message.\n            zim_file_path: Optional. **Omit entirely (recommended)** \u2014\n                the tool auto-selects the loaded archive (or opens\n                all of them when `synthesize=True`). Pass a real\n                path ONLY when multiple archives are loaded and you\n                need to target a specific one; call `list available\n                ZIM files` first to see the real paths. NEVER pass\n                an article title, topic, or made-up filename here,\n                and do NOT invent a path from this docstring \u2014\n                paths that don't match a loaded archive are silently\n                auto-corrected when only one archive is loaded, and\n                surface a path-listing error otherwise.\n            limit: Max search/browse results (default: 3). Ignored\n                for atomic intents that return a single item or a\n                fixed-shape payload \u2014 `tell me about <topic>`,\n                `get article <name>`, `show structure of <name>`,\n                `links in <name>`, `articles related to <name>`,\n                `show main page`, `list namespaces`, `metadata for\n                <file>`, `list available ZIM files`, `summary of\n                <name>`, `table of contents <name>`, `section <X>\n                of <name>`. Setting it there has no effect; omit\n                it on those calls.\n            offset: Pagination offset (default: 0).\n            max_content_length: Article body cap (default: 4000).\n            content_offset: Character offset to start reading the\n                article body from (default: 0). The truncation footer\n                on long articles surfaces a `pass content_offset=N`\n                hint \u2014 wire that value back here to read the next\n                page. Negative values are rejected with an\n                `invalid_content_offset` error.\n            compact: When True (default in simple mode), apply\n                small-LLM optimizations \u2014 strip markdown link-soup,\n                drop section previews from structure responses,\n                flatten link/title/related listings into compact\n                markdown, fetch only the article lead section, and\n                cap total response size. Set False for the verbose\n                advanced-mode-style response.\n            compact_budget: Hard char-cap on the final response when\n                `compact=True`. Accepts either a named profile \u2014\n                `\"tiny\"` (2 000), `\"small\"` (4 000), `\"medium\"` (6 000,\n                default), `\"large\"` (12 000) \u2014 or a raw integer. Used\n                to size the budget to the calling model's context\n                window: an 8B-class model on an agentic prompt fits\n                `tiny`, a 70B-class assistant fits `large`. Has no\n                effect when `compact=False`.\n            synthesize: When True, bypass intent classification and\n                run the synthesize pipeline \u2014 multi-archive Xapian\n                search, RRF fusion, passage extraction, section\n                attribution, and citation rendering. Returns a\n                SynthesizeResponse dict instead of markdown text.\n                Defaults to False (legacy markdown path unchanged).\n                NOTE: this is a mode toggle, not a \"search harder\"\n                flag. Don't flip it on a follow-up just because the\n                previous response was unhelpful \u2014 refine the `query`\n                or `offset` instead. The synthesize pipeline runs\n                one structured query and returns one answer; calling\n                it twice with the same query yields the same answer.\n\n        Returns:\n            Markdown string (synthesize=False) or SynthesizeResponse\n            dict (synthesize=True) with answer_markdown, passages,\n            citations, and archives_searched.\n        ",
+    "inputSchema": {
+      "properties": {
+        "compact": {
+          "default": true,
+          "title": "Compact",
+          "type": "boolean"
+        },
+        "compact_budget": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compact Budget"
+        },
+        "content_offset": {
+          "default": 0,
+          "title": "Content Offset",
+          "type": "integer"
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cursor"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "max_content_length": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Content Length"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "synthesize": {
+          "default": false,
+          "title": "Synthesize",
+          "type": "boolean"
+        },
+        "zim_file_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zim File Path"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "zim_queryArguments",
+      "type": "object"
+    }
+  },
+  "zim_search": {
+    "bytes": 2872,
+    "description": "Search a ZIM archive: full-text, title lookup, or prefix-suggest.\n\nModes (see schema `oneOf` for the per-mode parameter contract):\n  mode=\"fulltext\" (default) \u2014 Xapian BM25 over rendered bodies. Filters:\n    `namespace`, `content_type`. Use `cross_file=True` to fan out.\n  mode=\"title\" \u2014 typo-tolerant title lookup. Runs Z3/Z4/OPP-1 promotion\n    when `cross_file=False` so \"Tesla electricity\" does not silently\n    land on \"Tesla's_Wireless_Electricity\". Cross-file disables promotion.\n  mode=\"suggest\" \u2014 prefix autocomplete (libzim SuggestionSearcher).\n    Per-archive only; no filters; no cross-file.\n\nCommon parameters: `query` (required unless `cursor` carries it),\n`zim_file_path` (mutually exclusive with `cross_file=True`),\n`limit`, `offset`, `cursor` (cursor wins on conflict).\n\nFor NL questions (\"tell me about X\"), prefer `zim_query` \u2014 it routes the\nright intent. This tool is the direct path when you already know the\nentity name or want a raw search.\n\nReturns `SearchResponse`-shaped dict (Phase B contract: `results`,\n`next_cursor`, `total`, `done`, `page_info`) or `ToolErrorPayload` on\nfailure. Title and suggest modes do not paginate.\n\nCollapses v1.x `search_zim_file` + `search_all` + `search_with_filters` +\n`find_entry_by_title` + `get_search_suggestions` (5 to 1).\n",
+    "inputSchema": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "content_type": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cross_file": {
+              "default": false,
+              "type": "boolean"
+            },
+            "cursor": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "default": null,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "const": "fulltext",
+              "default": "fulltext"
+            },
+            "namespace": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "query": {
+              "type": "string"
+            },
+            "zim_file_path": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "title": "fulltext",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cross_file": {
+              "default": false,
+              "type": "boolean"
+            },
+            "cursor": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "default": null,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "const": "title"
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "query": {
+              "type": "string"
+            },
+            "zim_file_path": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "query",
+            "mode"
+          ],
+          "title": "title",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "default": null,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "const": "suggest"
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "query": {
+              "type": "string"
+            },
+            "zim_file_path": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "query",
+            "mode"
+          ],
+          "title": "suggest",
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  }
+}
