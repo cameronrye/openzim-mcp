@@ -18,10 +18,9 @@ import json
 import traceback
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
-
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.tools.base import Tool
+from pydantic import BaseModel, Field
 
 
 def _dump_tool_params(srv: FastMCP, name: str) -> Dict[str, Any]:
@@ -218,9 +217,7 @@ def main() -> None:
     summary = {
         "patterns": results,
         "any_pattern_emits_oneOf": any(r.get("contains_oneOf") for r in results),
-        "winning_patterns": [
-            r["pattern"] for r in results if r.get("contains_oneOf")
-        ],
+        "winning_patterns": [r["pattern"] for r in results if r.get("contains_oneOf")],
     }
     print(json.dumps(summary, indent=2, default=str))
 
