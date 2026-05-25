@@ -371,7 +371,12 @@ def aggregate_cell(
             # Criterion C3 — Z4 subset of zim_query_preferred
             if "Z4" in classes:
                 summary.z4_zqp_n += 1
-                if o.spurious_route_kind == "answer_degrading":
+                # Mirror C1's nesting: require spurious_route True before
+                # inspecting spurious_route_kind. The runner guarantees the
+                # invariant (kind=None when not spurious), but the nested
+                # check is defense-in-depth for hand-constructed outcomes
+                # (including tests).
+                if o.spurious_route and o.spurious_route_kind == "answer_degrading":
                     summary.z4_zqp_answer_degrading += 1
 
     summary.per_class = {
@@ -578,6 +583,20 @@ def _build_family_verdicts(
         family_status[fam] = "available"
         # If a family slot somehow has multiple models (e.g. quaternary with
         # both Phi AND Qwen-3B), pair them up and take the worst case.
+        # WARN when this happens because positional zip after sort can
+        # silently cross-pair models if the b13 and phase-f sides disagree
+        # on which models they contain (e.g., Phi in b13 cells +
+        # Qwen-3B in phase-f cells per the documented substitution).
+        b13_models_sorted = sorted([c.model for c in b13_cells])
+        phase_f_models_sorted = sorted([c.model for c in phase_f_cells])
+        if len(b13_models_sorted) > 1 or len(phase_f_models_sorted) > 1:
+            print(
+                f"WARNING: family slot '{fam}' has multiple models — "
+                f"b13={b13_models_sorted}, phase-f={phase_f_models_sorted}. "
+                f"Pairing is positional after sorting; confirm models "
+                f"match across cells (e.g., Phi vs Qwen-3B substitution).",
+                file=sys.stderr,
+            )
         worst_a: Dict[str, Any] = {"pass": True, "delta_pp": 0.0}
         worst_b: Dict[str, Any] = {"pass": True, "delta_pp": 0.0}
         worst_d: Dict[str, Any] = {"pass": True, "delta_pp": 0.0}

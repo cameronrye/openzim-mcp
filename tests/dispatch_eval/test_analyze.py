@@ -476,83 +476,13 @@ def test_fallback_c1_c2_c3_all_must_pass_to_open_rc1() -> None:
     assert decision["criteria"]["C1"]["pass"] is False
     assert decision["gate_passed"] is False
 
-    # Now simulate the fallback re-run: fallback-C1 passes (4 degrading / 100)
-    # BUT fallback-C2 fails (degrading / misroutes = 4/4 = 100% > 30%)
-    fallback_outcomes: List[Outcome] = []
-    for i in range(n_zqp):
-        # 4 misroutes, ALL answer-degrading — that fails C2's 30% ceiling
-        is_misroute = i < 4
-        fallback_outcomes.append(
-            Outcome(
-                probe_id=f"p-{i}",
-                rep=0,
-                tool_called="zim_search" if is_misroute else "zim_query",
-                parameters={"mode": "title"} if is_misroute else {},
-                dispatch_correct=not is_misroute,
-                parameter_validity=(
-                    "schema_only" if is_misroute else "load_bearing_match"
-                ),
-                spurious_route=is_misroute,
-                spurious_route_kind="answer_degrading" if is_misroute else None,
-                resolved_entry_path=None,
-                cell_variant="phase-f-fallback",
-                cell_mode="advanced",
-                cell_model="qwen2.5-7b-instruct",
-            )
-        )
-    # C2 needs >=10 events to be powered; we have 4 misroutes. So C2 stays
-    # "null/underpowered". Bump misroutes up to 15 to make the test
-    # explicit-failure rather than underpowered.
-    fallback_outcomes = []
-    for i in range(n_zqp):
-        is_misroute = i < 15
-        # 12 of the 15 misroutes are answer-degrading → 80% > 30% (C2 fails)
-        is_degrading = i < 12
-        fallback_outcomes.append(
-            Outcome(
-                probe_id=f"p-{i}",
-                rep=0,
-                tool_called="zim_search" if is_misroute else "zim_query",
-                parameters={"mode": "title"} if is_misroute else {},
-                dispatch_correct=not is_misroute,
-                parameter_validity=(
-                    "schema_only" if is_misroute else "load_bearing_match"
-                ),
-                spurious_route=is_misroute,
-                spurious_route_kind=(
-                    "answer_degrading"
-                    if is_degrading
-                    else ("answer_preserving" if is_misroute else None)
-                ),
-                resolved_entry_path=None,
-                cell_variant="phase-f-fallback",
-                cell_mode="advanced",
-                cell_model="qwen2.5-7b-instruct",
-            )
-        )
-    # Now fallback-C1 = 12/100 = 12% (fails!), so we need to flip more to
-    # answer_preserving to make fallback-C1 pass. Drop degrading count to 3.
-    fallback_outcomes = []
-    for i in range(n_zqp):
-        is_misroute = i < 15  # 15 misroutes overall → C2 has enough events
-        is_degrading = i < 3  # only 3 are degrading → C1 = 3% (PASSES)
-        # 12 of the misroutes are answer_preserving → C2 = 3/15 = 20% (PASSES)
-        # Wait — C2 ceiling is 30%; 3/15 = 20% passes. Need fallback C2 to FAIL.
-        # Make 7/15 degrading → C1 = 7%, fails. Need C1 pass + C2 fail:
-        # Set is_misroute on 15, with 5 degrading → C1 = 5% (boundary; we use
-        # 4 to be safely under 5%), C2 = 4/15 = 26.7% (under 30% — passes).
-        # The constraint "C1 passes AND C2 fails AND C3 ok" needs:
-        #   C1 ≤ 5% absolute degrading rate over zqp probes
-        #   C2 > 30% conditional degrading rate over misroutes
-        # i.e. degrading is small but misroutes_total is even smaller — at
-        # the minimum 10 events. degrading=4, misroutes=10 → C2 = 40% fails.
-        # Adjusted: 100 probes, 10 misroutes, 4 degrading.
-        pass  # placeholder; rewritten below
-
-    # Final fallback: 100 probes, exactly 10 misroutes, 4 answer-degrading
+    # Now simulate the fallback re-run. We need the C1-passes/C2-fails shape:
+    #   C1 needs answer-degrading rate over zim_query_preferred probes ≤5%.
+    #   C2 needs ≥10 misroute events AND degrading/misroute ratio >30%.
+    # 100 probes, exactly 10 misroutes, 4 answer-degrading
     # (the rest answer_preserving). C1 = 4/100 = 4% (passes ≤5%);
     # C2 events = 10 (meets MIN_EVENTS), rate = 4/10 = 40% (FAILS >30%).
-    fallback_outcomes = []
+    fallback_outcomes: List[Outcome] = []
     for i in range(n_zqp):
         is_misroute = i < 10
         is_degrading = i < 4
@@ -621,6 +551,150 @@ def test_scope_limitations_required_nonempty() -> None:
         assert any(
             lim.startswith(prefix) for lim in limitations
         ), f"scope_limitations missing {prefix} entry; got {limitations}"
+
+
+# --------------------------------------------------------------------------
+# Test 12 — F1/F2 are primary-only verdicts (secondary failure observational)
+# --------------------------------------------------------------------------
+
+
+def test_secondary_f1_f2_failure_is_observational_not_blocking() -> None:
+    """Pin the design choice: F1/F2 verdicts are PRIMARY-ONLY.
+
+    If a future refactor starts computing F1/F2 per family (e.g. surfacing
+    criteria["F1"]["secondary"]), this test will trip. The contract is:
+      - criteria["F1"] / criteria["F2"] are flat dicts with pass/per_class_deltas/
+        failures — NOT keyed by family slot.
+      - A secondary cell with a 20pp Z3 regression (well above the 8pp F1
+        ceiling) does NOT block the gate, because F1/F2 are computed against
+        the primary pair only — secondary class deltas never enter the
+        decision math.
+      - The secondary's own A/B/D verdicts at 10pp margin are still checked;
+        we therefore keep the secondary's overall accuracy passing here so the
+        only "issue" is the per-class Z3 split (which the analyzer ignores).
+    """
+    probe_meta: Dict[str, Dict[str, Any]] = {}
+    # 300 probes for primary (all clean — pass A/B/D + F1)
+    for i in range(300):
+        probe_meta[f"q-{i}"] = {
+            "probe_id": f"q-{i}",
+            "operational_classes": ["Z3"],
+            "tool_eligibility": "any",
+        }
+    # 150 probes for secondary; first 75 are Z3, of which phase-f gets only
+    # 60 correct (60/75 = 80%) vs b13 100% → -20pp Z3 delta on secondary.
+    for i in range(150):
+        probe_meta[f"h-{i}"] = {
+            "probe_id": f"h-{i}",
+            "operational_classes": ["Z3"] if i < 75 else ["other"],
+            "tool_eligibility": "any",
+        }
+
+    # Primary — matched accuracy on Z3 (no F1 issue)
+    qwen_b13 = _make_outcomes(
+        n_correct=300,
+        n_total=300,
+        cell_variant="b13",
+        cell_model="qwen2.5-7b-instruct",
+        probe_id_prefix="q",
+    )
+    qwen_pf = _make_outcomes(
+        n_correct=300,
+        n_total=300,
+        cell_variant="phase-f",
+        cell_model="qwen2.5-7b-instruct",
+        probe_id_prefix="q",
+    )
+
+    # Secondary (Haiku) — construct cells so overall A/B/D is matched (no
+    # A/B/D failure at the 10pp margin) but the Z3 per-class split is badly
+    # regressed on phase-f. Specifically:
+    #   b13: 75/75 Z3 correct, 50/75 non-Z3 correct → 125/150 = 83.3%
+    #   phase-f: 60/75 Z3 correct, 65/75 non-Z3 correct → 125/150 = 83.3%
+    # Overall accuracy identical (delta_pp=0 → A passes), but the Z3 slice
+    # alone moved -20pp (75/75 → 60/75) — a regression that would trip an
+    # 8pp F1 ceiling IF F1 were computed per family.
+    haiku_b13_list: List[Outcome] = []
+    for i in range(150):
+        # b13: all 75 Z3 correct (i<75); non-Z3 only 50 of 75 correct.
+        is_correct = i < 75 or i < (75 + 50)
+        haiku_b13_list.append(
+            Outcome(
+                probe_id=f"h-{i}",
+                rep=0,
+                tool_called="zim_query" if is_correct else "wrong_tool",
+                parameters={"query": "x"},
+                dispatch_correct=is_correct,
+                parameter_validity=("load_bearing_match" if is_correct else "fail"),
+                spurious_route=False,
+                spurious_route_kind=None,
+                resolved_entry_path=None,
+                cell_variant="b13",
+                cell_mode="advanced",
+                cell_model="haiku-4.5",
+            )
+        )
+    haiku_pf_list: List[Outcome] = []
+    for i in range(150):
+        # phase-f: 60/75 Z3 correct (miss 15 in Z3 slice);
+        # non-Z3 65/75 correct (miss 10 outside Z3 slice).
+        if i < 75:
+            is_correct = i >= 15  # miss the first 15 Z3 probes
+        else:
+            is_correct = i >= (75 + 10)  # miss the first 10 non-Z3 probes
+        haiku_pf_list.append(
+            Outcome(
+                probe_id=f"h-{i}",
+                rep=0,
+                tool_called="zim_query" if is_correct else "wrong_tool",
+                parameters={"query": "x"},
+                dispatch_correct=is_correct,
+                parameter_validity=("load_bearing_match" if is_correct else "fail"),
+                spurious_route=False,
+                spurious_route_kind=None,
+                resolved_entry_path=None,
+                cell_variant="phase-f",
+                cell_mode="advanced",
+                cell_model="haiku-4.5",
+            )
+        )
+    # Sanity (math check encoded for the reader):
+    #   Haiku b13 correct  = 75 (Z3) + 50 (non-Z3) = 125 / 150
+    #   Haiku phase-f correct = 60 (Z3) + 65 (non-Z3) = 125 / 150
+    #   Overall delta = 0.0 → A/B/D pass cleanly.
+    #   Z3 slice delta = (60/75 - 75/75)*100 = -20pp → well above F1 ceiling.
+
+    decision = _build_gate_decision(
+        qwen_b13 + haiku_b13_list, qwen_pf + haiku_pf_list, probe_meta
+    )
+
+    # PIN 1: criteria["F1"] is flat — no per-family verdict keyed by slot.
+    f1 = decision["criteria"]["F1"]
+    assert (
+        "secondary" not in f1
+    ), f"F1 must remain a primary-only verdict; got per-family key in: {f1}"
+    assert "primary" not in f1, f"F1 is a flat verdict, not nested by family; got: {f1}"
+    f2 = decision["criteria"]["F2"]
+    assert (
+        "secondary" not in f2
+    ), f"F2 must remain a primary-only verdict; got per-family key in: {f2}"
+
+    # PIN 2: F1/F2 on the primary pair both pass (Qwen primary is clean) and
+    # the gate passes despite the secondary's bad Z3 split.
+    assert f1["pass"] is True, f1
+    assert f2["pass"] is True, f2
+    assert decision["gate_passed"] is True, (
+        f"secondary's per-class regression must not block; "
+        f"failures={decision.get('secondary_blocking_failures')} "
+        f"obs={decision.get('secondary_observational_failures')}"
+    )
+
+    # PIN 3: secondary observational/blocking lists must not surface F1/F2
+    # for the secondary — those verdicts simply aren't computed per family.
+    sec_blocking = decision["secondary_blocking_failures"]
+    sec_obs = decision["secondary_observational_failures"]
+    assert not any("F1" in f or "F2" in f for f in sec_blocking), sec_blocking
+    assert not any("F1" in f or "F2" in f for f in sec_obs), sec_obs
 
 
 # --------------------------------------------------------------------------
