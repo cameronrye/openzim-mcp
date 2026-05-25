@@ -195,10 +195,10 @@ def register(server: "OpenZimMcpServer") -> None:
                 context=f"path={entry_path}, view={view}",
             )
 
-    _inject_oneof_schema(server)
+    _inject_zim_get_oneof(server)
 
 
-def _inject_oneof_schema(server: "OpenZimMcpServer") -> None:
+def _inject_zim_get_oneof(server: "OpenZimMcpServer") -> None:
     """Pattern B: mutate Tool.parameters to a 4-branch oneOf.
 
     Branches encode the conditional-parameter contract from the spec:

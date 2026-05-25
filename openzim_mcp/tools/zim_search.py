@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_DESCRIPTION = """Search a ZIM archive: full-text, title lookup, or prefix-suggest.
+_DESCRIPTION_WIRED = """Search a ZIM archive: full-text, title lookup, or prefix-suggest.
 
 Modes (see schema `oneOf` for the per-mode parameter contract):
   mode="fulltext" (default) — Xapian BM25 over rendered bodies. Filters:
@@ -47,6 +47,35 @@ Modes (see schema `oneOf` for the per-mode parameter contract):
   mode="title" — typo-tolerant title lookup. Runs Z3/Z4/OPP-1 promotion
     when `cross_file=False` so "Tesla electricity" does not silently
     land on "Tesla's_Wireless_Electricity". Cross-file disables promotion.
+  mode="suggest" — prefix autocomplete (libzim SuggestionSearcher).
+    Per-archive only; no filters; no cross-file.
+
+Common parameters: `query` (required unless `cursor` carries it),
+`zim_file_path` (mutually exclusive with `cross_file=True`),
+`limit`, `offset`, `cursor` (cursor wins on conflict).
+
+For NL questions ("tell me about X"), prefer `zim_query` — it routes the
+right intent. This tool is the direct path when you already know the
+entity name or want a raw search.
+
+Returns `SearchResponse`-shaped dict (Phase B contract: `results`,
+`next_cursor`, `total`, `done`, `page_info`) or `ToolErrorPayload` on
+failure. Title and suggest modes do not paginate.
+
+Collapses v1.x `search_zim_file` + `search_all` + `search_with_filters` +
+`find_entry_by_title` + `get_search_suggestions` (5 to 1).
+"""
+
+
+_DESCRIPTION_FALLBACK = """Search a ZIM archive: full-text, title lookup, or prefix-suggest.
+
+Modes (see schema `oneOf` for the per-mode parameter contract):
+  mode="fulltext" (default) — Xapian BM25 over rendered bodies. Filters:
+    `namespace`, `content_type`. Use `cross_file=True` to fan out.
+  mode="title" — raw title lookup for callers who already know the exact
+    entity name. No promotion, no preprocessing — the query string is
+    passed through to libzim as-is. For natural-language questions, use
+    `zim_query` instead; it handles intent routing and entity resolution.
   mode="suggest" — prefix autocomplete (libzim SuggestionSearcher).
     Per-archive only; no filters; no cross-file.
 
@@ -78,10 +107,18 @@ def register(server: "OpenZimMcpServer") -> None:
     """
 
     # Gate 0b runner sets OZM_CRITERION_C_PATH. "wired" (default) applies
-    # promotion to mode="title"; "fallback" ships title mode as
-    # explicit-string-only. Read at call time so the env var can be flipped
-    # mid-run by the eval harness.
-    @server.mcp.tool(description=_DESCRIPTION)
+    # promotion to mode="title" and presents the wired tool description.
+    # "fallback" presents the stark explicit-entity-name framing and points
+    # the model at zim_query for NL questions. Any unrecognized value falls
+    # back to wired. Read at registration time — the env var is the
+    # ablation switch the Gate 0b runner sets before invoking the server.
+    criterion_c_path = os.environ.get("OZM_CRITERION_C_PATH", "wired")
+    if criterion_c_path == "fallback":
+        description = _DESCRIPTION_FALLBACK
+    else:
+        description = _DESCRIPTION_WIRED
+
+    @server.mcp.tool(description=description)
     async def zim_search(
         query: str,
         mode: Literal["fulltext", "title", "suggest"] = "fulltext",
@@ -172,11 +209,11 @@ def register(server: "OpenZimMcpServer") -> None:
                 )
 
             if mode == "title":
-                # Criterion C path read at call time. "wired" is the default;
-                # "fallback" would strip promotion (skeleton: delegate to
-                # raw find_entry_by_title in both, since promotion is
-                # delegated to the SimpleToolsHandler in the rc1 wiring).
-                _ = os.environ.get("OZM_CRITERION_C_PATH", "wired")
+                # Criterion C path is selected at registration time via
+                # OZM_CRITERION_C_PATH (see register()): the env var drives
+                # the tool description shown to the model. Behavior here
+                # delegates to find_entry_by_title_data; promotion runs
+                # inside the SimpleToolsHandler in the rc1 wiring.
                 if not zim_file_path and not cross_file:
                     return tool_error(
                         operation="zim_search",
@@ -214,10 +251,10 @@ def register(server: "OpenZimMcpServer") -> None:
                 context=f"mode={mode}, query='{query}'",
             )
 
-    _inject_oneof_schema(server)
+    _inject_zim_search_oneof(server)
 
 
-def _inject_oneof_schema(server: "OpenZimMcpServer") -> None:
+def _inject_zim_search_oneof(server: "OpenZimMcpServer") -> None:
     """Pattern B: mutate the registered Tool's parameters to a 3-branch oneOf.
 
     FastMCP's decorator generates a flat schema from the Python signature
