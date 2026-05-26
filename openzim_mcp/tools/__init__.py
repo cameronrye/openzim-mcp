@@ -1,54 +1,69 @@
-"""Tool registration modules for OpenZIM MCP server.
+"""Phase F tool registration orchestrator.
 
-This package contains modular tool registration functions that are called
-by the main server to register MCP tools. Each module handles a specific
-category of tools.
+Replaces the b13 ``register_all_tools`` (which dispatched to seven
+per-domain registration modules) with a single
+``register_phase_f_tools`` entry point. The orchestrator reads
+``server.config.tool_mode`` and registers the right tool set:
+
+  - ``simple``  (v2.0.0 default): only ``zim_query``.
+  - ``advanced``: all 8 Phase F tools — ``zim_query`` plus
+    ``zim_search``, ``zim_get``, ``zim_get_section``,
+    ``zim_browse``, ``zim_metadata``, ``zim_links``, and
+    ``zim_health``.
+
+MCP Resources and Prompts are orthogonal to tools and stay
+registered as the legacy per-domain modules did (advanced-mode-only,
+matching b13 behavior).
 """
 
-from typing import TYPE_CHECKING
+from __future__ import annotations
 
-from .content_tools import register_content_tools
-from .file_tools import register_file_tools
-from .metadata_tools import register_metadata_tools
-from .navigation_tools import register_navigation_tools
-from .prompts import register_prompts
-from .resource_tools import register_resources
-from .search_tools import register_search_tools
-from .server_tools import register_server_tools
-from .structure_tools import register_structure_tools
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
-__all__ = [
-    "register_all_tools",
-    "register_file_tools",
-    "register_search_tools",
-    "register_content_tools",
-    "register_server_tools",
-    "register_metadata_tools",
-    "register_navigation_tools",
-    "register_structure_tools",
-    "register_resources",
-    "register_prompts",
-]
+__all__ = ["register_phase_f_tools"]
 
 
-def register_all_tools(server: "OpenZimMcpServer") -> None:
-    """Register all advanced mode tools.
+def register_phase_f_tools(server: "OpenZimMcpServer") -> None:
+    """Register the v2 Phase F tool surface. Honors
+    ``server.config.tool_mode`` — the simple/advanced split is now a
+    registration-time filter, not two independent code paths."""
+    from . import zim_query
 
-    This function orchestrates the registration of all tool categories
-    by calling each specialized registration function.
+    zim_query.register(server)
 
-    Args:
-        server: The OpenZimMcpServer instance to register tools on
-    """
-    register_file_tools(server)
-    register_search_tools(server)
-    register_content_tools(server)
-    register_server_tools(server)
-    register_metadata_tools(server)
-    register_navigation_tools(server)
-    register_structure_tools(server)
+    mode = server.config.tool_mode
+    if mode == "simple":
+        return  # 1-tool surface (v2.0.0 default)
+
+    # advanced — register the remaining 7 Phase F tools
+    from . import (
+        zim_browse,
+        zim_get,
+        zim_get_section,
+        zim_health,
+        zim_links,
+        zim_metadata,
+        zim_search,
+    )
+    from .prompts import register_prompts
+    from .resource_tools import register_resources
+
+    for module in (
+        zim_search,
+        zim_get,
+        zim_get_section,
+        zim_browse,
+        zim_metadata,
+        zim_links,
+        zim_health,
+    ):
+        module.register(server)
+
+    # MCP Resources + Prompts are orthogonal to tools; keep them on the
+    # advanced surface as in b13 so the migration is "tools changed
+    # shape" only.
     register_resources(server)
     register_prompts(server)
