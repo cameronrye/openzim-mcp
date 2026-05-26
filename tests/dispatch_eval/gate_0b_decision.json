@@ -2,7 +2,7 @@
   "gate_passed": true,
   "default_tool_mode": "simple",
   "criterion_c_path": "wired",
-  "gate_0_schema_shape": "wired_oneof",
+  "gate_0_schema_shape": "flat",
   "gate_0_3_verdict": "unvalidated",
   "criteria": {
     "A": {
