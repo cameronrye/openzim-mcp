@@ -1,7 +1,7 @@
 {
   "zim_browse": {
-    "bytes": 1696,
-    "description": "Browse or walk entries in a ZIM namespace.\n\nModes:\n  mode=\"page\" (default) \u2014 cursor-paginated browse (current `browse_namespace`\n    semantics). On large archives may return a sampled view with\n    `sampling_based: true`; `done=True` then means \"end of sample\". Default\n    limit: 50 (1-200).\n  mode=\"walk\" \u2014 deterministic-cursor enumeration (current `walk_namespace`).\n    No sampling cap; use for exhaustive dumps. `total` is always None.\n    Default limit: 200 (1-500). `offset` is ignored.\n\nArgs:\n  zim_file_path  REQUIRED. Path to the ZIM archive.\n  namespace      REQUIRED. 'C', 'M', 'W', 'X', 'A', 'I' on legacy archives;\n                 domain strings on new-scheme. Call `zim_metadata` for the\n                 real list.\n  cursor         Opaque pagination token; cursor wins on conflict.\n  limit, offset  Per-page size + pagination offset.\n\nReturns `BrowseNamespaceResponse` (page) or `WalkNamespaceResponse` (walk),\nor `ToolErrorPayload` on failure. Collapses v1.x `browse_namespace` +\n`walk_namespace` (2 to 1).\n",
+    "bytes": 2030,
+    "description": "Browse a ZIM archive's namespace \u2014 paginated lookup or full walk.\n\nEXTRACT whether the caller wants a paginated page or a full walk\nbefore calling. Most read-the-table-of-contents-style requests are\n`mode=\"page\"`; only full-enumeration tasks (e.g. \"list every article\nin namespace A\") need `mode=\"walk\"`.\n\nALIASES: callers may say \"browse <namespace>\", \"list <namespace>\",\n\"walk namespace <letter>\". Route through THIS tool with the matching\nmode.\n\nPARAMETERS:\n  zim_file_path     REQUIRED. The archive to browse.\n  namespace         REQUIRED. ZIM namespace letter (e.g. \"C\" for\n                    content, \"A\" for articles in legacy archives,\n                    \"I\" for images).\n  mode              \"page\" (default) \u2014 paginated browse via cursor.\n                    \"walk\" \u2014 full namespace enumeration via cursor\n                    state.\n  cursor            Phase B cursor pagination handle.\n  limit             Page size (default depends on mode).\n  offset            Page-mode pagination offset (ignored in walk).\n\nRESPONSE:\n  BrowseNamespaceResponse (mode=\"page\") or WalkNamespaceResponse\n  (mode=\"walk\"). Both carry `results`, `next_cursor`, and pagination\n  metadata in `page_info`.\n\nERRORS:\n  Invalid `mode` returns `invalid_mode`. Missing or unknown\n  namespace returns the underlying data-layer error envelope.\n",
     "inputSchema": {
       "properties": {
         "cursor": {
@@ -60,191 +60,110 @@
     }
   },
   "zim_get": {
-    "bytes": 3428,
-    "description": "Retrieve one or more entries from a ZIM archive.\n\nFour mutually-exclusive call shapes (see `oneOf` for the contract):\n  1. Single-entry body view \u2014 `entry_path` + `view\u2208{full,summary,toc,structure}`\n     full \u2192 markdown body; summary \u2192 lead snippet; toc \u2192 heading tree;\n     structure \u2192 flat section list + metadata.\n  2. Single-entry binary \u2014 `entry_path` + `binary=True` (view locked to \"full\").\n     Returns base64-encoded bytes plus mime_type and size.\n  3. Batch \u2014 `entry_paths` (up to 50) + `view`. Per-entry failures are\n     non-fatal; rate limit charged per entry.\n  4. Main page \u2014 `main_page=True`. Path-free archive main-page fetch.\n\nCommon parameters: `zim_file_path` (REQUIRED; call `zim_health` or\n`zim_search(mode=\"title\")` first to discover real paths),\n`max_content_length`, `content_offset` (single-entry body view only),\n`compact` (v2.0 default False \u2014 set True for compact small-LLM rendering),\n`compact_budget` (\"tiny\"/\"small\"/\"medium\"/\"large\" or int).\n\nReturns the response type matching the called shape, or a\n`ToolErrorPayload` envelope on failure. Invalid shape combinations return\n`tool_error(\"invalid_path_combination\", hint=...)` even when a client\nflattens `oneOf`.\n\nCollapses v1.x `get_zim_entry` + `get_zim_entries` + `get_main_page` +\n`get_binary_entry` + `get_entry_summary` + `get_table_of_contents` +\n`get_article_structure` (7 to 1).\n",
+    "bytes": 4155,
+    "description": "Fetch entries from a ZIM archive \u2014 single, batch, binary, or main page.\n\nEXTRACT the right path-shape before calling \u2014 the parameters form four\nmutually-exclusive branches:\n\n  - Single entry, body view (default): pass `entry_path` + optional\n    `view`. Returns the article body for view=\"full\", a short summary\n    for view=\"summary\", a TOC tree for view=\"toc\", a flat section\n    list for view=\"structure\".\n  - Single entry, binary: pass `entry_path` + `binary=True`. Returns\n    raw bytes (image, video, PDF, etc.). `view` is locked to \"full\"\n    in this branch.\n  - Batch: pass `entry_paths` (list of strings) + optional `view`.\n    Returns the same shape as the single-entry body view, per entry.\n  - Main page: pass `main_page=True` (no entry_path). Returns the\n    archive's main page. `view`, `entry_path`, `entry_paths`,\n    `binary` are all forbidden in this branch.\n\nALIASES: callers may say \"get article\", \"fetch\", \"show me <article>\",\n\"summary of <article>\", \"structure of <article>\", \"main page\". Route\nthrough THIS tool with the matching branch.\n\nPARAMETERS:\n  zim_file_path        REQUIRED. The archive containing the entry.\n  entry_path           Single-entry path (string). Mutually exclusive\n                       with entry_paths and main_page.\n  entry_paths          Batch-mode path list. Mutually exclusive with\n                       entry_path, binary, main_page.\n  view                 Body slice when not binary/main_page:\n                       \"full\" (default, full markdown body),\n                       \"summary\" (short snippet),\n                       \"toc\" (heading tree),\n                       \"structure\" (flat section list).\n  binary               Default False. Set True to fetch raw bytes\n                       (single entry only).\n  main_page            Default False. Set True for the archive's\n                       main page (zero-path fetch).\n  max_content_length   Body cap in chars for view=\"full\".\n  content_offset       Char offset into the body for view=\"full\"\n                       (default 0). Used with the truncation footer's\n                       `pass content_offset=N` hint.\n  compact              Default **False** (v2.0). Set True for\n                       small-LLM compaction. v2.5 revisits the default.\n  compact_budget       Named profile (\"tiny\"/\"small\"/\"medium\"/\"large\")\n                       or raw integer char cap when compact=True.\n\nRESPONSE:\n  Branch-dependent dict \u2014 EntryResponse / BatchEntryResponse /\n  EntrySummaryResponse / TableOfContentsResponse /\n  ArticleStructureResponse / BinaryEntryResponse \u2014 or\n  ToolErrorPayload on invalid combinations\n  (`invalid_path_combination`).\n\nERRORS:\n  Invalid branch combinations return structured\n  `invalid_path_combination` with a hint naming the conflict.\n  Defense-in-depth: even if a small model flattens the wire-schema\n  oneOf and sends an impossible payload, the handler rejects it\n  cleanly.\n",
     "inputSchema": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "compact": {
-              "default": false,
-              "type": "boolean"
+      "properties": {
+        "binary": {
+          "default": false,
+          "title": "Binary",
+          "type": "boolean"
+        },
+        "compact": {
+          "default": false,
+          "title": "Compact",
+          "type": "boolean"
+        },
+        "compact_budget": {
+          "anyOf": [
+            {
+              "type": "string"
             },
-            "compact_budget": {
-              "default": null,
-              "type": [
-                "string",
-                "integer",
-                "null"
-              ]
-            },
-            "content_offset": {
-              "default": 0,
+            {
               "type": "integer"
             },
-            "entry_path": {
-              "type": "string"
-            },
-            "max_content_length": {
-              "default": null,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "view": {
-              "default": "full",
-              "enum": [
-                "full",
-                "summary",
-                "toc",
-                "structure"
-              ]
-            },
-            "zim_file_path": {
-              "type": "string"
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "zim_file_path",
-            "entry_path"
           ],
-          "title": "body_view",
-          "type": "object"
+          "default": null,
+          "title": "Compact Budget"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "binary": {
-              "const": true
-            },
-            "compact": {
-              "default": false,
-              "type": "boolean"
-            },
-            "compact_budget": {
-              "default": null,
-              "type": [
-                "string",
-                "integer",
-                "null"
-              ]
-            },
-            "entry_path": {
+        "content_offset": {
+          "default": 0,
+          "title": "Content Offset",
+          "type": "integer"
+        },
+        "entry_path": {
+          "anyOf": [
+            {
               "type": "string"
             },
-            "max_content_length": {
-              "default": null,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "zim_file_path": {
-              "type": "string"
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "zim_file_path",
-            "entry_path",
-            "binary"
           ],
-          "title": "binary",
-          "type": "object"
+          "default": null,
+          "title": "Entry Path"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "compact": {
-              "default": false,
-              "type": "boolean"
-            },
-            "compact_budget": {
-              "default": null,
-              "type": [
-                "string",
-                "integer",
-                "null"
-              ]
-            },
-            "entry_paths": {
+        "entry_paths": {
+          "anyOf": [
+            {
               "items": {
                 "type": "string"
               },
-              "maxItems": 50,
               "type": "array"
             },
-            "max_content_length": {
-              "default": null,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "view": {
-              "default": "full",
-              "enum": [
-                "full",
-                "summary",
-                "toc",
-                "structure"
-              ]
-            },
-            "zim_file_path": {
-              "type": "string"
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "zim_file_path",
-            "entry_paths"
           ],
-          "title": "batch",
-          "type": "object"
+          "default": null,
+          "title": "Entry Paths"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "compact": {
-              "default": false,
-              "type": "boolean"
+        "main_page": {
+          "default": false,
+          "title": "Main Page",
+          "type": "boolean"
+        },
+        "max_content_length": {
+          "anyOf": [
+            {
+              "type": "integer"
             },
-            "compact_budget": {
-              "default": null,
-              "type": [
-                "string",
-                "integer",
-                "null"
-              ]
-            },
-            "main_page": {
-              "const": true
-            },
-            "max_content_length": {
-              "default": null,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "zim_file_path": {
-              "type": "string"
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "zim_file_path",
-            "main_page"
           ],
-          "title": "main_page",
-          "type": "object"
+          "default": null,
+          "title": "Max Content Length"
+        },
+        "view": {
+          "default": "full",
+          "enum": [
+            "full",
+            "summary",
+            "toc",
+            "structure"
+          ],
+          "title": "View",
+          "type": "string"
+        },
+        "zim_file_path": {
+          "title": "Zim File Path",
+          "type": "string"
         }
+      },
+      "required": [
+        "zim_file_path"
       ],
+      "title": "zim_getArguments",
       "type": "object"
     }
   },
   "zim_get_section": {
-    "bytes": 1466,
-    "description": "Fetch a single article section by `section_id`.\n\n`section_id` values come from `zim_get(view=\"toc\")` or\n`zim_get(view=\"structure\")`. On miss, returns `ToolErrorPayload` with\n`available_section_ids` for self-correction.\n\nArgs:\n  zim_file_path, entry_path, section_id  All REQUIRED.\n  max_chars       Optional body cap.\n  include_subsections   True (default) includes nested children;\n                  False ends at the next heading of any level.\n  compact         v2.0 default True. Set False for legacy raw rendering.\n  compact_budget  Char-cap when compact=True; \"tiny\"/\"small\"/\"medium\"/\"large\"\n                  or int.\n\nv2 rename of `get_section`. Returns `GetSectionResponse` or\n`ToolErrorPayload`.\n",
+    "bytes": 2170,
+    "description": "Fetch one named section of an article \u2014 by `section_id` (from the\nTOC), with optional subsection inclusion.\n\nEXTRACT a specific section before calling \u2014 use `zim_get(view=\"toc\")`\nfirst to discover available section ids if the caller didn't supply\none.\n\nALIASES: callers may say \"section <X> of <article>\", \"show me the\n<X> section\", \"<article> section <X>\". Route through THIS tool.\n\nPARAMETERS:\n  zim_file_path        REQUIRED. The archive containing the article.\n  entry_path           REQUIRED. The article whose section to fetch.\n  section_id           REQUIRED. The TOC id (e.g. \"History\",\n                       \"Early_life\") of the section.\n  max_chars            Optional char cap on the section body.\n  compact              Default True. Small-LLM compaction. Pass\n                       False to recover the legacy raw text shape \u2014\n                       this is a behavior break vs Phase C's\n                       compact-by-default; v2.5 may revisit if\n                       telemetry shows callers prefer raw.\n  compact_budget       Named profile (\"tiny\"/\"small\"/\"medium\"/\"large\")\n                       or raw integer char cap when compact=True.\n\nRESPONSE:\n  GetSectionResponse \u2014 section body markdown (compacted by default),\n  metadata, and any nested subsections.\n\nERRORS:\n  Returns a ToolErrorPayload on missing/unknown section_id with a\n  hint listing the available section ids from the article's TOC.\n",
     "inputSchema": {
       "properties": {
         "compact": {
@@ -254,7 +173,12 @@
         },
         "compact_budget": {
           "anyOf": [
-            {},
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
             {
               "type": "null"
             }
@@ -265,11 +189,6 @@
         "entry_path": {
           "title": "Entry Path",
           "type": "string"
-        },
-        "include_subsections": {
-          "default": true,
-          "title": "Include Subsections",
-          "type": "boolean"
         },
         "max_chars": {
           "anyOf": [
@@ -302,8 +221,8 @@
     }
   },
   "zim_health": {
-    "bytes": 531,
-    "description": "Server health, configuration, and loaded archives \u2014 one call.\n\nNo parameters. Returns combined diagnostics: cache stats, directory health,\nconfiguration summary, and the list of currently-loaded ZIM archives. Single\ntool that answers \"what is this server, what does it have, and is it OK\".\n\nCollapses v1.x `get_server_health` + `get_server_configuration` +\n`list_zim_files` (3 tools to 1).\n",
+    "bytes": 1146,
+    "description": "Inspect the openzim-mcp server's state in one combined response.\n\nReturns three things: health checks (cache stats, directory probes,\nrecommendations), configuration (allowed directories, cache config,\nserver PID), and loaded_archives (the list of ZIM files the server\ncan read from). Collapses the legacy `get_server_health` +\n`get_server_configuration` + `list_zim_files` triple into one\nsingle-call answer to \"what is this server, what does it have, and\nis it OK\".\n\nALIASES: callers may say \"is the server ok\", \"list archives\",\n\"what's loaded\", \"server health\". Route through THIS tool \u2014 it\nanswers all three from one round trip.\n\nPARAMETERS:\n  (none \u2014 zim_health takes no arguments.)\n\nRESPONSE:\n  ServerHealthResponse (combined Phase F shape):\n    - health: HealthStatus (legacy get_server_health output).\n    - configuration: ServerConfig (legacy get_server_configuration).\n    - loaded_archives: list[ArchiveInfo] (legacy list_zim_files).\n    - _meta: standard envelope.\n",
     "inputSchema": {
       "properties": {},
       "title": "zim_healthArguments",
@@ -311,8 +230,8 @@
     }
   },
   "zim_links": {
-    "bytes": 1347,
-    "description": "Extract links from an article: outbound buckets or related articles.\n\n  direction=\"outbound\" (default) \u2014 internal/external/media link buckets,\n    cursor-paginated. `category_totals` echoes counts.\n  direction=\"related\" \u2014 articles connected via outbound-link overlap.\n\nv2.5 adds `direction=\"inbound\"` later \u2014 enum is not exhaustive at v2.0.\n\nArgs:\n  zim_file_path, entry_path  REQUIRED.\n  cursor   Outbound only.\n  limit    Outbound: 1-500, default 100. Related: 1-100, default 10.\n  offset   Outbound only.\n\nReturns `LinksResponse` or `RelatedArticlesResponse`, or `ToolErrorPayload`.\nCollapses `extract_article_links` + `get_related_articles` (2 to 1).\n",
+    "bytes": 2386,
+    "description": "Look up links from one article \u2014 outbound link buckets or\nrelated-article suggestions.\n\nEXTRACT the direction before calling. `direction=\"outbound\"` returns\nthe article's own outgoing links (internal / external / media\nbuckets, paginated). `direction=\"related\"` returns articles\nconnected to this one by outbound-link overlap \u2014 the canonical\n\"see also\" experience.\n\nALIASES: callers may say \"links in <article>\", \"what does <article>\nlink to\", \"related to <article>\", \"articles like <article>\". Route\nthrough THIS tool with the matching direction.\n\nPARAMETERS:\n  zim_file_path     REQUIRED. The archive containing the article.\n  entry_path        REQUIRED. The article whose links to inspect.\n  direction         \"outbound\" (default) \u2014 outgoing links by bucket.\n                    \"related\" \u2014 related articles via outbound-link\n                    overlap.\n  cursor            Phase B cursor pagination handle.\n  limit             Page size.\n  offset            Pagination offset (outbound mode only).\n\nRESPONSE:\n  ArticleLinksResponse (direction=\"outbound\") or\n  RelatedArticlesResponse (direction=\"related\"). Both carry\n  pagination metadata.\n\nNOTE (v2.0 scope): `\"inbound\"` is NOT in the direction enum. Inbound\nlink discovery requires a link-graph sidecar that lands in v2.5 \u2014\nreserving an unusable enum value at v2.0 would create a small-model\nfailure mode where the model attempts it, eats an error, and gives\nup. The schema-additive promotion to add `\"inbound\"` in v2.5 is\nnon-breaking.\n\nERRORS:\n  Invalid `direction` returns `invalid_direction`. Missing or\n  unknown `entry_path` returns the underlying data-layer error\n  envelope.\n",
     "inputSchema": {
       "properties": {
         "cursor": {
@@ -371,8 +290,8 @@
     }
   },
   "zim_metadata": {
-    "bytes": 691,
-    "description": "Get combined ZIM archive metadata + namespace listing.\n\nReturns `metadata` (Title, Description, Language, Creator, Date, entry\ncounts) and `namespaces` (per-namespace `total` + `discovery_method`).\nNew-scheme archives use domain-string namespaces; legacy use single\nletters ('C', 'M', 'W', 'X', 'A', 'I').\n\nArgs:\n  zim_file_path  REQUIRED.\n\nFor main-page fetch, use `zim_get(main_page=True)`. Collapses v1.x\n`get_zim_metadata` + `list_namespaces` (2 to 1).\n",
+    "bytes": 1195,
+    "description": "Inspect a ZIM archive's metadata + namespace inventory.\n\nReturns the M-namespace fields (Name, Title, Creator, Date, \u2026) plus\nthe per-namespace entry counts in one combined response. Replaces\nthe legacy `get_zim_metadata` + `list_namespaces` pair.\n\nALIASES: callers may say \"metadata for <archive>\", \"what's in this\nzim\", \"describe the archive\". Route through THIS tool.\n\nPARAMETERS:\n  zim_file_path     REQUIRED. The archive to inspect.\n\nRESPONSE:\n  ArchiveMetadataResponse with:\n    - metadata: flat dict[str, str] of M-namespace fields.\n    - namespaces: list of NamespaceInfo (letter + total +\n      discovery diagnostics).\n    - _meta: standard envelope.\n\n  **NO `main_page_path` field.** The canonical main-page fetch is\n  `zim_get(main_page=True)` \u2014 surfacing the path here would create\n  two routes a small model would null-check unnecessarily.\n\nERRORS:\n  Missing/invalid `zim_file_path` returns a structured error envelope.\n",
     "inputSchema": {
       "properties": {
         "zim_file_path": {
@@ -388,8 +307,8 @@
     }
   },
   "zim_query": {
-    "bytes": 7109,
-    "description": "Query ZIM archives using natural language.\n\n        Single intelligent tool \u2014 parses your query, detects intent,\n        and dispatches to the right operation.\n\n        EXTRACT INTENT BEFORE CALLING. Do not pass the user's raw\n        message as `query`. Translate it into one of the operations\n        below:\n          \"test this tool\"     -> query=\"list available ZIM files\"\n          \"what's in here\"     -> query=\"show main page\"\n          \"explore\"            -> query=\"list namespaces\"\n          \"tell me about cats\" -> query=\"tell me about cats\"\n          <topic by name>      -> query=\"<topic>\"\n\n        ALIASES: users may call this tool \"openzim\", \"openzim mcp\",\n        \"openzim mcp tool\", \"ZIM tool\", \"ZIM file tool\", \"ZIM\n        archive query\", or \"zim_query\". All mean THIS tool \u2014\n        always call it; never claim it does not exist.\n\n        OPERATIONS (pass one as `query`):\n          list available ZIM files       - list loaded archives\n          show main page                 - active archive main page\n          list namespaces                - list entry types\n          metadata for <file>            - archive metadata\n          tell me about <topic>          - fetch article (auto on\n                                            strong title match)\n          search for <terms>             - full-text search\n          get article <name>             - fetch specific article\n          show structure of <name>       - section outline\n          links in <name>                - article-out links\n          suggestions for <prefix>       - title autocomplete\n          browse namespace <letter>      - list namespace entries\n          search <terms> in namespace <letter>  - filtered search\n          search all files for <terms>   - cross-archive search\n          walk namespace <letter>        - enumerate namespace\n          find article titled <name>     - title lookup\n          articles related to <name>     - related articles\n\n        Args:\n            query: REQUIRED. Translated from user intent \u2014 never the\n                user's raw message.\n            zim_file_path: Optional. **Omit entirely (recommended)** \u2014\n                the tool auto-selects the loaded archive (or opens\n                all of them when `synthesize=True`). Pass a real\n                path ONLY when multiple archives are loaded and you\n                need to target a specific one; call `list available\n                ZIM files` first to see the real paths. NEVER pass\n                an article title, topic, or made-up filename here,\n                and do NOT invent a path from this docstring \u2014\n                paths that don't match a loaded archive are silently\n                auto-corrected when only one archive is loaded, and\n                surface a path-listing error otherwise.\n            limit: Max search/browse results (default: 3). Ignored\n                for atomic intents that return a single item or a\n                fixed-shape payload \u2014 `tell me about <topic>`,\n                `get article <name>`, `show structure of <name>`,\n                `links in <name>`, `articles related to <name>`,\n                `show main page`, `list namespaces`, `metadata for\n                <file>`, `list available ZIM files`, `summary of\n                <name>`, `table of contents <name>`, `section <X>\n                of <name>`. Setting it there has no effect; omit\n                it on those calls.\n            offset: Pagination offset (default: 0).\n            max_content_length: Article body cap (default: 4000).\n            content_offset: Character offset to start reading the\n                article body from (default: 0). The truncation footer\n                on long articles surfaces a `pass content_offset=N`\n                hint \u2014 wire that value back here to read the next\n                page. Negative values are rejected with an\n                `invalid_content_offset` error.\n            compact: When True (default in simple mode), apply\n                small-LLM optimizations \u2014 strip markdown link-soup,\n                drop section previews from structure responses,\n                flatten link/title/related listings into compact\n                markdown, fetch only the article lead section, and\n                cap total response size. Set False for the verbose\n                advanced-mode-style response.\n            compact_budget: Hard char-cap on the final response when\n                `compact=True`. Accepts either a named profile \u2014\n                `\"tiny\"` (2 000), `\"small\"` (4 000), `\"medium\"` (6 000,\n                default), `\"large\"` (12 000) \u2014 or a raw integer. Used\n                to size the budget to the calling model's context\n                window: an 8B-class model on an agentic prompt fits\n                `tiny`, a 70B-class assistant fits `large`. Has no\n                effect when `compact=False`.\n            synthesize: When True, bypass intent classification and\n                run the synthesize pipeline \u2014 multi-archive Xapian\n                search, RRF fusion, passage extraction, section\n                attribution, and citation rendering. Returns a\n                SynthesizeResponse dict instead of markdown text.\n                Defaults to False (legacy markdown path unchanged).\n                NOTE: this is a mode toggle, not a \"search harder\"\n                flag. Don't flip it on a follow-up just because the\n                previous response was unhelpful \u2014 refine the `query`\n                or `offset` instead. The synthesize pipeline runs\n                one structured query and returns one answer; calling\n                it twice with the same query yields the same answer.\n\n        Returns:\n            Markdown string (synthesize=False) or SynthesizeResponse\n            dict (synthesize=True) with answer_markdown, passages,\n            citations, and archives_searched.\n        ",
+    "bytes": 6378,
+    "description": "Query ZIM archives using natural language.\n\nSingle intelligent tool \u2014 parses your query, detects intent,\nand dispatches to the right operation.\n\nEXTRACT INTENT BEFORE CALLING. Do not pass the user's raw\nmessage as `query`. Translate it into one of the operations\nbelow:\n  \"test this tool\"     -> query=\"list available ZIM files\"\n  \"what's in here\"     -> query=\"show main page\"\n  \"explore\"            -> query=\"list namespaces\"\n  \"tell me about cats\" -> query=\"tell me about cats\"\n  <topic by name>      -> query=\"<topic>\"\n\nALIASES: users may call this tool \"openzim\", \"openzim mcp\",\n\"openzim mcp tool\", \"ZIM tool\", \"ZIM file tool\", \"ZIM\narchive query\", or \"zim_query\". All mean THIS tool \u2014\nalways call it; never claim it does not exist.\n\nOPERATIONS (pass one as `query`):\n  list available ZIM files       - list loaded archives\n  show main page                 - active archive main page\n  list namespaces                - list entry types\n  metadata for <file>            - archive metadata\n  tell me about <topic>          - fetch article (auto on\n                                    strong title match)\n  search for <terms>             - full-text search\n  get article <name>             - fetch specific article\n  show structure of <name>       - section outline\n  links in <name>                - article-out links\n  suggestions for <prefix>       - title autocomplete\n  browse namespace <letter>      - list namespace entries\n  search <terms> in namespace <letter>  - filtered search\n  search all files for <terms>   - cross-archive search\n  walk namespace <letter>        - enumerate namespace\n  find article titled <name>     - title lookup\n  articles related to <name>     - related articles\n\nArgs:\n    query: REQUIRED. Translated from user intent \u2014 never the\n        user's raw message.\n    zim_file_path: Optional. **Omit entirely (recommended)** \u2014\n        the tool auto-selects the loaded archive (or opens\n        all of them when `synthesize=True`). Pass a real\n        path ONLY when multiple archives are loaded and you\n        need to target a specific one; call `list available\n        ZIM files` first to see the real paths. NEVER pass\n        an article title, topic, or made-up filename here,\n        and do NOT invent a path from this docstring \u2014\n        paths that don't match a loaded archive are silently\n        auto-corrected when only one archive is loaded, and\n        surface a path-listing error otherwise.\n    limit: Max search/browse results (default: 3). Ignored\n        for atomic intents that return a single item or a\n        fixed-shape payload \u2014 `tell me about <topic>`,\n        `get article <name>`, `show structure of <name>`,\n        `links in <name>`, `articles related to <name>`,\n        `show main page`, `list namespaces`, `metadata for\n        <file>`, `list available ZIM files`, `summary of\n        <name>`, `table of contents <name>`, `section <X>\n        of <name>`. Setting it there has no effect; omit\n        it on those calls.\n    offset: Pagination offset (default: 0).\n    max_content_length: Article body cap (default: 4000).\n    content_offset: Character offset to start reading the\n        article body from (default: 0). The truncation footer\n        on long articles surfaces a `pass content_offset=N`\n        hint \u2014 wire that value back here to read the next\n        page. Negative values are rejected with an\n        `invalid_content_offset` error.\n    compact: When True (default in simple mode), apply\n        small-LLM optimizations \u2014 strip markdown link-soup,\n        drop section previews from structure responses,\n        flatten link/title/related listings into compact\n        markdown, fetch only the article lead section, and\n        cap total response size. Set False for the verbose\n        advanced-mode-style response.\n    compact_budget: Hard char-cap on the final response when\n        `compact=True`. Accepts either a named profile \u2014\n        `\"tiny\"` (2 000), `\"small\"` (4 000), `\"medium\"` (6 000,\n        default), `\"large\"` (12 000) \u2014 or a raw integer. Used\n        to size the budget to the calling model's context\n        window: an 8B-class model on an agentic prompt fits\n        `tiny`, a 70B-class assistant fits `large`. Has no\n        effect when `compact=False`.\n    synthesize: When True, bypass intent classification and\n        run the synthesize pipeline \u2014 multi-archive Xapian\n        search, RRF fusion, passage extraction, section\n        attribution, and citation rendering. Returns a\n        SynthesizeResponse dict instead of markdown text.\n        Defaults to False (legacy markdown path unchanged).\n        NOTE: this is a mode toggle, not a \"search harder\"\n        flag. Don't flip it on a follow-up just because the\n        previous response was unhelpful \u2014 refine the `query`\n        or `offset` instead. The synthesize pipeline runs\n        one structured query and returns one answer; calling\n        it twice with the same query yields the same answer.\n\nReturns:\n    Markdown string (synthesize=False) or SynthesizeResponse\n    dict (synthesize=True) with answer_markdown, passages,\n    citations, and archives_searched.\n",
     "inputSchema": {
       "properties": {
         "compact": {
@@ -399,7 +318,12 @@
         },
         "compact_budget": {
           "anyOf": [
-            {},
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
             {
               "type": "null"
             }
@@ -483,159 +407,99 @@
     }
   },
   "zim_search": {
-    "bytes": 2872,
-    "description": "Search a ZIM archive: full-text, title lookup, or prefix-suggest.\n\nModes (see schema `oneOf` for the per-mode parameter contract):\n  mode=\"fulltext\" (default) \u2014 Xapian BM25 over rendered bodies. Filters:\n    `namespace`, `content_type`. Use `cross_file=True` to fan out.\n  mode=\"title\" \u2014 typo-tolerant title lookup. Runs Z3/Z4/OPP-1 promotion\n    when `cross_file=False` so \"Tesla electricity\" does not silently\n    land on \"Tesla's_Wireless_Electricity\". Cross-file disables promotion.\n  mode=\"suggest\" \u2014 prefix autocomplete (libzim SuggestionSearcher).\n    Per-archive only; no filters; no cross-file.\n\nCommon parameters: `query` (required unless `cursor` carries it),\n`zim_file_path` (mutually exclusive with `cross_file=True`),\n`limit`, `offset`, `cursor` (cursor wins on conflict).\n\nFor NL questions (\"tell me about X\"), prefer `zim_query` \u2014 it routes the\nright intent. This tool is the direct path when you already know the\nentity name or want a raw search.\n\nReturns `SearchResponse`-shaped dict (Phase B contract: `results`,\n`next_cursor`, `total`, `done`, `page_info`) or `ToolErrorPayload` on\nfailure. Title and suggest modes do not paginate.\n\nCollapses v1.x `search_zim_file` + `search_all` + `search_with_filters` +\n`find_entry_by_title` + `get_search_suggestions` (5 to 1).\n",
+    "bytes": 4110,
+    "description": "Search a ZIM archive \u2014 three modes, one tool.\n\nEXTRACT the search intent before calling. Pick the `mode` that matches\nwhat the user actually needs; the wrong mode silently returns the\nwrong shape of results.\n\nMODES (pass one as `mode`):\n  - \"fulltext\" (default) \u2014 Xapian BM25 search with optional\n    `namespace` / `content_type` filters. Use for queries with\n    multiple keywords (\"history of Rome\", \"Tesla electricity\") or\n    when the caller wants snippets, not just titles. Cross-archive\n    via `cross_file=True`.\n  - \"title\" \u2014 Exact / typo-tolerant title lookup. Returns titles\n    matching the query (case ladder + suggestion expansion +\n    Levenshtein-1). Use when the caller knows the article name and\n    wants to confirm it exists or find near matches (\"find article\n    titled Detroit\"). Single-archive applies Z3/Z4/OPP-1 promotion;\n    cross-archive (`cross_file=True`) returns raw matches without\n    promotion (promotion is per-archive).\n  - \"suggest\" \u2014 Prefix autocomplete via libzim SuggestionSearcher.\n    Returns title candidates only \u2014 no snippets, no body. Use for\n    typeahead-style completion (\"prefix `Det`\"). Does NOT support\n    `cross_file=True` (libzim's SuggestionSearcher is per-archive).\n\nALIASES: callers may say \"search\", \"find\", \"lookup\", or \"autocomplete\".\nAll route through THIS tool \u2014 pick the matching `mode`.\n\nPARAMETERS:\n  query        REQUIRED. The user's search query.\n  mode         One of {\"fulltext\", \"title\", \"suggest\"}. Default\n               \"fulltext\".\n  zim_file_path Optional. Omit for auto-selection of the single\n               loaded archive, or use `cross_file=True` for\n               multi-archive fan-out.\n  cross_file   Default False. Set True to fan out across every\n               loaded archive (modes \"fulltext\" and \"title\" only;\n               \"suggest\" rejects this with `invalid_combination`).\n  namespace    Only valid in mode=\"fulltext\". Restricts search to\n               one ZIM namespace letter (e.g. \"C\" for content).\n               Silently ignored in other modes.\n  content_type Only valid in mode=\"fulltext\". Restricts search to\n               one MIME bucket (e.g. \"text/html\").\n  limit        Maximum results to return (default depends on mode).\n  offset       Pagination offset (default 0).\n  cursor       Phase B cursor pagination handle; overrides `offset`\n               when set.\n\nRESPONSE:\n  Search-shape dict with `results` array. Each result carries\n  `entry_path`, `title`, and (mode-dependent) `snippet`. The\n  `_meta` envelope on title-mode results sets `promotion_applied`\n  to True when the wired Criterion-C path hoisted a Z3/Z4/OPP-1\n  candidate; False with a `hint` when cross-archive blocked the\n  promotion pass.\n\nERRORS:\n  Returns a ToolErrorPayload on:\n    - mode=\"suggest\" with cross_file=True (`invalid_combination`)\n    - non-positive limit, negative offset (`invalid_limit`,\n      `invalid_offset`)\n    - missing archive when zim_file_path is required but cross_file\n      is False and auto-selection fails\n",
     "inputSchema": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "content_type": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "cross_file": {
-              "default": false,
-              "type": "boolean"
-            },
-            "cursor": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "limit": {
-              "default": null,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "mode": {
-              "const": "fulltext",
-              "default": "fulltext"
-            },
-            "namespace": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "offset": {
-              "default": 0,
-              "type": "integer"
-            },
-            "query": {
+      "properties": {
+        "content_type": {
+          "anyOf": [
+            {
               "type": "string"
             },
-            "zim_file_path": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "query"
           ],
-          "title": "fulltext",
-          "type": "object"
+          "default": null,
+          "title": "Content Type"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "cross_file": {
-              "default": false,
-              "type": "boolean"
-            },
-            "cursor": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "limit": {
-              "default": null,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "mode": {
-              "const": "title"
-            },
-            "offset": {
-              "default": 0,
-              "type": "integer"
-            },
-            "query": {
-              "type": "string"
-            },
-            "zim_file_path": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "query",
-            "mode"
-          ],
-          "title": "title",
-          "type": "object"
+        "cross_file": {
+          "default": false,
+          "title": "Cross File",
+          "type": "boolean"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "cursor": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "limit": {
-              "default": null,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "mode": {
-              "const": "suggest"
-            },
-            "offset": {
-              "default": 0,
-              "type": "integer"
-            },
-            "query": {
+        "cursor": {
+          "anyOf": [
+            {
               "type": "string"
             },
-            "zim_file_path": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "query",
-            "mode"
           ],
-          "title": "suggest",
-          "type": "object"
+          "default": null,
+          "title": "Cursor"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "mode": {
+          "default": "fulltext",
+          "enum": [
+            "fulltext",
+            "title",
+            "suggest"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Namespace"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "zim_file_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zim File Path"
         }
+      },
+      "required": [
+        "query"
       ],
+      "title": "zim_searchArguments",
       "type": "object"
     }
   }
