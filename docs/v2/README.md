@@ -34,7 +34,7 @@ These apply across all phases; per-phase specs do not re-litigate them.
 | **D** (trimmed) | Optional ML accelerators | #6 reranker + #8 Tier 1 query rewriting | **Shipped (v2.0.0b1)** | [2026-05-20-v2-phase-d-ml-accelerators-design.md](../superpowers/specs/2026-05-20-v2-phase-d-ml-accelerators-design.md) |
 | _Beta polish_ | Title-promotion defect sweeps | Z1, Z2, Z3, Z4, OPP-1, Sub-pattern C | **In progress (v2.0.0b2 → b13)** | Per-sweep PRs (see CHANGELOG) |
 | **E** | Offline build artifacts | #16, #17 | **Rolled to v2.5** | [docs/v2.5/README.md](../v2.5/README.md) |
-| **F** | Tool surface v2 | #9 | **In Design** | [2026-05-24-v2-phase-f-tool-surface-design.md](../superpowers/specs/2026-05-24-v2-phase-f-tool-surface-design.md) |
+| **F** | Tool surface v2 | #9 | **In Implementation (v2.0.0rc1)** | [2026-05-24-v2-phase-f-tool-surface-design.md](../superpowers/specs/2026-05-24-v2-phase-f-tool-surface-design.md) |
 | _Deferred from Phase D_ | Hybrid intent + embeddings sidecar | #8 Tier 2, #12, #15 | **Rolled to v2.5** | [docs/v2.5/README.md](../v2.5/README.md) |
 
 Each phase's spec is created via the brainstorming workflow when that phase begins. The spec link gets filled in when the design is approved.
