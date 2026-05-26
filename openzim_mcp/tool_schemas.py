@@ -608,7 +608,7 @@ class SynthesizeResponse(TypedDict, total=False):
 
 
 class UptimeInfo(TypedDict):
-    """Uptime block of ``ServerHealthResponse``."""
+    """Uptime block of ``HealthStatus``."""
 
     process_id: str
     started_at: str
@@ -616,7 +616,7 @@ class UptimeInfo(TypedDict):
 
 
 class HealthChecks(TypedDict):
-    """Per-check booleans/counters of ``ServerHealthResponse``."""
+    """Per-check booleans/counters of ``HealthStatus``."""
 
     directories_accessible: int
     zim_files_found: int
@@ -631,8 +631,14 @@ class HealthConfiguration(TypedDict):
     config_hash: str
 
 
-class ServerHealthResponse(TypedDict, total=False):
-    """``get_server_health`` success payload.
+class HealthStatus(TypedDict, total=False):
+    """Health block of ``ServerHealthResponse`` — the shape the legacy
+    ``get_server_health`` tool returned at v2.0.0rc0.
+
+    Renamed from ``ServerHealthResponse`` at Phase F rc1 because that
+    name now belongs to the combined-shape ``zim_health`` response (see
+    below). Legacy ``server_tools.py`` callers were updated to import
+    ``HealthStatus`` directly.
 
     ``cache_performance`` and ``simple_tools_telemetry`` carry free-form
     dicts whose shape is owned by the cache / simple-tools modules; the
@@ -650,6 +656,13 @@ class ServerHealthResponse(TypedDict, total=False):
     health_checks: HealthChecks
     recommendations: list[str]
     warnings: list[str]
+
+
+# Phase F rc1: legacy alias preserved for back-compat across the rc1
+# transition while the b13 single-purpose ``get_server_health`` tool is
+# still registered alongside the new combined ``zim_health``. Removed
+# in Task D12 when the legacy server-tools surface is deleted.
+LegacyServerHealthResponse = HealthStatus
 
 
 class ServerConfigDetails(TypedDict):
@@ -682,3 +695,69 @@ class ServerConfigurationResponse(TypedDict):
     configuration: ServerConfigDetails
     diagnostics: ServerConfigDiagnostics
     timestamp: str
+
+
+# Phase F rc1 alias: the spec calls this ``ServerConfig`` when used as a
+# building block of ``ServerHealthResponse``. Keeping both names lets
+# legacy ``server_tools.py`` continue to import the long name while the
+# new combined response references the spec-matching short one.
+ServerConfig = ServerConfigurationResponse
+
+
+# Phase F rc1 alias: spec name ``ArchiveInfo`` for ``FileSummary`` when
+# carried as an element of ``ServerHealthResponse.loaded_archives``.
+ArchiveInfo = FileSummary
+
+
+class NamespaceInfo(TypedDict):
+    """List-form variant of a single namespace entry, used inside
+    ``ArchiveMetadataResponse.namespaces``.
+
+    The legacy ``list_namespaces`` data returns a ``dict[str, NamespaceSummary]``
+    keyed by namespace letter. The combined ``zim_metadata`` response
+    converts that dict to a list so small models can iterate naturally
+    over namespaces without flattening a single-character-keyed mapping.
+    """
+
+    letter: str
+    total: int
+    is_authoritative: bool
+    description: NotRequired[str]
+    sample_entries: NotRequired[list[dict[str, str]]]
+    sampled_count: NotRequired[int]
+    probed_count: NotRequired[int]
+    estimated_total: NotRequired[int]
+
+
+class ArchiveMetadataResponse(TypedDict):
+    """Phase F ``zim_metadata`` success payload.
+
+    Combines the per-archive M-namespace fields (current
+    ``get_zim_metadata`` shape) with the namespace inventory (current
+    ``list_namespaces`` shape, converted to list-form). The combined
+    tool collapses ``get_zim_metadata`` + ``list_namespaces`` into one.
+
+    Per the design spec, this response does **not** expose
+    ``main_page_path``. The canonical main-page fetch is
+    ``zim_get(main_page=True)``; surfacing the path here would create
+    two routes that small models would null-check unnecessarily.
+    """
+
+    metadata: dict[str, str]
+    namespaces: list[NamespaceInfo]
+    _meta: MetaEnvelope
+
+
+class ServerHealthResponse(TypedDict):
+    """Phase F ``zim_health`` success payload — combined server state.
+
+    Replaces the legacy single-purpose shape (now ``HealthStatus``) by
+    folding three tools into one: ``get_server_health`` +
+    ``get_server_configuration`` + ``list_zim_files``. Single tool that
+    answers "what is this server, what does it have, and is it OK".
+    """
+
+    health: HealthStatus
+    configuration: ServerConfig
+    loaded_archives: list[ArchiveInfo]
+    _meta: MetaEnvelope

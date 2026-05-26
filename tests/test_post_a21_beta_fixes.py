@@ -688,17 +688,19 @@ class TestTD1LimitDocstringClarifiesAtomicIntents:
     """
 
     def test_limit_docstring_mentions_atomic_intents(self) -> None:
-        import openzim_mcp.server as server_mod
+        # Phase F D3 moved the zim_query docstring to a committed
+        # description file shipped with the wheel.
+        import importlib.resources as resources
 
-        source = inspect.getsource(server_mod)
-        # Look for an explicit mention near the ``limit`` Args block.
-        # We can't grep for the exact wording (style choice) but the
-        # docstring must say something about ``limit`` being ignored
-        # or no-op for atomic intents.
+        source = (
+            resources.files("openzim_mcp.tools")
+            .joinpath("zim_query_description.md")
+            .read_text(encoding="utf-8")
+        )
         assert "limit" in source.lower() and (
             "ignored" in source.lower() or "atomic" in source.lower()
         ), (
-            "zim_query docstring should clarify that ``limit`` is "
+            "zim_query description should clarify that ``limit`` is "
             "ignored for atomic intents (tell_me_about / get article / "
             "show structure / main_page / list_namespaces / list_files). "
             "Small models speculatively pass it otherwise."

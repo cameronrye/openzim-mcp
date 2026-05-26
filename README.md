@@ -82,6 +82,70 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 - **Configurable**: Flexible configuration with validation
 - **Observable**: Structured logging and health monitoring
 
+## What's new in v2.0.0rc1
+
+> Phase F of the v2 effort. Collapses the 22-tool advanced surface into
+> 8 consolidated tools — the largest API change in the project's history.
+
+### Surface collapse
+
+`tool_mode='advanced'` now registers exactly 8 tools (down from 22):
+
+- `zim_query` — natural-language entry point (unchanged from b13).
+- `zim_search` — fulltext / title / suggest mode dispatch (replaces
+  `search_zim_file`, `search_all`, `search_with_filters`,
+  `find_entry_by_title`, `get_search_suggestions`).
+- `zim_get` — single / batch / binary / main-page entry fetch
+  (replaces `get_zim_entry`, `get_zim_entries`, `get_main_page`,
+  `get_binary_entry`, `get_entry_summary`, `get_table_of_contents`,
+  `get_article_structure`).
+- `zim_get_section` — section-level fetch (renamed from `get_section`).
+- `zim_browse` — namespace browse / walk (replaces
+  `browse_namespace`, `walk_namespace`).
+- `zim_metadata` — combined archive metadata + namespaces (replaces
+  `get_zim_metadata`, `list_namespaces`).
+- `zim_links` — outbound / related direction dispatch (replaces
+  `extract_article_links`, `get_related_articles`).
+- `zim_health` — combined server health, configuration, and loaded
+  archives (replaces `get_server_health`, `get_server_configuration`,
+  `list_zim_files`).
+
+`tool_mode='simple'` is unchanged (still registers only `zim_query`).
+Default `tool_mode` is unchanged (`'simple'`).
+
+### Why
+
+Dispatch quality on small models degrades sharply once the registered
+tool surface enters the 25-50KB MCP Tax pain band. v2.0.0b13's
+22-tool advanced surface clocked ~36 KB of schema text; rc1's 8-tool
+surface lands ~23.5 KB — comfortably below the pain band — without
+giving up any of the operations a caller could perform at b13.
+
+The collapse uses two mode parameters (`mode`, `view`) and a small
+set of boolean branch selectors (`binary`, `main_page`, `cross_file`)
+to route within each consolidated tool. A small model that flattens
+a forbidden combination still gets a structured
+`tool_error("invalid_path_combination", ...)` envelope — handler-level
+validation is defense-in-depth for clients that don't honor
+JSON Schema `oneOf`.
+
+### Migration
+
+See [CHANGELOG.md](CHANGELOG.md) for the full v1.x / v2-beta → v2.0
+call-site map and the default-behavior changes you might silently
+break on if you don't read it (notably: `zim_get_section` adds
+`compact=True` default; `zim_metadata` no longer exposes
+`main_page_path`).
+
+### Validation
+
+The 8-tool surface was validated against the b13 22-tool baseline via
+a 300-probe dispatch eval on Qwen-2.5-7B-Instruct (the small-model
+deployment target). Gate outcome ships at
+`tests/dispatch_eval/gate_0b_decision.json`; drift between rc1's
+baked Python constants and the gate decision is caught by
+`tests/test_phase_f_gate_decision_consistency.py`.
+
 ## What's new in v1.2.0
 
 ### Compact mode for `zim_query` (default in simple mode)

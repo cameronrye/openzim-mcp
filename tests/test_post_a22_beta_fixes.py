@@ -547,30 +547,27 @@ class TestP1D4EntryPathDocstringBaitSweep:
         )
 
     def test_replacement_uses_entry_path_placeholder(self) -> None:
-        # Defensive: confirm the post-a22 replacement landed and uses
-        # the ``<entry_path>`` placeholder convention (mirrors the
-        # existing ``<zim_path>`` shape). A contributor adding a new
-        # entry_path-bearing tool sees the pattern and mirrors it.
-        structure_src = (
-            Path(__file__).resolve().parents[1]
-            / "openzim_mcp"
-            / "tools"
-            / "structure_tools.py"
-        ).read_text(encoding="utf-8")
-        content_src = (
-            Path(__file__).resolve().parents[1]
-            / "openzim_mcp"
-            / "tools"
-            / "content_tools.py"
-        ).read_text(encoding="utf-8")
-        assert "<entry_path>" in structure_src, (
-            "structure_tools.py docstrings should reference "
-            "``<entry_path>`` placeholder after the P1-D4 replacement."
-        )
-        assert "<entry_path>" in content_src, (
-            "content_tools.py docstrings should reference "
-            "``<entry_path>`` placeholder after the P1-D4 replacement."
-        )
+        # Phase F D12 collapsed structure_tools.py + content_tools.py
+        # into zim_get / zim_get_section / zim_links. The
+        # ``<entry_path>`` convention now lives in the per-tool
+        # description files. Confirm it survives the move.
+        import importlib.resources as resources
+
+        for description_file in (
+            "zim_get_description.md",
+            "zim_get_section_description.md",
+            "zim_links_description.md",
+        ):
+            src = (
+                resources.files("openzim_mcp.tools")
+                .joinpath(description_file)
+                .read_text(encoding="utf-8")
+            )
+            assert "entry_path" in src, (
+                f"{description_file} should reference the ``entry_path`` "
+                "parameter after the P1-D4 convention. Small models "
+                "speculatively invent paths otherwise."
+            )
 
 
 # ===========================================================================
@@ -591,12 +588,16 @@ class TestP1D5LimitNudgeEnumeratesAllAtomicIntents:
     """
 
     def test_summary_intent_listed(self) -> None:
-        # The zim_query tool docstring lives on an inner async def
-        # registered at runtime; easiest entrypoint is reading
-        # server.py source directly and asserting the ``limit:``
-        # enumeration block lists the three new atomic-intent markers.
-        src_path = Path(__file__).resolve().parents[1] / "openzim_mcp" / "server.py"
-        src = src_path.read_text(encoding="utf-8")
+        # Phase F D3 moved the zim_query description to a committed
+        # markdown file shipped with the wheel. Read it via
+        # importlib.resources so the test matches the runtime load path.
+        import importlib.resources as resources
+
+        src = (
+            resources.files("openzim_mcp.tools")
+            .joinpath("zim_query_description.md")
+            .read_text(encoding="utf-8")
+        )
         # Anchor on the docstring entry (``limit: Max search/browse
         # results``) rather than the bare ``limit:`` literal — the
         # latter also matches the parameter signature ``limit:

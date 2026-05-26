@@ -15,7 +15,9 @@ from .zim_operations import ZimOperations
 
 if TYPE_CHECKING:
     from .responses import ToolErrorPayload
+    from .server import OpenZimMcpServer
     from .tool_schemas import (
+        ArchiveMetadataResponse,
         ArticleStructureResponse,
         BatchEntryResponse,
         BinaryEntryResponse,
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
         SearchResponse,
         SearchSuggestionsResponse,
         SearchWithFiltersResponse,
+        ServerHealthResponse,
         TableOfContentsResponse,
         WalkNamespaceResponse,
         ZimMetadataResponse,
@@ -703,3 +706,84 @@ class AsyncZimOperations:
             max_chars=max_chars,
             include_subsections=include_subsections,
         )
+
+    # -----------------------------------------------------------------
+    # Phase F combined wrappers (Task D2)
+    #
+    # Each combined wrapper composes existing single-purpose data calls
+    # into the new combined response shape from tool_schemas.py
+    # (ArchiveMetadataResponse, ServerHealthResponse). The Phase F tools
+    # zim_metadata and zim_health register thin async functions that
+    # delegate here; the composition logic lives in one place so the
+    # legacy single-purpose tools and the combined Phase F tools can't
+    # drift.
+    # -----------------------------------------------------------------
+
+    async def get_archive_metadata_data(
+        self, zim_file_path: str
+    ) -> "ArchiveMetadataResponse":
+        """Combined ``zim_metadata`` response — M-namespace fields plus
+        list-form namespaces. Async-safe; defers both source calls to a
+        thread pool concurrently because they touch different archive
+        slices and run independently.
+        """
+        metadata_resp, namespaces_resp = await asyncio.gather(
+            asyncio.to_thread(self._ops.get_zim_metadata_data, zim_file_path),
+            asyncio.to_thread(self._ops.list_namespaces_data, zim_file_path),
+        )
+        # The legacy list_namespaces_data returns a dict keyed by namespace
+        # letter; the Phase F combined response wants a list with the letter
+        # carried as an explicit field so small models can iterate naturally.
+        ns_dict = namespaces_resp.get("namespaces", {})
+        namespaces_list: List[Dict[str, Any]] = []
+        for letter, summary in ns_dict.items():
+            entry: Dict[str, Any] = {"letter": letter}
+            entry.update(summary)
+            namespaces_list.append(entry)
+        # M-namespace fields are surfaced as a flat str→str map. The legacy
+        # ZimMetadataResponse.metadata_entries is dict[str, Any]; in practice
+        # libzim only emits str values for the M-namespace, so the cast is
+        # a tightening, not a lossy projection.
+        metadata_entries = metadata_resp.get("metadata_entries", {}) or {}
+        flat_metadata: Dict[str, str] = {k: str(v) for k, v in metadata_entries.items()}
+        return {
+            "metadata": flat_metadata,
+            "namespaces": namespaces_list,  # type: ignore[typeddict-item]
+            "_meta": {},
+        }
+
+    async def get_health_data(
+        self, server: "OpenZimMcpServer"
+    ) -> "ServerHealthResponse":
+        """Combined ``zim_health`` response — health + configuration +
+        loaded_archives in one envelope.
+
+        The health and configuration builders live in
+        ``tools/server_tools`` (the legacy registration site) so this
+        wrapper imports them lazily to avoid a circular dependency.
+        The legacy single-purpose ``get_server_health`` /
+        ``get_server_configuration`` tools call the same builders, so
+        the combined response stays in lockstep with the per-tool
+        responses by construction.
+        """
+        # The builders live in openzim_mcp.server_state — extracted there
+        # in Task D12 when the legacy tools/server_tools.py was deleted.
+        # Lazy import keeps server_state out of the module-level import
+        # graph (server_state itself imports tool_schemas, which routes
+        # back through async_operations during type-checking).
+        from .server_state import (
+            _build_configuration_report,
+            _build_health_report,
+        )
+
+        health, configuration, loaded_archives = await asyncio.gather(
+            asyncio.to_thread(_build_health_report, server),
+            asyncio.to_thread(_build_configuration_report, server),
+            asyncio.to_thread(self._ops.list_zim_files_data, None),
+        )
+        return {
+            "health": health,  # type: ignore[typeddict-item]
+            "configuration": configuration,  # type: ignore[typeddict-item]
+            "loaded_archives": loaded_archives,  # type: ignore[typeddict-item]
+            "_meta": {},
+        }

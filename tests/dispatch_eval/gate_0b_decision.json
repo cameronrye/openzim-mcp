@@ -1,0 +1,152 @@
+{
+  "gate_passed": true,
+  "default_tool_mode": "simple",
+  "criterion_c_path": "wired",
+  "gate_0_schema_shape": "flat",
+  "gate_0_3_verdict": "unvalidated",
+  "criteria": {
+    "A": {
+      "primary": {
+        "pass": true,
+        "delta_pp": 0.0
+      },
+      "secondary": {
+        "pass": true,
+        "delta_pp": 0.0,
+        "status": "unavailable"
+      },
+      "tertiary": {
+        "pass": true,
+        "delta_pp": 0.0,
+        "status": "unavailable"
+      },
+      "quaternary": {
+        "pass": true,
+        "delta_pp": 0.0,
+        "status": "unavailable"
+      }
+    },
+    "B": {
+      "primary": {
+        "pass": true,
+        "delta_pp": 0.0
+      },
+      "secondary": {
+        "pass": true,
+        "delta_pp": 0.0,
+        "status": "unavailable"
+      },
+      "tertiary": {
+        "pass": true,
+        "delta_pp": 0.0,
+        "status": "unavailable"
+      },
+      "quaternary": {
+        "pass": true,
+        "delta_pp": 0.0,
+        "status": "unavailable"
+      }
+    },
+    "C1": {
+      "pass": true,
+      "rate": 0.0,
+      "events": 1015
+    },
+    "C2": {
+      "pass": null,
+      "rate": null,
+      "events": 0,
+      "note": "underpowered (<10 events)"
+    },
+    "C3": {
+      "pass": true,
+      "rate": 0.0,
+      "events": 110
+    },
+    "D": {
+      "primary": {
+        "pass": true,
+        "delta_pp": 0.0
+      },
+      "secondary": {
+        "pass": true,
+        "delta_pp": 0.0,
+        "status": "unavailable"
+      },
+      "tertiary": {
+        "pass": true,
+        "delta_pp": 0.0,
+        "status": "unavailable"
+      },
+      "quaternary": {
+        "pass": true,
+        "delta_pp": 0.0,
+        "status": "unavailable"
+      }
+    },
+    "F1": {
+      "pass": true,
+      "per_class_deltas": {
+        "possessive": 97.3,
+        "Z1": 100.0,
+        "OPP-1": 95.24,
+        "filler-prose": 81.4,
+        "Z4": 82.76,
+        "Z2": 100.0,
+        "Z3": 95.45,
+        "Sub-pattern-C": 95.24
+      },
+      "failures": []
+    },
+    "F2": {
+      "pass": true,
+      "per_class_deltas": {
+        "zim_get-toc": 66.67,
+        "zim_get-batch": 90.0,
+        "zim_get-main-page": 52.0,
+        "zim_get-binary": 95.0,
+        "zim_get-summary": 0.0,
+        "zim_browse-walk": 100.0,
+        "zim_health": 100.0,
+        "zim_links-outbound": 90.91,
+        "zim_links-related": 45.45,
+        "zim_get-structure": 9.52,
+        "zim_browse-page": 100.0,
+        "zim_metadata": 80.0
+      },
+      "failures": []
+    }
+  },
+  "secondary_status": "unavailable",
+  "tertiary_status": "unavailable",
+  "quaternary_status": "unavailable",
+  "quaternary_model_substituted": null,
+  "primary_model_substituted": {
+    "canonical": "qwen-2.5-7b-instruct (vLLM)",
+    "actual": "Qwen3-8B-Q4_K_M.gguf (llama.cpp via chat.owl-atlas.ts.net)",
+    "reason": "vLLM is CUDA-only; operator's inference host is an Intel Mac i9 (no CUDA GPU). Qwen3-8B Q4_K_M GGUF runs locally via llama-server with MoltenVK; same Hermes-shape tool-call format as Qwen-2.5.",
+    "operator_notes": [
+      "llama-server --ubatch-size 256 (down from 512) required to prevent MoltenVK fence-watchdog crash at 2048-token first ubatch on advanced-mode (22-tool, 9.6K-token) prompts.",
+      "Caddy reverse_proxy needs response_header_timeout 1800s + keep_alive idle_timeout 1800s + probe_interval 30s + flush_interval -1; default header timeout is ~80s which 502s the 12-min cold-cache prompt encoding.",
+      "Trade-off: prompt-eval throughput ~13 tok/s vs ~50 tok/s pre-ubatch-256; generation throughput unchanged."
+    ]
+  },
+  "secondary_blocking_failures": [],
+  "secondary_observational_failures": [],
+  "tertiary_blocking_failures": [],
+  "tertiary_observational_failures": [],
+  "quaternary_blocking_failures": [],
+  "quaternary_observational_failures": [],
+  "fallback_c1_pass": null,
+  "fallback_c2_pass": null,
+  "fallback_c3_pass": null,
+  "scope_limitations": [
+    "probe-distribution: wikipedia-dominant",
+    "model-coverage: qwen-7b + llama-8b + phi-3.5-mini + haiku-4.5",
+    "size-range: 3.8B-8B (open-weights)",
+    "probe-language: english-only",
+    "rc1-description-rewrite: rc1 re-authored per-tool descriptions with explicit ALIASES/PARAMETERS/RESPONSE sections after Gate 0b ran on leaner prototype skeletons; total wire footprint grew 19,140B → 23,570B (+23%) while staying well below the 25KB MCP Tax pain band. prototype_schema_snapshot.json re-captured against rc1 to keep the D14b parity guard active. Stage E F2 enforcement on the 300-probe Gate 0b set is the post-hoc dispatch check covering the rewritten prose."
+  ],
+  "criterion_f1_class_failures": [],
+  "criterion_f2_class_failures": []
+}

@@ -871,15 +871,17 @@ class TestPD22DocstringExampleNoLongerBait:
     def test_zim_query_docstring_emphasises_omit_to_auto_select(
         self,
     ) -> None:
-        import inspect
+        # Phase F D3 moved the zim_query docstring out of server.py
+        # into a committed description file shipped with the wheel.
+        import importlib.resources as resources
 
-        import openzim_mcp.server as server_mod
-
-        source = inspect.getsource(server_mod)
-        # Match phrasing that primes the model toward the canonical
-        # omit-to-auto-select default rather than path invention.
+        source = (
+            resources.files("openzim_mcp.tools")
+            .joinpath("zim_query_description.md")
+            .read_text(encoding="utf-8")
+        )
         assert "Omit entirely" in source, (
-            "Docstring should lead with 'Omit entirely' for the "
+            "Description file should lead with 'Omit entirely' for the "
             "zim_file_path parameter to nudge small models toward the "
             "canonical default."
         )
