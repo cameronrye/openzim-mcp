@@ -75,7 +75,7 @@
       ],
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": false,
-      "draft": false,
+      "draft": true,
       "prerelease": false,
       "draft-pull-request": false,
       "include-component-in-tag": false,
