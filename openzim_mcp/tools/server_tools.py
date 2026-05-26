@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union, cast
 from ..constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
 from ..responses import ToolErrorPayload, tool_error
 from ..security import redact_paths_in_message, sanitize_path_for_error
-from ..tool_schemas import ServerConfigurationResponse, ServerHealthResponse
+from ..tool_schemas import ServerConfigurationResponse, HealthStatus
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -34,13 +34,13 @@ def register_server_tools(server: "OpenZimMcpServer") -> None:
 
 def _register_get_server_health(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool()
-    async def get_server_health() -> Union[ServerHealthResponse, ToolErrorPayload]:
+    async def get_server_health() -> Union[HealthStatus, ToolErrorPayload]:
         """Get comprehensive server health and statistics.
 
         Includes cache performance, directory health, and recommendations.
 
         Returns:
-            ``ServerHealthResponse``-shaped dict on success; ``ToolErrorPayload``
+            ``HealthStatus``-shaped dict on success; ``ToolErrorPayload``
             envelope on failure (see ``responses.tool_error``).
         """
         return await asyncio.to_thread(_build_health_report, server)
@@ -198,7 +198,7 @@ def _build_uptime_info(server: "OpenZimMcpServer") -> Dict[str, Any]:
 
 def _build_health_report(
     server: "OpenZimMcpServer",
-) -> Union[ServerHealthResponse, ToolErrorPayload]:
+) -> Union[HealthStatus, ToolErrorPayload]:
     try:
         cache_stats = server.cache.stats()
         recommendations: List[str] = []
@@ -250,7 +250,7 @@ def _build_health_report(
             health_info, accessible_dirs, total_zim_files, warnings, recommendations
         )
 
-        return cast(ServerHealthResponse, health_info)
+        return cast(HealthStatus, health_info)
 
     except Exception as e:
         logger.error(f"Error getting server health: {e}")
