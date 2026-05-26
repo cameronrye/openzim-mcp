@@ -78,6 +78,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -441,8 +442,12 @@ def _resolve_zim_dir() -> str:
     if explicit:
         return explicit
     # Boot-time-only fallback; tools that touch real archives will return
-    # empty results.
-    return os.environ.get("OZM_DISPATCH_ZIM_DIR_FALLBACK", "/tmp")
+    # empty results. Per-process unique temp dir avoids the strict "publicly
+    # writable directory" finding static analyzers raise on bare /tmp.
+    fallback = os.environ.get("OZM_DISPATCH_ZIM_DIR_FALLBACK")
+    if fallback:
+        return fallback
+    return tempfile.mkdtemp(prefix="openzim_mcp_dispatch_fallback_")
 
 
 def _spawn_mcp_server(variant: str, mode: str) -> subprocess.Popen:

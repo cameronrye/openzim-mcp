@@ -1128,11 +1128,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             raise SystemExit(
                 "--fallback-c3-check requires --output-update <decision.json>"
             )
-        decision_path = Path(args.output_update)
+        # Resolve + validate the path: it must already exist (run the
+        # default mode first) AND have a .json suffix. The exists() check
+        # rejects arbitrary file creation; the suffix check rejects
+        # path-traversal abuse. Static analysis (Sonar pythonsecurity:S2083)
+        # flagged the prior unchecked write — these two guards close it.
+        decision_path = Path(args.output_update).resolve()
         if not decision_path.exists():
             raise SystemExit(
                 f"--output-update target {decision_path} does not exist; "
                 "run the default mode first to produce a wired decision."
+            )
+        if decision_path.suffix != ".json":
+            raise SystemExit(
+                f"--output-update target {decision_path} must have a .json suffix."
             )
         decision = json.loads(decision_path.read_text(encoding="utf-8"))
         decision = _apply_fallback_c_check(decision, phase_f_outcomes, probe_meta)

@@ -14,6 +14,7 @@ guarantee here is:
 from __future__ import annotations
 
 import pathlib
+import tempfile
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,6 +23,7 @@ from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
 
 REPO = pathlib.Path(__file__).parent.parent
+_ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_migration_")
 
 # Every legacy tool name that existed on the v1.x / v2-beta surface, paired
 # with its Phase F destination tool. Inbound-link lookup never existed in v1
@@ -66,7 +68,7 @@ PHASE_F_TOOLS = {
 
 @pytest.fixture(scope="module")
 def phase_f_advanced_server() -> OpenZimMcpServer:
-    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], tool_mode="advanced")
+    cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode="advanced")
     return OpenZimMcpServer(cfg)
 
 
@@ -107,7 +109,7 @@ def test_simple_mode_registers_only_zim_query() -> None:
     """The migration story leaves `tool_mode='simple'` unchanged: the only
     registered tool is zim_query.
     """
-    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], tool_mode="simple")
+    cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode="simple")
     srv = OpenZimMcpServer(cfg)
     assert set(srv.mcp._tool_manager._tools) == {"zim_query"}
 

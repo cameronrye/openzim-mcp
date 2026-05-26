@@ -10,6 +10,7 @@ constants in this commit; the decision JSON ships only under ``tests/``.
 
 import json
 import pathlib
+import tempfile
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
@@ -17,6 +18,10 @@ from openzim_mcp.server import OpenZimMcpServer
 GATE_DECISION_PATH = (
     pathlib.Path(__file__).parent / "dispatch_eval" / "gate_0b_decision.json"
 )
+
+# Per-process unique dir; avoids the "publicly writable directory" flag that
+# strict static analyzers raise on bare /tmp usage in test code.
+_ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_budget_")
 
 # Budget caps are baked from the rc1-re-snapshotted baseline (see
 # ``tests/dispatch_eval/prototype_schema_snapshot.json`` and the
@@ -39,7 +44,7 @@ ALLOCATION = {
 
 
 def _measure_tools(mode: str) -> dict[str, int]:
-    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], tool_mode=mode)
+    cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode=mode)
     srv = OpenZimMcpServer(cfg)
     return {
         name: len(

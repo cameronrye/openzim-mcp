@@ -9,6 +9,7 @@ so a future refactor doesn't silently change the gating math.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional
 
 from tests.dispatch_eval.analyze import (
@@ -118,7 +119,7 @@ def test_non_inferiority_passes_when_phase_f_matches_b13() -> None:
     assert verdicts["A"]["pass"] is True
     assert verdicts["B"]["pass"] is True
     assert verdicts["D"]["pass"] is True
-    assert verdicts["A"]["delta_pp"] == 0.0
+    assert math.isclose(verdicts["A"]["delta_pp"], 0.0)
 
 
 # --------------------------------------------------------------------------
@@ -705,7 +706,7 @@ def test_secondary_f1_f2_failure_is_observational_not_blocking() -> None:
 def test_non_inferiority_test_handles_empty_cells() -> None:
     """Both cells empty → return delta=0, fall back to delta>=-margin check."""
     p, delta = non_inferiority_test(0, 0, 0, 0, 0.05)
-    assert delta == 0.0
+    assert math.isclose(delta, 0.0)
     assert p is True  # 0 >= -0.05
 
 
@@ -720,7 +721,7 @@ def test_non_inferiority_test_handles_exact_match() -> None:
     """
     p, delta = non_inferiority_test(270, 300, 270, 300, 0.05)
     assert p is True
-    assert delta == 0.0
+    assert math.isclose(delta, 0.0)
 
 
 def test_disagreement_rule_primary_d_failure_blocks() -> None:

@@ -11,11 +11,13 @@ file without updating the production constants will trip this test.
 import json
 import pathlib
 import re
+import tempfile
 
 REPO = pathlib.Path(__file__).parent.parent
 DECISION = json.loads(
     (REPO / "tests" / "dispatch_eval" / "gate_0b_decision.json").read_text()
 )
+_ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_gate_consistency_")
 
 
 def test_zim_search_criterion_c_path_matches_decision():
@@ -55,7 +57,7 @@ def test_schema_shape_consistent_with_decision():
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.server import OpenZimMcpServer
 
-    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], tool_mode="advanced")
+    cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode="advanced")
     srv = OpenZimMcpServer(cfg)
     expected_wired = DECISION["gate_0_schema_shape"] == "wired_oneof"
     for name in ("zim_search", "zim_get"):

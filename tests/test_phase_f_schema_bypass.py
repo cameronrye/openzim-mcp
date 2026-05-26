@@ -14,15 +14,19 @@ others out), this list must be extended.
 
 from __future__ import annotations
 
+import tempfile
+
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
 
+_ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_bypass_")
+
 
 @pytest.fixture(scope="module")
 def phase_f_server() -> OpenZimMcpServer:
-    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], tool_mode="advanced")
+    cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode="advanced")
     return OpenZimMcpServer(cfg)
 
 

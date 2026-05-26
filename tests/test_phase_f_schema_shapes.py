@@ -10,6 +10,7 @@ at test time only. Production code does NOT read this JSON at runtime.
 
 import json
 import pathlib
+import tempfile
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
@@ -19,9 +20,11 @@ DECISION_PATH = (
 )
 SCHEMA_SHAPE = json.loads(DECISION_PATH.read_text())["gate_0_schema_shape"]
 
+_ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_shapes_")
+
 
 def _get_tool_schema(name: str) -> str:
-    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], tool_mode="advanced")
+    cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode="advanced")
     srv = OpenZimMcpServer(cfg)
     return json.dumps(srv.mcp._tool_manager._tools[name].parameters)
 

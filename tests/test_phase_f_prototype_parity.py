@@ -26,6 +26,7 @@ post-hoc dispatch check covering the re-snapshotted surface.
 
 import json
 import pathlib
+import tempfile
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
@@ -35,10 +36,11 @@ SNAPSHOT_PATH = (
 )
 BYTE_TOLERANCE = 0.05  # ±5%
 DESCRIPTION_EDIT_DISTANCE_TOLERANCE = 0.30  # ≤30% Levenshtein / max(len_a, len_b)
+_ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_prototype_parity_")
 
 
 def _rc1_footprints() -> dict[str, dict]:
-    cfg = OpenZimMcpConfig(allowed_directories=["/tmp"], tool_mode="advanced")
+    cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode="advanced")
     srv = OpenZimMcpServer(cfg)
     out = {}
     for name, tool in srv.mcp._tool_manager._tools.items():
