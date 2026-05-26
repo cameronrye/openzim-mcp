@@ -7,7 +7,7 @@ records per-probe outcomes to a JSONL file.
 USAGE (Cameron runs this — the present module builds the harness only):
 
     python tests/dispatch_eval/runner.py \\
-      --variant {b13,phase-f,phase-f-fallback} \\
+      --variant {b13,rc1,phase-f,phase-f-fallback} \\
       --mode {simple,advanced} \\
       --model {qwen2.5-7b-instruct,haiku-4.5,llama-3.1-8b-instruct, \\
                phi-3.5-mini-instruct,qwen-2.5-3b-instruct} \\
@@ -19,12 +19,20 @@ Variant semantics:
   - ``b13``    — runs against whichever surface is active in the current
                  working tree (no env overrides). Operator invokes this from
                  a worktree at the ``v2.0.0b13`` tag.
+  - ``rc1``    — runs against whichever surface is active in the current
+                 working tree (no env overrides). Operator invokes this from
+                 a worktree at the ``v2.0.0rc1`` tag (or ``main`` after rc1
+                 merged). Structurally identical to b13's empty-overlay path;
+                 the variant label distinguishes the cell for Stage E A/B
+                 comparison.
   - ``phase-f`` — sets ``OZM_PHASE_F_PROTOTYPE=1`` and ``OZM_TOOL_MODE=<mode>``
-                 in the spawned MCP server's env. Drives the prototype
-                 skeleton.
+                 in the spawned MCP server's env. Drives the throwaway
+                 prototype skeleton — Gate 0b only.
   - ``phase-f-fallback`` — like ``phase-f`` but ALSO sets
-                 ``OZM_CRITERION_C_PATH=fallback`` so ``zim_search`` swaps to
-                 the legibility-fallback description.
+                 ``OZM_CRITERION_C_PATH=fallback`` so the prototype's
+                 ``zim_search`` swaps to the legibility-fallback description.
+                 rc1's ``_CRITERION_C_PATH`` is a baked Python constant; a
+                 Stage E fallback re-run would require a code amend.
 
 Per-model adapter table:
 
@@ -106,7 +114,7 @@ DEFAULT_TEMPERATURE = float(os.environ.get("OZM_DISPATCH_TEMPERATURE", "0.2"))
 PER_REP_TIMEOUT_S = float(os.environ.get("OZM_DISPATCH_TIMEOUT_S", "30"))
 MAX_RETRIES = 3
 
-VALID_VARIANTS = {"b13", "phase-f", "phase-f-fallback"}
+VALID_VARIANTS = {"b13", "phase-f", "phase-f-fallback", "rc1"}
 VALID_MODES = {"simple", "advanced"}
 
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "system_prompt.md"
@@ -412,8 +420,17 @@ def _build_server_env(variant: str, mode: str) -> Dict[str, str]:
     """Return the env-var overlay for an MCP server subprocess.
 
     - b13: empty overlay; the working tree's surface is whatever's at HEAD.
-    - phase-f: OZM_PHASE_F_PROTOTYPE=1, OZM_TOOL_MODE=<mode>.
-    - phase-f-fallback: + OZM_CRITERION_C_PATH=fallback.
+      Operator invokes from a worktree at the ``v2.0.0b13`` tag.
+    - rc1: empty overlay; the working tree's surface is whatever's at HEAD.
+      Operator invokes from a worktree at the ``v2.0.0rc1`` tag (or main
+      after rc1 merged). Structurally identical to b13's empty-overlay path
+      — the variant label only affects output filenames + scoring cell
+      identification, so a Stage E sweep can compare b13 vs rc1 runs.
+    - phase-f: OZM_PHASE_F_PROTOTYPE=1, OZM_TOOL_MODE=<mode> (drives the
+      throwaway prototype branch — used only for Gate 0b).
+    - phase-f-fallback: + OZM_CRITERION_C_PATH=fallback (prototype's
+      fallback cell; rc1 does NOT read this env var because the constant
+      is baked in — fallback re-runs at Stage E require a code amend).
     """
     env = os.environ.copy()
     if variant == "phase-f":
@@ -423,9 +440,9 @@ def _build_server_env(variant: str, mode: str) -> Dict[str, str]:
         env["OZM_PHASE_F_PROTOTYPE"] = "1"
         env["OZM_TOOL_MODE"] = mode
         env["OZM_CRITERION_C_PATH"] = "fallback"
-    # b13: no overlay — operator must invoke from a v2.0.0b13 worktree, the
-    # surface there is the default. We still pass the requested mode so the
-    # b13 server boots in the right tool set.
+    # b13 / rc1: no overlay — the surface there is the working tree's
+    # default. We still pass the requested mode so the spawned server
+    # boots in the right tool set.
     env["OPENZIM_MCP_TOOL_MODE"] = mode
     return env
 
