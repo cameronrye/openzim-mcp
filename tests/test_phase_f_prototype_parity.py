@@ -61,7 +61,9 @@ def _strip_descriptions(schema):
     """Walk inputSchema dict and drop ``description`` fields so the structural
     comparison ignores prose."""
     if isinstance(schema, dict):
-        return {k: _strip_descriptions(v) for k, v in schema.items() if k != "description"}
+        return {
+            k: _strip_descriptions(v) for k, v in schema.items() if k != "description"
+        }
     if isinstance(schema, list):
         return [_strip_descriptions(item) for item in schema]
     return schema

@@ -25,9 +25,7 @@ def test_zim_search_criterion_c_path_matches_decision():
         r'_CRITERION_C_PATH\s*:\s*Literal\[[^\]]+\]\s*=\s*"(wired|fallback)"',
         source,
     )
-    assert match is not None, (
-        "_CRITERION_C_PATH constant not found in zim_search.py"
-    )
+    assert match is not None, "_CRITERION_C_PATH constant not found in zim_search.py"
     assert match.group(1) == DECISION["criterion_c_path"], (
         f"Drift: zim_search.py has _CRITERION_C_PATH={match.group(1)!r} but "
         f"gate decision says criterion_c_path={DECISION['criterion_c_path']!r}. "

@@ -209,6 +209,6 @@ def test_zim_query_compact_signature_default_is_true(
     sig = inspect.signature(tool.fn)
     compact_param = sig.parameters.get("compact")
     assert compact_param is not None, "zim_query must accept `compact`"
-    assert compact_param.default is True, (
-        f"zim_query.compact default must be True; got {compact_param.default!r}"
-    )
+    assert (
+        compact_param.default is True
+    ), f"zim_query.compact default must be True; got {compact_param.default!r}"

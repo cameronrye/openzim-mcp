@@ -84,9 +84,9 @@ def test_per_tool_allocations():
 
 def test_simple_mode_only_registers_zim_query():
     bytes_by_tool = _measure_tools("simple")
-    assert set(bytes_by_tool) == {"zim_query"}, (
-        f"simple mode must register only zim_query; got {set(bytes_by_tool)}"
-    )
+    assert set(bytes_by_tool) == {
+        "zim_query"
+    }, f"simple mode must register only zim_query; got {set(bytes_by_tool)}"
 
 
 def test_gate_decision_criterion_d_passed():
