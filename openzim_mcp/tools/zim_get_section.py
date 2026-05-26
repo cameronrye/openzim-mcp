@@ -1,11 +1,20 @@
 """zim_get_section — fetch one named section of an article.
 
 Phase F renames Phase C's ``get_section`` to ``zim_get_section`` and
-adds ``compact``/``compact_budget`` parameters with ``compact=True``
-default (behavior break from Phase C's raw-text default, documented
-in the migration table). The data layer
-(``zim_operations.get_section_data``) and response shape
-(``GetSectionResponse``) are unchanged.
+adds ``compact`` / ``compact_budget`` parameters for surface uniformity
+with the rest of the family (``zim_query`` / ``zim_get`` /
+``zim_get_section``). At v2.0 both parameters are **no-ops at the
+data layer** — ``get_section_data`` reads the bundle's
+``rendered_markdown`` which is always compact-rendered (see
+``openzim_mcp/bundle.py`` line 300+: compact rendering keeps the
+section slice shape identical to ``get_zim_entry`` for UX
+consistency, a load-bearing invariant of the v1.x → v2.0 rename).
+v2.5 #18 will wire a true raw-text path; until then, ``compact=True``
+and ``compact=False`` produce identical responses, and the migration
+from legacy ``get_section`` is **behavior-preserving** (rename only).
+
+The data layer (``zim_operations.get_section_data``) and response
+shape (``GetSectionResponse``) are unchanged from Phase C.
 """
 
 from __future__ import annotations
@@ -46,13 +55,12 @@ def register(server: "OpenZimMcpServer") -> None:
                     operation="invalid_section",
                     message="`section_id` is required and cannot be empty.",
                 )
-            # The legacy get_section_data signature didn't accept compact /
-            # compact_budget — those are surface-level shape params on
-            # zim_get_section. The handler honors them by passing
-            # max_chars through and letting the caller's compact_budget
-            # narrow the result in the calling LLM's rendering layer
-            # (no server-side post-processing yet — the legacy raw shape
-            # is what get_section_data returns).
+            # `compact` / `compact_budget` are surface-uniformity params;
+            # at v2.0 they are no-ops at the data layer because the bundle
+            # is always compact-rendered (see module docstring). The
+            # parameters stay on the surface so callers can adopt the
+            # zim_get_section shape today and v2.5 #18 can wire the
+            # raw-text path without another rename.
             return await ops.get_section_data(
                 zim_file_path,
                 entry_path,

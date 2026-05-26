@@ -163,10 +163,11 @@ def test_zim_get_section_compact_signature_default_is_true(
     phase_f_advanced_server: OpenZimMcpServer,
 ) -> None:
     """zim_get_section's `compact` parameter must default to True at the
-    function signature — the v2.0 surface contract called out in the
-    migration story as a silent break. (Whether the data layer threads the
-    flag through to a compactor is a separate behavior contract; the
-    migration conformance test pins only the surface default.)
+    function signature — surface-uniformity contract with `zim_query` /
+    `zim_get_section`'s sibling tools. At v2.0 the parameter is a no-op at
+    the data layer (bundle is always compact-rendered for UX consistency
+    with `get_zim_entry`); v2.5 #18 will wire a true raw-text path. This
+    test pins the surface default so v2.5 callers can keep relying on it.
     """
     import inspect
 

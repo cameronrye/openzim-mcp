@@ -67,7 +67,7 @@ mapping is mechanical:
 | `get_entry_summary(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="summary")` |
 | `get_table_of_contents(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="toc")` |
 | `get_article_structure(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="structure")` |
-| `get_section(path, entry_path, section_id)` | `zim_get_section(path, entry_path, section_id)` — **note:** `compact` parameter is **new** and defaults to `True`; pass `compact=False` to preserve the pre-Phase-F raw-text response shape |
+| `get_section(path, entry_path, section_id)` | `zim_get_section(path, entry_path, section_id)` — rename only. `compact` parameter added for surface uniformity (default `True`) but is a no-op at v2.0; v2.5 #18 wires a true raw-text path. Same response shape as legacy `get_section`. |
 | `browse_namespace(path, namespace)` | `zim_browse(path, namespace)` |
 | `walk_namespace(path, namespace)` | `zim_browse(path, namespace, mode="walk")` |
 | `extract_article_links(path, entry_path)` | `zim_links(path, entry_path)` |
@@ -77,10 +77,6 @@ mapping is mechanical:
 
 ### Default behavior changes (silent breaks if not handled)
 
-- **`zim_get_section` adds a `compact` parameter that defaults to
-  `True`.** The legacy `get_section` returned raw text; the renamed
-  `zim_get_section` returns compacted text. Pass `compact=False`
-  to preserve the pre-Phase-F shape.
 - **`zim_metadata` no longer exposes `main_page_path`.** Callers who
   used it to construct an explicit `entry_path` round-trip to
   `zim_get` should switch to `zim_get(path, main_page=True)` — a
@@ -92,6 +88,14 @@ mapping is mechanical:
 The `zim_get` rename from `get_zim_entry` is **behavior-preserving**
 on the `compact` axis (default is `False`, matching legacy). v2.5
 will revisit the `zim_get` default once telemetry shows adoption.
+
+`zim_get_section` adds a `compact` parameter for surface uniformity
+with the rest of the family, but at v2.0 it is a **no-op at the data
+layer** — the bundle is always compact-rendered (see
+`openzim_mcp/bundle.py` line 300+: load-bearing UX invariant that
+section slices match `get_zim_entry` output on the same article).
+v2.5 #18 wires a true raw-text path. Until then, the rename from
+`get_section` is **behavior-preserving** despite the new parameter.
 
 ### Schema shape
 
