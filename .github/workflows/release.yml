@@ -325,6 +325,31 @@ jobs:
 
           echo "✅ Assets uploaded to release $TAG_NAME"
 
+      - name: Publish draft release
+        # release-please creates the release shell as a draft
+        # (release-please-config.json#draft=true). On repos with immutable
+        # releases enabled, assets can only be uploaded to a draft — once a
+        # release is published, GitHub locks its asset list. This step flips
+        # the draft to published *after* the upload step above has run, so
+        # the final release ends up with both the changelog body
+        # (release-please) and the dist artifacts (this workflow).
+        if: steps.check-release.outputs.release_exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${{ steps.tag.outputs.tag_name }}"
+          # Verify it's actually a draft before flipping — release-please
+          # may have already published it, or someone may have manually
+          # published it. Either way, "edit --draft=false" on an already-
+          # published release is a no-op, so this is safe.
+          if gh release view "$TAG_NAME" --json isDraft --jq .isDraft | grep -qi true; then
+            echo "🚀 Publishing draft release: $TAG_NAME"
+            gh release edit "$TAG_NAME" --draft=false
+            echo "✅ Release $TAG_NAME published"
+          else
+            echo "ℹ️  Release $TAG_NAME is already published — nothing to do"
+          fi
+
       - name: Create new release
         if: steps.check-release.outputs.release_exists != 'true'
         uses: softprops/action-gh-release@v3
