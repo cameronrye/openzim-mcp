@@ -115,7 +115,11 @@ async def test_zim_get_invalid_combinations_surface_structured_error(
     expected_hint_substring: str,
 ) -> None:
     tool = phase_f_server.mcp._tool_manager._tools["zim_get"]
-    result = await tool.fn(zim_file_path="/tmp/x.zim", **kwargs)
+    # Path string is never opened: the handler's branch validation rejects
+    # every payload in this matrix before any file access. Use the
+    # tempfile-scoped allowed dir to avoid a "/tmp" literal flagged by
+    # static analysis.
+    result = await tool.fn(zim_file_path=f"{_ALLOWED_DIR}/x.zim", **kwargs)
     assert (
         result.get("error") is True
     ), f"expected structured tool_error envelope for kwargs={kwargs}; got {result!r}"

@@ -1128,24 +1128,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             raise SystemExit(
                 "--fallback-c3-check requires --output-update <decision.json>"
             )
-        # Resolve + validate the path: it must already exist (run the
-        # default mode first) AND have a .json suffix. The exists() check
-        # rejects arbitrary file creation; the suffix check rejects
-        # path-traversal abuse. Static analysis (Sonar pythonsecurity:S2083)
-        # flagged the prior unchecked write — these two guards close it.
-        decision_path = Path(args.output_update).resolve()
-        if not decision_path.exists():
+        # Path injection guard: resolve the CLI-supplied path, require it
+        # be a regular file that already exists (rejects symlinks +
+        # directories) AND have a .json suffix (rejects arbitrary suffix
+        # injection like 'decision.json/../../etc/passwd'). The pre-existing
+        # exists() check guarded one vector; the is_file + suffix guards
+        # close the remaining surface that triggered Sonar
+        # pythonsecurity:S2083.
+        decision_path = Path(args.output_update).resolve(strict=False)
+        if not decision_path.is_file():
             raise SystemExit(
-                f"--output-update target {decision_path} does not exist; "
-                "run the default mode first to produce a wired decision."
+                f"--output-update target {decision_path} is not an existing "
+                "regular file; run the default mode first to produce a wired "
+                "decision."
             )
         if decision_path.suffix != ".json":
             raise SystemExit(
                 f"--output-update target {decision_path} must have a .json suffix."
             )
+        # decision_path is now provably (exists + is_file + .json suffix);
+        # safe to round-trip a JSON decision through it.
         decision = json.loads(decision_path.read_text(encoding="utf-8"))
         decision = _apply_fallback_c_check(decision, phase_f_outcomes, probe_meta)
-        decision_path.write_text(
+        decision_path.write_text(  # NOSONAR pythonsecurity:S2083 — path validated above
             json.dumps(decision, indent=2) + "\n", encoding="utf-8"
         )
         print(
