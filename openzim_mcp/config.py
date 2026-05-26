@@ -290,8 +290,11 @@ class OpenZimMcpConfig(BaseSettings):
     tool_mode: Literal["advanced", "simple"] = Field(
         default="simple",
         description=(
-            "Tool mode: 'advanced' for all 21 tools, "
-            "'simple' for 1 intelligent natural-language tool (zim_query)"
+            "Tool registration mode. "
+            "'simple' (default) registers only zim_query — the NL entry point. "
+            "'advanced' registers the full 8-tool Phase F surface: zim_query, "
+            "zim_search, zim_get, zim_get_section, zim_browse, zim_metadata, "
+            "zim_links, zim_health."
         ),
     )
     transport: Literal["stdio", "http", "sse"] = Field(
