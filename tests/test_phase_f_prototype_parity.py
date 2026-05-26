@@ -92,7 +92,7 @@ def _normalized_edit_distance(a: str, b: str) -> float:
 
 
 def test_prototype_parity_byte_budget():
-    snapshot = json.loads(SNAPSHOT_PATH.read_text())
+    snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
     rc1 = _rc1_footprints()
     failures = []
     for name, proto in snapshot.items():
@@ -114,7 +114,7 @@ def test_prototype_parity_byte_budget():
 
 
 def test_prototype_parity_input_schema_shape():
-    snapshot = json.loads(SNAPSHOT_PATH.read_text())
+    snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
     rc1 = _rc1_footprints()
     failures = []
     for name, proto in snapshot.items():
@@ -137,7 +137,7 @@ def test_prototype_parity_description_edit_distance():
     typical grammar/clarity edits land 5–10%; anything past 30% means the
     description was meaningfully rewritten and the measurement is stale.
     """
-    snapshot = json.loads(SNAPSHOT_PATH.read_text())
+    snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
     rc1 = _rc1_footprints()
     failures = []
     for name, proto in snapshot.items():
@@ -162,7 +162,7 @@ def test_prototype_snapshot_covers_all_rc1_tools():
     """A new tool added to rc1 without a snapshot entry would silently slip
     parity. Pin parity coverage to the full rc1 surface.
     """
-    snapshot = json.loads(SNAPSHOT_PATH.read_text())
+    snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
     rc1 = _rc1_footprints()
     missing = set(rc1) - set(snapshot)
     assert not missing, (

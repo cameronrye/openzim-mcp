@@ -15,14 +15,18 @@ import tempfile
 
 REPO = pathlib.Path(__file__).parent.parent
 DECISION = json.loads(
-    (REPO / "tests" / "dispatch_eval" / "gate_0b_decision.json").read_text()
+    (REPO / "tests" / "dispatch_eval" / "gate_0b_decision.json").read_text(
+        encoding="utf-8"
+    )
 )
 _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_gate_consistency_")
 
 
 def test_zim_search_criterion_c_path_matches_decision():
     """zim_search.py's _CRITERION_C_PATH constant matches gate's criterion_c_path."""
-    source = (REPO / "openzim_mcp" / "tools" / "zim_search.py").read_text()
+    source = (REPO / "openzim_mcp" / "tools" / "zim_search.py").read_text(
+        encoding="utf-8"
+    )
     match = re.search(
         r'_CRITERION_C_PATH\s*:\s*Literal\[[^\]]+\]\s*=\s*"(wired|fallback)"',
         source,
@@ -37,7 +41,7 @@ def test_zim_search_criterion_c_path_matches_decision():
 
 def test_config_tool_mode_default_is_simple():
     """config.py's tool_mode Field default matches gate's default_tool_mode."""
-    source = (REPO / "openzim_mcp" / "config.py").read_text()
+    source = (REPO / "openzim_mcp" / "config.py").read_text(encoding="utf-8")
     match = re.search(
         r'tool_mode\s*:\s*Literal\[[^\]]+\]\s*=\s*Field\s*\(\s*default\s*=\s*"(\w+)"',
         source,

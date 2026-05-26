@@ -18,7 +18,9 @@ from openzim_mcp.server import OpenZimMcpServer
 DECISION_PATH = (
     pathlib.Path(__file__).parent / "dispatch_eval" / "gate_0b_decision.json"
 )
-SCHEMA_SHAPE = json.loads(DECISION_PATH.read_text())["gate_0_schema_shape"]
+SCHEMA_SHAPE = json.loads(DECISION_PATH.read_text(encoding="utf-8"))[
+    "gate_0_schema_shape"
+]
 
 _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_shapes_")
 

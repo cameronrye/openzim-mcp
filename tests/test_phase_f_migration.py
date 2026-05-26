@@ -93,7 +93,7 @@ def test_changelog_documents_every_legacy_name(legacy_name: str) -> None:
     """The rc1 CHANGELOG entry must reference every legacy tool name so a
     migrating user can grep for their current call and find the mapping.
     """
-    changelog = (REPO / "CHANGELOG.md").read_text()
+    changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
     # Find the rc1 section bounds.
     rc1_start = changelog.find("## [2.0.0rc1]")
     assert rc1_start >= 0, "v2.0.0rc1 section not found in CHANGELOG.md"

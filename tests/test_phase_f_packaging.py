@@ -22,6 +22,7 @@ import pytest
 
 def test_zim_query_description_packaged() -> None:
     """The b13 zim_query description ships verbatim with the wheel."""
+    contents = ""
     try:
         ref = resources.files("openzim_mcp.tools").joinpath("zim_query_description.md")
         contents = ref.read_text(encoding="utf-8")

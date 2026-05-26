@@ -95,7 +95,7 @@ def test_simple_mode_only_registers_zim_query():
 
 
 def test_gate_decision_criterion_d_passed():
-    decision = json.loads(GATE_DECISION_PATH.read_text())
+    decision = json.loads(GATE_DECISION_PATH.read_text(encoding="utf-8"))
     assert decision["gate_passed"] is True
     assert decision["criteria"]["D"]["primary"]["pass"] is True
     # Secondary, tertiary, and quaternary are conditional on availability.
@@ -108,12 +108,12 @@ def test_gate_decision_criterion_d_passed():
 
 
 def test_gate_decision_default_tool_mode_is_simple():
-    decision = json.loads(GATE_DECISION_PATH.read_text())
+    decision = json.loads(GATE_DECISION_PATH.read_text(encoding="utf-8"))
     assert decision["default_tool_mode"] == "simple"
 
 
 def test_gate_decision_criterion_c_path_known_value():
-    decision = json.loads(GATE_DECISION_PATH.read_text())
+    decision = json.loads(GATE_DECISION_PATH.read_text(encoding="utf-8"))
     assert decision["criterion_c_path"] in {"wired", "fallback"}
     # Fallback path is only valid if ALL of fallback_c1_pass, fallback_c2_pass,
     # fallback_c3_pass are True — the legibility fix must reduce routing harm
@@ -142,7 +142,7 @@ def test_gate_decision_scope_limitations_documented():
     Gate 0b under different conditions (different probe set, different model
     coverage, different language) and forgets to update scope_limitations.
     """
-    decision = json.loads(GATE_DECISION_PATH.read_text())
+    decision = json.loads(GATE_DECISION_PATH.read_text(encoding="utf-8"))
     limitations = decision.get("scope_limitations", [])
     assert isinstance(limitations, list) and limitations, (
         "gate_0b_decision.json must include a non-empty scope_limitations list. "
