@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union, cast
 from ..constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
 from ..responses import ToolErrorPayload, tool_error
 from ..security import redact_paths_in_message, sanitize_path_for_error
-from ..tool_schemas import ServerConfigurationResponse, HealthStatus
+from ..tool_schemas import HealthStatus, ServerConfigurationResponse
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer

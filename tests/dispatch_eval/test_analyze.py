@@ -19,6 +19,7 @@ from tests.dispatch_eval.analyze import (
     F1_CEILING,
     F2_CEILING,
     PRIMARY_MARGIN,
+    Outcome,
     _apply_fallback_c_check,
     _build_gate_decision,
     aggregate_cell,
@@ -30,7 +31,6 @@ from tests.dispatch_eval.analyze import (
     criterion_f1,
     criterion_f2,
     non_inferiority_test,
-    Outcome,
 )
 
 # --------------------------------------------------------------------------

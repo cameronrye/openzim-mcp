@@ -196,7 +196,10 @@ def build_flat_variant_schemas() -> Tuple[Dict[str, Any], Dict[str, Any]]:
                 "max_content_length": {"type": ["integer", "null"], "default": None},
                 "content_offset": {"type": "integer", "default": 0},
                 "compact": {"type": "boolean", "default": False},
-                "compact_budget": {"type": ["string", "integer", "null"], "default": None},
+                "compact_budget": {
+                    "type": ["string", "integer", "null"],
+                    "default": None,
+                },
             },
             "required": ["zim_file_path"],
         },
@@ -438,9 +441,7 @@ def run_variant(variant: str, probes: List[Probe]) -> VariantResults:
         for _rep in range(REPS_PER_PROBE):
             name, args, _raw = call_model(probe.query, tools)
             branch = classify_branch(name or "", args)
-            ok_branch = (
-                name == probe.expected_tool and branch == probe.expected_branch
-            )
+            ok_branch = name == probe.expected_tool and branch == probe.expected_branch
             ok_params = ok_branch and params_match(probe, args)
             results.record(probe, ok_branch, ok_params)
     return results
@@ -467,9 +468,7 @@ def z_test_one_sided(p1: float, p2: float, n1: int, n2: int) -> float:
     return 0.5 * math.erfc(z / math.sqrt(2))
 
 
-def render_verdict(
-    oneof: VariantResults, flat: VariantResults
-) -> Dict[str, Any]:
+def render_verdict(oneof: VariantResults, flat: VariantResults) -> Dict[str, Any]:
     """Compose the final verdict dict (also printed as the script's stdout)."""
     p_oneof_branch = oneof.branch_correct / max(oneof.n_total, 1)
     p_flat_branch = flat.branch_correct / max(flat.n_total, 1)
