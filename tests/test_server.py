@@ -210,259 +210,6 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
         # This at least verifies that _register_tools was called
         assert server.mcp.name == server.config.server_name
 
-    def test_server_tool_execution_with_mocked_dependencies(
-        self, server: OpenZimMcpServer
-    ):
-        """Test server tool execution by mocking dependencies and triggering errors."""
-        # This test aims to actually execute server code by manipulating dependencies
-
-        # Mock zim_operations to throw exceptions, then try to trigger the tools.
-        # The list_zim_files MCP tool now routes through
-        # ``list_zim_files_summary_data`` -> ``list_zim_files_data``, so mock
-        # both the legacy and the structured backend to keep this test
-        # provider-agnostic across the structured-output migration.
-        original_list_method = server.zim_operations.list_zim_files
-        original_list_data_method = server.zim_operations.list_zim_files_data
-        original_list_summary_method = server.zim_operations.list_zim_files_summary_data
-        original_search_method = server.zim_operations.search_zim_file
-        original_entry_method = server.zim_operations.get_zim_entry
-        original_entry_data_method = server.zim_operations.get_zim_entry_data
-
-        try:
-            # Set up mocks that will cause exceptions
-            server.zim_operations.list_zim_files = MagicMock(
-                side_effect=Exception("List error")
-            )
-            server.zim_operations.list_zim_files_data = MagicMock(
-                side_effect=Exception("List error")
-            )
-            server.zim_operations.list_zim_files_summary_data = MagicMock(
-                side_effect=Exception("List error")
-            )
-            server.zim_operations.search_zim_file = MagicMock(
-                side_effect=Exception("Search error")
-            )
-            server.zim_operations.get_zim_entry = MagicMock(
-                side_effect=Exception("Entry error")
-            )
-            # The migrated MCP tool routes through ``get_zim_entry_data``,
-            # so mock it too to keep this test provider-agnostic.
-            server.zim_operations.get_zim_entry_data = MagicMock(
-                side_effect=Exception("Entry error")
-            )
-
-            # Use call_tool to invoke the MCP tools and trigger exception paths
-            # This actually executes the server code and achieves coverage!
-
-            # Test list_zim_files exception handling. The migrated tool now
-            # returns a structured ``{"error": True, ...}`` envelope instead
-            # of a markdown string, so accept either presentation.
-            result = asyncio.run(server.mcp.call_tool("list_zim_files", {}))
-            result_str = str(result)
-            assert "List error" in result_str
-            assert "**Operation Failed**" in result_str or "'error': True" in result_str
-
-            # Test search_zim_file exception handling. Phase B: tool returns
-            # a structured error envelope ({"error": True, ...}) — exception
-            # text and error envelope shape are surfaced in the result.
-            result = asyncio.run(
-                server.mcp.call_tool(
-                    "search_zim_file", {"zim_file_path": "test.zim", "query": "test"}
-                )
-            )
-            result_str = str(result)
-            assert "Search error" in result_str or "search ZIM file" in result_str
-            assert "'error': True" in result_str or "**Operation Failed**" in result_str
-
-            # Test get_zim_entry exception handling. Phase B: returns a
-            # structured error envelope ({"error": True, ...}); error text
-            # and envelope shape are surfaced in the result.
-            result = asyncio.run(
-                server.mcp.call_tool(
-                    "get_zim_entry",
-                    {"zim_file_path": "test.zim", "entry_path": "A/Test"},
-                )
-            )
-            result_str = str(result)
-            assert "Entry error" in result_str or "get ZIM entry" in result_str
-            assert "'error': True" in result_str or "**Operation Failed**" in result_str
-
-        finally:
-            # Restore original methods
-            server.zim_operations.list_zim_files = original_list_method
-            server.zim_operations.list_zim_files_data = original_list_data_method
-            server.zim_operations.list_zim_files_summary_data = (
-                original_list_summary_method
-            )
-            server.zim_operations.search_zim_file = original_search_method
-            server.zim_operations.get_zim_entry = original_entry_method
-            server.zim_operations.get_zim_entry_data = original_entry_data_method
-
-    def test_mcp_tool_validation_paths(self, server: OpenZimMcpServer):
-        """Test MCP tool validation paths using call_tool."""
-        # Phase B: search_zim_file returns a ToolErrorPayload envelope on
-        # validation failure. The error text is in the ``message`` field;
-        # str(result) renders the structuredContent dict alongside the
-        # TextContent JSON, so substring assertions still work.
-
-        # Test search_zim_file validation - invalid limit
-        result = asyncio.run(
-            server.mcp.call_tool(
-                "search_zim_file",
-                {
-                    "zim_file_path": "test.zim",
-                    "query": "test",
-                    "limit": 0,  # Invalid: should be >= 1
-                },
-            )
-        )
-        assert "limit must be between 1 and" in str(result)
-        assert "'error': True" in str(result) or "error" in str(result).lower()
-
-        # Test search_zim_file validation - invalid limit (too high)
-        result = asyncio.run(
-            server.mcp.call_tool(
-                "search_zim_file",
-                {
-                    "zim_file_path": "test.zim",
-                    "query": "test",
-                    "limit": 101,  # Invalid: should be <= 100
-                },
-            )
-        )
-        assert "limit must be between 1 and" in str(result)
-        assert "'error': True" in str(result) or "error" in str(result).lower()
-
-        # Test search_zim_file validation - invalid offset
-        result = asyncio.run(
-            server.mcp.call_tool(
-                "search_zim_file",
-                {
-                    "zim_file_path": "test.zim",
-                    "query": "test",
-                    "offset": -1,  # Invalid: should be >= 0
-                },
-            )
-        )
-        assert "Offset must be non-negative" in str(result)
-        assert "'error': True" in str(result) or "error" in str(result).lower()
-
-        # Test get_zim_entry validation - invalid max_content_length
-        result = asyncio.run(
-            server.mcp.call_tool(
-                "get_zim_entry",
-                {
-                    "zim_file_path": "test.zim",
-                    "entry_path": "A/Test",
-                    "max_content_length": 50,  # Invalid: should be >= 100
-                },
-            )
-        )
-        assert "**Parameter Validation Error**" in str(
-            result
-        ) and "max_content_length must be at least 100" in str(result)
-
-        # Test get_search_suggestions validation - invalid limit
-        result = asyncio.run(
-            server.mcp.call_tool(
-                "get_search_suggestions",
-                {
-                    "zim_file_path": "test.zim",
-                    "partial_query": "test",
-                    "limit": 0,  # Invalid: should be >= 1
-                },
-            )
-        )
-        assert "**Parameter Validation Error**" in str(
-            result
-        ) and "limit must be between 1 and 50" in str(result)
-
-        # Test get_search_suggestions validation - invalid limit (too high)
-        result = asyncio.run(
-            server.mcp.call_tool(
-                "get_search_suggestions",
-                {
-                    "zim_file_path": "test.zim",
-                    "partial_query": "test",
-                    "limit": 51,  # Invalid: should be <= 50
-                },
-            )
-        )
-        assert "**Parameter Validation Error**" in str(
-            result
-        ) and "limit must be between 1 and 50" in str(result)
-
-    def test_mcp_tool_exception_paths_comprehensive(self, server: OpenZimMcpServer):
-        """Test exception paths for all MCP tools."""
-        # Mock all zim_operations methods to throw exceptions
-        original_methods = {}
-        methods_to_mock = [
-            "list_zim_files",
-            "search_zim_file",
-            "get_zim_entry",
-            "get_zim_metadata",
-            "get_main_page",
-            "get_search_suggestions",
-            "get_article_structure",
-            "extract_article_links",
-        ]
-
-        try:
-            # Set up mocks
-            for method_name in methods_to_mock:
-                if hasattr(server.zim_operations, method_name):
-                    original_methods[method_name] = getattr(
-                        server.zim_operations, method_name
-                    )
-                    setattr(
-                        server.zim_operations,
-                        method_name,
-                        MagicMock(side_effect=Exception(f"{method_name} error")),
-                    )
-
-            # Mock cache.stats for get_server_health
-            original_stats = server.cache.stats
-            server.cache.stats = MagicMock(side_effect=Exception("Cache error"))
-
-            # Test all tools' exception handling
-            tools_to_test = [
-                ("get_zim_metadata", {"zim_file_path": "test.zim"}),
-                ("get_main_page", {"zim_file_path": "test.zim"}),
-                ("get_server_health", {}),
-                (
-                    "get_search_suggestions",
-                    {"zim_file_path": "test.zim", "partial_query": "test"},
-                ),
-                (
-                    "get_article_structure",
-                    {"zim_file_path": "test.zim", "entry_path": "A/Test"},
-                ),
-                (
-                    "extract_article_links",
-                    {"zim_file_path": "test.zim", "entry_path": "A/Test"},
-                ),
-            ]
-
-            for tool_name, params in tools_to_test:
-                result = asyncio.run(server.mcp.call_tool(tool_name, params))
-                # Each tool should signal failure -- either via the legacy
-                # markdown error string ("**Operation Failed**" / "Error:")
-                # or via the structured-content error envelope (which carries
-                # ``error: True`` and an ``**Operation**`` header).
-                result_str = str(result)
-                assert (
-                    "**Operation Failed**" in result_str
-                    or "Error:" in result_str
-                    or "'error': True" in result_str
-                    or "**Operation**" in result_str
-                )
-
-        finally:
-            # Restore all original methods
-            for method_name, original_method in original_methods.items():
-                setattr(server.zim_operations, method_name, original_method)
-            server.cache.stats = original_stats
-
     def test_server_validation_paths_direct(self, server: OpenZimMcpServer):
         """Test validation paths by directly testing the validation logic."""
         # Test the validation logic that appears in the server tools
@@ -497,95 +244,6 @@ class TestOpenZimMcpServerMCPToolsErrorHandling:
             validate_max_content_length(50)
         )
         assert validate_max_content_length(500) == "valid"
-
-    def test_additional_server_edge_cases(self, server: OpenZimMcpServer):
-        """Test additional server edge cases to improve coverage."""
-        # Test server tools with edge case parameters
-        test_cases = [
-            # Test with maximum limits
-            (
-                "search_zim_file",
-                {
-                    "zim_file_path": "test.zim",
-                    "query": "test",
-                    "limit": 50,
-                    "offset": 100,
-                },
-            ),
-            # Test with minimum limits
-            (
-                "search_zim_file",
-                {"zim_file_path": "test.zim", "query": "test", "limit": 1, "offset": 0},
-            ),
-            # Test browse_namespace with edge cases
-            (
-                "browse_namespace",
-                {
-                    "zim_file_path": "test.zim",
-                    "namespace": "X",
-                    "limit": 25,
-                    "offset": 50,
-                },
-            ),
-            # Test get_article_structure
-            (
-                "get_article_structure",
-                {"zim_file_path": "test.zim", "entry_path": "A/Test"},
-            ),
-        ]
-
-        # Mock all ZIM operations to return success
-        original_methods = {}
-        try:
-            methods_to_mock = [
-                "search_zim_file",
-                "browse_namespace",
-                "get_article_structure",
-            ]
-
-            for method_name in methods_to_mock:
-                if hasattr(server.zim_operations, method_name):
-                    original_methods[method_name] = getattr(
-                        server.zim_operations, method_name
-                    )
-                    setattr(
-                        server.zim_operations,
-                        method_name,
-                        MagicMock(return_value=f"Success: {method_name}"),
-                    )
-
-            for tool_name, params in test_cases:
-                result = asyncio.run(server.mcp.call_tool(tool_name, params))
-                # Tools may surface success either via the legacy mocked
-                # string ("Success: ...") or, for migrated tools, fail with
-                # the structured-content error envelope (which carries
-                # ``'error': True`` because the legacy sync mock no longer
-                # intercepts the now-async ``_data`` codepath).
-                result_str = str(result)
-                assert (
-                    "Success:" in result_str
-                    or "Error:" in result_str
-                    or "'error': True" in result_str
-                    or "**Operation**" in result_str
-                )
-
-        finally:
-            # Restore original methods
-            for method_name, original_method in original_methods.items():
-                setattr(server.zim_operations, method_name, original_method)
-
-        # Test search suggestions limit validation
-        def validate_suggestions_limit(limit):
-            if limit < 1 or limit > 50:
-                return (
-                    "**Parameter Validation Error**\n\n"
-                    f"**Issue**: limit must be between 1 and 50 (provided: {limit})"
-                )
-            return "valid"
-
-        assert "limit must be between 1 and 50" in validate_suggestions_limit(0)
-        assert "limit must be between 1 and 50" in validate_suggestions_limit(51)
-        assert validate_suggestions_limit(25) == "valid"
 
     def test_health_tool_error_handling(self, server: OpenZimMcpServer):
         """Test get_server_health tool error handling."""
@@ -1482,31 +1140,31 @@ class TestToolModeRegistration:
     def test_advanced_mode_registers_full_tool_surface(
         self, test_config: OpenZimMcpConfig
     ):
-        """Advanced mode registers the full advanced tool surface.
+        """Advanced mode registers the full Phase F 8-tool surface.
 
-        It must NOT include the simple-mode wrapper ``zim_query``.
+        The b13 advanced surface exposed 22 per-domain tools and
+        excluded ``zim_query``; Phase F collapses those to 8 tools and
+        registers ``zim_query`` in BOTH modes (it's the dispatch entry
+        point that small models reach for in natural-language queries).
         """
-        # test_config now defaults to tool_mode='advanced' (see conftest).
         assert test_config.tool_mode == "advanced"
         server = OpenZimMcpServer(test_config)
 
         names = _registered_tool_names(server)
-        # A representative sample of advanced-only tools that should appear.
-        for expected in (
-            "list_zim_files",
-            "search_zim_file",
-            "get_zim_entry",
-            "get_zim_metadata",
-            "browse_namespace",
-            "get_article_structure",
-        ):
-            assert (
-                expected in names
-            ), f"advanced mode missing {expected!r}; got {sorted(names)}"
-        # And the simple-only wrapper must NOT be present in advanced mode.
-        assert (
-            "zim_query" not in names
-        ), "advanced mode should not register the simple-mode wrapper"
+        expected_surface = {
+            "zim_query",
+            "zim_search",
+            "zim_get",
+            "zim_get_section",
+            "zim_browse",
+            "zim_metadata",
+            "zim_links",
+            "zim_health",
+        }
+        assert names == expected_surface, (
+            "Phase F advanced surface drift: expected "
+            f"{sorted(expected_surface)}, got {sorted(names)}"
+        )
 
 
 class TestSimpleModeWrapperDefaults:

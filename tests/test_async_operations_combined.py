@@ -162,11 +162,11 @@ async def test_health_data_combines_all_three_sources(
     server = MagicMock()
     with (
         patch(
-            "openzim_mcp.tools.server_tools._build_health_report",
+            "openzim_mcp.server_state._build_health_report",
             return_value=fake_health,
         ),
         patch(
-            "openzim_mcp.tools.server_tools._build_configuration_report",
+            "openzim_mcp.server_state._build_configuration_report",
             return_value=fake_config,
         ),
     ):
@@ -187,9 +187,9 @@ async def test_health_data_calls_list_zim_files_with_no_filter(
     filtered subset."""
     server = MagicMock()
     with (
-        patch("openzim_mcp.tools.server_tools._build_health_report", return_value={}),
+        patch("openzim_mcp.server_state._build_health_report", return_value={}),
         patch(
-            "openzim_mcp.tools.server_tools._build_configuration_report",
+            "openzim_mcp.server_state._build_configuration_report",
             return_value={},
         ),
     ):

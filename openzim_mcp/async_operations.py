@@ -766,9 +766,12 @@ class AsyncZimOperations:
         the combined response stays in lockstep with the per-tool
         responses by construction.
         """
-        # Lazy import: tools/server_tools imports async_operations through
-        # the registration shim, so a module-level import here would loop.
-        from .tools.server_tools import (
+        # The builders live in openzim_mcp.server_state — extracted there
+        # in Task D12 when the legacy tools/server_tools.py was deleted.
+        # Lazy import keeps server_state out of the module-level import
+        # graph (server_state itself imports tool_schemas, which routes
+        # back through async_operations during type-checking).
+        from .server_state import (
             _build_configuration_report,
             _build_health_report,
         )

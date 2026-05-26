@@ -1,18 +1,34 @@
-"""Server health and diagnostics tools for OpenZIM MCP server."""
+"""Server-state introspection helpers — builders for the ``zim_health``
+tool's combined response.
 
-import asyncio
+Phase F lifted these helpers out of the legacy ``tools/server_tools.py``
+(which Task D12 deleted) into this dedicated module so the cross-layer
+dependency chain becomes a stable, non-tool path:
+
+  ``tools/zim_health`` →  ``async_operations.get_health_data``
+                       →  ``server_state._build_health_report`` /
+                          ``server_state._build_configuration_report``
+
+The same builders served the legacy single-purpose ``get_server_health``
+and ``get_server_configuration`` tools verbatim, so the data shape they
+emit is identical to b13.
+"""
+
+from __future__ import annotations
+
 import logging
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union, cast
 
-from ..constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
-from ..responses import ToolErrorPayload, tool_error
-from ..security import redact_paths_in_message, sanitize_path_for_error
-from ..tool_schemas import HealthStatus, ServerConfigurationResponse
+from .constants import CACHE_HIGH_HIT_RATE_THRESHOLD, CACHE_LOW_HIT_RATE_THRESHOLD
+from .responses import ToolErrorPayload, tool_error
+from .security import redact_paths_in_message, sanitize_path_for_error
+from .tool_schemas import HealthStatus, ServerConfigurationResponse
 
 if TYPE_CHECKING:
-    from ..server import OpenZimMcpServer
+    from .server import OpenZimMcpServer
 
 logger = logging.getLogger(__name__)
 
@@ -20,45 +36,10 @@ logger = logging.getLogger(__name__)
 def _utc_now_iso() -> str:
     """Return the current UTC time as an ISO-8601 string with offset.
 
-    All server-tools timestamps go through this helper so a single response
+    All server-state timestamps go through this helper so a single response
     never mixes timezone-aware (``+00:00``) and naive local strings.
     """
     return datetime.now(timezone.utc).isoformat()
-
-
-def register_server_tools(server: "OpenZimMcpServer") -> None:
-    """Register server health and diagnostics tools."""
-    _register_get_server_health(server)
-    _register_get_server_configuration(server)
-
-
-def _register_get_server_health(server: "OpenZimMcpServer") -> None:
-    @server.mcp.tool()
-    async def get_server_health() -> Union[HealthStatus, ToolErrorPayload]:
-        """Get comprehensive server health and statistics.
-
-        Includes cache performance, directory health, and recommendations.
-
-        Returns:
-            ``HealthStatus``-shaped dict on success; ``ToolErrorPayload``
-            envelope on failure (see ``responses.tool_error``).
-        """
-        return await asyncio.to_thread(_build_health_report, server)
-
-
-def _register_get_server_configuration(server: "OpenZimMcpServer") -> None:
-    @server.mcp.tool()
-    async def get_server_configuration() -> (
-        Union[ServerConfigurationResponse, ToolErrorPayload]
-    ):
-        """Get detailed server configuration with diagnostics and validation.
-
-        Returns:
-            ``ServerConfigurationResponse``-shaped dict on success;
-            ``ToolErrorPayload`` envelope on failure (see
-            ``responses.tool_error``).
-        """
-        return await asyncio.to_thread(_build_configuration_report, server)
 
 
 def _check_directory_health(
@@ -102,15 +83,21 @@ def _check_directory_health(
     return 0, 0
 
 
+# Minimum cache accesses before we report on hit-rate trends. Below this we
+# treat the rate as too noisy to comment on. 50 is enough that a steady-state
+# pattern has emerged; below that, warming-up effects dominate.
+_CACHE_RECOMMENDATION_MIN_SAMPLES = 50
+
+
 def _append_cache_recommendations(
     cache_stats: Dict[str, Any], recommendations: List[str]
 ) -> None:
     """Translate cache hit-rate stats into human-readable recommendations.
 
-    Skip the "low" warning until the cache has seen a meaningful sample
-    (>= ``_CACHE_RECOMMENDATION_MIN_SAMPLES`` total accesses). A fresh
-    session legitimately has a low hit rate while it warms up; warning
-    on the first query was misleading and got beta-tester complaints.
+    Skip the "low" warning until the cache has seen a meaningful sample.
+    A fresh session legitimately has a low hit rate while it warms up;
+    warning on the first query was misleading and got beta-tester
+    complaints.
     """
     if cache_stats.get("enabled", False):
         hit_rate = cache_stats.get("hit_rate", 0)
@@ -126,12 +113,6 @@ def _append_cache_recommendations(
             recommendations.append("Cache is performing well")
     else:
         recommendations.append("Consider enabling cache for better performance")
-
-
-# Minimum cache accesses before we report on hit-rate trends. Below this we
-# treat the rate as too noisy to comment on. 50 is enough that a steady-state
-# pattern has emerged; below that, warming-up effects dominate.
-_CACHE_RECOMMENDATION_MIN_SAMPLES = 50
 
 
 def _finalize_health_status(
@@ -181,8 +162,6 @@ def _build_uptime_info(server: "OpenZimMcpServer") -> Dict[str, Any]:
     init-time anchors when present; falls back to ``"unknown"`` /
     ``None`` for legacy paths that didn't record them.
     """
-    import time as _time
-
     start_iso = getattr(server, "_start_time", None) or "unknown"
     start_mono = getattr(server, "_start_monotonic", None)
     uptime_seconds: Any = None
@@ -225,10 +204,7 @@ def _build_health_report(
         }
 
         # Surface simple-mode heuristic-branch counters so the operator
-        # can see, in aggregate, which fallback paths are firing — which
-        # makes the bare-topic gate / meta-detection / hallucinated-path
-        # thresholds tunable from real traffic instead of guesses.
-        # Counters are process-local; restarts reset them.
+        # can see, in aggregate, which fallback paths are firing.
         simple_handler = getattr(server, "simple_tools_handler", None)
         if simple_handler is not None and hasattr(simple_handler, "get_telemetry"):
             health_info["simple_tools_telemetry"] = simple_handler.get_telemetry()
@@ -270,15 +246,7 @@ def _build_configuration_report(
 ) -> Union[ServerConfigurationResponse, ToolErrorPayload]:
     try:
         # Always redact paths and PID — even on stdio, diagnostic output
-        # frequently ends up in bug reports / logs / issue trackers, so
-        # leaking host topology is an info-disclosure risk regardless of
-        # transport. The unredacted values remain available to operators
-        # in server logs.
-        #
-        # The basename-only format (``<redacted>/<basename>``) is
-        # unambiguous: a leading ``...`` was reading like a malformed path
-        # in beta testing while ``list_zim_files`` exposes the real paths
-        # for tool-input use. Making the redaction explicit closes that gap.
+        # frequently ends up in bug reports / logs / issue trackers.
         config_info = {
             "server_name": server.config.server_name,
             "allowed_directories": [
@@ -304,8 +272,6 @@ def _build_configuration_report(
             "recommendations": recommendations_list,
         }
 
-        # Match the redaction format used for ``allowed_directories`` so
-        # callers comparing the two lists don't see a different convention.
         invalid_dirs = [
             _redact_directory_path(str(d))
             for d in server.config.allowed_directories
