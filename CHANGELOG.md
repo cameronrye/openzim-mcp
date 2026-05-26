@@ -5,6 +5,157 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0rc1] — 2026-05-26 (release candidate) — Phase F Stage D: 8-tool surface consolidation
+
+Second release candidate for v2.0.0. The 22-tool advanced surface
+collapses to 8 consolidated tools — the largest API change in the
+project's history. `tool_mode='simple'` is unchanged (still registers
+only `zim_query`); the consolidation lands in `tool_mode='advanced'`.
+
+### Surface change
+
+22 tools → 8 tools in `tool_mode='advanced'`. All renamed with the
+`zim_*` prefix:
+
+- `zim_query` — natural-language entry point (unchanged from b13).
+- `zim_search` — fulltext / title / suggest mode dispatch. Collapses
+  `search_zim_file`, `search_all`, `search_with_filters`,
+  `find_entry_by_title`, `get_search_suggestions` (5 → 1).
+- `zim_get` — single / batch / binary / main-page entry fetch.
+  Collapses `get_zim_entry`, `get_zim_entries`, `get_main_page`,
+  `get_binary_entry`, `get_entry_summary`, `get_table_of_contents`,
+  `get_article_structure` (7 → 1).
+- `zim_get_section` — section-level fetch (renamed from
+  `get_section`).
+- `zim_browse` — namespace browse / walk mode dispatch.
+  Collapses `browse_namespace` + `walk_namespace` (2 → 1).
+- `zim_metadata` — combined archive metadata + namespaces.
+  Collapses `get_zim_metadata` + `list_namespaces` (2 → 1).
+- `zim_links` — outbound / related direction dispatch.
+  Collapses `extract_article_links` + `get_related_articles`
+  (2 → 1). `direction="inbound"` arrives in v2.5 #16.
+- `zim_health` — combined server health, configuration, and
+  loaded archives. Collapses `get_server_health` +
+  `get_server_configuration` + `list_zim_files` (3 → 1).
+
+Default `tool_mode` stays `'simple'`. The total advanced-mode wire
+footprint lands ~23.5KB — well below the 25-50KB MCP Tax pain band
+the spec targets (down from b13's ~36.1KB).
+
+### Migrating from v1.x / v2 beta
+
+v2 allows clean breaks; there are no aliases on the wire. The
+mapping is mechanical:
+
+| v1 / v2-beta call | v2.0 equivalent |
+| --- | --- |
+| `list_zim_files()` | `zim_health()` → `.loaded_archives` |
+| `get_server_health()` | `zim_health()` → `.health` |
+| `get_server_configuration()` | `zim_health()` → `.configuration` |
+| `get_zim_metadata(path)` | `zim_metadata(path)` → `.metadata` |
+| `list_namespaces(path)` | `zim_metadata(path)` → `.namespaces` |
+| `get_main_page(path)` | `zim_get(path, main_page=True)` |
+| `search_zim_file(path, q)` | `zim_search(q, zim_file_path=path)` |
+| `search_all(q)` | `zim_search(q, cross_file=True)` |
+| `search_with_filters(path, q, ns=, ct=)` | `zim_search(q, zim_file_path=path, namespace=ns, content_type=ct)` |
+| `find_entry_by_title(path, title)` | `zim_search(title, zim_file_path=path, mode="title")` |
+| `find_entry_by_title(cross_file=True)` | `zim_search(title, cross_file=True, mode="title")` — promotion disabled in cross-archive case |
+| `get_search_suggestions(path, prefix)` | `zim_search(prefix, zim_file_path=path, mode="suggest")` |
+| `get_zim_entry(path, entry_path)` | `zim_get(path, entry_path=entry_path)` — rename only; `compact` defaults to `False` (legacy behavior preserved) |
+| `get_zim_entries(path, entry_paths)` | `zim_get(path, entry_paths=entry_paths)` — rename only; `compact` defaults to `False` |
+| `get_binary_entry(path, entry_path)` | `zim_get(path, entry_path=entry_path, binary=True)` |
+| `get_entry_summary(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="summary")` |
+| `get_table_of_contents(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="toc")` |
+| `get_article_structure(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="structure")` |
+| `get_section(path, entry_path, section_id)` | `zim_get_section(path, entry_path, section_id)` — **note:** `compact` parameter is **new** and defaults to `True`; pass `compact=False` to preserve the pre-Phase-F raw-text response shape |
+| `browse_namespace(path, namespace)` | `zim_browse(path, namespace)` |
+| `walk_namespace(path, namespace)` | `zim_browse(path, namespace, mode="walk")` |
+| `extract_article_links(path, entry_path)` | `zim_links(path, entry_path)` |
+| `get_related_articles(path, entry_path)` | `zim_links(path, entry_path, direction="related")` |
+| inbound-link lookup (no v1 tool) | not available at v2.0 — `zim_links(..., direction="related")` is the closest approximation; `direction="inbound"` arrives in v2.5 #16 |
+| `zim_query(...)` | unchanged |
+
+### Default behavior changes (silent breaks if not handled)
+
+- **`zim_get_section` adds a `compact` parameter that defaults to
+  `True`.** The legacy `get_section` returned raw text; the renamed
+  `zim_get_section` returns compacted text. Pass `compact=False`
+  to preserve the pre-Phase-F shape.
+- **`zim_metadata` no longer exposes `main_page_path`.** Callers who
+  used it to construct an explicit `entry_path` round-trip to
+  `zim_get` should switch to `zim_get(path, main_page=True)` — a
+  single-call, null-safe path. (Note: `main_page` is a dedicated
+  boolean flag, NOT a value of the `view` enum — earlier Phase F
+  drafts overloaded `view="main_page"` but it now stands as its
+  own parameter so the `view` enum stays focused on body slicers.)
+
+The `zim_get` rename from `get_zim_entry` is **behavior-preserving**
+on the `compact` axis (default is `False`, matching legacy). v2.5
+will revisit the `zim_get` default once telemetry shows adoption.
+
+### Schema shape
+
+Each `zim_get` and `zim_search` call still has multiple mutually-
+exclusive branches. The spec's preferred wire shape is JSON Schema
+`oneOf` over the branches, but Gate 0.3 (small-model `oneOf` parsing
+benchmark) is `unvalidated` in `tests/dispatch_eval/gate_0b_decision.json`
+at rc1 cut, so per the spec's fallback rule the schema ships **flat**
+with handler-level invalid-combination validation. A small model
+that flattens a `oneOf` payload still gets a structured
+`tool_error("invalid_path_combination", ...)` envelope rather than a
+silent dispatch.
+
+### Gate 0b — surface-change non-regression
+
+The 8-tool surface was validated against the b13 22-tool baseline via
+a 300-probe dispatch eval (`tests/dispatch_eval/probes.jsonl`) before
+rc1 opened. The Qwen-2.5-7B-Instruct primary cleared all gating
+criteria (A: dispatch non-inferiority, B: parameter validity, C1/C3:
+Z4 silent-wrong-answer ceilings, D: aggregate non-inferiority, F1/F2:
+per-class deltas within 8pp / 10pp ceilings). Haiku / Llama / Phi
+secondaries recorded as `unavailable` (Intel Mac i9 — no CUDA for
+vLLM; documented in the gate decision artifact).
+
+The full gate outcome ships at
+`tests/dispatch_eval/gate_0b_decision.json` and the prototype's
+per-tool wire-footprint snapshot ships at
+`tests/dispatch_eval/prototype_schema_snapshot.json`. Drift between
+the rc1 commit's baked Python constants and the recorded gate
+outcome is caught by `tests/test_phase_f_gate_decision_consistency.py`;
+drift between the rc1 schemas and the prototype baseline is caught
+by `tests/test_phase_f_prototype_parity.py` (±5% bytes + structural
+inputSchema identity + ≤30% description Levenshtein edit distance).
+
+### Tests added
+
+- `tests/test_phase_f_schema_budget.py` — total + per-tool byte
+  budgets, simple-mode 1-tool registration, gate-decision invariants.
+- `tests/test_phase_f_schema_shapes.py` — `oneOf`/flat schema shape
+  matches `gate_0_schema_shape`.
+- `tests/test_phase_f_gate_decision_consistency.py` — rc1 constants
+  match the recorded gate outcome.
+- `tests/test_phase_f_prototype_parity.py` — rc1 surface stays
+  within parity tolerances of the prototype snapshot.
+- `tests/test_phase_f_schema_bypass.py` — 13 invalid-combination
+  probes per oneOf-forbidden shape on `zim_get` — handler
+  validation surfaces structured `tool_error` envelopes.
+- `tests/test_phase_f_migration.py` — v1.x legacy tool names map
+  exhaustively to v2.0 Phase F names.
+
+### Files
+
+New: `openzim_mcp/tools/zim_{query,search,get,get_section,browse,
+metadata,links,health}.py` + sibling `*_description.md` per-tool
+descriptions packaged via `[tool.setuptools.package-data]`. New:
+`openzim_mcp/server_state.py` extracts `_build_health_report` and
+`_build_configuration_report`. New: `openzim_mcp/tools/__init__.py`
+`register_phase_f_tools` orchestrator. Deleted: legacy per-domain
+`content_tools.py` / `file_tools.py` / `metadata_tools.py` /
+`navigation_tools.py` / `search_tools.py` / `server_tools.py` /
+`structure_tools.py` modules.
+
+---
+
 ## [2.0.0rc0] — 2026-05-25 (release candidate) — Phase F Stage A: promotion-extraction refactor + Gate 0 transport verification
 
 First release candidate for v2.0.0. Two structural changes land,
