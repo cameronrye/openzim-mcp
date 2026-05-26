@@ -86,7 +86,7 @@ where = ["."]
 include = ["openzim_mcp*"]
 
 [tool.setuptools.package-data]
-openzim_mcp = ["data/*.txt"]
+openzim_mcp = ["data/*.txt", "tools/*.md"]
 
 
 
