@@ -94,6 +94,13 @@ DEFAULT_LLAMA_BASE_URL = os.environ.get(
     "OZM_LLAMA_BASE_URL", "http://localhost:8001/v1"
 )
 DEFAULT_PHI_BASE_URL = os.environ.get("OZM_PHI_BASE_URL", "http://localhost:8002/v1")
+# Optional bearer token sent on every OpenAI-compatible request. llama-server
+# spawned with ``--api-key <key>`` requires it; vLLM accepts it too when its
+# own ``--api-key`` flag is set. Unset → no Authorization header is added
+# (matches the original local-localhost-vLLM default).
+DEFAULT_OPENAI_API_KEY = os.environ.get("OZM_OWL_ATLAS_API_KEY") or os.environ.get(
+    "OZM_OPENAI_COMPATIBLE_API_KEY"
+)
 DEFAULT_TEMPERATURE = float(os.environ.get("OZM_DISPATCH_TEMPERATURE", "0.2"))
 PER_REP_TIMEOUT_S = float(os.environ.get("OZM_DISPATCH_TIMEOUT_S", "30"))
 MAX_RETRIES = 3
@@ -109,6 +116,10 @@ SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "system_prompt.md"
 _VENDOR_MODEL_IDS = {
     "qwen2.5-7b-instruct": "Qwen/Qwen2.5-7B-Instruct",
     "qwen-2.5-3b-instruct": "Qwen/Qwen2.5-3B-Instruct",
+    # Qwen3 family — local llama.cpp GGUF deployment. The vendor_id is the
+    # filename llama-server returns from ``/v1/models``; it has to match
+    # exactly or the server rejects the request.
+    "qwen3-8b-q4": "Qwen3-8B-Q4_K_M.gguf",
     "llama-3.1-8b-instruct": "meta-llama/Llama-3.1-8B-Instruct",
     "phi-3.5-mini-instruct": "microsoft/Phi-3.5-mini-instruct",
     "haiku-4.5": "claude-haiku-4-5-20251001",
@@ -504,6 +515,20 @@ def _mcp_to_anthropic_tool_specs(
 # --------------------------------------------------------------------------
 
 
+def _openai_compatible_headers() -> Dict[str, str]:
+    """Standard headers for vLLM / llama-server OpenAI-compatible endpoints.
+
+    Adds ``Authorization: Bearer ...`` when ``OZM_OWL_ATLAS_API_KEY`` (or its
+    generic alias ``OZM_OPENAI_COMPATIBLE_API_KEY``) is set — required when
+    the backend was booted with ``--api-key`` (llama-server) or behind an
+    Authelia bypass-header rule.
+    """
+    headers = {"Content-Type": "application/json"}
+    if DEFAULT_OPENAI_API_KEY:
+        headers["Authorization"] = f"Bearer {DEFAULT_OPENAI_API_KEY}"
+    return headers
+
+
 def _http_post_json(
     url: str, payload: Dict[str, Any], timeout_s: float
 ) -> Dict[str, Any]:
@@ -512,7 +537,7 @@ def _http_post_json(
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=_openai_compatible_headers(),
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:
@@ -523,13 +548,17 @@ def _http_post_json(
 def _probe_openai_compatible_endpoint(endpoint: str) -> None:
     """Fail-fast: hit /models on an OpenAI-compatible endpoint."""
     try:
-        with urllib.request.urlopen(f"{endpoint}/models", timeout=5) as resp:
+        req = urllib.request.Request(
+            f"{endpoint}/models", headers=_openai_compatible_headers()
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
             json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as e:
         raise SystemExit(
             f"OpenAI-compatible endpoint at {endpoint} unreachable: {e}. "
-            "Start the vLLM server with the right --tool-call-parser before "
-            "running the dispatch eval."
+            "Start the vLLM / llama-server with the right --tool-call-parser "
+            "(and --api-key if OZM_OWL_ATLAS_API_KEY is set) before running "
+            "the dispatch eval."
         ) from e
 
 
