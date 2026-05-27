@@ -25,7 +25,7 @@ Examples:
   python -m openzim_mcp /path/to/zim/files
   python -m openzim_mcp --mode simple /path/to/zim/files
 
-  # Advanced mode (all 21 tools)
+  # Advanced mode (all 8 tools)
   python -m openzim_mcp --mode advanced /path/to/zim/files
 
 Environment Variables:
@@ -42,7 +42,7 @@ Environment Variables:
         choices=list(VALID_TOOL_MODES),
         default=None,
         help=(
-            f"Tool mode: 'advanced' for all 21 tools, 'simple' for 1 "
+            f"Tool mode: 'advanced' for all 8 tools, 'simple' for 1 "
             f"intelligent NL tool "
             f"(default: {TOOL_MODE_SIMPLE}, or from OPENZIM_MCP_TOOL_MODE env var)"
         ),
@@ -134,7 +134,7 @@ def main() -> None:
         mode_desc = (
             "SIMPLE mode (1 intelligent tool)"
             if config.tool_mode == TOOL_MODE_SIMPLE
-            else "ADVANCED mode (21 specialized tools)"
+            else "ADVANCED mode (8 specialized tools)"
         )
         # Route the startup banner through the logger so log-level configuration
         # (env: ``OPENZIM_MCP_LOGGING__LEVEL``) actually suppresses it. The

@@ -107,7 +107,7 @@ This recipe puts OpenZIM MCP on a single host, reachable from the rest of your L
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:1.2.0
+    image: ghcr.io/cameronrye/openzim-mcp:2.0.0
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -117,9 +117,11 @@ services:
       OPENZIM_MCP_AUTH_TOKEN: "${OPENZIM_MCP_AUTH_TOKEN}"
 ```
 
+> Still running v1.x? The `ghcr.io/cameronrye/openzim-mcp:1.2.0` image stays available; v1.x is in maintenance mode (security + data-corruption + pre-v2.0.0 crash fixes accepted; no new features) until the FIRST of `{v2.5.0 ships, 2026-11-27}`. The v2.0.0 advanced tool surface is a breaking rename per [CHANGELOG.md](../CHANGELOG.md#200--2026-05-27--phase-f-stage-d-ships) — migrate when convenient.
+
 What's intentional here:
 
-- **Pinned tag** (`:1.2.0`, not `:latest`). Upgrades are deliberate — `docker compose pull` is a thing you do, not a thing that happens to you.
+- **Pinned tag** (`:2.0.0`, not `:latest`). Upgrades are deliberate — `docker compose pull` is a thing you do, not a thing that happens to you.
 - **Host port bound to `127.0.0.1`**. The container listens on all interfaces (the image's default `OPENZIM_MCP_HOST=0.0.0.0`), but Docker's port publish restricts external exposure to loopback. The Tailscale variant below lifts this restriction by binding to a specific interface.
 - **Read-only ZIM mount** (`:ro`). The server only reads ZIM files; mounting read-only ensures a server compromise can't damage them.
 - **Token via env, not hard-coded.** Put it in a `.env` file next to the compose file (and add `.env` to `.gitignore`). The image's defaults already set `TRANSPORT=http`, `HOST=0.0.0.0`, `PORT=8000`, so they're not repeated here.
@@ -227,7 +229,7 @@ This is the LAN compose file with two changes: a `caddy` service is added, and t
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:1.2.0
+    image: ghcr.io/cameronrye/openzim-mcp:2.0.0
     restart: unless-stopped
     expose:
       - "8000"
@@ -313,7 +315,7 @@ docker compose pull
 docker compose up -d
 ```
 
-The image tag in `docker-compose.yml` is pinned (`:1.2.0`) — change it to the new version before pulling. Pinning is deliberate: `:latest` makes upgrades a surprise, and the v1 release notes (or future v1.x release notes) tell you when an upgrade involves a breaking change.
+The image tag in `docker-compose.yml` is pinned (`:2.0.0`) — change it to the new version before pulling. Pinning is deliberate: `:latest` makes upgrades a surprise, and the release notes for each tag tell you when an upgrade involves a breaking change. The v1.x → v2.0.0 jump is a breaking rename of the advanced-mode tool surface (22 tools → 8); see the [v1 → v2 migration table](../CHANGELOG.md#migrating-from-v1x--v2-beta) before bumping.
 
 ### Watching logs
 

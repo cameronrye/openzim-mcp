@@ -38,11 +38,11 @@
 
 ---
 
-> 🆕 **NEW in v1.1.0: Structured tool output!** All 17 JSON-returning tools now emit MCP `structuredContent` alongside the legacy text envelope — no more double-stringified JSON, no more escape soup. Plus a major namespace-handling fix for new-scheme archives (`list_namespaces` / `browse_namespace` / `walk_namespace` were silently broken on Wikipedia-style ZIMs), pagination for `extract_article_links`, case-insensitive `find_entry_by_title` with proper scoring, and CORS support for browser MCP clients. [Learn more →](#whats-new-in-v110)
+> 🆕 **NEW in v2.0.0: 8-tool advanced surface.** Phase F collapses the 22 advanced-mode tools into 8 consolidated ones — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. The advanced-mode wire footprint drops from ~36KB to ~23.5KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. Migration is mechanical and 1-to-1; see the [v1 → v2 migration table](#migration) and the [Stage E F2 verdict](CHANGELOG.md#200--2026-05-27--phase-f-stage-d-ships) in the v2.0.0 changelog. [Learn more →](#whats-new-in-v200)
 >
-> Still on the v1.0.0 highlights? Streamable HTTP transport, batch entry retrieval, and per-entry resources are documented in the [v1.0.0 section](#whats-new-in-v100).
+> Still on a v1.x release? Highlights for [v1.2.0](#whats-new-in-v120), [v1.1.0](#whats-new-in-v110), and [v1.0.0](#whats-new-in-v100) remain documented below. v1.x is in maintenance mode (security + data-corruption + pre-v2.0.0 crash fixes accepted; no new features) until the FIRST of `{v2.5.0 ships, 2026-11-27}`.
 
-> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
+> **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (8 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
 
 ## Built for LLM Intelligence
 
@@ -64,7 +64,7 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 
 ## Features
 
-- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (21 specialized tools)
+- **Dual Mode Support**: Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (8 specialized tools)
 - **Streamable HTTP Transport**: 🆕 Run as a long-running service over HTTP — bearer-token auth, CORS, health endpoints, multi-arch Docker image, and resource subscriptions
 - **Batch Entry Retrieval**: 🆕 Fetch up to 50 entries per call with `get_zim_entries` — pairs naturally with HTTP, where round-trip cost matters
 - **Per-Entry MCP Resources**: 🆕 Stream individual entries via `zim://{name}/entry/{path}` with native MIME types — browse HTML, PDFs, and images directly
@@ -476,7 +476,7 @@ mkdir ~/zim-files
 openzim-mcp /path/to/zim/files
 python -m openzim_mcp /path/to/zim/files
 
-# Advanced mode - all 21 specialized tools
+# Advanced mode - all 8 specialized tools
 openzim-mcp --mode advanced /path/to/zim/files
 python -m openzim_mcp --mode advanced /path/to/zim/files
 
@@ -493,7 +493,7 @@ make run ZIM_DIR=/path/to/zim/files
 OpenZIM MCP supports two modes:
 
 - **Simple Mode** (default): Provides 1 intelligent tool (`zim_query`) that accepts natural language queries
-- **Advanced Mode**: Exposes all 21 specialized MCP tools for maximum control
+- **Advanced Mode**: Exposes all 8 specialized MCP tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`) for maximum control
 
 ### MCP Configuration
 
@@ -1615,7 +1615,7 @@ export OPENZIM_MCP_SERVER_NAME=my_openzim_mcp_server
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `OPENZIM_MCP_TOOL_MODE` | `simple` | Tool surface: `simple` (one `zim_query` tool) or `advanced` (21 specialized tools). Controlled by `--tool-mode` on the CLI as well. |
+| `OPENZIM_MCP_TOOL_MODE` | `simple` | Tool surface: `simple` (one `zim_query` tool) or `advanced` (8 specialized tools). Controlled by `--tool-mode` on the CLI as well. |
 | `OPENZIM_MCP_TRANSPORT` | `stdio` | Transport protocol: `stdio`, `http`, or `sse`. |
 | `OPENZIM_MCP_HOST` | `127.0.0.1` | HTTP/SSE bind host. Non-loopback hosts require `OPENZIM_MCP_AUTH_TOKEN`. |
 | `OPENZIM_MCP_PORT` | `8000` | HTTP/SSE bind port. |
