@@ -23,6 +23,9 @@ env/
 *.swo
 *~
 
+# Git worktrees
+.worktrees/
+
 # Testing
 .pytest_cache/
 .coverage
