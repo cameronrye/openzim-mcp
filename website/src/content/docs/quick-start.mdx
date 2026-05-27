@@ -1,0 +1,295 @@
+---
+title: Quick start
+summary: Run OpenZIM MCP v2.0.0 in 5 minutes — start the server in simple mode, dispatch a zim_query, and try one advanced-mode zim_search example.
+group: Get started
+sidebar_order: 3
+---
+
+Get up and running with OpenZIM MCP in just a few minutes. This tutorial walks through your first successful setup and usage in **simple mode** (the default, one natural-language tool), then shows one **advanced mode** example using the v2.0.0 8-tool surface.
+
+## What you'll learn
+
+- How to set up OpenZIM MCP with a test ZIM file
+- How to configure your MCP client
+- How to dispatch `zim_query` in simple mode
+- How to use `zim_search` (and friends) in advanced mode
+- How to verify everything is working correctly
+
+## Time required: ~5 minutes
+
+## Before you start
+
+Make sure you have completed the [Installation](/openzim-mcp/docs/installation/) page and have:
+
+- OpenZIM MCP installed (`uv tool install openzim-mcp` or `pip install openzim-mcp`)
+- Python 3.12+ available
+- A ZIM file downloaded (we'll help you get one if needed)
+
+> **Notation:** examples on this page use MCP JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`). Your MCP client (Claude Desktop, etc.) handles the wire framing; you only need to know the tool name and argument shape.
+
+## Step 1: Get a test ZIM file
+
+### Option A: download a small test file
+
+```bash
+# Create a directory for ZIM files
+mkdir ~/zim-files
+cd ~/zim-files
+
+# Download a small Wikipedia subset (recommended for testing)
+# Visit: https://browse.library.kiwix.org/
+# Search for "Wikipedia English Top 100" (~300MB)
+# Download and save to ~/zim-files/
+```
+
+### Option B: use the project test data (development)
+
+```bash
+# From your openzim-mcp directory (if installed from source)
+make download-test-data
+
+# This downloads small test ZIM files to tests/data/
+```
+
+## Step 2: Start the server (simple mode)
+
+Simple mode is the default. It exposes a single natural-language tool, `zim_query`, that dispatches to the right underlying operation based on the request.
+
+```bash
+# Start the server with your ZIM files directory
+openzim-mcp ~/zim-files
+
+# You should see two log lines like:
+# 2026-05-27 15:30:00,000 - openzim_mcp.main - INFO - OpenZIM MCP server started in SIMPLE mode (1 intelligent tool)
+# 2026-05-27 15:30:00,001 - openzim_mcp.main - INFO - Allowed directories: /home/user/zim-files
+```
+
+For network access (long-running service, browser clients, Docker), use `--transport http` and see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
+
+**Development installation:**
+
+```bash
+# Navigate to your openzim-mcp directory
+cd /path/to/openzim-mcp
+
+# Start the server with your ZIM files directory
+uv run python -m openzim_mcp ~/zim-files
+```
+
+## Step 3: Configure your MCP client
+
+### For Claude Desktop
+
+1. **Find your configuration file**:
+   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Linux**: `~/.config/claude/claude_desktop_config.json`
+
+2. **Add OpenZIM MCP configuration**:
+
+**Standard Installation (Recommended):**
+
+```json
+{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "openzim-mcp",
+      "args": ["/path/to/your/zim-files"]
+    }
+  }
+}
+```
+
+**Development Installation:**
+
+```json
+{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/your/openzim-mcp",
+        "run",
+        "python",
+        "-m",
+        "openzim_mcp",
+        "/path/to/your/zim-files"
+      ]
+    }
+  }
+}
+```
+
+3. **Restart Claude Desktop**.
+
+### For Other MCP Clients
+
+**Standard Installation:**
+
+```bash
+openzim-mcp /path/to/zim-files
+```
+
+**Development Installation:**
+
+```bash
+uv run python -m openzim_mcp /path/to/zim-files
+```
+
+## Step 4: Try simple mode (`zim_query`)
+
+In simple mode, the server exposes one tool. Phrase the request in plain language; the dispatcher routes it to the right underlying operation.
+
+### Summarize an article
+
+```json
+{
+  "name": "zim_query",
+  "arguments": {
+    "request": "summarize Photosynthesis"
+  }
+}
+```
+
+**Expected response:** a summary block for the Photosynthesis article, drawn from the first ZIM file that contains it.
+
+### List available ZIM files
+
+```json
+{
+  "name": "zim_query",
+  "arguments": {
+    "request": "list available ZIM files"
+  }
+}
+```
+
+**Expected response:** the set of ZIM files in your allowed directories, with sizes and modification times.
+
+### Search across content
+
+```json
+{
+  "name": "zim_query",
+  "arguments": {
+    "request": "search for biology"
+  }
+}
+```
+
+**Expected response:** ranked search results with snippets and entry paths.
+
+### Server health
+
+```json
+{
+  "name": "zim_query",
+  "arguments": {
+    "request": "what's the server health and cache performance?"
+  }
+}
+```
+
+**Expected response:** JSON with `status`, `cache_performance`, `health_checks`, and any warnings or recommendations. `process_id` is `[REDACTED]`.
+
+## Step 5: Try advanced mode (`zim_search` + friends)
+
+When you need precise control — a specific search mode, cross-file scope, suggestion-style title resolution — start the server in **advanced mode**, which exposes the full v2.0.0 8-tool surface: `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`.
+
+```bash
+openzim-mcp --mode advanced ~/zim-files
+```
+
+### A focused full-text search
+
+```json
+{
+  "name": "zim_search",
+  "arguments": {
+    "zim_file_path": "/home/user/zim-files/wikipedia_en_100.zim",
+    "mode": "fulltext",
+    "query": "photosynthesis light reaction",
+    "limit": 10
+  }
+}
+```
+
+**Expected response:** up to 10 ranked full-text hits with snippets and entry paths. From here, the LLM can call `zim_get` with one of the returned paths to retrieve the full article, or `zim_links(direction="outbound", ...)` to extract outgoing links.
+
+## Step 6: Verify everything works
+
+### Performance smoke test
+
+In simple mode:
+
+```json
+{
+  "name": "zim_query",
+  "arguments": {
+    "request": "search for computer, then fetch the top result"
+  }
+}
+```
+
+This exercises both search and content retrieval in a single dispatch.
+
+## Success! What's next?
+
+You now have OpenZIM MCP running successfully. Here's what to explore next:
+
+### Learn more
+
+- **[API Reference](/openzim-mcp/docs/api-reference/)** — every tool, prompt, and resource (v2.0.0 8-tool surface)
+- **[LLM Integration Patterns](/openzim-mcp/docs/llm-integration-patterns/)** — best practices for AI integration
+- **[Configuration Guide](/openzim-mcp/docs/configuration/)** — customize your setup
+
+### Advanced usage
+
+- **[Performance Optimization](/openzim-mcp/docs/performance-optimization/)** — optimize for production
+- **[Security Best Practices](/openzim-mcp/docs/security-best-practices/)** — secure your deployment
+- **[Architecture Overview](/openzim-mcp/docs/architecture-overview/)** — understand the system design
+
+### Development
+
+- **[Contributing Guidelines](https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md)** — contribute, run tests, and use the dev workflow
+
+## Troubleshooting
+
+### Common issues
+
+**"No ZIM files found"**
+
+- Verify ZIM files are in the correct directory
+- Check file permissions
+- Ensure files have `.zim` extension
+
+**"Server not responding"**
+
+- Check if the server process is running
+- Verify the correct path in MCP client configuration
+- Look for error messages in the server output
+
+**"Permission denied"**
+
+- Ensure the user has read access to ZIM files directory
+- Check directory permissions
+
+### Getting help
+
+- **[Troubleshooting Guide](/openzim-mcp/docs/troubleshooting/)** — detailed solutions
+- **[GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues)** — report bugs
+- **[GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions)** — ask questions
+
+## Pro tips
+
+1. **Start small:** use smaller ZIM files (100–500MB) for initial testing.
+2. **Monitor performance:** use `zim_query` ("server health") in simple mode or `zim_health` directly in advanced mode to monitor cache performance.
+3. **Experiment:** try different search terms and content types to understand capabilities.
+4. **Read the logs:** server logs provide valuable debugging information.
+
+---
+
+**Great job!** You're now ready to harness the full power of OpenZIM MCP for your AI applications. Happy exploring.
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

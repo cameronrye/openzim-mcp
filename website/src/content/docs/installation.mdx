@@ -1,0 +1,426 @@
+---
+title: Installation
+summary: Install OpenZIM MCP v2.0.0 from PyPI (uv or pip), Docker, or source on Windows, macOS, or Linux, then wire it into Claude Desktop or any MCP client.
+group: Get started
+sidebar_order: 2
+---
+
+This guide covers installing OpenZIM MCP on different platforms and for various use cases.
+
+## Prerequisites
+
+### System Requirements
+
+- **Python**: 3.12 or higher (3.13 also supported)
+- **Operating System**: Windows, macOS, or Linux
+- **Memory**: Minimum 512MB RAM (2GB+ recommended for large ZIM files)
+- **Storage**: Space for ZIM files (varies by content, typically 100MB - 50GB+)
+
+### Required Tools
+
+- **uv** (recommended) or **pip** for package management. `uv` is the preferred installer for CLI tools because it creates an isolated, self-contained tool environment; `pip` is fine for venv-based installs.
+
+## Standard Installation (Recommended)
+
+### Install from PyPI with uv (recommended)
+
+```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install OpenZIM MCP as an isolated CLI tool
+uv tool install openzim-mcp
+
+# Verify installation
+openzim-mcp --help
+```
+
+### Install from PyPI with pip
+
+```bash
+# Install OpenZIM MCP from PyPI
+pip install openzim-mcp
+
+# Verify installation
+openzim-mcp --help
+```
+
+That's it! OpenZIM MCP is now installed and ready to use.
+
+## Development Installation
+
+For contributors and developers who want to modify the code:
+
+### Option 1: Using uv (recommended for development)
+
+```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone the repository
+git clone https://github.com/cameronrye/openzim-mcp.git
+cd openzim-mcp
+
+# Install dependencies
+uv sync
+
+# Install development dependencies
+uv sync --dev
+```
+
+### Option 2: Using pip (development)
+
+```bash
+# Clone the repository
+git clone https://github.com/cameronrye/openzim-mcp.git
+cd openzim-mcp
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On Windows:
+venv\Scripts\activate
+# On macOS/Linux:
+source venv/bin/activate
+
+# Install in development mode
+pip install -e .
+```
+
+## Setting Up ZIM Files
+
+### Download ZIM Files
+
+1. **Visit the Kiwix Library**: [browse.library.kiwix.org](https://browse.library.kiwix.org/)
+2. **Choose content**: Wikipedia, Wiktionary, Stack Overflow, etc.
+3. **Download ZIM files** to a dedicated directory
+
+```bash
+# Create ZIM files directory
+mkdir ~/zim-files
+
+# Example: Download a small Wikipedia subset
+# (Download from Kiwix Library and place in ~/zim-files/)
+```
+
+### Recommended ZIM Files for Testing
+
+- **Wikipedia (English, Top 100)**: ~300MB - Good for testing
+- **Wikipedia (English, Top 1000)**: ~2GB - Comprehensive testing
+- **Simple English Wikipedia**: ~200MB - Lightweight option
+
+## Platform-Specific Installation
+
+### Windows
+
+**Standard Installation:**
+
+```powershell
+# Install Python 3.12+ from python.org
+# Then install OpenZIM MCP
+uv tool install openzim-mcp
+# Or, with pip:
+pip install openzim-mcp
+```
+
+**Development Installation:**
+
+```powershell
+# Install Git from git-scm.com
+# Clone and install
+git clone https://github.com/cameronrye/openzim-mcp.git
+cd openzim-mcp
+
+# Using uv (recommended)
+uv sync
+
+# Or using pip
+python -m venv venv
+venv\Scripts\activate
+pip install -e .
+```
+
+### macOS
+
+**Standard Installation:**
+
+```bash
+# Install Python 3.12+ using Homebrew
+brew install python@3.12
+
+# Install OpenZIM MCP (uv recommended)
+uv tool install openzim-mcp
+# Or:
+pip install openzim-mcp
+```
+
+**Development Installation:**
+
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone and install
+git clone https://github.com/cameronrye/openzim-mcp.git
+cd openzim-mcp
+uv sync
+```
+
+### Linux (Ubuntu/Debian)
+
+**Standard Installation:**
+
+```bash
+# Install Python 3.12+
+sudo apt update
+sudo apt install python3.12 python3-pip
+
+# Install OpenZIM MCP (uv recommended)
+uv tool install openzim-mcp
+# Or:
+pip install openzim-mcp
+```
+
+**Development Installation:**
+
+```bash
+# Install development tools
+sudo apt install python3.12-venv python3.12-dev git
+
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone and install
+git clone https://github.com/cameronrye/openzim-mcp.git
+cd openzim-mcp
+uv sync
+```
+
+### Linux (CentOS/RHEL/Fedora)
+
+**Standard Installation:**
+
+```bash
+# Install Python 3.12+
+sudo dnf install python3.12 python3-pip
+
+# Install OpenZIM MCP (uv recommended)
+uv tool install openzim-mcp
+# Or:
+pip install openzim-mcp
+```
+
+**Development Installation:**
+
+```bash
+# Install development tools
+sudo dnf install python3.12-venv python3.12-devel git
+
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone and install
+git clone https://github.com/cameronrye/openzim-mcp.git
+cd openzim-mcp
+uv sync
+```
+
+## Docker Installation
+
+OpenZIM MCP ships a multi-arch image at `ghcr.io/cameronrye/openzim-mcp` (`linux/amd64` + `linux/arm64`). Runs as non-root (uid 10001), includes a built-in healthcheck.
+
+```bash
+# Pull
+docker pull ghcr.io/cameronrye/openzim-mcp:2.0.0
+
+# Run with HTTP transport, bound to all interfaces (the image default).
+# The server REFUSES to bind 0.0.0.0 without OPENZIM_MCP_AUTH_TOKEN.
+docker run --rm -p 8000:8000 \
+  -v /srv/zim:/data:ro \
+  -e OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)" \
+  ghcr.io/cameronrye/openzim-mcp:2.0.0
+```
+
+The image entrypoint is `python -m openzim_mcp /data`, so mount your ZIM directory at `/data`. Default env vars in the image: `OPENZIM_MCP_TRANSPORT=http`, `OPENZIM_MCP_HOST=0.0.0.0`, `OPENZIM_MCP_PORT=8000`.
+
+For full deployment guidance (CORS, reverse proxy, healthchecks, systemd) see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
+
+## HTTP Transport (long-running service)
+
+For network access without Docker, use `--transport http`:
+
+```bash
+export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
+openzim-mcp --transport http --host 127.0.0.1 --port 8000 /srv/zim
+```
+
+The server **refuses to bind a non-loopback host without an auth token** as a safe default. For exposed deployments, terminate TLS at a reverse proxy (Caddy, nginx, traefik). See [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
+
+## Verification
+
+### Test the Installation
+
+**Standard Installation:**
+
+```bash
+# Test basic functionality
+openzim-mcp --help
+
+# Or using module
+python -m openzim_mcp --help
+
+# Run with a ZIM file directory
+openzim-mcp /path/to/zim/files
+```
+
+**Development Installation:**
+
+```bash
+# Test basic functionality
+uv run python -m openzim_mcp --help
+
+# Run with a ZIM file directory
+uv run python -m openzim_mcp /path/to/zim/files
+
+# Run tests to verify everything works
+make test
+```
+
+### Expected Output
+
+```
+2026-05-27 15:30:00,000 - openzim_mcp.main - INFO - OpenZIM MCP server started in SIMPLE mode (1 intelligent tool)
+2026-05-27 15:30:00,001 - openzim_mcp.main - INFO - Allowed directories: /path/to/zim/files
+```
+
+Default mode is **Simple** (one natural-language tool). For all 8 v2.0.0 tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`), pass `--mode advanced`.
+
+## MCP Client Configuration
+
+### Claude Desktop
+
+Add to your Claude Desktop configuration file:
+
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/claude/claude_desktop_config.json`
+
+**Standard Installation (Recommended):**
+
+```json
+{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "openzim-mcp",
+      "args": ["/path/to/zim/files"]
+    }
+  }
+}
+```
+
+**Alternative (using Python module):**
+
+```json
+{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "python",
+      "args": [
+        "-m",
+        "openzim_mcp",
+        "/path/to/zim/files"
+      ]
+    }
+  }
+}
+```
+
+**Development Installation:**
+
+```json
+{
+  "mcpServers": {
+    "openzim-mcp": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/openzim-mcp",
+        "run",
+        "python",
+        "-m",
+        "openzim_mcp",
+        "/path/to/zim/files"
+      ]
+    }
+  }
+}
+```
+
+### Other MCP Clients
+
+**Standard Installation:**
+
+```bash
+openzim-mcp /path/to/zim/files
+```
+
+**Development Installation:**
+
+```bash
+uv run python -m openzim_mcp /path/to/zim/files
+```
+
+## Troubleshooting Installation
+
+### Common Issues
+
+**Python Version Error**
+
+```
+Error: Python 3.12+ required
+```
+
+**Solution**: Install Python 3.12 or higher from [python.org](https://python.org)
+
+**uv Not Found**
+
+```
+Command 'uv' not found
+```
+
+**Solution**: Install uv using the installation script or use pip instead
+
+**Permission Denied**
+
+```
+Permission denied: '/path/to/zim/files'
+```
+
+**Solution**: Ensure the ZIM files directory is readable by the user running the server
+
+**ZIM Files Not Found**
+
+```
+No ZIM files found in directory
+```
+
+**Solution**: Download ZIM files from [Kiwix Library](https://browse.library.kiwix.org/) and place them in the specified directory
+
+### Getting Help
+
+- **Check the [Troubleshooting Guide](/openzim-mcp/docs/troubleshooting/)** for detailed solutions
+- **Open an issue** on [GitHub](https://github.com/cameronrye/openzim-mcp/issues)
+- **Join discussions** on [GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions)
+
+## Next Steps
+
+1. **[Quick start](/openzim-mcp/docs/quick-start/)** — Learn basic usage
+2. **[Configuration Guide](/openzim-mcp/docs/configuration/)** — Customize your setup
+3. **[API Reference](/openzim-mcp/docs/api-reference/)** — Explore available tools
+
+---
+
+**Installation complete!** Continue with the [Quick start](/openzim-mcp/docs/quick-start/) to start using OpenZIM MCP.
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

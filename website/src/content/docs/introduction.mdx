@@ -1,0 +1,63 @@
+---
+title: Introduction
+summary: OpenZIM MCP is a secure, high-performance MCP server giving AI models offline access to ZIM-format knowledge bases via 8 consolidated v2.0.0 tools.
+group: Get started
+sidebar_order: 1
+---
+
+**OpenZIM MCP** is a modern, secure, and high-performance MCP (Model Context Protocol) server that enables AI models to access and search [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge bases offline.
+
+> **v2.0.0 — 8-tool advanced surface.** Phase F collapses the prior 22-tool advanced surface into 8 consolidated tools — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. The advanced-mode wire footprint drops from ~36KB to ~23.5KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. Simple mode (`zim_query` only) is unchanged. [What's new in v2.0.0 →](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#200--2026-05-27--phase-f-stage-d-ships)
+>
+> Still running v1.x? Highlights for [v1.2.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#120) and [v1.0.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#100-2026-05-01) remain documented in the changelog. v1.x is in maintenance mode (security + data-corruption + pre-v2.0.0 crash fixes accepted; no new features) until the FIRST of `{v2.5.0 ships, 2026-11-27}`.
+
+## What Makes OpenZIM MCP Different
+
+### Built for LLM Intelligence
+
+OpenZIM MCP provides **intelligent, structured access** that LLMs need:
+
+- **Dual-mode surface** — Simple mode (default) exposes a single natural-language tool (`zim_query`) for smaller LLMs; Advanced mode exposes the 8 specialized v2.0.0 tools for hosts that can pick from a richer surface.
+- **Smart navigation** — browse by namespace (articles, metadata, media) instead of blind searching. `zim_browse(mode="walk")` does deterministic cursor-paginated iteration.
+- **Multi-archive search** — `zim_search(cross_file=True)` queries every ZIM file at once; `zim_search(mode="title")` resolves titles directly without full-text scoring.
+- **Smart retrieval** — automatic fallback from direct path access to search-derived term resolution, with archive-scoped path-mapping cache and bounded redirect-chain following.
+- **Batch retrieval** — `zim_get(entry_paths=[...])` fetches up to 50 entries in one call with per-entry success/error reporting.
+- **MCP prompts** — pre-built workflows (`/research`, `/summarize`, `/explore`) orchestrate multi-step ZIM operations.
+- **MCP resources** — `zim://files`, `zim://{name}`, `zim://{name}/entry/{path}` integrate with MCP-aware client browsers and `@`-mention pickers; subscribe for live update notifications.
+- **Binary content** — `zim_get(binary=True)` extracts PDFs, images, and other embedded media for multi-agent workflows.
+
+### Operations & Security
+
+- **Streamable HTTP transport** with bearer-token auth, CORS allow-list, and `/healthz` / `/readyz` probes.
+- **Safe-default startup check** refuses to bind a non-localhost host without an auth token.
+- **Path and PID redaction** in error responses and diagnostics — rejected traversals no longer leak the canonical allowed-directory layout.
+- **Atomic rate limiting** — global + per-operation token-bucket acquire is single-pass; no transient over-consumption.
+- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp`, builds for `linux/amd64` and `linux/arm64`, runs as non-root with a built-in healthcheck.
+
+## Use Cases
+
+- **Research & knowledge management** — offline Wikipedia / Wiktionary / academic archives behind an MCP-aware assistant.
+- **Knowledge chatbots** — give a small/local LLM real reference material instead of relying on weights.
+- **Compliance / air-gapped environments** — offline knowledge access without internet egress.
+- **Multi-agent workflows** — extract binary entries (PDFs, images) and pass to specialized processors.
+
+## Project Status
+
+- **Version:** 2.0.0
+- **License:** MIT
+- **Python:** 3.12+
+- **Test Coverage:** 80%+
+- **Container:** `ghcr.io/cameronrye/openzim-mcp:2.0.0` + `:latest` (linux/amd64, linux/arm64)
+
+## Quick Links
+
+- **[GitHub Repository](https://github.com/cameronrye/openzim-mcp)**
+- **[CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md)** — version history
+- **[v1 → v2 migration table](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#migrating-from-v1x--v2-beta)** — the mechanical 22→8 mapping
+- **[Issues & Bug Reports](https://github.com/cameronrye/openzim-mcp/issues)**
+- **[Discussions](https://github.com/cameronrye/openzim-mcp/discussions)**
+- **[Releases](https://github.com/cameronrye/openzim-mcp/releases)**
+
+---
+
+**Need help?** Start with the [Quick start](/openzim-mcp/docs/quick-start/); for HTTP/Docker deployment see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/); for failure modes see [Troubleshooting](/openzim-mcp/docs/troubleshooting/).
