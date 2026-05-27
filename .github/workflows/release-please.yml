@@ -49,24 +49,40 @@ jobs:
       pull-requests: write
     steps:
       - name: Comment on PR
+        # release-please's ``pr`` output is a JSON object (not a URL string
+        # as an earlier iteration of this workflow assumed). Pass it via an
+        # env var and JSON.parse to avoid embedding the body content into
+        # the github-script source, which previously broke when commit
+        # subjects contained single-quoted tokens like ``plumb 'rc1'``.
         uses: actions/github-script@v9
+        env:
+          RELEASE_PR_JSON: ${{ needs.release-please.outputs.pr }}
         with:
           script: |
-            // Extract PR number from the PR output (format: "https://github.com/owner/repo/pull/123")
-            const prUrl = '${{ needs.release-please.outputs.pr }}';
-            if (!prUrl) {
-              console.log('No PR URL found');
+            const raw = process.env.RELEASE_PR_JSON;
+            if (!raw) {
+              console.log('No PR data found');
               return;
             }
-
-            const prNumber = prUrl.split('/').pop();
+            let prData;
+            try {
+              prData = JSON.parse(raw);
+            } catch (e) {
+              console.log('Failed to JSON.parse release-please pr output:', e.message);
+              return;
+            }
+            const prNumber = prData && prData.number;
+            if (!prNumber) {
+              console.log('release-please pr output had no .number field');
+              return;
+            }
             console.log(`Found PR number: ${prNumber}`);
 
             try {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: parseInt(prNumber),
+                issue_number: prNumber,
                 body: `🤖 **Automated Release PR Created**
 
                 This PR was automatically created by release-please based on conventional commits.
