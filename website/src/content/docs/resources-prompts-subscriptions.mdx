@@ -1,0 +1,308 @@
+---
+title: Resources, prompts & subscriptions
+summary: MCP resources (zim://files, zim://{name}, zim://{name}/entry/{path}), slash-command prompts (/research, /summarize, /explore), and the polling subscription system in v2.0.0.
+group: Reference
+sidebar_order: 3
+---
+
+OpenZIM MCP exposes three MCP "resources" (URI-addressable data), three slash-command "prompts" (pre-built workflows), and a polling-based subscription system for live update notifications. This page is the canonical reference for each.
+
+> **Source of truth:** [openzim_mcp/tools/resource_tools.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/resource_tools.py), [openzim_mcp/tools/prompts.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/prompts.py), [openzim_mcp/subscriptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/subscriptions.py).
+
+Resources, prompts, and subscriptions are **always available** regardless of tool mode (Simple or Advanced).
+
+> **Notation:** code samples on this page use MCP JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`). Your MCP client handles the wire framing; you supply the tool name and argument shape.
+
+---
+
+## Resources
+
+MCP resources are URI-addressable data. Clients with a resource browser or `@`-mention picker (Claude Code, Inspector) surface them automatically.
+
+### `zim://files`
+
+JSON list of every ZIM file in the allowed directories.
+
+```json
+[
+  {
+    "name": "wikipedia_en_100_2026-02.zim",
+    "path": "/srv/zim/wikipedia_en_100_2026-02.zim",
+    "size": 124857600,
+    "modified": "2026-02-15T10:30:00"
+  }
+]
+```
+
+Same shape as the `loaded_archives` field returned by the `zim_health` tool.
+
+### `zim://{name}`
+
+Overview of one ZIM file. `{name}` is the bare basename without `.zim` (e.g. `wikipedia_en_100_2026-02`). Returns metadata, namespace summary, and a main-page preview (truncated to 2000 chars).
+
+```json
+{
+  "name": "wikipedia_en_100_2026-02",
+  "path": "/srv/zim/wikipedia_en_100_2026-02.zim",
+  "metadata": {
+    "Title": "Wikipedia",
+    "Language": "eng",
+    "Creator": "Wikipedia",
+    "Flavour": "maxi"
+  },
+  "namespaces": { },
+  "main_page_preview": "..."
+}
+```
+
+If a section fails to load (rare — corrupt archive, missing metadata), it's reported in `metadata_error` / `namespaces_error` / `main_page_error` rather than aborting the whole response.
+
+### `zim://{name}/entry/{path}`
+
+Single entry served with native MIME type. The MIME type is detected from libzim's `Item.mimetype` and reported back per request — text entries return text bodies; binary entries (images, PDFs, audio) return raw bytes (FastMCP base64-wraps).
+
+#### URL encoding requirement
+
+**Clients MUST URL-encode `/` as `%2F`** in the `{path}` segment. FastMCP's URI template engine treats `/` as a segment separator, so a literal slash won't route. Other RFC 3986 reserved characters in the path also need encoding (e.g. `?` as `%3F`).
+
+```
+zim://wikipedia_en/entry/A%2FClimate_change
+zim://wikipedia_en/entry/I%2FFlag_of_France.svg
+```
+
+Without the encoding, the resource fetch returns a "not found" error even when the entry exists.
+
+#### MIME type behavior
+
+- HTML / text → `text/html`, `text/plain`, `application/json`, `application/xml`, `application/javascript` returned as decoded text.
+- Binary (anything else) → returned as raw bytes; FastMCP base64-wraps them on the wire.
+- Unknown / missing MIME → `application/octet-stream`.
+
+Charset parameters (`text/html; charset=utf-8`) are stripped before reporting; only the bare MIME type ends up in the response.
+
+#### When to use this resource vs the `zim_get` tool
+
+| Concern | Per-entry resource | `zim_get` tool |
+|---------|---------------------|----------------|
+| Direct browser/MCP-client rendering (HTML, image, PDF) | preferred | not designed for this |
+| Native MIME type | yes | wraps article body in markdown envelope |
+| Smart-retrieval fallback | no — direct path only, must know exact path | yes — search-derived term fallback |
+| Truncation / `max_content_length` | no | yes |
+| Binary content with metadata wrapping | bare bytes only | use `zim_get(binary=True)` for the `{path, title, mime_type, size, encoding, data}` envelope |
+
+For LLM workflows that need processed text + smart fallback, prefer the tool. For "render this entry" workflows, prefer the resource.
+
+---
+
+## Prompts
+
+MCP prompts are pre-built workflows clients can invoke as slash commands. Each one returns a list of messages instructing the LLM to chain a specific multi-step ZIM operation against the v2.0.0 8-tool surface.
+
+> **Hardening:** user-supplied arguments are sanitized before interpolation — control characters replaced with spaces, backticks stripped (template delimiter), length capped at 200 characters. Apostrophes and double quotes are *preserved* (real entry paths contain them, e.g. `C/Schrödinger's_cat`). If args reduce to empty after sanitization, the prompt body asks the user to re-supply them.
+
+### `/research`
+
+Signature: `research(topic: str)`.
+
+Searches across every ZIM file for a topic, then drills into the top hits. Workflow:
+
+1. Dispatch `zim_search` with `cross_file=True` to find which ZIM files have relevant content.
+2. For each top hit, dispatch `zim_get` with `view="summary"` for a concise overview.
+3. Identify sub-topics worth exploring; ask the user which to pursue.
+
+Step 1 call shape:
+
+```json
+{
+  "name": "zim_search",
+  "arguments": {
+    "query": "<topic>",
+    "cross_file": true,
+    "limit": 10
+  }
+}
+```
+
+Step 2 call shape (per hit):
+
+```json
+{
+  "name": "zim_get",
+  "arguments": {
+    "zim_file_path": "<from step 1 result>",
+    "entry_path": "<from step 1 result>",
+    "view": "summary"
+  }
+}
+```
+
+Use case: "I want to research X but I don't know which archive has the best material."
+
+### `/summarize`
+
+Signature: `summarize(zim_file_path: str, entry_path: str)`.
+
+Three-part article summary. Workflow:
+
+1. `zim_get` with `view="toc"` for the structural overview.
+2. `zim_get` with `view="summary"` for the lead-paragraph summary.
+3. `zim_links` with `direction="outbound"` for the most-mentioned related entries.
+
+Combined into: (a) one-paragraph TL;DR, (b) section list, (c) 5–10 most relevant outbound links.
+
+Step 1 call shape:
+
+```json
+{
+  "name": "zim_get",
+  "arguments": {
+    "zim_file_path": "<arg>",
+    "entry_path": "<arg>",
+    "view": "toc"
+  }
+}
+```
+
+Step 2 call shape:
+
+```json
+{
+  "name": "zim_get",
+  "arguments": {
+    "zim_file_path": "<arg>",
+    "entry_path": "<arg>",
+    "view": "summary"
+  }
+}
+```
+
+Step 3 call shape:
+
+```json
+{
+  "name": "zim_links",
+  "arguments": {
+    "zim_file_path": "<arg>",
+    "entry_path": "<arg>",
+    "direction": "outbound"
+  }
+}
+```
+
+### `/explore`
+
+Signature: `explore(zim_file_path: str)`.
+
+High-level briefing of one ZIM file. Workflow:
+
+1. `zim_metadata` — title, language, creator, flavour, plus the deterministic namespace breakdown (surfaces minority namespaces — M, W, X, I).
+2. `zim_get` with `main_page=True` — the entry point.
+3. `zim_browse` with `mode="walk"`, `namespace="C"`, `limit=5` — sample article content.
+
+Step 1 call shape:
+
+```json
+{
+  "name": "zim_metadata",
+  "arguments": {
+    "zim_file_path": "<arg>"
+  }
+}
+```
+
+Step 2 call shape:
+
+```json
+{
+  "name": "zim_get",
+  "arguments": {
+    "zim_file_path": "<arg>",
+    "main_page": true
+  }
+}
+```
+
+Step 3 call shape:
+
+```json
+{
+  "name": "zim_browse",
+  "arguments": {
+    "zim_file_path": "<arg>",
+    "namespace": "C",
+    "mode": "walk",
+    "limit": 5
+  }
+}
+```
+
+Produces a compact briefing of what the archive is, what it covers, and what typical content looks like.
+
+### When to use prompts vs raw tool calls
+
+If your client supports MCP prompts, prefer them — they save the LLM from having to remember the orchestration. If you're building your own client or your host doesn't surface prompts, the same workflows are easy to call directly with the underlying tools.
+
+---
+
+## Subscriptions
+
+OpenZIM MCP supports the MCP `resources/subscribe` and `resources/unsubscribe` requests on `zim://files` and `zim://{name}`. The server emits `notifications/resources/updated` whenever:
+
+- A `.zim` file is added to or removed from an allowed directory (subscription target: `zim://files`)
+- A specific `.zim` file's mtime changes (subscription target: `zim://{name}`)
+
+Detection is **mtime-based** — same-size archive replacement (which is common when re-downloading from Kiwix) is detected via the mtime change.
+
+### Configuration
+
+| Env var | Default | Range | Notes |
+|---------|---------|-------|-------|
+| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | bool | master switch — `false` skips the watcher entirely; subscribe calls succeed but never fire updates |
+| `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1-60 | polling interval; the watcher rescans allowed directories on this cadence |
+
+For production HTTP services with low-priority watching, increase to `15-30s` to reduce I/O churn. For interactive desktop use, the default is fine.
+
+### Lifespan integration
+
+Under the streamable-HTTP transport the watcher is started/stopped via a lifespan-context wrapper around FastMCP's own lifespan handler. (FastMCP supplies a custom lifespan, so `add_event_handler('startup', …)` is silently a no-op — the wrapper is the only path that works.)
+
+### Subscriber behavior
+
+- The fan-out is concurrent (`asyncio.gather`); one slow subscriber doesn't delay the others.
+- Per-subscriber send timeout is 5 seconds (`TIMEOUTS.SUBSCRIPTION_SEND_SECONDS`); a subscriber that doesn't respond is treated as dead and evicted from the registry.
+- `asyncio.CancelledError` from a subscriber is re-raised, not swallowed — clean shutdown propagates correctly.
+
+### Client example (pseudocode)
+
+After the initial MCP handshake, subscribe via your client SDK's resource-subscription API. The wire-level interaction is:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/subscribe",
+  "params": { "uri": "zim://files" }
+}
+```
+
+The server then pushes notifications when changes are detected:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/resources/updated",
+  "params": { "uri": "zim://files" }
+}
+```
+
+On each notification, re-read the resource (`resources/read` with the same URI) to refresh your local view. Specifics depend on your MCP client SDK — check its subscription API for the idiomatic wrapper.
+
+### Implementation note
+
+Resource handler registration uses a private FastMCP attribute (`_mcp_server`); the SDK doesn't yet expose a stable public hook for handler-level interception. This is fragile if FastMCP changes its internals; the project tracks the risk and will migrate once a stable public API lands upstream.
+
+---
+
+**API reference for tools:** [API reference](/openzim-mcp/docs/api-reference/). **HTTP transport details:** [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/). **Configuration knobs:** [Configuration](/openzim-mcp/docs/configuration/).
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

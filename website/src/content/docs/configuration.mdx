@@ -1,0 +1,325 @@
+---
+title: Configuration
+summary: Every supported environment variable, CLI flag, and configuration field for OpenZIM MCP v2.0.0 — transport, cache, content, rate limiting, subscriptions, and deployment profiles.
+group: Reference
+sidebar_order: 2
+---
+
+Every supported environment variable, CLI flag, and configuration field for OpenZIM MCP v2.0.0.
+
+> **Source of truth:** [openzim_mcp/config.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/config.py) and [openzim_mcp/defaults.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/defaults.py). If this page disagrees with code, code wins — please file an issue.
+
+## How configuration is loaded
+
+OpenZIM MCP is a [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) `BaseSettings` model. Every field can be set three ways, in priority order:
+
+1. CLI flag (where one is wired through `__main__.py` — currently `--mode`, `--transport`, `--host`, `--port`)
+2. Environment variable, prefixed with `OPENZIM_MCP_`
+3. Default value baked into [defaults.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/defaults.py)
+
+Nested fields use a double-underscore separator: `OPENZIM_MCP_CACHE__MAX_SIZE`, `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE`, etc.
+
+A bad value raises `OpenZimMcpConfigurationError` at startup with a human-readable message — pydantic's raw `ValidationError` dump is wrapped before it reaches the operator.
+
+## Tool mode
+
+```bash
+# Default: simple — exposes one natural-language tool (zim_query)
+# Set to advanced for the full v2.0.0 8-tool surface
+export OPENZIM_MCP_TOOL_MODE=advanced
+```
+
+Or via CLI:
+
+```bash
+openzim-mcp --mode advanced /path/to/zim/files
+```
+
+| Mode | Tool surface | When to use |
+|------|--------------|-------------|
+| `simple` (default) | 1 tool: `zim_query` (NL intent router) | small/local LLMs, MCP hosts that struggle with large tool catalogs |
+| `advanced` | 8 tools: `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health` (see [API reference](/openzim-mcp/docs/api-reference/)) | hosts that handle a richer tool surface, scripting, fine-grained control |
+
+**v2.0.0 ships the 8-tool advanced surface** — collapsed from the prior 22-tool v1 surface (Phase F). Advanced-mode wire footprint dropped from ~36KB to ~23.5KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
+
+## Transport
+
+```bash
+# Default: stdio (no network)
+# Other values: http (streamable HTTP), sse (legacy, localhost-only)
+export OPENZIM_MCP_TRANSPORT=http
+export OPENZIM_MCP_HOST=127.0.0.1            # default 127.0.0.1
+export OPENZIM_MCP_PORT=8000                 # default 8000
+export OPENZIM_MCP_AUTH_TOKEN='openssl rand -hex 32'  # required for non-localhost
+export OPENZIM_MCP_CORS_ORIGINS='["https://app.example"]'  # JSON list; "*" rejected
+```
+
+| Field | Env var | Default | Notes |
+|-------|---------|---------|-------|
+| `auth_token` | `OPENZIM_MCP_AUTH_TOKEN` | unset | Bearer token for streamable HTTP. Stored as `SecretStr`; never logged. **Set via env only — never put it in a file.** |
+| `cors_origins` | `OPENZIM_MCP_CORS_ORIGINS` | `[]` | JSON list of allowed origins. Wildcard `"*"` is rejected at startup (whitespace-padded `" * "` too). |
+| `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | Bind address. Non-loopback hosts require `auth_token` for `http`; `sse` always rejects non-loopback. |
+| `port` | `OPENZIM_MCP_PORT` | `8000` | 1-65535. |
+| `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | One of `stdio`/`http`/`sse`. `sse` has no auth middleware and is loopback-only. |
+
+**Safe-default startup check** — the server *refuses* to bind if either:
+
+- `transport=http` + non-loopback host + no `auth_token` → `OpenZimMcpConfigurationError: HTTP transport bound to {host} requires authentication.`
+- `transport=sse` + non-loopback host → `OpenZimMcpConfigurationError: SSE transport bound to {host} is not allowed.`
+
+For full HTTP deployment guidance see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
+
+## Resource subscriptions
+
+Polling-based mtime watcher that emits `notifications/resources/updated` to subscribed clients when allowed directories change or `.zim` files are replaced.
+
+```bash
+export OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=true        # default true
+export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=5          # default 5, range 1-60
+```
+
+Setting `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the polling task entirely; subscribe calls succeed but never fire updates. Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` upward for low-priority watching, downward for sub-second freshness.
+
+## Cache
+
+Single LRU+TTL cache shared by all tools and the smart-retrieval path-mapping store.
+
+```bash
+export OPENZIM_MCP_CACHE__ENABLED=true         # default true
+export OPENZIM_MCP_CACHE__MAX_SIZE=100         # default 100, range 1-10000
+export OPENZIM_MCP_CACHE__TTL_SECONDS=3600     # default 3600, range 60-86400
+export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=false              # default false
+export OPENZIM_MCP_CACHE__PERSISTENCE_PATH="$HOME/.cache/openzim-mcp"  # default
+```
+
+| Field | Default | Range |
+|-------|---------|-------|
+| `cache.enabled` | `true` | bool |
+| `cache.max_size` | `100` | 1-10000 |
+| `cache.persistence_enabled` | `false` | bool |
+| `cache.persistence_path` | `~/.cache/openzim-mcp` | normalized to absolute path; falls in a predictable location even when CWD is unpredictable (containers, systemd) |
+| `cache.ttl_seconds` | `3600` | 60-86400 (1 min - 24 h) |
+
+Cache stats surface inside `zim_health` under `.health.cache_performance` — there are no explicit `warm_cache`/`cache_stats`/`cache_clear` tools (restart the server to flush).
+
+> **Persistence note:** when `persistence_enabled=true`, `cache.set()` validates that the value is JSON-serializable at write time and raises `OpenZimMcpValidationError` if not (no silent `str()` coercion). Internal callers always pass JSON-safe values (strings, dicts, lists, numbers, bools), so this only matters if you've patched in a custom caller that stashes a `Path`, `datetime`, or other non-JSON object. Pure in-memory caches (persistence off) still accept arbitrary Python objects.
+
+## Content
+
+```bash
+export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=100000   # default 100000, min 100
+export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=1000         # default 1000, min 100
+export OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT=10     # default 10, range 1-100
+```
+
+`zim_get(entry_path=...)` requires `max_content_length >= 100` (lower values are rejected with a `ToolErrorPayload`).
+
+## Logging
+
+```bash
+export OPENZIM_MCP_LOGGING__LEVEL=INFO              # default INFO; one of DEBUG/INFO/WARNING/ERROR/CRITICAL
+export OPENZIM_MCP_LOGGING__FORMAT="%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # default
+```
+
+Only `level` and `format` are configurable — there is no separate JSON-mode toggle. To emit JSON, supply a JSON `format` string (or wrap stdout with a JSON-converting handler in your deployment).
+
+## Rate limiting
+
+Token-bucket limiter; global + per-operation acquire is atomic (one pass, no transient over-consumption).
+
+```bash
+export OPENZIM_MCP_RATE_LIMIT__ENABLED=true                # default true
+export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=10.0    # default 10.0
+export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=20               # default 20, max 1000
+# Per-operation limits (nested dict, JSON):
+export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"search": {"requests_per_second": 4, "burst_size": 8}}'
+```
+
+Per-internal-operation cost defaults are defined in [defaults.RATE_LIMIT_COSTS](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/defaults.py). The v2 tools dispatch internally; each branch resolves to a specific operation key the limiter charges against.
+
+> **Note on key vocabulary.** The internal operation keys below are stable pydantic-validated identifiers — they happen to share their string form with the v1 tool names, but they are **config keys**, not v1 tool surfaces. The keys remained stable through the Phase F tool collapse so that existing `PER_OPERATION_LIMITS` overrides in production deployments did not need to be rewritten when the wire-level tool surface changed.
+
+| v2 tool call | Internal operation key (literal) | Cost |
+|--------------|----------------------------------|------|
+| `zim_search(mode="fulltext")` | `"search"` | 2 |
+| `zim_search(mode="title")` | `"find_entry_by_title"` | 2 |
+| `zim_search` with namespace/content_type filters | `"search_with_filters"` | 2 |
+| `zim_search(mode="suggest")` | `"suggestions"` | 1 |
+| `zim_get(entry_path=...)` | `"get_entry"` | 1 |
+| `zim_get(entry_paths=[...])` | `"get_zim_entries"` (×N per-entry) | 1 |
+| `zim_get(binary=True)` | `"get_binary_entry"` | 3 |
+| `zim_get(view="structure")` / `view="toc"` / `view="summary")` | `"get_structure"` | 1 |
+| `zim_browse(...)` | `"browse_namespace"` | 1 |
+| `zim_metadata(...)` | `"get_metadata"` | 1 |
+| `zim_links(direction="related")` | `"get_related_articles"` | 2 |
+| `zim_health`, `zim_get_section`, `zim_query` per-intent | `"default"` | 1 |
+
+`zim_get(entry_paths=[...])` charges per-entry cost so a batch of 50 doesn't trivially bypass per-second limits.
+
+Per-operation overrides use the literal key strings shown in the right column. To throttle binary fetches:
+
+```bash
+export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"get_binary_entry": {"requests_per_second": 1, "burst_size": 2}}'
+```
+
+## Server identity
+
+```bash
+export OPENZIM_MCP_SERVER_NAME=openzim-mcp     # default openzim-mcp; reported in serverInfo
+```
+
+`serverInfo.version` always reports openzim-mcp's installed version (read from `importlib.metadata`), no longer the FastMCP SDK default.
+
+## Allowed directories
+
+ZIM file directories. Pass on the CLI:
+
+```bash
+openzim-mcp /srv/zim /home/user/zim-files
+```
+
+At least one directory is required; each is canonicalized (resolves symlinks and `..`) and verified to exist and be a directory at startup. Paths in MCP error responses are redacted to a `...filename.zim` form so the canonical layout is never leaked.
+
+## Complete reference table
+
+Sorted alphabetically by field name within each grouping.
+
+| Field | Env var | Default | Notes |
+|-------|---------|---------|-------|
+| `auth_token` | `OPENZIM_MCP_AUTH_TOKEN` | unset | `SecretStr`, never logged, env-only |
+| `cache.enabled` | `OPENZIM_MCP_CACHE__ENABLED` | `true` | bool |
+| `cache.max_size` | `OPENZIM_MCP_CACHE__MAX_SIZE` | `100` | 1-10000 |
+| `cache.persistence_enabled` | `OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED` | `false` | bool |
+| `cache.persistence_path` | `OPENZIM_MCP_CACHE__PERSISTENCE_PATH` | `~/.cache/openzim-mcp` | normalized absolute |
+| `cache.ttl_seconds` | `OPENZIM_MCP_CACHE__TTL_SECONDS` | `3600` | 60-86400 |
+| `content.default_search_limit` | `OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT` | `10` | 1-100 |
+| `content.max_content_length` | `OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH` | `100000` | min 100 |
+| `content.snippet_length` | `OPENZIM_MCP_CONTENT__SNIPPET_LENGTH` | `1000` | min 100 |
+| `cors_origins` | `OPENZIM_MCP_CORS_ORIGINS` | `[]` | JSON list; `*` rejected |
+| `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | non-loopback requires auth (http) or refuses (sse) |
+| `logging.format` | `OPENZIM_MCP_LOGGING__FORMAT` | structured | format string |
+| `logging.level` | `OPENZIM_MCP_LOGGING__LEVEL` | `INFO` | DEBUG/INFO/WARNING/ERROR/CRITICAL |
+| `port` | `OPENZIM_MCP_PORT` | `8000` | 1-65535 |
+| `rate_limit.burst_size` | `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE` | `20` | 1-1000 |
+| `rate_limit.enabled` | `OPENZIM_MCP_RATE_LIMIT__ENABLED` | `true` | bool |
+| `rate_limit.per_operation_limits` | `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` | `{}` | nested JSON dict |
+| `rate_limit.requests_per_second` | `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` | `10.0` | positive float |
+| `server_name` | `OPENZIM_MCP_SERVER_NAME` | `openzim-mcp` | reported in serverInfo |
+| `subscriptions_enabled` | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | watcher master switch |
+| `tool_mode` | `OPENZIM_MCP_TOOL_MODE` | `simple` | `simple` or `advanced` |
+| `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | `stdio`/`http`/`sse` |
+| `watch_interval_seconds` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1-60 |
+
+## Profiles
+
+### Local development (stdio)
+
+```bash
+export OPENZIM_MCP_LOGGING__LEVEL=DEBUG
+export OPENZIM_MCP_CACHE__MAX_SIZE=50
+export OPENZIM_MCP_CACHE__TTL_SECONDS=1800
+openzim-mcp ~/zim-files
+```
+
+### Production stdio (e.g. behind a desktop MCP host)
+
+```bash
+export OPENZIM_MCP_LOGGING__LEVEL=INFO
+export OPENZIM_MCP_CACHE__MAX_SIZE=500
+export OPENZIM_MCP_CACHE__TTL_SECONDS=14400
+export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
+export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000
+openzim-mcp /srv/zim
+```
+
+### Production HTTP service
+
+```bash
+export OPENZIM_MCP_TRANSPORT=http
+export OPENZIM_MCP_HOST=127.0.0.1
+export OPENZIM_MCP_PORT=8000
+export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
+export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com"]'
+export OPENZIM_MCP_LOGGING__LEVEL=INFO
+export OPENZIM_MCP_CACHE__MAX_SIZE=500
+export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
+export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=20
+export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=40
+openzim-mcp --transport http /srv/zim
+```
+
+Front it with a TLS-terminating reverse proxy (Caddy, nginx, traefik) — there is no built-in TLS.
+
+### Memory-constrained (e.g. small VPS, RPi)
+
+```bash
+export OPENZIM_MCP_CACHE__MAX_SIZE=25
+export OPENZIM_MCP_CACHE__TTL_SECONDS=900
+export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=50000
+export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=500
+export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=30
+openzim-mcp ~/zim-files
+```
+
+## Validating configuration
+
+There is no offline `--validate` flag. Two options:
+
+1. **Start the server with stdio.** Bad config raises `OpenZimMcpConfigurationError` immediately. The error message names the offending field.
+2. **Call `zim_health` from your MCP client.** Returns combined health + resolved configuration + loaded archives in one response.
+
+```text
+"Show the current server health and configuration"
+```
+
+The response includes (abbreviated):
+
+- `.health` — server status, uptime, cache performance, health checks, warnings, recommendations
+- `.configuration` — resolved values (no secrets; `server_pid` redacted)
+- `.loaded_archives` — list of every ZIM file in the allowed directories
+
+## Setting environment variables
+
+**Linux / macOS:**
+
+```bash
+echo 'export OPENZIM_MCP_CACHE__MAX_SIZE=200' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**Windows (PowerShell):**
+
+```powershell
+$env:OPENZIM_MCP_CACHE__MAX_SIZE = "200"
+[Environment]::SetEnvironmentVariable("OPENZIM_MCP_CACHE__MAX_SIZE", "200", "User")
+```
+
+**systemd unit:**
+
+```ini
+[Service]
+Environment=OPENZIM_MCP_TRANSPORT=http
+Environment=OPENZIM_MCP_HOST=127.0.0.1
+EnvironmentFile=/etc/openzim-mcp/secrets.env   # OPENZIM_MCP_AUTH_TOKEN here
+ExecStart=/usr/local/bin/openzim-mcp /srv/zim
+```
+
+**Docker:** see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
+
+## Stale env vars (not in code)
+
+The following env-var namespaces appeared in pre-1.0 / early-v2 documentation and **do not exist** in the v2.0.0 codebase. If a tool or example tells you to set them, the source is stale:
+
+- `OPENZIM_MCP_INSTANCE__*` — multi-instance conflict tracking was removed entirely.
+- `OPENZIM_MCP_SECURITY__*` — there is no `SecurityConfig`. Path validation, input sanitization, and limits are all controlled by the values listed above.
+- `OPENZIM_MCP_SMART_RETRIEVAL__*` — smart retrieval shares the global cache; there are no dedicated knobs.
+- `OPENZIM_MCP_METRICS__*` and `OPENZIM_MCP_MONITORING__*` — no first-party metrics endpoint; use `/healthz`, `/readyz`, and `zim_health` instead.
+- `OPENZIM_MCP_SERVER__MAX_CONCURRENT`, `OPENZIM_MCP_SERVER__REQUEST_TIMEOUT`, `OPENZIM_MCP_SERVER_DESCRIPTION`, `OPENZIM_MCP_SERVER__ENABLE_MONITORING` — never existed.
+- `OPENZIM_MCP_CONTENT__CONVERT_HTML`, `OPENZIM_MCP_CONTENT__PRESERVE_FORMATTING` — content processing is unconditional.
+- `OPENZIM_MCP_LOGGING__JSON`, `OPENZIM_MCP_LOGGING__SECURITY_EVENTS` — only `level` and `format` are configurable.
+
+---
+
+**Tuning?** See [Performance Optimization](/openzim-mcp/docs/performance-optimization/). **Deploying over HTTP?** See [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
