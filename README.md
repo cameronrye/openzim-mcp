@@ -40,7 +40,7 @@
 
 > 🆕 **NEW in v2.0.0: 8-tool advanced surface.** Phase F collapses the 22 advanced-mode tools into 8 consolidated ones — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. The advanced-mode wire footprint drops from ~36KB to ~23.5KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. Migration is mechanical and 1-to-1; see the [v1 → v2 migration table](#migration) and the [Stage E F2 verdict](CHANGELOG.md#200--2026-05-27--phase-f-stage-d-ships) in the v2.0.0 changelog. [Learn more →](#whats-new-in-v200)
 >
-> Still on a v1.x release? Highlights for [v1.2.0](#whats-new-in-v120), [v1.1.0](#whats-new-in-v110), and [v1.0.0](#whats-new-in-v100) remain documented below. v1.x is in maintenance mode (security + data-corruption + pre-v2.0.0 crash fixes accepted; no new features) until the FIRST of `{v2.5.0 ships, 2026-11-27}`.
+> Still on a v1.x release? Highlights for [v1.2.0](#whats-new-in-v120), [v1.1.0](#whats-new-in-v110), and [v1.0.0](#whats-new-in-v100) remain documented below. v1.x is in maintenance mode (security + data-corruption + pre-v2.0.0 crash fixes accepted; no new features) through 2026-11-27.
 
 > **Dual Mode Support:** Choose between Simple mode (1 intelligent natural language tool, default) or Advanced mode (8 specialized tools, plus 3 MCP prompts and 3 MCP resources) to match your LLM's capabilities.
 
