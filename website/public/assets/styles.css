@@ -671,6 +671,171 @@ p { color: var(--text-secondary); }
   .docs-toc { display: none; }
 }
 
+/* ===== Docs article typography ===== */
+.docs-article {
+  max-width: 72ch;
+  color: var(--text);
+}
+.docs-article h1 {
+  font-size: clamp(1.75rem, 1.25rem + 1.4vw, var(--text-3xl));
+  margin-bottom: var(--space-5);
+  letter-spacing: -0.02em;
+}
+.docs-article h2 {
+  font-size: var(--text-2xl);
+  margin-top: var(--space-10);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-color);
+  letter-spacing: -0.015em;
+}
+.docs-article h3 {
+  font-size: var(--text-xl);
+  margin-top: var(--space-8);
+  margin-bottom: var(--space-3);
+}
+.docs-article h4 {
+  font-size: var(--text-lg);
+  margin-top: var(--space-6);
+  margin-bottom: var(--space-2);
+}
+.docs-article p {
+  margin-block: var(--space-4);
+  color: var(--text);
+}
+.docs-article ul,
+.docs-article ol {
+  margin-block: var(--space-4);
+  padding-left: 1.5rem;
+}
+.docs-article ul { list-style: disc; }
+.docs-article ol { list-style: decimal; }
+.docs-article li { margin-block: var(--space-1); }
+.docs-article li > ul,
+.docs-article li > ol { margin-block: var(--space-2); }
+.docs-article blockquote {
+  border-left: 3px solid var(--signal);
+  background: var(--surface);
+  padding: var(--space-3) var(--space-5);
+  margin-block: var(--space-5);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.docs-article blockquote > :first-child { margin-top: 0; }
+.docs-article blockquote > :last-child { margin-bottom: 0; }
+.docs-article a {
+  color: var(--secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.docs-article a:hover { color: var(--signal); }
+.docs-article code:not(pre code) {
+  background: var(--surface);
+  border: 1px solid var(--border-color);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.92em;
+  color: var(--signal);
+}
+.docs-article pre {
+  margin-block: var(--space-5);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  overflow-x: auto;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+.docs-article pre code { font-size: inherit; }
+.docs-article table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-block: var(--space-5);
+  font-size: var(--text-sm);
+}
+.docs-article th,
+.docs-article td {
+  border: 1px solid var(--border-color);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+}
+.docs-article th {
+  background: var(--surface);
+  font-weight: var(--weight-semibold);
+}
+.docs-article hr {
+  border: 0;
+  border-top: 1px solid var(--border-color);
+  margin-block: var(--space-8);
+}
+.docs-article img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  margin-block: var(--space-4);
+}
+.docs-article strong { color: var(--text); font-weight: var(--weight-semibold); }
+.docs-article > :first-child { margin-top: 0; }
+
+/* Docs-shell tweaks now that the page has a sticky nav above it */
+.docs-shell { padding-top: var(--space-8); }
+.docs-toc { top: 84px; }
+.docs-toc h4 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  margin-bottom: var(--space-3);
+}
+.docs-toc ul { padding-left: 0; }
+.docs-toc li { margin-block: var(--space-1); }
+.docs-toc a { color: var(--text-secondary); font-size: var(--text-sm); }
+.docs-toc a:hover { color: var(--signal); }
+.docs-sidebar a { color: var(--text-secondary); display: block; padding: 2px 0; }
+.docs-sidebar a:hover { color: var(--signal); }
+.docs-sidebar a[aria-current="page"] { color: var(--signal); }
+.docs-breadcrumbs a { color: var(--text-secondary); }
+.docs-breadcrumbs a:hover { color: var(--signal); }
+.docs-prevnext { gap: var(--space-4); }
+.docs-prevnext a {
+  color: var(--text);
+  text-decoration: none;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.docs-prevnext a:hover { border-color: var(--signal); color: var(--signal); }
+.docs-prevnext .next { margin-left: auto; text-align: right; }
+.docs-edit {
+  margin-top: var(--space-6);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.docs-edit a {
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.docs-edit a:hover { color: var(--signal); }
+
+/* ===== Shiki dual-theme code blocks =====
+   astro.config.mjs configures Shiki with { light: 'github-light', dark: 'github-dark' }.
+   Light tokens render inline; dark tokens are emitted as --shiki-dark / --shiki-dark-bg
+   custom properties on each span and the wrapping <pre>. We swap to dark tokens when
+   the page is in dark mode. */
+html[data-theme="dark"] .astro-code,
+html[data-theme="dark"] .astro-code span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+  /* Text styles can also be overridden where Shiki exposes them. */
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
+}
+
+
 /* ============= WHATS-IN-V2 ============= */
 .v2 { position: relative; overflow: hidden; }
 .v2__watermark {

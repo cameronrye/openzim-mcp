@@ -10,4 +10,11 @@ export default defineConfig({
   build: {
     format: 'directory',
   },
+  markdown: {
+    shikiConfig: {
+      // Dual-theme: light tokens are inline; dark tokens emit CSS vars that
+      // styles.css activates under [data-theme="dark"].
+      themes: { light: 'github-light', dark: 'github-dark' },
+    },
+  },
 });

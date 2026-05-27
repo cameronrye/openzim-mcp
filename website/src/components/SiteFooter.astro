@@ -1,0 +1,70 @@
+---
+export interface Props {
+  context?: 'landing' | 'docs';
+}
+const { context = 'landing' } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const topHref = context === 'landing' ? '#hero' : `${base}/`;
+const docsHref = `${base}/docs/`;
+---
+<footer class="footer" id="footer">
+  <div class="container">
+    <div class="footer__cols">
+      <div class="footer__brand">
+        <a href={topHref} class="nav__brand" aria-label="Back to top">
+          <svg class="nav__logo" width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
+            <g transform="translate(4 4) rotate(90 12 12)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+              <path d="M9 13a4.5 4.5 0 0 0 3-4"/>
+              <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>
+              <path d="M3.477 10.896a4 4 0 0 1 .585-.396"/>
+              <path d="M6 18a4 4 0 0 1-1.967-.516"/>
+              <path d="M12 13h4"/>
+              <path d="M12 18h6a2 2 0 0 1 2 2v1"/>
+              <path d="M12 8h8"/>
+              <path d="M16 8V5a2 2 0 0 1 2-2"/>
+              <circle cx="16" cy="13" r=".7" fill="currentColor"/>
+              <circle cx="18" cy="3"  r=".7" fill="currentColor"/>
+              <circle cx="20" cy="21" r=".7" fill="currentColor"/>
+              <circle cx="20" cy="8"  r=".7" fill="currentColor"/>
+            </g>
+          </svg>
+          <span class="nav__wordmark">OpenZIM&nbsp;MCP</span>
+        </a>
+        <p>Knowledge that works offline. Released under the <a href="https://opensource.org/licenses/MIT">MIT License</a>.</p>
+        <div class="footer__badges">
+          <img src="https://img.shields.io/badge/python-3.12+-blue.svg" alt="Python 3.12+" loading="lazy">
+          <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License" loading="lazy">
+        </div>
+      </div>
+      <div>
+        <h4 class="footer__title">Resources</h4>
+        <ul class="footer__links">
+          <li><a href={docsHref}>Docs</a></li>
+          <li><a href="https://github.com/cameronrye/openzim-mcp">GitHub</a></li>
+          <li><a href="https://github.com/cameronrye/openzim-mcp/releases">Releases</a></li>
+          <li><a href="https://github.com/cameronrye/openzim-mcp/issues">Issues</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4 class="footer__title">Community</h4>
+        <ul class="footer__links">
+          <li><a href="https://modelcontextprotocol.io/">Model Context Protocol</a></li>
+          <li><a href="https://openzim.org/">OpenZIM</a></li>
+          <li><a href="https://www.kiwix.org/">Kiwix</a></li>
+          <li><a href="https://browse.library.kiwix.org/">ZIM Library</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer__bottom">
+      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <g transform="rotate(90 12 12)">
+          <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+          <path d="M12 13h4"/>
+          <path d="M12 8h8"/>
+        </g>
+      </svg>
+      <span>Made with ❤️ by <a href="https://rye.dev" target="_blank" rel="noopener">Cameron Rye</a>.</span>
+    </div>
+  </div>
+</footer>
