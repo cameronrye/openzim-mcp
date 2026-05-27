@@ -93,7 +93,7 @@ v2.0.0 collapses the prior 22-tool advanced surface into 8 consolidated tools (s
 - `zim_search`: Full-text / title / suggest search dispatch (replaces `search_zim_file`, `search_all`, `search_with_filters`, `find_entry_by_title`, `get_search_suggestions`). Modes: `mode="fulltext" | "title" | "suggest"`; optional `cross_file=True` for multi-archive search
 - `zim_get`: Single / batch / binary / main-page entry fetch (replaces `get_zim_entry`, `get_zim_entries`, `get_main_page`, `get_binary_entry`, `get_entry_summary`, `get_table_of_contents`, `get_article_structure`). Branches: `entry_path` (single), `entry_paths` (batch), `main_page=True`, `binary=True`, `view="summary" | "toc" | "structure"`
 - `zim_get_section`: Section-level fetch by section ID (renamed from `get_section`)
-- `zim_browse`: Namespace browse / walk dispatch (replaces `browse_namespace`, `walk_namespace`). Modes: `mode="browse" | "walk"`
+- `zim_browse`: Namespace browse / walk dispatch (replaces `browse_namespace`, `walk_namespace`). Modes: `mode="page" | "walk"` (default `"page"` — sampled namespace overview; `"walk"` returns cursor-paginated deterministic iteration)
 - `zim_metadata`: Combined archive metadata + namespaces (replaces `get_zim_metadata`, `list_namespaces`)
 - `zim_links`: Outbound / related link dispatch (replaces `extract_article_links`, `get_related_articles`). Directions: `direction="outbound" | "related"` (inbound arrives in v2.5)
 - `zim_health`: Combined server health, configuration, and loaded archives (replaces `get_server_health`, `get_server_configuration`, `list_zim_files`)
