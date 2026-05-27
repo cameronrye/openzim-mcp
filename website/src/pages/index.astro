@@ -1,140 +1,140 @@
-<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenZIM MCP — Knowledge that works offline</title>
-  <meta name="description" content="OpenZIM MCP gives any AI model structured, secure access to ZIM archives — Wikipedia, MedlinePlus, the Stack Exchange dumps — without an internet connection.">
-  <meta name="keywords" content="OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python, open source">
-  <meta name="author" content="Cameron Rye">
+---
+import LandingLayout from '../layouts/LandingLayout.astro';
+const title = "OpenZIM MCP — Knowledge that works offline";
+const description = "OpenZIM MCP gives any AI model structured, secure access to ZIM archives — Wikipedia, MedlinePlus, the Stack Exchange dumps — without an internet connection.";
+---
+<LandingLayout title={title} description={description}>
+  <Fragment slot="head">
+    <meta name="keywords" content="OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python, open source">
+    <meta name="author" content="Cameron Rye">
 
-  <link rel="canonical" href="https://cameronrye.github.io/openzim-mcp/">
-  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-  <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-  <meta name="bingbot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-  <meta name="theme-color" content="#0B0F1A">
-  <meta name="color-scheme" content="dark light">
+    <link rel="canonical" href="https://cameronrye.github.io/openzim-mcp/">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="bingbot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="theme-color" content="#0B0F1A">
+    <meta name="color-scheme" content="dark light">
 
-  <!-- Open Graph -->
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="OpenZIM MCP">
-  <meta property="og:url" content="https://cameronrye.github.io/openzim-mcp/">
-  <meta property="og:title" content="OpenZIM MCP — Knowledge that works offline">
-  <meta property="og:description" content="MCP server for offline ZIM-archive access. 8-tool advanced surface, streamable HTTP, batch retrieval, per-entry resources, subscriptions. v2.0.0.">
-  <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="OpenZIM MCP 1.0 — Knowledge that works offline">
-  <meta property="og:locale" content="en_US">
-  <meta property="article:author" content="Cameron Rye">
-  <meta property="article:modified_time" content="2026-05-27T00:00:00Z">
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="OpenZIM MCP">
+    <meta property="og:url" content="https://cameronrye.github.io/openzim-mcp/">
+    <meta property="og:title" content="OpenZIM MCP — Knowledge that works offline">
+    <meta property="og:description" content="MCP server for offline ZIM-archive access. 8-tool advanced surface, streamable HTTP, batch retrieval, per-entry resources, subscriptions. v2.0.0.">
+    <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="OpenZIM MCP 1.0 — Knowledge that works offline">
+    <meta property="og:locale" content="en_US">
+    <meta property="article:author" content="Cameron Rye">
+    <meta property="article:modified_time" content="2026-05-27T00:00:00Z">
 
-  <!-- Twitter -->
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:site" content="@cameronrye">
-  <meta name="twitter:creator" content="@cameronrye">
-  <meta name="twitter:url" content="https://cameronrye.github.io/openzim-mcp/">
-  <meta name="twitter:title" content="OpenZIM MCP — Knowledge that works offline">
-  <meta name="twitter:description" content="MCP server for offline ZIM-archive access. 8-tool advanced surface, streamable HTTP, batch retrieval, per-entry resources, subscriptions. v2.0.0.">
-  <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
-  <meta name="twitter:image:alt" content="OpenZIM MCP 1.0 — Knowledge that works offline">
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:site" content="@cameronrye">
+    <meta name="twitter:creator" content="@cameronrye">
+    <meta name="twitter:url" content="https://cameronrye.github.io/openzim-mcp/">
+    <meta name="twitter:title" content="OpenZIM MCP — Knowledge that works offline">
+    <meta name="twitter:description" content="MCP server for offline ZIM-archive access. 8-tool advanced surface, streamable HTTP, batch retrieval, per-entry resources, subscriptions. v2.0.0.">
+    <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+    <meta name="twitter:image:alt" content="OpenZIM MCP 1.0 — Knowledge that works offline">
 
-  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
-  <link rel="author" type="text/plain" href="humans.txt">
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+    <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+    <link rel="author" type="text/plain" href="humans.txt">
 
-  <!-- Fonts: rely on the system font stack declared in styles.css. Avoiding
-       third-party CDN fonts removes a privacy hop (no request leaks to
-       Google Fonts) and the subresource-integrity gap that comes with a
-       dynamically generated stylesheet that cannot be hashed. -->
-  <link rel="stylesheet" href="assets/styles.css">
+    <!-- Fonts: rely on the system font stack declared in styles.css. Avoiding
+         third-party CDN fonts removes a privacy hop (no request leaks to
+         Google Fonts) and the subresource-integrity gap that comes with a
+         dynamically generated stylesheet that cannot be hashed. -->
+    <link rel="stylesheet" href="assets/styles.css">
 
-  <!-- Legacy fragment redirect (runs before render to avoid scroll jump) -->
-  <script>
-    (function () {
-      var aliases = {
-        '#features': '#what', '#smart-retrieval': '#what', '#advanced-features': '#what',
-        '#developer-experience': '#what', '#security': '#what',
-        '#whats-new': '#v1', '#installation': '#try', '#usage': '#try',
-        '#documentation': '#deeper', '#home': '#hero'
-      };
-      if (aliases[location.hash]) {
-        history.replaceState(null, '', aliases[location.hash]);
-      }
-    })();
-  </script>
+    <!-- Legacy fragment redirect (runs before render to avoid scroll jump) -->
+    <script is:inline>
+      (function () {
+        var aliases = {
+          '#features': '#what', '#smart-retrieval': '#what', '#advanced-features': '#what',
+          '#developer-experience': '#what', '#security': '#what',
+          '#whats-new': '#v1', '#installation': '#try', '#usage': '#try',
+          '#documentation': '#deeper', '#home': '#hero'
+        };
+        if (aliases[location.hash]) {
+          history.replaceState(null, '', aliases[location.hash]);
+        }
+      })();
+    </script>
 
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    "name": "OpenZIM MCP",
-    "alternateName": "OpenZIM MCP Server",
-    "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
-    "url": "https://cameronrye.github.io/openzim-mcp/",
-    "softwareVersion": "2.0.0",
-    "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
-    "applicationCategory": "DeveloperApplication",
-    "applicationSubCategory": "AI Tools",
-    "operatingSystem": "Linux, macOS, Windows",
-    "programmingLanguage": { "@type": "ComputerLanguage", "name": "Python", "version": "3.12+" },
-    "license": "https://opensource.org/licenses/MIT",
-    "downloadUrl": "https://pypi.org/project/openzim-mcp/",
-    "installUrl": "https://pypi.org/project/openzim-mcp/",
-    "codeRepository": "https://github.com/cameronrye/openzim-mcp",
-    "softwareHelp": "https://github.com/cameronrye/openzim-mcp#readme",
-    "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
-    "creator": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
-    "maintainer": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
-    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
-  }
-  </script>
-  <script type="application/ld+json">
-  { "@context": "https://schema.org", "@type": "Organization", "name": "OpenZIM MCP",
-    "url": "https://cameronrye.github.io/openzim-mcp/",
-    "logo": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg",
-    "founder": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" } }
-  </script>
-  <script type="application/ld+json">
-  { "@context": "https://schema.org", "@type": "WebSite", "name": "OpenZIM MCP",
-    "url": "https://cameronrye.github.io/openzim-mcp/",
-    "description": "Knowledge that works offline." }
-  </script>
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "BreadcrumbList",
-    "itemListElement": [
-      { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://cameronrye.github.io/openzim-mcp/" },
-      { "@type": "ListItem", "position": 2, "name": "What is this", "item": "https://cameronrye.github.io/openzim-mcp/#what" },
-      { "@type": "ListItem", "position": 3, "name": "v1.0", "item": "https://cameronrye.github.io/openzim-mcp/#v1" },
-      { "@type": "ListItem", "position": 4, "name": "Try it", "item": "https://cameronrye.github.io/openzim-mcp/#try" },
-      { "@type": "ListItem", "position": 5, "name": "Deeper", "item": "https://cameronrye.github.io/openzim-mcp/#deeper" }
-    ]
-  }
-  </script>
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "TechArticle",
-    "headline": "OpenZIM MCP — Knowledge that works offline",
-    "description": "MCP server for offline ZIM-archive access. Streamable HTTP transport, batch retrieval, per-entry resources, resource subscriptions.",
-    "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
-    "datePublished": "2024-01-01T00:00:00Z",
-    "dateModified": "2026-05-27T00:00:00Z",
-    "publisher": {
-      "@type": "Organization",
+    <script type="application/ld+json" is:inline>
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
       "name": "OpenZIM MCP",
-      "logo": { "@type": "ImageObject", "url": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg" }
-    },
-    "mainEntityOfPage": { "@type": "WebPage", "@id": "https://cameronrye.github.io/openzim-mcp/" },
-    "articleSection": "Technology",
-    "keywords": "OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python",
-    "inLanguage": "en-US"
-  }
-  </script>
-</head>
-<body>
+      "alternateName": "OpenZIM MCP Server",
+      "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
+      "url": "https://cameronrye.github.io/openzim-mcp/",
+      "softwareVersion": "2.0.0",
+      "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "AI Tools",
+      "operatingSystem": "Linux, macOS, Windows",
+      "programmingLanguage": { "@type": "ComputerLanguage", "name": "Python", "version": "3.12+" },
+      "license": "https://opensource.org/licenses/MIT",
+      "downloadUrl": "https://pypi.org/project/openzim-mcp/",
+      "installUrl": "https://pypi.org/project/openzim-mcp/",
+      "codeRepository": "https://github.com/cameronrye/openzim-mcp",
+      "softwareHelp": "https://github.com/cameronrye/openzim-mcp#readme",
+      "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+      "creator": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+      "maintainer": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+    }
+    </script>
+    <script type="application/ld+json" is:inline>
+    { "@context": "https://schema.org", "@type": "Organization", "name": "OpenZIM MCP",
+      "url": "https://cameronrye.github.io/openzim-mcp/",
+      "logo": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg",
+      "founder": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" } }
+    </script>
+    <script type="application/ld+json" is:inline>
+    { "@context": "https://schema.org", "@type": "WebSite", "name": "OpenZIM MCP",
+      "url": "https://cameronrye.github.io/openzim-mcp/",
+      "description": "Knowledge that works offline." }
+    </script>
+    <script type="application/ld+json" is:inline>
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://cameronrye.github.io/openzim-mcp/" },
+        { "@type": "ListItem", "position": 2, "name": "What is this", "item": "https://cameronrye.github.io/openzim-mcp/#what" },
+        { "@type": "ListItem", "position": 3, "name": "v1.0", "item": "https://cameronrye.github.io/openzim-mcp/#v1" },
+        { "@type": "ListItem", "position": 4, "name": "Try it", "item": "https://cameronrye.github.io/openzim-mcp/#try" },
+        { "@type": "ListItem", "position": 5, "name": "Deeper", "item": "https://cameronrye.github.io/openzim-mcp/#deeper" }
+      ]
+    }
+    </script>
+    <script type="application/ld+json" is:inline>
+    {
+      "@context": "https://schema.org",
+      "@type": "TechArticle",
+      "headline": "OpenZIM MCP — Knowledge that works offline",
+      "description": "MCP server for offline ZIM-archive access. Streamable HTTP transport, batch retrieval, per-entry resources, resource subscriptions.",
+      "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+      "datePublished": "2024-01-01T00:00:00Z",
+      "dateModified": "2026-05-27T00:00:00Z",
+      "publisher": {
+        "@type": "Organization",
+        "name": "OpenZIM MCP",
+        "logo": { "@type": "ImageObject", "url": "https://cameronrye.github.io/openzim-mcp/assets/favicon.svg" }
+      },
+      "mainEntityOfPage": { "@type": "WebPage", "@id": "https://cameronrye.github.io/openzim-mcp/" },
+      "articleSection": "Technology",
+      "keywords": "OpenZIM, MCP, Model Context Protocol, AI, LLM, knowledge base, offline, ZIM files, Wikipedia, Python",
+      "inLanguage": "en-US"
+    }
+    </script>
+  </Fragment>
+
   <a href="#main" class="skip-link">Skip to main content</a>
 
   <header class="nav" id="nav">
@@ -341,7 +341,7 @@
             <span class="v1__card-dot" aria-hidden="true"></span>
             <h3>Batch entry retrieval</h3>
             <p><code>get_zim_entries</code> fetches up to 50 entries per call. Multi-archive batches, partial-success reporting, rate-limit-aware.</p>
-            <pre><code>{
+            <pre><code>{`{
   "name": "get_zim_entries",
   "arguments": {
     "zim_file_path": "wiki.zim",
@@ -349,13 +349,13 @@
                 "C/Genetics",
                 "C/Mendel"]
   }
-}</code></pre>
+}`}</code></pre>
           </li>
 
           <li class="v1__card">
             <span class="v1__card-dot" aria-hidden="true"></span>
             <h3>Per-entry MCP resources</h3>
-            <p>Each entry exposed as <code>zim://{name}/entry/{path}</code> with libzim's native MIME type — HTML, PDFs, images render in MCP-aware clients.</p>
+            <p>Each entry exposed as <code>zim://{`{name}`}/entry/{`{path}`}</code> with libzim's native MIME type — HTML, PDFs, images render in MCP-aware clients.</p>
             <pre><code>zim://wikipedia_en/entry/C%2FEvolution
 # returns text/html
 
@@ -366,14 +366,14 @@ zim://gutenberg/entry/I%2Fbook_cover.jpg
           <li class="v1__card">
             <span class="v1__card-dot" aria-hidden="true"></span>
             <h3>Resource subscriptions</h3>
-            <p>Subscribe to <code>zim://files</code> or <code>zim://{name}</code>. mtime-polling watcher emits <code>notifications/resources/updated</code> when archives change.</p>
-            <pre><code>// client subscribes
+            <p>Subscribe to <code>zim://files</code> or <code>zim://{`{name}`}</code>. mtime-polling watcher emits <code>notifications/resources/updated</code> when archives change.</p>
+            <pre><code>{`// client subscribes
 { "method": "resources/subscribe",
   "params": { "uri": "zim://files" } }
 
 // server notifies on change
 { "method": "notifications/resources/updated",
-  "params": { "uri": "zim://files" } }</code></pre>
+  "params": { "uri": "zim://files" } }`}</code></pre>
           </li>
         </ul>
 
@@ -419,7 +419,7 @@ zim://gutenberg/entry/I%2Fbook_cover.jpg
             <li><strong>Multi-archive search</strong> — <code>search_all</code> queries every ZIM file in your allowed directories at once.</li>
             <li><strong>MCP Prompts</strong> — <code>/research</code>, <code>/summarize</code>, <code>/explore</code> as ready-made workflows.</li>
             <li><strong>Find entries by title</strong> — <code>find_entry_by_title</code> resolves a title to entry paths, optionally cross-file.</li>
-            <li><strong>MCP Resources</strong> — <code>zim://files</code> and <code>zim://{name}</code> show up in your client's resource browser.</li>
+            <li><strong>MCP Resources</strong> — <code>zim://files</code> and <code>zim://{`{name}`}</code> show up in your client's resource browser.</li>
             <li><strong>Power-user tools</strong> — <code>walk_namespace</code> for cursor-paginated iteration; <code>get_related_articles</code> for outbound link-graph neighbours.</li>
           </ul>
         </article>
@@ -487,14 +487,14 @@ uv sync</code></pre>
               <div class="try__exchange">
                 <div>
                   <h4>Request</h4>
-                  <pre><code>{
+                  <pre><code>{`{
   "name": "search_zim_file",
   "arguments": {
     "zim_file_path": "wikipedia_en.zim",
     "query": "artificial intelligence",
     "limit": 5
   }
-}</code></pre>
+}`}</code></pre>
                 </div>
                 <div>
                   <h4>Response</h4>
@@ -516,18 +516,18 @@ artificial intelligence...</code></pre>
               <div class="try__exchange">
                 <div>
                   <h4>Request</h4>
-                  <pre><code>{
+                  <pre><code>{`{
   "name": "browse_namespace",
   "arguments": {
     "zim_file_path": "wikipedia_en.zim",
     "namespace": "C",
     "limit": 10
   }
-}</code></pre>
+}`}</code></pre>
                 </div>
                 <div>
                   <h4>Response</h4>
-                  <pre><code>{
+                  <pre><code>{`{
   "namespace": "C",
   "total_in_namespace": 80000,
   "returned_count": 10,
@@ -538,7 +538,7 @@ artificial intelligence...</code></pre>
       "preview": "Biology is the scientific
                   study of life..." }
   ]
-}</code></pre>
+}`}</code></pre>
                 </div>
               </div>
             </div>
@@ -546,17 +546,17 @@ artificial intelligence...</code></pre>
               <div class="try__exchange">
                 <div>
                   <h4>Subscribe</h4>
-                  <pre><code>{
+                  <pre><code>{`{
   "method": "resources/subscribe",
   "params": { "uri": "zim://files" }
-}</code></pre>
+}`}</code></pre>
                 </div>
                 <div>
                   <h4>Notification (when archive changes)</h4>
-                  <pre><code>{
+                  <pre><code>{`{
   "method": "notifications/resources/updated",
   "params": { "uri": "zim://files" }
-}</code></pre>
+}`}</code></pre>
                 </div>
               </div>
             </div>
@@ -676,5 +676,4 @@ artificial intelligence...</code></pre>
   </footer>
 
   <script src="assets/script.js" defer></script>
-</body>
-</html>
+</LandingLayout>
