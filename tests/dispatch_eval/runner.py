@@ -405,6 +405,10 @@ class McpStdioClient:
             if self._proc.stdin and not self._proc.stdin.closed:
                 self._proc.stdin.close()
         except Exception:
+            # Best-effort teardown: the MCP server may have already exited
+            # and closed its end of the pipe (BrokenPipeError) or the
+            # stdin handle may have been reaped under us. Either way, the
+            # subprocess is on its way out — don't fail teardown.
             pass
         try:
             self._proc.terminate()
@@ -413,6 +417,11 @@ class McpStdioClient:
             self._proc.kill()
             self._proc.wait(timeout=5)
         except Exception:
+            # Best-effort teardown: the subprocess may already be gone
+            # (e.g. it exited on its own between the stdin close above
+            # and this terminate()), in which case terminate() / wait()
+            # raise ProcessLookupError or similar. Suppress to keep the
+            # eval runner's outer loop alive across reps.
             pass
 
 
