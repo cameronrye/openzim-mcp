@@ -1,0 +1,14 @@
+---
+const { headings } = Astro.props as { headings: Array<{ depth: number; slug: string; text: string }> };
+const tocItems = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
+---
+<aside class="docs-toc" aria-label="On this page">
+  <h4>On this page</h4>
+  <ul>
+    {tocItems.map((h) => (
+      <li class={`toc-h${h.depth}`}>
+        <a href={`#${h.slug}`}>{h.text}</a>
+      </li>
+    ))}
+  </ul>
+</aside>

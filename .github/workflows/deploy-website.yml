@@ -23,36 +23,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
       - name: Setup Pages
         uses: actions/configure-pages@v6
 
-      - name: Build website
+      - name: Install deps
+        working-directory: website
+        run: npm ci
+
+      - name: Type-check
+        working-directory: website
+        run: npx astro check
+
+      - name: Build Astro site
+        working-directory: website
+        run: npm run build
+        env:
+          BUILD_SHA: ${{ github.sha }}
+          BUILD_REF: ${{ github.ref_name }}
+
+      - name: Stamp build info
         run: |
-          # Create build directory
-          mkdir -p _site
+          echo "Built on: $(date -u +%Y-%m-%dT%H:%M:%SZ)" > website/dist/build-info.txt
+          echo "Commit: ${{ github.sha }}" >> website/dist/build-info.txt
+          echo "Branch: ${{ github.ref_name }}" >> website/dist/build-info.txt
 
-          # Copy website files
-          cp -r website/* _site/
-
-          # Create a simple build info file
-          echo "Built on: $(date)" > _site/build-info.txt
-          echo "Commit: ${{ github.sha }}" >> _site/build-info.txt
-          echo "Branch: ${{ github.ref_name }}" >> _site/build-info.txt
-
-          # Validate HTML (basic check)
-          if command -v tidy &> /dev/null; then
-            echo "Validating HTML..."
-            tidy -q -e _site/index.html || echo "HTML validation warnings (non-critical)"
-          fi
-
-          # List built files for debugging
-          echo "Built files:"
-          find _site -type f -name "*.html" -o -name "*.css" -o -name "*.js" -o -name "*.svg" | head -20
+      - name: List built files
+        run: find website/dist -maxdepth 3 -type f | head -40
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: _site
+          path: website/dist
 
   deploy:
     environment:
