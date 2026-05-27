@@ -1,0 +1,153 @@
+---
+title: Smart retrieval
+summary: How OpenZIM MCP v2.0.0 resolves entry paths when direct access fails — the four-step fallback inside zim_get, the path-mapping cache, and how to debug resolutions.
+group: Guides
+sidebar_order: 2
+---
+
+How OpenZIM MCP resolves entry paths when direct access fails — and how to debug it when it doesn't.
+
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_get(entry_path="...")`). The wire format is MCP JSON-RPC; your client handles the framing. Tool names and argument shapes match the v2.0.0 8-tool surface.
+
+> **Source of truth:** [openzim_mcp/zim/content.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/zim/content.py) (`_get_entry_content`) and [openzim_mcp/zim/search.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/zim/search.py) (`_extract_search_terms_from_path`, `_find_entry_by_search`).
+
+## What it is
+
+ZIM entry paths aren't always predictable. Wikipedia's "Photosynthesis" might live at `A/Photosynthesis`, `C/Photosynthesis`, `Photosynthesis`, or under a slug variant. Smart retrieval is the fallback path that turns "I have a guess at the path" into "here's the article" without forcing the LLM to do trial-and-error.
+
+In v2.0.0 the fallback is consolidated into `zim_get` — it runs automatically whenever `zim_get` is called with an `entry_path` that doesn't match directly. It applies to every view mode of `zim_get` (`view="content"` default, `view="summary"`, `view="toc"`, `view="structure"`), the binary form (`zim_get(binary=True, ...)`), and to `zim_links` (which resolves the source entry before extracting links).
+
+Internally these all share `_resolve_entry_with_fallback` in `zim/structure.py`.
+
+## How it works
+
+The `_get_entry_content` flow is four steps. There is no scoring, no confidence value, no "pattern learning" — just direct then search-derived terms then cache the resolved path.
+
+```
+1. Cache check
+   ─────────────
+   Look up `path_mapping:{archive}:{requested_path}` in the global cache.
+   If present, try the cached resolved path directly. If the cached lookup
+   fails (cached path now stale), drop the cache entry and continue.
+
+2. Direct access
+   ──────────────
+   Try `archive.get_entry_by_path(requested_path)`. Follow redirect chains
+   up to MAX_REDIRECT_DEPTH (10) — cycles raise OpenZimMcpArchiveError and
+   propagate (we do not search for cycles).
+
+3. Search-derived term retrieval
+   ─────────────────────────────
+   Generate candidate search terms via `_extract_search_terms_from_path`:
+     - the path with the leading namespace stripped (`A/Photosynthesis` → `Photosynthesis`)
+     - the full path string
+     - underscore ↔ space variants
+     - URL-decoded variant
+   Query libzim's Searcher with each term in order. The first result that
+   passes `_is_path_match` wins. (No fuzzy matching, no scoring.)
+
+4. Cache the resolved path
+   ───────────────────────
+   On success, write `cache.set("path_mapping:{archive}:{requested}", resolved)`.
+   The TTL is the global cache TTL — there is no per-entry TTL or
+   confidence-tiered expiration.
+```
+
+The `resolved` path stored in the cache may differ from both the requested path *and* the path that initially matched in step 3, if redirect-following took us further. Subsequent requests for the same `requested_path` skip the redirect chain entirely.
+
+## Cache structure
+
+The smart-retrieval cache shares the global `OpenZimMcpCache` (LRU + TTL). Path-mapping entries use the key prefix `path_mapping:` and store the resolved path string as the value:
+
+```
+key:   "path_mapping:/srv/zim/wikipedia.zim:A/Photosynthesis"
+value: "C/Photosynthesis"
+```
+
+The archive path is part of the key so identical entry names in different ZIM files don't collide. There is no separate `OPENZIM_MCP_SMART_RETRIEVAL__*` config namespace — tune via the global `OPENZIM_MCP_CACHE__*` settings (see [Configuration](/openzim-mcp/docs/configuration/)).
+
+## What you see in the response
+
+When direct access succeeds, `zim_get(entry_path="C/Photosynthesis")` returns a rendered string:
+
+```
+Title: Photosynthesis
+Path: C/Photosynthesis
+Type: text/html
+
+## Content
+...
+```
+
+When smart-retrieval fallback resolves to a different path, the response shows both:
+
+```
+Title: Photosynthesis
+Requested Path: A/Photosynthesis
+Actual Path: C/Photosynthesis
+Type: text/html
+
+## Content
+...
+```
+
+Use this to check whether your guessed paths are accurate or you're relying on the fallback.
+
+## Errors that bypass fallback
+
+Some failures are *not* candidates for search-based retrieval — searching would either return the same broken path or a misleading match. These propagate unchanged:
+
+- **Redirect cycles** — `OpenZimMcpArchiveError: Redirect cycle detected`
+- **Redirect chain exceeded `MAX_REDIRECT_DEPTH=10`** — `OpenZimMcpArchiveError: Maximum redirect depth exceeded`
+- **Transient libzim content errors** — these do not poison the cache (failed reads do not write to the path-mapping cache).
+
+If you see a redirect-cycle error, the ZIM file's data is broken; smart retrieval cannot fix it.
+
+## Tuning
+
+There are no smart-retrieval-specific knobs. The global cache config governs:
+
+| Setting | Effect on smart retrieval |
+|---------|---------------------------|
+| `OPENZIM_MCP_CACHE__ENABLED=false` | No path-mapping cache; every fallback re-runs the search loop |
+| `OPENZIM_MCP_CACHE__MAX_SIZE` | LRU evicts older mappings when full |
+| `OPENZIM_MCP_CACHE__TTL_SECONDS` | Mapped path expires after TTL; next request re-resolves |
+| `OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED` | Path mappings survive restart when on |
+
+For workloads that hit the same articles repeatedly, increase `MAX_SIZE` and `TTL_SECONDS`. For low-memory deployments, decrease both.
+
+## Diagnostics
+
+There is no `smart_retrieval` block in `zim_health` — smart-retrieval activity shows up as cache hits/misses in `cache_performance`. To see the actual mapping decisions, run with `OPENZIM_MCP_LOGGING__LEVEL=DEBUG`:
+
+```
+DEBUG  Attempting direct entry access: A/Photosynthesis
+DEBUG  Direct entry access failed for A/Photosynthesis: ...
+INFO   Falling back to search-based retrieval for: A/Photosynthesis
+INFO   Smart retrieval successful: A/Photosynthesis -> C/Photosynthesis
+```
+
+When something resolves "wrong":
+
+1. Get the right path with `zim_search(zim_file_path=..., query="Photosynthesis", mode="title")` — title-indexed lookup, doesn't go through smart retrieval.
+2. Or browse the namespace: `zim_browse(zim_file_path=..., namespace="C", mode="page", limit=20)`.
+3. Restart the server to flush the cache (there's no `cache_clear` tool in v2.0.0).
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| "Entry not found" after a successful search | The search term derivation didn't match | Use `zim_search(mode="title")` first, then call `zim_get` with the resolved path |
+| Stale article body returned | Path-mapping cache pointing at old redirect target | Restart the server; consider a shorter `OPENZIM_MCP_CACHE__TTL_SECONDS` |
+| Repeated direct-access failures even though the path looks right | Namespace mismatch (e.g. modern domain-scheme archive) | Use `zim_metadata` to see the real namespace inventory |
+| Redirect-cycle error | The ZIM data is broken; smart retrieval can't fix it | Fall back to a different ZIM build, or report to the producer |
+| Slow first-call performance, fast subsequent | Cold cache; first call ran the full search-derivation loop | Normal — pre-warm by calling key entries on startup if needed |
+
+## Related
+
+- [API reference → `zim_get`](/openzim-mcp/docs/api-reference/) — the `Requested Path` / `Actual Path` response shape.
+- [Configuration](/openzim-mcp/docs/configuration/) — the only knobs that affect smart retrieval.
+- [Performance optimization](/openzim-mcp/docs/performance-optimization/) — cache tuning patterns.
+- [Architecture overview](/openzim-mcp/docs/architecture-overview/) — where the smart-retrieval code lives.
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

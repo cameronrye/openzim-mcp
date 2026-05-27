@@ -383,6 +383,62 @@ Contributors are recognized in:
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
 
+## Release process
+
+Releases are driven by [release-please](https://github.com/googleapis/release-please) reading conventional commits on `main`. When a release PR merges, GitHub Actions builds and publishes the wheel to PyPI (via Trusted Publishing), creates the GitHub Release, and pushes a multi-arch Docker image to `ghcr.io/cameronrye/openzim-mcp`.
+
+### Conventional commits drive versioning
+
+Commit message prefixes map to semver bumps and `CHANGELOG.md` sections:
+
+| Prefix | Section | Version bump |
+| --- | --- | --- |
+| `feat:` | Added | minor |
+| `fix:` | Fixed | patch |
+| `perf:` | Performance | patch |
+| `deps:` | Dependencies | none |
+| `docs:` | Documentation | none |
+| `refactor:` | Refactored | none |
+| `chore:` / `ci:` / `build:` / `test:` / `style:` | Maintenance (hidden) | none |
+
+Breaking changes: append `!` to the type (`feat!:`) or include a `BREAKING CHANGE:` footer. Either form triggers a major bump.
+
+### Automatic release flow
+
+1. Land conventional commits on `main` via squash-merge.
+2. `release-please.yml` opens a release PR (updates `CHANGELOG.md`, `pyproject.toml`, `openzim_mcp/__init__.py`, `.release-please-manifest.json`, `website/llm.txt`).
+3. Review and merge the release PR.
+4. `release-please` pushes the `v<X.Y.Z>` tag.
+5. `release.yml` triggers on the tag: version-sync check → integration tests → wheel + sdist build → PyPI upload (Trusted Publishing, no token) → GitHub Release creation with notes pulled from `CHANGELOG.md` and wheel + sdist attached.
+6. `docker-publish.yml` triggers on the same tag: multi-arch build → push to `ghcr.io/cameronrye/openzim-mcp:<X.Y.Z>` and `:latest`.
+
+`release-please-config.json` sets `skip-github-release: true`, so the GitHub Release is created by `release.yml` *after* PyPI succeeds (avoids orphaned releases if PyPI fails).
+
+### Manual / emergency release
+
+For tag-only releases when `release-please` isn't appropriate:
+
+```bash
+git tag v<X.Y.Z>
+git push origin v<X.Y.Z>
+```
+
+`tag-release.yml` fires on the tag push and runs the same pipeline as `release.yml`.
+
+### Troubleshooting
+
+- **No release PR after merging commits**: check commit messages are conventional. Non-`feat`/`fix`/`perf`/`deps` commits don't bump versions on their own.
+- **Version sync failure**: `pyproject.toml`, `openzim_mcp/__init__.py`, and `.release-please-manifest.json` must agree on the version. If they drift (rare; usually a manual edit), align them in a follow-up PR.
+- **PyPI upload failure with "already exists"**: harmless; the workflow uses `skip-existing: true`. A true conflict (same version, different artifact) requires bumping the version.
+
+### Source files
+
+- [`release-please-config.json`](release-please-config.json)
+- [`.github/workflows/release-please.yml`](.github/workflows/release-please.yml)
+- [`.github/workflows/release.yml`](.github/workflows/release.yml)
+- [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)
+- [`.github/workflows/tag-release.yml`](.github/workflows/tag-release.yml)
+
 ---
 
 Thank you for contributing to OpenZIM MCP!

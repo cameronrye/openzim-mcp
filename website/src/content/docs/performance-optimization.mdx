@@ -1,0 +1,295 @@
+---
+title: Performance optimization
+summary: Cache tuning, rate limiting, batching, and deployment-profile guidance for OpenZIM MCP v2.0.0 — including HTTP transport, monitoring endpoints, and latency targets.
+group: Guides
+sidebar_order: 4
+---
+
+Cache tuning, rate limiting, batching, and request-pattern guidance for OpenZIM MCP v2.0.0.
+
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_get(entry_path="...")`) for tool calls and shell snippets for environment / HTTP commands. The MCP wire format is JSON-RPC; your client handles the framing. Tool names and argument shapes match the v2.0.0 8-tool surface.
+
+## Where time goes
+
+Most OpenZIM MCP latency comes from one of three places:
+
+1. **libzim cold reads** — first access to an entry pays disk I/O + decompression. Subsequent reads hit page cache (OS) and the in-memory archive cache.
+2. **HTTP round-trips** (when using `--transport http`) — each tool call is a request/response. Batch where possible.
+3. **Search-derived smart-retrieval fallback** — when direct path access fails, the server runs a search loop. Cache hits eliminate this on repeat calls.
+
+The cache and the batch-retrieval tools are the two biggest tuning levers.
+
+## Cache tuning
+
+Single LRU+TTL cache shared by all tools and the smart-retrieval path-mapping store.
+
+```bash
+export OPENZIM_MCP_CACHE__ENABLED=true                # default
+export OPENZIM_MCP_CACHE__MAX_SIZE=500                # default 100; up to 10000
+export OPENZIM_MCP_CACHE__TTL_SECONDS=14400           # default 3600; up to 86400
+export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true    # cache survives restarts
+```
+
+| Workload | Recommended cache settings |
+|----------|----------------------------|
+| Single-user desktop (Claude Desktop, Inspector) | defaults are fine |
+| Multi-user HTTP service | `MAX_SIZE=500-2000`, `TTL_SECONDS=14400+`, persistence on |
+| Memory-constrained (RPi, small VPS) | `MAX_SIZE=25-50`, `TTL_SECONDS=900-1800` |
+| Volatile content (frequent ZIM swaps) | shorter TTL or rely on subscriptions to invalidate downstream |
+
+Cache stats surface in `zim_health().cache_performance` (`enabled`, `size`, `max_size`, `ttl_seconds`, `hits`, `misses`, `hit_rate`). There are no `warm_cache` / `cache_stats` / `cache_clear` tools in v2.0.0 — restart to flush.
+
+**Persistence path:** defaults to `~/.cache/openzim-mcp` (resolved to absolute). For containerized deployments, mount a volume there or override `OPENZIM_MCP_CACHE__PERSISTENCE_PATH`.
+
+## Rate limiting
+
+Token-bucket limiter (atomic global + per-operation acquire). Tune for your client load:
+
+```bash
+export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=20    # default 10
+export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=40             # default 20, max 1000
+```
+
+Per-operation costs (defaults from `RATE_LIMIT_COSTS`):
+
+| Operation | Cost |
+|-----------|------|
+| `zim_get(binary=True, ...)` | 3 |
+| `zim_search` (any mode), `zim_links(direction="related")` | 2 |
+| All others (incl. **per-entry** for `zim_get(entry_paths=[...])`) | 1 |
+
+A 50-entry batch costs 50 slots, so plan burst size with batch tools in mind. To carve out a different limit for one operation, use the per-operation overrides (keys match the v2 tool names):
+
+```bash
+export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"zim_search": {"requests_per_second": 4, "burst_size": 8}}'
+```
+
+## Batching
+
+`zim_get(entry_paths=[...])` takes up to 50 entry paths per call:
+
+```python
+# Instead of N round-trips:
+for path in paths:
+    zim_get(zim_file_path=zfp, entry_path=path)
+
+# One round-trip:
+zim_get(zim_file_path=zfp, entry_paths=paths)
+```
+
+Per-entry success/failure means an LLM can request many candidates without all-or-nothing semantics. Particularly valuable over HTTP transport where round-trip cost dominates.
+
+`zim_search(cross_file=True, ...)` queries every ZIM file in the allowed directories at once and merges the results. Avoids the "which archive holds X?" guessing game and keeps the LLM from chaining N single-archive `zim_search` calls.
+
+## Search pagination
+
+`zim_search` accepts an opaque `cursor` parameter. Pass `next_cursor` from the prior result to resume:
+
+```python
+# Page 1
+result1 = zim_search(zim_file_path=zfp, query="biology", limit=10)
+# Page 2 — no need to restate query
+result2 = zim_search(zim_file_path=zfp, cursor=result1.next_cursor)
+```
+
+Cursor pagination is O(returned), not O(offset) — important for very deep pages.
+
+`zim_browse(mode="walk", ...)` uses entry-ID cursor pagination for exhaustive iteration:
+
+```python
+cursor = None
+while True:
+    page = zim_browse(
+        zim_file_path=zfp,
+        namespace="M",
+        mode="walk",
+        cursor=cursor,
+        limit=200,
+    )
+    process(page.entries)
+    if page.done:
+        break
+    cursor = page.next_cursor
+```
+
+## HTTP transport considerations
+
+If you're running behind `--transport http`:
+
+- **Keep-alive matters.** A reverse proxy or client that closes connections per request burns the TLS handshake every call.
+- **Auth overhead is negligible** — bearer-token comparison is `hmac.compare_digest`.
+- **Health probes** — use `/healthz` for liveness (auth-exempt, returns 200 OK), `/readyz` for readiness (auth-exempt, returns 503 if no allowed dir is readable). Don't probe `/mcp` from your platform's health checker; that requires a token and a JSON-RPC body.
+- **Subscription watcher cost** — `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5) controls poll cadence. Increase to 30+ if you don't need sub-minute freshness; set `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` to skip watching entirely.
+
+## Monitoring
+
+### Liveness / readiness
+
+```bash
+# Liveness
+curl -f http://localhost:8000/healthz
+# {"status":"ok"}
+
+# Readiness — 200 if at least one allowed dir is readable, 503 otherwise
+curl -f http://localhost:8000/readyz
+# {"status":"ready"}
+```
+
+Both endpoints are auth-exempt and CORS-friendly; safe to wire into Kubernetes probes, systemd `WatchdogSec`, or external uptime checks.
+
+### Health detail
+
+`zim_health()` returns the full status. Real response shape:
+
+```json
+{
+  "timestamp": "2026-05-02T15:30:00.000000",
+  "status": "healthy",
+  "server_name": "openzim-mcp",
+  "uptime_info": {
+    "process_id": "[REDACTED]",
+    "started_at": "2026-05-02T15:00:00.000000"
+  },
+  "configuration": {
+    "allowed_directories": 1,
+    "cache_enabled": true,
+    "config_hash": "abc12345..."
+  },
+  "cache_performance": {
+    "enabled": true,
+    "size": 42,
+    "max_size": 100,
+    "ttl_seconds": 3600,
+    "hits": 1024,
+    "misses": 256,
+    "hit_rate": 0.8
+  },
+  "health_checks": {
+    "directories_accessible": 1,
+    "zim_files_found": 5,
+    "permissions_ok": true
+  },
+  "recommendations": [],
+  "warnings": []
+}
+```
+
+`process_id` is always `[REDACTED]`. Path entries inside warnings are also redacted. There are no `instance_tracking`, `request_metrics`, or `smart_retrieval` blocks — those were either removed (instance tracking) or never collected.
+
+### Calling `zim_health` from outside an MCP client
+
+You can hit the JSON-RPC endpoint directly. Replace `$TOKEN` with `OPENZIM_MCP_AUTH_TOKEN`:
+
+```bash
+curl -sS -X POST http://localhost:8000/mcp \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "Mcp-Session-Id: my-monitoring-session" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"zim_health","arguments":{}}}'
+```
+
+For platform-level monitoring prefer `/healthz` (no auth, no JSON body, 200/503).
+
+### External monitoring
+
+Wire `/healthz` and `/readyz` into your platform's uptime monitor. For Prometheus-style metrics OpenZIM MCP doesn't ship a metrics endpoint — scrape `/healthz` for liveness or compose `zim_health().cache_performance` into your own exporter.
+
+## Resource patterns
+
+### Pre-warming on startup
+
+There is no `warm_cache` tool in v2.0.0. To pre-warm, call the entry tools yourself at startup:
+
+```python
+# Wake the cache for high-value articles
+common = ["A/Photosynthesis", "A/Evolution", "A/Climate_change"]
+zim_get(zim_file_path="/srv/zim/wikipedia.zim", entry_paths=common)
+```
+
+### Reducing repeated retrievals
+
+- Use `zim_get(view="summary")` or `zim_get(view="toc")` first to decide whether to fetch the full body.
+- Use `zim_search(mode="title")` to resolve titles to canonical paths cheaply, then call `zim_get` with the resolved path (fewer smart-retrieval roundtrips).
+- For multi-archive lookups, prefer `zim_search(cross_file=True)` over N sequential single-archive `zim_search` calls.
+
+### Multi-archive perf
+
+`zim_search(cross_file=True, ...)` queries every ZIM file in the allowed directories. Files that can't be searched (corrupt, no full-text index) are skipped without aborting the rest. The merge happens server-side, so the response size scales with `limit_per_file × number_of_archives`.
+
+For very large allowed-dir sets, consider:
+
+- Splitting archives across multiple OpenZIM MCP instances behind a reverse proxy.
+- Reducing `limit_per_file` (default 5).
+
+## Profiles
+
+### Single-user desktop
+
+Defaults (`MAX_SIZE=100`, `TTL=3600`, persistence off). Smart retrieval covers most "I guessed wrong" cases without intervention.
+
+### Production HTTP service
+
+```bash
+export OPENZIM_MCP_TRANSPORT=http
+export OPENZIM_MCP_HOST=127.0.0.1
+export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
+export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com"]'
+
+export OPENZIM_MCP_CACHE__MAX_SIZE=1000
+export OPENZIM_MCP_CACHE__TTL_SECONDS=14400
+export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
+export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=200000
+
+export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=20
+export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=40
+
+# Subscriptions on, but slower poll for less I/O churn
+export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=15
+
+openzim-mcp /srv/zim
+```
+
+### Memory-constrained
+
+```bash
+export OPENZIM_MCP_CACHE__MAX_SIZE=25
+export OPENZIM_MCP_CACHE__TTL_SECONDS=900
+export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=50000
+export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=500
+export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=30
+export OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false
+openzim-mcp ~/zim-files
+```
+
+### Read-heavy single archive
+
+```bash
+export OPENZIM_MCP_CACHE__MAX_SIZE=2000
+export OPENZIM_MCP_CACHE__TTL_SECONDS=28800   # 8h
+export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
+export OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT=20
+openzim-mcp /srv/zim
+```
+
+## Targets
+
+*Benchmark numbers captured against v1.x's 22-tool surface in 2026-04. Tool-name dispatch overhead is unchanged in v2; per-call latency numbers remain representative.*
+
+Indicative latency targets on a modern desktop / midrange VPS, hot cache:
+
+| Operation | Target |
+|-----------|--------|
+| `/healthz` | < 5 ms |
+| Cached `zim_get` (single entry) | < 50 ms |
+| Cold `zim_get` (single entry) | < 500 ms |
+| `zim_search` (10 hits) | < 200 ms |
+| `zim_search(cross_file=True)` (5 archives) | < 1 s |
+| `zim_get(entry_paths=[...])` (50 batch, mixed cache) | < 2 s |
+
+Cold libzim opens of large archives (multi-GB Wikipedia) can be slow on first use; the archive cache amortises this.
+
+---
+
+**Configuration reference?** [Configuration](/openzim-mcp/docs/configuration/). **Smart retrieval details?** [Smart retrieval](/openzim-mcp/docs/smart-retrieval/). **Architecture?** [Architecture overview](/openzim-mcp/docs/architecture-overview/).
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

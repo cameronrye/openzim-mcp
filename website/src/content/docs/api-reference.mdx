@@ -1,0 +1,469 @@
+---
+title: API reference
+summary: Every v2.0.0 tool, prompt, and resource — 8 consolidated advanced tools, 3 slash-command prompts, 3 resource templates, plus the v1 → v2 migration table.
+group: Reference
+sidebar_order: 1
+---
+
+OpenZIM MCP exposes three kinds of MCP surfaces:
+
+| Surface | Count (advanced mode) | Default mode |
+|---------|------------------------|---------------|
+| **Tools** (callable functions) | 8 | only `zim_query` exposed in Simple mode |
+| **Prompts** (slash-command workflows) | 3 | always available |
+| **Resources** (URI-addressable data) | 3 templates + subscriptions | always available |
+
+In **Simple mode** (the default) only the `zim_query` natural-language tool is exposed. Pass `--mode advanced` (or set `OPENZIM_MCP_TOOL_MODE=advanced`) to expose all 8 specialized tools below.
+
+v2.0.0 collapsed the prior 22-tool advanced surface into 8 consolidated tools. The full mechanical v1 → v2 mapping is reproduced in the [migration table](#v1--v2-migration) at the bottom of this page; it also lives in [CHANGELOG.md](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#migrating-from-v1x--v2-beta).
+
+> **Source of truth:** [openzim_mcp/tools/](https://github.com/cameronrye/openzim-mcp/tree/main/openzim_mcp/tools). If signatures here disagree with code, file an issue — code is canonical.
+
+## Output format
+
+Tools return one of:
+
+- **Structured response objects** (most tools) — typed payloads (`SearchResponse`, `EntryBundle`, `MetadataResponse`, etc.) that the MCP transport serializes. Clients should parse the JSON envelope.
+- **Markdown-string responses** — `zim_get` (single-entry mode) returns a rendered string with `Title:`, `Path:`, `Type:` lines, then a `## Content` block.
+- **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{operation, message, hint?}`) rather than raising. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
+
+---
+
+## Simple mode
+
+### `zim_query`
+
+Single natural-language tool exposed by default. Routes to the underlying advanced operations via an intent parser.
+
+**Signature:**
+
+```python
+zim_query(
+    query: str,
+    zim_file_path: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+    content_offset: int = 0,
+    cursor: Optional[str] = None,
+    max_content_length: Optional[int] = None,
+    compact: bool = True,
+    compact_budget: Optional[Union[str, int]] = None,
+    synthesize: bool = False,
+) -> Union[str, SynthesizeResponse, ToolErrorPayload]
+```
+
+| Parameter | Type | Default | Notes |
+|-----------|------|---------|-------|
+| `query` | string | (required) | Natural-language question or instruction |
+| `zim_file_path` | string | `None` | Auto-selects when only one ZIM is in the allowed dirs |
+| `limit` | int | `None` | Max results for search/browse intents |
+| `offset` | int | `0` | Pagination offset |
+| `content_offset` | int | `0` | Pagination within long article body |
+| `cursor` | string | `None` | Opaque cursor for resuming paginated results |
+| `max_content_length` | int | `None` | Max characters for retrieved articles |
+| `compact` | bool | `True` | Compact prose rendering (token-budget aware) |
+| `compact_budget` | str \| int | `None` | Override the compact-mode budget |
+| `synthesize` | bool | `False` | When `True`, return a `SynthesizeResponse` (multi-source briefing) |
+
+**Intents recognized** (incomplete list):
+
+- "list available ZIM files"
+- "search for biology in wikipedia.zim"
+- "get article Evolution"
+- "show structure of Biology"
+- "browse namespace C with limit 10"
+- "search all files for python"
+- "walk namespace M"
+- "find article titled Photosynthesis"
+- "articles related to Climate_Change"
+- "summary of Quantum_mechanics"
+
+**Returns:** intent-specific output; for searches a markdown list of results, for retrievals a rendered article, for "synthesize" intents a structured `SynthesizeResponse`.
+
+---
+
+## Advanced tools (8)
+
+### `zim_search`
+
+Full-text / title / suggest search dispatch. Collapses five v1 search tools (`search_zim_file`, `search_all`, `search_with_filters`, `find_entry_by_title`, `get_search_suggestions`) into one.
+
+```python
+zim_search(
+    query: str,
+    mode: Literal["fulltext", "title", "suggest"] = "fulltext",
+    zim_file_path: Optional[str] = None,
+    cross_file: bool = False,
+    namespace: Optional[str] = None,
+    content_type: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+    cursor: Optional[str] = None,
+) -> Any
+```
+
+| Parameter | Notes |
+|-----------|-------|
+| `query` | Required search term, title, or partial-query prefix (depending on `mode`) |
+| `mode` | `"fulltext"` (default; libzim full-text index), `"title"` (title-indexed lookup with fast `C/<Title>` path), or `"suggest"` (auto-complete prefix) |
+| `zim_file_path` | Optional when `cross_file=True`; otherwise required (unless only one ZIM in allowed dirs) |
+| `cross_file` | When `True`, queries every allowed ZIM file. Multi-archive merges into `per_file_results` |
+| `namespace`, `content_type` | Optional filters (only meaningful for `mode="fulltext"`) |
+| `limit` | 1–100 for `fulltext`/`title`, 1–50 for `suggest` |
+| `cursor` | Opaque cursor from a prior result; resumes the search where it left off |
+
+**Returns:** mode-shaped response — `SearchResponse` / `SearchAllResponse` / `SearchWithFiltersResponse` / `FindEntryResponse` / `SearchSuggestionsResponse` — or `ToolErrorPayload` on validation failure. Subsequent pages include `next_cursor` until exhausted.
+
+---
+
+### `zim_get`
+
+Single-entry / batch / binary / main-page / view-mode entry fetch. Collapses seven v1 retrieval tools into one.
+
+```python
+zim_get(
+    zim_file_path: str,
+    entry_path: Optional[str] = None,
+    entry_paths: Optional[List[str]] = None,
+    view: Literal["full", "summary", "toc", "structure"] = "full",
+    binary: bool = False,
+    main_page: bool = False,
+    max_content_length: Optional[int] = None,
+    content_offset: int = 0,
+    compact: bool = False,
+    compact_budget: Optional[Union[str, int]] = None,
+) -> Any
+```
+
+Exactly one of these four branch selectors must be set:
+
+| Branch | Selector | Returns |
+|--------|----------|---------|
+| Single-entry (article body) | `entry_path="..."` | Markdown string with `Title:` / `Path:` / `## Content` |
+| Single-entry view modes | `entry_path="..."` + `view="summary"` / `"toc"` / `"structure"` | Structured response (summary / TOC tree / headings) |
+| Batch | `entry_paths=[...]` (up to 50) | `{results, succeeded, failed}` — per-entry success/error |
+| Binary | `entry_path="..."` + `binary=True` | `{path, title, mime_type, size, encoding, data}` (base64) |
+| Main page | `main_page=True` | Archive main page entry |
+
+The four branches are **mutually exclusive**. Setting more than one (e.g. `entry_path` + `entry_paths`, or `main_page` + `view="summary"`) returns a `ToolErrorPayload` with `operation="invalid_path_combination"`.
+
+| Parameter | Notes |
+|-----------|-------|
+| `view` | `"full"` (default; article body), `"summary"` (opening paragraph), `"toc"` (hierarchical TOC), `"structure"` (headings + section anchors). Ignored when `binary=True` or `main_page=True` |
+| `binary` | When `True`, returns raw bytes (base64) with native MIME type. Default per-entry cap 10 MiB |
+| `max_content_length` | Per-entry char cap, min 100 |
+| `content_offset` | Page through long articles without re-fetching the prefix |
+| `compact` | Compact-mode prose (default `False` at v2.0 — preserves legacy byte-identical behavior). v2.5 will revisit the default with telemetry |
+| `compact_budget` | Optional budget override for compact mode |
+
+**Smart retrieval:** if direct path access fails, single-entry mode falls back to search-derived candidate terms; resolved paths are cached. When fallback resolves to a different path, the response shows both `Requested Path:` and `Actual Path:`.
+
+---
+
+### `zim_get_section`
+
+Section-level fetch by section ID. Renamed from the v1 `get_section` tool; the new `compact=True` default is the only behavioral change.
+
+```python
+zim_get_section(
+    zim_file_path: str,
+    entry_path: str,
+    section_id: str,
+    max_chars: Optional[int] = None,
+    compact: bool = True,
+    compact_budget: Optional[Union[str, int]] = None,
+) -> Any
+```
+
+| Parameter | Notes |
+|-----------|-------|
+| `section_id` | Required; the heading ID or anchor from a prior `zim_get(view="toc")` or `zim_get(view="structure")` response |
+| `max_chars` | Per-section char cap |
+| `compact` | Default `True`. v2.0 surface-uniformity parameter — a no-op at the data layer because the bundle is always compact-rendered. v2.5 #18 will wire the real raw-text path |
+| `compact_budget` | Optional budget override |
+
+**Returns:** structured response with section body, heading metadata, and adjacent-section hints.
+
+---
+
+### `zim_browse`
+
+Namespace browse / walk dispatch. Collapses the v1 `browse_namespace` + `walk_namespace` tools.
+
+```python
+zim_browse(
+    zim_file_path: str,
+    namespace: str,
+    mode: Literal["page", "walk"] = "page",
+    cursor: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> Any
+```
+
+| Mode | Behavior |
+|------|----------|
+| `"page"` (default) | Sampled namespace overview, paginated by `limit` + `offset`. For very large namespaces may cap entries — use `mode="walk"` for exhaustive iteration |
+| `"walk"` | Cursor-paginated deterministic iteration by entry ID. Pair `next_cursor` with a follow-up call until `done: true` |
+
+| Parameter | Range | Notes |
+|-----------|-------|-------|
+| `namespace` | | `C`, `M`, `W`, `X`, `A`, `I` for legacy schemes; domain-style names for modern archives |
+| `limit` | 1–500 | Default 50 (`page`) / 200 (`walk`) |
+| `cursor`, `offset` | | `cursor` only valid with `mode="walk"`; `offset` only valid with `mode="page"` |
+
+**Returns:** `{entries, next_cursor, done}` for `walk`, or a sampled JSON list for `page`.
+
+---
+
+### `zim_metadata`
+
+Combined archive metadata + namespaces. Collapses the v1 `get_zim_metadata` + `list_namespaces` tools — the response now includes both the M-namespace metadata and the deterministic namespace breakdown.
+
+```python
+zim_metadata(zim_file_path: str) -> Any
+```
+
+**Returns:** structured response with archive M-namespace metadata (`title`, `language`, `creator`, `flavour`, `date`, etc.) and a deterministic namespace breakdown (surfaces minority namespaces — `M`, `W`, `X`, `I` — that random sampling could miss).
+
+---
+
+### `zim_links`
+
+Outbound / related link-graph dispatch. Collapses the v1 `extract_article_links` + `get_related_articles` tools.
+
+```python
+zim_links(
+    zim_file_path: str,
+    entry_path: str,
+    direction: Literal["outbound", "related"] = "outbound",
+    cursor: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> Any
+```
+
+| Direction | Behavior |
+|-----------|----------|
+| `"outbound"` (default) | All internal + external links extracted from the article body. Drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`) |
+| `"related"` | Outbound link-graph neighbors with deduplication |
+
+`direction="inbound"` is reserved for v2.5 (lands with the link-graph sidecar).
+
+Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
+
+**Returns:** `{outbound_links: [...], internal_count, external_count, media_count}` (outbound) or `{related: [...]}` (related).
+
+---
+
+### `zim_health`
+
+Combined server health, configuration, and loaded archives. Collapses the v1 `get_server_health` + `get_server_configuration` + `list_zim_files` tools into a single call.
+
+```python
+zim_health() -> Any
+```
+
+No parameters.
+
+**Returns:** structured response with this shape (abbreviated):
+
+```json
+{
+  "health": {
+    "timestamp": "2026-05-27T15:30:00.000000",
+    "status": "healthy",
+    "server_name": "openzim-mcp",
+    "uptime_info": { "process_id": "[REDACTED]", "started_at": "..." },
+    "cache_performance": { "hits": 1024, "misses": 256, "hit_rate": 0.8 },
+    "health_checks": { "directories_accessible": 1, "zim_files_found": 5, "permissions_ok": true },
+    "recommendations": [],
+    "warnings": []
+  },
+  "configuration": {
+    "server_name": "openzim-mcp",
+    "allowed_directories": ["...zim-files"],
+    "cache_enabled": true,
+    "cache_max_size": 100,
+    "tool_mode": "advanced",
+    "transport": "stdio",
+    "config_hash": "<sha256>",
+    "server_pid": "[REDACTED]"
+  },
+  "loaded_archives": [
+    { "name": "wikipedia_en_100_2026-02.zim", "path": "...wikipedia_en_100_2026-02.zim", "size": 124857600, "modified": "2026-02-15T10:30:00" }
+  ]
+}
+```
+
+`process_id` / `server_pid` are **always** `"[REDACTED]"` — diagnostic output frequently lands in bug reports. Allowed directories are shown as `...basename` to avoid leaking the canonical layout.
+
+---
+
+## MCP prompts
+
+Three slash-command workflows. See [openzim_mcp/tools/prompts.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/prompts.py).
+
+User-supplied arguments are sanitized: ASCII control characters are replaced with spaces, backticks are stripped (template delimiter), and the value is capped at 200 characters before being interpolated. Apostrophes and double quotes are preserved (real entry paths contain them, e.g. `C/Schrödinger's_cat`).
+
+### `/research`
+
+```python
+research(topic: str)
+```
+
+Workflow: `zim_search(query=topic, cross_file=True)` across archives, then `zim_get(entry_path=..., view="summary")` on the top hits, then ask the user which thread to pursue.
+
+### `/summarize`
+
+```python
+summarize(zim_file_path: str, entry_path: str)
+```
+
+Workflow: `zim_get(view="toc")` → `zim_get(view="summary")` → `zim_links(direction="outbound")`, combined into a TL;DR + section list + 5–10 most relevant outbound links.
+
+### `/explore`
+
+```python
+explore(zim_file_path: str)
+```
+
+Workflow: `zim_metadata` → `zim_get(main_page=True)` → `zim_browse(namespace="C", mode="walk", limit=5)`. Produces a compact briefing.
+
+If a prompt is invoked without required args (or args reduce to empty after sanitization), the response asks the user to supply them.
+
+---
+
+## MCP resources
+
+Three URI templates. See [openzim_mcp/tools/resource_tools.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/resource_tools.py).
+
+### `zim://files`
+
+JSON list of every ZIM file in the allowed directories. Same shape as the `loaded_archives` field of `zim_health`.
+
+### `zim://{name}`
+
+Overview of one ZIM file: metadata, namespace breakdown, and main-page preview (truncated to 2000 characters). `{name}` is the bare basename without `.zim` (e.g. `wikipedia_en_climate_change_mini_2024-06`).
+
+### `zim://{name}/entry/{path}`
+
+Single entry served with native MIME type:
+
+- HTML / text entries → `text/html`, `text/plain`, `application/json`, etc., body as text.
+- Binary entries (images, PDFs) → appropriate MIME, body as raw bytes (FastMCP base64-wraps).
+
+**Encoding requirement:** clients MUST URL-encode `/` as `%2F` in the `{path}` segment because FastMCP's URI template engine treats `/` as a segment separator. Example:
+
+```
+zim://wikipedia_en/entry/A%2FClimate_change
+```
+
+A literal slash will fail to route. See the [Resources, prompts and subscriptions guide](/openzim-mcp/docs/resources-prompts-subscriptions/) for full details.
+
+---
+
+## Resource subscriptions
+
+Clients can subscribe to `zim://files` or `zim://{name}` and receive `notifications/resources/updated` whenever:
+
+- A `.zim` file is added to or removed from an allowed directory (`zim://files`)
+- A specific `.zim` file's mtime changes (`zim://{name}`)
+
+Configuration:
+
+| Env var | Default | Notes |
+|---------|---------|-------|
+| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | master switch |
+| `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1–60 |
+
+See [Resources, prompts and subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/) for full client-side examples.
+
+---
+
+## Rate limiting
+
+All tools are subject to a global token-bucket limiter (default 10 req/s, burst 20). Costs are charged per **internal operation**, not per tool call — a v2 tool that dispatches over multiple modes resolves to a specific underlying operation key:
+
+| Tool call | Internal operation | Cost |
+|-----------|--------------------|------|
+| `zim_search(mode="fulltext")` or `zim_search(mode="title")` | `search` / `find_entry_by_title` | 2 |
+| `zim_search(mode="suggest")` | `suggestions` | 1 |
+| `zim_search(cross_file=True)` | charged per archive scanned | varies |
+| `zim_get(entry_path=...)` | `get_entry` | 1 |
+| `zim_get(entry_paths=[...])` | `get_zim_entries` (per-entry charge) | N |
+| `zim_get(binary=True)` | `get_binary_entry` | 3 |
+| `zim_get(view="structure")` / `view="toc"` / `view="summary"` | `get_structure` | 1 |
+| `zim_browse(mode="page")` or `zim_browse(mode="walk")` | `browse_namespace` | 1 |
+| `zim_metadata` | `get_metadata` | 1 |
+| `zim_links(direction="related")` | `get_related_articles` | 2 |
+| `zim_links(direction="outbound")` | default | 1 |
+| `zim_health`, `zim_get_section`, `zim_query` (per-intent) | default | 1 |
+
+Tune via `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND`, `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE`, and `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS`. See [Configuration](/openzim-mcp/docs/configuration/#rate-limiting).
+
+When the limit is exceeded, the tool returns a `ToolErrorPayload` with a `retry_after` hint; it does not raise.
+
+---
+
+## Error responses
+
+Every tool wraps exceptions and returns a structured `ToolErrorPayload`:
+
+```json
+{
+  "status": "error",
+  "operation": "invalid_path_combination",
+  "message": "Set exactly one of: entry_path, entry_paths, binary, main_page",
+  "hint": "Use entry_paths=[...] for batch fetch"
+}
+```
+
+The error classes in [openzim_mcp/exceptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/exceptions.py) are the canonical source for the underlying exception hierarchy:
+
+- `OpenZimMcpError` — base
+- `OpenZimMcpConfigurationError`
+- `OpenZimMcpValidationError`
+- `OpenZimMcpArchiveError`
+- `OpenZimMcpRateLimitError`
+
+Absolute filesystem paths in error messages are redacted to `...filename.zim` form. PIDs are redacted in diagnostics output. Error text in v2.0 is safe to copy into bug reports.
+
+---
+
+## v1 → v2 migration
+
+The full mechanical mapping. Every v1 tool name in this table is intentional — it is the canonical place to look up "what does my old call become?". For the narrative context see [CHANGELOG.md → migration table](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#migrating-from-v1x--v2-beta).
+
+| v1 call | v2 equivalent | Notes |
+| --- | --- | --- |
+| `list_zim_files()` | `zim_health()` → `.loaded_archives` | health/config/files consolidated |
+| `get_server_health()` | `zim_health()` → `.health` | health/config/files consolidated |
+| `get_server_configuration()` | `zim_health()` → `.configuration` | health/config/files consolidated |
+| `get_zim_metadata(path)` | `zim_metadata(path)` → `.metadata` | now includes namespace breakdown too |
+| `list_namespaces(path)` | `zim_metadata(path)` → `.namespaces` | now includes namespace breakdown too |
+| `get_main_page(path)` | `zim_get(path, main_page=True)` | one of four mutually-exclusive branches |
+| `search_zim_file(path, q)` | `zim_search(q, zim_file_path=path)` | default `mode="fulltext"` |
+| `search_all(q)` | `zim_search(q, cross_file=True)` | multi-archive merge in `per_file_results` |
+| `search_with_filters(path, q, ns=, ct=)` | `zim_search(q, zim_file_path=path, namespace=ns, content_type=ct)` | filters only meaningful for fulltext |
+| `find_entry_by_title(path, title)` | `zim_search(title, zim_file_path=path, mode="title")` | fast title-indexed `C/<Title>` path |
+| `get_search_suggestions(path, prefix)` | `zim_search(prefix, zim_file_path=path, mode="suggest")` | autocomplete-style prefix |
+| `get_zim_entry(path, entry_path)` | `zim_get(path, entry_path=entry_path)` | smart-retrieval fallback on miss |
+| `get_zim_entries(path, entries)` | `zim_get(path, entry_paths=entries)` | up to 50 per call; per-entry cost |
+| `get_binary_entry(path, entry_path)` | `zim_get(path, entry_path=entry_path, binary=True)` | base64 wire payload, 10 MiB default cap |
+| `get_entry_summary(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="summary")` | one of four view modes |
+| `get_table_of_contents(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="toc")` | one of four view modes |
+| `get_article_structure(path, entry_path)` | `zim_get(path, entry_path=entry_path, view="structure")` | one of four view modes |
+| `get_section(path, entry_path, section_id)` | `zim_get_section(path, entry_path, section_id)` | now defaults `compact=True` |
+| `browse_namespace(path, namespace)` | `zim_browse(path, namespace)` | default `mode="page"` |
+| `walk_namespace(path, namespace)` | `zim_browse(path, namespace, mode="walk")` | cursor-paginated deterministic iteration |
+| `extract_article_links(path, entry_path)` | `zim_links(path, entry_path)` | default `direction="outbound"` |
+| `get_related_articles(path, entry_path)` | `zim_links(path, entry_path, direction="related")` | replaces standalone tool |
+
+There are no on-the-wire aliases at v2.0 — old tool names disappear cleanly per the foundational v2 decisions.
+
+---
+
+**Need configuration help?** See [Configuration](/openzim-mcp/docs/configuration/). **Deploying over HTTP?** See [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/). **Using resources / subscriptions?** See [Resources, prompts and subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

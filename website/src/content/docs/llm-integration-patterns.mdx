@@ -1,0 +1,581 @@
+---
+title: LLM integration patterns
+summary: Proven patterns for wiring OpenZIM MCP v2.0.0 into LLM applications — simple-mode dispatch, advanced-mode 8-tool composition, progressive discovery, batching, and error handling.
+group: Guides
+sidebar_order: 1
+---
+
+Best practices and patterns for integrating OpenZIM MCP with large language models.
+
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_query(request="...")`, `zim_search(query="...", ...)`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. The argument names and types match the v2.0.0 8-tool surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
+
+## Overview
+
+OpenZIM MCP is purpose-built for LLM integration: structured access to offline knowledge bases via a small, dispatch-friendly tool surface. This guide covers proven patterns for maximizing effectiveness against both **simple mode** (the default, one natural-language tool `zim_query`) and **advanced mode** (the full 8-tool surface).
+
+If your host LLM is small or struggles with large tool catalogs, prefer simple mode — `zim_query` delegates to the underlying advanced operations via an intent parser. If your host LLM dispatches reliably against a richer tool surface, switch to advanced mode (`--mode advanced` or `OPENZIM_MCP_TOOL_MODE=advanced`) for fine-grained control.
+
+## Core integration principles
+
+### 1. Progressive discovery
+
+Start broad, then narrow down based on results.
+
+```
+User: "Tell me about evolution"
+
+LLM strategy (simple mode):
+1. zim_query(request="summarize Evolution")
+
+LLM strategy (advanced mode):
+1. zim_search(query="evolution", ...)                  → broad search
+2. zim_get(entry_path=..., view="structure")           → article shape
+3. zim_get_section(entry_path=..., section_id=...)     → specific sections
+4. zim_links(direction="related", entry_path=...)      → adjacent topics
+```
+
+### 2. Context-aware retrieval
+
+Use article structure and metadata to provide better context.
+
+```
+User: "What are the main mechanisms of evolution?"
+
+LLM strategy (advanced mode):
+1. zim_get(view="structure", entry_path="C/Evolution")
+2. Identify "Mechanisms" section
+3. zim_get_section(entry_path="C/Evolution", section_id=...)
+4. zim_links(direction="related", entry_path="C/Evolution")
+```
+
+### 3. Smart fallback
+
+`zim_get(entry_path=...)` runs the smart-retrieval fallback internally — guessed paths that don't match exactly get resolved via search-derived candidate terms. See the [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) page for the algorithm.
+
+```
+# The system automatically handles:
+- "Natural Selection" → "Natural_selection"
+- "DNA Replication"   → "DNA_replication"
+- "Café"              → "Caf%C3%A9"
+```
+
+## Simple mode: `zim_query`
+
+In simple mode the server exposes one tool. Phrase the request in natural language; the intent parser routes to the right underlying operation.
+
+```python
+# Summarize an article
+zim_query(request="summarize Photosynthesis")
+
+# Search across all loaded archives
+zim_query(request="search every ZIM for climate change")
+
+# Server health and cache performance
+zim_query(request="what's the server health and cache performance?")
+
+# Walk a namespace
+zim_query(request="walk namespace M in wikipedia.zim")
+```
+
+The intent parser recognises summarise / search / get / browse / structure / TOC / health / list-files / related-articles / find-by-title phrasings. If parsing is ambiguous, the response includes a `routed_to` field describing which underlying operation the parser picked — useful for diagnosing surprises.
+
+For everything that follows on this page, switch to advanced mode for fine-grained control.
+
+## Search strategies (advanced mode)
+
+### Basic search pattern
+
+```python
+# 1. Start with broad search
+search_results = zim_search(
+    query="biology",
+    zim_file_path=zim_path,
+    limit=5,
+)
+
+# 2. Get detailed content for relevant results
+for result in search_results.results:
+    content = zim_get(
+        zim_file_path=zim_path,
+        entry_path=result.path,
+    )
+```
+
+### Advanced search with filters
+
+```python
+# Search within a specific namespace + content type
+filtered_results = zim_search(
+    query="evolution",
+    zim_file_path=zim_path,
+    mode="fulltext",
+    namespace="C",            # Content articles only
+    content_type="text/html",
+    limit=10,
+)
+```
+
+### Auto-complete for better queries
+
+```python
+# Get title-suggester results for partial queries
+suggestions = zim_search(
+    query="bio",
+    zim_file_path=zim_path,
+    mode="suggest",
+    limit=5,
+)
+
+# Use suggestions to refine search
+for suggestion in suggestions.suggestions:
+    refined = zim_search(query=suggestion, zim_file_path=zim_path)
+```
+
+### Title-first lookup (skip search overhead)
+
+When the LLM already has a likely article title, `zim_search(mode="title")` is much cheaper than full-text search — it tries the normalized `C/<Title>` direct match first (fast path), then falls back to libzim's title-indexed suggester:
+
+```python
+hit = zim_search(
+    query="Photosynthesis",
+    zim_file_path=zim_path,
+    mode="title",
+)
+if hit.results:
+    body = zim_get(zim_file_path=zim_path, entry_path=hit.results[0].path)
+```
+
+Set `cross_file=True` to query every allowed archive at once.
+
+### Cross-archive search
+
+Use `cross_file=True` instead of looping over files — `zim_search` queries every ZIM in the allowed dirs and merges results in one call:
+
+```python
+# One round-trip across every ZIM file in the allowed dirs
+results = zim_search(query="climate change", cross_file=True, limit=5)
+# results.per_file_results groups hits by file
+```
+
+## Content retrieval patterns (advanced mode)
+
+### Structured content access
+
+```python
+# 1. Get article structure first
+structure = zim_get(
+    zim_file_path=zim_path,
+    entry_path="C/Evolution",
+    view="structure",
+)
+
+# 2. Present overview to user
+overview = f"Article '{structure.title}' has {len(structure.headings)} sections"
+
+# 3. Get a specific section by ID (cheaper than full article)
+section = zim_get_section(
+    zim_file_path=zim_path,
+    entry_path="C/Evolution",
+    section_id=structure.headings[1].id,
+)
+
+# 4. Or fetch the full body with a cap
+content = zim_get(
+    zim_file_path=zim_path,
+    entry_path="C/Evolution",
+    max_content_length=50000,
+)
+```
+
+### Cheap context: summary and TOC
+
+`zim_get(view="summary")` returns the lead paragraph(s) without loading the full body. `zim_get(view="toc")` returns a hierarchical TOC tree. Both are excellent "what's in this article?" probes before deciding to fetch the full content:
+
+```python
+toc = zim_get(zim_file_path=zim_path, entry_path=entry_path, view="toc")
+summary = zim_get(zim_file_path=zim_path, entry_path=entry_path, view="summary")
+```
+
+### Link-based exploration
+
+```python
+# All outbound links (internal + external + media)
+links = zim_links(
+    zim_file_path=zim_path,
+    entry_path="C/Biology",
+    direction="outbound",
+)
+
+# Or deduplicated outbound link-graph neighbours
+related = zim_links(
+    zim_file_path=zim_path,
+    entry_path="C/Biology",
+    direction="related",
+    limit=10,
+)
+```
+
+`direction="inbound"` lands in v2.5 with the link-graph sidecar — not available in v2.0.
+
+## User experience patterns
+
+### Conversational knowledge exploration
+
+**Pattern:** Guide users through knowledge discovery.
+
+```
+User: "I want to learn about biology"
+
+LLM response:
+1. "I found several biology topics. Here are the main areas:"
+2. Present structured overview from zim_get(view="structure")
+3. "Which area interests you most?"
+4. Based on response, dive deeper into specific sections via zim_get_section
+```
+
+### Research assistant pattern
+
+**Pattern:** Help users research specific topics.
+
+```
+User: "I'm writing about evolutionary mechanisms"
+
+LLM strategy:
+1. zim_search(query="evolutionary mechanisms")
+2. zim_get(view="structure")                          → identify key mechanisms
+3. zim_get_section(...)                               → extract each mechanism
+4. zim_links(direction="related")                     → additional context
+5. Provide structured summary with sources
+```
+
+### Question-answering pattern
+
+**Pattern:** Answer specific questions using knowledge base.
+
+```
+User: "What is natural selection?"
+
+LLM strategy:
+1. zim_search(mode="title", query="Natural selection") if confident, fulltext otherwise
+2. zim_get(view="summary", entry_path=...)            → opening paragraph
+3. Provide concise answer with option to explore further
+```
+
+## Performance optimization patterns
+
+### Efficient content loading
+
+```python
+# Use appropriate content limits
+small_preview = zim_get(
+    zim_file_path=zim_path,
+    entry_path=article_path,
+    max_content_length=5000,    # For previews
+)
+
+full_content = zim_get(
+    zim_file_path=zim_path,
+    entry_path=article_path,
+    max_content_length=100000,  # For full reading
+)
+```
+
+### Batch retrieval (HTTP-friendly)
+
+`zim_get(entry_paths=[...])` takes up to 50 entries per call with per-entry success/failure. Per-entry failures don't abort the batch — particularly valuable over HTTP transport where round-trip cost dominates:
+
+```python
+# Bare-string shape for single-archive batches
+batch = zim_get(
+    zim_file_path=zim_path,
+    entry_paths=["C/Biology", "C/Evolution", "C/Genetics"],
+)
+hits = [r for r in batch.results if r.success]
+```
+
+Rate limiting is charged **per-entry**, not per batch — a 50-entry batch costs 50 slots.
+
+### Cache-friendly patterns
+
+```python
+# Reuse common queries to benefit from caching
+popular_topics = ["Biology", "Physics", "Chemistry"]
+
+for topic in popular_topics:
+    # These will be cached for faster subsequent access
+    zim_search(query=topic, zim_file_path=zim_path)
+```
+
+## Specialized use cases
+
+### Educational content delivery
+
+```python
+def create_lesson_plan(topic):
+    # 1. Get topic overview
+    overview = zim_search(query=topic, zim_file_path=zim_path, limit=1)
+
+    # 2. Get article structure for curriculum planning
+    structure = zim_get(
+        zim_file_path=zim_path,
+        entry_path=overview.results[0].path,
+        view="structure",
+    )
+
+    # 3. Prepare related topics for exploration
+    links = zim_links(
+        zim_file_path=zim_path,
+        entry_path=overview.results[0].path,
+        direction="outbound",
+    )
+
+    return {
+        "overview": overview,
+        "structure": structure,
+        "related_topics": links.outbound_links,
+    }
+```
+
+### Research and analysis
+
+```python
+def research_topic(topic, depth="medium"):
+    results = []
+
+    # 1. Initial search
+    primary_results = zim_search(query=topic, zim_file_path=zim_path, limit=10)
+
+    # 2. Get detailed content and related links
+    for result in primary_results.results:
+        content = zim_get(zim_file_path=zim_path, entry_path=result.path)
+        related = zim_links(
+            zim_file_path=zim_path,
+            entry_path=result.path,
+            direction="related",
+            limit=5,
+        )
+
+        results.append({
+            "content": content,
+            "related": related.related,
+        })
+
+    return results
+```
+
+### Content summarization
+
+```python
+def summarize_topic(topic):
+    # 1. Get main article
+    search_results = zim_search(query=topic, zim_file_path=zim_path, limit=1)
+    main_path = search_results.results[0].path
+
+    # 2. Lead-paragraph summary (cheap)
+    summary = zim_get(zim_file_path=zim_path, entry_path=main_path, view="summary")
+
+    # 3. TOC for key sections
+    toc = zim_get(zim_file_path=zim_path, entry_path=main_path, view="toc")
+
+    # 4. Extract top-level sections
+    key_sections = [s for s in toc.toc if s.level <= 2]
+
+    # 5. Pull each section by its ID
+    section_bodies = [
+        zim_get_section(
+            zim_file_path=zim_path,
+            entry_path=main_path,
+            section_id=s.id,
+        )
+        for s in key_sections
+    ]
+
+    return {
+        "title": toc.title,
+        "summary": summary,
+        "key_sections": key_sections,
+        "section_bodies": section_bodies,
+    }
+```
+
+## Error handling patterns
+
+### Structured tool errors
+
+OpenZIM MCP v2 tools return **structured `ToolErrorPayload` objects**, not exceptions. The payload has `{status: "error", operation, message, hint?}`. Smart retrieval already handles "wrong path" cases automatically — see [Smart retrieval](/openzim-mcp/docs/smart-retrieval/).
+
+```python
+def robust_content_access(entry_path):
+    # zim_get already runs smart-retrieval fallback internally —
+    # if direct access fails, it tries search-derived candidate terms.
+    result = zim_get(zim_file_path=zim_path, entry_path=entry_path)
+
+    # When smart retrieval bails, the result is a ToolErrorPayload dict.
+    if isinstance(result, dict) and result.get("status") == "error":
+        # Title-mode search is the cheapest "I have a name, give me the path" fallback.
+        hit = zim_search(
+            query=entry_path.split("/")[-1],
+            zim_file_path=zim_path,
+            mode="title",
+        )
+        if hit.results:
+            return zim_get(zim_file_path=zim_path, entry_path=hit.results[0].path)
+        return None
+
+    return result
+```
+
+For programmatic checks, the underlying exception class hierarchy lives in [openzim_mcp/exceptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/exceptions.py): `OpenZimMcpArchiveError`, `OpenZimMcpValidationError`, `OpenZimMcpRateLimitError`, `OpenZimMcpConfigurationError`. They're caught at the tool boundary; you don't see them on the wire.
+
+### Progressive content loading
+
+```python
+def progressive_content_load(entry_path):
+    # Start with structure (cheap)
+    structure = zim_get(zim_file_path=zim_path, entry_path=entry_path, view="structure")
+
+    # Get a preview
+    preview = zim_get(
+        zim_file_path=zim_path,
+        entry_path=entry_path,
+        max_content_length=2000,
+    )
+
+    # Full content only if needed
+    if user_wants_full_content:
+        full_content = zim_get(
+            zim_file_path=zim_path,
+            entry_path=entry_path,
+            max_content_length=100000,
+        )
+        return full_content
+
+    return preview
+```
+
+## Monitoring and analytics
+
+### Performance tracking
+
+```python
+# zim_health returns combined server health + configuration + loaded archives
+health = zim_health()
+cache_hit_rate = health.health.cache_performance.hit_rate
+
+if cache_hit_rate < 0.7:
+    # Adjust caching strategy — see Performance Optimization Guide
+    pass
+```
+
+Note `health.cache_performance` (not `cache`); fields are `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. `process_id` / `server_pid` are `[REDACTED]`.
+
+### Usage analytics
+
+```python
+# Track popular content
+popular_searches = track_search_patterns()
+popular_articles = track_article_access()
+
+# Optimize based on usage patterns
+```
+
+## Best practices summary
+
+### Do's
+
+1. **Start with search** before direct access.
+2. **Use `view="structure"` or `view="toc"`** to understand content organisation cheaply.
+3. **Use `view="summary"`** for lead-paragraph previews before fetching full bodies.
+4. **Use `zim_get_section`** when you already have a section ID — much cheaper than fetching the whole article.
+5. **Leverage caching** by reusing common queries.
+6. **Handle structured tool errors** with `isinstance(result, dict) and result.get("status") == "error"`.
+7. **Monitor performance** via `zim_health` and adjust limits accordingly.
+8. **Use appropriate content limits** (`max_content_length`) for different use cases.
+9. **Use `zim_links(direction="related")`** for content discovery.
+10. **Provide progressive disclosure** of information.
+
+### Don'ts
+
+1. **Don't assume exact paths** — let smart retrieval do its job.
+2. **Don't ignore article structure** — it provides valuable context.
+3. **Don't request excessive content** — use appropriate limits.
+4. **Don't ignore cache performance** — monitor and optimise.
+5. **Don't hardcode file paths** — make them configurable.
+6. **Don't skip error handling** — always have fallbacks.
+7. **Don't overwhelm users** — provide structured, digestible information.
+8. **Don't fetch full articles when a section will do** — `zim_get_section` is your friend.
+
+## Advanced integration techniques
+
+### Namespace iteration
+
+`zim_browse(mode="page")` samples (caps at limit on large namespaces). For exhaustive iteration use `mode="walk"`, which is deterministic cursor pagination by entry ID:
+
+```python
+cursor = None
+while True:
+    page = zim_browse(
+        zim_file_path=zim_path,
+        namespace="M",
+        mode="walk",
+        cursor=cursor,
+        limit=200,
+    )
+    process(page.entries)
+    if page.done:
+        break
+    cursor = page.next_cursor
+```
+
+### MCP prompts
+
+Three pre-built workflow prompts are always available regardless of mode (simple or advanced):
+
+- `/research <topic>` — `zim_search(cross_file=True)` then `zim_get(view="summary")` on top hits, then ask which thread to pursue.
+- `/summarize <zim_file_path> <entry_path>` — `zim_get(view="toc")` + `zim_get(view="summary")` + `zim_links(direction="outbound")` combined.
+- `/explore <zim_file_path>` — `zim_metadata` then `zim_get(main_page=True)` then `zim_browse(namespace="C", mode="walk", limit=5)` — high-level briefing of one archive.
+
+If your client supports MCP prompts, surface these as slash commands rather than reimplementing the workflows in your own orchestration.
+
+### MCP resources
+
+Three URI templates also always available:
+
+- `zim://files` — JSON list of every ZIM file.
+- `zim://{name}` — overview of one ZIM (metadata, namespace summary, main-page preview).
+- `zim://{name}/entry/{path}` — single entry served with native MIME type (HTML, JSON, image, PDF).
+
+The per-entry resource is great for clients that render content directly (browsers, image viewers). **Clients MUST URL-encode `/` as `%2F`** in the path segment because the URI template engine treats `/` as a separator. Example: `zim://wikipedia_en/entry/A%2FClimate_change`.
+
+Subscribe to `zim://files` or `zim://{name}` for `notifications/resources/updated` when the directory or file changes — see [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
+
+### Simple-mode considerations
+
+In simple mode (the default) only `zim_query` is exposed — pass a natural-language request and the server's intent parser routes to the right underlying operation. If your host LLM is small or struggles with large tool catalogues, prefer simple mode and let the parser do the routing. For LLMs that handle the full 8-tool surface, switch to advanced mode (`OPENZIM_MCP_TOOL_MODE=advanced`) for fine-grained control.
+
+**The v2.0.0 8-tool surface fits comfortably below the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (~23.5KB vs the 25–50KB band)** — most 7-8B class open-weights models dispatch reliably against it. The 22-tool v1 surface (~36KB) sat squarely inside the band; if you saw dispatch confusion on v1 with a small model, v2 should be substantially better.
+
+### Contextual content assembly
+
+```python
+# Assemble context from a single article + its outbound neighbours
+def create_comprehensive_answer(zim_path, entry_path):
+    body = zim_get(zim_file_path=zim_path, entry_path=entry_path)
+    related = zim_links(
+        zim_file_path=zim_path,
+        entry_path=entry_path,
+        direction="related",
+        limit=10,
+    )
+    return body, related.related
+```
+
+---
+
+**Next steps:**
+
+- **[API reference](/openzim-mcp/docs/api-reference/)** — full v2.0.0 tool signatures.
+- **[Performance optimization](/openzim-mcp/docs/performance-optimization/)** — cache tuning, rate limiting, batching.
+- **[Smart retrieval](/openzim-mcp/docs/smart-retrieval/)** — how the search-fallback path resolution works.
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
