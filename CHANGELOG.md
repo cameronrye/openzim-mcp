@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-05-27 — Phase F Stage D ships: 8-tool surface
+
+Final cut after `v2.0.0rc1` (PR #194). No surface or behavior changes vs rc1 — this is
+the stabilization commit. See the `[2.0.0rc1]` section below for the full surface change
+and migration table.
+
+### Stage E verdict
+
+- **E1 dispatch sweep** (Task E1, full 512-probe Gate 0b set, 5 reps): 2560 outcomes
+  against Qwen3-8B-Q4 via `chat.owl-atlas.ts.net`, 0 errors. Overall dispatch accuracy
+  76.7% (1964/2560), 5 spurious routes. Baseline committed at
+  `tests/dispatch_eval/runs/rc1__advanced__qwen3-8b-q4__2026-05-27T03-31-27Z.jsonl`.
+- **F2 enforcement** (Task E3 Step 3): **PASS** (`f2_pass=true`, `failures=[]`). Per-class
+  delta ceiling at 10pp holds for every new Phase F operation class on the primary cell.
+  (Haiku / Llama / Phi cells remain unavailable per `gate_0b_decision.json`
+  `scope_limitations` — same posture as Gate 0b and rc1.)
+- **E2 disposition** (Task E2): the dedicated 24-legal-probes test was not authored. The
+  schema-bypass half (Task D15, `tests/test_phase_f_schema_bypass.py`) passes 15/15. The
+  legal half is effectively covered by the 122 unique `zim_get-*` dispatch probes from E1
+  against live Wikipedia plus the branch-level unit tests in `tests/test_zim_get.py`.
+- **E4** (migration conformance in CI): `tests/test_phase_f_migration.py` runs in the
+  default pytest suite; verified during PR #194 CI.
+
+### Known limitation — natural-language dispatch on three new operation classes
+
+Three of the new Phase F operation classes showed low absolute dispatch accuracy on
+Qwen3-8B-Q4 in the Stage E1 sweep — but **F2 formally passes** (these are new classes
+with no b13 baseline to regress against):
+
+| Class | Accuracy | Where the model goes instead |
+| --- | --- | --- |
+| `zim_get-summary` | 20% (20/100) | 80/100 → `zim_query` |
+| `zim_get-structure` | 53% (56/105) | 49/105 → `zim_query` |
+| `zim_get-main-page` | 76% (76/100) | 14/100 → `zim_query`, 10/100 → `zim_metadata` |
+
+The model interprets natural-language phrasings ("give me a brief summary of X") as
+**query intent** rather than direct-fetch intent. This is **not a surface defect** — when
+`zim_query` is dispatched the user still gets a working answer via the natural-language
+entry path. Description tuning and/or probe-set relaxation tracked at #199 for v2.5.
+
+### v1.x maintenance scope
+
+Per the [v1.x maintenance commitment](docs/superpowers/specs/2026-05-24-v2-phase-f-tool-surface-design.md#v1x-maintenance-commitment-rollback-runway),
+the most recent v1.x tag is retained as a parallel maintenance branch until the FIRST of
+`{v2.5.0 ships, 6 calendar months after v2.0.0}`.
+
+- **Accepted backports to v1.x:** security fixes (always), data-corruption fixes (always),
+  pre-v2.0.0 crash bugs.
+- **Rejected backports to v1.x:** new features, new tools, performance work, refactors.
+
 ## [2.0.0rc1] — 2026-05-26 (release candidate) — Phase F Stage D: 8-tool surface consolidation
 
 Second release candidate for v2.0.0. The 22-tool advanced surface

@@ -82,7 +82,7 @@ Whether you're building a research assistant, knowledge chatbot, or content anal
 - **Configurable**: Flexible configuration with validation
 - **Observable**: Structured logging and health monitoring
 
-## What's new in v2.0.0rc1
+## What's new in v2.0.0
 
 > Phase F of the v2 effort. Collapses the 22-tool advanced surface into
 > 8 consolidated tools — the largest API change in the project's history.
