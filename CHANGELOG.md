@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1](https://github.com/cameronrye/openzim-mcp/compare/v2.0.0...v2.0.1) (2026-05-27)
+
+
+### Bug Fixes
+
+* **codeql:** clear 2 py/empty-except alerts in dispatch-eval runner ([b3b47e8](https://github.com/cameronrye/openzim-mcp/commit/b3b47e8c15f11b06cdd60634bf0b7e0b29afa987))
+* **docs:** zim_browse mode is 'page'|'walk', not 'browse'|'walk' ([#203](https://github.com/cameronrye/openzim-mcp/issues/203)) ([6fddc82](https://github.com/cameronrye/openzim-mcp/commit/6fddc82afd4887c10a7005d1f79b9e4c2ac0e219))
+
+
+### Documentation
+
+* Astro scaffold + landing v1→v2 refresh + Astro build in deploy workflow ([#205](https://github.com/cameronrye/openzim-mcp/issues/205)) ([3ef225e](https://github.com/cameronrye/openzim-mcp/commit/3ef225eae3b8e4282f0639d15c924b53740ef71f))
+* comprehensive v2.0.0 surface update across README, website, deployment ([#201](https://github.com/cameronrye/openzim-mcp/issues/201)) ([3ba32f3](https://github.com/cameronrye/openzim-mcp/commit/3ba32f33df5f857f1f69f3d494f01ac84880ce8d))
+* consolidate v2 planning artifacts into single roadmap ([5930dad](https://github.com/cameronrye/openzim-mcp/commit/5930dadf3437f7fad710b6441609c730d5c8f984))
+* drop v2.5 references from README + website/llms.txt ([#204](https://github.com/cameronrye/openzim-mcp/issues/204)) ([3a91587](https://github.com/cameronrye/openzim-mcp/commit/3a9158748148bc4ca1d1a865ce8b354050b1a5d2))
+* migrate 15-page wiki to Astro docs collection + retire docs/deployment.md ([#206](https://github.com/cameronrye/openzim-mcp/issues/206)) ([2beed02](https://github.com/cameronrye/openzim-mcp/commit/2beed027609bb324fb521945c9639802a0c97680))
+* post-v2.0.0 documentation consolidation design spec + 4-PR plan ([#209](https://github.com/cameronrye/openzim-mcp/issues/209)) ([e8920a2](https://github.com/cameronrye/openzim-mcp/commit/e8920a2b6ae54f2ecb778108e4584d4f184a46fe))
+* restore ❤️ in 'Made with' attribution (README + landing) ([#210](https://github.com/cameronrye/openzim-mcp/issues/210)) ([081397f](https://github.com/cameronrye/openzim-mcp/commit/081397f525144fa8cf129b392e1896efdf30d033))
+* slim README to 147-line project card + relocate Dev/Test to CONTRIBUTING.md + fix /docs/ root URL ([#207](https://github.com/cameronrye/openzim-mcp/issues/207)) ([289b3ab](https://github.com/cameronrye/openzim-mcp/commit/289b3ab4edf19724c836c3204b06d47d33f3edb8))
+* **website:** fix loose ends from docs-consolidation cut ([#211](https://github.com/cameronrye/openzim-mcp/issues/211)) ([085fb37](https://github.com/cameronrye/openzim-mcp/commit/085fb3787d07cef9eebfdef392e0ecdec1d65f7b))
+
 ## [2.0.0] — 2026-05-27 — Phase F Stage D ships: 8-tool surface
 
 Final cut after `v2.0.0rc1` (PR #194). No surface or behavior changes vs rc1 — this is
