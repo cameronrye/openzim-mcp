@@ -1,0 +1,375 @@
+---
+title: FAQ
+summary: Common questions about OpenZIM MCP — v1 → v2 migration, simple vs advanced mode, the 8-tool MCP context-tax win, ZIM files, configuration, security, and where to get help.
+group: Operations
+sidebar_order: 2
+---
+
+Common questions and answers about OpenZIM MCP.
+
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_query(query="...")`). Argument names match the v2.0.0 8-tool surface.
+
+## General questions
+
+### What is OpenZIM MCP?
+
+OpenZIM MCP is a Model Context Protocol (MCP) server that enables AI models to access and search ZIM format knowledge bases offline. It provides intelligent, structured access to content like Wikipedia, Wiktionary, and other knowledge repositories.
+
+### What changed from v1 to v2?
+
+v2.0.0 collapsed the 22-tool advanced surface into 8 consolidated tools: `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. The old names (`search_zim_file`, `get_zim_entry`, `browse_namespace`, `extract_article_links`, `get_server_health`, and the rest) are gone — most consolidate into a single new tool with a `mode` or `view` parameter that selects the old behavior.
+
+Functionally nothing was removed; the surface area just shrank. See the [migration table on the API reference page](/openzim-mcp/docs/api-reference/#v1--v2-migration) and the [CHANGELOG migration table](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#migrating-from-v1x--v2-beta) for the full mechanical mapping.
+
+### What makes it different from other file readers?
+
+Unlike basic file readers, OpenZIM MCP provides:
+
+- **Smart navigation**: Browse by namespace instead of blind searching
+- **Context-aware discovery**: Get article structure and relationships
+- **Intelligent search**: Advanced filtering and auto-complete
+- **Performance optimization**: Caching and pagination for large archives
+- **LLM-optimized**: Designed specifically for AI model integration
+
+### What are ZIM files?
+
+ZIM (Zeno IMproved) files are an open format for storing web content offline. They're highly compressed and optimized for fast access, commonly used for Wikipedia, Wiktionary, and other reference materials.
+
+## Getting started
+
+### How do I install OpenZIM MCP?
+
+1. **Install Python 3.12+**
+2. **Install OpenZIM MCP**: `pip install openzim-mcp`
+3. **Download ZIM files** from [Kiwix Library](https://browse.library.kiwix.org/)
+4. **Configure your MCP client** with the server command
+
+See the [Installation guide](/openzim-mcp/docs/installation/) for detailed instructions.
+
+### Where can I get ZIM files?
+
+Download ZIM files from the [Kiwix Library](https://browse.library.kiwix.org/). Popular options include:
+
+- Wikipedia (various languages and sizes)
+- Wiktionary (dictionaries)
+- Stack Overflow (programming Q&A)
+- Medical and educational content
+
+### What's the minimum system requirements?
+
+- **Python**: 3.12 or higher
+- **Memory**: 512MB minimum (2GB+ recommended for large ZIM files)
+- **Storage**: Space for ZIM files (100MB to 50GB+ depending on content)
+- **OS**: Windows, macOS, or Linux
+
+## Configuration
+
+### How do I configure caching?
+
+Use environment variables:
+
+```bash
+export OPENZIM_MCP_CACHE__ENABLED=true
+export OPENZIM_MCP_CACHE__MAX_SIZE=200
+export OPENZIM_MCP_CACHE__TTL_SECONDS=7200
+```
+
+See the [Configuration guide](/openzim-mcp/docs/configuration/) for all options.
+
+### Can I use multiple ZIM files?
+
+Yes. Place multiple ZIM files in your directory and OpenZIM MCP will automatically detect and provide access to all of them.
+
+### How do I optimize performance?
+
+Key optimization strategies:
+
+- **Increase cache size** for frequently accessed content
+- **Use appropriate content limits** for your use case
+- **Monitor cache hit rates** (target >70%)
+- **Choose the right ZIM files** for your needs
+
+See the [Performance optimization guide](/openzim-mcp/docs/performance-optimization/) for details.
+
+## Usage
+
+### Simple mode vs Advanced mode — which do I want?
+
+**Simple mode** (the default) exposes one tool: `zim_query`, which accepts a natural-language query and routes it to the right underlying operation. Pick this when your host LLM is small (anything Llama-3-8B-class or below), when the host disables tools beyond a small ceiling, or when you don't care about fine-grained control over how the call is shaped.
+
+**Advanced mode** (`--mode advanced` or `OPENZIM_MCP_TOOL_MODE=advanced`) exposes the 8 specialized tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). Pick this when your host is a frontier model that handles a richer tool catalog well, or for scripted workflows that need explicit control over which operation runs.
+
+Prompts (`/research`, `/summarize`, `/explore`) and resources (`zim://files`, `zim://{name}`, `zim://{name}/entry/{path}`) are always available regardless of mode.
+
+### What is the MCP Tax and why does the 8-tool surface help?
+
+The [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) is the context cost an MCP server's tool schemas impose on every LLM request — the LLM has to read every tool description and parameter spec before it can pick one. There's an empirically observed pain band around 25–50KB of schema where small models start dropping accuracy and tool-call latency climbs.
+
+v1.x's 22-tool advanced surface was roughly 36KB of schema — squarely in the pain band. v2.0.0's 8-tool surface is roughly 23.5KB — just under the band. Same functionality, lower context tax, fewer wrong-tool calls. The detailed argument shapes still live inside the consolidated tools (in the `mode` / `view` discriminator), so frontier models keep their granularity.
+
+### How do I search for content?
+
+Use natural language with your MCP client:
+
+- "Search for biology in the ZIM files"
+- "Find articles about evolution"
+- "Get search suggestions for 'bio'"
+
+The system supports various search strategies and filters.
+
+### How do I get specific articles?
+
+Request articles directly:
+
+- "Get the Biology article from the ZIM file"
+- "Show me the content of the Evolution page"
+
+The smart retrieval system automatically handles path encoding differences. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the fallback ladder.
+
+### Can I get article structure without full content?
+
+Yes. Use structure requests:
+
+- "Show me the structure of the Evolution article"
+- "What are the main sections in the Biology page?"
+
+This gives you headings, sections, and metadata without loading full content. Under the hood it's `zim_get(view="structure")` or `zim_get(view="toc")`.
+
+### My v1 client code references `search_zim_file` — how do I migrate?
+
+The v1 names are gone in v2.0.0. The migration is almost always 1-to-1 with a new `mode` (or `view`) parameter selecting the old behavior — for example:
+
+- `search_zim_file(zim_file_path=..., query=...)` → `zim_search(zim_file_path=..., query=..., mode="fulltext")` (the default)
+- `find_entry_by_title(...)` → `zim_search(..., mode="title")`
+- `get_zim_entry(entry_path=...)` → `zim_get(entry_path=...)`
+- `get_main_page(...)` → `zim_get(main_page=True)`
+- `browse_namespace(namespace="C")` → `zim_browse(namespace="C")`
+- `extract_article_links(...)` → `zim_links(...)`
+- `get_server_health()` / `get_server_configuration()` / `list_zim_files()` → `zim_health()` (one tool, three views)
+
+For the full mechanical mapping see the [migration table on the API reference page](/openzim-mcp/docs/api-reference/#v1--v2-migration). Argument names stayed stable where they made sense, so most call sites change name and pick up a `mode=` keyword.
+
+### When is v1.x EOL?
+
+v1.x exits maintenance on the FIRST of `{v2.5.0 ships, 2026-11-27}`. Until then, v1.x receives security fixes, data-corruption fixes, and crash fixes for issues that already existed before v2.0.0 shipped — no new features and no v2 backports. The `ghcr.io/cameronrye/openzim-mcp:1.2.0` image stays available throughout the maintenance window.
+
+If you're still on v1.x and the migration looks costly, the simplest path is to flip to v2 Simple mode (one tool, `zim_query`) and let natural-language routing absorb the v1 → v2 differences for you — then opt into Advanced mode later when you want explicit control.
+
+## Troubleshooting
+
+### "No ZIM files found" error
+
+**Causes**:
+
+- Wrong directory path
+- Missing `.zim` file extension
+- Permission issues
+
+**Solutions**:
+
+1. Verify the directory path exists
+2. Check file permissions (`chmod 644 *.zim`)
+3. Ensure files have `.zim` extension
+4. Download ZIM files if directory is empty
+
+### Server not responding
+
+**Causes**:
+
+- Server process not running
+- Wrong configuration path
+- Permission issues
+
+**Solutions**:
+
+1. Check if server process is running
+2. Verify MCP client configuration paths
+3. Restart the server
+4. Check server logs for errors
+
+### Search returns no results
+
+**Causes**:
+
+- Typos in search terms
+- Content not in ZIM file
+- Wrong namespace
+
+**Solutions**:
+
+1. Check spelling of search terms
+2. Try broader search terms
+3. Browse namespaces to explore content
+4. Verify ZIM file contains expected content
+
+### Slow performance
+
+**Causes**:
+
+- Large ZIM files
+- Low cache hit rate
+- Insufficient system resources
+
+**Solutions**:
+
+1. Increase cache size
+2. Use smaller ZIM files for testing
+3. Monitor system resources
+4. Optimize search patterns
+
+See the [Troubleshooting guide](/openzim-mcp/docs/troubleshooting/) for detailed solutions.
+
+## Security
+
+### Is OpenZIM MCP secure?
+
+Yes. OpenZIM MCP includes multiple security layers:
+
+- **Path traversal protection**
+- **Input validation and sanitization**
+- **Directory access restrictions**
+- **Resource usage limits**
+
+See [Security best practices](/openzim-mcp/docs/security-best-practices/) for deployment guidelines.
+
+### Can I restrict access to certain files?
+
+Yes — use the allowed directories configuration to limit access to specific paths. The system prevents access outside configured directories.
+
+### How do I run it securely in production?
+
+Follow security best practices:
+
+- Run as dedicated user (not root)
+- Set appropriate file permissions
+- Enable comprehensive logging
+- Regular security updates
+- Monitor for suspicious activity
+
+## Advanced usage
+
+### Can I use it with multiple MCP clients?
+
+Yes. Multiple instances of OpenZIM MCP coexist freely as of v1.0 — the multi-instance conflict tracking from earlier versions was removed (it caused more friction than it prevented). For HTTP deployments, run as many instances as you need behind a reverse proxy.
+
+### Can I run OpenZIM MCP over the network?
+
+Yes, via the streamable HTTP transport. Pass `--transport http` and set `OPENZIM_MCP_AUTH_TOKEN`. The server refuses to bind a non-localhost host without an auth token as a safe default. Multi-arch Docker image at `ghcr.io/cameronrye/openzim-mcp`. See [HTTP and Docker deployment](/openzim-mcp/docs/http-and-docker-deployment/).
+
+### Can I subscribe to updates when ZIM files change?
+
+Yes. Subscribe to `zim://files` or `zim://{name}` and the server emits `notifications/resources/updated` whenever the directory contents change or a `.zim` file is replaced. Polling-based; configurable via `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s). See [Resources, prompts, and subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
+
+### Can I batch-fetch entries?
+
+Yes, via `zim_get(entry_paths=[...])`. Up to 50 entries per call with per-entry success/error reporting. Particularly valuable over HTTP transport where round-trip cost matters.
+
+### Is binary content (PDFs, images) supported?
+
+Yes. Use `zim_get(entry_path=..., binary=True)` for base64-encoded binary content with metadata. For direct browser/MCP-client rendering, use the `zim://{name}/entry/{path}` resource template — it serves entries with their native MIME type. Note clients must URL-encode `/` as `%2F` in the path segment.
+
+### How do I integrate with my application?
+
+OpenZIM MCP follows the standard MCP protocol. Any MCP-compatible client can integrate with it. See [LLM integration patterns](/openzim-mcp/docs/llm-integration-patterns/) for best practices.
+
+### Can I extend functionality?
+
+The modular architecture supports extensions. Check the [Architecture overview](/openzim-mcp/docs/architecture-overview/) for technical details and extension points.
+
+### Does it support custom ZIM files?
+
+Yes. Any valid ZIM file works with OpenZIM MCP. You can create custom ZIM files using tools from the OpenZIM project.
+
+## Performance
+
+### What's a good cache hit rate?
+
+Target >70% cache hit rate for good performance. Monitor using `zim_health` (the `.cache_performance` block) and adjust cache size accordingly.
+
+### How much memory does it use?
+
+Memory usage depends on:
+
+- Cache size configuration
+- ZIM file sizes
+- Concurrent operations
+- Content length limits
+
+Typical usage: 100-500MB for moderate workloads.
+
+### Can it handle large ZIM files?
+
+Yes, but performance depends on system resources. For very large files (>10GB):
+
+- Increase system RAM
+- Optimize cache settings
+- Use SSD storage
+- Monitor performance metrics
+
+## Development
+
+### How do I contribute?
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests (`make test`)
+5. Submit a pull request
+
+See [Contributing guidelines](https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md) for details.
+
+### How do I run tests?
+
+```bash
+# Run all tests
+make test
+
+# Run with coverage
+make test-cov
+
+# Run integration tests with real ZIM files
+make test-with-zim-data
+```
+
+### Where can I report bugs?
+
+Report bugs on [GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues). Include:
+
+- Operating system and version
+- Python version
+- Error messages
+- Steps to reproduce
+
+## Resources
+
+### Where can I learn more?
+
+- **[Quick start](/openzim-mcp/docs/quick-start/)** — Get started quickly
+- **[API reference](/openzim-mcp/docs/api-reference/)** — Complete tool documentation
+- **[Architecture overview](/openzim-mcp/docs/architecture-overview/)** — Technical details
+- **[GitHub repository](https://github.com/cameronrye/openzim-mcp)** — Source code and issues
+
+### What about the ZIM format?
+
+Learn more about ZIM files:
+
+- **[OpenZIM project](https://openzim.org/)** — Official ZIM format documentation
+- **[Kiwix](https://www.kiwix.org/)** — ZIM file reader and library
+- **[ZIM format specification](https://openzim.org/wiki/ZIM_file_format)** — Technical details
+
+### Community and support
+
+- **[GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions)** — Ask questions and share ideas
+- **[GitHub Issues](https://github.com/cameronrye/openzim-mcp/issues)** — Report bugs and request features
+
+## Staying updated
+
+- **Watch the repository** on GitHub for releases and security advisories
+- **Check the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md)** for the latest release notes
+- **Follow [GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions)** for announcements and roadmap conversations
+
+---
+
+**Still have questions?** Check the other docs pages or [ask in GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions).
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

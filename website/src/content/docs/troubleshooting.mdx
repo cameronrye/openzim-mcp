@@ -1,0 +1,440 @@
+---
+title: Troubleshooting
+summary: Common failure modes for OpenZIM MCP v2.0.0 — installation, ZIM file access, MCP client config, search/content issues, HTTP transport, cache, subscriptions, and the structured error payload shape.
+group: Operations
+sidebar_order: 1
+---
+
+Common issues, error messages, and solutions for OpenZIM MCP v2.0.0.
+
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_health()`, `zim_search(query="...", mode="...")`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. Tool names match the v2.0.0 8-tool surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
+
+## Error response shape (v2.0.0)
+
+Before diving into specific failure modes — v2.0.0 changed how errors come back from tools. Every tool catches exceptions and returns a structured `ToolErrorPayload` instead of raising:
+
+```json
+{
+  "status": "error",
+  "operation": "invalid_path_combination",
+  "message": "Set exactly one of: entry_path, entry_paths, binary, main_page",
+  "hint": "Use entry_paths=[...] for batch fetch"
+}
+```
+
+Check for it with `isinstance(result, dict) and result.get("status") == "error"`. Common v2 error `operation` values you'll see in this guide:
+
+- `invalid_path_combination` — `zim_get` got conflicting branch selectors (e.g. `entry_path` + `main_page`)
+- `invalid_mode` — `zim_browse`, `zim_search`, or `zim_links` got an unsupported mode/direction
+- `invalid_section` — `zim_get_section` got an empty/missing `section_id`
+- `invalid_content_offset` — `zim_get` / `zim_query` got a negative `content_offset`
+- specific operation names (`get_entry`, `search`, etc.) for underlying-operation failures (smart retrieval miss, archive read error, rate-limit exhausted)
+
+The underlying exception hierarchy in [openzim_mcp/exceptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/exceptions.py) is the canonical source.
+
+## Quick diagnostics
+
+### Health check command
+
+First, run the server health check to identify issues:
+
+```bash
+# In your MCP client, ask:
+"Check the server health and configuration"
+```
+
+This will run `zim_health`, which in v2.0.0 returns combined health, configuration, and loaded-archives data in one response (consolidating three separate v1 tools into a single call).
+
+If the server is running over HTTP, you can also probe `/healthz` and `/readyz` directly without a token — both are auth-exempt.
+
+## Installation issues
+
+### Python version problems
+
+**Error**: `Python 3.12+ required`
+
+**Symptoms**:
+
+- Server fails to start
+- Import errors during installation
+
+**Solutions**:
+
+1. **Check Python version**: `python --version`
+2. **Install Python 3.12+**: Visit [python.org](https://python.org)
+3. **Use correct Python**: `python3.12 -m openzim_mcp`
+
+### Package installation failures
+
+**Error**: `uv not found` or `pip install failed`
+
+**Solutions**:
+
+1. **Install uv**: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+2. **Use pip instead**: `pip install -e .`
+3. **Check permissions**: Ensure write access to installation directory
+
+### Virtual environment issues
+
+**Error**: `ModuleNotFoundError: No module named 'openzim_mcp'`
+
+**Solutions**:
+
+1. **Activate virtual environment**:
+
+   ```bash
+   # Windows
+   venv\Scripts\activate
+   # macOS/Linux
+   source venv/bin/activate
+   ```
+
+2. **Reinstall in virtual environment**: `pip install -e .`
+
+## ZIM file issues
+
+### No ZIM files found
+
+**Error**: `No ZIM files found in directory`
+
+**Symptoms**:
+
+- Empty `.loaded_archives` from `zim_health`
+- Server starts but no content available
+
+**Solutions**:
+
+1. **Check directory path**: Verify the path exists and is correct
+2. **Check file extensions**: Ensure files have `.zim` extension
+3. **Check permissions**: Ensure read access to directory and files
+4. **Download ZIM files**: Get files from [Kiwix Library](https://browse.library.kiwix.org/)
+
+### Permission denied
+
+**Error**: `Permission denied: '/path/to/zim/files'`
+
+**Solutions**:
+
+1. **Fix directory permissions**: `chmod 755 /path/to/zim/files`
+2. **Fix file permissions**: `chmod 644 /path/to/zim/files/*.zim`
+3. **Run as correct user**: Ensure user has read access
+4. **Check SELinux/AppArmor**: May block file access on some systems
+
+### Corrupted ZIM files
+
+**Error**: `Failed to open ZIM file` or `Invalid ZIM format`
+
+**Symptoms**:
+
+- Search operations fail
+- Content retrieval errors
+- Metadata extraction fails
+
+**Solutions**:
+
+1. **Verify file integrity**: Re-download the ZIM file
+2. **Check file size**: Compare with expected size from download source
+3. **Test with different file**: Try a known-good ZIM file
+4. **Check disk space**: Ensure sufficient space for file operations
+
+## MCP client configuration
+
+### Server not responding
+
+**Error**: `Connection refused` or `Server timeout`
+
+**Symptoms**:
+
+- MCP client can't connect
+- Commands hang or timeout
+- No response from server
+
+**Solutions**:
+
+1. **Check server process**: Ensure server is running
+2. **Verify configuration**: Check MCP client config file
+3. **Check paths**: Ensure all paths in config are correct
+4. **Restart client**: Restart MCP client application
+5. **Check logs**: Look for error messages in server output
+
+### Configuration file issues
+
+**Error**: `Invalid configuration` or `Command not found`
+
+**Common issues**:
+
+```json
+// Wrong - missing directory parameter
+{
+  "command": "python",
+  "args": ["-m", "openzim_mcp"]
+}
+
+// Correct - includes directory and ZIM path
+{
+  "command": "uv",
+  "args": [
+    "--directory", "/path/to/openzim-mcp",
+    "run", "python", "-m", "openzim_mcp",
+    "/path/to/zim/files"
+  ]
+}
+```
+
+**Solutions**:
+
+1. **Validate JSON**: Use a JSON validator to check syntax
+2. **Check paths**: Ensure all paths exist and are accessible
+3. **Use absolute paths**: Avoid relative paths in configuration
+4. **Test command manually**: Run the command in terminal first
+
+## Search and content issues
+
+### `zim_search` returns 0 results
+
+**Error**: `No matches found` or empty search results
+
+**Possible causes**:
+
+1. **Typos in search terms**: Check spelling
+2. **Content not in ZIM file**: Verify content exists
+3. **Wrong namespace**: Try different namespaces
+4. **Search index issues**: ZIM file may lack search index
+
+**Solutions**:
+
+1. **Try broader terms**: Use more general search terms
+2. **Browse namespaces**: Use `zim_browse` to explore content
+3. **Check ZIM metadata**: Use `zim_metadata` to understand content (returns metadata + namespace counts in one payload)
+4. **Try different ZIM files**: Test with known-good content
+
+### Entry not found
+
+**Error**: `Entry not found: 'A/Article_Name'`
+
+**Smart retrieval**: OpenZIM MCP automatically tries to find entries with different encodings, but sometimes manual intervention is needed.
+
+**Solutions**:
+
+1. **Use title-mode search first**: `zim_search(query="Article Name", mode="title")` is the cheapest title-to-path resolver
+2. **Check exact path**: Use `zim_browse(namespace="C")` to find correct path
+3. **Try different encodings**:
+   - `A/Article_Name` vs `A/Article%20Name`
+   - `A/Article_Name` vs `A/Article-Name`
+4. **Check namespace**: Ensure correct namespace (A, C, etc.)
+
+### Content truncation
+
+**Issue**: Content appears cut off
+
+**Cause**: `max_content_length` parameter limiting content
+
+**Solutions**:
+
+1. **Increase limit**: Use higher `max_content_length` value
+2. **Get structure first**: Use `zim_get(view="structure")` or `zim_get(view="toc")` to understand content cheaply
+3. **Request specific sections**: Use `zim_get_section(section_id=...)` to target specific parts of long articles
+
+## Performance issues
+
+### Slow response times
+
+**Symptoms**:
+
+- Long delays for search results
+- Timeouts on large operations
+- High memory usage
+
+**Solutions**:
+
+1. **Check cache settings**: Ensure caching is enabled
+2. **Reduce result limits**: Use smaller `limit` values
+3. **Monitor server health**: Check cache hit rates
+4. **Optimize ZIM files**: Use smaller or more focused ZIM files
+5. **Increase system resources**: More RAM helps with large ZIM files
+
+### Memory issues
+
+**Error**: `Out of memory` or system becomes unresponsive
+
+**Solutions**:
+
+1. **Reduce cache size**: Lower `OPENZIM_MCP_CACHE__MAX_SIZE`
+2. **Use smaller ZIM files**: Start with smaller content sets
+3. **Limit concurrent operations**: Avoid multiple large operations
+4. **Increase system RAM**: 2GB+ recommended for large ZIM files
+
+### Cache problems
+
+**Issue**: Poor cache performance or cache misses
+
+**Diagnostics**: cache stats live inside `zim_health` under `.health.cache_performance`:
+
+```text
+"Get server health and show cache performance"
+```
+
+The `cache_performance` block has `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`.
+
+**Solutions**:
+
+1. **Increase cache size**: Raise `OPENZIM_MCP_CACHE__MAX_SIZE`.
+2. **Increase TTL**: Raise `OPENZIM_MCP_CACHE__TTL_SECONDS`.
+3. **Flush the cache**: There are no `cache_clear` / `cache_stats` / `warm_cache` tools — restart the server to flush. (For pre-warming after restart, call `zim_get(entry_path=...)` on your high-value entries from your client.)
+4. **Aim for >70% hit rate** for read-heavy workloads.
+
+## Security issues
+
+### Path traversal warnings
+
+**Error**: `Path traversal attempt detected`
+
+**Cause**: Attempting to access files outside allowed directories
+
+**Solutions**:
+
+1. **Check file paths**: Ensure paths are within allowed directories
+2. **Use relative paths**: Avoid `../` in file paths
+3. **Verify configuration**: Check allowed directories setting
+
+### Permission errors
+
+**Error**: `Access denied` or `Permission denied`
+
+**Solutions**:
+
+1. **Check file ownership**: Ensure correct user owns files
+2. **Fix permissions**: Use `chmod` to set appropriate permissions
+3. **Check parent directories**: Ensure all parent directories are accessible
+4. **Avoid running as root**: Use appropriate user account
+
+## HTTP transport issues
+
+### `OpenZimMcpConfigurationError: HTTP transport bound to <host> requires authentication`
+
+The safe-default startup check refuses to bind a non-loopback host without an auth token. Either:
+
+```bash
+export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
+# or bind loopback only:
+openzim-mcp --transport http --host 127.0.0.1 ...
+```
+
+### `OpenZimMcpConfigurationError: SSE transport bound to <host> is not allowed`
+
+The SSE transport has no auth middleware in this server, so it must bind 127.0.0.1. For exposed deployments use `--transport http` (streamable HTTP) with `OPENZIM_MCP_AUTH_TOKEN` set.
+
+### 401 unauthorized on `/mcp`
+
+Bearer token missing or wrong. Note `OPTIONS /mcp` is **not** exempt from auth (closed preflight-bypass attack surface) — your client must send `Authorization: Bearer ...` even on preflight if your CORS configuration triggers preflight before the actual request.
+
+`/healthz` and `/readyz` are exempt from auth and useful for unauthenticated probing.
+
+### Browser CORS errors when resuming sessions
+
+`Mcp-Session-Id` is in the server's `allow_headers` and `expose_headers` since v1.0. If you have a reverse proxy in front that strips this header, sessions can't resume.
+
+### `OPENZIM_MCP_CORS_ORIGINS` rejected at startup
+
+Wildcard `"*"` is rejected (whitespace-padded `" * "` too). List origins explicitly:
+
+```bash
+export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com","https://other.example.com"]'
+```
+
+### `UserWarning: Host 'localhost' does not resolve to loopback`
+
+Your `/etc/hosts` maps `localhost` away from `127.0.0.1`. The server emits a warning and treats the host as public, which then triggers the safe-default refusal. Bind explicitly to `127.0.0.1` or fix `/etc/hosts`.
+
+### Health endpoint behavior
+
+- `/healthz` (liveness) — returns 200 OK if the process is running and the event loop is responsive. No auth.
+- `/readyz` (readiness) — returns 200 OK if at least one allowed directory is readable, 503 with `{"status":"not_ready", "reason":"no readable allowed directories"}` otherwise. No auth.
+
+## Per-entry resource issues
+
+### `zim://wikipedia/entry/A/Climate_change` not found
+
+Clients MUST URL-encode `/` as `%2F` in the path segment because FastMCP's URI template engine treats `/` as a segment separator. Correct form:
+
+```
+zim://wikipedia/entry/A%2FClimate_change
+```
+
+A literal slash will fail to route. Other RFC 3986 reserved characters in the path also need encoding.
+
+## Subscription issues
+
+### Subscriptions never fire
+
+- Check `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` — set to `false` disables the watcher entirely.
+- Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1-60). Slower poll = longer detection latency.
+- Detection is mtime-based — same-size archive replacement is detected via mtime change.
+- A subscriber that doesn't respond within 5 seconds is treated as dead and evicted from the registry; if your client is slow, increase its response timeout or process notifications asynchronously.
+
+## Configuration errors
+
+### Cleaner `OpenZimMcpConfigurationError` instead of pydantic dump
+
+The server catches `pydantic.ValidationError` from `OpenZimMcpConfig` construction and re-surfaces it as `OpenZimMcpConfigurationError` with a human-readable message naming the offending field. If you're grepping logs for "validation error", search for `OpenZimMcpConfigurationError` instead.
+
+### Path traversal warnings show `...filename.zim`
+
+Path-traversal rejections redact absolute filesystem paths to `...filename.zim` form so the canonical allowed-directory layout is not leaked. The truncated form is expected, not corrupted output.
+
+## Advanced debugging
+
+### Enable debug logging
+
+```bash
+export OPENZIM_MCP_LOGGING__LEVEL=DEBUG
+uv run python -m openzim_mcp /path/to/zim/files
+```
+
+### Check server logs
+
+Look for error patterns in server output:
+
+- `ERROR`: Critical errors requiring attention
+- `WARNING`: Potential issues to investigate
+- `INFO`: Normal operation messages
+
+### Test with minimal setup
+
+1. **Use small ZIM file**: Test with `<100MB` file
+2. **Single operation**: Test one tool at a time
+3. **Fresh environment**: Clean virtual environment
+4. **Default configuration**: No custom environment variables
+
+## Getting help
+
+### Before asking for help
+
+1. **Check this guide**: Review relevant sections above
+2. **Run diagnostics**: Use `zim_health` (v2.0.0 consolidates server health, configuration, and loaded-archives into one tool with `view="health" | "config" | "archives"`)
+3. **Check logs**: Look for error messages — error text is safe to copy verbatim (paths and PIDs are redacted)
+4. **Test minimal case**: Reproduce with simple setup
+
+### Where to get help
+
+1. **GitHub Issues**: [Report bugs](https://github.com/cameronrye/openzim-mcp/issues)
+2. **GitHub Discussions**: [Ask questions](https://github.com/cameronrye/openzim-mcp/discussions)
+3. **Documentation**: Check other docs pages — [FAQ](/openzim-mcp/docs/faq/), [Architecture overview](/openzim-mcp/docs/architecture-overview/)
+
+### Information to include
+
+When reporting issues, include:
+
+- **Operating system** and version
+- **Python version**: `python --version`
+- **OpenZIM MCP version**: `python -c "import openzim_mcp; print(openzim_mcp.__version__)"` or check `zim_health` → `.configuration.config_hash` and the MCP `serverInfo.version` (reads from `importlib.metadata`; reports openzim-mcp's actual version, not the FastMCP SDK default)
+- **ZIM file details**: Size, source, name
+- **Error messages**: Full error text
+- **Configuration**: MCP client config (remove sensitive paths)
+- **Steps to reproduce**: Exact commands used
+
+---
+
+**Still having issues?** [Open an issue](https://github.com/cameronrye/openzim-mcp/issues) with detailed information about your problem.
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

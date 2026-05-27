@@ -1,0 +1,328 @@
+---
+title: Architecture overview
+summary: Module map, transports, and the zim/ package layout for OpenZIM MCP v2.0.0 — including the 8-tool consolidated surface, caching, smart-retrieval fallback, MCP transport layer, and subscription watcher.
+group: Operations
+sidebar_order: 3
+---
+
+Module map, transports, and the `zim/` package layout.
+
+> **Notation:** examples on this page use Python pseudo-call syntax for tool calls. The MCP wire format is JSON-RPC; your client handles the framing. Tool names match the v2.0.0 8-tool surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
+
+> **Source of truth:** [openzim_mcp/](https://github.com/cameronrye/openzim-mcp/tree/main/openzim_mcp). The README's [Project Structure section](https://github.com/cameronrye/openzim-mcp#project-structure) mirrors the on-disk layout — this page explains *why* it's organized that way.
+
+## High-level layers
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                      MCP Client Layer                            │
+│         (Claude Desktop, Claude Code, Inspector, custom)         │
+└─────────────────────┬───────────────────────┬────────────────────┘
+                      │ stdio                 │ streamable HTTP / SSE
+┌─────────────────────▼───────────────────────▼────────────────────┐
+│                     OpenZIM MCP Server                           │
+│  ┌────────────┐ ┌──────────────┐ ┌────────────┐ ┌────────────┐   │
+│  │   Server   │ │  HTTP/SSE    │ │  Subscrip- │ │  Security  │   │
+│  │   core     │ │  transport   │ │  tions     │ │   layer    │   │
+│  │ (server.py)│ │(http_app.py) │ │(subscrip…) │ │(security)  │   │
+│  └────────────┘ └──────────────┘ └────────────┘ └────────────┘   │
+└─────────────────────┬────────────────────────────────────────────┘
+                      │
+┌─────────────────────▼────────────────────────────────────────────┐
+│              Tool Surface (advanced=8, simple=1)                 │
+│  tools/{file,content,search,navigation,structure,                │
+│          metadata,server,resource,prompts}_tools.py              │
+└─────────────────────┬────────────────────────────────────────────┘
+                      │
+┌─────────────────────▼────────────────────────────────────────────┐
+│                       Business Logic                             │
+│  ┌────────────┐ ┌──────────────┐ ┌──────────────────────────┐    │
+│  │   Cache    │ │   Content    │ │   ZIM operations         │    │
+│  │  (LRU+TTL) │ │  processor   │ │   (zim/ package, mixin)  │    │
+│  │ (cache.py) │ │              │ │                          │    │
+│  └────────────┘ └──────────────┘ └──────────────────────────┘    │
+│  ┌────────────┐ ┌──────────────┐ ┌──────────────────────────┐    │
+│  │   Async    │ │ Rate limiter │ │ Intent parser / simple   │    │
+│  │ operations │ │              │ │ tools (NL routing)       │    │
+│  └────────────┘ └──────────────┘ └──────────────────────────┘    │
+└─────────────────────┬────────────────────────────────────────────┘
+                      │
+┌─────────────────────▼────────────────────────────────────────────┐
+│                    Data Access Layer                             │
+│  ┌────────────┐ ┌──────────────┐ ┌──────────────────────────┐    │
+│  │   libzim   │ │  filesystem  │ │   Config & validation    │    │
+│  │ (Archive,  │ │  (allowed    │ │   (config.py + pydantic) │    │
+│  │  Searcher) │ │   dirs only) │ │                          │    │
+│  └────────────┘ └──────────────┘ └──────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## The 8-tool consolidated surface
+
+v2.0.0 collapsed the 22-tool v1 advanced surface into 8 tools. Each consolidated tool takes a `mode` or `view` parameter that selects the prior v1 behavior:
+
+```
+                                ┌──────────────────────────────────┐
+                                │  zim_query (Simple-mode default) │
+                                │  • NL routing → all 7 below      │
+                                └──────────────────────────────────┘
+
+  ┌──────────────────────────────┐  ┌──────────────────────────────┐
+  │  zim_search                  │  │  zim_get                     │
+  │  • mode="fulltext"  (default)│  │  • entry_path=...            │
+  │  • mode="title"              │  │  • entry_paths=[...]  batch  │
+  │  • mode="suggest"            │  │  • binary=True   binary blob │
+  │  • mode="cross_file"         │  │  • main_page=True            │
+  │  • mode="filtered"           │  │  • view="summary"            │
+  │                              │  │  • view="toc"                │
+  │                              │  │  • view="structure"          │
+  └──────────────────────────────┘  └──────────────────────────────┘
+
+  ┌──────────────────────────────┐  ┌──────────────────────────────┐
+  │  zim_get_section             │  │  zim_browse                  │
+  │  • section_id=...            │  │  • mode="list"    (default)  │
+  │  • from a TOC node           │  │  • mode="walk"    deep tree  │
+  └──────────────────────────────┘  └──────────────────────────────┘
+
+  ┌──────────────────────────────┐  ┌──────────────────────────────┐
+  │  zim_links                   │  │  zim_metadata                │
+  │  • direction="outgoing"      │  │  • metadata + namespace      │
+  │  • direction="related"       │  │    counts in one payload     │
+  └──────────────────────────────┘  └──────────────────────────────┘
+
+  ┌──────────────────────────────┐
+  │  zim_health                  │
+  │  • view="health"  (default)  │
+  │  • view="config"             │
+  │  • view="archives"           │
+  │  • consolidated payload too  │
+  └──────────────────────────────┘
+```
+
+Each call-out under a consolidated tool corresponds to a v1 operation that was folded in. The detailed mapping lives in the [migration table on the API reference page](/openzim-mcp/docs/api-reference/#v1--v2-migration).
+
+## Module structure
+
+```
+openzim_mcp/
+├── __init__.py
+├── __main__.py              # CLI entry — reads --mode/--transport/--host/--port
+├── server.py                # OpenZimMcpServer + DI wiring + tool registration
+├── http_app.py              # Streamable-HTTP / SSE Starlette app, auth, CORS, /healthz, /readyz
+├── subscriptions.py         # MtimeWatcher + SubscriberRegistry (resource subscriptions)
+├── simple_tools.py          # zim_query NL handler (Simple mode)
+├── intent_parser.py         # NL intent → underlying-tool routing
+├── config.py                # OpenZimMcpConfig (pydantic-settings)
+├── defaults.py              # Frozen-dataclass defaults referenced by config.py
+├── cache.py                 # LRU+TTL cache (with optional disk persistence)
+├── rate_limiter.py          # Token-bucket limiter, per-client + per-operation
+├── content_processor.py     # HTML→text, summary extraction, link filtering
+├── security.py              # PathValidator, sanitize_input, redact_paths_in_message
+├── async_operations.py      # asyncio.to_thread wrappers around blocking ZIM I/O
+├── timeout_utils.py         # bounded-time helpers
+├── error_messages.py        # markdown error templates
+├── exceptions.py            # OpenZimMcp* exception hierarchy
+├── constants.py             # cross-module constants (input limits, thresholds)
+├── types.py                 # shared TypedDicts / Protocols
+├── zim_operations.py        # back-compat shim — re-exports from zim/
+├── zim/                     # ZIM operations package
+│   ├── __init__.py
+│   ├── archive.py           # ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin)
+│   ├── search.py            # _SearchMixin
+│   ├── content.py           # _ContentMixin
+│   ├── structure.py         # _StructureMixin
+│   └── namespace.py         # _NamespaceMixin
+└── tools/                   # MCP tool registration — one file per v2 tool category
+    ├── __init__.py
+    ├── file_tools.py        # underlying file-listing helpers (rolled into zim_health)
+    ├── content_tools.py     # zim_get (single + batch + binary + main_page + views)
+    ├── navigation_tools.py  # zim_browse (list + walk), zim_search filtered/suggest modes
+    ├── search_tools.py      # zim_search (fulltext + title + cross_file modes)
+    ├── metadata_tools.py    # zim_metadata (combined metadata + namespace counts)
+    ├── structure_tools.py   # zim_get views (structure, toc, summary), zim_links, zim_get_section
+    ├── server_tools.py      # zim_health (consolidated health + config + archives)
+    ├── resource_tools.py    # zim:// resources + per-entry template
+    └── prompts.py           # /research, /summarize, /explore
+```
+
+The `tools/` filenames pre-date the v2 consolidation; the *category* organization still holds (search, navigation, content, structure, metadata, server, resources, prompts) but each file now registers one v2 tool that may dispatch to multiple underlying mixin operations based on `mode` / `view`.
+
+## Core components
+
+### Server core (`server.py`)
+
+`OpenZimMcpServer` wires the dependency graph:
+
+```python
+config            → OpenZimMcpConfig
+path_validator    → PathValidator(allowed_directories)
+cache             → OpenZimMcpCache(config.cache)
+content_processor → ContentProcessor(config.content)
+zim_operations    → ZimOperations(config, path_validator, cache, content_processor)
+async_zim_ops     → AsyncOperations(zim_operations)
+rate_limiter      → RateLimiter(config.rate_limit)
+subscriber_reg    → SubscriberRegistry()  (only when subscriptions_enabled)
+simple_tools_h    → SimpleToolsHandler(zim_operations, async_zim_operations)
+```
+
+Tool registration is dispatched from `tools/__init__.py:register_all_tools(server)`. In Simple mode, only `zim_query` is registered as a *new* tool — the underlying advanced tools are still wired for routing but aren't surfaced to the MCP client unless `tool_mode='advanced'`.
+
+### HTTP / SSE transport (`http_app.py`)
+
+Owns streamable-HTTP and legacy-SSE concerns so `server.py` stays focused on MCP-protocol logic:
+
+- **Starlette app** with `/healthz` (liveness — always 200) and `/readyz` (returns 503 if no allowed directory is readable).
+- **`BearerTokenAuthMiddleware`** — timing-safe `hmac.compare_digest`; never logs the attempted token; `OPTIONS` is *not* exempt; `/healthz`/`/readyz` are.
+- **CORS** — explicit allow-list via `apply_cors_middleware`; wildcard `*` rejected at config-load time. `Mcp-Session-Id` is in `allow_headers` and `expose_headers` so browser clients can resume sessions.
+- **`check_safe_startup`** — refuses to bind a non-loopback host without an auth token (HTTP) or any non-loopback host (SSE has no auth middleware).
+- **Lifespan wrapping** — the subscription watcher is started/stopped via a wrapper around FastMCP's own lifespan context (FastMCP's `streamable_http_app()` supplies its own custom lifespan, which means `add_event_handler('startup', …)` is silently a no-op).
+
+See [HTTP and Docker deployment](/openzim-mcp/docs/http-and-docker-deployment/) for operator-level guidance.
+
+### Subscriptions (`subscriptions.py`)
+
+Polling-based mtime watcher:
+
+- **`MtimeWatcher`** — periodically scans every allowed directory; emits change events on file add/remove and on `.zim` mtime change (catches same-size archive replacement).
+- **`SubscriberRegistry`** — maps subscribed URI → set of subscriber callbacks. Fan-out is concurrent (`asyncio.gather`); per-subscriber send is bounded by `TIMEOUTS.SUBSCRIPTION_SEND_SECONDS` so one hung subscriber doesn't block others.
+- Tunable via `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1-60); disable with `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false`.
+- Implementation note: handler registration uses a private FastMCP attribute (`_mcp_server`); see `docs/superpowers/notes/2026-05-01-subscription-api-spike.md` in the repo for the SDK-behaviour analysis.
+
+### Security layer (`security.py`)
+
+- **`PathValidator.validate_path`** — regex-based traversal-pattern check + `Path.is_relative_to(allowed_dir)` containment + canonical resolution.
+- **`PathValidator.validate_zim_file`** — re-resolves the file and re-checks containment after open to close the TOCTOU window between path validation and the eventual libzim open (defends against symlink swaps).
+- **`sanitize_input`** — strips control characters, caps length per input class.
+- **`redact_paths_in_message`** / **`sanitize_path_for_error`** — regex `_ABS_PATH_RE` redacts absolute paths (cross-platform `/` and `\`, wrapped/quoted forms like `(/opt/foo)` / `"/opt/bar"` / `file=/opt/foo`, and URL-decoded forms like `%2Fopt%2Fzims`). Used in every error message and in diagnostics tools.
+
+### Cache (`cache.py`)
+
+Single LRU+TTL cache shared across all tools and the smart-retrieval path-mapping store. Backed by an in-memory `OrderedDict`; optional disk persistence at `~/.cache/openzim-mcp` (off by default).
+
+Cache stats: `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. Surfaced inside `zim_health.cache_performance` — there are no separate management tools; restart the server to flush.
+
+### Rate limiter (`rate_limiter.py`)
+
+- Token bucket per global `RateLimitConfig`, with optional per-operation overrides (`per_operation_limits` dict).
+- Per-client bucket map with LRU eviction (10k cap) so client identity scopes the limit.
+- Global + per-operation acquire is **atomic** — single pass over both buckets, no transient over-consumption.
+- `zim_get(entry_paths=[...])` charges per-entry to prevent batch bypass.
+
+### ZIM operations (`zim/` package)
+
+`zim_operations.py` is a back-compat shim. Real code lives in `openzim_mcp/zim/`, split by concern:
+
+```python
+class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin):
+    """Composed via mixins so each domain (search, content, structure,
+    namespace) lives in its own file. The class proper holds the
+    constructor and the handful of cross-cutting helpers (file listing,
+    metadata, main-page lookup, shared entry-resolution fallback)."""
+```
+
+| Mixin | File | Domain | Surfaces v2 tools |
+|-------|------|--------|--------------------|
+| `_SearchMixin` | `zim/search.py` | full-text search, suggestions, cross-file search, title-indexed lookup | `zim_search` (all modes) |
+| `_ContentMixin` | `zim/content.py` | entry retrieval, redirect resolution, smart-retrieval fallback, batch fetch | `zim_get` (single + batch + binary + main_page) |
+| `_StructureMixin` | `zim/structure.py` | TOC, link extraction, summary, related articles, sections | `zim_get` (structure/toc/summary views), `zim_links`, `zim_get_section` |
+| `_NamespaceMixin` | `zim/namespace.py` | namespace browse / walk / listing | `zim_browse`, `zim_metadata` (namespace counts) |
+
+Each mixin uses the same shared services injected into the parent: `config`, `path_validator`, `cache`, `content_processor`. The shim exists because external callers (and tests) were importing from `openzim_mcp.zim_operations` for years; the package layout is treated as an implementation detail.
+
+### Tools package (`tools/`)
+
+One file per category. Every file exports a `register_*_tools(server)` function called from `tools/__init__.py:register_all_tools`. Tools are decorated with `@server.mcp.tool()` (FastMCP) and forward to either `server.async_zim_operations` (for blocking ZIM I/O dispatched via `asyncio.to_thread`) or `server.zim_operations` (for cheap synchronous helpers).
+
+### Smart retrieval fallback
+
+Entry lookup in `_ContentMixin` runs a fallback ladder when the literal path misses:
+
+1. Exact path match
+2. URL-decoded path
+3. Re-encoded path (`%20` ↔ `_` and similar swaps)
+4. Namespace-stripped lookup
+5. Title-index lookup via `_SearchMixin`
+
+Successful resolutions are memoized in the shared cache so repeat lookups bypass the ladder. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the full ladder and the diagnostics that surface which step matched.
+
+## Configuration
+
+```python
+class OpenZimMcpConfig(BaseSettings):
+    # Top-level
+    allowed_directories: List[str]
+    server_name: str = "openzim-mcp"
+    tool_mode: Literal["advanced", "simple"] = "simple"
+    transport: Literal["stdio", "http", "sse"] = "stdio"
+    host: str = "127.0.0.1"
+    port: int = 8000
+    auth_token: Optional[SecretStr] = None
+    cors_origins: List[str] = []
+    watch_interval_seconds: int = 5
+    subscriptions_enabled: bool = True
+
+    # Component sub-configs
+    cache: CacheConfig
+    content: ContentConfig
+    logging: LoggingConfig
+    rate_limit: RateLimitConfig
+```
+
+There is no `SecurityConfig` and no `InstanceConfig` — security policy is hard-coded in `security.py` and instance tracking was removed in v1.0. See [Configuration](/openzim-mcp/docs/configuration/) for every supported field.
+
+## Data flow — typical tool call (stdio)
+
+```
+MCP client         FastMCP                Server core         async_zim_operations         ZimOperations         libzim
+    │                  │                        │                          │                       │                  │
+    │── tools/call ───▶│                        │                          │                       │                  │
+    │                  │── @mcp.tool wrapper ──▶│                          │                       │                  │
+    │                  │                        │── rate_limiter.check ───▶│                       │                  │
+    │                  │                        │── sanitize_input        ─│                       │                  │
+    │                  │                        │── async_op.fn ──────────▶│── to_thread(fn) ─────▶│── Archive.open ─▶│
+    │                  │                        │                          │                       │── … ZIM I/O ────▶│
+    │                  │                        │◀── ToolResponse / err ───│                       │                  │
+    │                  │◀── tool result ────────│                          │                       │                  │
+    │◀── result ───────│                        │                          │                       │                  │
+```
+
+Errors anywhere in the chain are caught by the tool wrapper and returned as a structured `ToolErrorPayload` (`{operation, message, hint?}`) rather than raised. Absolute paths inside error messages are redacted to `...filename.zim` form before the payload is returned.
+
+## Data flow — HTTP transport
+
+`serve_streamable_http(server)` mounts FastMCP on a Starlette app, then attaches middleware in **LIFO** order so CORS is the *outer* layer and bearer-auth is *inner*:
+
+```
+client → CORS middleware → BearerTokenAuthMiddleware → FastMCP MCP routes
+                              │
+                              └── /healthz, /readyz exempt (auth bypass)
+```
+
+Why CORS-outer-than-auth: a 401 from auth must still carry `Access-Control-Allow-Origin` headers, otherwise browsers see an opaque CORS error instead of "401 unauthorized".
+
+The subscription watcher is started on app startup via a `lifespan_context` wrapper (FastMCP supplies its own lifespan, so `add_event_handler('startup', …)` is silently a no-op).
+
+## What was removed before v2.0.0
+
+- **`instance_tracker.py`** (removed in v1.0) — multi-instance conflict tracking, along with its tools `diagnose_server_state` and `resolve_server_conflicts`. HTTP server instances now coexist freely.
+- **Cache management tools** (removed in v1.0) — `warm_cache`, `cache_stats`, `cache_clear`. The cache itself remains; restart the server to flush.
+- **`get_random_entry`** (removed in v1.0) — exploratory helper that didn't pull its weight.
+
+v2.0.0 then collapsed the remaining 22 advanced tools into 8 consolidated tools without removing functionality — every v1 call site maps to a v2 call with a `mode` / `view` parameter.
+
+## Horizontal scaling
+
+The server is per-process; multiple HTTP instances coexist freely. Standard pattern:
+
+- Run N instances behind a TLS-terminating reverse proxy (Caddy, nginx, traefik).
+- Each instance has its own cache (no cross-process coordination).
+- Persistent cache on shared storage is *not* recommended unless you handle concurrent-writer issues at the storage layer — the on-disk cache uses simple file rewrites.
+- `/healthz` and `/readyz` are reverse-proxy-friendly.
+
+For deployment specifics see [HTTP and Docker deployment](/openzim-mcp/docs/http-and-docker-deployment/).
+
+---
+
+**Tuning?** [Performance optimization](/openzim-mcp/docs/performance-optimization/). **Security model?** [Security best practices](/openzim-mcp/docs/security-best-practices/).
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
