@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0](https://github.com/cameronrye/openzim-mcp/compare/v2.0.0...v2.1.0) (2026-05-27)
+
+
+### Features
+
+* **dispatch-eval:** plumb 'rc1' variant in runner ([#196](https://github.com/cameronrye/openzim-mcp/issues/196)) ([7985d17](https://github.com/cameronrye/openzim-mcp/commit/7985d173795eee2740b3b8d63d37a4eb8771ff23))
+
+
+### Bug Fixes
+
+* correct zim_get_section compact prose to match implementation ([#195](https://github.com/cameronrye/openzim-mcp/issues/195)) ([f42267b](https://github.com/cameronrye/openzim-mcp/commit/f42267ba7fdc0d0d8dda0d2266efa06e542f9f7f))
+* **release-please:** pass pr output via env to avoid JS-string injection ([#198](https://github.com/cameronrye/openzim-mcp/issues/198)) ([f1b8103](https://github.com/cameronrye/openzim-mcp/commit/f1b8103779a19a991f56f97e148d1736d3cf7e68))
+* **release:** create-then-publish on manual-tag path (immutable releases) ([#197](https://github.com/cameronrye/openzim-mcp/issues/197)) ([8253b4e](https://github.com/cameronrye/openzim-mcp/commit/8253b4e9f0326cfbd4fce2732e7516cee522f9c8))
+
 ## [2.0.0rc1] — 2026-05-26 (release candidate) — Phase F Stage D: 8-tool surface consolidation
 
 Second release candidate for v2.0.0. The 22-tool advanced surface
