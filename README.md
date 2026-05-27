@@ -24,7 +24,7 @@
 
 ---
 
-> 🆕 **v2.0.0 — 8-tool advanced surface.** Phase F consolidates 22 advanced tools into 8 (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). [Full release notes →](CHANGELOG.md#200--2026-05-27--phase-f-stage-d-ships) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/introduction/)
+> 🆕 **v2.0.0 — 8-tool advanced surface.** Phase F consolidates 22 advanced tools into 8 (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). [Full release notes →](CHANGELOG.md#200--2026-05-27--phase-f-stage-d-ships) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
 
 **OpenZIM MCP** is a modern, secure, high-performance [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI models structured, offline access to [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge archives — Wikipedia, Wiktionary, Stack Exchange, and the rest of the [Kiwix Library](https://library.kiwix.org/).
 
@@ -111,11 +111,11 @@ Rule of thumb: models ≤ 13B parameters benefit from Simple mode; larger models
 
 ## Documentation
 
-Full documentation lives at **<https://cameronrye.github.io/openzim-mcp/docs/introduction/>**.
+Full documentation lives at **<https://cameronrye.github.io/openzim-mcp/docs/>**.
 
 | Group | Pages |
 | --- | --- |
-| [Get started](https://cameronrye.github.io/openzim-mcp/docs/introduction/) | Introduction · Installation · Quick start |
+| [Get started](https://cameronrye.github.io/openzim-mcp/docs/) | Introduction · Installation · Quick start |
 | [Reference](https://cameronrye.github.io/openzim-mcp/docs/api-reference/) | API reference · Configuration · Resources, prompts & subscriptions |
 | [Guides](https://cameronrye.github.io/openzim-mcp/docs/llm-integration-patterns/) | LLM integration patterns · Smart retrieval · HTTP & Docker deployment · Performance optimization · Security best practices · Worked examples |
 | [Operations](https://cameronrye.github.io/openzim-mcp/docs/troubleshooting/) | Troubleshooting · FAQ · Architecture overview |
