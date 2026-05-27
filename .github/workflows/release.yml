@@ -325,15 +325,40 @@ jobs:
 
           echo "✅ Assets uploaded to release $TAG_NAME"
 
+      - name: Create new release (draft)
+        # Manual `git tag` push path: no release-please draft shell exists,
+        # so this step creates one. On repos with immutable releases enabled,
+        # assets can only be uploaded WHILE the release is a draft — publishing
+        # locks the asset list. softprops/action-gh-release uploads the dist
+        # artifacts as part of the draft creation in this branch; the
+        # "Publish draft release" step below then flips draft -> published.
+        # rc0 and rc1 both shipped with empty Releases pages because this
+        # step used to set draft: false (single-shot create+publish), which
+        # failed on the asset-upload step under immutable releases.
+        if: steps.check-release.outputs.release_exists != 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag_name }}
+          name: Release v${{ steps.extract-notes.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            dist/*
+          draft: true
+          # Use the resolved tag name (works for workflow_dispatch where
+          # github.ref is the source branch, not the release tag).
+          prerelease: ${{ contains(steps.tag.outputs.tag_name, 'alpha') || contains(steps.tag.outputs.tag_name, 'beta') || contains(steps.tag.outputs.tag_name, 'rc') }}
+
       - name: Publish draft release
-        # release-please creates the release shell as a draft
-        # (release-please-config.json#draft=true). On repos with immutable
-        # releases enabled, assets can only be uploaded to a draft — once a
-        # release is published, GitHub locks its asset list. This step flips
-        # the draft to published *after* the upload step above has run, so
-        # the final release ends up with both the changelog body
-        # (release-please) and the dist artifacts (this workflow).
-        if: steps.check-release.outputs.release_exists == 'true'
+        # Both paths converge here:
+        #   - release-please path: "Upload assets to existing release" above
+        #     populated a release-please-created draft with assets.
+        #   - manual-tag-push path: "Create new release (draft)" above created
+        #     a fresh draft with assets.
+        # In both cases the release is a draft at this point; flip it to
+        # published. On repos with immutable releases enabled, this step is
+        # what makes assets visible on the Releases page — once published,
+        # GitHub locks the asset list, so the order
+        # (create-draft → upload-assets → publish) is load-bearing.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -349,17 +374,3 @@ jobs:
           else
             echo "ℹ️  Release $TAG_NAME is already published — nothing to do"
           fi
-
-      - name: Create new release
-        if: steps.check-release.outputs.release_exists != 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.tag.outputs.tag_name }}
-          name: Release v${{ steps.extract-notes.outputs.version }}
-          body_path: release_notes.md
-          files: |
-            dist/*
-          draft: false
-          # Use the resolved tag name (works for workflow_dispatch where
-          # github.ref is the source branch, not the release tag).
-          prerelease: ${{ contains(steps.tag.outputs.tag_name, 'alpha') || contains(steps.tag.outputs.tag_name, 'beta') || contains(steps.tag.outputs.tag_name, 'rc') }}
