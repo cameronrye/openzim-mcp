@@ -1,0 +1,51 @@
+---
+export interface Props {
+  /** 'landing' keeps in-page hash links; 'docs' rewrites them to land on the landing page. */
+  context?: 'landing' | 'docs';
+}
+const { context = 'landing' } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const landingHref = (hash: string) => (context === 'landing' ? hash : `${base}/${hash}`);
+const homeHref = context === 'landing' ? '#hero' : `${base}/`;
+const docsHref = `${base}/docs/`;
+---
+<header class="nav" id="nav">
+  <div class="container nav__inner">
+    <a href={homeHref} class="nav__brand" aria-label="OpenZIM MCP home">
+      <svg class="nav__logo" width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
+        <g transform="translate(4 4) rotate(90 12 12)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+          <path d="M9 13a4.5 4.5 0 0 0 3-4"/>
+          <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>
+          <path d="M3.477 10.896a4 4 0 0 1 .585-.396"/>
+          <path d="M6 18a4 4 0 0 1-1.967-.516"/>
+          <path d="M12 13h4"/>
+          <path d="M12 18h6a2 2 0 0 1 2 2v1"/>
+          <path d="M12 8h8"/>
+          <path d="M16 8V5a2 2 0 0 1 2-2"/>
+          <circle cx="16" cy="13" r=".7" fill="currentColor"/>
+          <circle cx="18" cy="3"  r=".7" fill="currentColor"/>
+          <circle cx="20" cy="21" r=".7" fill="currentColor"/>
+          <circle cx="20" cy="8"  r=".7" fill="currentColor"/>
+        </g>
+      </svg>
+      <span class="nav__wordmark">OpenZIM&nbsp;MCP</span>
+    </a>
+    <nav class="nav__menu" id="nav-menu" aria-label="Primary">
+      <a href={landingHref('#what')} class="nav__link">What is this</a>
+      <a href={docsHref} class="nav__link" aria-current={context === 'docs' ? 'page' : undefined}>Docs</a>
+      <a href={landingHref('#v2')} class="nav__link">v2.0</a>
+      <a href={landingHref('#try')} class="nav__link">Try it</a>
+      <a href={landingHref('#deeper')} class="nav__link">Deeper</a>
+      <a href="https://github.com/cameronrye/openzim-mcp" class="nav__link" target="_blank" rel="noopener">GitHub ↗</a>
+      <button class="nav__theme" id="theme-toggle" aria-label="Toggle theme" type="button">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      </button>
+    </nav>
+    <button class="nav__toggle" id="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="nav-menu" type="button">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
