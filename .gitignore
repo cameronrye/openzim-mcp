@@ -58,9 +58,14 @@ test_*_integration.py
 
 # Node.js (for pre-commit hooks like prettier)
 node_modules/
-package-lock.json
+/package-lock.json
 yarn.lock
 
 # Prettier cache (configured via --cache-location in pre-commit)
 .cache/
 .claude/
+
+# Astro (website/)
+website/node_modules/
+website/dist/
+website/.astro/
