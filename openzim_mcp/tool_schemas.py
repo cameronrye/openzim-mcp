@@ -8,8 +8,11 @@ the output schema and emits the payload at the top level of
 
 Every list-returning tool's TypedDict carries the five contract keys
 (``results``, ``next_cursor``, ``total``, ``done``, ``page_info``)
-plus ``_meta``. See the design spec for shape details:
-docs/superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md
+plus ``_meta``. Cursors are opaque base64-encoded JSON; ``total`` may
+carry ``total_is_lower_bound=True`` in ``PageInfo`` when an exact count
+would be expensive; ``done=True`` signals end-of-stream for the current
+filter set (in sampling browses, end-of-sample rather than
+end-of-namespace).
 """
 
 from __future__ import annotations

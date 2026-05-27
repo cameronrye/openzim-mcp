@@ -47,9 +47,8 @@ entry path. Description tuning and/or probe-set relaxation tracked at #199 for v
 
 ### v1.x maintenance scope
 
-Per the [v1.x maintenance commitment](docs/superpowers/specs/2026-05-24-v2-phase-f-tool-surface-design.md#v1x-maintenance-commitment-rollback-runway),
-the most recent v1.x tag is retained as a parallel maintenance branch until the FIRST of
-`{v2.5.0 ships, 6 calendar months after v2.0.0}`.
+Per the v1.x maintenance commitment, the most recent v1.x tag is retained as a parallel
+maintenance branch until the FIRST of `{v2.5.0 ships, 6 calendar months after v2.0.0}`.
 
 - **Accepted backports to v1.x:** security fixes (always), data-corruption fixes (always),
   pre-v2.0.0 crash bugs.
@@ -1575,7 +1574,7 @@ distinct surfaces across two waves.
 
 Three defects/gaps surfaced operating the b1 reranker integration
 end-to-end against the air-gapped pre-stage workflow advertised in
-`docs/v2/extras-reranker.md`.
+`docs/extras-reranker.md`.
 
 - **`download-models` CLI ignored env vars.** The CLI built a bare
   `RerankerConfig()` (`BaseModel`, not `BaseSettings`), so
@@ -1752,9 +1751,8 @@ pattern.
 
 First b-series release. Ships Phase D sub-D-2: four idempotent rule-based
 query rewrites that run before the existing intent regex chain. Zero new
-dependencies — every user gets the lift on the next install. Per the spec
-([sub-D-2 design](docs/superpowers/specs/2026-05-20-v2-phase-d-sub-d-2-query-rewriting-design.md)),
-the four rules are:
+dependencies — every user gets the lift on the next install. The four
+rules are:
 
 - **Rule 1 — lowercase topic normalization.** `_normalize_topic_case`
   consolidates scattered `.lower()` calls into a single named pass that
@@ -4712,9 +4710,8 @@ removed; existing wire-format breaks (C2, H14) are documented in the
   point at a ZIM directory.
 - **Op2: `compact` parameter on natural-shape advanced tools.**
   `get_zim_entry`, `get_zim_entries`, `get_entry_summary` now accept
-  `compact: bool = False` and thread it through. Documented decision
-  in `docs/v2/adr-001-compact-plumbing.md`; Phase F decides whether
-  to propagate further.
+  `compact: bool = False` and thread it through. Phase F decides
+  whether to propagate further.
 - **Op3: `browse_namespace` sampling semantics documented in the tool
   docstring.** Explicitly says `done=True` in sampling mode means
   "end of sample, not end of namespace" and recommends `walk_namespace`
@@ -5134,8 +5131,6 @@ mode ships.
 
 v2 Phase B: response-contract migration. **Wire-format break** for every
 list-returning tool. v1.x users upgrading must update response-shape parsing.
-See [docs/superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md](docs/superpowers/specs/2026-05-08-v2-phase-b-response-contract-design.md)
-for the full design.
 
 ### Breaking — pagination contract
 

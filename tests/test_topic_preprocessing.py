@@ -6,8 +6,8 @@ function's contract INDEPENDENTLY of its current call sites
 ``_auto_select_zim_file``). These tests stay in the project's main
 suite so they run in normal CI without the ``--dispatch-eval`` opt-in.
 
-Coverage targets (from
-``docs/superpowers/plans/2026-05-24-v2-phase-f-tool-surface.md`` Task A6):
+Coverage targets (Phase F rc0 Task A6 — the Z3/Z4 promotion-guard
+defects surfaced during the b2–b13 beta sweep cycles):
 
   * **Z3 probe-based discriminator** (b11) — multi-entity discriminator
     rejects tail-hijack canonicals when 2+ non-tail tokens probe as

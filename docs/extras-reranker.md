@@ -19,6 +19,7 @@ itself is downloaded lazily on first use (~1.1 GB for the default
 ## Supported platforms
 
 The `[reranker]` extra is tested on:
+
 - Linux glibc x86_64 and ARM64
 - macOS x86_64 and ARM64
 - Windows x86_64
