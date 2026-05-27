@@ -605,3 +605,68 @@ p { color: var(--text-secondary); }
   }
   [data-reveal] { opacity: 1; transform: none; }
 }
+
+/* ===== Docs shell (added for /docs/* route) ===== */
+.docs-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr 200px;
+  gap: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+.docs-sidebar {
+  font-size: 0.9rem;
+}
+
+.docs-sidebar section + section {
+  margin-top: 1.5rem;
+}
+
+.docs-sidebar h3 {
+  margin-top: 1.5rem;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+}
+
+.docs-sidebar ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.docs-sidebar a[aria-current="page"] {
+  font-weight: 600;
+}
+
+.docs-toc {
+  font-size: 0.85rem;
+  position: sticky;
+  top: 2rem;
+  align-self: start;
+}
+
+.docs-toc .toc-h3 {
+  padding-left: 1rem;
+}
+
+.docs-breadcrumbs {
+  font-size: 0.85rem;
+  opacity: 0.7;
+  margin-bottom: 1rem;
+}
+
+.docs-prevnext {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid currentColor;
+}
+
+@media (max-width: 900px) {
+  .docs-shell { grid-template-columns: 1fr; }
+  .docs-toc { display: none; }
+}

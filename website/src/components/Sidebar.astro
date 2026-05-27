@@ -1,0 +1,31 @@
+---
+import { getCollection } from 'astro:content';
+
+const allDocs = await getCollection('docs');
+const groups: Record<string, typeof allDocs> = {};
+for (const doc of allDocs.sort((a, b) => a.data.sidebar_order - b.data.sidebar_order)) {
+  (groups[doc.data.group] ??= []).push(doc);
+}
+const orderedGroups = ['Get started', 'Reference', 'Guides', 'Operations'] as const;
+const { currentSlug } = Astro.props as { currentSlug: string };
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<nav class="docs-sidebar" aria-label="Documentation">
+  {orderedGroups.map((g) =>
+    groups[g] && (
+      <section>
+        <h3>{g}</h3>
+        <ul>
+          {groups[g].map((d) => (
+            <li>
+              <a
+                href={`${base}/docs/${d.id === 'index' ? '' : d.id + '/'}`}
+                aria-current={d.id === currentSlug ? 'page' : undefined}
+              >{d.data.title}</a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )
+  )}
+</nav>

@@ -1,0 +1,10 @@
+---
+const { group, title } = Astro.props as { group: string; title: string };
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<nav class="docs-breadcrumbs" aria-label="Breadcrumb">
+  <a href={`${base}/`}>OpenZIM MCP</a> ›
+  <a href={`${base}/docs/`}>Docs</a> ›
+  <span>{group}</span> ›
+  <span aria-current="page">{title}</span>
+</nav>

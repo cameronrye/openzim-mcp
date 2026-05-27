@@ -1,0 +1,19 @@
+---
+import { getCollection } from 'astro:content';
+
+const allDocs = (await getCollection('docs')).sort(
+  (a, b) => a.data.sidebar_order - b.data.sidebar_order,
+);
+const { currentSlug } = Astro.props as { currentSlug: string };
+const idx = allDocs.findIndex((d) => d.id === currentSlug);
+const prev = idx > 0 ? allDocs[idx - 1] : null;
+const next = idx >= 0 && idx < allDocs.length - 1 ? allDocs[idx + 1] : null;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+function hrefFor(slug: string) {
+  return `${base}/docs/${slug === 'index' ? '' : slug + '/'}`;
+}
+---
+<nav class="docs-prevnext" aria-label="Page navigation">
+  {prev && <a class="prev" href={hrefFor(prev.id)}>← {prev.data.title}</a>}
+  {next && <a class="next" href={hrefFor(next.id)}>{next.data.title} →</a>}
+</nav>
