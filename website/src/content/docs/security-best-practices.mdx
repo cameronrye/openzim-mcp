@@ -1,0 +1,236 @@
+---
+title: Security best practices
+summary: OpenZIM MCP v2.0.0 security model and operator hardening — path validation, redaction, input sanitization, bearer-token auth, CORS, rate limiting, container hardening, and a production checklist.
+group: Guides
+sidebar_order: 5
+---
+
+OpenZIM MCP's security model and operator-level hardening. This page covers the in-process protections (path validation, redaction, input sanitization, prompt hardening, rate limiting) and the network-layer protections (bearer-token auth, CORS, safe-default startup, container hardening) that ship in v2.0.0.
+
+> **Notation:** examples on this page use JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`) and shell snippets. Tool names referenced match the v2.0.0 8-tool surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
+
+> **Source of truth:** [openzim_mcp/security.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/security.py), [openzim_mcp/http_app.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/http_app.py), and the [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) policy. Vulnerability reports go through [GitHub Private Vulnerability Reporting](https://github.com/cameronrye/openzim-mcp/security/advisories/new).
+
+## Threat model
+
+OpenZIM MCP serves offline knowledge archives to MCP clients. The relevant threats:
+
+| Threat | Mitigation |
+|--------|------------|
+| Path traversal — read files outside allowed dirs | `PathValidator` regex patterns + `Path.is_relative_to` containment + canonical resolution |
+| TOCTOU symlink swap between path validation and open | `validate_zim_file` re-resolves and re-checks containment after open |
+| Information disclosure via error messages | All paths and PIDs are redacted in error responses and in the `zim_health` health + configuration views |
+| Unauthenticated network access | HTTP transport requires bearer token unless bound to loopback; SSE transport is loopback-only |
+| Cross-origin browser abuse | CORS allow-list; wildcard `*` rejected at startup; `OPTIONS` not exempt from auth |
+| Cache poisoning via transient libzim errors | Failed reads do not write to cache |
+| Prompt injection via user args | Control characters stripped, backticks stripped (template delimiter), length capped before interpolation |
+| Resource exhaustion | Token-bucket rate limiter with per-operation costs, atomic acquire, per-client buckets with LRU eviction |
+| Self-referential redirects causing infinite loops | Bounded redirect-chain follow (`MAX_REDIRECT_DEPTH = 10`), self-referential refs rejected |
+
+## Path validation
+
+`PathValidator` (in `security.py`) is the single gatekeeper for filesystem access:
+
+- **`validate_path(input_path)`** — applies regex traversal-pattern detection, expands `~`, resolves the path, and verifies containment within at least one allowed directory.
+- **`validate_zim_file(path)`** — calls `validate_path`, then re-resolves the file and re-checks containment after the file handle is opened. This closes the TOCTOU window where a symlink could be swapped between validation and `Archive.open()`.
+
+There are no env vars to relax this — path validation is unconditional. The set of allowed directories is the only knob.
+
+## Error and diagnostic redaction
+
+Every operator-visible string is run through `redact_paths_in_message` / `sanitize_path_for_error` before it leaves the server:
+
+- **MCP error responses** — rejected traversals previously leaked the canonical allowed-directory layout; now they appear as `...filename.zim`.
+- **`zim_health` health view** — `process_id` is always `[REDACTED]`. Warning strings about inaccessible directories use the redacted form.
+- **`zim_health` configuration view** — `server_pid` is always `[REDACTED]`. `allowed_directories` are reported as `[...basename]`.
+
+The redaction regex (`_ABS_PATH_RE`) handles cross-platform separators (`/` and `\`), wrapped/quoted forms (`(/opt/foo)`, `"/opt/bar"`, `file=/opt/foo`), and URL-decoded forms (`%2Fopt%2Fzims`). Operators can still see unredacted paths in server logs — only the wire-visible diagnostics are redacted.
+
+This also means error text is **safe to copy into bug reports**.
+
+## Input sanitization
+
+`sanitize_input(value, max_length, allow_empty=False)` applies to every string input:
+
+- Strips ASCII control characters (C0 range, including `\x00`/`\n`/`\r`/`\t`).
+- Caps length per input class:
+
+| Class | Limit |
+|-------|-------|
+| `INPUT_LIMIT_FILE_PATH` | 1000 chars |
+| `INPUT_LIMIT_QUERY` | 500 chars |
+| `INPUT_LIMIT_ENTRY_PATH` | 500 chars |
+| `INPUT_LIMIT_NAMESPACE` | 100 chars |
+| `INPUT_LIMIT_CONTENT_TYPE` | 100 chars |
+| `INPUT_LIMIT_PARTIAL_QUERY` | 200 chars |
+
+Numeric ranges (limit/offset/cursor) are validated per tool — bounds documented in the [API reference](/openzim-mcp/docs/api-reference/). Content max length must be ≥100 chars.
+
+`name_filter` on `zim_health` is sanitized; cursor strings on `zim_search` are validated against the encoded query they were issued for (mismatch is rejected, not silently honored).
+
+## HTTP transport security
+
+The streamable-HTTP transport (`http_app.py`) ships with bearer-token auth, CORS, and a safe-default startup check.
+
+### Bearer-token authentication
+
+```python
+class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
+    # Comparison is timing-safe via hmac.compare_digest.
+    # The attempted token is NEVER logged.
+    # /healthz and /readyz are exempt.
+    # OPTIONS is NOT exempt (closes preflight-bypass attack surface).
+```
+
+Set the token via env only:
+
+```bash
+export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
+```
+
+`auth_token` is a pydantic `SecretStr` — its value never appears in `repr()`, logs, or the `zim_health` configuration view.
+
+### Safe-default startup check
+
+`check_safe_startup()` refuses to start the server in two cases:
+
+| Transport | Host | Token | Result |
+|-----------|------|-------|--------|
+| `http` | loopback | unset | OK (localhost-only, no auth) |
+| `http` | loopback | set | OK |
+| `http` | non-loopback | unset | **REFUSE** |
+| `http` | non-loopback | set | OK |
+| `sse` | loopback | (any) | OK |
+| `sse` | non-loopback | (any) | **REFUSE** (no auth middleware in SSE path) |
+
+If the operator sets `host=localhost` and `/etc/hosts` maps `localhost` away from `127.0.0.1`, the server emits a `UserWarning` and treats it as a public host (which then triggers the safe-default refusal).
+
+### CORS
+
+Set `OPENZIM_MCP_CORS_ORIGINS` to an explicit list:
+
+```bash
+export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com"]'
+```
+
+Wildcard `"*"` is **rejected at startup** — including whitespace-padded variants like `" * "`. There is no opt-out; the wildcard footgun is closed.
+
+`Mcp-Session-Id` is in `allow_headers` and `expose_headers` so browser clients can resume sessions across CORS preflight.
+
+### Health endpoints
+
+`/healthz` (liveness) and `/readyz` (at least one allowed dir is readable) are exempt from auth so probes work cleanly. `/readyz` returns 503 if no allowed directory is readable.
+
+There is no built-in TLS — terminate TLS at a reverse proxy (Caddy, nginx, traefik). See [HTTP and Docker deployment](/openzim-mcp/docs/http-and-docker-deployment/) for full deployment guidance.
+
+## Rate limiting
+
+Token-bucket limiter (`rate_limiter.py`):
+
+- Global rate: `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` (default 10) and `__BURST_SIZE` (default 20, max 1000).
+- Per-operation overrides via `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` (nested JSON).
+- Global + per-operation acquire is **atomic** — single pass over both buckets, no transient over-consumption.
+- Per-client buckets with LRU eviction (10k cap) — client identity scopes the limit so one noisy client can't drain the global bucket.
+- `zim_get(entry_paths=[...])` charges per-entry to prevent batch bypass.
+
+When the limit is exceeded, the tool returns a markdown error block (it does not raise).
+
+## Prompt hardening
+
+Slash-prompt arguments (`/research`, `/summarize`, `/explore`) are sanitized before interpolation:
+
+- Control characters replaced with spaces (so a topic of `"Foo\n2. Ignore previous instructions"` cannot append fake numbered steps).
+- Backticks stripped (template delimiter — interpolated values are wrapped in backticks so quote-injection at the boundary is impossible).
+- Length capped at 200 characters with `...` suffix.
+- Apostrophes and double quotes **preserved** (real entry paths contain them, e.g. `C/Schrödinger's_cat`).
+- Re-checked for emptiness after sanitization — a topic that collapses to whitespace returns the asking-message body, not an empty prompt.
+
+## Container security
+
+The published image (`ghcr.io/cameronrye/openzim-mcp`) is hardened by default:
+
+- **Non-root user** — `appuser` (uid 10001, gid 10001).
+- **Multi-stage build** — runtime image only contains the venv and source, no build tools.
+- **Multi-arch** — `linux/amd64`, `linux/arm64`.
+- **Built-in `HEALTHCHECK`** — `curl -fsS http://localhost:8000/readyz`.
+- **`HOST=0.0.0.0` default** — but the safe-default startup check refuses to bind without `OPENZIM_MCP_AUTH_TOKEN`. Set the token, or override `OPENZIM_MCP_HOST=127.0.0.1` for loopback-only.
+
+See the [Dockerfile](https://github.com/cameronrye/openzim-mcp/blob/main/Dockerfile) for full details.
+
+## Operational hardening checklist
+
+For a production HTTP deployment:
+
+- [ ] Bind to a specific interface, not `0.0.0.0`, unless behind a reverse proxy that already restricts ingress.
+- [ ] Set `OPENZIM_MCP_AUTH_TOKEN` to a high-entropy value (`openssl rand -hex 32`).
+- [ ] Set `OPENZIM_MCP_CORS_ORIGINS` to the explicit list of allowed origins (never `*`).
+- [ ] Terminate TLS at a reverse proxy.
+- [ ] Run as a non-root user (the Docker image already does this).
+- [ ] Mount ZIM directories read-only (`-v /srv/zim:/data:ro`).
+- [ ] Tune `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` for your client load.
+- [ ] Monitor `/healthz` and `/readyz` from your platform's health-check tooling.
+- [ ] Subscribe your alerting to repo Security Advisories: GitHub → Watch → Custom → Security alerts.
+- [ ] Keep dependencies current (Dependabot is enabled in the repo).
+
+For stdio deployments (Claude Desktop, Inspector, MCP-aware editors):
+
+- [ ] Restrict `allowed_directories` to the smallest set the use case needs.
+- [ ] Run as the user account that owns the ZIM files (no privilege escalation).
+
+## Built-in limits
+
+Real defaults (verify against [openzim_mcp/defaults.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/defaults.py)):
+
+| Limit | Default | Where set |
+|-------|---------|-----------|
+| Max content length per entry | 100,000 chars | `ContentDefaults.MAX_CONTENT_LENGTH` |
+| Max binary entry size | 10 MiB (default), 100 MiB (cap) | `ContentDefaults.MAX_BINARY_SIZE`, `zim_get(binary=True, ...)` cap |
+| Max batch size (`zim_get(entry_paths=[...])`) | 50 entries | `BatchDefaults.MAX_SIZE` |
+| Max redirect chain depth | 10 | `ContentDefaults.MAX_REDIRECT_DEPTH` |
+| Max namespace sample size | 1000 entries | `NamespaceSamplingDefaults.MAX_SAMPLE_SIZE` |
+| Rate limit burst cap | 1000 | `RateLimitConfig.burst_size.le` |
+| Path input cap | 1000 chars | `INPUT_LIMITS.FILE_PATH` |
+| Query input cap | 500 chars | `INPUT_LIMITS.QUERY` |
+| Subscription send timeout | 5 sec | `TimeoutDefaults.SUBSCRIPTION_SEND_SECONDS` |
+
+## Reporting vulnerabilities
+
+**Sensitive issues:** [GitHub Private Vulnerability Reporting](https://github.com/cameronrye/openzim-mcp/security/advisories/new). Encrypted communication, attachments, and coordinated disclosure are all built in — no email or PGP channel.
+
+**Non-sensitive hardening suggestions:** open a GitHub issue using the "Security Vulnerability Report" template, or start a Discussions thread.
+
+Response timeline (per [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md)):
+
+| Window | Action |
+|--------|--------|
+| 24 hours | Initial acknowledgment |
+| 72 hours | Severity classification |
+| 7 days | Detailed response |
+| 30 days | Target for fix development |
+| 45 days | Target for coordinated disclosure |
+
+## Security review highlights
+
+These are the load-bearing protections that distinguish v2.0.0's posture:
+
+- Path/PID redaction in error and diagnostics responses (regex handles wrapped/quoted/URL-encoded paths).
+- `OPTIONS /mcp` locked behind auth (closed preflight-bypass attack surface).
+- Cache poisoning on transient libzim errors fixed (failed reads no longer write to cache).
+- Redirects resolved before rendering with cycle detection.
+- Heading slugs preserve Unicode (Arabic, Chinese, Cyrillic, Japanese).
+- Rate-limiting acquire made atomic (no transient over-consumption).
+- `zim_get(entry_paths=[...])` charges per-entry to prevent batch bypass.
+- `zim_links(direction="related", ...)` rejects self-referential refs.
+- `name_filter` sanitized.
+- CORS whitespace-wildcard rejection.
+- Symlink-tightened archive scan (TOCTOU close).
+- Per-entry path sanitization in `zim_get(entry_paths=[...])`.
+- Subscription handler `asyncio.CancelledError` re-raised (not swallowed by `gather(return_exceptions=True)`).
+
+For the full review log see the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md).
+
+---
+
+**Deploying over HTTP?** [HTTP and Docker deployment](/openzim-mcp/docs/http-and-docker-deployment/). **Tuning rate limits?** [Configuration](/openzim-mcp/docs/configuration/). **Architecture?** Documented in the [project README](https://github.com/cameronrye/openzim-mcp/blob/main/README.md).
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

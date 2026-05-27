@@ -1,0 +1,522 @@
+---
+title: Worked examples
+summary: Five end-to-end case studies showing the OpenZIM MCP v2.0.0 8-tool surface in action — search, get, summarize, browse namespaces, and follow related links across a Wikipedia ZIM archive.
+group: Guides
+sidebar_order: 6
+---
+
+Five case studies that walk through real retrieval workflows against a Wikipedia ZIM archive. Each one starts from a research question, threads the v2.0.0 advanced-mode tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`) into an end-to-end answer, and notes the response shape at each step.
+
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_search(zim_file_path="...", query="...")`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. Argument names and types match the v2.0.0 8-tool surface.
+
+> All examples assume a Wikipedia ZIM file at `C:\zim\wikipedia_en_100_2025-08.zim`. Substitute your own archive path. Sample responses are truncated for readability.
+
+## Setup: confirm the archive is loaded
+
+Before any case study, a quick health check pins down which archives are available and that the cache + permissions are healthy.
+
+```python
+zim_health()
+```
+
+Response (truncated):
+
+```json
+{
+  "status": "healthy",
+  "server_name": "openzim-mcp",
+  "loaded_archives": [
+    {
+      "name": "wikipedia_en_100_2025-08.zim",
+      "path": "...wikipedia_en_100_2025-08.zim",
+      "size": "310.77 MB",
+      "modified": "2025-09-11T10:20:50"
+    }
+  ],
+  "cache_performance": { "enabled": true, "size": 0, "max_size": 100, "hit_rate": 0.0 },
+  "configuration": { "allowed_directories": 1, "cache_enabled": true }
+}
+```
+
+`zim_health` is one tool with three views (`view="health"`, `view="config"`, `view="archives"`; default is the consolidated payload above) — server status, configuration, and loaded archives in a single call.
+
+---
+
+## Case study 1: Taxonomy — broad search to top hit
+
+**Research goal:** find the canonical Wikipedia article on biological taxonomy.
+
+Start with a broad search. The Wikipedia archive has dozens of articles touching "biology", so cap the result set and inspect the top hits.
+
+```python
+zim_search(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    query="biology",
+    mode="fulltext",
+    limit=3,
+)
+```
+
+Response (truncated):
+
+```plain
+Found 51 matches for "biology", showing 1-3:
+
+## 1. Taxonomy (biology)
+Path: Taxonomy_(biology)
+Snippet: #  Taxonomy (biology) Part of a series on
+Evolutionary biology ...
+
+## 2. Protein
+Path: Protein
+Snippet: #  Protein A representation of the 3D structure of the protein myoglobin ...
+
+## 3. Ant
+Path: Ant
+Snippet: #  Ant Ants — Temporal range: Late Aptian – Present ...
+```
+
+The top hit, `Taxonomy_(biology)`, is the canonical disambiguated article. The snippet confirms it's part of an evolutionary-biology series, which is what we want. Fetch the article:
+
+```python
+zim_get(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="Taxonomy_(biology)",
+)
+```
+
+If you had guessed `entry_path="Taxonomy (biology)"` (with a literal space instead of underscore), `zim_get`'s smart-retrieval fallback would still resolve to `Taxonomy_(biology)` automatically. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the algorithm.
+
+**Takeaway:** start broad, narrow on the snippet, then `zim_get`. Two calls, one canonical article.
+
+---
+
+## Case study 2: Protein — full entry, then summary, then structure
+
+**Research goal:** answer "what is a protein?" with an LLM-friendly progressive disclosure (one-paragraph summary → outline → focused section).
+
+`zim_get` defaults to `view="content"`, which returns the rendered article body truncated to the per-entry content cap (100,000 chars; first 1,500 returned by default).
+
+```python
+zim_get(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="Protein",
+)
+```
+
+Response (truncated):
+
+```plain
+# Protein
+
+Path: Protein
+Type: text/html
+## Content
+
+#  Protein
+
+A representation of the 3D structure of the protein myoglobin showing turquoise α-helices.
+This protein was the first to have its structure solved by X-ray crystallography ...
+
+**Proteins** are large biomolecules and macromolecules that comprise one or more long chains
+of amino acid residues. Proteins perform a vast array of functions within organisms, including
+catalysing metabolic reactions, DNA replication, responding to stimuli ...
+
+... [Content truncated, total of 56,202 characters, only showing first 1,500 characters] ...
+```
+
+For an LLM-sized summary instead of the full body, switch to `view="summary"`:
+
+```python
+zim_get(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="C/Protein",
+    view="summary",
+    max_words=100,
+)
+```
+
+Response:
+
+```json
+{
+  "title": "Protein",
+  "path": "C/Protein",
+  "content_type": "text/html",
+  "summary": "Proteins are large biomolecules comprising one or more long chains of amino acid residues. They perform a vast array of functions within organisms, including catalysing metabolic reactions, DNA replication, responding to stimuli, providing structure to cells and organisms, and transporting molecules ...",
+  "word_count": 100,
+  "is_truncated": true
+}
+```
+
+For an outline before drilling in, use `view="toc"`:
+
+```python
+zim_get(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="C/Protein",
+    view="toc",
+)
+```
+
+Response:
+
+```json
+{
+  "title": "Protein",
+  "path": "C/Protein",
+  "toc": [
+    { "level": 1, "text": "Protein", "id": "protein", "children": [
+      { "level": 2, "text": "Biochemistry", "id": "biochemistry", "children": [] },
+      { "level": 2, "text": "Synthesis", "id": "synthesis", "children": [] },
+      { "level": 2, "text": "Cellular functions", "id": "cellular-functions", "children": [] }
+    ]}
+  ],
+  "heading_count": 15,
+  "max_depth": 4
+}
+```
+
+Then read just the section you want with `zim_get_section` (defaults to `compact=True` — no surrounding HTML chrome):
+
+```python
+zim_get_section(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="C/Protein",
+    section_id="biochemistry",
+)
+```
+
+**Takeaway:** `zim_get` is one tool, four views — `content`, `summary`, `toc`, `structure`. Pair with `zim_get_section` to read one section without pulling the whole article.
+
+---
+
+## Case study 3: Ant — taxonomy box plus related articles
+
+**Research goal:** build a knowledge graph around the article "Ant" — the taxonomic classification box plus a handful of related articles.
+
+Search to confirm the canonical path:
+
+```python
+zim_search(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    query="ant insect",
+    mode="fulltext",
+    limit=3,
+)
+```
+
+The Ant article's intro contains an inline classification box pulling in `Taxonomy_(biology)`, `Animal`, `Arthropod`, and `Insect`. To get the full set of outbound links programmatically, use `zim_links`:
+
+```python
+zim_links(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="C/Ant",
+    direction="outbound",
+)
+```
+
+Response (truncated):
+
+```json
+{
+  "outbound_links": [
+    { "target": "C/Taxonomy_(biology)", "anchor": "Scientific classification" },
+    { "target": "C/Animal", "anchor": "Animalia" },
+    { "target": "C/Arthropod", "anchor": "Arthropoda" },
+    { "target": "C/Insect", "anchor": "Insecta" }
+  ],
+  "internal_count": 187,
+  "external_count": 23,
+  "media_count": 12
+}
+```
+
+For semantically related articles (not just inline links), flip the direction:
+
+```python
+zim_links(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="C/Ant",
+    direction="related",
+    limit=5,
+)
+```
+
+Response:
+
+```json
+{
+  "related": [
+    { "path": "C/Bee", "title": "Bee", "score": 0.91 },
+    { "path": "C/Wasp", "title": "Wasp", "score": 0.88 },
+    { "path": "C/Hymenoptera", "title": "Hymenoptera", "score": 0.85 },
+    { "path": "C/Eusociality", "title": "Eusociality", "score": 0.78 },
+    { "path": "C/Termite", "title": "Termite", "score": 0.74 }
+  ]
+}
+```
+
+`direction="related"` carries a rate-limit cost of 2 (vs 1 for `direction="outbound"`) because it runs a search-based similarity pass under the hood. Use `outbound` when you only need the inline link list.
+
+**Takeaway:** `zim_links` does both inline link extraction and semantic related-article surfacing in one tool. Cheap mode is the default; opt in to the expensive mode when you actually need it.
+
+---
+
+## Case study 4: Video game — cross-topic search with computer concepts
+
+**Research goal:** find a Wikipedia article connecting "computer" with another high-traffic topic.
+
+A search for "computer" against the same archive surfaces unexpected cross-topic hits:
+
+```python
+zim_search(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    query="computer",
+    mode="fulltext",
+    limit=2,
+)
+```
+
+Response (truncated):
+
+```plain
+Found 39 matches for "computer", showing 1-2:
+
+## 1. Video game
+Path: Video_game
+Snippet: #  Video game First-generation _Pong_ console at the Computerspielemuseum Berlin
+---
+Platforms
+
+## 2. Protein
+Path: Protein
+Snippet: #  Protein A representation of the 3D structure of the protein myoglobin ...
+```
+
+"Video game" is the top hit for "computer" — the article opens with a museum exhibit photo of an early console. Fetch the article with a larger content cap to read past the truncation that defaults at 1,500 chars:
+
+```python
+zim_get(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="Video_game",
+    max_content_length=3000,
+)
+```
+
+To narrow further, use `zim_search` with `mode="suggest"` for typeahead-style completion against the title index — fast (sub-50ms typical) and useful for disambiguation:
+
+```python
+zim_search(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    partial_query="vide",
+    mode="suggest",
+    limit=5,
+)
+```
+
+Response:
+
+```json
+{
+  "partial_query": "vide",
+  "suggestions": [
+    { "text": "Video game", "path": "C/Video_game", "type": "title_start_match" },
+    { "text": "Video", "path": "C/Video", "type": "title_start_match" },
+    { "text": "Video camera", "path": "C/Video_camera", "type": "title_start_match" }
+  ],
+  "count": 3
+}
+```
+
+**Takeaway:** `zim_search` is one tool, four modes — `fulltext`, `title`, `suggest`, `keyword`. Pair `fulltext` for discovery with `suggest` for disambiguation.
+
+---
+
+## Case study 5: Protein-redux — metadata, namespace browse, filtered search
+
+**Research goal:** characterize the archive itself — how many entries, what namespaces exist, and what's available under the `C` namespace.
+
+Start with `zim_metadata`:
+
+```python
+zim_metadata(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+)
+```
+
+Response:
+
+```json
+{
+  "entry_count": 100000,
+  "all_entry_count": 120000,
+  "article_count": 80000,
+  "media_count": 20000,
+  "metadata_entries": {
+    "Title": "Wikipedia (English)",
+    "Description": "Wikipedia articles in English",
+    "Language": "eng",
+    "Creator": "Kiwix",
+    "Date": "2025-08-15"
+  },
+  "namespaces": ["C", "A", "M", "W", "X"]
+}
+```
+
+`zim_metadata` returns both the archive's metadata records and the discovered namespace list in one call.
+
+Browse the `C` (content) namespace to see what's there:
+
+```python
+zim_browse(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    namespace="C",
+    mode="page",
+    limit=5,
+    offset=0,
+)
+```
+
+Response:
+
+```json
+{
+  "namespace": "C",
+  "total_in_namespace": 80000,
+  "offset": 0,
+  "limit": 5,
+  "returned_count": 5,
+  "has_more": true,
+  "entries": [
+    {
+      "path": "C/Biology",
+      "title": "Biology",
+      "content_type": "text/html",
+      "preview": "Biology is the scientific study of life..."
+    }
+  ]
+}
+```
+
+For programmatic enumeration across the whole namespace, switch to `mode="walk"` and follow the cursor:
+
+```python
+zim_browse(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    namespace="C",
+    mode="walk",
+    limit=500,
+)
+```
+
+Returns `{ entries, next_cursor, done }`. Pass `next_cursor` on the next call until `done=True`.
+
+Now filter a full-text search to that namespace and content type — keeps results focused on rendered HTML articles (vs media or redirects):
+
+```python
+zim_search(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    query="evolution",
+    mode="fulltext",
+    namespace="C",
+    content_type="text/html",
+    limit=3,
+)
+```
+
+Finally, jump back to the `Protein` article and pull its structural outline with `view="structure"` — same `zim_get` tool, different view:
+
+```python
+zim_get(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="C/Protein",
+    view="structure",
+)
+```
+
+Response:
+
+```json
+{
+  "title": "Protein",
+  "path": "C/Protein",
+  "content_type": "text/html",
+  "headings": [
+    { "level": 1, "text": "Protein", "id": "protein" },
+    { "level": 2, "text": "Biochemistry", "id": "biochemistry" },
+    { "level": 2, "text": "Synthesis", "id": "synthesis" }
+  ],
+  "sections": [
+    {
+      "title": "Protein",
+      "level": 1,
+      "content_preview": "Proteins are large biomolecules ...",
+      "word_count": 150
+    }
+  ],
+  "word_count": 5000
+}
+```
+
+`view="structure"` is the lighter sibling of `view="toc"` — flatter, with per-section word counts, optimized for "how big is this article and where do I start reading?" decisions.
+
+**Takeaway:** the metadata, browse, and filtered-search trio is the right opening pattern when you don't know the archive's shape yet. Once you do, jump straight to `zim_search` + `zim_get`.
+
+---
+
+## Smart retrieval in action
+
+Every `zim_get` call goes through smart retrieval if the direct lookup fails. Asking for a path with a space when the canonical form uses an underscore:
+
+```python
+zim_get(
+    zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
+    entry_path="C/Test Article",  # space, not underscore
+)
+```
+
+Response (showing the resolved path):
+
+```plain
+# Test Article
+
+Requested Path: C/Test Article
+Actual Path: C/Test_Article
+Type: text/html
+
+## Content
+
+# Test Article
+
+This article demonstrates the smart retrieval system automatically handling
+path encoding differences. The system tried "C/Test Article" directly,
+then automatically searched and found "C/Test_Article".
+
+... [Content continues] ...
+```
+
+The resolved path is cached for subsequent calls within the same archive, so the fallback search runs once per unique guess. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the full algorithm.
+
+## Using simple mode instead
+
+Every case study above can be expressed as a single `zim_query` call in simple mode — the natural-language intent parser routes to the right advanced operation:
+
+```python
+zim_query(request="summarize the Protein article")
+zim_query(request="find articles about computers in the wikipedia archive")
+zim_query(request="show me the table of contents for Evolution")
+zim_query(request="what articles are related to Ant?")
+```
+
+Simple mode is the default (one tool exposed) and is the right choice when your host LLM struggles with large tool catalogues. Switch to advanced mode with `OPENZIM_MCP_TOOL_MODE=advanced` for fine-grained control over the 8-tool surface. See [LLM integration patterns](/openzim-mcp/docs/llm-integration-patterns/) for the trade-off in more depth.
+
+---
+
+**Next steps:**
+
+- **[API reference](/openzim-mcp/docs/api-reference/)** — full v2.0.0 tool signatures and argument shapes.
+- **[Smart retrieval](/openzim-mcp/docs/smart-retrieval/)** — the four-step fallback inside `zim_get`.
+- **[LLM integration patterns](/openzim-mcp/docs/llm-integration-patterns/)** — simple vs advanced mode, progressive discovery, batching, error handling.
+
+*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
