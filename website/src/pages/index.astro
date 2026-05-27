@@ -55,7 +55,7 @@ const description = "OpenZIM MCP gives any AI model structured, secure access to
         var aliases = {
           '#features': '#what', '#smart-retrieval': '#what', '#advanced-features': '#what',
           '#developer-experience': '#what', '#security': '#what',
-          '#whats-new': '#v1', '#installation': '#try', '#usage': '#try',
+          '#whats-new': '#v2', '#v1': '#v2', '#installation': '#try', '#usage': '#try',
           '#documentation': '#deeper', '#home': '#hero'
         };
         if (aliases[location.hash]) {
@@ -107,7 +107,7 @@ const description = "OpenZIM MCP gives any AI model structured, secure access to
       "itemListElement": [
         { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://cameronrye.github.io/openzim-mcp/" },
         { "@type": "ListItem", "position": 2, "name": "What is this", "item": "https://cameronrye.github.io/openzim-mcp/#what" },
-        { "@type": "ListItem", "position": 3, "name": "v1.0", "item": "https://cameronrye.github.io/openzim-mcp/#v1" },
+        { "@type": "ListItem", "position": 3, "name": "v2.0", "item": "https://cameronrye.github.io/openzim-mcp/#v2" },
         { "@type": "ListItem", "position": 4, "name": "Try it", "item": "https://cameronrye.github.io/openzim-mcp/#try" },
         { "@type": "ListItem", "position": 5, "name": "Deeper", "item": "https://cameronrye.github.io/openzim-mcp/#deeper" }
       ]
@@ -161,7 +161,8 @@ const description = "OpenZIM MCP gives any AI model structured, secure access to
       </a>
       <nav class="nav__menu" id="nav-menu" aria-label="Primary">
         <a href="#what" class="nav__link">What is this</a>
-        <a href="#v1" class="nav__link">v1.0</a>
+        <a href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/docs/`} class="nav__link">Docs</a>
+        <a href="#v2" class="nav__link">v2.0</a>
         <a href="#try" class="nav__link">Try it</a>
         <a href="#deeper" class="nav__link">Deeper</a>
         <a href="https://github.com/cameronrye/openzim-mcp" class="nav__link" target="_blank" rel="noopener">GitHub ↗</a>
@@ -316,113 +317,49 @@ const description = "OpenZIM MCP gives any AI model structured, secure access to
       </div>
     </section>
 
-    <section id="v1" class="section v1" data-reveal>
+    <section id="v2" class="section v2" data-reveal>
       <div class="container">
-        <span class="v1__watermark" aria-hidden="true">1.0</span>
+        <span class="v2__watermark" aria-hidden="true">2.0</span>
         <header class="section__header">
-          <span class="eyebrow">The 1.0 release</span>
-          <h2>Four headlines, dozens of fixes.</h2>
-          <p>v1.0.0 ships streamable HTTP, batch retrieval, per-entry resources, and resource subscriptions — plus an end-to-end review pass before tagging.</p>
+          <span class="eyebrow">The 2.0 release</span>
+          <h2>Eight tools. Same surface area.</h2>
+          <p>v2.0.0 collapses the 22-tool advanced mode into 8 consolidated tools — schema text drops from ~36KB to ~23.5KB, clearing the <a href="https://www.mmntm.net/articles/mcp-context-tax">MCP Tax</a> pain band for small-model dispatch.</p>
         </header>
 
-        <ul class="v1__cards">
-          <li class="v1__card">
-            <span class="v1__card-dot" aria-hidden="true"></span>
-            <h3>Streamable HTTP &amp; SSE transports</h3>
-            <p>Run as a long-running service. Bearer-token auth, CORS allow-list, <code>/healthz</code> &amp; <code>/readyz</code>, multi-arch Docker.</p>
-            <pre><code>docker run -p 8000:8000 \
-  -e OPENZIM_MCP_AUTH_TOKEN="$TOKEN" \
-  -v /path/to/zim:/data:ro \
-  ghcr.io/cameronrye/openzim-mcp:2.0.0 \
-  --transport http --host 0.0.0.0 /data</code></pre>
-          </li>
-
-          <li class="v1__card">
-            <span class="v1__card-dot" aria-hidden="true"></span>
-            <h3>Batch entry retrieval</h3>
-            <p><code>get_zim_entries</code> fetches up to 50 entries per call. Multi-archive batches, partial-success reporting, rate-limit-aware.</p>
+        <ul class="v2__cards">
+          <li class="v2__card">
+            <span class="v2__card-dot" aria-hidden="true"></span>
+            <h3>8-tool advanced surface</h3>
+            <p><code>zim_query</code>, <code>zim_search</code>, <code>zim_get</code>, <code>zim_get_section</code>, <code>zim_browse</code>, <code>zim_metadata</code>, <code>zim_links</code>, <code>zim_health</code>. Every v1 operation still reachable via a mode parameter.</p>
             <pre><code>{`{
-  "name": "get_zim_entries",
+  "name": "zim_search",
   "arguments": {
     "zim_file_path": "wiki.zim",
-    "entries": ["C/Evolution",
-                "C/Genetics",
-                "C/Mendel"]
+    "query": "evolution",
+    "mode": "fulltext"
   }
 }`}</code></pre>
           </li>
 
-          <li class="v1__card">
-            <span class="v1__card-dot" aria-hidden="true"></span>
-            <h3>Per-entry MCP resources</h3>
-            <p>Each entry exposed as <code>zim://{`{name}`}/entry/{`{path}`}</code> with libzim's native MIME type — HTML, PDFs, images render in MCP-aware clients.</p>
-            <pre><code>zim://wikipedia_en/entry/C%2FEvolution
-# returns text/html
+          <li class="v2__card">
+            <span class="v2__card-dot" aria-hidden="true"></span>
+            <h3>Simple mode unchanged</h3>
+            <p>The natural-language <code>zim_query</code> tool is identical to v1.2.0. Small-model clients see one tool; large-model clients can opt into the 8-tool surface with <code>--mode advanced</code>.</p>
+            <pre><code>openzim-mcp /data/zim/
+# simple mode (default): one tool
 
-zim://gutenberg/entry/I%2Fbook_cover.jpg
-# returns image/jpeg</code></pre>
+openzim-mcp --mode advanced /data/zim/
+# advanced mode: 8 tools</code></pre>
           </li>
 
-          <li class="v1__card">
-            <span class="v1__card-dot" aria-hidden="true"></span>
-            <h3>Resource subscriptions</h3>
-            <p>Subscribe to <code>zim://files</code> or <code>zim://{`{name}`}</code>. mtime-polling watcher emits <code>notifications/resources/updated</code> when archives change.</p>
-            <pre><code>{`// client subscribes
-{ "method": "resources/subscribe",
-  "params": { "uri": "zim://files" } }
-
-// server notifies on change
-{ "method": "notifications/resources/updated",
-  "params": { "uri": "zim://files" } }`}</code></pre>
+          <li class="v2__card">
+            <span class="v2__card-dot" aria-hidden="true"></span>
+            <h3>Dispatch quality validated</h3>
+            <p>300-probe dispatch eval on Qwen-2.5-7B-Instruct (small-model deployment target). Gate decision baked into the release; drift between gate output and shipped constants is caught by a consistency test in CI.</p>
+            <pre><code>tests/dispatch_eval/gate_0b_decision.json
+tests/test_phase_f_gate_decision_consistency.py</code></pre>
           </li>
         </ul>
-
-        <details class="v1__also">
-          <summary><strong>Also in 1.0</strong> — polish, fixes, and scope cuts</summary>
-          <div class="v1__also-grid">
-            <div>
-              <h4>Smarter archive handling</h4>
-              <ul>
-                <li><code>get_related_articles</code> resolves relative hrefs against the source entry's directory and detects the content namespace correctly on domain-scheme archives.</li>
-                <li>Suggestion fallback uses <code>SuggestionSearcher(archive).suggest(text)</code> (the prior <code>archive.suggest()</code> call didn't exist).</li>
-                <li><code>list_zim_files</code> gains a case-insensitive <code>name_filter</code> substring argument.</li>
-                <li><code>search_zim_file</code> accepts an opaque <code>cursor</code> parameter; passing the cursor alone resumes pagination.</li>
-              </ul>
-            </div>
-            <div>
-              <h4>Cleaner content extraction</h4>
-              <ul>
-                <li>Heading-id resolution falls through <code>id</code> → mw-headline anchor → <code>&lt;a name=""&gt;</code> → slug.</li>
-                <li>Summary extraction skips USWDS banners and skip-nav blocks above the first <code>&lt;h1&gt;</code>.</li>
-                <li>Link extraction drops non-navigable schemes (<code>javascript:</code>, <code>mailto:</code>, <code>tel:</code>, <code>data:</code>, <code>blob:</code>, <code>vbscript:</code>).</li>
-                <li>Per-entry paths sanitized in <code>get_zim_entries</code>.</li>
-              </ul>
-            </div>
-            <div>
-              <h4>Server hygiene</h4>
-              <ul>
-                <li><code>__version__</code> reads from <code>importlib.metadata</code>; <code>serverInfo.version</code> reports openzim-mcp's actual version.</li>
-                <li>HTTP transport's subscription watcher starts via wrapped lifespan.</li>
-                <li>Per-entry <code>zim://</code> returns libzim's native MIME type.</li>
-              </ul>
-            </div>
-            <div>
-              <h4>Streamlined scope</h4>
-              <p>Advanced-mode tool surface drops 27 → 21. Removed: <code>warm_cache</code>, <code>cache_stats</code>, <code>cache_clear</code>, <code>get_random_entry</code>, <code>diagnose_server_state</code>, <code>resolve_server_conflicts</code>. The cache itself remains. Multi-instance conflict tracking removed entirely.</p>
-            </div>
-          </div>
-        </details>
-
-        <article class="v1__prior">
-          <h3>v0.9.0 <span class="v1__prior-label">— previously</span></h3>
-          <ul>
-            <li><strong>Multi-archive search</strong> — <code>search_all</code> queries every ZIM file in your allowed directories at once.</li>
-            <li><strong>MCP Prompts</strong> — <code>/research</code>, <code>/summarize</code>, <code>/explore</code> as ready-made workflows.</li>
-            <li><strong>Find entries by title</strong> — <code>find_entry_by_title</code> resolves a title to entry paths, optionally cross-file.</li>
-            <li><strong>MCP Resources</strong> — <code>zim://files</code> and <code>zim://{`{name}`}</code> show up in your client's resource browser.</li>
-            <li><strong>Power-user tools</strong> — <code>walk_namespace</code> for cursor-paginated iteration; <code>get_related_articles</code> for outbound link-graph neighbours.</li>
-          </ul>
-        </article>
       </div>
     </section>
 
@@ -479,19 +416,48 @@ uv sync</code></pre>
           <h3 class="try__usage-title">See it in action</h3>
           <div class="tabs" data-tabs="usage">
             <div class="tabs__buttons" role="tablist" aria-label="Usage example">
-              <button class="tabs__btn is-active" role="tab" id="tab-use-search"    data-tab="use-search"    aria-selected="true"  aria-controls="use-search">Search</button>
+              <button class="tabs__btn is-active" role="tab" id="tab-use-nl"        data-tab="use-nl"        aria-selected="true"  aria-controls="use-nl">Natural language</button>
+              <button class="tabs__btn"           role="tab" id="tab-use-search"    data-tab="use-search"    aria-selected="false" aria-controls="use-search">Search</button>
               <button class="tabs__btn"           role="tab" id="tab-use-browse"    data-tab="use-browse"    aria-selected="false" aria-controls="use-browse">Browse</button>
               <button class="tabs__btn"           role="tab" id="tab-use-subscribe" data-tab="use-subscribe" aria-selected="false" aria-controls="use-subscribe">Subscribe</button>
             </div>
-            <div class="tabs__panel is-active" id="use-search" role="tabpanel" aria-labelledby="tab-use-search">
+            <div class="tabs__panel is-active" id="use-nl" role="tabpanel" aria-labelledby="tab-use-nl">
               <div class="try__exchange">
                 <div>
                   <h4>Request</h4>
                   <pre><code>{`{
-  "name": "search_zim_file",
+  "name": "zim_query",
+  "arguments": {
+    "query": "summarize the article on Photosynthesis"
+  }
+}`}</code></pre>
+                </div>
+                <div>
+                  <h4>Response</h4>
+                  <pre><code>## Photosynthesis
+
+Photosynthesis is the process by which
+plants and other organisms convert light
+energy into chemical energy that drives
+the conversion of carbon dioxide and water
+into glucose and oxygen.
+
+The process consists of two main stages:
+the light-dependent reactions and the
+Calvin cycle (light-independent reactions).</code></pre>
+                </div>
+              </div>
+            </div>
+            <div class="tabs__panel" id="use-search" role="tabpanel" aria-labelledby="tab-use-search" hidden>
+              <div class="try__exchange">
+                <div>
+                  <h4>Request</h4>
+                  <pre><code>{`{
+  "name": "zim_search",
   "arguments": {
     "zim_file_path": "wikipedia_en.zim",
     "query": "artificial intelligence",
+    "mode": "fulltext",
     "limit": 5
   }
 }`}</code></pre>
@@ -517,10 +483,11 @@ artificial intelligence...</code></pre>
                 <div>
                   <h4>Request</h4>
                   <pre><code>{`{
-  "name": "browse_namespace",
+  "name": "zim_browse",
   "arguments": {
     "zim_file_path": "wikipedia_en.zim",
     "namespace": "C",
+    "mode": "page",
     "limit": 10
   }
 }`}</code></pre>
