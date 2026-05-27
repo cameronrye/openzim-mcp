@@ -144,4 +144,4 @@ MIT. See [LICENSE](LICENSE).
 
 ---
 
-Made with care by [Cameron Rye](https://rye.dev)
+Made with ❤️ by [Cameron Rye](https://rye.dev)
