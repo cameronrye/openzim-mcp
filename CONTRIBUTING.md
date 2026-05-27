@@ -27,7 +27,7 @@ Thank you for your interest in contributing to OpenZIM MCP! This document provid
 5. **Make your changes** and commit them
 6. **Push to your fork** and create a pull request
 
-## Development Setup
+## Development
 
 ### Prerequisites
 
@@ -64,6 +64,18 @@ make test
 # Run tests with coverage
 make test-cov
 
+# Run specific test file
+uv run pytest tests/test_security.py -v
+
+# Run tests with ZIM test data (comprehensive testing)
+make test-with-zim-data
+
+# Run integration tests only
+make test-integration
+
+# Run tests that require ZIM test data
+make test-requires-zim-data
+
 # Run linting
 make lint
 
@@ -75,9 +87,58 @@ make type-check
 
 # Run all checks (lint + type-check + security + test)
 make check
+```
 
-# Run integration tests with ZIM data
-make test-with-zim-data
+### Project Structure
+
+```text
+openzim-mcp/
+├── openzim_mcp/                # Main package
+│   ├── __init__.py             # Package init, exports __version__ via importlib.metadata
+│   ├── __main__.py             # Module entry point (`python -m openzim_mcp`)
+│   ├── main.py                 # CLI entry point and arg parsing
+│   ├── server.py               # MCP server setup, transport selection
+│   ├── http_app.py             # Streamable HTTP / SSE transport, auth, CORS, health
+│   ├── config.py               # Pydantic config + env var bindings
+│   ├── defaults.py             # Default values and tunables
+│   ├── security.py             # Path validation, traversal protection, sanitization
+│   ├── error_messages.py       # User-facing error message catalog
+│   ├── exceptions.py           # Custom exception hierarchy
+│   ├── cache.py                # LRU cache with TTL
+│   ├── rate_limiter.py         # Per-client + global token-bucket rate limiting
+│   ├── content_processor.py    # HTML→text, heading-id, link extraction
+│   ├── async_operations.py     # asyncio helpers and timeouts
+│   ├── timeout_utils.py        # Timeout primitives
+│   ├── subscriptions.py        # MtimeWatcher and SubscriberRegistry
+│   ├── simple_tools.py         # Simple-mode `zim_query` tool
+│   ├── intent_parser.py        # Natural-language intent parsing
+│   ├── types.py                # Shared TypedDicts
+│   ├── constants.py            # Shared constants
+│   ├── zim_operations.py       # Backward-compat shim re-exporting from zim/ package
+│   ├── zim/                    # ZIM access (split from monolithic zim_operations.py)
+│   │   ├── __init__.py         # ZimOperations facade composed of mixins
+│   │   ├── archive.py          # Archive open/close, file listing, name resolution
+│   │   ├── content.py          # Entry retrieval, summaries, batch get
+│   │   ├── namespace.py        # Namespace listing, browse, walk
+│   │   ├── search.py           # Full-text + suggestion search; cursor pagination
+│   │   └── structure.py        # Article structure, links, related articles
+│   └── tools/                  # MCP tool registrations
+│       ├── __init__.py
+│       ├── file_tools.py       # list_zim_files
+│       ├── content_tools.py    # get_zim_entry, get_zim_entries
+│       ├── search_tools.py     # search_zim_file, search_all, find_entry_by_title
+│       ├── navigation_tools.py # browse_namespace, walk_namespace, search_with_filters, get_search_suggestions
+│       ├── structure_tools.py  # get_article_structure, extract_article_links, get_entry_summary, get_table_of_contents, get_binary_entry
+│       ├── metadata_tools.py   # get_zim_metadata, get_main_page, list_namespaces
+│       ├── server_tools.py     # get_server_health, get_server_configuration
+│       ├── resource_tools.py   # MCP resources (zim://files, zim://{name}/...)
+│       └── prompts.py          # MCP prompts (/research, /summarize, /explore)
+├── tests/                      # Test suite (pytest)
+├── website/                    # GitHub Pages site source
+├── pyproject.toml              # Project configuration
+├── Makefile                    # Development commands
+├── Dockerfile                  # Multi-stage container build
+└── README.md                   # Project overview
 ```
 
 ## Code Style and Standards
@@ -177,12 +238,51 @@ docs(readme): update installation guide
 
 ## Testing
 
+The project maintains 80%+ test coverage using a hybrid of mock data and real ZIM files.
+
 ### Test Categories
 
 1. **Unit Tests**: Fast tests with mocked dependencies
-2. **Integration Tests**: Tests with real ZIM files
+2. **Integration Tests**: End-to-end functionality testing with real ZIM files
 3. **Security Tests**: Path traversal and input validation
 4. **Performance Tests**: Caching and resource management
+5. **Format Compatibility**: Various ZIM file formats and versions
+6. **Error Handling**: Invalid and malformed ZIM files
+
+### Test Infrastructure
+
+OpenZIM MCP uses a hybrid testing approach:
+
+1. **Mock-based tests**: Fast unit tests using mocked libzim components
+2. **Real ZIM file tests**: Integration tests using official zim-testing-suite files
+3. **Automatic test data management**: Download and organize test files as needed
+
+### ZIM Test Data Integration
+
+OpenZIM MCP integrates with the official [zim-testing-suite](https://github.com/openzim/zim-testing-suite) for comprehensive testing with real ZIM files:
+
+```bash
+# Download essential test files (basic testing)
+make download-test-data
+
+# Download all test files (comprehensive testing)
+make download-test-data-all
+
+# List available test files
+make list-test-data
+
+# Clean downloaded test data
+make clean-test-data
+```
+
+The test data includes:
+
+- **Basic files**: Small ZIM files for essential testing
+- **Real content**: Actual Wikipedia/Wikibooks content for integration testing
+- **Invalid files**: Malformed ZIM files for error handling testing
+- **Special cases**: Embedded content, split files, and edge cases
+
+Test files are automatically organized by category and priority level. Set `ZIM_TEST_DATA_DIR` to use a custom test data location.
 
 ### Writing Tests
 
@@ -213,6 +313,10 @@ uv run pytest -m "not slow"
 
 # Run tests requiring ZIM data
 make test-requires-zim-data
+
+# Run tests with coverage and open HTML report
+make test-cov
+open htmlcov/index.html
 ```
 
 ## Security
