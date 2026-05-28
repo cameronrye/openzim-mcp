@@ -21,7 +21,7 @@ import openzim_mcp.zim_operations as _zim_ops_mod
 
 from . import compact_renderers
 from .exceptions import RegexTimeoutError
-from .intent_parser import IntentParser, safe_regex_sub
+from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
 from .meta import build_meta, format_footer
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
@@ -3633,6 +3633,16 @@ class SimpleToolsHandler:
                 ).strip()
             except RegexTimeoutError:
                 cleaned_query = query.strip()
+            # Post-v2.0.4 D-E sibling: peel a surrounding quote-pair so
+            # ``get article ""`` / ``get article ''`` drop to the missing-
+            # arg guard. Pre-fix the word-strip left the literal 2-char
+            # quote pair, which the backend fuzzy-matched to the
+            # ``Empty_string`` article at cert=0.75 (same silent-wrong-
+            # answer shape as the post-v2.0.0 D-E sweep — that fix landed
+            # on the extractor and the keyword-branch tail, but the
+            # ``_handle_get_article`` word-strip recovery branch
+            # regenerates the literal from ``query`` and bypasses it).
+            cleaned_query = _strip_quote_pair(cleaned_query)
             if not cleaned_query:
                 return (
                     "**Missing Article Path**\n\n"
