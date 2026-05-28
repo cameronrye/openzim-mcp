@@ -66,6 +66,28 @@ _QUOTE_OPEN = f"[{_QUOTE_CHARS}]"
 _QUOTE_NOT = f"[^{_QUOTE_CHARS}]"
 
 
+def _strip_quote_pair(value: str) -> str:
+    """Peel a single surrounding matched quote-pair from ``value`` and
+    trim interior whitespace.
+
+    Post-v2.0.0 D-E: when a caller types ``""`` (or ``''`` / curly
+    equivalents) as an entry path or title, several extractors capture
+    the 2-char literal verbatim, the handler's ``.strip()`` only trims
+    whitespace, and the backend's title-promotion fuzzy-matches the
+    empty input to the ``Empty_string`` article at score 1.00. Stripping
+    surrounding quotes here drops the value cleanly so the handler's
+    missing-arg guard can fire.
+
+    Stripping is opportunistic — both endpoints just need to live in
+    ``_QUOTE_CHARS``. Mixed quote endpoints (``"foo'``) are stripped too
+    so LLM-generated mismatched pairs don't survive as wrong values.
+    Single-char inputs (already < 2 chars) pass through unchanged.
+    """
+    if len(value) >= 2 and value[0] in _QUOTE_CHARS and value[-1] in _QUOTE_CHARS:
+        return value[1:-1].strip()
+    return value
+
+
 def safe_regex_findall(
     pattern: str,
     text: str,
@@ -178,6 +200,47 @@ def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
         params["content_type"] = type_match.group(1)
 
 
+# Post-v2.0.0 D-C/D-D fallback: when the shared keyworded extractor
+# finds no canonical ``article|entry|page|of|for|in|from|to`` anchor,
+# fall back to peeling a leading intent-keyword prefix. Covers the
+# bare-verb forms surfaced by the v2.0.0 live sweep:
+#
+#   structure Photosynthesis    summary Photosynthesis
+#   outline Photosynthesis      summarize Photosynthesis
+#   sections Photosynthesis     overview Photosynthesis
+#   headings Photosynthesis     toc Photosynthesis
+#   table of contents X         contents Photosynthesis
+#   show structure Photosynthesis
+#
+# The optional ``show|display|give|tell`` preamble (with optional
+# ``me``/``the``) handles natural-language preambles. Each verb is the
+# same one that lights up the corresponding intent regex; if a future
+# contributor widens the intent regex (e.g. adds ``layout`` as a
+# structure synonym) the prefix set must be widened in lockstep —
+# pinned by ``TestEntryPathExtractorVerbSetCanonicalPin`` in the
+# post-v2.0.0 sweep file.
+_LEADING_INTENT_KEYWORDS_RE = re.compile(
+    r"^\s*"
+    r"(?:(?:show|display|give|tell)\s+(?:me\s+)?(?:the\s+)?)?"
+    r"(?:"
+    r"table\s+of\s+contents|"
+    r"structure|outline|sections?|headings?|"
+    r"summary|summarize|summarise|overview|brief|"
+    r"toc|contents"
+    r")"
+    r"\b\s+",
+    re.IGNORECASE,
+)
+
+# Post-v2.0.0 D-C: when the canonical-keyword extractor anchors on
+# ``of`` inside ``table of contents X``, the captured tail is
+# ``contents X``. Peel the leading ``contents`` token so the
+# downstream path-resolver sees ``X``. Confined to a leading position
+# so legitimate entries containing the word ``contents`` mid-title
+# (rare but possible) are untouched.
+_TAIL_LEADING_CONTENTS_RE = re.compile(r"^contents\s+", re.IGNORECASE)
+
+
 def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     """Shared extractor for get_article / structure / links / toc / summary.
 
@@ -190,6 +253,14 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     silently truncated, dropping the user at the wrong article (the
     common silent-fall-through failure mode for ``show structure of
     United States`` returning the ``United`` disambig page).
+
+    Post-v2.0.0 D-C / D-D additions: when no canonical anchor matches,
+    fall back to stripping a leading intent-keyword prefix
+    (``structure``/``summary``/``toc``/etc.) so bare-verb forms
+    ``structure Photosynthesis`` and ``toc Photosynthesis`` resolve
+    correctly. When the canonical anchor matched on ``of`` inside
+    ``table of contents X``, peel the leading ``contents`` token from
+    the tail so ``X`` survives as the entry_path.
 
     The downstream :meth:`SimpleToolsHandler._resolve_natural_language_path`
     helper then runs the captured tail through ``find_title_match`` so a
@@ -213,11 +284,36 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         re.IGNORECASE,
     )
     matches = list(keyword_re.finditer(query))
-    if not matches:
+    if matches:
+        tail = query[matches[-1].end() :].strip().rstrip("?.,;:!").strip()
+        # Post-v2.0.0 D-C: ``table of contents X`` anchors on ``of`` →
+        # tail = ``contents X``. Peel the leading ``contents`` so the
+        # downstream resolver sees ``X``.
+        cleaned = _TAIL_LEADING_CONTENTS_RE.sub("", tail, count=1).strip()
+        if cleaned and cleaned != tail:
+            tail = cleaned
+        # Post-v2.0.0 D-E: peel a surrounding quote pair so an
+        # empty-quoted tail (``structure of ""`` / ``get article ""``)
+        # doesn't survive to the backend, which would otherwise
+        # fuzzy-match it to the Empty_string article at score 1.00.
+        # When the quote-pair encloses a real entity (``get article
+        # "Photosynthesis"``) the strip also improves the lookup score.
+        tail = _strip_quote_pair(tail)
+        if tail:
+            params["entry_path"] = tail
         return
-    tail = query[matches[-1].end() :].strip().rstrip("?.,;:!").strip()
-    if tail:
-        params["entry_path"] = tail
+
+    # Post-v2.0.0 D-D fallback: no canonical anchor — the intent verb
+    # itself acts as the of/for anchor (``structure X``, ``summary X``,
+    # ``toc X``). Strip the leading verb (with optional show/give
+    # preamble) and use the remainder as the entry_path.
+    prefix_match = _LEADING_INTENT_KEYWORDS_RE.match(query)
+    if prefix_match:
+        tail = query[prefix_match.end() :].strip().rstrip("?.,;:!").strip()
+        # Post-v2.0.0 D-E: same quote-pair peel as the canonical branch.
+        tail = _strip_quote_pair(tail)
+        if tail:
+            params["entry_path"] = tail
 
 
 def _extract_binary(query: str, params: Dict[str, Any]) -> None:
@@ -317,7 +413,12 @@ def _extract_find_by_title(query: str, params: Dict[str, Any]) -> None:
         r"(?:titled|named|called|path\s+for)\s+(.+?)$", query, re.IGNORECASE
     )
     if m:
-        params["title"] = m.group(1).strip().rstrip("?.")
+        title = _strip_quote_pair(m.group(1).strip().rstrip("?."))
+        # Post-v2.0.0 D-E: empty-quoted input must not survive to the
+        # handler — the backend fuzzy-matches '""' to the Empty_string
+        # article at score 1.00.
+        if title:
+            params["title"] = title
 
 
 def _extract_related(query: str, params: Dict[str, Any]) -> None:
@@ -327,7 +428,10 @@ def _extract_related(query: str, params: Dict[str, Any]) -> None:
         re.IGNORECASE,
     )
     if m:
-        params["entry_path"] = m.group(1).strip().rstrip("?.")
+        entry_path = _strip_quote_pair(m.group(1).strip().rstrip("?."))
+        # Post-v2.0.0 D-E: see _extract_find_by_title.
+        if entry_path:
+            params["entry_path"] = entry_path
 
 
 def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
@@ -473,6 +577,14 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
         topic = safe_regex_sub(r"\s*[,&]\s*$", "", topic).strip()
         if topic == before:
             break
+    # Post-v2.0.0 D-E (extended pass-4): strip a surrounding matched
+    # quote pair so ``tell me about ""`` doesn't survive as the literal
+    # 2-char ``""`` and silently resolve to the ``Empty_string``
+    # Wikipedia article (the same shape D-E fixed for find_by_title,
+    # related, and entry_path_keyworded). Bonus regression upside:
+    # ``tell me about "Photosynthesis"`` now searches the bare topic
+    # instead of the quoted form, which is a cleaner search input.
+    topic = _strip_quote_pair(topic)
     params["topic"] = topic
 
 
@@ -547,6 +659,36 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
         params["entry_path"] = m.group(2).strip().rstrip("?.,;:!")
 
 
+# Post-v2.0.0 D-B: filename hint extractor for the ``metadata`` intent.
+# ``metadata for wikipedia_en_all_maxi_2026-02.zim`` carries the target
+# file name in the query body; pre-fix the parser ignored it and the
+# dispatcher's no-zim-file gate fired when 2+ archives were loaded. The
+# hint is stashed in ``params["metadata_target"]`` and resolved against
+# ``zim_operations.list_zim_files_data()`` in the dispatcher.
+#
+# Limited to ``.zim``-suffixed tokens — a permissive bare-name match
+# would collide with phrasings like ``info about Python`` (where
+# ``Python`` is a topic, not a file). The ``.zim`` suffix is the
+# canonical disambiguator.
+_METADATA_FILENAME_RE = re.compile(
+    r"\b(metadata|info|details?)\s+(?:for|about|of)\s+" r"([A-Za-z0-9_.\-]+\.zim)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_metadata(query: str, params: Dict[str, Any]) -> None:
+    """Extract a filename hint for the ``metadata`` intent.
+
+    See module-level ``_METADATA_FILENAME_RE`` docstring. Only ``.zim``
+    targets are captured. Bare ``metadata`` (no filename) leaves
+    ``metadata_target`` unset and the dispatcher's existing no-zim-file
+    behaviour kicks in.
+    """
+    match = _METADATA_FILENAME_RE.search(query)
+    if match:
+        params["metadata_target"] = match.group(2)
+
+
 _PARAM_EXTRACTORS = {
     "browse": _extract_browse,
     "filtered_search": _extract_filtered_search,
@@ -565,6 +707,7 @@ _PARAM_EXTRACTORS = {
     "related": _extract_related,
     "get_zim_entries": _extract_get_zim_entries,
     "get_section": _extract_get_section,
+    "metadata": _extract_metadata,
 }
 
 

@@ -16,18 +16,62 @@ export interface Props {
 const { title, description, group, slug, headings } = Astro.props;
 const repoEditUrl = `https://github.com/cameronrye/openzim-mcp/blob/main/website/src/content/docs/${slug === 'index' ? 'index' : slug}.mdx`;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const canonicalUrl = `https://cameronrye.github.io${base}/docs/${slug === 'index' ? '' : slug + '/'}`;
+const pageTitle = `${title} — OpenZIM MCP docs`;
+const breadcrumbLd = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    { '@type': 'ListItem', position: 1, name: 'OpenZIM MCP', item: `https://cameronrye.github.io${base}/` },
+    { '@type': 'ListItem', position: 2, name: 'Documentation', item: `https://cameronrye.github.io${base}/docs/` },
+    ...(slug === 'index' ? [] : [{ '@type': 'ListItem', position: 3, name: title, item: canonicalUrl }]),
+  ],
+};
 ---
 <!doctype html>
 <html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{title} — OpenZIM MCP docs</title>
+    <title>{pageTitle}</title>
     <meta name="description" content={description} />
     <meta name="theme-color" content="#0B0F1A">
     <meta name="color-scheme" content="dark light">
     <link rel="icon" type="image/svg+xml" href={`${base}/assets/favicon.svg`}>
-    <link rel="canonical" href={`https://cameronrye.github.io${base}/docs/${slug === 'index' ? '' : slug + '/'}`}>
+    <link rel="canonical" href={canonicalUrl}>
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="OpenZIM MCP">
+    <meta property="og:url" content={canonicalUrl}>
+    <meta property="og:title" content={pageTitle}>
+    <meta property="og:description" content={description}>
+    <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+    <meta property="og:image:alt" content="OpenZIM MCP 2.0.0 — Knowledge that works offline">
+    <meta property="og:locale" content="en_US">
+    <meta property="article:section" content={group}>
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content={canonicalUrl}>
+    <meta name="twitter:title" content={pageTitle}>
+    <meta name="twitter:description" content={description}>
+    <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
+    <meta name="twitter:image:alt" content="OpenZIM MCP 2.0.0 — Knowledge that works offline">
+
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(breadcrumbLd)} />
+
+    <!-- Theme init: set before stylesheet parse to avoid FOUC. -->
+    <script is:inline>
+      (function () {
+        try {
+          var stored = localStorage.getItem('theme');
+          var theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {}
+      })();
+    </script>
+
     <link rel="stylesheet" href={`${base}/assets/styles.css`} />
   </head>
   <body>
@@ -35,9 +79,12 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <SiteHeader context="docs" />
     <div class="docs-shell">
       <Sidebar currentSlug={slug} />
-      <main class="docs-main" id="docs-main">
+      <main class="docs-main" id="docs-main" tabindex="-1">
         <Breadcrumbs group={group} title={title} />
-        <article class="docs-article"><slot /></article>
+        <article class="docs-article">
+          <h1>{title}</h1>
+          <slot />
+        </article>
         <PrevNext currentSlug={slug} />
         <p class="docs-edit"><a href={repoEditUrl} target="_blank" rel="noopener">Edit this page on GitHub ↗</a></p>
       </main>
