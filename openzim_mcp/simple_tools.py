@@ -3518,14 +3518,22 @@ class SimpleToolsHandler:
         if params.get("namespace") is None and re.search(
             r"\bin\s+namespace\b", query, re.IGNORECASE
         ):
+            # Post-v2.0.4 sweep pass-2: the embedded
+            # ``<!-- intent=filtered_search cert=0.80 -->`` here
+            # duplicated the dispatcher's auto-appended intent footer
+            # at line 1017 (every string result gets ``intent={intent}
+            # cert={confidence:.2f}`` from the parser's classification).
+            # Sibling ``_handle_browse`` / ``_handle_walk_namespace``
+            # missing-namespace envelopes never embedded it and rely on
+            # the auto-append. Drop the embedded comment so the
+            # response carries exactly one intent footer.
             return (
                 "**Missing or Invalid Namespace**\n\n"
                 "**Issue**: `search ... in namespace` needs a single "
                 "namespace letter (A, C, M, W, etc.; case-insensitive).\n"
                 "**Examples**:\n"
                 "- `search Berlin in namespace C` — main content\n"
-                "- `search Counter in namespace M` — archive metadata\n"
-                "<!-- intent=filtered_search cert=0.80 -->"
+                "- `search Counter in namespace M` — archive metadata"
             )
         # Post-a19 P1-D2: reject cursors issued by a different
         # cursor-emitting tool. Pre-fix, a ``walk_namespace`` cursor

@@ -200,3 +200,74 @@ class TestEntryPathExtractorWhitespaceQuotedDrops:
         intent, params, _conf = IntentParser.parse_intent('get article "World War II"')
         assert intent == "get_article"
         assert params.get("entry_path") == "world war ii"
+
+
+# ===========================================================================
+# Pass-2 D-H — duplicate ``<!-- intent=filtered_search cert=0.80 -->``
+# telemetry comment on missing-namespace envelope.
+# ===========================================================================
+
+
+class TestFilteredSearchMissingNamespaceSingleIntentFooter:
+    """``_handle_filtered_search`` missing-namespace envelope embedded an
+    ``<!-- intent=filtered_search cert=0.80 -->`` comment in the body
+    that duplicated the dispatcher's auto-appended footer (every string
+    result gets an intent footer at handle_zim_query, line ~1017). The
+    sibling ``_handle_browse`` / ``_handle_walk_namespace`` envelopes
+    relied on the auto-append and emitted exactly one footer. Pinning
+    parity here.
+    """
+
+    @pytest.fixture
+    def handler(self) -> SimpleToolsHandler:
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        # Backend must NOT be reached for invalid namespace inputs.
+        mock.search_with_filters_with_canonical_splice.side_effect = AssertionError(
+            "backend should not be called for invalid namespace"
+        )
+        return SimpleToolsHandler(mock)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            'search Berlin in namespace ""',
+            "search photosynthesis in namespace abc",
+            "search Berlin in namespace XYZ",
+            "search foo in namespace 1",
+        ],
+    )
+    def test_exactly_one_filtered_search_intent_footer(
+        self, handler: SimpleToolsHandler, query: str
+    ) -> None:
+        """Each invalid-namespace envelope must carry exactly one
+        ``<!-- intent=filtered_search cert=...`` footer — not two. The
+        sibling browse / walk_namespace envelopes (line 2974, line 5111)
+        already emit one; this pins parity for filtered_search."""
+        out = handler.handle_zim_query(
+            query, zim_file_path="/x.zim", options={"compact": False}
+        )
+        assert "Missing or Invalid Namespace" in out
+        footer_count = out.count("<!-- intent=filtered_search cert=")
+        assert footer_count == 1, (
+            f"Expected exactly one filtered_search intent footer; got "
+            f"{footer_count}. Full output:\n{out}"
+        )
+
+    def test_browse_missing_namespace_unchanged(
+        self, handler: SimpleToolsHandler
+    ) -> None:
+        """Regression guard: the sibling ``_handle_browse`` envelope
+        already emitted exactly one ``<!-- intent=browse cert=`` footer
+        via the dispatcher auto-append; this pin confirms the fix
+        didn't accidentally touch that surface."""
+        out = handler.handle_zim_query(
+            "browse namespace XYZ",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert "Missing or Invalid Namespace" in out
+        assert out.count("<!-- intent=browse cert=") == 1
