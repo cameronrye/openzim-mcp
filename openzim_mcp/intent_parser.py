@@ -271,7 +271,16 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}", query
     )
     if quoted_match:
-        params["entry_path"] = quoted_match.group(1)
+        # Post-v2.0.4 D-E sibling: ``get article "  "`` /
+        # ``structure of "  "`` (whitespace-only between matched
+        # quotes) bypassed the canonical-branch's empty-drop guard
+        # because the ``+`` quantifier matches whitespace chars. Trim
+        # the captured value and drop the param entirely when empty
+        # so the handler's missing-arg guard fires instead of
+        # propagating ``"  "`` to the backend's title-promotion.
+        captured = quoted_match.group(1).strip()
+        if captured:
+            params["entry_path"] = captured
         return
 
     # Find every keyword position; take the LAST so that

@@ -21,7 +21,7 @@ import openzim_mcp.zim_operations as _zim_ops_mod
 
 from . import compact_renderers
 from .exceptions import RegexTimeoutError
-from .intent_parser import IntentParser, safe_regex_sub
+from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
 from .meta import build_meta, format_footer
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
@@ -3518,14 +3518,22 @@ class SimpleToolsHandler:
         if params.get("namespace") is None and re.search(
             r"\bin\s+namespace\b", query, re.IGNORECASE
         ):
+            # Post-v2.0.4 sweep pass-2: the embedded
+            # ``<!-- intent=filtered_search cert=0.80 -->`` here
+            # duplicated the dispatcher's auto-appended intent footer
+            # at line 1017 (every string result gets ``intent={intent}
+            # cert={confidence:.2f}`` from the parser's classification).
+            # Sibling ``_handle_browse`` / ``_handle_walk_namespace``
+            # missing-namespace envelopes never embedded it and rely on
+            # the auto-append. Drop the embedded comment so the
+            # response carries exactly one intent footer.
             return (
                 "**Missing or Invalid Namespace**\n\n"
                 "**Issue**: `search ... in namespace` needs a single "
                 "namespace letter (A, C, M, W, etc.; case-insensitive).\n"
                 "**Examples**:\n"
                 "- `search Berlin in namespace C` — main content\n"
-                "- `search Counter in namespace M` — archive metadata\n"
-                "<!-- intent=filtered_search cert=0.80 -->"
+                "- `search Counter in namespace M` — archive metadata"
             )
         # Post-a19 P1-D2: reject cursors issued by a different
         # cursor-emitting tool. Pre-fix, a ``walk_namespace`` cursor
@@ -3633,6 +3641,16 @@ class SimpleToolsHandler:
                 ).strip()
             except RegexTimeoutError:
                 cleaned_query = query.strip()
+            # Post-v2.0.4 D-E sibling: peel a surrounding quote-pair so
+            # ``get article ""`` / ``get article ''`` drop to the missing-
+            # arg guard. Pre-fix the word-strip left the literal 2-char
+            # quote pair, which the backend fuzzy-matched to the
+            # ``Empty_string`` article at cert=0.75 (same silent-wrong-
+            # answer shape as the post-v2.0.0 D-E sweep — that fix landed
+            # on the extractor and the keyword-branch tail, but the
+            # ``_handle_get_article`` word-strip recovery branch
+            # regenerates the literal from ``query`` and bypasses it).
+            cleaned_query = _strip_quote_pair(cleaned_query)
             if not cleaned_query:
                 return (
                     "**Missing Article Path**\n\n"
@@ -3932,6 +3950,36 @@ class SimpleToolsHandler:
             topic=topic,
         )
 
+    @staticmethod
+    def _swap_tell_me_about_recovery_hint(text: str, topic: str) -> str:
+        """Post-v2.0.4 D-J: when ``_handle_tell_me_about`` falls back
+        to the search backend's rendered no-results output, the shared
+        ``_format_search_text`` recovery hints (zim/search.py:774-782)
+        suggest ``tell me about {topic}`` — which is exactly what the
+        caller just tried. Swap that bullet for a ``find article
+        titled {topic}`` hint (title-index fuzzy lookup) that's
+        genuinely a different recovery path.
+
+        Implemented as a narrow string-replace at the handler edge
+        rather than parameterizing the shared formatter so the
+        search-backend recovery wording stays canonical for direct
+        ``search for X`` callers (where the ``tell me about`` cross-
+        intent nudge is still useful). The replace is canonical-source
+        pinned by ``TestTellMeAboutNoResultsRecoveryNotCircular`` —
+        future search.py wording changes need to update the swap in
+        tandem.
+        """
+        truncated = topic[:30]
+        circular = (
+            f"- `tell me about {truncated}` — structured topic "
+            f"lookup with auto article fetch"
+        )
+        replacement = (
+            f"- `find article titled {truncated}` — title-index "
+            f"lookup with fuzzy fallback"
+        )
+        return text.replace(circular, replacement)
+
     def _handle_tell_me_about(
         self,
         query: str,
@@ -4114,8 +4162,11 @@ class SimpleToolsHandler:
 
         results = payload.get("results", []) if isinstance(payload, dict) else []
         if not results:
-            return self.zim_operations.search_zim_file(
-                zim_file_path, topic, search_limit, 0
+            return self._swap_tell_me_about_recovery_hint(
+                self.zim_operations.search_zim_file(
+                    zim_file_path, topic, search_limit, 0
+                ),
+                topic,
             )
 
         top = results[0]
@@ -4124,8 +4175,11 @@ class SimpleToolsHandler:
         if not is_strong_title_match(topic, top_path, top_title):
             promoted = self._promote_topic_via_title_index(zim_file_path, topic)
             if promoted is None:
-                return self.zim_operations.search_zim_file(
-                    zim_file_path, topic, search_limit, 0
+                return self._swap_tell_me_about_recovery_hint(
+                    self.zim_operations.search_zim_file(
+                        zim_file_path, topic, search_limit, 0
+                    ),
+                    topic,
                 )
             top_path = promoted["path"]
             top_title = promoted["title"]
@@ -5413,6 +5467,31 @@ class SimpleToolsHandler:
         """
         from openzim_mcp.synthesize import synthesize_query
 
+        # Post-v2.0.4 D-I: mirror the meta-only / chained-intent guards
+        # the non-synthesize path fires at handle_zim_query lines 693
+        # and 710. Pre-fix the synthesize early-exit at line 626 skipped
+        # both: ``try again`` BM25-searched and returned Aaliyah's "Try
+        # Again" song; ``tell me about Berlin then list namespaces``
+        # silently RAG-searched the literal verb chain and returned
+        # Namespace + War articles instead of rejecting the chain.
+        # Same shape as the post-v2.0.0 D-G fix — return a structured
+        # tool_error envelope (synthesize's native error shape) with
+        # the full markdown guidance from the simple-mode helpers so
+        # callers get the same actionable recovery info.
+        if self._is_meta_only_query(query):
+            self._track("meta_only_guidance")
+            return tool_error(
+                operation="meta_only_guidance",
+                message=self._meta_query_guidance(),
+            )
+        chained_warning = self._chained_intent_guidance(query)
+        if chained_warning is not None:
+            self._track("chained_intent_rejected")
+            return tool_error(
+                operation="chained_intent_rejected",
+                message=chained_warning,
+            )
+
         # D5: distill the user's natural-language query down to the
         # topic (or actual search terms) BEFORE handing it to BM25.
         # The intent parser already knows how to pull "Berlin" out of
@@ -5507,6 +5586,40 @@ class SimpleToolsHandler:
                         'Examples: `search for "quantum mechanics"`, '
                         "`search for Berlin in namespace C`."
                     ),
+                )
+        # Post-v2.0.4 D-I: mirror the multi-entity chain rejection the
+        # non-synthesize path fires at handle_zim_query line 960.
+        # Pre-fix, ``tell me about Berlin and Munich and Cologne`` with
+        # synthesize=True silently RAG-searched the literal three-entity
+        # chain and returned Cologne plus unrelated articles — Berlin
+        # and Munich data dropped on the floor. ``_multi_entity_chain_
+        # guidance`` requires a real archive path to probe the title
+        # index (so canonical multi-entity titles like ``Earth, Wind &
+        # Fire`` aren't false-rejected). Resolve best-effort: use the
+        # explicit zim_file_path if given, else pick the first
+        # available archive. When no archive is available skip the
+        # probe — the synthesize pipeline will surface a
+        # no_archives_available error below anyway.
+        multi_probe_path: Optional[str] = zim_file_path
+        if not multi_probe_path:
+            try:
+                _file_entries = self.zim_operations.list_zim_files_data()
+                for _entry in _file_entries:
+                    _ep = _entry.get("path")
+                    if _ep:
+                        multi_probe_path = str(_ep)
+                        break
+            except Exception:
+                multi_probe_path = None
+        if multi_probe_path:
+            multi_entity_warning = self._multi_entity_chain_guidance(
+                intent, params, multi_probe_path
+            )
+            if multi_entity_warning is not None:
+                self._track("multi_entity_chain_rejected")
+                return tool_error(
+                    operation="multi_entity_chain_rejected",
+                    message=multi_entity_warning,
                 )
         search_query = query
         if intent == "tell_me_about" and isinstance(params, dict):
