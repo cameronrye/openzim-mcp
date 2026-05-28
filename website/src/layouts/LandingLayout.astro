@@ -13,6 +13,17 @@ const { title, description } = Astro.props;
   <title>{title}</title>
   <meta name="description" content={description}>
 
+  <!-- Theme init: set before stylesheet parse to avoid FOUC. -->
+  <script is:inline>
+    (function () {
+      try {
+        var stored = localStorage.getItem('theme');
+        var theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.dataset.theme = theme;
+      } catch (e) {}
+    })();
+  </script>
+
   <slot name="head" />
 </head>
 <body>

@@ -10,11 +10,9 @@
   }
 
   // ============= THEME =============
+  // Initial theme is applied by an inline <script> in <head> to avoid FOUC.
+  // Here we only wire up the user-facing toggle.
   function initTheme() {
-    const stored = safeStorage('get', 'theme');
-    const initial = stored || (globalThis.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-    document.documentElement.dataset.theme = initial;
-
     const toggle = document.getElementById('theme-toggle');
     if (!toggle) return;
     toggle.addEventListener('click', () => {
@@ -195,6 +193,7 @@
       panels.forEach(p => {
         const active = p.id === target;
         p.classList.toggle('is-active', active);
+        p.setAttribute('aria-hidden', String(!active));
         if (active) p.removeAttribute('hidden'); else p.setAttribute('hidden', '');
       });
     };
@@ -203,6 +202,11 @@
     buttons.forEach(b => {
       const active = b.classList.contains('is-active');
       b.setAttribute('tabindex', active ? '0' : '-1');
+    });
+    // Initial aria-hidden state — needed because the usage tabs use grid
+    // stacking + visibility:hidden, which AT browse mode would otherwise expose.
+    panels.forEach(p => {
+      p.setAttribute('aria-hidden', String(!p.classList.contains('is-active')));
     });
 
     const onKeydown = (btn) => (e) => {
@@ -222,6 +226,24 @@
 
   function initTabs() {
     document.querySelectorAll('[data-tabs]').forEach(setupTabGroup);
+  }
+
+  // ============= DOCS SIDEBAR (mobile disclosure) =============
+  function initSidebarToggle() {
+    const btn = document.getElementById('docs-sidebar-toggle');
+    const nav = document.getElementById('docs-sidebar-nav');
+    if (!btn || !nav) return;
+    const mq = globalThis.matchMedia('(max-width: 900px)');
+    const sync = () => {
+      if (mq.matches) btn.setAttribute('aria-expanded', 'false');
+      else btn.setAttribute('aria-expanded', 'true');
+    };
+    sync();
+    mq.addEventListener('change', sync);
+    btn.addEventListener('click', () => {
+      const expanded = btn.getAttribute('aria-expanded') === 'true';
+      btn.setAttribute('aria-expanded', String(!expanded));
+    });
   }
 
   // ============= LEGACY ANCHOR REDIRECT =============
@@ -257,6 +279,7 @@
     initReveal();
     initCopyButtons();
     initTabs();
+    initSidebarToggle();
     redirectLegacyAnchors();
   });
 })();

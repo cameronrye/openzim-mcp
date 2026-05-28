@@ -2,7 +2,7 @@ User-agent: *
 Allow: /
 
 # Sitemap
-Sitemap: https://cameronrye.github.io/openzim-mcp/sitemap.xml
+Sitemap: https://cameronrye.github.io/openzim-mcp/sitemap-index.xml
 
 # Well-known URIs
 Allow: /.well-known/
