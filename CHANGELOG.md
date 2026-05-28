@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2](https://github.com/cameronrye/openzim-mcp/compare/v2.0.1...v2.0.2) (2026-05-28)
+
+
+### Bug Fixes
+
+* post-v2.0.0 beta-test sweep — 7 dispatcher defects + website 3-pass audit ([#213](https://github.com/cameronrye/openzim-mcp/issues/213)) ([d3402fb](https://github.com/cameronrye/openzim-mcp/commit/d3402fb564de4f4a5c4acaef933728df61c03917))
+
 ## [2.0.1](https://github.com/cameronrye/openzim-mcp/compare/v2.0.0...v2.0.1) (2026-05-27)
 
 
