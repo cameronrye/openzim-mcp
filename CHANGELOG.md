@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.4](https://github.com/cameronrye/openzim-mcp/compare/v2.0.3...v2.0.4) (2026-05-28)
+
+
+### Reverts
+
+* PR [#215](https://github.com/cameronrye/openzim-mcp/issues/215) release.yml recovery hack — immutable-releases disabled at repo level ([#217](https://github.com/cameronrye/openzim-mcp/issues/217)) ([6951e09](https://github.com/cameronrye/openzim-mcp/commit/6951e09c698711bd37648d6d6bc409afadfb3386))
+
 ## [2.0.3](https://github.com/cameronrye/openzim-mcp/compare/v2.0.2...v2.0.3) (2026-05-28)
 
 
