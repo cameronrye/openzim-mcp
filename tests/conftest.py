@@ -1,10 +1,9 @@
 """Pytest configuration and fixtures for OpenZIM MCP tests."""
 
-import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Dict, Generator, List, Optional
+from typing import Dict, Generator, Optional
 
 import pytest
 
@@ -114,44 +113,6 @@ def zim_test_data_dir() -> Optional[Path]:
     return None
 
 
-@pytest.fixture(scope="session")
-def zim_test_manifest(zim_test_data_dir: Optional[Path]) -> Optional[Dict]:
-    """Load the ZIM test data manifest if available.
-
-    Returns:
-        Manifest dictionary or None if not available
-    """
-    if not zim_test_data_dir:
-        return None
-
-    manifest_path = zim_test_data_dir / "manifest.json"
-    if not manifest_path.exists():
-        return None
-
-    try:
-        with open(manifest_path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
-@pytest.fixture
-def available_test_zim_files(zim_test_data_dir: Optional[Path]) -> List[Path]:
-    """Get list of available ZIM test files.
-
-    Returns:
-        List of available ZIM file paths
-    """
-    if not zim_test_data_dir:
-        return []
-
-    zim_files = []
-    for pattern in ["**/*.zim", "**/*.zim.*"]:
-        zim_files.extend(zim_test_data_dir.glob(pattern))
-
-    return sorted(zim_files)
-
-
 @pytest.fixture
 def basic_test_zim_files(
     zim_test_data_dir: Optional[Path],
@@ -175,23 +136,6 @@ def basic_test_zim_files(
         files["nons"] = nons_file
 
     return files
-
-
-@pytest.fixture
-def invalid_test_zim_files(zim_test_data_dir: Optional[Path]) -> List[Path]:
-    """Get invalid ZIM test files for error handling testing.
-
-    Returns:
-        List of invalid ZIM file paths
-    """
-    if not zim_test_data_dir:
-        return []
-
-    invalid_files = []
-    for pattern in ["**/invalid.*.zim"]:
-        invalid_files.extend(zim_test_data_dir.glob(pattern))
-
-    return sorted(invalid_files)
 
 
 @pytest.fixture
@@ -221,26 +165,6 @@ def real_content_zim_files(
     return files
 
 
-@pytest.fixture
-def test_config_with_zim_data(
-    temp_dir: Path, zim_test_data_dir: Optional[Path]
-) -> OpenZimMcpConfig:
-    """Create a test config including ZIM test data directory if available."""
-    allowed_dirs = [str(temp_dir)]
-
-    # Add ZIM test data directory to allowed directories if available
-    if zim_test_data_dir:
-        allowed_dirs.append(str(zim_test_data_dir))
-
-    return OpenZimMcpConfig(
-        allowed_directories=allowed_dirs,
-        tool_mode="advanced",
-        cache=CacheConfig(enabled=True, max_size=10, ttl_seconds=60),
-        content=ContentConfig(max_content_length=1000, snippet_length=100),
-        logging=LoggingConfig(level="DEBUG"),
-    )
-
-
 from tests.conftest_v2_fixtures import (  # noqa: F401, E402
     v2_phase_a_zim,
     v2_phase_c_zim,
@@ -249,8 +173,6 @@ from tests.conftest_v2_fixtures import (  # noqa: F401, E402
 
 def pytest_configure(config):
     """Configure pytest with custom markers."""
-    config.addinivalue_line("markers", "integration: mark test as integration test")
-    config.addinivalue_line("markers", "slow: mark test as slow running")
     config.addinivalue_line(
         "markers",
         "live: mark test as spawning a real openzim-mcp subprocess "

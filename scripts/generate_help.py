@@ -6,7 +6,6 @@ This script provides cross-platform compatibility for the make help command.
 
 import os
 import re
-import signal
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -18,65 +17,6 @@ if os.name == "nt":
     with contextlib.suppress(OSError):
         # Enable ANSI escape sequence processing on Windows 10+
         os.system("")  # nosec B605,B607 - empty string to enable ANSI on Windows
-
-
-class RegexTimeoutError(Exception):
-    """Raised when regex processing takes too long."""
-
-    pass
-
-
-def timeout_handler(signum, frame):
-    """Signal handler for regex timeout."""
-    raise RegexTimeoutError("Regex processing timed out")
-
-
-def safe_regex_findall(
-    pattern: str, text: str, flags: int = 0, timeout: int = 5
-) -> List[Tuple[str, str]]:
-    """
-    Safely execute regex findall with timeout protection.
-
-    Args:
-        pattern: The regex pattern to match
-        text: The text to search in
-        flags: Regex flags
-        timeout: Maximum time in seconds to allow for regex processing
-
-    Returns:
-        List of matches as tuples
-
-    Raises:
-        RegexTimeoutError: If regex processing takes longer than timeout
-    """
-    # Set up timeout handler (Unix-like systems only)
-    old_handler = None
-    if hasattr(signal, "SIGALRM"):
-        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout)
-
-    try:
-        # Compile the regex first to catch any compilation errors
-        compiled_pattern = re.compile(pattern, flags)
-        matches = compiled_pattern.findall(text)
-        return matches
-    except RegexTimeoutError:
-        print(
-            "Warning: Regex processing timed out, using fallback parsing",
-            file=sys.stderr,
-        )
-        return []
-    except re.error as e:
-        print(
-            f"Warning: Regex compilation error: {e}, using fallback parsing",
-            file=sys.stderr,
-        )
-        return []
-    finally:
-        # Clean up timeout handler
-        if hasattr(signal, "SIGALRM") and old_handler is not None:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
 
 
 _CATEGORY_NAMES = (
