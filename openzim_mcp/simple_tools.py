@@ -3950,6 +3950,36 @@ class SimpleToolsHandler:
             topic=topic,
         )
 
+    @staticmethod
+    def _swap_tell_me_about_recovery_hint(text: str, topic: str) -> str:
+        """Post-v2.0.4 D-J: when ``_handle_tell_me_about`` falls back
+        to the search backend's rendered no-results output, the shared
+        ``_format_search_text`` recovery hints (zim/search.py:774-782)
+        suggest ``tell me about {topic}`` — which is exactly what the
+        caller just tried. Swap that bullet for a ``find article
+        titled {topic}`` hint (title-index fuzzy lookup) that's
+        genuinely a different recovery path.
+
+        Implemented as a narrow string-replace at the handler edge
+        rather than parameterizing the shared formatter so the
+        search-backend recovery wording stays canonical for direct
+        ``search for X`` callers (where the ``tell me about`` cross-
+        intent nudge is still useful). The replace is canonical-source
+        pinned by ``TestTellMeAboutNoResultsRecoveryNotCircular`` —
+        future search.py wording changes need to update the swap in
+        tandem.
+        """
+        truncated = topic[:30]
+        circular = (
+            f"- `tell me about {truncated}` — structured topic "
+            f"lookup with auto article fetch"
+        )
+        replacement = (
+            f"- `find article titled {truncated}` — title-index "
+            f"lookup with fuzzy fallback"
+        )
+        return text.replace(circular, replacement)
+
     def _handle_tell_me_about(
         self,
         query: str,
@@ -4132,8 +4162,11 @@ class SimpleToolsHandler:
 
         results = payload.get("results", []) if isinstance(payload, dict) else []
         if not results:
-            return self.zim_operations.search_zim_file(
-                zim_file_path, topic, search_limit, 0
+            return self._swap_tell_me_about_recovery_hint(
+                self.zim_operations.search_zim_file(
+                    zim_file_path, topic, search_limit, 0
+                ),
+                topic,
             )
 
         top = results[0]
@@ -4142,8 +4175,11 @@ class SimpleToolsHandler:
         if not is_strong_title_match(topic, top_path, top_title):
             promoted = self._promote_topic_via_title_index(zim_file_path, topic)
             if promoted is None:
-                return self.zim_operations.search_zim_file(
-                    zim_file_path, topic, search_limit, 0
+                return self._swap_tell_me_about_recovery_hint(
+                    self.zim_operations.search_zim_file(
+                        zim_file_path, topic, search_limit, 0
+                    ),
+                    topic,
                 )
             top_path = promoted["path"]
             top_title = promoted["title"]

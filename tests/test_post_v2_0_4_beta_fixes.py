@@ -415,3 +415,108 @@ class TestSynthesizePathBypassesGuards:
                 f"The title-index probe (score=1.0) should suppress the "
                 f"chain rejection. Got: {result}"
             )
+
+
+# ===========================================================================
+# Pass-4 D-J — circular ``tell me about <X>`` no-results recovery hint
+# ===========================================================================
+
+
+class TestTellMeAboutNoResultsRecoveryNotCircular:
+    """When ``_handle_tell_me_about`` falls back to the search backend
+    on no-results, the shared ``_format_search_text`` recovery hints
+    (zim/search.py:774-782) include a ``tell me about {topic}`` bullet
+    — which is exactly what the caller just tried. Live repro:
+    ``tell me about photosynthsis`` (misspelling not in the post-a11
+    map) → "No search results found for photosynthsis" with a recovery
+    bullet `tell me about photosynthsis` (circular).
+
+    Fix swaps the bullet for ``find article titled {topic}`` (title-
+    index fuzzy lookup) — a genuinely different recovery path. Pinned
+    via the canonical search-backend wording so future drift in
+    ``_format_search_text`` surfaces here.
+    """
+
+    def test_swap_replaces_circular_tell_me_about_bullet(self) -> None:
+        """Direct unit test on the helper. Given the canonical no-
+        results recovery body, the swap must drop the ``tell me about
+        X`` bullet and emit ``find article titled X`` instead."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        topic = "photosynthsis"
+        # Mirror exactly what zim/search.py:_format_search_text
+        # produces for a no-results echo. If the canonical wording
+        # drifts, the swap silently no-ops — this test pins it.
+        input_text = (
+            f'No search results found for "{topic}".\n\n'
+            f"**Try one of these:**\n"
+            f"- `suggestions for {topic[:30]}` — autocomplete to "
+            f"catch typos or partial names\n"
+            f"- `tell me about {topic[:30]}` — structured topic "
+            f"lookup with auto article fetch\n"
+            f"- A shorter or differently-cased query"
+        )
+        out = SimpleToolsHandler._swap_tell_me_about_recovery_hint(input_text, topic)
+        assert f"tell me about {topic[:30]}" not in out, (
+            f"Circular `tell me about {topic[:30]}` bullet must be removed. "
+            f"Got:\n{out}"
+        )
+        assert f"find article titled {topic[:30]}" in out, (
+            f"Replacement `find article titled {topic[:30]}` bullet missing. "
+            f"Got:\n{out}"
+        )
+
+    def test_swap_idempotent_when_no_circular_bullet(self) -> None:
+        """Regression: when the input doesn't contain the circular
+        bullet (e.g. it's already been swapped, or it's an entirely
+        different envelope), the swap leaves the text unchanged."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        unchanged = "**Some envelope** that doesn't carry the bullet."
+        assert (
+            SimpleToolsHandler._swap_tell_me_about_recovery_hint(unchanged, "Berlin")
+            == unchanged
+        )
+
+    def test_swap_canonical_source_pin_against_format_search_text(self) -> None:
+        """Canonical-source pin: the swap relies on an EXACT-string
+        match against ``_format_search_text``'s wording. Reach into
+        the formatter directly with a zero-results payload and
+        confirm the swap consumes the bullet end-to-end. If
+        ``_format_search_text`` ever changes the wording, this test
+        fails and the swap string in ``_swap_tell_me_about_recovery_hint``
+        must be updated in tandem."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+        from openzim_mcp.zim.search import _SearchMixin
+
+        topic = "photosynthsis"
+        # Build a minimal payload the formatter accepts as
+        # ``total == 0`` with no filter context.
+        payload = {
+            "query": topic,
+            "total": 0,
+            "page_info": {"offset": 0, "limit": 3},
+            "results": [],
+            "done": True,
+            "next_cursor": None,
+        }
+        # Call as an unbound method — _format_search_text is on a
+        # mixin and is self-bound, but its no-results path doesn't
+        # touch any instance state.
+        rendered = _SearchMixin._format_search_text(MagicMock(), payload)
+        # Sanity-check the formatter still emits the circular bullet
+        # the swap targets. If this assertion fires, the canonical
+        # source wording has drifted and the swap is no-opping.
+        assert (
+            f"- `tell me about {topic[:30]}` — structured topic "
+            f"lookup with auto article fetch"
+        ) in rendered, (
+            "_format_search_text no longer emits the canonical "
+            "circular bullet — update the swap string in "
+            "_swap_tell_me_about_recovery_hint to match."
+        )
+        swapped = SimpleToolsHandler._swap_tell_me_about_recovery_hint(rendered, topic)
+        assert f"tell me about {topic[:30]}" not in swapped
+        assert f"find article titled {topic[:30]}" in swapped
