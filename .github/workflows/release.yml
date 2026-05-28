@@ -231,20 +231,49 @@ jobs:
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "Tag name: $TAG_NAME"
 
-      - name: Check if release already exists
+      - name: Check if release already exists (recover from immutable lockout)
         id: check-release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG_NAME="${{ steps.tag.outputs.tag_name }}"
           echo "Checking if release exists for tag: $TAG_NAME"
 
-          if gh release view "$TAG_NAME" --json tagName >/dev/null 2>&1; then
-            echo "release_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ Release already exists for $TAG_NAME (created by release-please)"
-          else
+          if ! gh release view "$TAG_NAME" --json tagName >/dev/null 2>&1; then
             echo "release_exists=false" >> $GITHUB_OUTPUT
+            echo "release_notes_recovered=false" >> $GITHUB_OUTPUT
             echo "📝 Release does not exist for $TAG_NAME, will create new release"
+            exit 0
+          fi
+
+          # Release exists. Detect the immutable-lockout race: release-please
+          # creates the release as a draft per config, but in practice the
+          # draft has been observed to flip to published BEFORE release.yml's
+          # workflow_dispatch fires (~20s window). With this repo's immutable
+          # releases setting, a published release's asset list is locked —
+          # `gh release upload` returns HTTP 422 and `gh release edit --draft=true`
+          # is rejected. The only path back is to delete the release page
+          # (the tag survives) and recreate it as a draft below.
+          # v2.0.0 worked because the operator used a manual git-tag-push and
+          # release.yml's Path B (Create new release (draft)) ran instead.
+          # v2.0.1 + v2.0.2 both shipped with empty asset lists via Path A.
+          IS_DRAFT=$(gh release view "$TAG_NAME" --json isDraft --jq .isDraft)
+          ASSET_COUNT=$(gh release view "$TAG_NAME" --json assets --jq '.assets | length')
+
+          if [ "$IS_DRAFT" = "false" ] && [ "$ASSET_COUNT" = "0" ]; then
+            echo "⚠️  $TAG_NAME is published with zero assets (immutable-lockout race)"
+            echo "💾 Saving release notes before delete"
+            gh release view "$TAG_NAME" --json body --jq '.body' > release_notes_recovered.md
+            echo "🗑️  Deleting locked release (tag survives)"
+            gh release delete "$TAG_NAME" --yes
+            echo "release_exists=false" >> $GITHUB_OUTPUT
+            echo "release_notes_recovered=true" >> $GITHUB_OUTPUT
+            echo "✅ Recovery prepared; Path B will recreate $TAG_NAME as a draft with assets"
+          else
+            echo "release_exists=true" >> $GITHUB_OUTPUT
+            echo "release_notes_recovered=false" >> $GITHUB_OUTPUT
+            echo "✅ Release exists for $TAG_NAME (draft=$IS_DRAFT, assets=$ASSET_COUNT) — asset upload path will run"
           fi
 
       - name: Extract release notes
@@ -254,6 +283,16 @@ jobs:
           TAG_NAME="${{ steps.tag.outputs.tag_name }}"
           VERSION=${TAG_NAME#v}  # Remove 'v' prefix if present
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # If the check-release step saved notes from a deleted release page,
+          # prefer those — release-please's release-body is richer than what
+          # we can reconstruct from CHANGELOG.md alone (it includes Linkified
+          # commit SHAs and contributor handles).
+          if [ "${{ steps.check-release.outputs.release_notes_recovered }}" = "true" ] && [ -s release_notes_recovered.md ]; then
+            cp release_notes_recovered.md release_notes.md
+            echo "✅ Using recovered release notes from deleted release ($(wc -c < release_notes.md) bytes)"
+            exit 0
+          fi
 
           # Extract release notes from CHANGELOG.md
           python -c "
@@ -302,31 +341,38 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Strict error propagation: prior versions swallowed failures with
+          # `|| echo "Warning"` which let the step exit 0 even when every
+          # `gh release upload` returned HTTP 422 (immutable lockout). That
+          # silent regression is what shipped empty asset lists at v2.0.1
+          # and v2.0.2. The check-release step now recovers from the lockout
+          # case proactively, so any failure here is an unexpected one and
+          # MUST fail the workflow.
+          set -euo pipefail
           TAG_NAME="${{ steps.tag.outputs.tag_name }}"
           echo "📦 Uploading build artifacts to existing release: $TAG_NAME"
 
-          # Upload each file in dist/
           for file in dist/*; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               echo "Uploading: $filename"
-              # Use --clobber to overwrite if asset already exists
-              gh release upload "$TAG_NAME" "$file" --clobber || echo "Warning: Failed to upload $filename"
+              gh release upload "$TAG_NAME" "$file" --clobber
             fi
           done
 
           echo "✅ Assets uploaded to release $TAG_NAME"
 
       - name: Create new release (draft)
-        # Manual `git tag` push path: no release-please draft shell exists,
-        # so this step creates one. On repos with immutable releases enabled,
-        # assets can only be uploaded WHILE the release is a draft — publishing
-        # locks the asset list. softprops/action-gh-release uploads the dist
-        # artifacts as part of the draft creation in this branch; the
-        # "Publish draft release" step below then flips draft -> published.
-        # rc0 and rc1 both shipped with empty Releases pages because this
-        # step used to set draft: false (single-shot create+publish), which
-        # failed on the asset-upload step under immutable releases.
+        # Fires on two paths now that the check-release step recovers from
+        # the release-please-published-too-early race by deleting the locked
+        # release:
+        #   1. Manual `git tag` push path — no release-please draft existed.
+        #   2. Recovery path — check-release step deleted a locked release.
+        # On repos with immutable releases enabled, assets can only be
+        # uploaded WHILE the release is a draft — publishing locks the asset
+        # list. softprops/action-gh-release uploads the dist artifacts as
+        # part of the draft creation in this branch; "Publish draft release"
+        # below then flips draft -> published.
         if: steps.check-release.outputs.release_exists != 'true'
         uses: softprops/action-gh-release@v3
         with:
@@ -341,12 +387,14 @@ jobs:
           prerelease: ${{ contains(steps.tag.outputs.tag_name, 'alpha') || contains(steps.tag.outputs.tag_name, 'beta') || contains(steps.tag.outputs.tag_name, 'rc') }}
 
       - name: Publish draft release
-        # Both paths converge here:
-        #   - release-please path: "Upload assets to existing release" above
-        #     populated a release-please-created draft with assets.
+        # All paths converge here:
+        #   - release-please-still-draft path: "Upload assets to existing release"
+        #     above populated a release-please-created draft with assets.
         #   - manual-tag-push path: "Create new release (draft)" above created
         #     a fresh draft with assets.
-        # In both cases the release is a draft at this point; flip it to
+        #   - immutable-recovery path: check-release deleted the locked release,
+        #     "Create new release (draft)" then recreated it with assets.
+        # In all cases the release is a draft at this point; flip it to
         # published. On repos with immutable releases enabled, this step is
         # what makes assets visible on the Releases page — once published,
         # GitHub locks the asset list, so the order
