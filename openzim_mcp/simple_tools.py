@@ -899,8 +899,37 @@ class SimpleToolsHandler:
             if intent == "list_files":
                 return self.zim_operations.list_zim_files() + low_confidence_note
 
-            if not zim_file_path:
-                zim_file_path = self._auto_select_zim_file()
+            # Post-v2.0.0 D-A: ``search_all`` is semantically cross-archive
+            # — ``_handle_search_all`` ignores ``zim_file_path`` and
+            # iterates every loaded archive via ``search_all_data`` /
+            # ``search_all``. Pre-fix this intent tripped the
+            # no-zim-file gate when 2+ archives were loaded and the
+            # caller followed the docstring's recommendation to OMIT
+            # the path; the gate blocked the intended cross-archive
+            # query. Mirror the ``list_files`` bypass: route past the
+            # gate and let the handler iterate. Pass any caller-supplied
+            # path through unchanged (the handler ignores it but
+            # downstream low-confidence rendering / telemetry expect a
+            # non-empty string).
+            if intent == "search_all":
+                zim_file_path = zim_file_path or ""
+            elif not zim_file_path:
+                # Post-v2.0.0 D-B: ``metadata for X.zim`` carries a
+                # filename hint that the dispatcher can resolve against
+                # the loaded archives BEFORE the no-zim-file gate fires.
+                # Without this, the multi-archive case (2+ loaded ZIMs)
+                # fails the gate even though the query named the target
+                # in plain text. Only resolves to a real archive path;
+                # unknown filenames still fall through to the gate so
+                # the operator sees a clear error.
+                if intent == "metadata" and isinstance(params, dict):
+                    hint = params.get("metadata_target")
+                    if hint:
+                        resolved = self._resolve_zim_path(hint)
+                        if resolved:
+                            zim_file_path = resolved
+                if not zim_file_path:
+                    zim_file_path = self._auto_select_zim_file()
                 if not zim_file_path:
                     return (
                         "**No ZIM File Specified**\n\n"
