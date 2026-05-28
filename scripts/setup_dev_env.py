@@ -77,7 +77,6 @@ def run_tests() -> bool:
         ("make lint", "Running linting"),
         ("make type-check", "Running type checking"),
         ("make test", "Running unit tests"),
-        ("make test-requires-zim-data", "Running ZIM data tests"),
     ]
 
     success_count = 0

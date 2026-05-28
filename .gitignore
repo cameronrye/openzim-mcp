@@ -32,6 +32,7 @@ env/
 coverage.xml
 htmlcov/
 .tox/
+.benchmarks/
 
 # Logs
 *.log

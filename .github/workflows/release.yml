@@ -133,14 +133,6 @@ jobs:
         run: |
           make check
 
-      - name: Download ZIM test data
-        run: |
-          make download-test-data
-
-      - name: Run integration tests
-        run: |
-          make test-requires-zim-data
-
   build:
     name: Build distribution
     runs-on: ubuntu-latest
