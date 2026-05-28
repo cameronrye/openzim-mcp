@@ -73,9 +73,6 @@ make test-with-zim-data
 # Run integration tests only
 make test-integration
 
-# Run tests that require ZIM test data
-make test-requires-zim-data
-
 # Run linting
 make lint
 
@@ -297,9 +294,8 @@ Test files are automatically organized by category and priority level. Set `ZIM_
 Use pytest markers to categorize tests:
 
 ```python
-@pytest.mark.requires_zim_data  # Requires ZIM test files
-@pytest.mark.integration       # Integration test
-@pytest.mark.slow             # Long-running test
+@pytest.mark.integration  # Integration test
+@pytest.mark.slow         # Long-running test
 ```
 
 ### Running Specific Tests
@@ -310,9 +306,6 @@ uv run pytest tests/test_security.py -v
 
 # Run tests with specific marker
 uv run pytest -m "not slow"
-
-# Run tests requiring ZIM data
-make test-requires-zim-data
 
 # Run tests with coverage and open HTML report
 make test-cov

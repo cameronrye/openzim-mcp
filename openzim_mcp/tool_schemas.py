@@ -661,13 +661,6 @@ class HealthStatus(TypedDict, total=False):
     warnings: list[str]
 
 
-# Phase F rc1: legacy alias preserved for back-compat across the rc1
-# transition while the b13 single-purpose ``get_server_health`` tool is
-# still registered alongside the new combined ``zim_health``. Removed
-# in Task D12 when the legacy server-tools surface is deleted.
-LegacyServerHealthResponse = HealthStatus
-
-
 class ServerConfigDetails(TypedDict):
     """Configuration block inside ``ServerConfigurationResponse``."""
 
