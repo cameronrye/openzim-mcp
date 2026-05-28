@@ -104,6 +104,34 @@ Defects span THREE surfaces:
   to ``zim_query.py`` mirroring the existing ``limit`` check, returning
   ``invalid_max_content_length`` for non-positive values.
 
+  Pass-4 sibling extension: ``tools/zim_get.py`` (advanced surface)
+  inherited the same validation gap — neither ``content_offset < 0``
+  nor ``max_content_length < 1`` was rejected. Same fix shape applied
+  there so the two surfaces stay consistent.
+
+* **D-G — synthesize path bypasses empty-topic / empty-search guards.**
+  Pass-4 found that the synthesize branch (early exit at
+  ``simple_tools.py:626``) completely skips the structured
+  ``topic_required`` / ``search_terms_required`` guards the
+  intent-classification path fires at lines 836-887. Pre-fix live impact:
+
+  - ``tell me about `` (trailing space, synthesize=True) → RAG-searched
+    the literal verb prefix "tell me about" and returned title-prefix
+    matches (``Tell_Me_About_Tomorrow``, ``Tell_Me_About_Your_Day_Today``)
+  - ``tell me about ?`` (punctuation-only) → same silent-wrong shape
+  - ``tell me about ""`` (D-E shape on synthesize path) →
+    ``Empty_string`` Wikipedia article at score 1.00
+  - ``search for `` (synthesize=True) → returned the ``For`` disambig
+    article
+
+  Fix: in ``_handle_synthesize_query`` after the existing ``parse_intent``
+  prelude, mirror the same empty-topic / empty-search guards as the
+  non-synthesize path. Returns a structured ``tool_error`` envelope
+  (synthesize's native error shape). Also extended D-E's quote-strip
+  to ``_extract_tell_me_about`` so the ``tell me about ""`` shape
+  drops cleanly before the guard rather than carrying the literal
+  ``""`` topic through to the RAG pipeline.
+
 The post-v2.0.0 sweep is run from the same ``mcp__openzim-mcp__zim_query``
 surface that the b-series sweeps used. v2.0.0 ships a stable Phase F
 surface (22→8 tool collapse) so this is the first sweep against the
@@ -886,3 +914,240 @@ class TestMaxContentLengthValidation:
         positive value and must succeed."""
         result = self._call_zim_query(query="tell me about X", max_content_length=1)
         assert result == "ok"
+
+
+# ===========================================================================
+# D-G — synthesize path bypasses empty-topic / empty-search guards
+# ===========================================================================
+
+
+class TestSynthesizePathEmptyTopicGuard:
+    """The non-synthesize path fires structured guards at
+    ``simple_tools.py:836-887`` when the parsed intent is
+    ``tell_me_about`` with an empty topic or ``search`` with no terms.
+    Pass-4 surfaced that the synthesize branch (early-exit at line 626)
+    completely bypasses these guards — the raw query string ("tell me
+    about ", "tell me about ?", "tell me about ""\", "search for ")
+    flows through the RAG pipeline and returns silent-wrong hits
+    (``Tell_Me_About_Tomorrow``-style title-prefix matches, or the
+    ``Empty_string`` Wikipedia article for the quoted-empty case —
+    same shape as D-E but on a different code path).
+
+    The fix mirrors the non-synthesize guards inside
+    ``_handle_synthesize_query`` after its own ``parse_intent`` call,
+    returning a structured ``tool_error`` envelope (synthesize's
+    native error shape) when topic / query is empty.
+    """
+
+    def _make_handler(self) -> Any:
+        """Build a SimpleToolsHandler with a stub archive list. The
+        guard fires BEFORE archive resolution, so we don't need a real
+        archive backend.
+        """
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock_ops = MagicMock()
+        mock_ops.list_zim_files_data.return_value = [
+            {"path": "/data/zim_0.zim", "name": "zim_0.zim"},
+        ]
+        mock_ops.list_zim_files.return_value = "Found 1 ZIM file."
+        # Stub config for query_rewrite gating.
+        mock_ops.config = MagicMock()
+        mock_ops.config.query_rewrite = MagicMock()
+        mock_ops.config.query_rewrite.enabled = False
+        return SimpleToolsHandler(mock_ops)
+
+    def test_synthesize_empty_tell_me_about_returns_topic_required(self) -> None:
+        """``tell me about `` with synthesize=True must fire the
+        same topic_required guard as the non-synthesize path."""
+        handler = self._make_handler()
+        result = handler.handle_zim_query(
+            query="tell me about ", options={"synthesize": True}
+        )
+        # Either a tool_error envelope (dict) or a markdown string with
+        # the topic_required intent comment. Accept either shape.
+        if isinstance(result, dict):
+            assert result.get("error") is True
+            assert result.get("operation") == "topic_required", (
+                f"Pre-fix synthesize=True with empty topic silently "
+                f"searched the literal verb and returned Tell_Me_About_* "
+                f"hits. Post-fix must return topic_required envelope. "
+                f"Got: {result}"
+            )
+        else:
+            assert "topic_required" in result or "Topic Required" in result, (
+                f"Pre-fix synthesize=True with empty topic silent-wrong. "
+                f"Got: {result}"
+            )
+
+    def test_synthesize_empty_tell_me_about_punctuation_returns_topic_required(
+        self,
+    ) -> None:
+        """``tell me about ?`` (punctuation-only topic) — same shape."""
+        handler = self._make_handler()
+        result = handler.handle_zim_query(
+            query="tell me about ?", options={"synthesize": True}
+        )
+        if isinstance(result, dict):
+            assert result.get("error") is True
+            assert result.get("operation") == "topic_required"
+        else:
+            assert "topic_required" in result or "Topic Required" in result
+
+    def test_synthesize_empty_quoted_tell_me_about_returns_topic_required(
+        self,
+    ) -> None:
+        """``tell me about ""`` (D-E shape on synthesize path) — must
+        also fire topic_required, NOT silent-resolve to Empty_string."""
+        handler = self._make_handler()
+        result = handler.handle_zim_query(
+            query='tell me about ""', options={"synthesize": True}
+        )
+        if isinstance(result, dict):
+            # Either topic_required (preferred) OR a synthesize result
+            # that doesn't silently match Empty_string. The fix
+            # specifically prevents the silent-Empty-string match.
+            if result.get("error"):
+                assert result.get("operation") == "topic_required"
+            else:
+                # If synthesize ran at all, ensure it didn't latch on
+                # to Empty_string at score 1.00.
+                citations = result.get("citations") or []
+                for c in citations:
+                    if c.get("rank") == 1:
+                        assert c.get("entry_path") != "Empty_string", (
+                            f"Synthesize must not silent-resolve quoted-"
+                            f"empty topic to Empty_string. Got rank-1 "
+                            f"citation: {c}"
+                        )
+
+    def test_synthesize_empty_search_returns_search_terms_required(self) -> None:
+        """``search for `` with synthesize=True — empty search terms."""
+        handler = self._make_handler()
+        result = handler.handle_zim_query(
+            query="search for ", options={"synthesize": True}
+        )
+        if isinstance(result, dict):
+            assert result.get("error") is True
+            assert result.get("operation") == "search_terms_required", (
+                f"Pre-fix synthesize=True with empty search terms "
+                f"silently searched the literal verb 'for'. Got: "
+                f"{result}"
+            )
+        else:
+            assert "search_terms_required" in result or "Search Terms" in result
+
+    def test_synthesize_non_empty_tell_me_about_unchanged(self) -> None:
+        """Regression guard: a real topic flows through to the
+        synthesize pipeline as before. We expect either a
+        SynthesizeResponse or an envelope from archive-resolution that
+        isn't ``topic_required``."""
+        handler = self._make_handler()
+        result = handler.handle_zim_query(
+            query="tell me about Photosynthesis",
+            options={"synthesize": True},
+        )
+        # Should NOT be topic_required. Anything else is fine for this
+        # regression guard (synthesize will likely fail to open the
+        # stubbed archive but that's a different surface).
+        if isinstance(result, dict) and result.get("error"):
+            assert result.get("operation") != "topic_required"
+
+
+# ===========================================================================
+# D-F sibling — zim_get advanced surface validates content_offset /
+# max_content_length (mirrors the zim_query gap fixed in pass-3)
+# ===========================================================================
+
+
+class TestZimGetInputValidation:
+    """The advanced ``zim_get`` tool inherits the same input-validation
+    gap as ``zim_query`` pre-D-F: ``content_offset < 0`` and
+    ``max_content_length < 1`` both silently propagate to the data
+    layer. Pass-3's D-F fix landed in ``tools/zim_query.py`` only —
+    pass-4 extends the same shape to ``tools/zim_get.py`` so the two
+    surfaces stay consistent and a misconfigured advanced caller can't
+    bypass the cap either.
+    """
+
+    @staticmethod
+    def _call_zim_get(**kwargs: Any) -> Any:
+        """Drive the wire-layer ``zim_get`` tool directly, identical
+        shape to the ``zim_query`` test helper."""
+        import asyncio
+
+        from openzim_mcp.tools import zim_get as zg_module
+
+        mock_server = MagicMock()
+        registered: list[Any] = []
+
+        def fake_decorator(*_a: Any, **_kw: Any) -> Any:
+            def wrapper(fn: Any) -> Any:
+                registered.append(fn)
+                return fn
+
+            return wrapper
+
+        mock_server.mcp = MagicMock()
+        mock_server.mcp.tool = fake_decorator
+        # zim_get reaches into server.zim_operations to build the
+        # AsyncZimOperations wrapper. We don't need it to actually
+        # work — only path-validation failures show up post-guard.
+        mock_server.zim_operations = MagicMock()
+        zg_module.register(mock_server)
+        assert registered, "register failed to register the zim_get tool"
+        tool_fn = registered[0]
+        return asyncio.run(tool_fn(**kwargs))
+
+    def test_zim_get_content_offset_negative_rejected(self) -> None:
+        """``content_offset=-1`` → structured invalid_content_offset
+        envelope, mirroring the existing ``zim_query`` rejection."""
+        result = self._call_zim_get(
+            zim_file_path="/x.zim",
+            entry_path="Photosynthesis",
+            content_offset=-1,
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert result.get("operation") == "invalid_content_offset"
+
+    def test_zim_get_max_content_length_zero_rejected(self) -> None:
+        """``max_content_length=0`` → invalid_max_content_length."""
+        result = self._call_zim_get(
+            zim_file_path="/x.zim",
+            entry_path="Photosynthesis",
+            max_content_length=0,
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert result.get("operation") == "invalid_max_content_length"
+
+    def test_zim_get_max_content_length_negative_rejected(self) -> None:
+        """``max_content_length=-1`` → same shape."""
+        result = self._call_zim_get(
+            zim_file_path="/x.zim",
+            entry_path="Photosynthesis",
+            max_content_length=-1,
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert result.get("operation") == "invalid_max_content_length"
+
+    def test_zim_get_valid_inputs_pass_validation(self) -> None:
+        """Regression guard: positive ``max_content_length`` /
+        non-negative ``content_offset`` still pass the validator —
+        downstream archive open may fail, but NOT with the validation
+        operations."""
+        result = self._call_zim_get(
+            zim_file_path="/x.zim",
+            entry_path="Photosynthesis",
+            max_content_length=4000,
+            content_offset=100,
+        )
+        # Whatever fails downstream, it must NOT be one of our validators.
+        if isinstance(result, dict) and result.get("error"):
+            op = result.get("operation")
+            assert op not in (
+                "invalid_content_offset",
+                "invalid_max_content_length",
+            )

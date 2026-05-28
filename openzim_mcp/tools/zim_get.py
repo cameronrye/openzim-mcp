@@ -73,6 +73,29 @@ def register(server: "OpenZimMcpServer") -> None:
         compact_budget: Optional[Union[str, int]] = None,
     ) -> Any:
         try:
+            # Post-v2.0.0 D-F (sibling fix from pass-4): mirror the
+            # input-validation envelopes ``zim_query`` adopted in pass-3.
+            # Pre-fix this advanced surface silently passed
+            # ``content_offset < 0`` / ``max_content_length <= 0`` to the
+            # data layer (zim_get accepted negatives and ``<= 0`` meant
+            # "no limit"). Keeping the two surfaces consistent prevents
+            # a misconfigured advanced caller from bypassing the cap.
+            if content_offset < 0:
+                return tool_error(
+                    operation="invalid_content_offset",
+                    message=(
+                        "`content_offset` must be non-negative "
+                        f"(provided: {content_offset})."
+                    ),
+                )
+            if max_content_length is not None and max_content_length < 1:
+                return tool_error(
+                    operation="invalid_max_content_length",
+                    message=(
+                        "`max_content_length` must be a positive integer "
+                        f"(provided: {max_content_length})."
+                    ),
+                )
             err = _validate_branch_combination(
                 entry_path=entry_path,
                 entry_paths=entry_paths,

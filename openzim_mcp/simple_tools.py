@@ -5463,6 +5463,51 @@ class SimpleToolsHandler:
         except Exception as e:  # pragma: no cover — defensive
             logger.debug("intent_parser failed in synthesize prelude: %s", e)
             intent, params = "search", {}
+        # Post-v2.0.0 D-G: mirror the empty-topic / empty-search guards
+        # the non-synthesize path fires at simple_tools.py:836-887.
+        # Pre-fix, ``tell me about `` (trailing whitespace, empty topic)
+        # with synthesize=True silently searched the literal verb prefix
+        # "tell me about" via BM25 and returned title-prefix matches
+        # (``Tell_Me_About_Tomorrow``, ``Tell_Me_About_Your_Day_Today``).
+        # Same shape for ``tell me about ?`` (punctuation-only) and
+        # ``tell me about ""`` (D-E quoted-empty on the synthesize path).
+        # Return a structured tool_error envelope — synthesize's native
+        # error shape — rather than the markdown the non-synthesize path
+        # emits, since the synthesize return type is already
+        # ``Union[SynthesizeResponse, ToolErrorPayload]``.
+        if intent == "tell_me_about" and isinstance(params, dict):
+            _topic_check = (params.get("topic") or "").strip()
+            if not _topic_check:
+                return tool_error(
+                    operation="topic_required",
+                    message=(
+                        "`tell me about` needs a non-empty topic to look up. "
+                        "Examples: `tell me about Photosynthesis`, "
+                        "`who is Albert Einstein`, `describe DNA`."
+                    ),
+                )
+        elif intent == "search" and isinstance(params, dict):
+            # Mirror the non-synthesize empty-search check at line ~869:
+            # ``_extract_search`` falls back to the whole query when no
+            # tail follows ``search for``, so ``params["query"]`` for
+            # ``search for `` is the full literal "search for " — which
+            # ``.strip()`` reduces to "search for", non-empty. Use
+            # ``_search_query_tail`` which peels the verb prefix and
+            # returns "" when no terms follow.
+            _search_tail = self._search_query_tail(query)
+            if _search_tail is not None:
+                _search_tail = IntentParser._strip_trailing_politeness(
+                    _search_tail
+                ).strip()
+            if _search_tail is not None and not _search_tail:
+                return tool_error(
+                    operation="search_terms_required",
+                    message=(
+                        "`search for` needs at least one search term. "
+                        'Examples: `search for "quantum mechanics"`, '
+                        "`search for Berlin in namespace C`."
+                    ),
+                )
         search_query = query
         if intent == "tell_me_about" and isinstance(params, dict):
             topic = params.get("topic")

@@ -577,6 +577,14 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
         topic = safe_regex_sub(r"\s*[,&]\s*$", "", topic).strip()
         if topic == before:
             break
+    # Post-v2.0.0 D-E (extended pass-4): strip a surrounding matched
+    # quote pair so ``tell me about ""`` doesn't survive as the literal
+    # 2-char ``""`` and silently resolve to the ``Empty_string``
+    # Wikipedia article (the same shape D-E fixed for find_by_title,
+    # related, and entry_path_keyworded). Bonus regression upside:
+    # ``tell me about "Photosynthesis"`` now searches the bare topic
+    # instead of the quoted form, which is a cleaner search input.
+    topic = _strip_quote_pair(topic)
     params["topic"] = topic
 
 
