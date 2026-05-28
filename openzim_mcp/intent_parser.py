@@ -66,6 +66,28 @@ _QUOTE_OPEN = f"[{_QUOTE_CHARS}]"
 _QUOTE_NOT = f"[^{_QUOTE_CHARS}]"
 
 
+def _strip_quote_pair(value: str) -> str:
+    """Peel a single surrounding matched quote-pair from ``value`` and
+    trim interior whitespace.
+
+    Post-v2.0.0 D-E: when a caller types ``""`` (or ``''`` / curly
+    equivalents) as an entry path or title, several extractors capture
+    the 2-char literal verbatim, the handler's ``.strip()`` only trims
+    whitespace, and the backend's title-promotion fuzzy-matches the
+    empty input to the ``Empty_string`` article at score 1.00. Stripping
+    surrounding quotes here drops the value cleanly so the handler's
+    missing-arg guard can fire.
+
+    Stripping is opportunistic — both endpoints just need to live in
+    ``_QUOTE_CHARS``. Mixed quote endpoints (``"foo'``) are stripped too
+    so LLM-generated mismatched pairs don't survive as wrong values.
+    Single-char inputs (already < 2 chars) pass through unchanged.
+    """
+    if len(value) >= 2 and value[0] in _QUOTE_CHARS and value[-1] in _QUOTE_CHARS:
+        return value[1:-1].strip()
+    return value
+
+
 def safe_regex_findall(
     pattern: str,
     text: str,
@@ -270,6 +292,13 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         cleaned = _TAIL_LEADING_CONTENTS_RE.sub("", tail, count=1).strip()
         if cleaned and cleaned != tail:
             tail = cleaned
+        # Post-v2.0.0 D-E: peel a surrounding quote pair so an
+        # empty-quoted tail (``structure of ""`` / ``get article ""``)
+        # doesn't survive to the backend, which would otherwise
+        # fuzzy-match it to the Empty_string article at score 1.00.
+        # When the quote-pair encloses a real entity (``get article
+        # "Photosynthesis"``) the strip also improves the lookup score.
+        tail = _strip_quote_pair(tail)
         if tail:
             params["entry_path"] = tail
         return
@@ -281,6 +310,8 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     prefix_match = _LEADING_INTENT_KEYWORDS_RE.match(query)
     if prefix_match:
         tail = query[prefix_match.end() :].strip().rstrip("?.,;:!").strip()
+        # Post-v2.0.0 D-E: same quote-pair peel as the canonical branch.
+        tail = _strip_quote_pair(tail)
         if tail:
             params["entry_path"] = tail
 
@@ -382,7 +413,12 @@ def _extract_find_by_title(query: str, params: Dict[str, Any]) -> None:
         r"(?:titled|named|called|path\s+for)\s+(.+?)$", query, re.IGNORECASE
     )
     if m:
-        params["title"] = m.group(1).strip().rstrip("?.")
+        title = _strip_quote_pair(m.group(1).strip().rstrip("?."))
+        # Post-v2.0.0 D-E: empty-quoted input must not survive to the
+        # handler — the backend fuzzy-matches '""' to the Empty_string
+        # article at score 1.00.
+        if title:
+            params["title"] = title
 
 
 def _extract_related(query: str, params: Dict[str, Any]) -> None:
@@ -392,7 +428,10 @@ def _extract_related(query: str, params: Dict[str, Any]) -> None:
         re.IGNORECASE,
     )
     if m:
-        params["entry_path"] = m.group(1).strip().rstrip("?.")
+        entry_path = _strip_quote_pair(m.group(1).strip().rstrip("?."))
+        # Post-v2.0.0 D-E: see _extract_find_by_title.
+        if entry_path:
+            params["entry_path"] = entry_path
 
 
 def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:

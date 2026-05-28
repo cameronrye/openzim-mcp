@@ -62,6 +62,36 @@ Defects span THREE surfaces:
   intent-keyword strip so ``structure X`` / ``summary X`` / ``toc X``
   resolve to ``X``.
 
+* **D-E — empty-quoted titles / entry paths silently resolve to the
+  ``Empty_string`` article.** Pass-2 of the sweep surfaced a separate
+  defect class: when a caller types ``""`` (literal empty-quote pair)
+  as an entry path or title, several extractors capture the literal
+  2-char ``""`` value, the handler treats it as non-empty (``.strip()``
+  removes whitespace, not quotes), the backend's title-promotion path
+  resolves the empty input to ``Empty_string`` at score 1.00, and the
+  user gets a silent-wrong response. Affected:
+
+  - ``find article titled ""`` → ``Empty_string`` at score 1.00
+    (find_by_title)
+  - ``articles related to ""`` → links from ``Empty_string`` (related)
+  - ``structure of ""`` → structure of ``Empty_string``
+    (entry_path_keyworded keyword-branch tail)
+  - ``links in ""`` → links from ``Empty_string``
+    (entry_path_keyworded keyword-branch tail)
+  - ``get article ""`` → ``Empty_string`` article body
+    (entry_path_keyworded keyword-branch tail)
+
+  Fix: add ``_strip_quote_pair`` helper that peels a single surrounding
+  matched quote-pair (covering ASCII ``'`` / ``"`` plus Unicode smart
+  quotes via the existing ``_QUOTE_CHARS`` set). Apply at the tail of
+  ``_extract_find_by_title`` / ``_extract_related`` / the keyword-branch
+  arm of ``_extract_entry_path_keyworded``. Empty result → don't set
+  the param, letting the handler's missing-arg guard fire.
+
+  Bonus regression upside: ``find article titled "World War II"`` now
+  scores 1.00 instead of 0.95 (the quote-stripped lookup is an exact
+  title match instead of fuzzy).
+
 The post-v2.0.0 sweep is run from the same ``mcp__openzim-mcp__zim_query``
 surface that the b-series sweeps used. v2.0.0 ships a stable Phase F
 surface (22→8 tool collapse) so this is the first sweep against the
@@ -577,3 +607,174 @@ class TestEntryPathExtractorVerbSetCanonicalPin:
         ):
             match = _LEADING_INTENT_KEYWORDS_RE.match(q)
             assert match is not None, f"Leading-prefix regex must match {q!r}."
+
+
+# ===========================================================================
+# D-E — empty-quoted titles / entry paths silent-resolve to Empty_string
+# ===========================================================================
+
+
+class TestEmptyQuotedInputDoesNotResolveToEmptyStringArticle:
+    """Pass-2 of the sweep: ``find article titled ""`` and siblings
+    silently resolved to the ``Empty_string`` Wikipedia article at
+    score 1.00. The extractor captured the 2-char literal ``""``, the
+    handler's ``.strip()`` only trimmed whitespace, and the backend's
+    title-promotion fuzzy-matched the empty input to ``Empty_string``.
+
+    The fix peels a single surrounding matched quote-pair from the
+    captured value and drops the param entirely when the result is
+    empty/whitespace. Affected extractors:
+    ``_extract_find_by_title`` (title), ``_extract_related``
+    (entry_path), ``_extract_entry_path_keyworded`` keyword-branch
+    (entry_path).
+    """
+
+    def test_find_by_title_empty_double_quotes_unset(self) -> None:
+        """``find article titled ""`` must NOT carry a title param,
+        so the handler's missing-arg guard fires."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent('find article titled ""')
+        assert intent == "find_by_title"
+        assert not params.get("title"), (
+            f"Pre-fix params['title'] was the literal 2-char '\"\"' which "
+            f"the backend fuzzy-matched to Empty_string. Post-fix the "
+            f"quote-pair-empty title must drop entirely. "
+            f"Got title={params.get('title')!r}"
+        )
+
+    def test_find_by_title_empty_single_quotes_unset(self) -> None:
+        """``find article titled ''`` — same shape, single-quote pair."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent("find article titled ''")
+        assert intent == "find_by_title"
+        assert not params.get("title")
+
+    def test_find_by_title_quoted_whitespace_unset(self) -> None:
+        """``find article titled "  "`` — non-empty between quotes but
+        only whitespace. Same expected behaviour as empty quotes."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent('find article titled "  "')
+        assert intent == "find_by_title"
+        assert not params.get("title")
+
+    def test_find_by_title_quoted_real_title_strips_quotes(self) -> None:
+        """``find article titled "World War II"`` — quotes peeled,
+        title stored cleanly. Regression upside: backend's title
+        promotion scores exact-match 1.00 instead of fuzzy-quote 0.95."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            'find article titled "World War II"'
+        )
+        assert intent == "find_by_title"
+        # Sub-D-2 Rule 1 lowercases.
+        assert params.get("title") == "world war ii", (
+            f"Quote-strip must remove surrounding quote pair so the "
+            f"backend gets the bare title. Got "
+            f"{params.get('title')!r}"
+        )
+
+    def test_find_by_title_bare_title_unchanged(self) -> None:
+        """``find article titled World War II`` (no quotes) — regression
+        guard, the quote-strip must only fire on a matched quote pair."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent(
+            "find article titled World War II"
+        )
+        assert intent == "find_by_title"
+        assert params.get("title") == "world war ii"
+
+    def test_related_empty_double_quotes_unset(self) -> None:
+        """``articles related to ""`` — same shape via related
+        extractor."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent('articles related to ""')
+        assert intent == "related"
+        assert not params.get("entry_path"), (
+            f"Pre-fix params['entry_path']=='\"\"' silent-matched "
+            f"Empty_string in the backend. Got "
+            f"{params.get('entry_path')!r}"
+        )
+
+    def test_structure_of_empty_quotes_unset(self) -> None:
+        """``structure of ""`` — keyword-branch tail of
+        ``_extract_entry_path_keyworded`` captured ``""`` and the
+        backend resolved it to ``Empty_string``."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent('structure of ""')
+        assert intent == "structure"
+        assert not params.get("entry_path"), (
+            f"Pre-fix the keyword-branch tail was the literal '\"\"' "
+            f"which the natural-language path resolver fuzzy-matched "
+            f"to Empty_string. Got {params.get('entry_path')!r}"
+        )
+
+    def test_get_article_empty_quotes_unset(self) -> None:
+        """``get article ""`` — same shape, get_article intent."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent('get article ""')
+        assert intent == "get_article"
+        assert not params.get("entry_path")
+
+    def test_links_in_empty_quotes_unset(self) -> None:
+        """``links in ""`` — same shape, links intent."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent('links in ""')
+        assert intent == "links"
+        assert not params.get("entry_path")
+
+    def test_summary_of_quoted_real_topic_strips_quotes(self) -> None:
+        """``summary of "Photosynthesis"`` — regression guard: the
+        keyword-branch tail must peel quotes when the value is
+        non-empty. Pre-existing quoted-match branch already handled
+        this; just confirm post-fix behaviour is unchanged."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent('summary of "Photosynthesis"')
+        assert intent == "summary"
+        assert params.get("entry_path") == "photosynthesis"
+
+    def test_structure_of_unquoted_bare_topic_unchanged(self) -> None:
+        """``structure of Photosynthesis`` — regression guard, no quote
+        pair present, behaviour identical to pre-fix."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _conf = IntentParser.parse_intent("structure of Photosynthesis")
+        assert intent == "structure"
+        assert params.get("entry_path") == "photosynthesis"
+
+    def test_strip_quote_pair_helper_direct(self) -> None:
+        """Direct unit test of the helper — covers ASCII single/double
+        quotes plus Unicode smart quotes from the existing
+        ``_QUOTE_CHARS`` set."""
+        from openzim_mcp.intent_parser import _strip_quote_pair
+
+        # Stripped:
+        assert _strip_quote_pair('"hello"') == "hello"
+        assert _strip_quote_pair("'hello'") == "hello"
+        assert _strip_quote_pair("“hello”") == "hello"  # curly double
+        assert _strip_quote_pair("‘hello’") == "hello"  # curly single
+
+        # Empty / whitespace-only quoted:
+        assert _strip_quote_pair('""') == ""
+        assert _strip_quote_pair("''") == ""
+        assert _strip_quote_pair('"  "') == ""
+
+        # Unmatched: preserve verbatim
+        assert _strip_quote_pair("hello") == "hello"
+        assert _strip_quote_pair('"hello') == '"hello'
+        assert _strip_quote_pair('hello"') == 'hello"'
+        # Single character — not a quote pair, preserve
+        assert _strip_quote_pair('"') == '"'
+        # Mixed quote characters — STILL strip since both endpoints
+        # are in the quote set (covers ``"foo'`` and similar
+        # LLM-generated mismatched pairs).
+        assert _strip_quote_pair("\"hello'") == "hello"
