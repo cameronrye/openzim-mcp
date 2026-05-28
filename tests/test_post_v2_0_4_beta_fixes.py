@@ -271,3 +271,147 @@ class TestFilteredSearchMissingNamespaceSingleIntentFooter:
         )
         assert "Missing or Invalid Namespace" in out
         assert out.count("<!-- intent=browse cert=") == 1
+
+
+# ===========================================================================
+# Pass-3 D-I — synthesize path bypasses meta-only / chained-intent /
+# multi-entity-chain guards. Same shape as the post-v2.0.0 D-G fix:
+# the synthesize early-exit at simple_tools.py:626 skipped three
+# additional guards the non-synthesize path fires at handle_zim_query
+# lines 693, 710, 960.
+# ===========================================================================
+
+
+class TestSynthesizePathBypassesGuards:
+    """Pre-fix, ``synthesize=True`` with a meta-only / chained / multi-
+    entity query bypassed the guards and silently RAG-searched the
+    literal verb chain:
+      * ``try again`` → Aaliyah's "Try Again" song body
+      * ``tell me about Berlin then list namespaces`` → Namespace + War
+      * ``tell me about Berlin and Munich and Cologne`` → Cologne only
+
+    Fix mirrors the simple-mode guards inside ``_handle_synthesize_query``
+    and returns structured ``tool_error`` envelopes (synthesize's
+    native error shape, same as D-G).
+    """
+
+    def _make_handler(self) -> SimpleToolsHandler:
+        from unittest.mock import MagicMock
+
+        mock_ops = MagicMock()
+        mock_ops.list_zim_files_data.return_value = [
+            {"path": "/data/zim_0.zim", "name": "zim_0.zim"},
+        ]
+        mock_ops.list_zim_files.return_value = "Found 1 ZIM file."
+        # ``_multi_entity_chain_guidance`` probes the title index. For
+        # bare chain rejections we want the probe to MISS so the
+        # guidance fires; return an empty results envelope.
+        mock_ops.find_entry_by_title_data.return_value = {"results": []}
+        mock_ops.config = MagicMock()
+        mock_ops.config.query_rewrite = MagicMock()
+        mock_ops.config.query_rewrite.enabled = False
+        return SimpleToolsHandler(mock_ops)
+
+    def test_synthesize_meta_only_returns_meta_only_guidance(self) -> None:
+        """``try again`` with synthesize=True must fire the same meta-
+        only guidance the simple path fires at handle_zim_query line
+        693, NOT silently BM25-search the literal phrase and return
+        the Aaliyah "Try Again" song body."""
+        handler = self._make_handler()
+        result = handler.handle_zim_query(
+            query="try again", options={"synthesize": True}
+        )
+        assert isinstance(result, dict), (
+            f"Expected tool_error envelope (dict). Got {type(result).__name__}: "
+            f"{result!r}"
+        )
+        assert result.get("error") is True
+        assert result.get("operation") == "meta_only_guidance", (
+            f"Pre-fix `try again` with synthesize silently returned the "
+            f"Aaliyah `Try Again` song. Post-fix must return "
+            f"meta_only_guidance. Got operation="
+            f"{result.get('operation')!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "tell me about Berlin then list namespaces",
+            "get article Photosynthesis then search for Berlin",
+            "search for biology then show structure of Evolution",
+        ],
+    )
+    def test_synthesize_chained_intent_returns_chained_rejection(
+        self, query: str
+    ) -> None:
+        """Each chained-operation query with synthesize=True must fire
+        the same chained_intent_rejected envelope as the simple path
+        (handle_zim_query line 710), NOT silently RAG-search the
+        literal chain."""
+        handler = self._make_handler()
+        result = handler.handle_zim_query(query, options={"synthesize": True})
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert result.get("operation") == "chained_intent_rejected", (
+            f"Pre-fix {query!r} with synthesize silently returned RAG hits "
+            f"on the literal chain. Post-fix must return "
+            f"chained_intent_rejected. Got operation="
+            f"{result.get('operation')!r}"
+        )
+        # Recovery info preserved: simple-mode markdown body should be
+        # passed through as the tool_error message.
+        assert "Chained Operations Detected" in (result.get("message") or "")
+
+    def test_synthesize_multi_entity_returns_multi_entity_rejection(self) -> None:
+        """``tell me about Berlin and Munich and Cologne`` with
+        synthesize=True must fire multi_entity_chain_rejected as the
+        simple path does (handle_zim_query line 960). Pre-fix returned
+        Cologne plus unrelated articles — Berlin and Munich silently
+        dropped."""
+        handler = self._make_handler()
+        result = handler.handle_zim_query(
+            "tell me about Berlin and Munich and Cologne",
+            options={"synthesize": True},
+        )
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert result.get("operation") == "multi_entity_chain_rejected"
+        assert "Multi-Entity Chain Detected" in (result.get("message") or "")
+
+    def test_synthesize_canonical_multi_entity_title_not_rejected(self) -> None:
+        """Regression: ``Earth, Wind & Fire`` is a canonical multi-entity
+        article title. The simple-mode path suppresses chain rejection
+        when the whole-topic title-index probe returns a high-score
+        hit. Synthesize must follow the same suppression — pin by
+        mocking the title-index probe to return score=1.0 for the
+        full topic."""
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock_ops = MagicMock()
+        mock_ops.list_zim_files_data.return_value = [
+            {"path": "/data/zim_0.zim", "name": "zim_0.zim"},
+        ]
+        mock_ops.list_zim_files.return_value = "Found 1 ZIM file."
+        mock_ops.find_entry_by_title_data.return_value = {
+            "results": [
+                {"path": "Earth,_Wind_&_Fire", "score": 1.0},
+            ]
+        }
+        mock_ops.config = MagicMock()
+        mock_ops.config.query_rewrite = MagicMock()
+        mock_ops.config.query_rewrite.enabled = False
+        # Backend synthesize path must be reached — pin by having it
+        # raise an obviously-not-a-chain-rejection error.
+        handler = SimpleToolsHandler(mock_ops)
+        result = handler.handle_zim_query(
+            "tell me about Earth, Wind & Fire",
+            options={"synthesize": True},
+        )
+        if isinstance(result, dict):
+            assert result.get("operation") != "multi_entity_chain_rejected", (
+                f"Canonical multi-entity title was incorrectly rejected. "
+                f"The title-index probe (score=1.0) should suppress the "
+                f"chain rejection. Got: {result}"
+            )

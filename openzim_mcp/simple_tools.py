@@ -5431,6 +5431,31 @@ class SimpleToolsHandler:
         """
         from openzim_mcp.synthesize import synthesize_query
 
+        # Post-v2.0.4 D-I: mirror the meta-only / chained-intent guards
+        # the non-synthesize path fires at handle_zim_query lines 693
+        # and 710. Pre-fix the synthesize early-exit at line 626 skipped
+        # both: ``try again`` BM25-searched and returned Aaliyah's "Try
+        # Again" song; ``tell me about Berlin then list namespaces``
+        # silently RAG-searched the literal verb chain and returned
+        # Namespace + War articles instead of rejecting the chain.
+        # Same shape as the post-v2.0.0 D-G fix — return a structured
+        # tool_error envelope (synthesize's native error shape) with
+        # the full markdown guidance from the simple-mode helpers so
+        # callers get the same actionable recovery info.
+        if self._is_meta_only_query(query):
+            self._track("meta_only_guidance")
+            return tool_error(
+                operation="meta_only_guidance",
+                message=self._meta_query_guidance(),
+            )
+        chained_warning = self._chained_intent_guidance(query)
+        if chained_warning is not None:
+            self._track("chained_intent_rejected")
+            return tool_error(
+                operation="chained_intent_rejected",
+                message=chained_warning,
+            )
+
         # D5: distill the user's natural-language query down to the
         # topic (or actual search terms) BEFORE handing it to BM25.
         # The intent parser already knows how to pull "Berlin" out of
@@ -5525,6 +5550,40 @@ class SimpleToolsHandler:
                         'Examples: `search for "quantum mechanics"`, '
                         "`search for Berlin in namespace C`."
                     ),
+                )
+        # Post-v2.0.4 D-I: mirror the multi-entity chain rejection the
+        # non-synthesize path fires at handle_zim_query line 960.
+        # Pre-fix, ``tell me about Berlin and Munich and Cologne`` with
+        # synthesize=True silently RAG-searched the literal three-entity
+        # chain and returned Cologne plus unrelated articles — Berlin
+        # and Munich data dropped on the floor. ``_multi_entity_chain_
+        # guidance`` requires a real archive path to probe the title
+        # index (so canonical multi-entity titles like ``Earth, Wind &
+        # Fire`` aren't false-rejected). Resolve best-effort: use the
+        # explicit zim_file_path if given, else pick the first
+        # available archive. When no archive is available skip the
+        # probe — the synthesize pipeline will surface a
+        # no_archives_available error below anyway.
+        multi_probe_path: Optional[str] = zim_file_path
+        if not multi_probe_path:
+            try:
+                _file_entries = self.zim_operations.list_zim_files_data()
+                for _entry in _file_entries:
+                    _ep = _entry.get("path")
+                    if _ep:
+                        multi_probe_path = str(_ep)
+                        break
+            except Exception:
+                multi_probe_path = None
+        if multi_probe_path:
+            multi_entity_warning = self._multi_entity_chain_guidance(
+                intent, params, multi_probe_path
+            )
+            if multi_entity_warning is not None:
+                self._track("multi_entity_chain_rejected")
+                return tool_error(
+                    operation="multi_entity_chain_rejected",
+                    message=multi_entity_warning,
                 )
         search_query = query
         if intent == "tell_me_about" and isinstance(params, dict):
