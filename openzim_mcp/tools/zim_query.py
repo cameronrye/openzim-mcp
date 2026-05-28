@@ -80,6 +80,21 @@ def register(server: "OpenZimMcpServer") -> None:
                     operation="invalid_offset",
                     message=(f"`offset` must be non-negative (provided: {offset})."),
                 )
+            # Post-v2.0.0 D-F: `max_content_length` was the only sibling
+            # of `limit` / `offset` / `content_offset` without an upfront
+            # validator. Pre-fix `max_content_length <= 0` silently meant
+            # "no limit" because the truncation site
+            # (`simple_tools.py:3329-3334`) gates on `max_len > 0`. That
+            # contradicts the param contract (positive char-cap) and
+            # diverges from the existing `limit < 1` rejection shape.
+            if max_content_length is not None and max_content_length < 1:
+                return tool_error(
+                    operation="invalid_max_content_length",
+                    message=(
+                        "`max_content_length` must be a positive integer "
+                        f"(provided: {max_content_length})."
+                    ),
+                )
 
             # Simple-mode defaults: 3 results × 4 000-char bodies fit
             # comfortably in an 8B Q4 model's agentic prompt window.

@@ -92,6 +92,18 @@ Defects span THREE surfaces:
   scores 1.00 instead of 0.95 (the quote-stripped lookup is an exact
   title match instead of fuzzy).
 
+* **D-F — ``max_content_length`` input validation gap.** Pass-3 of the
+  sweep surfaced an input-validation hole: ``zim_query`` validates
+  ``limit < 1`` / ``offset < 0`` / ``content_offset < 0`` upfront with
+  clear ``invalid_<param>`` envelopes, but ``max_content_length``
+  silently treats ``<= 0`` as "no limit" (the truncation site at
+  ``simple_tools.py:3329-3334`` only fires when ``max_len > 0``). Live
+  impact: ``max_content_length=0`` and ``max_content_length=-1`` both
+  bypass the cap and return full article bodies, contradicting the
+  parameter contract. Fix: add ``max_content_length < 1`` validation
+  to ``zim_query.py`` mirroring the existing ``limit`` check, returning
+  ``invalid_max_content_length`` for non-positive values.
+
 The post-v2.0.0 sweep is run from the same ``mcp__openzim-mcp__zim_query``
 surface that the b-series sweeps used. v2.0.0 ships a stable Phase F
 surface (22→8 tool collapse) so this is the first sweep against the
@@ -778,3 +790,99 @@ class TestEmptyQuotedInputDoesNotResolveToEmptyStringArticle:
         # are in the quote set (covers ``"foo'`` and similar
         # LLM-generated mismatched pairs).
         assert _strip_quote_pair("\"hello'") == "hello"
+
+
+# ===========================================================================
+# D-F — max_content_length input validation gap
+# ===========================================================================
+
+
+class TestMaxContentLengthValidation:
+    """`zim_query` already validates `limit` / `offset` / `content_offset`
+    with structured `invalid_<param>` envelopes for out-of-bounds values.
+    Pass-3 surfaced that `max_content_length` skipped this validation —
+    `<= 0` silently bypassed the truncation cap (``simple_tools.py:3332``
+    only fires when ``max_len > 0``), returning full article bodies and
+    contradicting the parameter contract.
+
+    The fix mirrors the existing `limit` check: ``max_content_length < 1``
+    returns an `invalid_max_content_length` envelope upfront.
+    """
+
+    @staticmethod
+    def _call_zim_query(**kwargs: Any) -> Any:
+        """Drive the wire-layer `zim_query` tool wrapper directly.
+
+        The tool is registered against an MCP server; for unit testing we
+        import the module, attach a minimal mocked server with a stub
+        ``simple_tools_handler``, register the tool, then call the
+        underlying coroutine. Returns the (sync) result of awaiting the
+        coroutine — small enough to ``asyncio.run`` per-call without
+        thread pool overhead.
+        """
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from openzim_mcp.tools import zim_query as zq_module
+
+        mock_server = MagicMock()
+        # Capture the registered tool callable so we can invoke it
+        # directly with kwargs.
+        registered: list[Any] = []
+
+        def fake_decorator(*_a: Any, **_kw: Any) -> Any:
+            def wrapper(fn: Any) -> Any:
+                registered.append(fn)
+                return fn
+
+            return wrapper
+
+        mock_server.mcp = MagicMock()
+        mock_server.mcp.tool = fake_decorator
+        mock_server.simple_tools_handler = MagicMock()
+        mock_server.simple_tools_handler.handle_zim_query.return_value = "ok"
+
+        zq_module.register(mock_server)
+        assert registered, "register_zim_query_tool failed to register the tool"
+        tool_fn = registered[0]
+        return asyncio.run(tool_fn(**kwargs))
+
+    def test_max_content_length_zero_rejected(self) -> None:
+        """``max_content_length=0`` → structured invalid_max_content_length
+        envelope, mirroring the existing ``limit=0`` rejection."""
+        result = self._call_zim_query(query="tell me about X", max_content_length=0)
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert result.get("operation") == "invalid_max_content_length", (
+            f"Pre-fix max_content_length=0 silently meant 'no limit' and "
+            f"returned the full article body. Post-fix the tool must "
+            f"return an invalid_max_content_length envelope. "
+            f"Got: {result}"
+        )
+
+    def test_max_content_length_negative_rejected(self) -> None:
+        """``max_content_length=-1`` → same shape."""
+        result = self._call_zim_query(query="tell me about X", max_content_length=-1)
+        assert isinstance(result, dict)
+        assert result.get("error") is True
+        assert result.get("operation") == "invalid_max_content_length"
+
+    def test_max_content_length_positive_accepted(self) -> None:
+        """Regression guard: positive values still route through to the
+        handler."""
+        result = self._call_zim_query(query="tell me about X", max_content_length=4000)
+        # Tool returns the handler's string result on success.
+        assert result == "ok"
+
+    def test_max_content_length_none_accepted(self) -> None:
+        """Regression guard: omitting ``max_content_length`` (the
+        default) still works — the tool falls back to its 4000-char
+        simple-mode default."""
+        result = self._call_zim_query(query="tell me about X")
+        assert result == "ok"
+
+    def test_max_content_length_one_accepted(self) -> None:
+        """Boundary: ``max_content_length=1`` is the smallest legal
+        positive value and must succeed."""
+        result = self._call_zim_query(query="tell me about X", max_content_length=1)
+        assert result == "ok"
