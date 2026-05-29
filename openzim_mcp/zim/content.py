@@ -159,16 +159,38 @@ class _ContentMixin:
         """
         try:
             item = entry.get_item()
-            if item.mimetype.startswith(_TEXT_MIME_PREFIX):
-                content = self.content_processor.process_mime_content(
-                    bytes(item.content), item.mimetype, compact=True
+            mime = item.mimetype or ""
+            if not mime.startswith(_TEXT_MIME_PREFIX):
+                return f"(Unsupported content type: {mime})"
+            if mime.startswith("text/html"):
+                # Scope to the page's main-content landmark so snippets are
+                # drawn from the article body, not the ZIMIT/warc2zim site
+                # chrome (banner / header nav / footer) wrapping it. With no
+                # landmark, select_main_content returns the whole document, so
+                # this matches process_mime_content output for chrome-free
+                # (e.g. Wikipedia/mwoffliner) pages — no regression there.
+                from bs4 import BeautifulSoup
+
+                from openzim_mcp.content_processor import (
+                    HTML_PARSER,
+                    select_main_content,
                 )
-                entry_title = getattr(entry, "title", None) or ""
-                return self.content_processor.create_snippet(
-                    content, query=query, title=entry_title
+
+                soup = BeautifulSoup(
+                    bytes(item.content).decode("utf-8", errors="replace"),
+                    HTML_PARSER,
+                )
+                content = self.content_processor._render_soup_to_text(
+                    select_main_content(soup), compact=True
                 )
             else:
-                return f"(Unsupported content type: {item.mimetype})"
+                content = self.content_processor.process_mime_content(
+                    bytes(item.content), mime, compact=True
+                )
+            entry_title = getattr(entry, "title", None) or ""
+            return self.content_processor.create_snippet(
+                content, query=query, title=entry_title
+            )
         except Exception as e:
             logger.warning(f"Error getting content snippet: {e}")
             return "(Unable to get content preview)"

@@ -269,7 +269,7 @@ def extract_entry_bundle(
     """
     from bs4 import BeautifulSoup
 
-    from openzim_mcp.content_processor import _build_headings
+    from openzim_mcp.content_processor import _build_headings, select_main_content
 
     title, mime, html = _resolve_entry_html(archive, entry_path)
 
@@ -293,10 +293,19 @@ def extract_entry_bundle(
         return empty
 
     soup = BeautifulSoup(html, "html.parser")
-    headings = _build_headings(soup)
-    raw_links = content_processor.extract_html_links(html)
+    # Scope every downstream extraction to the page's main-content landmark
+    # so ZIMIT/warc2zim site chrome (banner, header nav, footer, aside) does
+    # not leak into headings (TOC), links (related articles), or the rendered
+    # markdown (summary). No landmark -> the whole document, unchanged.
+    # ``extract_html_links`` is fed the scoped subtree's HTML rather than the
+    # raw entry HTML so nav links are excluded too; capture it BEFORE
+    # ``_extract_infobox`` decomposes the infobox, preserving the prior order
+    # in which links were extracted ahead of infobox removal.
+    content_root = select_main_content(soup)
+    headings = _build_headings(content_root)
+    raw_links = content_processor.extract_html_links(str(content_root))
     link_buckets = _build_link_buckets(raw_links)
-    infobox = _extract_infobox(soup, content_processor)
+    infobox = _extract_infobox(content_root, content_processor)
     # Render with compact=True so that the bundle's rendered_markdown
     # carries the same table-stripping placeholders that direct
     # ``get_zim_entry`` callers see. Without this, get_section returns
@@ -304,7 +313,7 @@ def extract_entry_bundle(
     # tables embedded in Wikipedia articles — a UX regression vs. the
     # surrounding article-fetch path. The infobox is already
     # ``decompose()``d above, so compact rendering won't re-extract it.
-    rendered = content_processor._render_soup_to_text(soup, compact=True)
+    rendered = content_processor._render_soup_to_text(content_root, compact=True)
     sections = _compute_section_offsets(rendered, headings)
 
     bundle: EntryBundle = cast(

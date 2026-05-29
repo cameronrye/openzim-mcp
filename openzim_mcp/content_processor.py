@@ -293,6 +293,38 @@ def _collect_meta_tag_metadata(soup: BeautifulSoup) -> Dict[str, str]:
     return metadata
 
 
+# Main-content landmarks, in priority order. ZIMIT / warc2zim entries embed
+# the origin site's full chrome (federal banner, header nav, footer, aside
+# sidebars) around the article body. Scoping content extraction to the
+# main-content landmark drops that chrome at the source, so every bundle
+# consumer (summary, TOC, related-article links) and the search-snippet
+# renderer see the article body only. Wikipedia / mwoffliner pages carry no
+# such landmark, so the helper returns the document unchanged and their
+# behaviour is preserved.
+_MAIN_CONTENT_SELECTORS = ("main", "[role=main]", "article")
+
+
+def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
+    """Return the page's main-content subtree, or ``soup`` if none is clear.
+
+    Tries ``<main>``, then ``[role=main]``, then ``<article>``. A landmark
+    is used only when EXACTLY ONE matches — multiple matches (e.g. a blog
+    index rendered as many ``<article>`` cards) are ambiguous, so we fall
+    back to the whole document rather than guess and risk dropping content.
+
+    The matched landmark is re-parsed into its OWN document rather than
+    returned as a detached child ``Tag``: downstream rendering calls
+    BeautifulSoup-only APIs (``new_tag`` during oversized-table replacement),
+    which a bare child ``Tag`` does not expose. Re-parsing keeps the return
+    type a full ``BeautifulSoup`` for every caller and code path.
+    """
+    for selector in _MAIN_CONTENT_SELECTORS:
+        nodes = soup.select(selector)
+        if len(nodes) == 1:
+            return BeautifulSoup(str(nodes[0]), HTML_PARSER)
+    return soup
+
+
 def _build_headings(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     """Collect headings (h1-h6) in document order with disambiguated anchors.
 
