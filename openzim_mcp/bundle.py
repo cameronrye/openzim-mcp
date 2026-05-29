@@ -84,6 +84,22 @@ def _normalize_heading_text(text: str) -> str:
     return " ".join(text.split())
 
 
+def _loose_escaped_text(text: str) -> str:
+    """Regex source matching ``text`` even when html2text backslash-escaped
+    interior punctuation.
+
+    html2text escapes markdown-significant punctuation by prefixing a
+    backslash — a numbered heading ``1. Topic`` renders as ``1\\. Topic``,
+    so a plain ``re.escape`` pattern never matches and the section is dropped
+    (this is the root cause of the IEP "flattened TOC": every ``## 1.``,
+    ``## 2.`` ... H2 vanished, leaving the H3 subsections misnested under the
+    H1). Allowing an optional backslash before each character matches the
+    escaped and unescaped forms alike. Used only by the relaxed fallback, so
+    the larger pattern is paid only for headings the strict match missed.
+    """
+    return "".join(r"\\?" + re.escape(ch) for ch in text)
+
+
 def _resolve_entry_html(archive: "Archive", entry_path: str) -> tuple[str, str, str]:
     """Fetch the entry's HTML, returning (title, mimetype, html).
 
@@ -179,9 +195,13 @@ def _compute_section_offsets(
             # emits (``*``, ``_``, ``` ` ```, backslashes, whitespace) so
             # the relaxed branch only catches decorated-heading cases, not
             # any heading containing the text anywhere.
+            # Inline markup (``**bold**`` etc.) is tolerated as a prefix/suffix
+            # wrapper; ``_loose_escaped_text`` additionally tolerates html2text's
+            # backslash-escaped interior punctuation (e.g. ``1\.`` for ``1.``).
             _MD_INLINE = r"[ \t\*_`\\]*"
             relaxed = re.compile(
-                rf"^{'#' * level} {_MD_INLINE}{re.escape(text)}{_MD_INLINE}\s*$",
+                rf"^{'#' * level} {_MD_INLINE}{_loose_escaped_text(text)}"
+                rf"{_MD_INLINE}\s*$",
                 re.MULTILINE,
             )
             match = relaxed.search(rendered_markdown, cursor)
@@ -269,7 +289,7 @@ def extract_entry_bundle(
     """
     from bs4 import BeautifulSoup
 
-    from openzim_mcp.content_processor import _build_headings
+    from openzim_mcp.content_processor import _build_headings, select_main_content
 
     title, mime, html = _resolve_entry_html(archive, entry_path)
 
@@ -293,10 +313,19 @@ def extract_entry_bundle(
         return empty
 
     soup = BeautifulSoup(html, "html.parser")
-    headings = _build_headings(soup)
-    raw_links = content_processor.extract_html_links(html)
+    # Scope every downstream extraction to the page's main-content landmark
+    # so ZIMIT/warc2zim site chrome (banner, header nav, footer, aside) does
+    # not leak into headings (TOC), links (related articles), or the rendered
+    # markdown (summary). No landmark -> the whole document, unchanged.
+    # ``extract_html_links`` is fed the scoped subtree's HTML rather than the
+    # raw entry HTML so nav links are excluded too; capture it BEFORE
+    # ``_extract_infobox`` decomposes the infobox, preserving the prior order
+    # in which links were extracted ahead of infobox removal.
+    content_root = select_main_content(soup)
+    headings = _build_headings(content_root)
+    raw_links = content_processor.extract_html_links(str(content_root))
     link_buckets = _build_link_buckets(raw_links)
-    infobox = _extract_infobox(soup, content_processor)
+    infobox = _extract_infobox(content_root, content_processor)
     # Render with compact=True so that the bundle's rendered_markdown
     # carries the same table-stripping placeholders that direct
     # ``get_zim_entry`` callers see. Without this, get_section returns
@@ -304,7 +333,7 @@ def extract_entry_bundle(
     # tables embedded in Wikipedia articles — a UX regression vs. the
     # surrounding article-fetch path. The infobox is already
     # ``decompose()``d above, so compact rendering won't re-extract it.
-    rendered = content_processor._render_soup_to_text(soup, compact=True)
+    rendered = content_processor._render_soup_to_text(content_root, compact=True)
     sections = _compute_section_offsets(rendered, headings)
 
     bundle: EntryBundle = cast(

@@ -57,6 +57,18 @@ _FILTERED_BATCH_SIZE = 500
 _FILTERED_MAX_SCAN = 10000
 
 
+def canonical_result_path(path: str) -> str:
+    """Strip the query string and fragment from a result path.
+
+    warc2zim stores query-string URL variants as distinct entries, so a
+    full-text search surfaces e.g. ``ency/quiz/001214_3.htm`` and
+    ``ency/quiz/001214_3.htm?quiz=1`` as two hits for the same page.
+    Collapsing on the canonical (query/fragment-free) path lets the
+    filtered-search scanner emit each page once.
+    """
+    return path.split("?", 1)[0].split("#", 1)[0]
+
+
 def _no_fulltext_index_payload(
     query: str,
     *,
@@ -1630,6 +1642,11 @@ class _SearchMixin:
         filtered_count = 0
         scanned = 0
         scan_cap_hit = False
+        # Canonical paths already placed on this page, so warc2zim query-string
+        # variants (foo.htm and foo.htm?x=1) don't each consume a result slot.
+        # Scoped to the emitted page; a duplicate is skipped without filling a
+        # slot, and scanning continues so the page still fills to ``limit``.
+        seen_canonical: set[str] = set()
         has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
         # When namespace-only filtering is active (no content_type), the
         # entry namespace is derivable from the path string without an
@@ -1690,6 +1707,13 @@ class _SearchMixin:
 
                 filtered_count += 1
                 if filtered_count > offset and len(page) < limit:
+                    canonical = canonical_result_path(materialised[0])
+                    if canonical in seen_canonical:
+                        # A query-string variant of an entry already on this
+                        # page — skip it and keep scanning so the dropped slot
+                        # is backfilled with the next distinct result.
+                        continue
+                    seen_canonical.add(canonical)
                     page.append(materialised)
                     if len(page) >= limit:
                         break

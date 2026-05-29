@@ -293,6 +293,44 @@ def _collect_meta_tag_metadata(soup: BeautifulSoup) -> Dict[str, str]:
     return metadata
 
 
+# Main-content landmarks, in priority order. ZIMIT / warc2zim entries embed
+# the origin site's full chrome (federal banner, header nav, footer, aside
+# sidebars) around the article body. Scoping content extraction to the
+# main-content landmark drops that chrome at the source, so every bundle
+# consumer (summary, TOC, related-article links) and the search-snippet
+# renderer see the article body only. Wikipedia / mwoffliner pages carry no
+# such landmark, so the helper returns the document unchanged and their
+# behaviour is preserved.
+#
+# ``<article>`` is tried FIRST (narrower) so that when a ``<main>`` /
+# ``[role=main]`` wrapper contains both the article and an ``<aside>``
+# sidebar, the single article wins and the sidebar is excluded.
+_MAIN_CONTENT_SELECTORS = ("article", "main", "[role=main]")
+
+
+def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
+    """Return the page's main-content subtree, or ``soup`` if none is clear.
+
+    Tries ``<article>``, then ``<main>``, then ``[role=main]``. A landmark
+    is used only when EXACTLY ONE matches AND it carries text — multiple
+    matches (e.g. a blog index rendered as many ``<article>`` cards) are
+    ambiguous, and an empty/whitespace-only landmark would silently drop the
+    real content when it sits in a sibling; in both cases we fall through to
+    the next selector and ultimately to the whole document.
+
+    The matched landmark is re-parsed into its OWN document rather than
+    returned as a detached child ``Tag``: downstream rendering calls
+    BeautifulSoup-only APIs (``new_tag`` during oversized-table replacement),
+    which a bare child ``Tag`` does not expose. Re-parsing keeps the return
+    type a full ``BeautifulSoup`` for every caller and code path.
+    """
+    for selector in _MAIN_CONTENT_SELECTORS:
+        nodes = soup.select(selector)
+        if len(nodes) == 1 and nodes[0].get_text(strip=True):
+            return BeautifulSoup(str(nodes[0]), HTML_PARSER)
+    return soup
+
+
 def _build_headings(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     """Collect headings (h1-h6) in document order with disambiguated anchors.
 
@@ -1171,6 +1209,7 @@ class ContentProcessor:
         *,
         compact: bool = False,
         snippet_mode: bool = False,
+        scope_main_content: bool = False,
     ) -> str:
         """
         Process content based on MIME type.
@@ -1201,6 +1240,16 @@ class ContentProcessor:
                     # Skip structural rewrites; render the soup as-is.
                     soup = BeautifulSoup(raw_content, HTML_PARSER)
                     return self._render_soup_to_text(soup, compact=False)
+                if scope_main_content:
+                    # Entry-content fetch (get_zim_entry / get_entries): scope
+                    # to the page's main-content landmark so the primary read
+                    # path drops ZIMIT/warc2zim site chrome, matching the
+                    # bundle-based tools. No landmark -> whole document, so
+                    # chrome-free (Wikipedia/mwoffliner) pages are unchanged.
+                    soup = BeautifulSoup(raw_content, HTML_PARSER)
+                    return self._render_soup_to_text(
+                        select_main_content(soup), compact=compact
+                    )
                 return self.html_to_plain_text(raw_content, compact=compact)
             elif mime_type.startswith("text/"):
                 return raw_content.strip()
