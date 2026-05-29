@@ -15,6 +15,20 @@ import that the reverse direction would create.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+# Names this module deliberately exports to ``simple_tools`` (the reranker
+# telemetry contract + the mixin). Declaring it documents the cross-module
+# export the docstring describes and tells static analysis these module-level
+# constants are intentionally consumed elsewhere — notably
+# ``_INFO_LEVEL_TELEMETRY_EVENTS``, whose only reader is ``simple_tools``.
+__all__ = [
+    "_INFO_LEVEL_TELEMETRY_EVENTS",
+    "_RERANKER_ENGAGED",
+    "_RERANKER_SKIPPED_NO_RESULTS",
+    "_RERANKER_SKIPPED_NOT_INSTALLED",
+    "_RERANKER_SKIPPED_PASSTHROUGH",
+    "_RerankMixin",
+]
+
 # Phase D sub-D-1 reranker telemetry events.
 _RERANKER_ENGAGED = "reranker_engaged"
 _RERANKER_SKIPPED_NOT_INSTALLED = "reranker_skipped.not_installed"
