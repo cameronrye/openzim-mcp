@@ -13,9 +13,13 @@ PARAMETERS:
 RESPONSE:
   ArchiveMetadataResponse with:
     - metadata: flat dict[str, str] of M-namespace fields.
-    - namespaces: list of NamespaceInfo (letter + total +
-      discovery diagnostics).
-    - _meta: standard envelope.
+    - namespaces: list of NamespaceInfo (letter + total + diagnostics).
+    - archive_identity `{uuid, is_multipart}` + index_capabilities
+      `{has_fulltext_index, has_title_index}` — identity and whether
+      search / suggestions will work.
+    - counter_breakdown `{mimetype: count}` parsed from M/Counter;
+      omitted when absent.
+    - `_meta`: standard envelope.
 
   **NO `main_page_path` field.** The canonical main-page fetch is
   `zim_get(main_page=True)` — surfacing the path here would create

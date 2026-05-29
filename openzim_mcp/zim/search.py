@@ -57,6 +57,39 @@ _FILTERED_BATCH_SIZE = 500
 _FILTERED_MAX_SCAN = 10000
 
 
+def _no_fulltext_index_payload(
+    query: str,
+    *,
+    offset: int,
+    limit: int,
+    namespace: Optional[str] = None,
+    content_type: Optional[str] = None,
+    filtered: bool = False,
+) -> Dict[str, Any]:
+    """Build the empty search payload for an archive with no fulltext index.
+
+    Shared by ``search_zim_file_data`` and ``search_with_filters_data`` so
+    both degrade to the same ``reason="no_xapian_index"`` contract instead
+    of diverging (the filtered path previously raised a hard error).
+    """
+    payload: Dict[str, Any] = {
+        "query": query,
+        "results": [],
+        "next_cursor": None,
+        "total": 0,
+        "done": True,
+        "page_info": {
+            "offset": offset,
+            "limit": limit,
+            "returned_count": 0,
+        },
+    }
+    if filtered:
+        payload["namespace_filter"] = namespace
+        payload["content_type_filter"] = content_type
+    return payload
+
+
 @dataclass(frozen=True)
 class _FilteredScanState:
     """Aggregate state captured during one filtered-search scan pass."""
@@ -444,6 +477,22 @@ class _SearchMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
+                # Explicit precheck: an archive with no full-text (Xapian)
+                # index can't be searched — surface the structured reason
+                # rather than constructing a Searcher just to catch the
+                # resulting RuntimeError. Authoritative and message-format
+                # independent (the old string-match on the exception text
+                # didn't even match libzim's current wording).
+                if not archive.has_fulltext_index:
+                    return cast(
+                        "SearchResponse",
+                        attach_meta(
+                            _no_fulltext_index_payload(
+                                query, offset=offset, limit=limit
+                            ),
+                            reason="no_xapian_index",
+                        ),
+                    )
                 payload, total_results = self._perform_search(
                     archive, query, limit, offset, validated_path=validated_path
                 )
@@ -549,35 +598,11 @@ class _SearchMixin:
                 self.cache.set(cache_key, with_meta)
             return cast("SearchResponse", with_meta)
 
-        except OpenZimMcpArchiveError as e:
-            # Detect "no Xapian index" so we can return a structured reason
-            # instead of just an opaque archive error. libzim raises
-            # RuntimeError("Archive has no fulltext index") under the hood;
-            # the typed wrapper carries that message verbatim.
-            msg = str(e).lower()
-            if (
-                "no fulltext index" in msg
-                or "no full-text index" in msg
-                or "no xapian" in msg
-            ):
-                empty_payload2: Dict[str, Any] = {
-                    "query": query,
-                    "results": [],
-                    "next_cursor": None,
-                    "total": 0,
-                    "done": True,
-                    "page_info": {
-                        "offset": offset,
-                        "limit": limit,
-                        "returned_count": 0,
-                    },
-                }
-                return cast(
-                    "SearchResponse",
-                    attach_meta(empty_payload2, reason="no_xapian_index"),
-                )
+        except OpenZimMcpArchiveError:
+            # Missing-fulltext-index is now handled by the explicit precheck
+            # above; any OpenZimMcpArchiveError here is a genuine failure.
             # Inner helper already raised a typed archive error with full
-            # context. Don't re-wrap and double the message prefix.
+            # context — don't re-wrap and double the message prefix.
             raise
         except Exception as e:
             logger.error(f"Search failed for {validated_path}: {e}")
@@ -1161,6 +1186,17 @@ class _SearchMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
+                # Mirror search_with_filters_data: degrade gracefully when the
+                # archive has no full-text index rather than letting the
+                # Searcher raise (which this wrapper would re-wrap as a hard
+                # OpenZimMcpArchiveError). Not cached — same rationale as the
+                # zero-result path below.
+                if not archive.has_fulltext_index:
+                    echo_query = display_query or query
+                    return (
+                        f"No full-text index in this archive; filtered search "
+                        f'for "{echo_query}" is unavailable.'
+                    )
                 result, total_filtered = self._perform_filtered_search(
                     archive,
                     query,
@@ -1285,6 +1321,24 @@ class _SearchMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
+                # Same explicit precheck as search_zim_file_data: degrade
+                # gracefully to reason="no_xapian_index" when the archive has
+                # no full-text index, instead of raising a hard archive error.
+                if not archive.has_fulltext_index:
+                    return cast(
+                        "SearchWithFiltersResponse",
+                        attach_meta(
+                            _no_fulltext_index_payload(
+                                query,
+                                offset=offset,
+                                limit=limit,
+                                namespace=namespace,
+                                content_type=content_type,
+                                filtered=True,
+                            ),
+                            reason="no_xapian_index",
+                        ),
+                    )
                 results, scan = self._perform_filtered_search_data(
                     archive, query, namespace, content_type, limit, offset
                 )
@@ -2364,6 +2418,17 @@ class _SearchMixin:
 
         Returns the resolved Entry on first match, or None on miss.
         """
+        # Strongest signal first: an exact match against libzim's native
+        # title index. This resolves titles whose on-disk path differs from
+        # the title (e.g. title "Climate Change" filed at path "A/CC") that
+        # the case-variant path probe below can never reach. ``has_entry_by_
+        # title`` avoids the KeyError ``get_entry_by_title`` raises on a miss.
+        try:
+            if archive.has_entry_by_title(title):
+                return archive.get_entry_by_title(title)
+        except Exception as e:  # pragma: no cover — defensive
+            logger.debug(f"_find_entry_fast_path title probe {title!r} failed: {e}")
+
         normalized = title.replace(" ", "_")
         # Order matters: most specific / common first. ``capitalize`` only
         # uppercases the first character; ``title`` upper-cases each word.

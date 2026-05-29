@@ -221,10 +221,23 @@
     }
   },
   "zim_health": {
-    "bytes": 1146,
-    "description": "Inspect the openzim-mcp server's state in one combined response.\n\nReturns three things: health checks (cache stats, directory probes,\nrecommendations), configuration (allowed directories, cache config,\nserver PID), and loaded_archives (the list of ZIM files the server\ncan read from). Collapses the legacy `get_server_health` +\n`get_server_configuration` + `list_zim_files` triple into one\nsingle-call answer to \"what is this server, what does it have, and\nis it OK\".\n\nALIASES: callers may say \"is the server ok\", \"list archives\",\n\"what's loaded\", \"server health\". Route through THIS tool \u2014 it\nanswers all three from one round trip.\n\nPARAMETERS:\n  (none \u2014 zim_health takes no arguments.)\n\nRESPONSE:\n  ServerHealthResponse (combined Phase F shape):\n    - health: HealthStatus (legacy get_server_health output).\n    - configuration: ServerConfig (legacy get_server_configuration).\n    - loaded_archives: list[ArchiveInfo] (legacy list_zim_files).\n    - _meta: standard envelope.\n",
+    "bytes": 1405,
+    "description": "Inspect the openzim-mcp server's state \u2014 or validate one archive \u2014 in one call.\n\nWith NO argument: returns health checks (cache stats, directory probes,\nrecommendations), configuration (allowed directories, cache config,\nserver PID), and loaded_archives (the ZIM files the server can read).\nCollapses the legacy `get_server_health` + `get_server_configuration` +\n`list_zim_files` triple into one answer to \"what is this server, what\ndoes it have, and is it OK\".\n\nWith a `zim_file_path`: validates/diagnoses that one archive \u2014 runs\n`Archive.check()` (integrity), reports checksum, index, and identity.\n\nALIASES: \"is the server ok\", \"list archives\", \"what's loaded\", \"server\nhealth\" (no arg); \"validate this zim\", \"is this archive corrupt\" (with path).\n\nPARAMETERS:\n  zim_file_path   OPTIONAL. Omit for server state; pass to validate one archive.\n\nRESPONSE:\n  No arg \u2192 ServerHealthResponse `{health, configuration, loaded_archives, _meta}`.\n  With path \u2192 ArchiveValidationResponse `{is_valid (check() result), has_checksum, checksum, has_fulltext_index, has_title_index, uuid, is_multipart, path, name, _meta}`.\n",
     "inputSchema": {
-      "properties": {},
+      "properties": {
+        "zim_file_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zim File Path"
+        }
+      },
       "title": "zim_healthArguments",
       "type": "object"
     }
@@ -290,8 +303,8 @@
     }
   },
   "zim_metadata": {
-    "bytes": 1195,
-    "description": "Inspect a ZIM archive's metadata + namespace inventory.\n\nReturns the M-namespace fields (Name, Title, Creator, Date, \u2026) plus\nthe per-namespace entry counts in one combined response. Replaces\nthe legacy `get_zim_metadata` + `list_namespaces` pair.\n\nALIASES: callers may say \"metadata for <archive>\", \"what's in this\nzim\", \"describe the archive\". Route through THIS tool.\n\nPARAMETERS:\n  zim_file_path     REQUIRED. The archive to inspect.\n\nRESPONSE:\n  ArchiveMetadataResponse with:\n    - metadata: flat dict[str, str] of M-namespace fields.\n    - namespaces: list of NamespaceInfo (letter + total +\n      discovery diagnostics).\n    - _meta: standard envelope.\n\n  **NO `main_page_path` field.** The canonical main-page fetch is\n  `zim_get(main_page=True)` \u2014 surfacing the path here would create\n  two routes a small model would null-check unnecessarily.\n\nERRORS:\n  Missing/invalid `zim_file_path` returns a structured error envelope.\n",
+    "bytes": 1458,
+    "description": "Inspect a ZIM archive's metadata + namespace inventory.\n\nReturns the M-namespace fields (Name, Title, Creator, Date, \u2026) plus\nthe per-namespace entry counts in one combined response. Replaces\nthe legacy `get_zim_metadata` + `list_namespaces` pair.\n\nALIASES: callers may say \"metadata for <archive>\", \"what's in this\nzim\", \"describe the archive\". Route through THIS tool.\n\nPARAMETERS:\n  zim_file_path     REQUIRED. The archive to inspect.\n\nRESPONSE:\n  ArchiveMetadataResponse with:\n    - metadata: flat dict[str, str] of M-namespace fields.\n    - namespaces: list of NamespaceInfo (letter + total + diagnostics).\n    - archive_identity `{uuid, is_multipart}` + index_capabilities\n      `{has_fulltext_index, has_title_index}` \u2014 identity and whether\n      search / suggestions will work.\n    - counter_breakdown `{mimetype: count}` parsed from M/Counter;\n      omitted when absent.\n    - `_meta`: standard envelope.\n\n  **NO `main_page_path` field.** The canonical main-page fetch is\n  `zim_get(main_page=True)` \u2014 surfacing the path here would create\n  two routes a small model would null-check unnecessarily.\n\nERRORS:\n  Missing/invalid `zim_file_path` returns a structured error envelope.\n",
     "inputSchema": {
       "properties": {
         "zim_file_path": {

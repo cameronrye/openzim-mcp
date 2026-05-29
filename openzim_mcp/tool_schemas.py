@@ -339,7 +339,14 @@ class ZimMetadataResponse(TypedDict):
     all_entry_count: int
     article_count: int
     media_count: int
+    # Native libzim identity + index-capability fields.
+    uuid: str
+    is_multipart: bool
+    has_fulltext_index: bool
+    has_title_index: bool
     metadata_entries: NotRequired[dict[str, Any]]
+    # Parsed ``M/Counter`` — {mimetype: count}. Omitted when absent.
+    counter_breakdown: NotRequired[dict[str, int]]
     _meta: MetaEnvelope
 
 
@@ -741,6 +748,34 @@ class ArchiveMetadataResponse(TypedDict):
 
     metadata: dict[str, str]
     namespaces: list[NamespaceInfo]
+    # Native libzim archive identity ({uuid, is_multipart}) and index
+    # capabilities ({has_fulltext_index, has_title_index}). Always emitted by
+    # get_archive_metadata_data, so they are required (not NotRequired).
+    archive_identity: dict[str, Any]
+    index_capabilities: dict[str, bool]
+    # Parsed ``M/Counter`` breakdown ({mimetype: count}); omitted when the
+    # archive carries no Counter metadata.
+    counter_breakdown: NotRequired[dict[str, int]]
+    _meta: MetaEnvelope
+
+
+class ArchiveValidationResponse(TypedDict):
+    """Per-archive validation payload from ``zim_health(zim_file_path=...)``.
+
+    Reports the native ``Archive.check()`` integrity result, checksum
+    availability, index presence, and archive identity. Distinct from the
+    server-state ``ServerHealthResponse`` returned by ``zim_health()``.
+    """
+
+    path: str
+    name: str
+    is_valid: bool  # Archive.check() — internal checksum verification
+    has_checksum: bool
+    checksum: Optional[str]  # hex digest when has_checksum, else None
+    has_fulltext_index: bool
+    has_title_index: bool
+    uuid: str
+    is_multipart: bool
     _meta: MetaEnvelope
 
 

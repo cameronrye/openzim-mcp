@@ -222,7 +222,9 @@ class TestGetZimMetadataDataMeta:
         zim_file = self._zim_file(temp_dir)
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
-        cache_key = f"metadata_data:{validated}"
+        # Key bumped to v2c when the metadata shape gained identity/index/
+        # counter fields (see get_zim_metadata_data).
+        cache_key = f"metadata_data:v2c:{validated}"
         seeded = {
             "title": "Test",
             "language": "eng",

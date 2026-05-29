@@ -9,7 +9,7 @@ the event loop during I/O-bound operations.
 import asyncio
 import logging
 from functools import partial
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from .zim_operations import ZimOperations
 
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .server import OpenZimMcpServer
     from .tool_schemas import (
         ArchiveMetadataResponse,
+        ArchiveValidationResponse,
         ArticleStructureResponse,
         BatchEntryResponse,
         BinaryEntryResponse,
@@ -746,11 +747,39 @@ class AsyncZimOperations:
         # a tightening, not a lossy projection.
         metadata_entries = metadata_resp.get("metadata_entries", {}) or {}
         flat_metadata: Dict[str, str] = {k: str(v) for k, v in metadata_entries.items()}
-        return {
+        # Surface the native identity + index-capability fields (and the
+        # parsed Counter breakdown) carried on the ZimMetadataResponse. They
+        # are grouped into nested objects so small models can read them as a
+        # unit rather than null-checking a handful of flat keys.
+        result: Dict[str, Any] = {
             "metadata": flat_metadata,
-            "namespaces": namespaces_list,  # type: ignore[typeddict-item]
+            "namespaces": namespaces_list,
+            "archive_identity": {
+                "uuid": metadata_resp.get("uuid"),
+                "is_multipart": metadata_resp.get("is_multipart"),
+            },
+            "index_capabilities": {
+                "has_fulltext_index": metadata_resp.get("has_fulltext_index"),
+                "has_title_index": metadata_resp.get("has_title_index"),
+            },
             "_meta": {},
         }
+        counter_breakdown = metadata_resp.get("counter_breakdown")
+        if counter_breakdown:
+            result["counter_breakdown"] = counter_breakdown
+        return cast("ArchiveMetadataResponse", result)
+
+    async def get_archive_validation_data(
+        self, zim_file_path: str
+    ) -> "ArchiveValidationResponse":
+        """Per-archive validation (``zim_health(zim_file_path=...)``).
+
+        Runs ``Archive.check()`` plus checksum / index / identity reads in a
+        worker thread so the event loop isn't blocked by the integrity scan.
+        """
+        return await asyncio.to_thread(
+            self._ops.get_archive_validation_data, zim_file_path
+        )
 
     async def get_health_data(
         self, server: "OpenZimMcpServer"
