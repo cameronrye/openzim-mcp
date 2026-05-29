@@ -1,9 +1,12 @@
 """Regression tests for the post-v2.0.5 beta-test sweep.
 
-Three follow-on defects surfaced by a live two-archive verification
+Five follow-on defects surfaced by a live two-archive verification
 sweep against v2.0.5 (``zim.owl-atlas.ts.net``,
 ``wikipedia_en_all_maxi_2026-02`` + ``superuser.com_en_all_2026-02``)
-after PR #219 shipped. All three are sibling widenings of pre-existing
+after PR #219 shipped. First three (D-K / D-L / D-M) caught on the
+initial sweep; second pass against the now-clean compact-search path
+surfaced D-N / D-O as sibling-of-D-L widenings on the other compact
+no-results renderers. All five are sibling widenings of pre-existing
 narrow fixes — same "narrow-scope sibling" pattern as PR #219 itself
 (``IntentParser`` lowercases all entry_paths via Rule 1, the post-a11
 E1 title-index probe only fired on multi-word tails, and the simple-
@@ -43,6 +46,20 @@ tools no-results recovery diverged from the non-compact formatter).
   the ambiguous-archive gate had to guess which alternative to
   try. Add a "Try one of these to recover:" block matching the
   shape used elsewhere.
+
+* D-N — ``render_find_by_title`` no-results body
+  (``compact_renderers.py:172-177``) suggested only
+  ``suggestions for X`` and ``search for X``. The
+  ``tell me about X`` cross-intent path (fuzzy title-index + RAG
+  fallback) is exactly what a missed `find article titled X`
+  caller would benefit from next, and it was absent.
+
+* D-O — ``render_search_all`` no-results body
+  (``compact_renderers.py:404-407``) suggested ``suggestions for
+  X``, broadening, and ``list_zim_files``. The ``tell me about
+  X`` cross-intent path (synthesize-mode auto-opens every loaded
+  archive) is the natural cross-archive structured-lookup escape
+  hatch and was missing.
 """
 
 from unittest.mock import MagicMock, Mock
@@ -427,6 +444,121 @@ class TestSearchNoResultsCompactFooterCrossIntentSuggestion:
             options={"compact": True},
         )
         assert 'No results for "nonexistentxyzqwer123".' in result
+
+
+# ===========================================================================
+# D-L sibling — `render_find_by_title` no-results body cross-intent bullet.
+# Same defect class as D-L (compact-mode search no-results), confirmed live
+# on v2.0.5: `find article titled nonexistentxyzqwer123` suggests
+# `suggestions for X` and `search for X` but NOT `tell me about X`
+# (which is the natural next step — fuzzy title-index + RAG fallback).
+# ===========================================================================
+
+
+class TestFindByTitleNoResultsIncludesTellMeAboutBullet:
+    """Pre-fix, ``render_find_by_title``'s no-results body
+    (``compact_renderers.py:172-177``) suggested only
+    ``suggestions for X`` and ``search for X``. The
+    ``tell me about X`` cross-intent path — fuzzy title-index +
+    RAG fallback — is the most natural next step for a caller who
+    tried ``find article titled X`` and missed; add it to the
+    recovery options."""
+
+    def test_no_results_body_includes_tell_me_about_bullet(self) -> None:
+        from openzim_mcp.compact_renderers import render_find_by_title
+
+        out = render_find_by_title({"results": []}, "nonexistentxyzqwer123")
+        assert (
+            "tell me about nonexistentxyzqwer123" in out
+        ), f"Cross-intent `tell me about X` recovery missing. Got:\n{out}"
+
+    def test_no_results_body_still_includes_suggestions_and_search_recoveries(
+        self,
+    ) -> None:
+        """Regression: the existing recovery options must stay."""
+        from openzim_mcp.compact_renderers import render_find_by_title
+
+        out = render_find_by_title({"results": []}, "nonexistentxyzqwer123")
+        assert "suggestions for nonexistentxyzqwer123" in out
+        assert "search for nonexistentxyzqwer123" in out
+
+    def test_results_present_does_not_render_recovery_block(self) -> None:
+        """Regression: when the title-index returns hits, the
+        recovery block must not appear (results take priority)."""
+        from openzim_mcp.compact_renderers import render_find_by_title
+
+        out = render_find_by_title(
+            {
+                "results": [
+                    {
+                        "title": "Photosynthesis",
+                        "path": "Photosynthesis",
+                        "score": 1.0,
+                    }
+                ]
+            },
+            "photosynthesis",
+        )
+        assert "tell me about photosynthesis" not in out
+        assert "No article found" not in out
+
+
+# ===========================================================================
+# D-L sibling — `render_search_all` no-results body cross-intent bullet.
+# Same defect class, confirmed live: `search all files for X` →
+# `No results in any archive. Try \`suggestions for X\`, broaden the terms,
+# or check \`list_zim_files\`.` — missing the cross-intent path.
+# ===========================================================================
+
+
+class TestSearchAllNoResultsIncludesTellMeAboutBullet:
+    """Pre-fix, ``render_search_all``'s no-results body
+    (``compact_renderers.py:404-407``) suggested ``suggestions for X``,
+    broadening, and ``list_zim_files`` — no cross-intent path. Add
+    ``tell me about X`` (synthesize-mode auto-opens every loaded
+    archive) since it's the natural cross-archive structured-lookup
+    escape hatch.
+    """
+
+    def test_no_results_body_includes_tell_me_about_bullet(self) -> None:
+        from openzim_mcp.compact_renderers import render_search_all
+
+        out = render_search_all(
+            {"results": [], "files_searched": 2, "files_failed": 0},
+            "nonexistentxyzqwer123",
+        )
+        assert (
+            "tell me about nonexistentxyzqwer123" in out
+        ), f"Cross-intent `tell me about X` recovery missing. Got:\n{out}"
+
+    def test_no_results_body_preserves_existing_recoveries(self) -> None:
+        """Regression: existing suggestions remain — `suggestions
+        for X` alt_spelling pointer and `list_zim_files` hint."""
+        from openzim_mcp.compact_renderers import render_search_all
+
+        out = render_search_all(
+            {"results": [], "files_searched": 2, "files_failed": 0},
+            "nonexistentxyzqwer123",
+        )
+        assert "suggestions for nonexistentxyzqwer123" in out
+        assert "list_zim_files" in out
+
+    def test_all_archives_failed_path_unchanged(self) -> None:
+        """Regression: the all-archives-failed branch
+        (``files_failed >= files_searched``) emits a structural
+        error message — ``tell me about X`` is irrelevant when
+        archives themselves are unreachable, so the cross-intent
+        bullet must NOT appear in this branch."""
+        from openzim_mcp.compact_renderers import render_search_all
+
+        out = render_search_all(
+            {"results": [], "files_searched": 2, "files_failed": 2},
+            "anything",
+        )
+        # Structural error message should fire instead.
+        assert "returned errors before search" in out
+        # No cross-intent bullet here — the issue isn't the query.
+        assert "tell me about anything" not in out
 
 
 # ===========================================================================
