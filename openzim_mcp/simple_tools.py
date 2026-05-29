@@ -931,10 +931,28 @@ class SimpleToolsHandler:
                 if not zim_file_path:
                     zim_file_path = self._auto_select_zim_file()
                 if not zim_file_path:
+                    # Post-v2.0.5 D-M: callers hitting the
+                    # ambiguous-archive gate (2+ archives loaded, no
+                    # ``zim_file_path`` arg, intent doesn't
+                    # auto-select) saw only "specify a ZIM file
+                    # path" with a raw file listing — no hint that
+                    # ``search all files for X`` or
+                    # ``synthesize=True`` would route across all
+                    # archives without an explicit path. Add a
+                    # "Try one of these to recover:" block
+                    # mirroring the shape used elsewhere.
                     return (
                         "**No ZIM File Specified**\n\n"
                         "Please specify a ZIM file path, or ensure there is "
                         "exactly one ZIM file available.\n\n"
+                        "**Try one of these to recover:**\n"
+                        "- Pass the `zim_file_path` argument to target a "
+                        "specific archive\n"
+                        "- `search all files for <terms>` — fan out across "
+                        "every loaded archive\n"
+                        "- `tell me about <topic>` with `synthesize=True` — "
+                        "auto-open every loaded archive and pick the best "
+                        "hit\n\n"
                         "**Available files:**\n"
                         f"{self.zim_operations.list_zim_files()}"
                         "\n<!-- intent=no_zim_file_specified cert=1.00 -->"
@@ -3659,13 +3677,24 @@ class SimpleToolsHandler:
                     "'show \"C/Evolution\"'"
                 )
             entry_path = cleaned_query
-        # A11 E1: also probe the title index for ``get article``
-        # natural-language paths — ``get article List of common
-        # misconceptions`` used to fail. Skip the probe for paths that
-        # look already-stored (contain underscores or namespace
-        # prefix) to keep the direct-path lookup zero-cost.
-        if " " in entry_path and "/" not in entry_path:
-            entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
+        # A11 E1: probe the title index so natural-language paths
+        # like ``get article List of common misconceptions`` resolve
+        # to the underscored canonical path. Post-v2.0.5 D-K: dropped
+        # the original ``" " in entry_path`` gate so single-token
+        # tails (``get article Biology``) also route through the
+        # probe — the parser lowercases all entry_paths (Rule 1) and
+        # most articles in ``wikipedia_en_all_maxi_2026-02`` don't
+        # ship a lowercase redirect, so the direct path lookup
+        # silently failed for ``biology`` even though the title
+        # index resolves it to ``Biology`` at score 1.00. Sibling
+        # handlers (structure / summary / get_section / links)
+        # already probe unconditionally; this restores parity. The
+        # probe is a single Xapian title-index lookup with
+        # ``min_score=0.8``; on a miss it returns ``entry_path``
+        # unchanged, so namespace-prefixed paths (``A/Biology``)
+        # still fall through to the direct lookup at zero behaviour
+        # cost.
+        entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         try:
             return self.zim_operations.get_zim_entry(
                 zim_file_path,
@@ -3765,10 +3794,31 @@ class SimpleToolsHandler:
                     limit=limit,
                 )
                 meta = payload.get("_meta", {})
+                # Post-v2.0.5 D-L: inject a cross-intent
+                # ``tell me about {display_query}`` suggestion into
+                # the meta footer so the compact-mode caller sees
+                # the same structured-topic-lookup escape hatch the
+                # non-compact ``_format_search_text`` body offers
+                # (``zim/search.py:779``). Pre-fix, the compact
+                # footer only carried backend-derived suggestions
+                # (alt_spelling / alt_archive) when present, and
+                # fell through to the terse one-liner
+                # ``> No results. Try a shorter or differently-
+                # spelled query.`` when they were absent — leaving
+                # callers without a pointer to the more powerful
+                # ``tell me about X`` path. Appended (not
+                # prepended) so the typo-catching ``suggestions for
+                # X`` hint stays first when the backend supplied
+                # it.
+                truncated = display_query[:30]
+                backend_suggestions = list(meta.get("suggestions") or [])
+                backend_suggestions.append(
+                    {"type": "cross_intent_tell_me_about", "value": truncated}
+                )
                 return _HandlerResult(
                     body=f'No results for "{display_query}".',
                     reason=meta.get("reason", "0_hits"),
-                    suggestions=meta.get("suggestions"),
+                    suggestions=backend_suggestions,
                 )
             # D6: promote canonical title-index hit if the top BM25 hit
             # isn't a strong title match. Only on first page. The splice

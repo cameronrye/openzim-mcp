@@ -211,6 +211,16 @@ def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
                 bits.append(f"`search {v}` (broader)")
             elif t == "narrower":
                 bits.append(f"`search {v}` (narrower)")
+            elif t == "cross_intent_tell_me_about":
+                # Post-v2.0.5 D-L: structured-topic-lookup escape
+                # hatch injected by the simple-mode search handler
+                # so compact-mode callers see the same
+                # ``tell me about X`` cross-intent nudge that the
+                # non-compact ``_format_search_text`` body emits
+                # (``zim/search.py:779``). Distinct type so the
+                # handler can append it without colliding with
+                # backend-derived suggestion types.
+                bits.append(f"`tell me about {v}`")
             else:
                 bits.append(f"`{v}`")
         return "> No results. Try: " + " · ".join(bits)
