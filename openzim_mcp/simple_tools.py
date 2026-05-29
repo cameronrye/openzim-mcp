@@ -1568,9 +1568,7 @@ class SimpleToolsHandler(
             )
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         try:
-            return self.zim_operations.get_table_of_contents(
-                zim_file_path, entry_path
-            )
+            return self.zim_operations.get_table_of_contents(zim_file_path, entry_path)
         except Exception as e:
             # Post-v2.0.5 D-Q: ``_handle_toc`` was the one structure/content
             # handler that never routed through ``_render_not_found_recovery``

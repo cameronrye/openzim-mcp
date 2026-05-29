@@ -52,9 +52,10 @@ class TestOpenZimMcpCache:
         config = CacheConfig(
             enabled=True, persistence_enabled=True, persistence_path=str(tmp_path)
         )
-        with patch.object(atexit, "register") as reg, patch.object(
-            atexit, "unregister"
-        ) as unreg:
+        with (
+            patch.object(atexit, "register") as reg,
+            patch.object(atexit, "unregister") as unreg,
+        ):
             cache = OpenZimMcpCache(config, enable_background_cleanup=True)
             registered = {c.args[0] for c in reg.call_args_list}
             # Both the save and cleanup-stop handlers were registered and

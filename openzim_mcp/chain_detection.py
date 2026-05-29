@@ -26,9 +26,7 @@ class _ChainMixin:
 
         zim_operations: "ZimOperations"
 
-        def _recase_from_original(
-            self, token: str, original_query: str
-        ) -> str: ...
+        def _recase_from_original(self, token: str, original_query: str) -> str: ...
 
     # A11 B1: connector tokens that split a chained query into two
     # halves. Each connector is a whole-word match (surrounded by

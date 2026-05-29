@@ -361,7 +361,7 @@ class TestNativeTitleLookup:
         assert data["results"], "expected at least one result"
         top = data["results"][0]
         assert "CC" in top["path"]
-        assert top["score"] == 1.0
+        assert top["score"] == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
