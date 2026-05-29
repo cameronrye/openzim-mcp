@@ -80,6 +80,7 @@ def _make_archive(html: str, *, title: str, entry_path: str) -> MagicMock:
     entry = MagicMock()
     entry.title = title
     entry.path = entry_path
+    entry.is_redirect = False
     entry.get_item.return_value = item
     archive = MagicMock()
     archive.get_entry_by_path.return_value = entry
@@ -311,3 +312,121 @@ def test_filtered_scan_dedupes_query_variants(tmp_path) -> None:
     canon = [canonical_result_path(p) for p in paths]
     assert len(canon) == len(set(canon)), f"duplicate canonical paths: {paths}"
     assert len(page) == 3  # three distinct quiz pages, variants collapsed
+
+
+# --------------------------------------------------------------------------
+# Pass-7: select_main_content robustness (empty landmark, precedence)
+# --------------------------------------------------------------------------
+
+
+def test_select_main_content_skips_empty_landmark() -> None:
+    """An empty/whitespace-only landmark must not be chosen over real content
+    elsewhere; the helper falls back rather than dropping the body."""
+    from bs4 import BeautifulSoup
+
+    from openzim_mcp.content_processor import select_main_content
+
+    # The only landmark (<main>) is empty; real content sits in a body
+    # sibling. Selecting the empty landmark would drop all content.
+    html = "<body><main>   </main><p>The real article body lives here.</p></body>"
+    soup = BeautifulSoup(html, "html.parser")
+    node = select_main_content(soup)
+    assert "The real article body lives here." in node.get_text()
+
+
+def test_select_main_content_prefers_article_over_broad_role_main() -> None:
+    """When [role=main] wraps both <article> and an <aside> sidebar, the
+    single <article> (narrower) should win so the sidebar is excluded."""
+    from bs4 import BeautifulSoup
+
+    from openzim_mcp.content_processor import select_main_content
+
+    html = (
+        "<body><div role='main'>"
+        "<article><p>The real article prose.</p></article>"
+        "<aside><p>Sidebar navigation junk.</p></aside>"
+        "</div></body>"
+    )
+    soup = BeautifulSoup(html, "html.parser")
+    text = select_main_content(soup).get_text()
+    assert "The real article prose." in text
+    assert "Sidebar navigation junk." not in text
+
+
+# --------------------------------------------------------------------------
+# Pass-7 / C: entry-content fetch (get_zim_entry / get_entries) scoping
+# --------------------------------------------------------------------------
+
+
+def test_process_mime_content_scope_main_content(cp: ContentProcessor) -> None:
+    scoped = cp.process_mime_content(
+        ZIMIT_HTML.encode("utf-8"), "text/html", compact=True, scope_main_content=True
+    )
+    full = cp.process_mime_content(
+        ZIMIT_HTML.encode("utf-8"), "text/html", compact=True, scope_main_content=False
+    )
+    assert "Type 2 diabetes is a long-term" in scoped
+    assert "official website" not in scoped
+    assert "Stay Connected" not in scoped
+    # Default (False) is unchanged: full-page chrome still present.
+    assert "official website" in full
+
+
+def test_get_zim_entry_scopes_to_main_content(tmp_path) -> None:
+    """get_zim_entry returns article content, not site chrome, for an entry
+    wrapped in a main-content landmark."""
+    from openzim_mcp.cache import OpenZimMcpCache
+    from openzim_mcp.config import CacheConfig, ContentConfig, OpenZimMcpConfig
+    from openzim_mcp.security import PathValidator
+    from openzim_mcp.zim_operations import ZimOperations
+
+    config = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        cache=CacheConfig(enabled=False, max_size=10, ttl_seconds=60),
+        content=ContentConfig(max_content_length=100000, snippet_length=200),
+    )
+    ops = ZimOperations(
+        config,
+        PathValidator(config.allowed_directories),
+        OpenZimMcpCache(config.cache),
+        ContentProcessor(),
+    )
+    out = ops._get_zim_entry_from_archive(
+        _make_archive(ZIMIT_HTML, title="Type 2 Diabetes", entry_path="C/000313"),
+        tmp_path / "x.zim",
+        "C/000313",
+        100000,
+        0,
+    )
+    assert "Type 2 diabetes is a long-term" in out
+    assert "official website" not in out
+    assert "Stay Connected" not in out
+
+
+# --------------------------------------------------------------------------
+# Pass-7 / E: heading offset matching tolerates html2text escaping (#6 root)
+# --------------------------------------------------------------------------
+
+
+def test_bundle_locates_html2text_escaped_numbered_headings(
+    cp: ContentProcessor,
+) -> None:
+    """IEP-style numbered headings (<h2><strong>1. X</strong></h2>) render via
+    html2text as '## **1\\. X**' (bold + backslash-escaped period). The
+    section-offset matcher must still locate them, otherwise the H2 sections
+    are silently dropped and their H3 children misnest under the H1 (beta #6)."""
+    numbered = (
+        "<body><article>"
+        "<h1>Doc</h1><p>lead paragraph</p>"
+        "<h2><strong>1. First Section</strong></h2><p>alpha body</p>"
+        "<h3>a. A Subsection</h3><p>sub body</p>"
+        "<h2>2. Second Section</h2><p>beta body</p>"
+        "</article></body>"
+    )
+    archive = _make_archive(numbered, title="Doc", entry_path="C/doc")
+    bundle = extract_entry_bundle(archive, "C/doc", content_processor=cp)
+    secs = {s["title"]: s for s in bundle["sections"]}
+    assert "1. First Section" in secs
+    assert "2. Second Section" in secs
+    # The H3 nests under its H2 parent, not the H1 — the #6 fix.
+    assert secs["a. A Subsection"]["parent_id"] == secs["1. First Section"]["id"]

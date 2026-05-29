@@ -550,7 +550,10 @@ class _ContentMixin:
             item = entry.get_item()
             content_type = item.mimetype or ""
             content = self.content_processor.process_mime_content(
-                bytes(item.content), content_type, compact=compact
+                bytes(item.content),
+                content_type,
+                compact=compact,
+                scope_main_content=True,
             )
         except Exception as e:
             logger.warning(f"Error getting entry content: {e}")
@@ -1088,9 +1091,14 @@ class _ContentMixin:
             mime_type = item.mimetype or ""
             content_type = mime_type
 
-            # Process content based on MIME type
+            # Process content based on MIME type. ``scope_main_content`` strips
+            # ZIMIT/warc2zim site chrome from the primary entry-content fetch
+            # so get_zim_entry / get_entries match the cleaned bundle tools.
             content = self.content_processor.process_mime_content(
-                bytes(item.content), mime_type, compact=compact
+                bytes(item.content),
+                mime_type,
+                compact=compact,
+                scope_main_content=True,
             )
 
         except Exception as e:
