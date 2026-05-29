@@ -57,6 +57,39 @@ _FILTERED_BATCH_SIZE = 500
 _FILTERED_MAX_SCAN = 10000
 
 
+def _no_fulltext_index_payload(
+    query: str,
+    *,
+    offset: int,
+    limit: int,
+    namespace: Optional[str] = None,
+    content_type: Optional[str] = None,
+    filtered: bool = False,
+) -> Dict[str, Any]:
+    """Build the empty search payload for an archive with no fulltext index.
+
+    Shared by ``search_zim_file_data`` and ``search_with_filters_data`` so
+    both degrade to the same ``reason="no_xapian_index"`` contract instead
+    of diverging (the filtered path previously raised a hard error).
+    """
+    payload: Dict[str, Any] = {
+        "query": query,
+        "results": [],
+        "next_cursor": None,
+        "total": 0,
+        "done": True,
+        "page_info": {
+            "offset": offset,
+            "limit": limit,
+            "returned_count": 0,
+        },
+    }
+    if filtered:
+        payload["namespace_filter"] = namespace
+        payload["content_type_filter"] = content_type
+    return payload
+
+
 @dataclass(frozen=True)
 class _FilteredScanState:
     """Aggregate state captured during one filtered-search scan pass."""
@@ -444,6 +477,22 @@ class _SearchMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
+                # Explicit precheck: an archive with no full-text (Xapian)
+                # index can't be searched — surface the structured reason
+                # rather than constructing a Searcher just to catch the
+                # resulting RuntimeError. Authoritative and message-format
+                # independent (the old string-match on the exception text
+                # didn't even match libzim's current wording).
+                if not archive.has_fulltext_index:
+                    return cast(
+                        "SearchResponse",
+                        attach_meta(
+                            _no_fulltext_index_payload(
+                                query, offset=offset, limit=limit
+                            ),
+                            reason="no_xapian_index",
+                        ),
+                    )
                 payload, total_results = self._perform_search(
                     archive, query, limit, offset, validated_path=validated_path
                 )
@@ -549,35 +598,11 @@ class _SearchMixin:
                 self.cache.set(cache_key, with_meta)
             return cast("SearchResponse", with_meta)
 
-        except OpenZimMcpArchiveError as e:
-            # Detect "no Xapian index" so we can return a structured reason
-            # instead of just an opaque archive error. libzim raises
-            # RuntimeError("Archive has no fulltext index") under the hood;
-            # the typed wrapper carries that message verbatim.
-            msg = str(e).lower()
-            if (
-                "no fulltext index" in msg
-                or "no full-text index" in msg
-                or "no xapian" in msg
-            ):
-                empty_payload2: Dict[str, Any] = {
-                    "query": query,
-                    "results": [],
-                    "next_cursor": None,
-                    "total": 0,
-                    "done": True,
-                    "page_info": {
-                        "offset": offset,
-                        "limit": limit,
-                        "returned_count": 0,
-                    },
-                }
-                return cast(
-                    "SearchResponse",
-                    attach_meta(empty_payload2, reason="no_xapian_index"),
-                )
+        except OpenZimMcpArchiveError:
+            # Missing-fulltext-index is now handled by the explicit precheck
+            # above; any OpenZimMcpArchiveError here is a genuine failure.
             # Inner helper already raised a typed archive error with full
-            # context. Don't re-wrap and double the message prefix.
+            # context — don't re-wrap and double the message prefix.
             raise
         except Exception as e:
             logger.error(f"Search failed for {validated_path}: {e}")
@@ -1161,6 +1186,17 @@ class _SearchMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
+                # Mirror search_with_filters_data: degrade gracefully when the
+                # archive has no full-text index rather than letting the
+                # Searcher raise (which this wrapper would re-wrap as a hard
+                # OpenZimMcpArchiveError). Not cached — same rationale as the
+                # zero-result path below.
+                if not archive.has_fulltext_index:
+                    echo_query = display_query or query
+                    return (
+                        f"No full-text index in this archive; filtered search "
+                        f'for "{echo_query}" is unavailable.'
+                    )
                 result, total_filtered = self._perform_filtered_search(
                     archive,
                     query,
@@ -1285,6 +1321,24 @@ class _SearchMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
+                # Same explicit precheck as search_zim_file_data: degrade
+                # gracefully to reason="no_xapian_index" when the archive has
+                # no full-text index, instead of raising a hard archive error.
+                if not archive.has_fulltext_index:
+                    return cast(
+                        "SearchWithFiltersResponse",
+                        attach_meta(
+                            _no_fulltext_index_payload(
+                                query,
+                                offset=offset,
+                                limit=limit,
+                                namespace=namespace,
+                                content_type=content_type,
+                                filtered=True,
+                            ),
+                            reason="no_xapian_index",
+                        ),
+                    )
                 results, scan = self._perform_filtered_search_data(
                     archive, query, namespace, content_type, limit, offset
                 )
@@ -2364,6 +2418,17 @@ class _SearchMixin:
 
         Returns the resolved Entry on first match, or None on miss.
         """
+        # Strongest signal first: an exact match against libzim's native
+        # title index. This resolves titles whose on-disk path differs from
+        # the title (e.g. title "Climate Change" filed at path "A/CC") that
+        # the case-variant path probe below can never reach. ``has_entry_by_
+        # title`` avoids the KeyError ``get_entry_by_title`` raises on a miss.
+        try:
+            if archive.has_entry_by_title(title):
+                return archive.get_entry_by_title(title)
+        except Exception as e:  # pragma: no cover — defensive
+            logger.debug(f"_find_entry_fast_path title probe {title!r} failed: {e}")
+
         normalized = title.replace(" ", "_")
         # Order matters: most specific / common first. ``capitalize`` only
         # uppercases the first character; ``title`` upper-cases each word.
@@ -2491,24 +2556,23 @@ class _SearchMixin:
         *,
         suggestion_limit: int,
     ) -> Tuple[Optional[Any], List[str]]:
-        """Merged single-sweep typo probe.
+        """Single-sweep typo probe (best entry + verified suggestions).
 
-        Combines the work that previously lived in
-        ``_find_entry_typo_fallback`` + ``_verified_typo_variants`` for the
-        same-archive cold-miss case. Both functions iterated the entire
-        ~700-variant set and called ``_find_entry_fast_path`` per variant,
+        Walks the ~700-variant typo set once, calling
+        ``_find_entry_fast_path`` per variant, and returns both the best
+        entry hit and the verified suggestion titles in one pass. This
+        replaced an earlier two-function design that iterated the variant
+        set twice — once for the entry, once for the suggestion titles —
         which on a ``find_entry_by_title`` zero-hit cold path doubled the
         archive lookup count and blew through the spec's 30 ms budget.
 
         Returns ``(best_entry, verified_titles)``:
 
-        - ``best_entry`` is the same Optional[Any] the legacy
-          ``_find_entry_typo_fallback`` returned (canonical preferred,
-          ``_TYPO_MAX_EXTRA_PROBES`` extra probes after first hit, redirect
-          chain followed).
-        - ``verified_titles`` is the same canonical-title list the legacy
-          ``_verified_typo_variants`` returned for a single archive,
-          capped at ``suggestion_limit``.
+        - ``best_entry`` is the canonical-preferred hit (``_TYPO_MAX_
+          EXTRA_PROBES`` extra probes after first hit, redirect chain
+          followed), or ``None``.
+        - ``verified_titles`` is the canonical-title list for
+          ``_meta.suggestions``, capped at ``suggestion_limit``.
         """
         if len(title) < self.config.search.fuzzy_title_min_query_len:
             return None, []
@@ -2558,66 +2622,6 @@ class _SearchMixin:
                     extra_probes += 1
         return best, verified
 
-    def _find_entry_typo_fallback(self, archive: Any, title: str) -> Optional[Any]:
-        """Try typo-corrected variants of ``title`` against the fast path.
-
-        Runs only when the case-variant fast path AND the libzim
-        suggestion search both came up empty — fuzzy-matching is a
-        last-resort try-this-before-giving-up step.
-
-        D1 (v2.0.0a9): the prior first-hit-wins iteration order picked
-        whichever variant came first alphabetically, which on real
-        Wikipedia returned typo-redirects (``Photosymthesis``) ahead of
-        canonical articles (``Photosynthesis``) — ``'m'`` < ``'n'`` at
-        position 7 of the alphabet sweep. The new shape: continue
-        iterating past the first hit, and prefer a canonical
-        (non-redirect) variant when one is reachable. After the first
-        hit we cap additional probes at ``_TYPO_MAX_EXTRA_PROBES`` to
-        keep worst-case latency bounded.
-
-        Both hit entries are passed through redirect-following so a
-        redirect-only variant still resolves to its canonical target —
-        the caller wants the actual article, not the misspelling page.
-
-        Length-gated via config.search.fuzzy_title_min_query_len (default >= 4):
-        short queries like ``"DNA"`` or ``"Pi"`` get too many spurious
-        adjacent-swap collisions to be worth the lookup cost.
-        """
-        if len(title) < self.config.search.fuzzy_title_min_query_len:
-            return None
-
-        best: Optional[Any] = None
-        best_is_canonical = False
-        extra_probes = 0
-        for variant in self._typo_variants(title):
-            # Bound additional work: once we have a hit AND a canonical
-            # alternative, stop. Otherwise allow ``_TYPO_MAX_EXTRA_PROBES``
-            # more probes to look for a canonical that would beat the
-            # redirect we found first.
-            if best is not None:
-                if best_is_canonical:
-                    break
-                if extra_probes >= self._TYPO_MAX_EXTRA_PROBES:
-                    break
-            entry = self._find_entry_fast_path(archive, variant)
-            if entry is None:
-                if best is not None:
-                    extra_probes += 1
-                continue
-            source_is_canonical = not bool(getattr(entry, "is_redirect", False))
-            resolved = self._follow_redirect_chain(entry)
-            if best is None:
-                best = resolved
-                best_is_canonical = source_is_canonical
-            elif source_is_canonical and not best_is_canonical:
-                # A canonical variant beats a redirect we found earlier
-                # in the alphabetical sweep.
-                best = resolved
-                best_is_canonical = True
-            else:
-                extra_probes += 1
-        return best
-
     @staticmethod
     def _follow_redirect_chain(entry: Any) -> Any:
         """Walk an entry's ``is_redirect`` chain to its canonical target.
@@ -2654,46 +2658,6 @@ class _SearchMixin:
             seen.add(tp)
             last_good = target
         return target
-
-    def _verified_typo_variants(
-        self, archives: List[Any], title: str, *, limit: int
-    ) -> List[str]:
-        """Return typo-variant *titles* that actually resolve to an entry.
-
-        Used to populate ``_meta.suggestions`` only with values the caller
-        can reuse as a query (Phase A #6 fix). The naive implementation
-        emitted raw permutations of the user's mangled input; this one
-        probes the same fast-path that produced the real results so
-        suggestions are guaranteed to be reachable.
-
-        ``archives`` is a list of open ``Archive`` objects (one per ZIM
-        file already opened by the caller); we probe each in order until
-        ``limit`` variants are confirmed. Length-gated identically to
-        ``_find_entry_typo_fallback``.
-        """
-        if len(title) < self.config.search.fuzzy_title_min_query_len:
-            return []
-        verified: List[str] = []
-        seen: set[str] = set()
-        for variant in self._typo_variants(title):
-            for archive in archives:
-                try:
-                    entry = self._find_entry_fast_path(archive, variant)
-                except Exception:
-                    continue
-                if entry is not None:
-                    # Follow redirects so the surfaced ``alt_spelling``
-                    # suggestion lands on the canonical article title,
-                    # not a typo-redirect's own (also-misspelled) title.
-                    target = self._follow_redirect_chain(entry)
-                    resolved = target.title or entry.title or variant
-                    if resolved not in seen:
-                        verified.append(resolved)
-                        seen.add(resolved)
-                    break
-            if len(verified) >= limit:
-                break
-        return verified
 
     def find_entry_by_title_data(
         self,

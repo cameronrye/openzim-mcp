@@ -54,6 +54,9 @@ def test_title_match_hit_survives_redirect_chain_returning_none() -> None:
     broken_redirect.get_redirect_entry.return_value = None
 
     archive = MagicMock()
+    # Lowercase query won't exact-match a capitalized title; exercise the
+    # case-variant path probe (the native title probe stays out).
+    archive.has_entry_by_title.return_value = False
     archive.has_entry_by_path.side_effect = lambda full: full.endswith("Bilogy")
     archive.get_entry_by_path.side_effect = lambda full: (
         broken_redirect if full.endswith("Bilogy") else None
@@ -99,6 +102,7 @@ def test_title_match_hit_returns_canonical_path_not_redirect_path() -> None:
             return redirect
         raise RuntimeError(f"no entry at {full_path!r}")
 
+    archive.has_entry_by_title.return_value = False
     archive.has_entry_by_path.side_effect = has_entry_by_path
     archive.get_entry_by_path.side_effect = get_entry_by_path
 

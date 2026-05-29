@@ -379,9 +379,33 @@ def test_enforce_budget_truncates_last_passage() -> None:
     ]
     capped = _enforce_budget(passages, char_budget=70)
     # First passage is 50 chars; budget allows 70. Second passage truncates to 20.
+    # No whitespace in the body, so the word-boundary snap is a no-op here.
     assert len(capped) == 2
     assert len(capped[0]["text_markdown"]) == 50
     assert len(capped[1]["text_markdown"]) == 20
+
+
+def test_enforce_budget_snaps_to_word_boundary() -> None:
+    from openzim_mcp.synthesize import _enforce_budget
+
+    # A 21-char budget lands mid-word: body[:21] is "Photosynthesis is a c"
+    # (cutting into "class"). The snap backs up to the last space so the
+    # passage ends on a whole word.
+    passages = [_passage("x/y", "Photosynthesis is a class of process", 1, 1.0)]
+    capped = _enforce_budget(passages, char_budget=21)
+    text = capped[0]["text_markdown"]
+    assert text == "Photosynthesis is a"
+    assert len(text) <= 21
+
+
+def test_enforce_budget_keeps_hard_cut_for_unbroken_token() -> None:
+    from openzim_mcp.synthesize import _enforce_budget
+
+    # A single token longer than the budget has no usable word boundary
+    # (snapping would discard >half the budget) — keep the hard cut.
+    passages = [_passage("x/y", "x" * 40, 1, 1.0)]
+    capped = _enforce_budget(passages, char_budget=10)
+    assert len(capped[0]["text_markdown"]) == 10
 
 
 def test_build_citations_dedupes_by_entry() -> None:

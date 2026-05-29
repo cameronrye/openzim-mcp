@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional, Tuple, cast
 
+import libzim  # type: ignore[import-untyped]
 from libzim.reader import Archive  # type: ignore[import-untyped]
 from libzim.search import (  # type: ignore[import-untyped]
     Query,
@@ -49,11 +50,13 @@ from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
 from openzim_mcp.zim.content import _ContentMixin
 from openzim_mcp.zim.namespace import _NamespaceMixin
+from openzim_mcp.zim.redirects import resolve_redirect_chain
 from openzim_mcp.zim.search import _SearchMixin
 from openzim_mcp.zim.structure import _StructureMixin
 
 if TYPE_CHECKING:
     from openzim_mcp.tool_schemas import (
+        ArchiveValidationResponse,
         EntryResponse,
         ListZimFilesResponse,
         ZimMetadataResponse,
@@ -67,6 +70,7 @@ __all__ = [
     "Searcher",
     "SuggestionSearcher",
     "ZimOperations",
+    "configure_libzim_caches",
     "zim_archive",
 ]
 
@@ -93,6 +97,70 @@ _METADATA_PREVIEW_CAP = 800
 # real value. Anything else (Date, Tags, Counter, ...) is plain text
 # and goes through unchanged.
 _HTML_MARKERS = ("<!doctype html", "<html", "<head", "<title>")
+
+
+# Optional per-archive dirent-cache size (number of cached dirents), applied
+# to every archive opened via ``zim_archive``. ``None`` leaves libzim's
+# default (512) untouched. The cluster cache, by contrast, is a *process*
+# global tuned directly via ``libzim.set_cluster_cache_max_size`` — see
+# ``configure_libzim_caches``. Stored at module scope because ``zim_archive``
+# is a module-level function with no access to server config.
+_LIBZIM_DIRENT_CACHE_MAX_COUNT: Optional[int] = None
+
+
+def configure_libzim_caches(
+    cluster_cache_max_size_bytes: Optional[int] = None,
+    dirent_cache_max_count: Optional[int] = None,
+) -> None:
+    """Apply optional libzim cache tuning.
+
+    libzim exposes two read-side caches with *different* units and scopes:
+
+    * The cluster cache is sized in **bytes** and is a **process-global**
+      setting (``libzim.set_cluster_cache_max_size``); the default is 16 MiB.
+    * The dirent cache is sized as a **count of dirents** and is a
+      **per-archive** property (``Archive.dirent_cache_max_size``); the
+      default is 512. It is applied per-open in ``zim_archive`` from the
+      module-level ``_LIBZIM_DIRENT_CACHE_MAX_COUNT`` set here.
+
+    ``None`` for either argument leaves libzim's default in place.
+    """
+    global _LIBZIM_DIRENT_CACHE_MAX_COUNT
+    if cluster_cache_max_size_bytes is not None:
+        try:
+            libzim.set_cluster_cache_max_size(cluster_cache_max_size_bytes)
+            logger.info(
+                "libzim cluster cache max size set to %d bytes (process-global)",
+                cluster_cache_max_size_bytes,
+            )
+        except Exception as e:  # pragma: no cover — defensive across versions
+            logger.debug("set_cluster_cache_max_size unavailable: %s", e)
+    # Guard on None so a caller tuning only the cluster cache doesn't clobber
+    # a dirent count another caller already set — ``None`` means "leave as-is",
+    # not "reset to default" (symmetric with the cluster branch above).
+    if dirent_cache_max_count is not None:
+        _LIBZIM_DIRENT_CACHE_MAX_COUNT = dirent_cache_max_count
+
+
+def _parse_counter_metadata(counter_str: str) -> Dict[str, int]:
+    """Parse an ``M/Counter`` value into a ``{mimetype: count}`` mapping.
+
+    The ``Counter`` metadata value is a ``;``-separated list of
+    ``mimetype=count`` pairs (e.g. ``"text/html=123;image/png=45"``).
+    Malformed pairs — missing ``=`` or a non-integer count — are skipped
+    rather than failing the whole parse; metadata is best-effort.
+    """
+    breakdown: Dict[str, int] = {}
+    for pair in counter_str.split(";"):
+        if "=" not in pair:
+            continue
+        mime, _, count_str = pair.partition("=")
+        mime = mime.strip()
+        try:
+            breakdown[mime] = int(count_str.strip())
+        except ValueError:
+            logger.debug("Skipping malformed Counter pair: %r", pair)
+    return breakdown
 
 
 def _extract_metadata_text(raw: str) -> str:
@@ -182,7 +250,16 @@ def zim_archive(
     import openzim_mcp.zim_operations as _zim_ops_shim
 
     def open_archive() -> Archive:
-        return _zim_ops_shim.Archive(str(file_path))
+        archive = _zim_ops_shim.Archive(str(file_path))
+        # Apply the optional per-archive dirent-cache size (count of
+        # dirents). ``None`` leaves libzim's default. Guarded so a binding
+        # that predates the settable property degrades silently.
+        if _LIBZIM_DIRENT_CACHE_MAX_COUNT is not None:
+            try:
+                archive.dirent_cache_max_size = _LIBZIM_DIRENT_CACHE_MAX_COUNT
+            except Exception as e:  # pragma: no cover — defensive across versions
+                logger.debug("dirent_cache_max_size unavailable: %s", e)
+        return archive
 
     try:
         archive = run_with_timeout(
@@ -231,6 +308,16 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         self.path_validator = path_validator
         self.cache = cache
         self.content_processor = content_processor
+        # Apply optional libzim cache tuning from config. Only touches
+        # process/global libzim state when at least one knob is set, so
+        # the default configuration leaves libzim's behaviour unchanged.
+        cluster_bytes = config.cache.libzim_cluster_cache_max_size_bytes
+        dirent_count = config.cache.libzim_dirent_cache_max_count
+        if cluster_bytes is not None or dirent_count is not None:
+            configure_libzim_caches(
+                cluster_cache_max_size_bytes=cluster_bytes,
+                dirent_cache_max_count=dirent_count,
+            )
         logger.info("ZimOperations initialized")
 
     def _scan_zim_files(self) -> List[Dict[str, Any]]:  # NOSONAR(python:S3776)
@@ -419,8 +506,10 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         validated_path = self.path_validator.validate_zim_file(validated_path)
 
         # Distinct cache key from the legacy string variant so the two
-        # don't collide on shared cache backends.
-        cache_key = f"metadata_data:{validated_path}"
+        # don't collide on shared cache backends. Bumped to v2c when the
+        # shape gained uuid / is_multipart / has_*_index / counter_breakdown
+        # so pre-upgrade cached responses (old shape) don't leak through.
+        cache_key = f"metadata_data:v2c:{validated_path}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached metadata dict for: {validated_path}")
@@ -464,6 +553,67 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             ensure_ascii=False,
         )
 
+    def get_archive_validation_data(
+        self, zim_file_path: str
+    ) -> "ArchiveValidationResponse":
+        """Validate a single ZIM archive and report its integrity + state.
+
+        Runs ``Archive.check()`` (the native MD5 verification) and reports
+        checksum availability, index capabilities, and identity. This is the
+        per-archive diagnostic behind ``zim_health(zim_file_path=...)`` —
+        distinct from the server-state report ``zim_health`` returns with no
+        argument.
+
+        Raises:
+            OpenZimMcpFileNotFoundError: If ZIM file not found
+            OpenZimMcpArchiveError: If validation fails
+        """
+        validated_path = self.path_validator.validate_path(zim_file_path)
+        validated_path = self.path_validator.validate_zim_file(validated_path)
+
+        # Include a file-identity (mtime:size) token so an in-place ZIM
+        # replacement invalidates the cached verdict. ``is_valid`` is an
+        # integrity assertion derived from the file's bytes — serving it
+        # stale after the file changed would be exactly backwards for a
+        # diagnostic tool. Mirrors the bundle / namespace / content caches.
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"validation_data:{validated_path}:{archive_stat_token(validated_path)}"
+        )
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Returning cached validation for: {validated_path}")
+            return cast("ArchiveValidationResponse", cached_result)
+
+        import openzim_mcp.zim_operations as _zim_ops_shim
+
+        try:
+            with _zim_ops_shim.zim_archive(validated_path) as archive:
+                has_checksum = bool(archive.has_checksum)
+                data: Dict[str, Any] = {
+                    "path": str(validated_path),
+                    "name": validated_path.name,
+                    # ``check()`` verifies the archive's internal checksum
+                    # over the whole file — the authoritative integrity test.
+                    "is_valid": bool(archive.check()),
+                    "has_checksum": has_checksum,
+                    "checksum": archive.checksum if has_checksum else None,
+                    "has_fulltext_index": bool(archive.has_fulltext_index),
+                    "has_title_index": bool(archive.has_title_index),
+                    "uuid": str(archive.uuid),
+                    "is_multipart": bool(archive.is_multipart),
+                }
+
+            with_meta = attach_meta(data)
+            self.cache.set(cache_key, with_meta)
+            logger.info(f"Validated archive: {validated_path}")
+            return cast("ArchiveValidationResponse", with_meta)
+
+        except Exception as e:
+            logger.error(f"Validation failed for {validated_path}: {e}")
+            raise OpenZimMcpArchiveError(f"Validation failed: {e}") from e
+
     def _extract_zim_metadata(  # NOSONAR(python:S3776)
         self, archive: Archive
     ) -> Dict[str, Any]:
@@ -475,6 +625,15 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             "article_count": archive.article_count,
             "media_count": archive.media_count,
         }
+
+        # Archive identity + index capabilities (native libzim reader fields).
+        # ``uuid`` is a ``uuid.UUID`` object — stringify for JSON. These are
+        # intrinsic, cheap reads and let callers know up front whether
+        # search/suggest will work without provoking an exception.
+        metadata["uuid"] = str(archive.uuid)
+        metadata["is_multipart"] = bool(archive.is_multipart)
+        metadata["has_fulltext_index"] = bool(archive.has_fulltext_index)
+        metadata["has_title_index"] = bool(archive.has_title_index)
 
         # Try to get metadata from M namespace
         metadata_entries = {}
@@ -652,6 +811,14 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
 
         if metadata_entries:
             metadata["metadata_entries"] = metadata_entries
+            # Parse the ``M/Counter`` field (``mimetype=count;...``) into a
+            # structured breakdown so callers can answer "how many
+            # images/articles" without walking the archive.
+            counter_raw = metadata_entries.get("Counter")
+            if counter_raw:
+                breakdown = _parse_counter_metadata(counter_raw)
+                if breakdown:
+                    metadata["counter_breakdown"] = breakdown
 
         return metadata
 
@@ -711,32 +878,15 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             outer exception), so the caller can skip caching it.
         """
 
+        # Most ZIM files generated by Kiwix tools point W/mainPage at the
+        # canonical article via a redirect. libzim raises RuntimeError if
+        # get_item() is called on a redirect entry, so walk the chain (cycle
+        # detection + shared MAX_REDIRECT_DEPTH cap) before any caller reaches
+        # get_item(). The shared resolver raises OpenZimMcpArchiveError on
+        # cycle/depth-exceeded — a targeted diagnostic instead of an opaque
+        # libzim RuntimeError surfaced via get_item().
         def _follow_redirect(entry: Any) -> Any:
-            # Most ZIM files generated by Kiwix tools point W/mainPage at
-            # the canonical article via a redirect. libzim raises
-            # RuntimeError if get_item() is called on a redirect entry, so
-            # walk the chain (with cycle detection and the shared
-            # MAX_REDIRECT_DEPTH cap) before any callers reach get_item().
-            # Raise OpenZimMcpArchiveError on cycle/depth-exceeded to match
-            # the rest of the codebase's redirect helpers and produce a
-            # targeted diagnostic instead of a libzim RuntimeError surfaced
-            # via get_item().
-            seen: set[str] = set()
-            for _ in range(MAX_REDIRECT_DEPTH):
-                if not getattr(entry, "is_redirect", False):
-                    return entry
-                if entry.path in seen:
-                    raise OpenZimMcpArchiveError(
-                        f"Redirect cycle detected at {entry.path}"
-                    )
-                seen.add(entry.path)
-                entry = entry.get_redirect_entry()
-            if getattr(entry, "is_redirect", False):
-                raise OpenZimMcpArchiveError(
-                    f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
-                    f"in main-page lookup"
-                )
-            return entry
+            return resolve_redirect_chain(entry, context="in main-page lookup")
 
         try:
             # Try to get main page from archive metadata
@@ -896,22 +1046,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         """
 
         def _follow_redirect(entry: Any) -> Any:
-            seen: set[str] = set()
-            for _ in range(MAX_REDIRECT_DEPTH):
-                if not getattr(entry, "is_redirect", False):
-                    return entry
-                if entry.path in seen:
-                    raise OpenZimMcpArchiveError(
-                        f"Redirect cycle detected at {entry.path}"
-                    )
-                seen.add(entry.path)
-                entry = entry.get_redirect_entry()
-            if getattr(entry, "is_redirect", False):
-                raise OpenZimMcpArchiveError(
-                    f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
-                    f"in main-page lookup"
-                )
-            return entry
+            return resolve_redirect_chain(entry, context="in main-page lookup")
 
         def _build(entry_obj: Any) -> Tuple[Dict[str, Any], bool]:
             title = entry_obj.title or "Main Page"
@@ -1014,22 +1149,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
         """
 
         def _follow(entry: Any) -> Any:
-            seen: set[str] = set()
-            for _ in range(MAX_REDIRECT_DEPTH):
-                if not getattr(entry, "is_redirect", False):
-                    return entry
-                if entry.path in seen:
-                    raise OpenZimMcpArchiveError(
-                        f"Redirect cycle detected at {entry.path}"
-                    )
-                seen.add(entry.path)
-                entry = entry.get_redirect_entry()
-            if getattr(entry, "is_redirect", False):
-                raise OpenZimMcpArchiveError(
-                    f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
-                    f"starting at {entry_path}"
-                )
-            return entry
+            return resolve_redirect_chain(entry, context=f"starting at {entry_path}")
 
         # Suppress only the transient direct-access lookup error so callers
         # see a clean "not found" message rather than a chained exception

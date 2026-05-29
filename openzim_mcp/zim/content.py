@@ -23,6 +23,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.zim.redirects import resolve_redirect_chain
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -516,20 +517,7 @@ class _ContentMixin:
         """
         entry = archive.get_entry_by_path(actual_path)
 
-        seen_paths: set[str] = set()
-        depth = 0
-        while entry.is_redirect:
-            if depth >= _zim_ops_mod.MAX_REDIRECT_DEPTH:
-                raise OpenZimMcpArchiveError(
-                    f"Redirect chain too deep (>{_zim_ops_mod.MAX_REDIRECT_DEPTH}) "
-                    f"starting at {actual_path}"
-                )
-            if entry.path in seen_paths:
-                raise OpenZimMcpArchiveError(f"Redirect cycle detected at {entry.path}")
-            seen_paths.add(entry.path)
-            entry = entry.get_redirect_entry()
-            depth += 1
-
+        entry = resolve_redirect_chain(entry, context=f"starting at {actual_path}")
         actual_path = entry.path
         title = entry.title or "Untitled"
 
@@ -1057,22 +1045,10 @@ class _ContentMixin:
 
         # Resolve redirects to the target entry so the response reflects
         # the resolved page (path, title, content) rather than the redirect
-        # stub. Detect cycles and runaway chains explicitly — libzim's
-        # ``Entry.get_item()`` silently follows the chain and would hang on
-        # a cycle.
-        seen_paths: set[str] = set()
-        depth = 0
-        while entry.is_redirect:
-            if depth >= _zim_ops_mod.MAX_REDIRECT_DEPTH:
-                raise OpenZimMcpArchiveError(
-                    f"Redirect chain too deep (>{_zim_ops_mod.MAX_REDIRECT_DEPTH}) "
-                    f"starting at {actual_path}"
-                )
-            if entry.path in seen_paths:
-                raise OpenZimMcpArchiveError(f"Redirect cycle detected at {entry.path}")
-            seen_paths.add(entry.path)
-            entry = entry.get_redirect_entry()
-            depth += 1
+        # stub. The shared resolver detects cycles and runaway chains
+        # explicitly — libzim's ``Entry.get_item()`` silently follows the
+        # chain and would hang on a cycle.
+        entry = resolve_redirect_chain(entry, context=f"starting at {actual_path}")
 
         # From here on, ``entry`` is the resolved target. Update
         # ``actual_path`` so the response and the path-mapping cache
@@ -1222,26 +1198,14 @@ class _ContentMixin:
                 # Resolve the redirect chain — libzim raises RuntimeError on
                 # get_item() of a redirect entry. Reflect the resolved path
                 # back into entry_path so the response identifies the entry
-                # actually served, matching _get_entry_content_direct. Use the
-                # shared MAX_REDIRECT_DEPTH cap and a seen-set so a redirect
-                # cycle is caught immediately rather than spinning to the cap.
-                seen_paths: set[str] = set()
-                redirect_hops = 0
-                max_hops = _zim_ops_mod.MAX_REDIRECT_DEPTH
-                while entry.is_redirect:
-                    if redirect_hops >= max_hops:
-                        raise OpenZimMcpArchiveError(
-                            f"Redirect chain too deep (>{max_hops}) "
-                            f"for: '{entry_path}'"
-                        )
-                    if entry.path in seen_paths:
-                        raise OpenZimMcpArchiveError(
-                            f"Redirect cycle detected at {entry.path}"
-                        )
-                    seen_paths.add(entry.path)
-                    entry = entry.get_redirect_entry()
+                # actually served, matching _get_entry_content_direct. Only
+                # rewrite entry_path when a redirect was actually followed
+                # (the resolver returns the same object on a direct hit), so
+                # a non-redirect lookup keeps the caller's original path.
+                resolved = resolve_redirect_chain(entry, context=f"for: '{entry_path}'")
+                if resolved is not entry:
+                    entry = resolved
                     entry_path = entry.path
-                    redirect_hops += 1
 
                 item = entry.get_item()
                 content_size = item.size

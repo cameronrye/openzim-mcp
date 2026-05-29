@@ -33,7 +33,8 @@ from pydantic import AnyUrl, ConfigDict, Field
 from ..constants import INPUT_LIMIT_ENTRY_PATH
 from ..exceptions import OpenZimMcpArchiveError
 from ..security import sanitize_input
-from ..zim_operations import MAX_REDIRECT_DEPTH, zim_archive
+from ..zim.redirects import resolve_redirect_chain
+from ..zim_operations import zim_archive
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -142,21 +143,9 @@ class ZimEntryResource(Resource):
                 # libzim raises RuntimeError if get_item() is called on a
                 # redirect entry, so walk the chain (bounded against cycles)
                 # before reading the body.
-                seen: set[str] = set()
-                for _ in range(MAX_REDIRECT_DEPTH):
-                    if not getattr(entry, "is_redirect", False):
-                        break
-                    if entry.path in seen:
-                        raise OpenZimMcpArchiveError(
-                            f"Redirect cycle detected at {entry.path}"
-                        )
-                    seen.add(entry.path)
-                    entry = entry.get_redirect_entry()
-                if getattr(entry, "is_redirect", False):
-                    raise OpenZimMcpArchiveError(
-                        f"Redirect chain too deep (>{MAX_REDIRECT_DEPTH}) "
-                        f"starting at {self.entry_path}"
-                    )
+                entry = resolve_redirect_chain(
+                    entry, context=f"starting at {self.entry_path}"
+                )
                 item = entry.get_item()
                 return _detect_mime_type(item), bytes(item.content)
 

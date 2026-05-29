@@ -42,6 +42,36 @@ class TestOpenZimMcpCache:
         result = cache.get("key")
         assert result is None
 
+    def test_shutdown_deregisters_atexit_handlers(self, tmp_path: Path):
+        """shutdown() must unregister the atexit handlers it registered so
+        repeated construction in one process can't accumulate stale
+        handlers that fire on already-shut-down instances at exit."""
+        import atexit
+        from unittest.mock import patch
+
+        config = CacheConfig(
+            enabled=True, persistence_enabled=True, persistence_path=str(tmp_path)
+        )
+        with (
+            patch.object(atexit, "register") as reg,
+            patch.object(atexit, "unregister") as unreg,
+        ):
+            cache = OpenZimMcpCache(config, enable_background_cleanup=True)
+            registered = {c.args[0] for c in reg.call_args_list}
+            # Both the save and cleanup-stop handlers were registered and
+            # their references retained for later deregistration.
+            assert cache._atexit_save_handler in registered
+            assert cache._atexit_stop_handler in registered
+            saved, stopped = cache._atexit_save_handler, cache._atexit_stop_handler
+
+            cache.shutdown()
+            unregistered = {c.args[0] for c in unreg.call_args_list}
+            assert saved in unregistered
+            assert stopped in unregistered
+            # Handles cleared so a double shutdown() is a no-op.
+            assert cache._atexit_save_handler is None
+            assert cache._atexit_stop_handler is None
+
     def test_cache_set_and_get(self, openzim_mcp_cache: OpenZimMcpCache):
         """Test basic cache set and get operations."""
         openzim_mcp_cache.set("test_key", "test_value")

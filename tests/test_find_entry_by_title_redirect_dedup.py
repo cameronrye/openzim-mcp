@@ -54,6 +54,10 @@ def test_find_entry_by_title_dedupes_after_redirect_chain_collapse(
 
     mock_archive = MagicMock()
     mock_archive.has_entry_by_path.return_value = False  # Fast path miss
+    # Lowercase query "biology" cannot exact-match the capitalized title
+    # "Biology" via libzim's case-sensitive title index, so the native
+    # title probe stays out of the way and the suggestion path is exercised.
+    mock_archive.has_entry_by_title.return_value = False
 
     # Suggestion search returns BOTH paths.
     mock_suggest = MagicMock()

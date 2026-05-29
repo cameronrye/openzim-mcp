@@ -169,11 +169,19 @@ def render_find_by_title(data: Mapping[str, Any], title: str) -> str:
         return json.dumps(data)
     results = data.get("results") or []
     if not results:
+        # Post-v2.0.5 D-N: add `tell me about X` cross-intent path
+        # to the recovery options. A caller who tried
+        # `find article titled X` and got no hits is exactly the
+        # caller who benefits from fuzzy title-index + RAG
+        # fallback (which is what `tell me about` does). Same
+        # defect class as D-L on the compact-search no-results
+        # footer.
         return (
             f'**No article found titled "{title}"**\n\n'
             f"Try `suggestions for {title[:30]}` for autocomplete-based "
-            f"name matching, or `search for {title[:30]}` for full-text "
-            f"search."
+            f"name matching, `tell me about {title[:30]}` for fuzzy "
+            f"title-index lookup with RAG fallback, or `search for "
+            f"{title[:30]}` for full-text search."
         )
     lines = [f'# Title lookup for "{title}"', ""]
     for i, r in enumerate(results, 1):
@@ -255,6 +263,10 @@ def render_related(data: Mapping[str, Any], entry_path: str) -> str:
         # serialises rather than re-raising). Append recovery guidance
         # to this branch too so a small LLM has concrete next-step
         # commands instead of a bare two-line error.
+        # Post-v2.0.5 D-P sibling: mirror the recovery shape from
+        # ``SimpleToolsHandler._render_not_found_recovery``; the
+        # ``tell me about`` bullet adds the RAG-fallback signal on
+        # top of pure title-index lookup.
         recovery = (
             f"\n\n**Try one of these to recover:**\n"
             f"- `suggestions for {entry_path[:40]}` — autocomplete to "
@@ -262,6 +274,8 @@ def render_related(data: Mapping[str, Any], entry_path: str) -> str:
             f"- `find article titled {entry_path}` — title-index lookup "
             "with fuzzy fallback\n"
             f"- `search for {entry_path}` — full-text search\n"
+            f"- `tell me about {entry_path}` — fuzzy title-index lookup "
+            "with RAG fallback when no exact title matches\n"
         )
         return (
             f'**Could not extract related articles for "{entry_path}"**\n\n'
@@ -401,9 +415,20 @@ def render_search_all(data: Mapping[str, Any], query: str) -> str:
                 "itself was not the problem."
             )
         else:
+            # Post-v2.0.5 D-O: add `tell me about X` cross-intent
+            # path. When `search all files` returns nothing across
+            # every loaded archive, the natural escape hatch is
+            # `tell me about X` with `synthesize=True` — which
+            # also auto-opens every loaded archive but does
+            # structured topic lookup with fuzzy title resolution
+            # instead of literal full-text matching. Same defect
+            # class as D-L / D-N on the other compact no-results
+            # bodies.
             lines.append(
                 "No results in any archive. Try `suggestions for "
-                f"{query[:30]}`, broaden the terms, or check `list_zim_files`."
+                f"{query[:30]}`, `tell me about {query[:30]}` (with "
+                "`synthesize=True` for cross-archive auto-fetch), "
+                "broaden the terms, or check `list_zim_files`."
             )
         return "\n".join(lines)
 

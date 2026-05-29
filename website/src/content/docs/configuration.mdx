@@ -90,6 +90,8 @@ export OPENZIM_MCP_CACHE__MAX_SIZE=100         # default 100, range 1-10000
 export OPENZIM_MCP_CACHE__TTL_SECONDS=3600     # default 3600, range 60-86400
 export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=false              # default false
 export OPENZIM_MCP_CACHE__PERSISTENCE_PATH="$HOME/.cache/openzim-mcp"  # default
+export OPENZIM_MCP_CACHE__LIBZIM_CLUSTER_CACHE_MAX_SIZE_BYTES=16777216  # default unset (libzim 16 MiB)
+export OPENZIM_MCP_CACHE__LIBZIM_DIRENT_CACHE_MAX_COUNT=512             # default unset (libzim 512)
 ```
 
 | Field | Default | Range |
@@ -99,6 +101,10 @@ export OPENZIM_MCP_CACHE__PERSISTENCE_PATH="$HOME/.cache/openzim-mcp"  # default
 | `cache.persistence_enabled` | `false` | bool |
 | `cache.persistence_path` | `~/.cache/openzim-mcp` | normalized to absolute path; falls in a predictable location even when CWD is unpredictable (containers, systemd) |
 | `cache.ttl_seconds` | `3600` | 60-86400 (1 min - 24 h) |
+| `cache.libzim_cluster_cache_max_size_bytes` | unset (libzim default 16 MiB) | 0 – 4 GiB, bytes; **process-global** (libzim's cluster cache) |
+| `cache.libzim_dirent_cache_max_count` | unset (libzim default 512) | 0 – 10,000,000, count of dirents; per-archive |
+
+These last two are independent of the response cache above: they size **libzim's own reader caches**. Leave them unset to keep libzim's defaults. The cluster cache is sized in bytes and is process-global; the dirent cache is a count of directory entries applied per opened archive. See [Performance optimization](/openzim-mcp/docs/performance-optimization/) for tuning guidance.
 
 Cache stats surface inside `zim_health` under `.health.cache_performance` — there are no explicit `warm_cache`/`cache_stats`/`cache_clear` tools (restart the server to flush).
 
@@ -188,6 +194,8 @@ Sorted alphabetically by field name within each grouping.
 |-------|---------|---------|-------|
 | `auth_token` | `OPENZIM_MCP_AUTH_TOKEN` | unset | `SecretStr`, never logged, env-only |
 | `cache.enabled` | `OPENZIM_MCP_CACHE__ENABLED` | `true` | bool |
+| `cache.libzim_cluster_cache_max_size_bytes` | `OPENZIM_MCP_CACHE__LIBZIM_CLUSTER_CACHE_MAX_SIZE_BYTES` | unset (libzim 16 MiB) | 0 – 4 GiB, bytes, process-global |
+| `cache.libzim_dirent_cache_max_count` | `OPENZIM_MCP_CACHE__LIBZIM_DIRENT_CACHE_MAX_COUNT` | unset (libzim 512) | 0 – 10,000,000, count, per-archive |
 | `cache.max_size` | `OPENZIM_MCP_CACHE__MAX_SIZE` | `100` | 1-10000 |
 | `cache.persistence_enabled` | `OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED` | `false` | bool |
 | `cache.persistence_path` | `OPENZIM_MCP_CACHE__PERSISTENCE_PATH` | `~/.cache/openzim-mcp` | normalized absolute |

@@ -41,6 +41,20 @@ Cache stats surface in `zim_health().cache_performance` (`enabled`, `size`, `max
 
 **Persistence path:** defaults to `~/.cache/openzim-mcp` (resolved to absolute). For containerized deployments, mount a volume there or override `OPENZIM_MCP_CACHE__PERSISTENCE_PATH`.
 
+### libzim reader caches (advanced)
+
+Separate from the response cache above, libzim keeps its own in-memory read caches. Two optional knobs expose them; leave both unset to keep libzim's defaults:
+
+```bash
+export OPENZIM_MCP_CACHE__LIBZIM_CLUSTER_CACHE_MAX_SIZE_BYTES=67108864  # 64 MiB; default 16 MiB
+export OPENZIM_MCP_CACHE__LIBZIM_DIRENT_CACHE_MAX_COUNT=2048            # default 512 dirents
+```
+
+- **Cluster cache** is sized in **bytes** and is **process-global** (one setting for the whole server, not per-archive). Raising it trades RAM for fewer decompressions on large archives with hot content.
+- **Dirent cache** is a **count of directory entries**, applied per opened archive. Raising it helps lookup-heavy workloads (deep namespace walks, many title/path probes) at a small memory cost.
+
+These rarely need tuning; reach for them only when profiling points at decompression or dirent churn on very large ZIMs.
+
 ## Rate limiting
 
 Token-bucket limiter (atomic global + per-operation acquire). Tune for your client load:

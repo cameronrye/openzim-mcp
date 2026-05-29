@@ -204,12 +204,25 @@ class OpenZimMcpCache:
         # Wrap both with _silence_logging_errors so that interpreter shutdown
         # — when stdout/stderr may already be closed by pytest's capture or
         # the runtime itself — does not spam "--- Logging error ---" tracebacks.
+        # Keep references to the registered (wrapped) callables so
+        # ``shutdown()`` can deregister them. ``_silence_logging_errors``
+        # returns a fresh wrapper each call, so the exact object must be
+        # retained to unregister it — otherwise repeated cache construction
+        # in one process (per-test server fixtures, config reloads) piles up
+        # stale handlers that fire on already-shut-down instances at exit.
+        self._atexit_save_handler: Optional[Callable[[], None]] = None
+        self._atexit_stop_handler: Optional[Callable[[], None]] = None
+
         if config.enabled and self._persistence_enabled:
-            atexit.register(_silence_logging_errors(self._save_to_disk))
+            self._atexit_save_handler = _silence_logging_errors(self._save_to_disk)
+            atexit.register(self._atexit_save_handler)
 
         if config.enabled and enable_background_cleanup:
             self._start_cleanup_thread()
-            atexit.register(_silence_logging_errors(self._stop_cleanup_thread))
+            self._atexit_stop_handler = _silence_logging_errors(
+                self._stop_cleanup_thread
+            )
+            atexit.register(self._atexit_stop_handler)
 
         logger.info(
             f"Cache initialized: enabled={config.enabled}, "
@@ -494,6 +507,15 @@ class OpenZimMcpCache:
         self._stop_cleanup_thread()
         if self._persistence_enabled:
             self._save_to_disk()
+        # Deregister our atexit handlers now that we've run their work
+        # explicitly — prevents accumulation across repeated construction
+        # and stops stale handlers from clobbering a newer instance's
+        # persisted snapshot at interpreter exit.
+        for handler in (self._atexit_save_handler, self._atexit_stop_handler):
+            if handler is not None:
+                atexit.unregister(handler)
+        self._atexit_save_handler = None
+        self._atexit_stop_handler = None
         logger.debug("Cache shutdown complete")
 
     def _get_persistence_file(self) -> Path:

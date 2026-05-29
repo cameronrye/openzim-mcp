@@ -752,7 +752,9 @@ class TestPass2SiblingAudits:
 
     def test_slashed_compound_helper_is_canonical_source(self) -> None:
         # Single declaration of ``_looks_like_slashed_compound`` —
-        # widening the threshold in one place is enough.
+        # widening the threshold in one place is enough. The helper lives
+        # in chain_detection.py since the post-v2.0.5 _ChainMixin
+        # extraction (was simple_tools.py).
         from pathlib import Path
 
         pkg_dir = Path(__file__).resolve().parent.parent / "openzim_mcp"
@@ -765,4 +767,4 @@ class TestPass2SiblingAudits:
         assert (
             len(defines) == 1
         ), f"Expected exactly one definition site; got {defines!r}"
-        assert defines[0][0] == "simple_tools.py"
+        assert defines[0][0] == "chain_detection.py"

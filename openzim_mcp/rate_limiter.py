@@ -407,7 +407,16 @@ class RateLimiter:
 
     def reset(self) -> None:
         """Reset all rate limit buckets to full capacity."""
-        with self._lock:
-            self._buckets.clear()
-            self._global_buckets.clear()
+        # Hold the coarse lock too: ``check_rate_limit`` resolves bucket
+        # references under ``_lock`` but then acquires/refunds on them
+        # while holding only ``_coarse_lock``. Clearing the dicts under
+        # ``_lock`` alone could swap the buckets out from under an
+        # in-flight check, silently dropping its consumed tokens. Taking
+        # ``_coarse_lock`` first serialises reset against that window —
+        # same ordering ``check_rate_limit`` uses (coarse then fine), so
+        # no lock-order inversion.
+        with self._coarse_lock:
+            with self._lock:
+                self._buckets.clear()
+                self._global_buckets.clear()
         logger.info("Rate limiter reset to full capacity")

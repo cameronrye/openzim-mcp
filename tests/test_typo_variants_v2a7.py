@@ -164,6 +164,11 @@ def _wire_typo_fallback_archive(
     server = OpenZimMcpServer(test_config)
 
     mock_archive = MagicMock()
+    # The native exact-title probe must stay out of the way so this test
+    # exercises the case-variant path probe + typo fallback. Real archives
+    # would resolve the corrected variant via the title index too, but the
+    # canonical entry it lands on is identical.
+    mock_archive.has_entry_by_title.return_value = False
     mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
     mock_entry = MagicMock()
     mock_entry.path = entry_path
@@ -192,7 +197,7 @@ def test_photosythesis_resolves_to_photosynthesis_via_typo_fallback(
     The expected flow:
       1. fast path probes ``C/Photosythesis`` (etc.) → miss
       2. ``SuggestionSearcher`` returns nothing → miss
-      3. ``_find_entry_typo_fallback`` generates ~700 variants
+      3. ``_find_entry_typo_fallback_with_suggestions`` generates ~700 variants
       4. Among them is ``Photosynthesis`` (single-character insertion of 'n')
       5. ``_find_entry_fast_path(archive, "Photosynthesis")`` hits
          ``C/Photosynthesis`` → fuzzy_path_hit = True
@@ -291,6 +296,7 @@ def _wire_typo_collision_archive(test_config, monkeypatch):
         raise KeyError(path)
 
     mock_archive = MagicMock()
+    mock_archive.has_entry_by_title.return_value = False
     mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
     mock_archive.get_entry_by_path.side_effect = _get_entry
 
@@ -355,6 +361,7 @@ def test_typo_fallback_keeps_redirect_when_no_canonical_alternative(
     valid_paths = {"C/Photosymthesis"}
 
     mock_archive = MagicMock()
+    mock_archive.has_entry_by_title.return_value = False
     mock_archive.has_entry_by_path.side_effect = lambda p: p in valid_paths
     mock_archive.get_entry_by_path.side_effect = lambda p: (
         redirect_only if p == "C/Photosymthesis" else None

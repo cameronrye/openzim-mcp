@@ -43,6 +43,33 @@ class CacheConfig(BaseModel):
     persistence_enabled: bool = Field(default=CACHE.PERSISTENCE_ENABLED)
     persistence_path: str = Field(default_factory=lambda: CACHE.PERSISTENCE_PATH)
 
+    # Optional libzim reader cache tuning. These are independent of the
+    # MCP-level response cache above; they size libzim's internal read
+    # caches. ``None`` (default) leaves libzim's own defaults untouched.
+    #
+    # The cluster cache is sized in BYTES and is a PROCESS-GLOBAL setting
+    # (libzim default 16 MiB). The dirent cache is sized as a COUNT of
+    # dirents and is a per-archive property (libzim default 512). The two
+    # units differ deliberately — see ``zim.archive.configure_libzim_caches``.
+    libzim_cluster_cache_max_size_bytes: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=4 * 1024 * 1024 * 1024,
+        description=(
+            "libzim cluster cache max size in bytes (process-global; "
+            "None = use libzim default of 16 MiB)"
+        ),
+    )
+    libzim_dirent_cache_max_count: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=10_000_000,
+        description=(
+            "libzim dirent cache max size as a count of dirents (per-archive; "
+            "None = use libzim default of 512)"
+        ),
+    )
+
     @field_validator("persistence_path")
     @classmethod
     def normalize_persistence_path(cls, v: str) -> str:
@@ -462,6 +489,10 @@ class OpenZimMcpConfig(BaseSettings):
             "cache_enabled": self.cache.enabled,
             "cache_max_size": self.cache.max_size,
             "cache_ttl_seconds": self.cache.ttl_seconds,
+            "libzim_cluster_cache_bytes": (
+                self.cache.libzim_cluster_cache_max_size_bytes
+            ),
+            "libzim_dirent_cache_count": self.cache.libzim_dirent_cache_max_count,
             "content_max_length": self.content.max_content_length,
             "content_snippet_length": self.content.snippet_length,
             "search_default_limit": self.content.default_search_limit,
