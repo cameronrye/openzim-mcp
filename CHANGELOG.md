@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0](https://github.com/cameronrye/openzim-mcp/compare/v2.0.5...v2.1.0) (2026-05-29)
+
+
+### Features
+
+* surface native libzim reader capabilities (validate / identity / index / Counter / exact-title / cache tuning) ([#221](https://github.com/cameronrye/openzim-mcp/issues/221)) ([0ca65b5](https://github.com/cameronrye/openzim-mcp/commit/0ca65b5d9dadde2af17f3fdb77ad58a6ef93063d))
+
+
+### Bug Fixes
+
+* scope content tools to main content (chrome leak), restore TOC nesting, dedupe search URL variants ([#225](https://github.com/cameronrye/openzim-mcp/issues/225)) ([659d987](https://github.com/cameronrye/openzim-mcp/commit/659d987747a7e9ac8524d10f40a8e5780a0bb95b))
+
 ## [2.0.5](https://github.com/cameronrye/openzim-mcp/compare/v2.0.4...v2.0.5) (2026-05-29)
 
 
