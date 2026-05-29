@@ -543,6 +543,12 @@ def _enforce_budget(
     to fit the remaining budget. Subsequent passages are dropped if budget
     is exhausted. Citation markers are NOT counted against the budget
     (they're small and rendering happens after this stage).
+
+    The truncated passage is snapped back to the last word boundary so the
+    answer doesn't end mid-word (a raw ``body[:budget]`` slice cut through
+    whatever token straddled the limit). The snap is skipped when it would
+    discard more than half the remaining budget — e.g. a single unbroken
+    token longer than the budget — in which case the hard cut is kept.
     """
     budget = char_budget
     capped: list[SynthesizePassage] = []
@@ -553,8 +559,12 @@ def _enforce_budget(
             budget -= len(body)
             continue
         if budget > 0:
+            truncated = body[:budget]
+            snap = max(truncated.rfind(" "), truncated.rfind("\n"))
+            if snap > budget // 2:
+                truncated = truncated[:snap]
             new_p = dict(p)
-            new_p["text_markdown"] = body[:budget]
+            new_p["text_markdown"] = truncated
             capped.append(cast("SynthesizePassage", new_p))
         break
     return capped
