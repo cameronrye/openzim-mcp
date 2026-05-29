@@ -3046,6 +3046,14 @@ class SimpleToolsHandler:
         err = sanitize_context_for_error(str(exc))
         err = self._BACKEND_API_LEAK_RE.sub("", err).strip()
         recovery_path = entry_path[:60]
+        # Post-v2.0.5 D-P: add `tell me about X` as a fourth
+        # recovery option. Same sibling-widening as D-N (which added
+        # it to ``render_find_by_title`` no-results). `tell me about`
+        # combines fuzzy title-index lookup with a RAG fallback when
+        # no exact title hits, so it's a distinct signal from the
+        # pure ``find article titled X`` title-only path — worth
+        # both, since the caller may have a typo (title-index
+        # recovers) or a paraphrase (RAG recovers).
         return (
             f"**Article not found: `{entry_path}`**\n\n"
             f"`{op_label} {entry_path}` failed: {err}\n\n"
@@ -3055,6 +3063,8 @@ class SimpleToolsHandler:
             f"- `find article titled {entry_path}` — title-index "
             "lookup with fuzzy fallback\n"
             f"- `search for {entry_path}` — full-text search\n"
+            f"- `tell me about {entry_path}` — fuzzy title-index "
+            "lookup with RAG fallback when no exact title matches\n"
         )
 
     def _resolve_natural_language_path(
@@ -5428,6 +5438,10 @@ class SimpleToolsHandler:
             # ``suggestions for`` / ``find article titled`` so a
             # small LLM has a concrete next step.
             err = sanitize_context_for_error(str(e))
+            # Post-v2.0.5 D-P sibling: mirror the recovery shape from
+            # ``_render_not_found_recovery``; ``tell me about`` is a
+            # distinct recovery (title-index + RAG fallback) from the
+            # pure ``find article titled X`` path.
             return (
                 f"**Article not found: `{entry_path}`**\n\n"
                 f"{err}\n\n"
@@ -5437,6 +5451,8 @@ class SimpleToolsHandler:
                 f"- `find article titled {entry_path}` — title-index "
                 "lookup with fuzzy fallback\n"
                 f"- `search for {entry_path}` — full-text search\n"
+                f"- `tell me about {entry_path}` — fuzzy title-index "
+                "lookup with RAG fallback when no exact title matches\n"
             )
 
     def _handle_get_zim_entries(

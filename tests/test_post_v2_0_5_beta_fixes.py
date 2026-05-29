@@ -1,13 +1,15 @@
 """Regression tests for the post-v2.0.5 beta-test sweep.
 
-Five follow-on defects surfaced by a live two-archive verification
+Six follow-on defects surfaced by a live two-archive verification
 sweep against v2.0.5 (``zim.owl-atlas.ts.net``,
 ``wikipedia_en_all_maxi_2026-02`` + ``superuser.com_en_all_2026-02``)
 after PR #219 shipped. First three (D-K / D-L / D-M) caught on the
 initial sweep; second pass against the now-clean compact-search path
 surfaced D-N / D-O as sibling-of-D-L widenings on the other compact
-no-results renderers. All five are sibling widenings of pre-existing
-narrow fixes — same "narrow-scope sibling" pattern as PR #219 itself
+no-results renderers; third pass surfaced D-P as a sibling-of-D-N
+widening on the shared ``Article not found`` recovery envelopes.
+All six are sibling widenings of pre-existing narrow fixes — same
+"narrow-scope sibling" pattern as PR #219 itself
 (``IntentParser`` lowercases all entry_paths via Rule 1, the post-a11
 E1 title-index probe only fired on multi-word tails, and the simple-
 tools no-results recovery diverged from the non-compact formatter).
@@ -60,6 +62,17 @@ tools no-results recovery diverged from the non-compact formatter).
   X`` cross-intent path (synthesize-mode auto-opens every loaded
   archive) is the natural cross-archive structured-lookup escape
   hatch and was missing.
+
+* D-P — shared ``Article not found`` recovery envelopes
+  (``_render_not_found_recovery`` at ``simple_tools.py:3050``,
+  ``_handle_related`` inline wrap at ``simple_tools.py:5431``,
+  ``render_related`` outbound_error block at
+  ``compact_renderers.py:258``) had three recovery options
+  (``suggestions for X`` / ``find article titled X`` /
+  ``search for X``) but skipped ``tell me about X``. That bullet
+  adds RAG fallback on top of the pure title-index lookup —
+  distinct signal from ``find article titled X`` — and it's the
+  one recovery most likely to handle paraphrased queries.
 """
 
 from unittest.mock import MagicMock, Mock
@@ -654,3 +667,147 @@ class TestNoZimFileSpecifiedEnvelopeIncludesCrossIntentHints:
         result = self._trip_gate(handler)
         assert "intent=no_zim_file_specified" in result
         assert "cert=1.00" in result
+
+
+# ===========================================================================
+# D-P — ``Article not found`` recovery envelopes missing the ``tell me about
+# X`` cross-intent path. Three sites share the same shape:
+#
+#   1. ``_render_not_found_recovery`` (``simple_tools.py:3050``) — fires on
+#      ``_handle_get_article`` / ``_handle_structure`` / ``_handle_summary``
+#      / ``_handle_links`` / ``_handle_get_section`` not-found.
+#   2. ``_handle_related`` inline wrap (``simple_tools.py:5431``) — fires
+#      when the related-articles backend raises ``Cannot find entry``.
+#   3. ``render_related`` outbound_error block
+#      (``compact_renderers.py:258``) — fires when the compact-mode
+#      related-articles call returns a serialised ``outbound_error``.
+#
+# All three already include ``suggestions for X`` + ``find article titled
+# X`` + ``search for X``. Add ``tell me about X`` as a fourth option —
+# fuzzy title-index + RAG fallback gives a different signal than the
+# pure title-index ``find article titled X`` recovery (title-lookup +
+# auto-RAG when no exact title hits). Same defect-class widening as D-N
+# (which added ``tell me about`` to ``render_find_by_title`` no-results).
+# ===========================================================================
+
+
+class TestNotFoundRecoveryIncludesTellMeAboutBullet:
+    """Pre-fix, the three shared not-found envelopes (one library
+    helper, two inline wraps) suggested three recoveries but skipped
+    ``tell me about X`` — even though that's the most powerful
+    single-step recovery (title-index fuzzy + auto-RAG)."""
+
+    def test_render_not_found_recovery_includes_tell_me_about(
+        self,
+    ) -> None:
+        """``SimpleToolsHandler._render_not_found_recovery`` is the
+        shared library helper for get_article / structure / summary /
+        links / get_section not-found responses. Add `tell me about
+        X` as the fourth recovery bullet."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        handler = SimpleToolsHandler(MagicMock())
+        out = handler._render_not_found_recovery(
+            "Photosynthsis", ValueError("Entry not found"), "get article"
+        )
+        assert (
+            "tell me about Photosynthsis" in out
+        ), f"Cross-intent `tell me about X` recovery missing. Got:\n{out}"
+
+    def test_render_not_found_recovery_preserves_existing_recoveries(
+        self,
+    ) -> None:
+        """Regression: the existing 3 recoveries
+        (``suggestions for`` / ``find article titled`` / ``search
+        for``) must stay."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        handler = SimpleToolsHandler(MagicMock())
+        out = handler._render_not_found_recovery(
+            "Photosynthsis", ValueError("Entry not found"), "get article"
+        )
+        assert "suggestions for Photosynthsis" in out
+        assert "find article titled Photosynthsis" in out
+        assert "search for Photosynthsis" in out
+
+    def test_render_not_found_recovery_preserves_envelope_header(
+        self,
+    ) -> None:
+        """Regression: the ``**Article not found: `X`**`` header and
+        the ``op_label`` echo must stay so callers can identify
+        which operation failed and on what path."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        handler = SimpleToolsHandler(MagicMock())
+        out = handler._render_not_found_recovery(
+            "Photosynthsis", ValueError("Entry not found"), "structure of"
+        )
+        assert "**Article not found: `Photosynthsis`**" in out
+        assert "structure of Photosynthsis" in out
+
+    def test_related_inline_not_found_wrap_includes_tell_me_about(
+        self,
+    ) -> None:
+        """``_handle_related``'s inline error wrap at
+        ``simple_tools.py:5431`` fires when ``get_related_articles``
+        raises ``Cannot find entry``. Same recovery shape as
+        ``_render_not_found_recovery`` — must include the cross-
+        intent bullet."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock = MagicMock()
+        mock.list_zim_files.return_value = '[{"path": "/x.zim"}]'
+        mock.config.meta.footer_enabled = False
+        # Force the related-articles backend to raise so the inline
+        # not-found wrap fires.
+        mock.get_related_articles.side_effect = ValueError(
+            "Cannot find entry NotARealArticle"
+        )
+        mock.get_related_articles_data.side_effect = ValueError(
+            "Cannot find entry NotARealArticle"
+        )
+        # Bypass the title-index promotion so the wrap actually fires.
+        import pytest as _pytest
+
+        from openzim_mcp import simple_tools as simple_tools_module
+
+        monkeypatch = _pytest.MonkeyPatch()
+        monkeypatch.setattr(
+            simple_tools_module, "find_title_match", lambda *_a, **_kw: None
+        )
+        try:
+            handler = SimpleToolsHandler(mock)
+            out = handler.handle_zim_query(
+                "articles related to NotARealArticle", "/x.zim"
+            )
+        finally:
+            monkeypatch.undo()
+        # The parser lowercases entry_path (Rule 1) so the recovery
+        # bullets echo the lowercased form.
+        assert "tell me about notarealarticle" in out, (
+            f"Cross-intent recovery missing in related-not-found " f"wrap. Got:\n{out}"
+        )
+        # Regression guard: existing 3 recoveries still present.
+        assert "suggestions for notarealarticle" in out
+        assert "find article titled notarealarticle" in out
+
+    def test_render_related_outbound_error_includes_tell_me_about(
+        self,
+    ) -> None:
+        """``render_related``'s ``outbound_error`` recovery block
+        (``compact_renderers.py:258``) — same shape as
+        ``_render_not_found_recovery`` but on the compact-mode
+        renderer surface. Must include the cross-intent bullet."""
+        from openzim_mcp.compact_renderers import render_related
+
+        out = render_related(
+            {"outbound_error": "Cannot find entry NotARealArticle"},
+            "NotARealArticle",
+        )
+        assert (
+            "tell me about NotARealArticle" in out
+        ), f"Cross-intent recovery missing in outbound_error. Got:\n{out}"
+        # Regression guard: existing recoveries still present.
+        assert "suggestions for NotARealArticle" in out
+        assert "find article titled NotARealArticle" in out
+        assert "search for NotARealArticle" in out

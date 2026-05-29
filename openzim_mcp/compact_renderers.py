@@ -263,6 +263,10 @@ def render_related(data: Mapping[str, Any], entry_path: str) -> str:
         # serialises rather than re-raising). Append recovery guidance
         # to this branch too so a small LLM has concrete next-step
         # commands instead of a bare two-line error.
+        # Post-v2.0.5 D-P sibling: mirror the recovery shape from
+        # ``SimpleToolsHandler._render_not_found_recovery``; the
+        # ``tell me about`` bullet adds the RAG-fallback signal on
+        # top of pure title-index lookup.
         recovery = (
             f"\n\n**Try one of these to recover:**\n"
             f"- `suggestions for {entry_path[:40]}` — autocomplete to "
@@ -270,6 +274,8 @@ def render_related(data: Mapping[str, Any], entry_path: str) -> str:
             f"- `find article titled {entry_path}` — title-index lookup "
             "with fuzzy fallback\n"
             f"- `search for {entry_path}` — full-text search\n"
+            f"- `tell me about {entry_path}` — fuzzy title-index lookup "
+            "with RAG fallback when no exact title matches\n"
         )
         return (
             f'**Could not extract related articles for "{entry_path}"**\n\n'
