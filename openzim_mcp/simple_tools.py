@@ -5,8 +5,8 @@ away the complexity of multiple specialized tools. Designed for LLMs with
 limited tool-calling capabilities or context windows.
 
 The regex-heavy intent-parsing layer lives in :mod:`openzim_mcp.intent_parser`.
-``IntentParser``, ``safe_regex_search`` and ``safe_regex_findall`` are
-re-exported here for backward-compatibility with existing imports.
+``IntentParser`` and ``safe_regex_sub`` are imported from there; refer to that
+module directly for the timeout-guarded ``safe_regex_*`` helpers.
 """
 
 import logging
@@ -541,16 +541,14 @@ class SimpleToolsHandler:
                         and cursor_q.strip()
                         and cursor_t_emits_q
                     ):
-                        import re as _re
-
                         cursor_tokens = {
                             t
-                            for t in _re.findall(r"[a-z0-9]+", cursor_q.lower())
+                            for t in re.findall(r"[a-z0-9]+", cursor_q.lower())
                             if len(t) >= 3
                         }
                         query_tokens = {
                             t
-                            for t in _re.findall(r"[a-z0-9]+", (query or "").lower())
+                            for t in re.findall(r"[a-z0-9]+", (query or "").lower())
                             if len(t) >= 3
                         }
                         cursor_q_lower = cursor_q.lower()
@@ -3171,7 +3169,22 @@ class SimpleToolsHandler:
                 "'toc of \"C/Evolution\"'"
             )
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
-        return self.zim_operations.get_table_of_contents(zim_file_path, entry_path)
+        try:
+            return self.zim_operations.get_table_of_contents(
+                zim_file_path, entry_path
+            )
+        except Exception as e:
+            # Post-v2.0.5 D-Q: ``_handle_toc`` was the one structure/content
+            # handler that never routed through ``_render_not_found_recovery``
+            # — an unknown TOC path raised ``OpenZimMcpArchiveError`` straight
+            # up to ``handle_zim_query``'s generic ``**Error Processing
+            # Query**`` block, the exact pre-a13 behavior the recovery
+            # envelope was built to replace. Sibling of D-P (which widened
+            # the shared envelope's recovery bullets); this brings the last
+            # holdout handler onto that shared envelope.
+            return self._render_not_found_recovery(
+                entry_path, e, "table of contents for"
+            )
 
     def _handle_summary(
         self,
@@ -5853,8 +5866,6 @@ class SimpleToolsHandler:
         verify the path; return ``None`` and let the caller decide how
         to proceed.
         """
-        from pathlib import Path
-
         cand = candidate.strip()
         if not cand:
             return None

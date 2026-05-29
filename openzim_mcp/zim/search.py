@@ -2491,24 +2491,23 @@ class _SearchMixin:
         *,
         suggestion_limit: int,
     ) -> Tuple[Optional[Any], List[str]]:
-        """Merged single-sweep typo probe.
+        """Single-sweep typo probe (best entry + verified suggestions).
 
-        Combines the work that previously lived in
-        ``_find_entry_typo_fallback`` + ``_verified_typo_variants`` for the
-        same-archive cold-miss case. Both functions iterated the entire
-        ~700-variant set and called ``_find_entry_fast_path`` per variant,
+        Walks the ~700-variant typo set once, calling
+        ``_find_entry_fast_path`` per variant, and returns both the best
+        entry hit and the verified suggestion titles in one pass. This
+        replaced an earlier two-function design that iterated the variant
+        set twice — once for the entry, once for the suggestion titles —
         which on a ``find_entry_by_title`` zero-hit cold path doubled the
         archive lookup count and blew through the spec's 30 ms budget.
 
         Returns ``(best_entry, verified_titles)``:
 
-        - ``best_entry`` is the same Optional[Any] the legacy
-          ``_find_entry_typo_fallback`` returned (canonical preferred,
-          ``_TYPO_MAX_EXTRA_PROBES`` extra probes after first hit, redirect
-          chain followed).
-        - ``verified_titles`` is the same canonical-title list the legacy
-          ``_verified_typo_variants`` returned for a single archive,
-          capped at ``suggestion_limit``.
+        - ``best_entry`` is the canonical-preferred hit (``_TYPO_MAX_
+          EXTRA_PROBES`` extra probes after first hit, redirect chain
+          followed), or ``None``.
+        - ``verified_titles`` is the canonical-title list for
+          ``_meta.suggestions``, capped at ``suggestion_limit``.
         """
         if len(title) < self.config.search.fuzzy_title_min_query_len:
             return None, []
@@ -2558,66 +2557,6 @@ class _SearchMixin:
                     extra_probes += 1
         return best, verified
 
-    def _find_entry_typo_fallback(self, archive: Any, title: str) -> Optional[Any]:
-        """Try typo-corrected variants of ``title`` against the fast path.
-
-        Runs only when the case-variant fast path AND the libzim
-        suggestion search both came up empty — fuzzy-matching is a
-        last-resort try-this-before-giving-up step.
-
-        D1 (v2.0.0a9): the prior first-hit-wins iteration order picked
-        whichever variant came first alphabetically, which on real
-        Wikipedia returned typo-redirects (``Photosymthesis``) ahead of
-        canonical articles (``Photosynthesis``) — ``'m'`` < ``'n'`` at
-        position 7 of the alphabet sweep. The new shape: continue
-        iterating past the first hit, and prefer a canonical
-        (non-redirect) variant when one is reachable. After the first
-        hit we cap additional probes at ``_TYPO_MAX_EXTRA_PROBES`` to
-        keep worst-case latency bounded.
-
-        Both hit entries are passed through redirect-following so a
-        redirect-only variant still resolves to its canonical target —
-        the caller wants the actual article, not the misspelling page.
-
-        Length-gated via config.search.fuzzy_title_min_query_len (default >= 4):
-        short queries like ``"DNA"`` or ``"Pi"`` get too many spurious
-        adjacent-swap collisions to be worth the lookup cost.
-        """
-        if len(title) < self.config.search.fuzzy_title_min_query_len:
-            return None
-
-        best: Optional[Any] = None
-        best_is_canonical = False
-        extra_probes = 0
-        for variant in self._typo_variants(title):
-            # Bound additional work: once we have a hit AND a canonical
-            # alternative, stop. Otherwise allow ``_TYPO_MAX_EXTRA_PROBES``
-            # more probes to look for a canonical that would beat the
-            # redirect we found first.
-            if best is not None:
-                if best_is_canonical:
-                    break
-                if extra_probes >= self._TYPO_MAX_EXTRA_PROBES:
-                    break
-            entry = self._find_entry_fast_path(archive, variant)
-            if entry is None:
-                if best is not None:
-                    extra_probes += 1
-                continue
-            source_is_canonical = not bool(getattr(entry, "is_redirect", False))
-            resolved = self._follow_redirect_chain(entry)
-            if best is None:
-                best = resolved
-                best_is_canonical = source_is_canonical
-            elif source_is_canonical and not best_is_canonical:
-                # A canonical variant beats a redirect we found earlier
-                # in the alphabetical sweep.
-                best = resolved
-                best_is_canonical = True
-            else:
-                extra_probes += 1
-        return best
-
     @staticmethod
     def _follow_redirect_chain(entry: Any) -> Any:
         """Walk an entry's ``is_redirect`` chain to its canonical target.
@@ -2654,46 +2593,6 @@ class _SearchMixin:
             seen.add(tp)
             last_good = target
         return target
-
-    def _verified_typo_variants(
-        self, archives: List[Any], title: str, *, limit: int
-    ) -> List[str]:
-        """Return typo-variant *titles* that actually resolve to an entry.
-
-        Used to populate ``_meta.suggestions`` only with values the caller
-        can reuse as a query (Phase A #6 fix). The naive implementation
-        emitted raw permutations of the user's mangled input; this one
-        probes the same fast-path that produced the real results so
-        suggestions are guaranteed to be reachable.
-
-        ``archives`` is a list of open ``Archive`` objects (one per ZIM
-        file already opened by the caller); we probe each in order until
-        ``limit`` variants are confirmed. Length-gated identically to
-        ``_find_entry_typo_fallback``.
-        """
-        if len(title) < self.config.search.fuzzy_title_min_query_len:
-            return []
-        verified: List[str] = []
-        seen: set[str] = set()
-        for variant in self._typo_variants(title):
-            for archive in archives:
-                try:
-                    entry = self._find_entry_fast_path(archive, variant)
-                except Exception:
-                    continue
-                if entry is not None:
-                    # Follow redirects so the surfaced ``alt_spelling``
-                    # suggestion lands on the canonical article title,
-                    # not a typo-redirect's own (also-misspelled) title.
-                    target = self._follow_redirect_chain(entry)
-                    resolved = target.title or entry.title or variant
-                    if resolved not in seen:
-                        verified.append(resolved)
-                        seen.add(resolved)
-                    break
-            if len(verified) >= limit:
-                break
-        return verified
 
     def find_entry_by_title_data(
         self,

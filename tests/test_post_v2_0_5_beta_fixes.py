@@ -80,6 +80,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from openzim_mcp import simple_tools as simple_tools_module
+from openzim_mcp.exceptions import OpenZimMcpArchiveError
 from openzim_mcp.simple_tools import SimpleToolsHandler
 
 # ===========================================================================
@@ -811,3 +812,82 @@ class TestNotFoundRecoveryIncludesTellMeAboutBullet:
         assert "suggestions for NotARealArticle" in out
         assert "find article titled NotARealArticle" in out
         assert "search for NotARealArticle" in out
+
+
+# ===========================================================================
+# D-Q — ``_handle_toc`` was the one structure/content handler that never
+# routed through ``_render_not_found_recovery``. Its siblings
+# ``_handle_structure`` / ``_handle_summary`` / ``_handle_get_article`` /
+# ``_handle_links`` / ``_handle_get_section`` each wrap the backend call in
+# ``try/except`` and return the shared ``Article not found`` envelope on an
+# unknown path. ``_handle_toc`` did not — so ``table of contents for
+# <unknown>`` raised ``OpenZimMcpArchiveError`` straight up to
+# ``handle_zim_query``'s generic ``**Error Processing Query**`` block: no
+# recovery bullets, no intent telemetry, leaked backend function names. This
+# is the exact pre-a13 behavior the recovery envelope was built to replace,
+# and a direct sibling of D-P (which widened that envelope's bullets).
+# ===========================================================================
+
+
+class TestTocNotFoundRoutesThroughRecoveryEnvelope:
+    """Pre-fix, ``_handle_toc`` let backend not-found exceptions escape to
+    the generic error page instead of returning the shared structured
+    recovery envelope its sibling handlers use."""
+
+    def test_handle_toc_unknown_path_returns_recovery_envelope(self) -> None:
+        """An ``OpenZimMcpArchiveError`` from ``get_table_of_contents``
+        must be caught and rendered as the ``Article not found`` envelope,
+        not propagated."""
+        mock = MagicMock()
+        mock.get_table_of_contents.side_effect = OpenZimMcpArchiveError(
+            "Cannot find entry NotARealArticle"
+        )
+        handler = SimpleToolsHandler(mock)
+        # ``find_title_match`` returning None keeps
+        # ``_resolve_natural_language_path`` on the literal path.
+        out = handler._handle_toc(
+            "table of contents for NotARealArticle",
+            "/x.zim",
+            {"entry_path": "NotARealArticle"},
+            {},
+        )
+        assert "**Article not found: `NotARealArticle`**" in out
+        # Echoes the op_label so the caller knows which op failed.
+        assert "table of contents for NotARealArticle" in out
+        # Full recovery bullet set (shared envelope, incl. D-P widening).
+        assert "suggestions for NotARealArticle" in out
+        assert "find article titled NotARealArticle" in out
+        assert "search for NotARealArticle" in out
+        assert "tell me about NotARealArticle" in out
+
+    def test_handle_toc_does_not_emit_generic_error_block(self) -> None:
+        """Regression: the response must NOT be the generic
+        ``handle_zim_query`` error template (which leaked backend
+        function names and pointed at server logs the MCP surface can't
+        see)."""
+        mock = MagicMock()
+        mock.get_table_of_contents.side_effect = OpenZimMcpArchiveError(
+            "Cannot find entry NotARealArticle"
+        )
+        handler = SimpleToolsHandler(mock)
+        out = handler._handle_toc(
+            "toc of NotARealArticle",
+            "/x.zim",
+            {"entry_path": "NotARealArticle"},
+            {},
+        )
+        assert "Error Processing Query" not in out
+
+    def test_handle_toc_success_path_passes_through(self) -> None:
+        """Regression: a successful TOC lookup must return the backend
+        payload unchanged — the try/except only intercepts failures."""
+        mock = MagicMock()
+        mock.get_table_of_contents.return_value = '{"toc": "tree"}'
+        handler = SimpleToolsHandler(mock)
+        out = handler._handle_toc(
+            "table of contents for Biology",
+            "/x.zim",
+            {"entry_path": "Biology"},
+            {},
+        )
+        assert out == '{"toc": "tree"}'

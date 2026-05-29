@@ -192,7 +192,7 @@ def test_photosythesis_resolves_to_photosynthesis_via_typo_fallback(
     The expected flow:
       1. fast path probes ``C/Photosythesis`` (etc.) → miss
       2. ``SuggestionSearcher`` returns nothing → miss
-      3. ``_find_entry_typo_fallback`` generates ~700 variants
+      3. ``_find_entry_typo_fallback_with_suggestions`` generates ~700 variants
       4. Among them is ``Photosynthesis`` (single-character insertion of 'n')
       5. ``_find_entry_fast_path(archive, "Photosynthesis")`` hits
          ``C/Photosynthesis`` → fuzzy_path_hit = True
