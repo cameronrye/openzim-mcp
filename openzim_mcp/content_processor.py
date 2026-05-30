@@ -164,8 +164,13 @@ def _word_in(folded_paragraph: str, term: str) -> bool:
 # italic disambig links, ``[**Photosynthesis**](**Photosynthesis** "…")``
 # where bolding inside the link target breaks the URL).
 #
-# - ``\[[^\]\n]+\]\([^\n)]*\)`` — full ``[text](href "title")`` link,
+# - ``\[[^\]\n]*\]\([^\n)]*\)`` — full ``[text](href "title")`` link,
 #   matched as ONE unit so the URL/tooltip parenthetical only counts
+#   (``*`` not ``+`` on the link text so EMPTY-text links ``[](url)`` —
+#   the shape ZIMIT/warc2zim emits for inline images with no alt text —
+#   are protected too; otherwise a query term inside the image URL,
+#   e.g. ``[](../media/plato.jpg)`` for query "plato", got bolded into
+#   ``[](../media/**plato**.jpg)`` and broke the path).
 #   when it's attached to a link. An earlier shape matched any ``(...)``
 #   parenthetical — that protected ordinary prose parentheticals like
 #   ``(also called assimilation)`` from highlighting too, silently
@@ -180,7 +185,7 @@ def _word_in(folded_paragraph: str, term: str) -> bool:
 #   Wikipedia, but cheap to skip and prevents bold-inside-code from
 #   breaking code-formatted text).
 _HIGHLIGHT_SKIP_RE = re.compile(
-    r"\[[^\]\n]+\]\([^\n)]*\)"
+    r"\[[^\]\n]*\]\([^\n)]*\)"
     r"|\*\*[^*\n]+\*\*"
     r"|(?<!\w)_[^_\n]+_(?!\w)"
     r"|`[^`\n]+`",

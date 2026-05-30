@@ -750,6 +750,56 @@ class _StructureMixin:
             ),
         )
 
+    @staticmethod
+    def _is_non_article_target(path: str) -> bool:
+        """True when ``path`` points at a binary asset, not a navigable article.
+
+        ZIMIT / warc2zim wraps an article's lead image in an
+        ``<a href="…/plato.jpg">`` anchor, so the image leaks into the
+        internal-link graph. Pre-fix, ``articles related to Plato`` on the IEP
+        archive surfaced ``iep.utm.edu/wp-content/media/plato.jpg`` as the
+        rank-1 "related article". Asset targets (images, fonts, styles,
+        scripts, media, archives) are never navigable articles and must be
+        excluded from the related-article set.
+
+        ``.htm`` / ``.html`` are intentionally NOT treated as assets —
+        MedlinePlus article paths legitimately end in ``.html`` / ``.htm``.
+        """
+        extensions = (
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".svg",
+            ".webp",
+            ".bmp",
+            ".ico",
+            ".tif",
+            ".tiff",
+            ".eot",
+            ".otf",
+            ".ttf",
+            ".woff",
+            ".woff2",
+            ".css",
+            ".js",
+            ".mjs",
+            ".json",
+            ".pdf",
+            ".zip",
+            ".gz",
+            ".mp4",
+            ".webm",
+            ".mp3",
+            ".ogg",
+            ".wav",
+            ".avi",
+            ".mov",
+            ".m4a",
+        )
+        base = path.split("?", 1)[0].split("#", 1)[0].lower()
+        return base.endswith(extensions)
+
     def get_related_articles_data(
         self,
         zim_file_path: str,
@@ -848,6 +898,12 @@ class _StructureMixin:
                     link.get("url", ""), resolved_source
                 )
                 if not target or target in (entry_path, resolved_source):
+                    continue
+                if self._is_non_article_target(target):
+                    # ZIMIT/warc2zim wraps the lead image in
+                    # ``<a href="…/plato.jpg">`` so the image leaks into the
+                    # internal-link graph; asset targets are not navigable
+                    # articles and must not rank as "related".
                     continue
                 target_counts[target] += 1
                 if target not in first_text:
