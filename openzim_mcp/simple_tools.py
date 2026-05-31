@@ -3250,38 +3250,11 @@ class SimpleToolsHandler(
         # it as a topic ask — for plain ``search`` intents (the user
         # typed "berlin wall" directly), the raw query IS the search
         # query.
-        # Sub-D-2: build the title probe (returns None when no archive
-        # is in scope; rules 2 and 3 degrade gracefully). Snapshot
-        # intermediate stages by running the rules individually to emit
-        # per-rule telemetry. This keeps parse_intent's responsibilities
-        # clean (it doesn't know about _track); the cost is two extra
-        # rule passes worth of CPU per query.
-        if self.zim_operations.config.query_rewrite.enabled:
-            # Post-b1 P1-D1: mirror of the simple-branch fix at line
-            # ~624 — pre-resolve zim_file_path so the probe sees the
-            # single auto-selected archive when the caller omits it.
-            probe_path = self._probe_archive_path(zim_file_path)
-            title_probe = self._build_title_probe(probe_path)
-            after_lower = IntentParser._normalize_topic_case(query)
-            after_misspell = IntentParser._apply_misspelling_map(
-                after_lower, title_probe=title_probe
-            )
-            if after_misspell != after_lower:
-                self._track(_QUERY_REWRITE_MISSPELLING)
-            after_stopword = IntentParser._detect_stopword_phrase(
-                after_misspell, title_probe=title_probe
-            )
-            if after_stopword != after_misspell:
-                self._track(_QUERY_REWRITE_STOPWORD_PHRASE)
-            # Post-b1 P1-D3: pass probe to Rule 4 (mirror of the
-            # simple-branch wiring).
-            _, hint_probe = IntentParser._decompose_x_of_y(
-                after_stopword, title_probe=title_probe
-            )
-            if hint_probe is not None:
-                self._track(_QUERY_REWRITE_X_OF_Y)
-        else:
-            title_probe = None
+        # Sub-D-2: build the title probe + emit per-rule query-rewrite
+        # telemetry (shared with handle_zim_query's simple branch). The
+        # probe returns None when no archive is in scope; rules 2 and 3
+        # degrade gracefully.
+        title_probe = self._run_query_rewrite_probes(query, zim_file_path)
 
         try:
             intent, params, _confidence = self.intent_parser.parse_intent(

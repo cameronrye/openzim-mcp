@@ -328,6 +328,124 @@ def test_suggestion_exception_single_file_raises(
         )
 
 
+def test_suggestion_redirect_branch_surfaces_match_type_redirect(
+    test_config: OpenZimMcpConfig, monkeypatch
+) -> None:
+    """A suggestion entry that walks a redirect surfaces match_type=redirect.
+
+    Pins the OUTPUT of the redirect-walked suggestion branch (not just
+    that it runs): the reported path is the canonical post-redirect path,
+    ``pre_redirect_path`` is the original suggestion path, and the
+    non-exact-CI score stays in the rank-decayed band.
+    """
+    server = _make_server(test_config)
+    # The suggestion index emits the redirect path "Color"; it walks to
+    # the canonical "Colour" whose title differs from the query, so the
+    # row is a redirect-walked suggestion (NOT an exact-CI promotion).
+    canonical = _entry("Colour", "Colour")
+    redirect = _entry("Color", "Color", is_redirect=True, target=canonical)
+
+    archive = MagicMock()
+    archive.has_entry_by_title.return_value = False
+    archive.has_entry_by_path.return_value = False
+    archive.get_entry_by_path.return_value = redirect
+
+    searcher = _suggester(["Color"])
+    _patch_archive(monkeypatch, archive, searcher)
+
+    out = server.zim_operations.find_entry_by_title_data(
+        "/zim/test.zim", "colorr", cross_file=False, limit=10
+    )
+
+    top = out["results"][0]
+    assert top["path"] == "Colour"
+    assert top["match_type"] == "redirect"
+    assert top["pre_redirect_path"] == "Color"
+    # n=1, idx=0 -> 0.95*(1-0/1) rounded; redirect-walked, not exact-CI.
+    assert top["score"] == 0.95
+    assert out["fast_path_hit"] is False
+    assert out["fuzzy_path_hit"] is False
+
+
+# ---------------------------------------------------------------------------
+# (b') Cross-file partial-row survival on a mid-loop raise.
+#
+# REGRESSION GUARD for the Tier 3 ``_suggestion_rows`` divergence: the
+# extracted helper built a LOCAL rows list and only ``extend``-ed it onto
+# ``aggregate_results`` after the whole loop completed, so a mid-loop raise
+# (e.g. ``_follow_redirect_chain`` throwing on the SECOND path) discarded
+# the already-built first row AND the inline ``fast_path_hit`` flip. The
+# original inlined code appends to the shared list incrementally and sets
+# ``fast_path_hit`` inline, so the partial first row survives the raise
+# (caught by the cross_file suggestion ``except`` that logs + continues).
+# ---------------------------------------------------------------------------
+
+
+def test_cross_file_suggestion_partial_row_survives_midloop_raise(
+    test_config: OpenZimMcpConfig, monkeypatch
+) -> None:
+    """First suggestion row survives a raise while building the second.
+
+    SuggestionSearcher returns two paths; ``get_entry_by_path`` succeeds
+    for both, but ``_follow_redirect_chain`` raises on the SECOND call
+    (after the first, exact-CI row was already appended). In cross_file
+    mode the outer suggestion ``except`` logs + continues, so the first
+    row MUST survive and ``fast_path_hit`` MUST stay True.
+    """
+    server = _make_server(test_config)
+    # First suggestion is an exact case-insensitive title match -> score
+    # 1.0 + fast_path_hit flip happen INLINE before the second iteration.
+    good = _entry("C/Good", "Good")
+    second = _entry("C/Second", "Second")
+
+    archive = MagicMock()
+    archive.has_entry_by_title.return_value = False
+    archive.has_entry_by_path.return_value = False
+
+    def get_entry_by_path(path: str):
+        return {"C/Good": good, "C/Second": second}[path]
+
+    archive.get_entry_by_path.side_effect = get_entry_by_path
+
+    searcher = _suggester(["C/Good", "C/Second"])
+    _patch_archive(monkeypatch, archive, searcher)
+    monkeypatch.setattr(
+        server.zim_operations,
+        "list_zim_files_data",
+        lambda *a, **kw: [{"path": "/zim/test.zim"}],
+    )
+
+    # ``_follow_redirect_chain`` succeeds (identity) on the first entry,
+    # raises on the second -- AFTER the first row was appended.
+    real_chain = server.zim_operations._follow_redirect_chain
+
+    def flaky_chain(entry):
+        if entry is second:
+            raise RuntimeError("redirect chain blew up mid-loop")
+        return real_chain(entry)
+
+    monkeypatch.setattr(server.zim_operations, "_follow_redirect_chain", flaky_chain)
+    # Typo fallback won't run (fast_path_hit gates it), but stub it so the
+    # test never reaches a real archive in any branch.
+    monkeypatch.setattr(
+        server.zim_operations,
+        "_find_entry_typo_fallback_with_suggestions",
+        lambda archive, title, *, suggestion_limit: (None, []),
+    )
+
+    out = server.zim_operations.find_entry_by_title_data(
+        "/zim/test.zim", "good", cross_file=True, limit=10
+    )
+
+    # The partial first row survives the mid-loop raise.
+    paths = [r["path"] for r in out["results"]]
+    assert paths == ["C/Good"]
+    # The inline exact-CI promotion + fast_path_hit flip also survive.
+    assert out["results"][0]["score"] == 1.0
+    assert out["results"][0]["match_type"] == "direct"
+    assert out["fast_path_hit"] is True
+
+
 # ---------------------------------------------------------------------------
 # (c) Typo-fallback hit (fuzzy_path_hit + alt_spelling suggestions).
 # ---------------------------------------------------------------------------

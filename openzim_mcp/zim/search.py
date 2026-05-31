@@ -2726,96 +2726,6 @@ class _SearchMixin:
             "pre_redirect_path": str(fast_pre_path or ""),
         }
 
-    def _suggestion_rows(
-        self,
-        archive: Any,
-        title: str,
-        title_lower: str,
-        file_path: str,
-        limit: int,
-    ) -> Tuple[List[Dict[str, Any]], bool]:
-        """Run the libzim suggestion search; return ``(rows, saw_exact_ci)``.
-
-        Note: ``Archive.suggest()`` does not exist; the public API is
-        ``SuggestionSearcher(archive).suggest(text)``.
-
-        Results carry rank-derived scores. Legacy behaviour was a
-        hardcoded 0.8 for every hit, which made the ``score`` field
-        decorative; rank-based scoring gives callers a real ordering
-        signal. An exact case-insensitive title match is promoted to
-        1.0 (and the returned ``saw_exact_ci`` flag lets the caller flip
-        ``fast_path_hit``) so callers can recognise the strongest
-        possible match.
-
-        The caller owns the surrounding try/except (re-raise vs. log
-        depending on ``cross_file``).
-        """
-        rows: List[Dict[str, Any]] = []
-        saw_exact_ci = False
-        suggestion_search = _zim_ops_mod.SuggestionSearcher(archive).suggest(title)
-        total = suggestion_search.getEstimatedMatches()
-        if total > 0:
-            paths = list(suggestion_search.getResults(0, limit))
-            # Score by rank — first result is the best
-            # libzim suggestion match.
-            n = max(len(paths), 1)
-            for idx, path in enumerate(paths):
-                try:
-                    entry = archive.get_entry_by_path(path)
-                except Exception as e:
-                    logger.debug(
-                        f"find_entry_by_title suggestion read "
-                        f"failed for {path}: {e}"
-                    )
-                    continue
-                # Post-a14 sweep: report canonical post-
-                # redirect path so cite_id consumers
-                # always see the same key for the same
-                # article regardless of which redirect
-                # the suggestion index emitted.
-                # Post-b4 D1: track whether the
-                # redirect chain actually walked, so
-                # the row's ``match_type`` distinguishes
-                # a true canonical redirect (safe to
-                # auto-fetch at the 0.95 gate) from a
-                # raw fuzzy title-prefix suggestion
-                # (``Darwin's evolution`` → ``Evolution``
-                # at 0.95 — same score, not safe).
-                suggest_pre_path = getattr(entry, "path", None)
-                entry = self._follow_redirect_chain(entry)
-                suggest_post_path = getattr(entry, "path", None)
-                redirect_walked = suggest_pre_path != suggest_post_path
-                resolved_title = entry.title or path
-                exact_ci = resolved_title.lower() == title_lower
-                if exact_ci:
-                    score: float = 1.0
-                    saw_exact_ci = True
-                    match_type = "direct"
-                else:
-                    # Linearly decaying rank-score in (0, 0.95].
-                    # Capped below 1.0 so an exact match always
-                    # outranks any prefix/partial.
-                    score = round(0.95 * (1.0 - idx / n), 4)
-                    match_type = "redirect" if redirect_walked else "fuzzy_suggest"
-                rows.append(
-                    {
-                        "path": entry.path,
-                        "title": resolved_title,
-                        "score": score,
-                        "zim_file": file_path,
-                        "match_type": match_type,
-                        # Post-b6 Z1: propagate the
-                        # pre-redirect path so the D1
-                        # filter on possessive topics
-                        # can detect associative
-                        # redirects (pre-path unrelated
-                        # to the user's possessor
-                        # entity).
-                        "pre_redirect_path": str(suggest_pre_path or ""),
-                    }
-                )
-        return rows, saw_exact_ci
-
     def _typo_fallback_row(
         self,
         archive: Any,
@@ -3010,15 +2920,85 @@ class _SearchMixin:
                         continue
 
                     # Fallback: libzim suggestion search (title-indexed).
-                    # The try/except stays here because the recovery
-                    # policy is per-file control flow (re-raise in
-                    # single-file mode, log-and-skip in cross_file mode).
+                    # Note: ``Archive.suggest()`` does not exist; the public
+                    # API is ``SuggestionSearcher(archive).suggest(text)``.
                     try:
-                        rows, saw_exact_ci = self._suggestion_rows(
-                            archive, title, title_lower, file_path, limit
-                        )
-                        aggregate_results.extend(rows)
-                        fast_path_hit = fast_path_hit or saw_exact_ci
+                        suggestion_search = _zim_ops_mod.SuggestionSearcher(
+                            archive
+                        ).suggest(title)
+                        total = suggestion_search.getEstimatedMatches()
+                        if total > 0:
+                            paths = list(suggestion_search.getResults(0, limit))
+                            # Score by rank — first result is the best
+                            # libzim suggestion match. Legacy behaviour was a
+                            # hardcoded 0.8 for every hit, which made the
+                            # ``score`` field decorative; rank-based scoring
+                            # gives callers a real ordering signal. An exact
+                            # case-insensitive title match is promoted to
+                            # 1.0 (and flips fast_path_hit) so callers can
+                            # recognise the strongest possible match.
+                            n = max(len(paths), 1)
+                            for idx, path in enumerate(paths):
+                                try:
+                                    entry = archive.get_entry_by_path(path)
+                                except Exception as e:
+                                    logger.debug(
+                                        f"find_entry_by_title suggestion read "
+                                        f"failed for {path}: {e}"
+                                    )
+                                    continue
+                                # Post-a14 sweep: report canonical post-
+                                # redirect path so cite_id consumers
+                                # always see the same key for the same
+                                # article regardless of which redirect
+                                # the suggestion index emitted.
+                                # Post-b4 D1: track whether the
+                                # redirect chain actually walked, so
+                                # the row's ``match_type`` distinguishes
+                                # a true canonical redirect (safe to
+                                # auto-fetch at the 0.95 gate) from a
+                                # raw fuzzy title-prefix suggestion
+                                # (``Darwin's evolution`` → ``Evolution``
+                                # at 0.95 — same score, not safe).
+                                suggest_pre_path = getattr(entry, "path", None)
+                                entry = self._follow_redirect_chain(entry)
+                                suggest_post_path = getattr(entry, "path", None)
+                                redirect_walked = suggest_pre_path != suggest_post_path
+                                resolved_title = entry.title or path
+                                exact_ci = resolved_title.lower() == title_lower
+                                if exact_ci:
+                                    score: float = 1.0
+                                    fast_path_hit = True
+                                    match_type = "direct"
+                                else:
+                                    # Linearly decaying rank-score in (0, 0.95].
+                                    # Capped below 1.0 so an exact match always
+                                    # outranks any prefix/partial.
+                                    score = round(0.95 * (1.0 - idx / n), 4)
+                                    match_type = (
+                                        "redirect"
+                                        if redirect_walked
+                                        else "fuzzy_suggest"
+                                    )
+                                aggregate_results.append(
+                                    {
+                                        "path": entry.path,
+                                        "title": resolved_title,
+                                        "score": score,
+                                        "zim_file": file_path,
+                                        "match_type": match_type,
+                                        # Post-b6 Z1: propagate the
+                                        # pre-redirect path so the D1
+                                        # filter on possessive topics
+                                        # can detect associative
+                                        # redirects (pre-path unrelated
+                                        # to the user's possessor
+                                        # entity).
+                                        "pre_redirect_path": str(
+                                            suggest_pre_path or ""
+                                        ),
+                                    }
+                                )
                     except Exception as e:
                         if not cross_file:
                             raise

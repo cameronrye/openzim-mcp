@@ -195,6 +195,75 @@ def test_new_scheme_metadata_keys_extras_discovered_and_filtered(test_config):
     assert "Illustration_48x48@1" not in entries
 
 
+def test_new_scheme_metadata_keys_read_raises_falls_back_to_hardcoded(test_config):
+    """When ``archive.metadata_keys`` access RAISES, the discovery falls
+    back to the hardcoded ``common_metadata`` list (discovered=[]) and
+    logs ``metadata_keys read failed``.
+
+    Pins the defensive ``except`` branch in ``_discover_metadata_keys``:
+    a property that throws (not a missing attribute) propagates past the
+    ``getattr`` default into the try/except, which logs + degrades to the
+    conventional list rather than crashing the whole metadata read.
+
+    A dedicated handler is attached directly to the archive module logger
+    AFTER constructing the server: ``OpenZimMcpConfig.setup_logging`` calls
+    ``logging.basicConfig(force=True)`` during server init, which strips
+    pytest's ``caplog`` handler off the root, so ``caplog`` can't see the
+    record. Capturing on the module logger sidesteps that reset.
+    """
+    import logging
+    from unittest.mock import PropertyMock
+
+    zim_ops = _make_server(test_config)
+
+    captured: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    arch_logger = logging.getLogger("openzim_mcp.zim.archive")
+    handler = _Capture(level=logging.DEBUG)
+    prev_level = arch_logger.level
+    arch_logger.addHandler(handler)
+    arch_logger.setLevel(logging.DEBUG)
+
+    mock_archive = MagicMock()
+    # ``metadata_keys`` as a property whose access raises (e.g. a libzim
+    # archive with a corrupt M-namespace index).
+    type(mock_archive).metadata_keys = PropertyMock(
+        side_effect=RuntimeError("corrupt index")
+    )
+
+    expected_hardcoded = [
+        "Title",
+        "Description",
+        "Long_Description",
+        "Language",
+        "Creator",
+        "Publisher",
+        "Date",
+        "Source",
+        "License",
+        "Relation",
+        "Flavour",
+        "Tags",
+        "Counter",
+        "Name",
+        "Scraper",
+    ]
+
+    try:
+        keys = zim_ops._discover_metadata_keys(mock_archive, has_new_scheme=True)
+    finally:
+        arch_logger.removeHandler(handler)
+        arch_logger.setLevel(prev_level)
+
+    # discovered=[] -> no extras appended -> exactly the hardcoded list.
+    assert keys == expected_hardcoded
+    assert any("metadata_keys read failed" in msg for msg in captured)
+
+
 # ---------------------------------------------------------------------------
 # Old-scheme branch — the critical under-tested path
 # ---------------------------------------------------------------------------
