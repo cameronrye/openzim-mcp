@@ -484,42 +484,6 @@ def _build_sections(soup: BeautifulSoup) -> List[Dict[str, Union[str, int]]]:
     return sections
 
 
-class ParsedHTML:
-    """Container for pre-parsed HTML to enable reuse across multiple operations.
-
-    This class allows parsing HTML once and using it for multiple extraction
-    operations (text conversion, structure extraction, link extraction) without
-    re-parsing the HTML each time.
-
-    Example:
-        >>> processor = ContentProcessor()
-        >>> parsed = processor.parse_html("<html><body><h1>Title</h1></body></html>")
-        >>> text = processor.html_to_plain_text_from_parsed(parsed)
-        >>> structure = processor.extract_html_structure_from_parsed(parsed)
-    """
-
-    def __init__(self, html_content: str):
-        """Parse HTML content once for reuse.
-
-        Args:
-            html_content: Raw HTML string to parse
-        """
-        self.original_html = html_content
-        self._soup = BeautifulSoup(html_content, HTML_PARSER)
-        # Store a copy of the original parsed soup for operations that modify it
-        self._original_soup_html = str(self._soup)
-
-    @property
-    def soup(self) -> BeautifulSoup:
-        """Return a fresh copy of the parsed soup for modifying operations."""
-        return BeautifulSoup(self._original_soup_html, HTML_PARSER)
-
-    @property
-    def soup_for_reading(self) -> BeautifulSoup:
-        """Get the original soup for read-only operations (more efficient)."""
-        return self._soup
-
-
 class ContentProcessor:
     """Handles HTML to text conversion and content processing."""
 
@@ -865,26 +829,6 @@ class ContentProcessor:
             )
             table.replace_with(placeholder)
 
-    def parse_html(self, html_content: str) -> ParsedHTML:
-        """Parse HTML content once for reuse across multiple operations.
-
-        Use this method when you need to perform multiple operations on the same
-        HTML content (e.g., extract text AND structure AND links). This avoids
-        re-parsing the HTML for each operation.
-
-        Args:
-            html_content: Raw HTML string to parse
-
-        Returns:
-            ParsedHTML container that can be passed to *_from_parsed methods
-
-        Example:
-            >>> parsed = processor.parse_html(html_content)
-            >>> text = processor.html_to_plain_text_from_parsed(parsed)
-            >>> links = processor.extract_html_links_from_parsed(parsed)
-        """
-        return ParsedHTML(html_content)
-
     def _render_soup_to_text(self, soup: BeautifulSoup, *, compact: bool) -> str:
         """Render a BeautifulSoup tree to clean plain text.
 
@@ -913,29 +857,6 @@ class ContentProcessor:
         text = self._create_html_converter().handle(str(soup))
         text = re.sub(r"\n{3,}", "\n\n", text)
         return (infobox_md + text).strip()
-
-    def html_to_plain_text_from_parsed(
-        self, parsed: ParsedHTML, *, compact: bool = False
-    ) -> str:
-        """Convert pre-parsed HTML to clean plain text.
-
-        More efficient when used with parse_html() for multiple operations.
-
-        Args:
-            parsed: Pre-parsed HTML container
-            compact: When True, extract infoboxes and replace oversized tables
-                with placeholders before rendering. Defaults to False, which
-                preserves byte-identical v1.2.0 behavior.
-
-        Returns:
-            Converted plain text
-        """
-        try:
-            return self._render_soup_to_text(parsed.soup, compact=compact)
-        except Exception as e:
-            logger.warning(f"Error converting HTML to text: {e}")
-            # Fallback: return raw text content
-            return str(parsed.soup_for_reading.get_text().strip())
 
     def html_to_plain_text(self, html_content: str, *, compact: bool = False) -> str:
         """Convert HTML to clean plain text.
@@ -1267,19 +1188,6 @@ class ContentProcessor:
             logger.warning(f"Error processing content with MIME type {mime_type}: {e}")
             return f"(Error processing content: {e})"
 
-    def extract_html_structure_from_parsed(self, parsed: ParsedHTML) -> Dict[str, Any]:
-        """Extract structure from pre-parsed HTML including headings and sections.
-
-        More efficient when used with parse_html() for multiple operations.
-
-        Args:
-            parsed: Pre-parsed HTML container
-
-        Returns:
-            Dictionary containing structure information
-        """
-        return self._extract_structure_from_soup(parsed.soup)
-
     def extract_html_structure(self, html_content: str) -> Dict[str, Any]:
         """
         Extract structure from HTML content including headings and sections.
@@ -1337,20 +1245,6 @@ class ContentProcessor:
             structure["error"] = str(e)
 
         return structure
-
-    def extract_html_links_from_parsed(self, parsed: ParsedHTML) -> Dict[str, Any]:
-        """Extract links from pre-parsed HTML content.
-
-        More efficient when used with parse_html() for multiple operations.
-
-        Args:
-            parsed: Pre-parsed HTML container
-
-        Returns:
-            Dictionary containing link information
-        """
-        # Links extraction is read-only, so we can use the original soup
-        return self._extract_links_from_soup(parsed.soup_for_reading)
 
     def extract_html_links(self, html_content: str) -> Dict[str, Any]:
         """
