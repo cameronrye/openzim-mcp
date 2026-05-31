@@ -2662,253 +2662,205 @@ class _SearchMixin:
             last_good = target
         return target
 
-    def find_entry_by_title_data(
-        self,
-        zim_file_path: str,
-        title: str,
-        cross_file: bool = False,
-        limit: int = 10,
-    ) -> "FindEntryResponse":
-        """Structured variant of ``find_entry_by_title``.
+    def _fast_path_row(
+        self, archive: Any, title: str, file_path: str
+    ) -> Optional[Dict[str, Any]]:
+        """Probe the fast path for ``title``; return a result row or None.
 
-        Returns the result dict directly (not a JSON string) so MCP tools
-        can hand it straight to FastMCP's structured-content path.
+        Tries a handful of case variants against ``C/<normalized>`` and
+        ``A/<normalized>`` (legacy content namespace). libzim's path
+        lookups are case-sensitive, so we expand a small set of natural
+        variants — ``Climate change``, ``climate change``, ``Climate
+        Change``, etc. — rather than asking callers to know exactly how
+        the entry was filed. has_new_scheme archives accept ``C/<path>``
+        as an alias for ``<path>``.
 
-        Implementation order:
-          1. Direct path probe in C/ and A/ namespaces against a small set of
-             case variants (fast path) — handles the common "user typed
-             lowercase" case without paying for a suggestion search.
-          2. libzim suggestion search (title-indexed) — primary fallback.
-             Results carry rank-derived scores; an exact case-insensitive
-             title match is promoted to score 1.0 and flips fast_path_hit.
-          3. Return list sorted by score (descending).
+        Returns the score-1.0 result row on a hit, or ``None`` on a miss.
+        The caller owns the loop control flow (break/continue) and the
+        ``fast_path_hit`` flag.
         """
-        if not title or not title.strip():
-            raise OpenZimMcpValidationError(
-                "Input is empty or contains only whitespace/control characters"
-            )
-        if limit < 1 or limit > 50:
-            raise OpenZimMcpValidationError(
-                f"limit must be between 1 and 50 (provided: {limit})"
-            )
+        fast_hit_entry = self._find_entry_fast_path(archive, title)
+        if fast_hit_entry is None:
+            return None
+        # Post-a14 sweep: walk the redirect chain so the
+        # reported path is the canonical post-redirect
+        # one. ``Big_Rapids_Michigan`` (comma-stripped
+        # redirect) → ``Big_Rapids,_Michigan`` keeps the
+        # cite_id stable across lookup-variant paths.
+        # Post-b4 D1: capture the pre-redirect path so we
+        # can annotate ``match_type`` with whether the
+        # canonical lookup actually walked a redirect.
+        # Post-b6 Z1: propagate the pre-redirect path
+        # itself in the result row so the D1 filter can
+        # check whether the redirect target is
+        # semantically related to the user's query.
+        fast_pre_path = getattr(fast_hit_entry, "path", None)
+        fast_hit_entry = self._follow_redirect_chain(fast_hit_entry)
+        fast_post_path = getattr(fast_hit_entry, "path", None)
+        fast_match_type = "redirect" if fast_pre_path != fast_post_path else "direct"
+        return {
+            "path": fast_hit_entry.path,
+            "title": fast_hit_entry.title or title,
+            "score": 1.0,
+            "zim_file": file_path,
+            "match_type": fast_match_type,
+            "pre_redirect_path": str(fast_pre_path or ""),
+        }
 
-        if cross_file:
-            files = [f["path"] for f in self.list_zim_files_data() if f.get("path")]
-        else:
-            validated = self._validate_zim_path(zim_file_path)
-            files = [str(validated)]
+    def _suggestion_rows(
+        self,
+        archive: Any,
+        title: str,
+        title_lower: str,
+        file_path: str,
+        limit: int,
+    ) -> Tuple[List[Dict[str, Any]], bool]:
+        """Run the libzim suggestion search; return ``(rows, saw_exact_ci)``.
 
-        aggregate_results: List[Dict[str, Any]] = []
-        fast_path_hit = False
-        fuzzy_path_hit = False
-        title_lower = title.lower()
-        # Verified typo-variant titles accumulated during the per-file
-        # typo-fallback probe. Used only when *all* archives return
-        # zero hits, to populate ``_meta.suggestions`` with values the
-        # caller can re-issue as a fresh query (Phase A #6 fix).
-        verified_variants: List[str] = []
-        verified_variants_seen: set[str] = set()
-        structured_suggestions_limit = self.config.search.structured_suggestions_limit
+        Note: ``Archive.suggest()`` does not exist; the public API is
+        ``SuggestionSearcher(archive).suggest(text)``.
 
-        for file_path in files:
-            try:
-                with _zim_ops_mod.zim_archive(file_path) as archive:
-                    # Fast path: try a handful of case variants against
-                    # ``C/<normalized>`` and ``A/<normalized>`` (legacy
-                    # content namespace). libzim's path lookups are
-                    # case-sensitive, so we expand a small set of natural
-                    # variants — ``Climate change``, ``climate change``,
-                    # ``Climate Change``, etc. — rather than asking callers
-                    # to know exactly how the entry was filed. has_new_scheme
-                    # archives accept ``C/<path>`` as an alias for ``<path>``.
-                    fast_hit_entry = self._find_entry_fast_path(archive, title)
-                    if fast_hit_entry is not None:
-                        # Post-a14 sweep: walk the redirect chain so the
-                        # reported path is the canonical post-redirect
-                        # one. ``Big_Rapids_Michigan`` (comma-stripped
-                        # redirect) → ``Big_Rapids,_Michigan`` keeps the
-                        # cite_id stable across lookup-variant paths.
-                        # Post-b4 D1: capture the pre-redirect path so we
-                        # can annotate ``match_type`` with whether the
-                        # canonical lookup actually walked a redirect.
-                        # Post-b6 Z1: propagate the pre-redirect path
-                        # itself in the result row so the D1 filter can
-                        # check whether the redirect target is
-                        # semantically related to the user's query.
-                        fast_pre_path = getattr(fast_hit_entry, "path", None)
-                        fast_hit_entry = self._follow_redirect_chain(fast_hit_entry)
-                        fast_post_path = getattr(fast_hit_entry, "path", None)
-                        fast_match_type = (
-                            "redirect" if fast_pre_path != fast_post_path else "direct"
-                        )
-                        aggregate_results.append(
-                            {
-                                "path": fast_hit_entry.path,
-                                "title": fast_hit_entry.title or title,
-                                "score": 1.0,
-                                "zim_file": file_path,
-                                "match_type": fast_match_type,
-                                "pre_redirect_path": str(fast_pre_path or ""),
-                            }
-                        )
-                        fast_path_hit = True
-                        if not cross_file:
-                            break
-                        continue
+        Results carry rank-derived scores. Legacy behaviour was a
+        hardcoded 0.8 for every hit, which made the ``score`` field
+        decorative; rank-based scoring gives callers a real ordering
+        signal. An exact case-insensitive title match is promoted to
+        1.0 (and the returned ``saw_exact_ci`` flag lets the caller flip
+        ``fast_path_hit``) so callers can recognise the strongest
+        possible match.
 
-                    # Fallback: libzim suggestion search (title-indexed).
-                    # Note: ``Archive.suggest()`` does not exist; the public
-                    # API is ``SuggestionSearcher(archive).suggest(text)``.
-                    try:
-                        suggestion_search = _zim_ops_mod.SuggestionSearcher(
-                            archive
-                        ).suggest(title)
-                        total = suggestion_search.getEstimatedMatches()
-                        if total > 0:
-                            paths = list(suggestion_search.getResults(0, limit))
-                            # Score by rank — first result is the best
-                            # libzim suggestion match. Legacy behaviour was a
-                            # hardcoded 0.8 for every hit, which made the
-                            # ``score`` field decorative; rank-based scoring
-                            # gives callers a real ordering signal. An exact
-                            # case-insensitive title match is promoted to
-                            # 1.0 (and flips fast_path_hit) so callers can
-                            # recognise the strongest possible match.
-                            n = max(len(paths), 1)
-                            for idx, path in enumerate(paths):
-                                try:
-                                    entry = archive.get_entry_by_path(path)
-                                except Exception as e:
-                                    logger.debug(
-                                        f"find_entry_by_title suggestion read "
-                                        f"failed for {path}: {e}"
-                                    )
-                                    continue
-                                # Post-a14 sweep: report canonical post-
-                                # redirect path so cite_id consumers
-                                # always see the same key for the same
-                                # article regardless of which redirect
-                                # the suggestion index emitted.
-                                # Post-b4 D1: track whether the
-                                # redirect chain actually walked, so
-                                # the row's ``match_type`` distinguishes
-                                # a true canonical redirect (safe to
-                                # auto-fetch at the 0.95 gate) from a
-                                # raw fuzzy title-prefix suggestion
-                                # (``Darwin's evolution`` → ``Evolution``
-                                # at 0.95 — same score, not safe).
-                                suggest_pre_path = getattr(entry, "path", None)
-                                entry = self._follow_redirect_chain(entry)
-                                suggest_post_path = getattr(entry, "path", None)
-                                redirect_walked = suggest_pre_path != suggest_post_path
-                                resolved_title = entry.title or path
-                                exact_ci = resolved_title.lower() == title_lower
-                                if exact_ci:
-                                    score: float = 1.0
-                                    fast_path_hit = True
-                                    match_type = "direct"
-                                else:
-                                    # Linearly decaying rank-score in (0, 0.95].
-                                    # Capped below 1.0 so an exact match always
-                                    # outranks any prefix/partial.
-                                    score = round(0.95 * (1.0 - idx / n), 4)
-                                    match_type = (
-                                        "redirect"
-                                        if redirect_walked
-                                        else "fuzzy_suggest"
-                                    )
-                                aggregate_results.append(
-                                    {
-                                        "path": entry.path,
-                                        "title": resolved_title,
-                                        "score": score,
-                                        "zim_file": file_path,
-                                        "match_type": match_type,
-                                        # Post-b6 Z1: propagate the
-                                        # pre-redirect path so the D1
-                                        # filter on possessive topics
-                                        # can detect associative
-                                        # redirects (pre-path unrelated
-                                        # to the user's possessor
-                                        # entity).
-                                        "pre_redirect_path": str(
-                                            suggest_pre_path or ""
-                                        ),
-                                    }
-                                )
-                    except Exception as e:
-                        if not cross_file:
-                            raise
-                        logger.debug(
-                            f"find_entry_by_title suggest() failed for "
-                            f"{file_path}: {e}"
-                        )
-
-                    # Typo-tolerant fallback: when both fast path AND
-                    # the libzim suggestion index came up empty, OR when
-                    # the suggestions only yielded weak results (score < 0.7),
-                    # try a small set of single-edit variants of the input
-                    # (transposition / single deletion). Runs only as a
-                    # last resort because the false-match rate isn't
-                    # zero — we don't want it competing with real hits.
-                    already_has_strong = any(
-                        r.get("score", 0.0) >= 0.7 for r in aggregate_results
+        The caller owns the surrounding try/except (re-raise vs. log
+        depending on ``cross_file``).
+        """
+        rows: List[Dict[str, Any]] = []
+        saw_exact_ci = False
+        suggestion_search = _zim_ops_mod.SuggestionSearcher(archive).suggest(title)
+        total = suggestion_search.getEstimatedMatches()
+        if total > 0:
+            paths = list(suggestion_search.getResults(0, limit))
+            # Score by rank — first result is the best
+            # libzim suggestion match.
+            n = max(len(paths), 1)
+            for idx, path in enumerate(paths):
+                try:
+                    entry = archive.get_entry_by_path(path)
+                except Exception as e:
+                    logger.debug(
+                        f"find_entry_by_title suggestion read "
+                        f"failed for {path}: {e}"
                     )
-                    if not fast_path_hit and not already_has_strong:
-                        # Single-sweep merged probe: one pass collects both
-                        # the typo-corrected best hit AND the verified
-                        # alt-spelling suggestions. The previous code ran
-                        # two separate ~700-variant sweeps on the same
-                        # archive, doubling the worst-case latency on
-                        # cold-miss queries.
-                        suggestion_room = structured_suggestions_limit - len(
-                            verified_variants
-                        )
-                        typo_entry, fresh_variants = (
-                            self._find_entry_typo_fallback_with_suggestions(
-                                archive, title, suggestion_limit=max(suggestion_room, 0)
-                            )
-                        )
-                        if typo_entry is not None:
-                            # Post-a14 sweep: typo-fallback variants
-                            # almost always land on a redirect (the
-                            # canonical title is exactly what they were
-                            # trying to reach by typo-correcting). Walk
-                            # the chain so cite_id consumers see the
-                            # canonical path.
-                            typo_entry = self._follow_redirect_chain(typo_entry)
-                            resolved_typo_title = typo_entry.title or title
-                            aggregate_results.append(
-                                {
-                                    "path": typo_entry.path,
-                                    "title": resolved_typo_title,
-                                    # Score set from config (default 0.85).
-                                    # Below 0.95 (suggestion-rank top) and
-                                    # well below 1.0 (exact match) so a
-                                    # fuzzy hit never silently outranks a
-                                    # legitimate result from another file.
-                                    "score": self.config.search.fuzzy_title_score_penalty,
-                                    "zim_file": file_path,
-                                    "match_type": "typo_corrected",
-                                }
-                            )
-                            fuzzy_path_hit = True
-                        # Whether or not the merged probe found a fuzzy
-                        # hit, surface the verified alt-spelling pool so
-                        # the response carries actionable suggestions in
-                        # both branches (matching the spec §14.4 surfacing
-                        # rule the legacy split-pass version implemented
-                        # via two code paths).
-                        for resolved in fresh_variants:
-                            if resolved not in verified_variants_seen:
-                                verified_variants.append(resolved)
-                                verified_variants_seen.add(resolved)
-                            if len(verified_variants) >= structured_suggestions_limit:
-                                break
-            except Exception as e:
-                if not cross_file:
-                    raise
-                logger.debug(f"find_entry_by_title: skipped {file_path}: {e}")
+                    continue
+                # Post-a14 sweep: report canonical post-
+                # redirect path so cite_id consumers
+                # always see the same key for the same
+                # article regardless of which redirect
+                # the suggestion index emitted.
+                # Post-b4 D1: track whether the
+                # redirect chain actually walked, so
+                # the row's ``match_type`` distinguishes
+                # a true canonical redirect (safe to
+                # auto-fetch at the 0.95 gate) from a
+                # raw fuzzy title-prefix suggestion
+                # (``Darwin's evolution`` → ``Evolution``
+                # at 0.95 — same score, not safe).
+                suggest_pre_path = getattr(entry, "path", None)
+                entry = self._follow_redirect_chain(entry)
+                suggest_post_path = getattr(entry, "path", None)
+                redirect_walked = suggest_pre_path != suggest_post_path
+                resolved_title = entry.title or path
+                exact_ci = resolved_title.lower() == title_lower
+                if exact_ci:
+                    score: float = 1.0
+                    saw_exact_ci = True
+                    match_type = "direct"
+                else:
+                    # Linearly decaying rank-score in (0, 0.95].
+                    # Capped below 1.0 so an exact match always
+                    # outranks any prefix/partial.
+                    score = round(0.95 * (1.0 - idx / n), 4)
+                    match_type = "redirect" if redirect_walked else "fuzzy_suggest"
+                rows.append(
+                    {
+                        "path": entry.path,
+                        "title": resolved_title,
+                        "score": score,
+                        "zim_file": file_path,
+                        "match_type": match_type,
+                        # Post-b6 Z1: propagate the
+                        # pre-redirect path so the D1
+                        # filter on possessive topics
+                        # can detect associative
+                        # redirects (pre-path unrelated
+                        # to the user's possessor
+                        # entity).
+                        "pre_redirect_path": str(suggest_pre_path or ""),
+                    }
+                )
+        return rows, saw_exact_ci
+
+    def _typo_fallback_row(
+        self,
+        archive: Any,
+        title: str,
+        file_path: str,
+        *,
+        suggestion_limit: int,
+    ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+        """Run the single-sweep typo probe; return ``(row_or_none, variants)``.
+
+        One pass collects both the typo-corrected best hit AND the
+        verified alt-spelling suggestions. The previous code ran two
+        separate ~700-variant sweeps on the same archive, doubling the
+        worst-case latency on cold-miss queries.
+
+        Returns the ``typo_corrected`` result row (or ``None``) plus the
+        fresh verified alt-spelling titles. The caller owns the
+        ``fuzzy_path_hit`` flag and the verified-variant accumulation.
+        """
+        typo_entry, fresh_variants = self._find_entry_typo_fallback_with_suggestions(
+            archive, title, suggestion_limit=suggestion_limit
+        )
+        if typo_entry is None:
+            return None, fresh_variants
+        # Post-a14 sweep: typo-fallback variants
+        # almost always land on a redirect (the
+        # canonical title is exactly what they were
+        # trying to reach by typo-correcting). Walk
+        # the chain so cite_id consumers see the
+        # canonical path.
+        typo_entry = self._follow_redirect_chain(typo_entry)
+        resolved_typo_title = typo_entry.title or title
+        row = {
+            "path": typo_entry.path,
+            "title": resolved_typo_title,
+            # Score set from config (default 0.85).
+            # Below 0.95 (suggestion-rank top) and
+            # well below 1.0 (exact match) so a
+            # fuzzy hit never silently outranks a
+            # legitimate result from another file.
+            "score": self.config.search.fuzzy_title_score_penalty,
+            "zim_file": file_path,
+            "match_type": "typo_corrected",
+        }
+        return row, fresh_variants
+
+    def _assemble_find_response(
+        self,
+        aggregate_results: List[Dict[str, Any]],
+        *,
+        title: str,
+        limit: int,
+        files: List[str],
+        fast_path_hit: bool,
+        fuzzy_path_hit: bool,
+        verified_variants: List[str],
+    ) -> "FindEntryResponse":
+        """Sort, dedupe, and assemble the contract envelope.
+
+        Pure transformation of the per-file accumulated state — no
+        archive access, no control flow. Mirrors the legacy post-loop
+        block exactly.
+        """
+        structured_suggestions_limit = self.config.search.structured_suggestions_limit
 
         # Sort results so exact case-insensitive matches (score=1.0) lead;
         # otherwise preserve per-file rank order.
@@ -2974,6 +2926,136 @@ class _SearchMixin:
                 suggestions=suggestions if suggestions else None,
                 reason=reason,
             ),
+        )
+
+    def find_entry_by_title_data(
+        self,
+        zim_file_path: str,
+        title: str,
+        cross_file: bool = False,
+        limit: int = 10,
+    ) -> "FindEntryResponse":
+        """Structured variant of ``find_entry_by_title``.
+
+        Returns the result dict directly (not a JSON string) so MCP tools
+        can hand it straight to FastMCP's structured-content path.
+
+        Implementation order:
+          1. Direct path probe in C/ and A/ namespaces against a small set of
+             case variants (fast path) — handles the common "user typed
+             lowercase" case without paying for a suggestion search.
+          2. libzim suggestion search (title-indexed) — primary fallback.
+             Results carry rank-derived scores; an exact case-insensitive
+             title match is promoted to score 1.0 and flips fast_path_hit.
+          3. Return list sorted by score (descending).
+        """
+        if not title or not title.strip():
+            raise OpenZimMcpValidationError(
+                "Input is empty or contains only whitespace/control characters"
+            )
+        if limit < 1 or limit > 50:
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 50 (provided: {limit})"
+            )
+
+        if cross_file:
+            files = [f["path"] for f in self.list_zim_files_data() if f.get("path")]
+        else:
+            validated = self._validate_zim_path(zim_file_path)
+            files = [str(validated)]
+
+        aggregate_results: List[Dict[str, Any]] = []
+        fast_path_hit = False
+        fuzzy_path_hit = False
+        title_lower = title.lower()
+        # Verified typo-variant titles accumulated during the per-file
+        # typo-fallback probe. Used only when *all* archives return
+        # zero hits, to populate ``_meta.suggestions`` with values the
+        # caller can re-issue as a fresh query (Phase A #6 fix).
+        verified_variants: List[str] = []
+        verified_variants_seen: set[str] = set()
+        structured_suggestions_limit = self.config.search.structured_suggestions_limit
+
+        for file_path in files:
+            try:
+                with _zim_ops_mod.zim_archive(file_path) as archive:
+                    # Fast path: a direct case-variant path/title probe.
+                    # The helper returns the score-1.0 row or None; the
+                    # loop owns the control flow and the flag update.
+                    fast_row = self._fast_path_row(archive, title, file_path)
+                    if fast_row is not None:
+                        aggregate_results.append(fast_row)
+                        fast_path_hit = True
+                        if not cross_file:
+                            break
+                        continue
+
+                    # Fallback: libzim suggestion search (title-indexed).
+                    # The try/except stays here because the recovery
+                    # policy is per-file control flow (re-raise in
+                    # single-file mode, log-and-skip in cross_file mode).
+                    try:
+                        rows, saw_exact_ci = self._suggestion_rows(
+                            archive, title, title_lower, file_path, limit
+                        )
+                        aggregate_results.extend(rows)
+                        fast_path_hit = fast_path_hit or saw_exact_ci
+                    except Exception as e:
+                        if not cross_file:
+                            raise
+                        logger.debug(
+                            f"find_entry_by_title suggest() failed for "
+                            f"{file_path}: {e}"
+                        )
+
+                    # Typo-tolerant fallback: when both fast path AND
+                    # the libzim suggestion index came up empty, OR when
+                    # the suggestions only yielded weak results (score < 0.7),
+                    # try a small set of single-edit variants of the input
+                    # (transposition / single deletion). Runs only as a
+                    # last resort because the false-match rate isn't
+                    # zero — we don't want it competing with real hits.
+                    already_has_strong = any(
+                        r.get("score", 0.0) >= 0.7 for r in aggregate_results
+                    )
+                    if not fast_path_hit and not already_has_strong:
+                        suggestion_room = structured_suggestions_limit - len(
+                            verified_variants
+                        )
+                        typo_row, fresh_variants = self._typo_fallback_row(
+                            archive,
+                            title,
+                            file_path,
+                            suggestion_limit=max(suggestion_room, 0),
+                        )
+                        if typo_row is not None:
+                            aggregate_results.append(typo_row)
+                            fuzzy_path_hit = True
+                        # Whether or not the merged probe found a fuzzy
+                        # hit, surface the verified alt-spelling pool so
+                        # the response carries actionable suggestions in
+                        # both branches (matching the spec §14.4 surfacing
+                        # rule the legacy split-pass version implemented
+                        # via two code paths).
+                        for resolved in fresh_variants:
+                            if resolved not in verified_variants_seen:
+                                verified_variants.append(resolved)
+                                verified_variants_seen.add(resolved)
+                            if len(verified_variants) >= structured_suggestions_limit:
+                                break
+            except Exception as e:
+                if not cross_file:
+                    raise
+                logger.debug(f"find_entry_by_title: skipped {file_path}: {e}")
+
+        return self._assemble_find_response(
+            aggregate_results,
+            title=title,
+            limit=limit,
+            files=files,
+            fast_path_hit=fast_path_hit,
+            fuzzy_path_hit=fuzzy_path_hit,
+            verified_variants=verified_variants,
         )
 
     def find_entry_by_title(
