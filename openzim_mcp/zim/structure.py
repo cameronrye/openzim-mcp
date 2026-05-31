@@ -45,9 +45,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# MIME type that drives the HTML-aware structure/links code paths.
-TEXT_HTML_MIME = "text/html"
-
 
 def _sections_to_toc_tree(sections: "List[SectionMeta]") -> "List[TocHeading]":
     """Build a hierarchical TOC tree from a flat SectionMeta list.
