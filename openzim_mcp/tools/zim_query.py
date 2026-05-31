@@ -18,7 +18,6 @@ diverge from what Gate 0b measured.
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from ..responses import ToolErrorPayload, tool_error
@@ -27,8 +26,6 @@ from ._common import load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
-
-logger = logging.getLogger(__name__)
 
 # Read description at IMPORT TIME from committed file shipped with the
 # package. Per-tool packaging guard in test_phase_f_packaging.py

@@ -36,7 +36,6 @@ this axis. v2.5 revisits the default with adoption telemetry.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from ..responses import tool_error
@@ -44,8 +43,6 @@ from ._common import load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
-
-logger = logging.getLogger(__name__)
 
 _DESCRIPTION = load_description("zim_get")
 

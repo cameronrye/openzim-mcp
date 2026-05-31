@@ -243,7 +243,7 @@ class SimpleToolsHandler(
             # the payload directly (bypassing that check) so any tool's
             # cursor can be replayed for offset extraction. It returns a
             # ``CursorDecodeResult`` (offset + optional ns/ai/tool to
-            # project into ``options``) or one of the six structured
+            # project into ``options``) or one of the structured
             # ``cursor_decode`` ``ToolErrorPayload`` errors. See
             # ``openzim_mcp.cursor_decode`` for the full rationale.
             cursor_result = decode_offset_cursor(

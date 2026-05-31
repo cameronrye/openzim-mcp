@@ -8,8 +8,9 @@ the cursor, so it deliberately bypasses
 :meth:`openzim_mcp.pagination.Cursor.decode`'s ``expected_tool`` check and
 reads ``s.o`` (offset) directly from any tool's cursor.
 
-Behavior is byte-identical to the inline original: the six structured
-``cursor_decode`` error payloads, the offset/ns/ai/tool projections, and the
+Behavior is byte-identical to the inline original: the five distinct structured
+``cursor_decode`` error payloads (the query-mismatch payload is shared by two
+branches), the offset/ns/ai/tool projections, and the
 token-overlap-vs-substring query-mismatch branching (gated on the
 ``_Q_EMITTING_CURSOR_TOOLS`` set) are preserved exactly. The broad
 ``except Exception`` that emitted the "undecodable" error AND a
@@ -52,8 +53,9 @@ def decode_offset_cursor(
     """Decode a simple-mode pagination cursor for offset extraction.
 
     Returns either a CursorDecodeResult (offset + optional ns/ai/tool to
-    project into options) OR a ToolErrorPayload (one of the 6 structured
-    cursor_decode errors). Behavior is identical to the former inline block
+    project into options) OR a ToolErrorPayload (one of the five distinct
+    structured cursor_decode errors). Behavior is identical to the former
+    inline block
     in handle_zim_query; q_emitting_tools is the handler's
     _Q_EMITTING_CURSOR_TOOLS set.
     """

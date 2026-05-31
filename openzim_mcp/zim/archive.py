@@ -19,7 +19,6 @@ Layout:
   the class here.
 """
 
-import json
 import logging
 from contextlib import contextmanager, suppress
 from datetime import datetime
@@ -491,7 +490,7 @@ class ZimOperations(
             f"Found {len(all_zim_files)} ZIM files in "
             f"{len(self.config.allowed_directories)} directories:\n\n"
         )
-        result_text += json.dumps(all_zim_files, indent=2, ensure_ascii=False)
+        result_text += _json(all_zim_files)
         return result_text
 
     def get_zim_metadata_data(self, zim_file_path: str) -> "ZimMetadataResponse":

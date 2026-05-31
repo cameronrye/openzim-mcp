@@ -1,4 +1,6 @@
-"""Shared path-validation helper for the ZIM domain mixins."""
+"""Shared low-level helpers for the ZIM domain mixins: path validation
+(``_ArchiveAccessMixin._validate_zim_path``) and the standard JSON serializer
+(``_json``)."""
 
 from __future__ import annotations
 

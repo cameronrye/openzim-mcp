@@ -8,15 +8,12 @@ Delegates to the D2 combined wrapper
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 from ._common import load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
-
-logger = logging.getLogger(__name__)
 
 _DESCRIPTION = load_description("zim_metadata")
 

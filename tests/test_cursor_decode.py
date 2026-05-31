@@ -1,6 +1,6 @@
 """Unit tests for :mod:`openzim_mcp.cursor_decode`.
 
-These pin the six structured ``cursor_decode`` error payloads, the happy-path
+These pin the structured ``cursor_decode`` error payloads, the happy-path
 offset/ns/ai/tool projection, and the token-overlap-vs-substring query-mismatch
 branching extracted verbatim from the former inline block at the top of
 ``SimpleToolsHandler.handle_zim_query``. Error message strings are copied

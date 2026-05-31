@@ -37,7 +37,6 @@ rc0 sign-off: WIRED.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ..responses import tool_error
@@ -45,8 +44,6 @@ from ._common import load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
-
-logger = logging.getLogger(__name__)
 
 _DESCRIPTION = load_description("zim_search")
 
