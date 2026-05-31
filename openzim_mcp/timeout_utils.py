@@ -58,15 +58,6 @@ def _get_executor() -> ThreadPoolExecutor:
         return _EXECUTOR
 
 
-def shutdown_executor() -> None:
-    """Tear down the executor — used by tests and shutdown hooks."""
-    global _EXECUTOR
-    with _EXECUTOR_LOCK:
-        if _EXECUTOR is not None:
-            _EXECUTOR.shutdown(wait=False, cancel_futures=True)
-            _EXECUTOR = None
-
-
 def run_with_timeout(
     func: Callable[[], T],
     timeout_seconds: float,
