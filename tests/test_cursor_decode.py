@@ -332,3 +332,13 @@ def test_two_mismatch_branches_return_identical_payload():
     # Same template modulo the cursor_q value.
     assert a["message"].replace("'algebra'", "Q") == b["message"].replace("'ab'", "Q")
     assert a["context"].replace("'algebra'", "Q") == b["context"].replace("'ab'", "Q")
+
+
+def test_whitespace_only_cursor_q_skips_overlap_check():
+    # A whitespace-only ``s.q`` has no meaningful tokens, so the q-overlap
+    # mismatch check is intentionally skipped and the cursor is accepted
+    # (offset still extracted). Pins the ``cursor_q.strip()`` guard branch.
+    token = _encode({"v": 2, "t": "search_zim_file", "s": {"o": 3, "q": "  "}})
+    out = decode_offset_cursor(token, query="zzz", q_emitting_tools=Q_EMITTING)
+    assert isinstance(out, CursorDecodeResult)
+    assert out.offset == 3

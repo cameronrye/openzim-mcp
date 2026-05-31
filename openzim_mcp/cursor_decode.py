@@ -197,13 +197,14 @@ def decode_offset_cursor(
         # shares no terms`` shape (which advises starting
         # the search over — useless when the real fault
         # is cross-tool reuse).
-        cursor_t_for_q = (
-            decoded_payload.get("t") if isinstance(decoded_payload, dict) else None
-        )
+        # ``cursor_t`` (read above) already holds ``decoded_payload["t"]``;
+        # at this point ``decoded_payload`` is guaranteed a dict (a
+        # non-dict would have set ``state = None`` and returned early),
+        # so reuse it directly rather than re-reading behind a dead guard.
         cursor_t_emits_q = (
-            not isinstance(cursor_t_for_q, str)
-            or not cursor_t_for_q
-            or cursor_t_for_q in q_emitting_tools
+            not isinstance(cursor_t, str)
+            or not cursor_t
+            or cursor_t in q_emitting_tools
         )
         if isinstance(cursor_q, str) and cursor_q.strip() and cursor_t_emits_q:
             cursor_tokens = {
