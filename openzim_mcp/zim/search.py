@@ -977,7 +977,7 @@ class _SearchMixin:
             canonical=canonical,
         )
 
-    def _splice_canonical_into_filtered(
+    def _splice_canonical_into_filtered(  # NOSONAR(python:S3776)
         self,
         *,
         zim_file_path: str,

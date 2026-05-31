@@ -763,7 +763,7 @@ class SimpleToolsHandler(
                 f"4. Check server logs for details"
             )
 
-    def _finalize_compact_response(
+    def _finalize_compact_response(  # NOSONAR(python:S3776)
         self,
         result: str,
         *,

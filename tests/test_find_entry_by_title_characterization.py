@@ -119,7 +119,7 @@ def test_fast_path_exact_hit(test_config: OpenZimMcpConfig, monkeypatch) -> None
     top = out["results"][0]
     assert top["path"] == "C/Climate_change"
     assert top["title"] == "Climate change"
-    assert top["score"] == 1.0
+    assert top["score"] == pytest.approx(1.0)
     assert top["match_type"] == "direct"
     assert top["zim_file"] == "/zim/test.zim"
     assert top["pre_redirect_path"] == "C/Climate_change"
@@ -155,7 +155,7 @@ def test_fast_path_redirect_walk_sets_match_type(
     assert top["path"] == "Big_Rapids,_Michigan"
     assert top["match_type"] == "redirect"
     assert top["pre_redirect_path"] == "Big_Rapids_Michigan"
-    assert top["score"] == 1.0
+    assert top["score"] == pytest.approx(1.0)
     assert out["fast_path_hit"] is True
 
 
@@ -195,7 +195,7 @@ def test_suggestion_search_rank_decayed_scores(
     assert scores == [0.95, 0.6333, 0.3167]
     # Rank-monotonic, non-increasing, all distinct from the legacy 0.8.
     assert all(a >= b for a, b in zip(scores, scores[1:]))
-    assert all(s != 0.8 for s in scores)
+    assert all(s != pytest.approx(0.8) for s in scores)
     assert all(r["match_type"] == "fuzzy_suggest" for r in out["results"])
     assert out["fast_path_hit"] is False
     assert out["fuzzy_path_hit"] is False
@@ -223,7 +223,7 @@ def test_suggestion_exact_ci_match_promoted_to_1(
     )
 
     top = out["results"][0]
-    assert top["score"] == 1.0
+    assert top["score"] == pytest.approx(1.0)
     assert top["match_type"] == "direct"
     # The exact-CI suggestion promotion also flips fast_path_hit.
     assert out["fast_path_hit"] is True
@@ -362,7 +362,7 @@ def test_suggestion_redirect_branch_surfaces_match_type_redirect(
     assert top["match_type"] == "redirect"
     assert top["pre_redirect_path"] == "Color"
     # n=1, idx=0 -> 0.95*(1-0/1) rounded; redirect-walked, not exact-CI.
-    assert top["score"] == 0.95
+    assert top["score"] == pytest.approx(0.95)
     assert out["fast_path_hit"] is False
     assert out["fuzzy_path_hit"] is False
 
@@ -441,7 +441,7 @@ def test_cross_file_suggestion_partial_row_survives_midloop_raise(
     paths = [r["path"] for r in out["results"]]
     assert paths == ["C/Good"]
     # The inline exact-CI promotion + fast_path_hit flip also survive.
-    assert out["results"][0]["score"] == 1.0
+    assert out["results"][0]["score"] == pytest.approx(1.0)
     assert out["results"][0]["match_type"] == "direct"
     assert out["fast_path_hit"] is True
 

@@ -824,7 +824,7 @@ class ZimOperations(
         original_chars = len(content)
         if len(extracted) > _METADATA_PREVIEW_CAP:
             preview = extracted[:_METADATA_PREVIEW_CAP].rstrip()
-            return f"{preview}… " f"[truncated, {original_chars:,} chars total]"
+            return f"{preview}… [truncated, {original_chars:,} chars total]"
         elif extracted != content:
             # The field was HTML — record the
             # extracted text alongside an indicator
@@ -834,7 +834,7 @@ class ZimOperations(
             return (
                 f"{extracted}"
                 if original_chars <= len(extracted) + 16
-                else (f"{extracted} " f"[extracted from {original_chars:,}-char HTML]")
+                else (f"{extracted} [extracted from {original_chars:,}-char HTML]")
             )
         else:
             return content
