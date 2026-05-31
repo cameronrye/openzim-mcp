@@ -1,7 +1,5 @@
 """Tests for openzim_mcp.text_utils.tokenize_for_relevance."""
 
-import pytest
-
 from openzim_mcp.text_utils import RELEVANCE_TOKEN_MIN_LEN, tokenize_for_relevance
 
 

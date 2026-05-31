@@ -13,7 +13,6 @@ import pytest
 
 from openzim_mcp.tools._common import load_description, tool_error_response
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -29,9 +28,7 @@ class _FakeServer:
     def _create_enhanced_error_message(
         self, *, operation: str, error: Exception, context: str
     ) -> str:
-        self.calls.append(
-            {"operation": operation, "error": error, "context": context}
-        )
+        self.calls.append({"operation": operation, "error": error, "context": context})
         return self._sentinel
 
 
@@ -69,7 +66,9 @@ def test_tool_error_response_context_defaults_to_empty_string() -> None:
     assert server.calls[0]["context"] == ""
 
 
-def test_tool_error_response_logs_under_per_tool_logger(caplog: pytest.LogCaptureFixture) -> None:
+def test_tool_error_response_logs_under_per_tool_logger(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """KEY REGRESSION GUARD (commit 0530bd7): the log record must be emitted under
     ``openzim_mcp.tools.<operation>`` — NOT the flattened ``openzim_mcp.tools``
     parent — so each tool's log records keep their module-level identity."""
@@ -80,7 +79,9 @@ def test_tool_error_response_logs_under_per_tool_logger(caplog: pytest.LogCaptur
         tool_error_response(server, operation="zim_links", error=err, context="ctx")
 
     # At least one record must have the exact per-tool logger name.
-    tool_records = [r for r in caplog.records if r.name == "openzim_mcp.tools.zim_links"]
+    tool_records = [
+        r for r in caplog.records if r.name == "openzim_mcp.tools.zim_links"
+    ]
     assert tool_records, (
         "Expected a log record under 'openzim_mcp.tools.zim_links'; "
         f"got names: {[r.name for r in caplog.records]}"
@@ -92,7 +93,9 @@ def test_tool_error_response_logs_under_per_tool_logger(caplog: pytest.LogCaptur
     assert record.getMessage() == "Error in zim_links: boom"
 
 
-def test_tool_error_response_log_message_format(caplog: pytest.LogCaptureFixture) -> None:
+def test_tool_error_response_log_message_format(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Message format ``'Error in <op>: <err>'`` must hold for other operations too."""
     server = _FakeServer()
 
@@ -101,7 +104,9 @@ def test_tool_error_response_log_message_format(caplog: pytest.LogCaptureFixture
             server, operation="zim_query", error=RuntimeError("oops"), context=""
         )
 
-    tool_records = [r for r in caplog.records if r.name == "openzim_mcp.tools.zim_query"]
+    tool_records = [
+        r for r in caplog.records if r.name == "openzim_mcp.tools.zim_query"
+    ]
     assert tool_records
     assert tool_records[0].getMessage() == "Error in zim_query: oops"
 

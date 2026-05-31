@@ -66,9 +66,7 @@ class TestArchiveAccessMixin:
         fake_validator.validate_zim_file.assert_called_once_with(intermediate)
         assert result == fake_validator.validate_zim_file.return_value
 
-    def test_returns_final_path(
-        self, stub: _Stub, fake_validator: MagicMock
-    ) -> None:
+    def test_returns_final_path(self, stub: _Stub, fake_validator: MagicMock) -> None:
         """The return value is whatever validate_zim_file returns."""
         expected = Path("/resolved/archive.zim")
         fake_validator.validate_zim_file.return_value = expected
