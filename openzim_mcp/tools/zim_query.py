@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import pathlib
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from ..responses import ToolErrorPayload, tool_error
 from ..synthesize import SynthesizeResponse
+from ._common import load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -33,8 +33,7 @@ logger = logging.getLogger(__name__)
 # Read description at IMPORT TIME from committed file shipped with the
 # package. Per-tool packaging guard in test_phase_f_packaging.py
 # verifies the wheel ships this file.
-_DIR = pathlib.Path(__file__).parent
-_DESCRIPTION = (_DIR / "zim_query_description.md").read_text(encoding="utf-8")
+_DESCRIPTION = load_description("zim_query")
 
 
 def register(server: "OpenZimMcpServer") -> None:
@@ -124,8 +123,8 @@ def register(server: "OpenZimMcpServer") -> None:
             return "Error: Simple tools handler not initialized"
 
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
-            logger.error(f"Error in zim_query: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error_response(
+                server,
                 operation="zim_query",
                 error=e,
                 context=f"Query: {query}, File: {zim_file_path}",

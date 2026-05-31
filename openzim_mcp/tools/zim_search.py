@@ -38,18 +38,17 @@ rc0 sign-off: WIRED.
 from __future__ import annotations
 
 import logging
-import pathlib
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ..responses import tool_error
+from ._common import load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
 logger = logging.getLogger(__name__)
 
-_DIR = pathlib.Path(__file__).parent
-_DESCRIPTION = (_DIR / "zim_search_description.md").read_text(encoding="utf-8")
+_DESCRIPTION = load_description("zim_search")
 
 # Baked-in at rc1 PR time from gate_0b_decision.json. Drift between this
 # value and the committed decision artifact is caught by
@@ -166,8 +165,8 @@ def register(server: "OpenZimMcpServer") -> None:
             )
 
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
-            logger.error(f"Error in zim_search: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error_response(
+                server,
                 operation="zim_search",
                 error=e,
                 context=f"Query: {query}, Mode: {mode}",

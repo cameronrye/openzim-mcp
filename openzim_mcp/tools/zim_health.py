@@ -8,16 +8,16 @@ Collapses ``get_server_health`` + ``get_server_configuration`` +
 from __future__ import annotations
 
 import logging
-import pathlib
 from typing import TYPE_CHECKING, Any, Optional
+
+from ._common import load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
 logger = logging.getLogger(__name__)
 
-_DIR = pathlib.Path(__file__).parent
-_DESCRIPTION = (_DIR / "zim_health_description.md").read_text(encoding="utf-8")
+_DESCRIPTION = load_description("zim_health")
 
 
 def register(server: "OpenZimMcpServer") -> None:
@@ -36,8 +36,8 @@ def register(server: "OpenZimMcpServer") -> None:
                 return await ops.get_health_data(server)
             return await ops.get_archive_validation_data(zim_file_path)
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
-            logger.error(f"Error in zim_health: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error_response(
+                server,
                 operation="zim_health",
                 error=e,
                 context=(
