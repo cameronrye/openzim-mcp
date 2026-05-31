@@ -23,6 +23,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.zim._ops_base import _json
 from openzim_mcp.zim.redirects import resolve_redirect_chain
 
 if TYPE_CHECKING:
@@ -1303,12 +1304,10 @@ class _ContentMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If entry retrieval fails
         """
-        return json.dumps(
+        return _json(
             self.get_binary_entry_data(
                 zim_file_path, entry_path, max_size_bytes, include_data
-            ),
-            indent=2,
-            ensure_ascii=False,
+            )
         )
 
     def _format_binary_response(
@@ -1436,12 +1435,10 @@ class _ContentMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If summary extraction fails
         """
-        return json.dumps(
+        return _json(
             self.get_entry_summary_data(
                 zim_file_path, entry_path, max_words, compact=compact
-            ),
-            indent=2,
-            ensure_ascii=False,
+            )
         )
 
     def _extract_entry_summary_data(

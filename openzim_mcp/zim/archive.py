@@ -48,7 +48,7 @@ from openzim_mcp.exceptions import (
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
-from openzim_mcp.zim._ops_base import _ArchiveAccessMixin
+from openzim_mcp.zim._ops_base import _ArchiveAccessMixin, _json
 from openzim_mcp.zim.content import _ContentMixin
 from openzim_mcp.zim.namespace import _NamespaceMixin
 from openzim_mcp.zim.redirects import resolve_redirect_chain
@@ -549,11 +549,7 @@ class ZimOperations(
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If metadata retrieval fails
         """
-        return json.dumps(
-            self.get_zim_metadata_data(zim_file_path),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.get_zim_metadata_data(zim_file_path))
 
     def get_archive_validation_data(
         self, zim_file_path: str

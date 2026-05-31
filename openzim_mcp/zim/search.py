@@ -12,7 +12,6 @@ the ``zim_operations`` module at call time rather than capturing a
 reference at import time.
 """
 
-import json
 import logging
 import urllib.parse
 from dataclasses import dataclass
@@ -29,6 +28,7 @@ from openzim_mcp.exceptions import (
 )
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.title_promotion import find_title_match
+from openzim_mcp.zim._ops_base import _json
 
 # Mirror ``openzim_mcp.zim.archive.MAX_REDIRECT_DEPTH`` without importing
 # it directly — archive.py imports this module, so the reverse-import
@@ -1954,10 +1954,8 @@ class _SearchMixin:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..50``.
             OpenZimMcpArchiveError: If suggestion generation fails
         """
-        return json.dumps(
-            self.get_search_suggestions_data(zim_file_path, partial_query, limit),
-            indent=2,
-            ensure_ascii=False,
+        return _json(
+            self.get_search_suggestions_data(zim_file_path, partial_query, limit)
         )
 
     def _generate_search_suggestions(  # NOSONAR(python:S3776)
@@ -3011,10 +3009,8 @@ class _SearchMixin:
             JSON string with query, ranked results, fast_path_hit flag,
             files_searched.
         """
-        return json.dumps(
-            self.find_entry_by_title_data(zim_file_path, title, cross_file, limit),
-            indent=2,
-            ensure_ascii=False,
+        return _json(
+            self.find_entry_by_title_data(zim_file_path, title, cross_file, limit)
         )
 
     def _find_entry_by_search(self, archive: Archive, entry_path: str) -> Optional[str]:
@@ -3342,11 +3338,7 @@ class _SearchMixin:
             JSON with per-file result groups (each ``result`` is itself a
             structured search payload) and aggregate counts.
         """
-        return json.dumps(
-            self.search_all_data(query, limit_per_file),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.search_all_data(query, limit_per_file))
 
     def search_top_k(self, archive: "Archive", query: str, *, k: int) -> list[dict]:
         """Top-K Xapian results from an open archive as a flat dict list.

@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from openzim_mcp.security import PathValidator
+
+
+def _json(payload: Any) -> str:
+    """Serialize ``payload`` as the project-standard pretty JSON string
+    (2-space indent, non-ASCII preserved). Single source for the
+    ``indent=2, ensure_ascii=False`` policy the zim wrappers repeat."""
+    return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
 class _ArchiveAccessMixin:

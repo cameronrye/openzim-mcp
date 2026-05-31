@@ -10,7 +10,6 @@ existing test patches against the shim's symbols continue to work
 without changes.
 """
 
-import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
@@ -26,6 +25,7 @@ from openzim_mcp.exceptions import (
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.responses import ToolErrorPayload, tool_error
+from openzim_mcp.zim._ops_base import _json
 from openzim_mcp.zim.content import reject_path_traversal
 
 if TYPE_CHECKING:
@@ -147,11 +147,7 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If structure extraction fails
         """
-        return json.dumps(
-            self.get_article_structure_data(zim_file_path, entry_path),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.get_article_structure_data(zim_file_path, entry_path))
 
     def _extract_article_structure_data(
         self,
@@ -410,16 +406,14 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If link extraction fails
         """
-        return json.dumps(
+        return _json(
             self.extract_article_links_data(
                 zim_file_path,
                 entry_path,
                 limit=limit,
                 offset=offset,
                 kind=kind,
-            ),
-            indent=2,
-            ensure_ascii=False,
+            )
         )
 
     def get_table_of_contents_data(
@@ -475,11 +469,7 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If TOC extraction fails
         """
-        return json.dumps(
-            self.get_table_of_contents_data(zim_file_path, entry_path),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.get_table_of_contents_data(zim_file_path, entry_path))
 
     def _extract_table_of_contents_data(
         self,
@@ -991,11 +981,7 @@ class _StructureMixin:
 
         Find articles related to entry_path via outbound links.
         """
-        return json.dumps(
-            self.get_related_articles_data(zim_file_path, entry_path, limit),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.get_related_articles_data(zim_file_path, entry_path, limit))
 
     @staticmethod
     def _resolve_link_to_entry_path(url: str, source_entry_path: str) -> Optional[str]:

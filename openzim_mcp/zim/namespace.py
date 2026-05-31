@@ -9,7 +9,6 @@ without changes.
 """
 
 import contextlib
-import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
@@ -27,6 +26,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.zim._ops_base import _json
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -148,11 +148,7 @@ class _NamespaceMixin:
         responses out of these strings) keeps working unchanged. New
         callers should prefer ``list_namespaces_data``.
         """
-        return json.dumps(
-            self.list_namespaces_data(zim_file_path),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.list_namespaces_data(zim_file_path))
 
     def _list_archive_namespaces(self, archive: Archive) -> Dict[str, Any]:
         """List namespaces in the archive.
@@ -777,10 +773,8 @@ class _NamespaceMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If browsing fails
         """
-        return json.dumps(
-            self.browse_namespace_data(zim_file_path, namespace, limit, offset),
-            indent=2,
-            ensure_ascii=False,
+        return _json(
+            self.browse_namespace_data(zim_file_path, namespace, limit, offset)
         )
 
     def _browse_namespace_entries(  # NOSONAR(python:S3776)
@@ -1903,10 +1897,8 @@ class _NamespaceMixin:
         Raises:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
         """
-        return json.dumps(
+        return _json(
             self.walk_namespace_data(
                 zim_file_path, namespace, cursor_state=cursor, limit=limit
-            ),
-            indent=2,
-            ensure_ascii=False,
+            )
         )

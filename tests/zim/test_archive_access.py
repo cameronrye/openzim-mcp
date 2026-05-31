@@ -1,11 +1,33 @@
-"""Tests for _ArchiveAccessMixin._validate_zim_path."""
+"""Tests for _ArchiveAccessMixin._validate_zim_path and _json."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from openzim_mcp.zim._ops_base import _ArchiveAccessMixin
+from openzim_mcp.zim._ops_base import _ArchiveAccessMixin, _json
+
+
+class TestJsonHelper:
+    """Tests for the module-level _json serialization helper."""
+
+    def test_matches_reference_dumps(self) -> None:
+        """_json must produce bit-identical output to json.dumps with indent=2, ensure_ascii=False."""
+        payload = {"a": "é", "n": 1}
+        expected = json.dumps(payload, indent=2, ensure_ascii=False)
+        assert _json(payload) == expected
+
+    def test_non_ascii_preserved_literally(self) -> None:
+        """The non-ASCII character é must appear literally, not as \\uXXXX."""
+        result = _json({"a": "é"})
+        assert "é" in result
+        assert "\\u" not in result
+
+    def test_indent_is_two_spaces(self) -> None:
+        """Output must use 2-space indentation."""
+        result = _json({"k": 1})
+        assert '  "k": 1' in result
 
 
 class _Stub(_ArchiveAccessMixin):
