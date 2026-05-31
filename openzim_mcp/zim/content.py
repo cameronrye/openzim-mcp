@@ -120,6 +120,9 @@ class _ContentMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
+        # Provided by _ArchiveAccessMixin on the concrete coordinator.
+        def _validate_zim_path(self, zim_file_path: str) -> Path: ...
+
         # Provided by other mixins / coordinator class.
         def _find_entry_by_search(
             self, archive: Archive, entry_path: str
@@ -246,8 +249,7 @@ class _ContentMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cheap response cache check: a hit avoids opening the archive
         # entirely, which is the whole point of caching here.
@@ -368,8 +370,7 @@ class _ContentMixin:
         if content_offset < 0:
             content_offset = 0
 
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key distinct from the legacy string cache so old persisted
         # entries (text payloads) don't collide with the new dict shape.
@@ -678,8 +679,7 @@ class _ContentMixin:
             # every entry in this group fails with the same error rather
             # than spending an archive open per entry.
             try:
-                validated_path = self.path_validator.validate_path(zim_file_path)
-                validated_path = self.path_validator.validate_zim_file(validated_path)
+                validated_path = self._validate_zim_path(zim_file_path)
             except Exception as e:  # noqa: BLE001 - per-group isolation
                 for index, zfp, entry_path in group:
                     results.append(
@@ -1177,8 +1177,7 @@ class _ContentMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key for invariant metadata (size, mime_type, etc.) — not data,
         # since data is potentially large and varies with max_size_bytes.
@@ -1384,8 +1383,7 @@ class _ContentMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:

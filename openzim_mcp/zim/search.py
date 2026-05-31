@@ -359,6 +359,9 @@ class _SearchMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
+        # Provided by _ArchiveAccessMixin on the concrete coordinator.
+        def _validate_zim_path(self, zim_file_path: str) -> Path: ...
+
         def list_zim_files_data(
             self, name_filter: Optional[str] = None
         ) -> List[Dict[str, Any]]:
@@ -438,8 +441,7 @@ class _SearchMixin:
             limit = self.config.content.default_search_limit
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity: reject cursors issued against a different archive
         # (cf. pagination.py module docstring — search_zim_file is in the list
@@ -1179,8 +1181,7 @@ class _SearchMixin:
             )
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Check cache (legacy markdown cache, separate from the v2b dict cache).
         # Post-b1 P3-D1: include display_query in the cache key. Two calls
@@ -1305,8 +1306,7 @@ class _SearchMixin:
             )
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity: reject cursors issued against a different archive.
         if cursor_archive_identity is not None:
@@ -1879,8 +1879,7 @@ class _SearchMixin:
             return cast("SearchSuggestionsResponse", attach_meta(empty_payload))
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
         # shape: suggestions/count keys) don't leak through after the upgrade.
@@ -2716,8 +2715,7 @@ class _SearchMixin:
         if cross_file:
             files = [f["path"] for f in self.list_zim_files_data() if f.get("path")]
         else:
-            validated = self.path_validator.validate_path(zim_file_path)
-            validated = self.path_validator.validate_zim_file(validated)
+            validated = self._validate_zim_path(zim_file_path)
             files = [str(validated)]
 
         aggregate_results: List[Dict[str, Any]] = []

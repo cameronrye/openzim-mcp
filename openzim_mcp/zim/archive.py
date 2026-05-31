@@ -48,6 +48,7 @@ from openzim_mcp.exceptions import (
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
+from openzim_mcp.zim._ops_base import _ArchiveAccessMixin
 from openzim_mcp.zim.content import _ContentMixin
 from openzim_mcp.zim.namespace import _NamespaceMixin
 from openzim_mcp.zim.redirects import resolve_redirect_chain
@@ -280,7 +281,9 @@ def zim_archive(
         logger.debug(f"Releasing ZIM archive: {file_path}")
 
 
-class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin):
+class ZimOperations(
+    _ArchiveAccessMixin, _SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin
+):
     """Handles all ZIM file operations with caching and security.
 
     The bulk of the surface is contributed by domain mixins; this class
@@ -502,8 +505,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             OpenZimMcpArchiveError: If metadata retrieval fails
         """
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Distinct cache key from the legacy string variant so the two
         # don't collide on shared cache backends. Bumped to v2c when the
@@ -568,8 +570,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If validation fails
         """
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Include a file-identity (mtime:size) token so an in-place ZIM
         # replacement invalidates the cached verdict. ``is_valid`` is an
@@ -836,8 +837,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             OpenZimMcpArchiveError: If main page retrieval fails
         """
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Check cache
         cache_key = f"main_page:{validated_path}:compact={compact}"
@@ -992,8 +992,7 @@ class ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixi
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If main page retrieval fails
         """
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key distinct from the legacy text cache so old persisted
         # entries (which hold strings) don't collide with the new dict shape.

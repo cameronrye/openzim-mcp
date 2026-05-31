@@ -89,6 +89,9 @@ class _StructureMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
+        # Provided by _ArchiveAccessMixin on the concrete coordinator.
+        def _validate_zim_path(self, zim_file_path: str) -> Path: ...
+
         def _resolve_entry_with_fallback(
             self, archive: Archive, entry_path: str
         ) -> Tuple[Any, str]:
@@ -109,8 +112,7 @@ class _StructureMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -287,8 +289,7 @@ class _StructureMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity (Phase B #11): a cursor issued for archive A
         # must not be honoured when resubmitted against archive B.
@@ -436,8 +437,7 @@ class _StructureMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -567,8 +567,7 @@ class _StructureMixin:
         """
         try:
             reject_path_traversal(entry_path)
-            validated_path = self.path_validator.validate_path(zim_file_path)
-            validated_path = self.path_validator.validate_zim_file(validated_path)
+            validated_path = self._validate_zim_path(zim_file_path)
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 return self._get_section_data(
                     archive,
@@ -837,8 +836,7 @@ class _StructureMixin:
         # (validated inside extract_article_links_data) but silently fails
         # in _resolve_outbound_titles, which would otherwise call
         # ``Path("~/zims/foo.zim")`` directly — Path does not expand ``~``.
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
         validated_str = str(validated_path)
 
         outbound: List[Dict[str, Any]] = []

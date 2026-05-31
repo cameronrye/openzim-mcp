@@ -92,6 +92,9 @@ class _NamespaceMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
+        # Provided by _ArchiveAccessMixin on the concrete coordinator.
+        def _validate_zim_path(self, zim_file_path: str) -> Path: ...
+
     def list_namespaces_data(self, zim_file_path: str) -> "ListNamespacesResponse":
         """Structured variant of ``list_namespaces``.
 
@@ -112,8 +115,7 @@ class _NamespaceMixin:
             OpenZimMcpArchiveError: If namespace listing fails
         """
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
         # shape: entry_count key) don't leak through after the rename to ``total``.
@@ -637,8 +639,7 @@ class _NamespaceMixin:
             )
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity: a cursor issued for archive A must not be
         # honoured when resubmitted against archive B (same guard as
@@ -1495,8 +1496,7 @@ class _NamespaceMixin:
         if namespace:
             namespace = self._canonicalise_namespace(namespace.strip())
 
-        validated = self.path_validator.validate_path(zim_file_path)
-        validated = self.path_validator.validate_zim_file(validated)
+        validated = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity: a v2 cursor encodes the namespace it was
         # issued for and the archive identity. Rejecting on mismatch
