@@ -3723,6 +3723,26 @@ class TestTelemetryCounters:
         h.handle_zim_query("show main page", options={"compact": True})
         assert h.get_telemetry().get("response_truncated") == 1
 
+    def test_query_rewrite_misspelling_counter_fires_via_handle_zim_query(self):
+        """A misspelled query routed through ``handle_zim_query`` bumps the
+        ``query_rewrite.misspelling`` counter.
+
+        Pins the per-rule query-rewrite telemetry path extracted into
+        ``_run_query_rewrite_probes``: the probing block runs the rewrite
+        rules an extra time purely to ``_track`` which rule fired. With a
+        MagicMock backend, ``config.query_rewrite.enabled`` is truthy and
+        ``find_entry_by_title_data`` yields a non-dict result, so the title
+        probe reports no canonical match and the ``bilogy`` -> ``biology``
+        substitution (from the bundled misspellings map) is NOT suppressed.
+        """
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        h = SimpleToolsHandler(mock)
+        h.handle_zim_query("tell me about bilogy")
+        assert h.get_telemetry().get("query_rewrite.misspelling") == 1
+
     def test_get_telemetry_returns_copy(self):
         """The returned dict must be a snapshot — mutating it must not
         affect the live counter (otherwise external callers can corrupt
