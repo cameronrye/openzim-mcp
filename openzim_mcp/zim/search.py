@@ -12,7 +12,6 @@ the ``zim_operations`` module at call time rather than capturing a
 reference at import time.
 """
 
-import json
 import logging
 import urllib.parse
 from dataclasses import dataclass
@@ -28,7 +27,9 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import find_title_match
+from openzim_mcp.zim._ops_base import _json
 
 # Mirror ``openzim_mcp.zim.archive.MAX_REDIRECT_DEPTH`` without importing
 # it directly — archive.py imports this module, so the reverse-import
@@ -123,14 +124,6 @@ def _format_filter_text(namespace: Optional[str], content_type: Optional[str]) -
     return f" (filters: {', '.join(parts)})" if parts else ""
 
 
-# Tokens this short can't reliably indicate query relevance — "in", "of",
-# "the", "is" appear everywhere. The token-match relevance check ignores
-# them so a query like "of mice and men" doesn't get flagged low-relevance
-# because the content-bearing tokens ("mice", "men") matched but the
-# stopwords technically didn't.
-_RELEVANCE_TOKEN_MIN_LEN = 3
-
-
 # Wikipedia / MediaWiki pseudo-namespaces excluded from suggestion + title
 # probe results. These live in the C namespace (not separate ZIM
 # namespaces) but use a colon-prefixed title convention to mark
@@ -172,17 +165,6 @@ def _is_pseudo_namespace_entry(
     return any(title.startswith(p) for p in prefixes)
 
 
-def _tokenize_for_relevance(text: str) -> set[str]:
-    """Lowercase alphanumeric tokens of length >= _RELEVANCE_TOKEN_MIN_LEN."""
-    import re as _re
-
-    return {
-        tok
-        for tok in _re.findall(r"[a-z0-9]+", text.lower())
-        if len(tok) >= _RELEVANCE_TOKEN_MIN_LEN
-    }
-
-
 def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool:
     """Return True iff NONE of the search results carry any query token.
 
@@ -198,12 +180,12 @@ def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool
     """
     if not results:
         return False
-    query_tokens = _tokenize_for_relevance(query)
+    query_tokens = tokenize_for_relevance(query)
     if not query_tokens:
         return False
     for r in results:
         haystack = f"{r.get('path', '')} {r.get('title', '')}"
-        r_tokens = _tokenize_for_relevance(haystack)
+        r_tokens = tokenize_for_relevance(haystack)
         if query_tokens & r_tokens:
             return False
     return True
@@ -359,6 +341,9 @@ class _SearchMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
+        def _validate_zim_path(self, zim_file_path: str) -> Path:
+            """Resolve via ``_ArchiveAccessMixin`` on the concrete coordinator."""
+
         def list_zim_files_data(
             self, name_filter: Optional[str] = None
         ) -> List[Dict[str, Any]]:
@@ -438,8 +423,7 @@ class _SearchMixin:
             limit = self.config.content.default_search_limit
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity: reject cursors issued against a different archive
         # (cf. pagination.py module docstring — search_zim_file is in the list
@@ -1179,8 +1163,7 @@ class _SearchMixin:
             )
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Check cache (legacy markdown cache, separate from the v2b dict cache).
         # Post-b1 P3-D1: include display_query in the cache key. Two calls
@@ -1305,8 +1288,7 @@ class _SearchMixin:
             )
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity: reject cursors issued against a different archive.
         if cursor_archive_identity is not None:
@@ -1879,8 +1861,7 @@ class _SearchMixin:
             return cast("SearchSuggestionsResponse", attach_meta(empty_payload))
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
         # shape: suggestions/count keys) don't leak through after the upgrade.
@@ -1955,10 +1936,8 @@ class _SearchMixin:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..50``.
             OpenZimMcpArchiveError: If suggestion generation fails
         """
-        return json.dumps(
-            self.get_search_suggestions_data(zim_file_path, partial_query, limit),
-            indent=2,
-            ensure_ascii=False,
+        return _json(
+            self.get_search_suggestions_data(zim_file_path, partial_query, limit)
         )
 
     def _generate_search_suggestions(  # NOSONAR(python:S3776)
@@ -2716,8 +2695,7 @@ class _SearchMixin:
         if cross_file:
             files = [f["path"] for f in self.list_zim_files_data() if f.get("path")]
         else:
-            validated = self.path_validator.validate_path(zim_file_path)
-            validated = self.path_validator.validate_zim_file(validated)
+            validated = self._validate_zim_path(zim_file_path)
             files = [str(validated)]
 
         aggregate_results: List[Dict[str, Any]] = []
@@ -3013,10 +2991,8 @@ class _SearchMixin:
             JSON string with query, ranked results, fast_path_hit flag,
             files_searched.
         """
-        return json.dumps(
-            self.find_entry_by_title_data(zim_file_path, title, cross_file, limit),
-            indent=2,
-            ensure_ascii=False,
+        return _json(
+            self.find_entry_by_title_data(zim_file_path, title, cross_file, limit)
         )
 
     def _find_entry_by_search(self, archive: Archive, entry_path: str) -> Optional[str]:
@@ -3344,11 +3320,7 @@ class _SearchMixin:
             JSON with per-file result groups (each ``result`` is itself a
             structured search payload) and aggregate counts.
         """
-        return json.dumps(
-            self.search_all_data(query, limit_per_file),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.search_all_data(query, limit_per_file))
 
     def search_top_k(self, archive: "Archive", query: str, *, k: int) -> list[dict]:
         """Top-K Xapian results from an open archive as a flat dict list.

@@ -36,19 +36,15 @@ this axis. v2.5 revisits the default with adoption telemetry.
 
 from __future__ import annotations
 
-import logging
-import pathlib
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from ..responses import tool_error
+from ._common import load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
-logger = logging.getLogger(__name__)
-
-_DIR = pathlib.Path(__file__).parent
-_DESCRIPTION = (_DIR / "zim_get_description.md").read_text(encoding="utf-8")
+_DESCRIPTION = load_description("zim_get")
 
 _VALID_VIEWS = {"full", "summary", "toc", "structure"}
 
@@ -145,8 +141,8 @@ def register(server: "OpenZimMcpServer") -> None:
             )
 
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
-            logger.error(f"Error in zim_get: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error_response(
+                server,
                 operation="zim_get",
                 error=e,
                 context=f"Path: {entry_path or entry_paths}",

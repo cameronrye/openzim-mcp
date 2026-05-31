@@ -7,19 +7,15 @@ v2.0 omits ``"inbound"`` per spec — see description file.
 
 from __future__ import annotations
 
-import logging
-import pathlib
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ..responses import tool_error
+from ._common import load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
 
-logger = logging.getLogger(__name__)
-
-_DIR = pathlib.Path(__file__).parent
-_DESCRIPTION = (_DIR / "zim_links_description.md").read_text(encoding="utf-8")
+_DESCRIPTION = load_description("zim_links")
 
 _VALID_DIRECTIONS = {"outbound", "related"}
 
@@ -64,8 +60,8 @@ def register(server: "OpenZimMcpServer") -> None:
                 limit=limit if limit is not None else 10,
             )
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
-            logger.error(f"Error in zim_links: {e}")
-            return server._create_enhanced_error_message(
+            return tool_error_response(
+                server,
                 operation="zim_links",
                 error=e,
                 context=f"Path: {entry_path}, Direction: {direction}",

@@ -23,6 +23,7 @@ from . import compact_renderers
 from .article_body import _ArticleBodyMixin
 from .chain_detection import _ChainMixin
 from .compact_format import _CompactFormatMixin
+from .cursor_decode import decode_offset_cursor
 from .disambiguation import _DisambiguationMixin
 from .exceptions import RegexTimeoutError
 from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
@@ -238,239 +239,31 @@ class SimpleToolsHandler(
         if cursor_raw is not None:
             # Simple-mode dispatch routes by parsed intent, not by the
             # tool that emitted the cursor — and ``Cursor.decode`` requires
-            # an ``expected_tool`` match. Decode the payload directly so
-            # any tool's cursor can be replayed for offset extraction.
-            # Cross-tool reuse is bounded: the only field we read is
-            # ``s.o`` (offset). Tool-specific cursor state (archive
-            # identity, query, namespace) is preserved if the caller
-            # also re-supplies the matching query terms.
-            #
-            # Defense-in-depth: cap the token length at 2 KB so an
-            # adversarially-crafted cursor can't trigger oversized
-            # base64-decode or json.loads work. Legitimate cursors
-            # issued by ``Cursor.encode`` are well under 200 chars.
-            import base64 as _b64
-            import json as _json
-
-            token = str(cursor_raw)
-            if len(token) > 2048:
-                # H24: errors travel as ToolErrorPayload so callers can
-                # programmatically branch on ``result.error``. The legacy
-                # markdown string forced clients to substring-match the
-                # heading, breaking the same shape the advanced tools use.
-                return tool_error(
-                    operation="cursor_decode",
-                    message=(
-                        "The `cursor` value exceeds the maximum length. "
-                        "Drop the cursor and call again with an explicit "
-                        "`offset` (or no pagination arg)."
-                    ),
-                    context=f"cursor={token[:64]}...",
-                )
-            try:
-                padded = token + "=" * (-len(token) % 4)
-                decoded_payload = _json.loads(
-                    _b64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
-                )
-                # A11 E3 (post-a10): a base64+JSON token that decodes
-                # but lacks the expected ``s`` envelope (or whose ``s``
-                # has no ``o`` offset) used to be silently treated as
-                # "no cursor" — the caller thought they were paginating
-                # and got page 1 instead with no signal anything was
-                # wrong. Surface a structured ``cursor_decode`` error
-                # for these too so the contract matches the totally-
-                # garbled-token case below.
-                state = (
-                    decoded_payload.get("s")
-                    if isinstance(decoded_payload, dict)
-                    else None
-                )
-                if not isinstance(state, dict):
-                    return tool_error(
-                        operation="cursor_decode",
-                        message=(
-                            "The `cursor` payload is missing the expected "
-                            "`s` envelope. Drop the cursor and call "
-                            "again with an explicit `offset` (or no "
-                            "pagination arg)."
-                        ),
-                        context=f"cursor={token[:64]}",
-                    )
-                decoded_offset = state.get("o")
-                if not isinstance(decoded_offset, int) or decoded_offset < 0:
-                    return tool_error(
-                        operation="cursor_decode",
-                        message=(
-                            "The `cursor` payload's `s.o` (offset) is "
-                            "missing or invalid. Drop the cursor and "
-                            "call again with an explicit `offset` (or "
-                            "no pagination arg)."
-                        ),
-                        context=f"cursor={token[:64]}",
-                    )
-                options["offset"] = decoded_offset
-                # P3-D7 (live-MCP sweep): stash the cursor's ``s.ns``
-                # so namespace-bound handlers (``_handle_browse`` /
-                # ``_handle_walk_namespace``) can reject mismatches.
-                # Live MCP saw a cursor for ``ns="C"`` accepted by a
-                # ``browse namespace M`` call — the tool silently
-                # rebound to M while applying the cursor's offset.
-                # Same defence-in-depth shape as the existing ``ai`` /
-                # ``q`` mismatch checks: cursors must match the
-                # context they were issued for.
-                cursor_ns = state.get("ns")
-                if isinstance(cursor_ns, str) and cursor_ns:
-                    options["_cursor_ns"] = cursor_ns
-                # Post-a17 P1-D3: stash the cursor's ``s.ai`` so
-                # cursor-rebuilding handlers (``_handle_walk_namespace``
-                # rebuilds ``{scan_at, l}`` from ``offset`` and passes
-                # that synthetic dict to ``walk_namespace_data``, whose
-                # unconditional ``verify_archive_identity`` then
-                # rejects the missing ``ai`` with a misleading
-                # "missing archive-identity field" error). Preserving
-                # the original ``ai`` round-trips it back through the
-                # check so a walk-namespace cursor returned by the
-                # tool can be replayed against the same archive.
-                cursor_ai = state.get("ai")
-                if isinstance(cursor_ai, str) and cursor_ai:
-                    options["_cursor_ai"] = cursor_ai
-                # Post-a18 P1-D4: stash the cursor's tool name so the
-                # simple-tools dispatcher can reject cross-tool reuse
-                # (e.g. a ``walk_namespace`` cursor passed to
-                # ``browse namespace M`` silently walked browse from
-                # walk's offset). The advanced tools already enforce
-                # tool-binding via ``Cursor.decode(expected_tool=...)``;
-                # the simple-tools layer decoded the cursor in-place
-                # earlier in this block, bypassing that check. The
-                # ``_cursor_tool_mismatch`` helper fires in each
-                # cursor-consuming handler (``_handle_browse`` /
-                # ``_handle_walk_namespace``) so the user sees a clear
-                # rejection instead of a silent wrong-result.
-                cursor_t = decoded_payload.get("t")
-                if isinstance(cursor_t, str) and cursor_t:
-                    options["_cursor_t"] = cursor_t
-                if isinstance(state, dict):  # always True now; kept for diff clarity
-                    # D9 (beta): the original implementation treated the
-                    # cursor's ``s.q`` field as decorative — only ``s.o``
-                    # was read. That meant a caller who reused a cursor
-                    # issued for ``query="algebra"`` with a fresh request
-                    # for ``query="photosynthesis"`` silently got page 2
-                    # of "photosynthesis" results (offset applied to the
-                    # NEW query). Pagination state coupled to the wrong
-                    # query is the same class of bug the advanced tools
-                    # explicitly reject via ``CursorMismatchError`` /
-                    # ``OpenZimMcpValidationError``.
-                    #
-                    # D9 (beta, second pass): the first revision used a
-                    # one-directional substring check
-                    # (``cursor_q.lower() in query.lower()``). That
-                    # false-rejected legitimate pagination when the
-                    # model shortened the query on the retry —
-                    # cursor issued for ``"berlin culture"`` then
-                    # resubmitted with ``"berlin"`` errored out
-                    # even though both name the same topic. Use a
-                    # token-set overlap test instead: as long as
-                    # cursor and current query share at least one
-                    # meaningful (≥3-char) token, accept the cursor.
-                    # This catches the ``"algebra"`` → ``"photosynthesis"``
-                    # swap while tolerating same-topic phrase reshaping
-                    # in either direction. Cursors whose stored query
-                    # has no ≥3-char tokens fall back to a bidirectional
-                    # substring check.
-                    cursor_q = state.get("q")
-                    # Post-a20 P1-D1: only ``search_zim_file`` /
-                    # ``search_with_filters`` legitimately emit ``s.q``
-                    # in their cursors (see ``Cursor.encode`` callsites
-                    # in zim/search.py). When ``_cursor_t`` claims a
-                    # non-q-emitting tool (``walk_namespace`` /
-                    # ``browse_namespace`` / ``extract_article_links``)
-                    # but the payload still carries ``s.q``, the field
-                    # is adversarial or vestigial — skipping the
-                    # dispatcher q-overlap check here lets the
-                    # handler-level ``_cursor_tool_mismatch`` fire
-                    # with the correct ``Cursor / Tool Mismatch``
-                    # diagnosis instead of the misleading
-                    # ``Cursor was issued for query X; current request
-                    # shares no terms`` shape (which advises starting
-                    # the search over — useless when the real fault
-                    # is cross-tool reuse).
-                    cursor_t_for_q = (
-                        decoded_payload.get("t")
-                        if isinstance(decoded_payload, dict)
-                        else None
-                    )
-                    cursor_t_emits_q = (
-                        not isinstance(cursor_t_for_q, str)
-                        or not cursor_t_for_q
-                        or cursor_t_for_q in self._Q_EMITTING_CURSOR_TOOLS
-                    )
-                    if (
-                        isinstance(cursor_q, str)
-                        and cursor_q.strip()
-                        and cursor_t_emits_q
-                    ):
-                        cursor_tokens = {
-                            t
-                            for t in re.findall(r"[a-z0-9]+", cursor_q.lower())
-                            if len(t) >= 3
-                        }
-                        query_tokens = {
-                            t
-                            for t in re.findall(r"[a-z0-9]+", (query or "").lower())
-                            if len(t) >= 3
-                        }
-                        cursor_q_lower = cursor_q.lower()
-                        query_lower = (query or "").lower()
-                        # Three outcomes:
-                        #   1. Cursor has meaningful tokens AND they
-                        #      share at least one with the query → ok.
-                        #   2. Cursor has meaningful tokens AND no
-                        #      overlap → reject.
-                        #   3. Cursor has only short tokens (rare;
-                        #      e.g. ``"bio"``) → bidirectional
-                        #      substring check.
-                        if cursor_tokens:
-                            shares_token = bool(cursor_tokens & query_tokens)
-                            if not shares_token:
-                                return tool_error(
-                                    operation="cursor_decode",
-                                    message=(
-                                        f"Cursor was issued for query {cursor_q!r}; "
-                                        f"current request shares no terms "
-                                        f"with it. Drop the cursor and start "
-                                        f"the search over for the new query."
-                                    ),
-                                    context=f"cursor_q={cursor_q!r}",
-                                )
-                        else:
-                            mutually_unrelated = (
-                                cursor_q_lower not in query_lower
-                                and query_lower not in cursor_q_lower
-                            )
-                            if mutually_unrelated:
-                                return tool_error(
-                                    operation="cursor_decode",
-                                    message=(
-                                        f"Cursor was issued for query {cursor_q!r}; "
-                                        f"current request shares no terms "
-                                        f"with it. Drop the cursor and start "
-                                        f"the search over for the new query."
-                                    ),
-                                    context=f"cursor_q={cursor_q!r}",
-                                )
-            except Exception as e:
-                logger.warning("Could not decode cursor %r: %s", cursor_raw, e)
-                # H24: see above — keep simple-mode error shape consistent
-                # with the advanced surface.
-                return tool_error(
-                    operation="cursor_decode",
-                    message=(
-                        "The `cursor` value could not be decoded. Drop "
-                        "the cursor and call again with an explicit "
-                        "`offset` (or no pagination arg)."
-                    ),
-                    context=f"cursor={token[:64]}",
-                )
+            # an ``expected_tool`` match. ``decode_offset_cursor`` decodes
+            # the payload directly (bypassing that check) so any tool's
+            # cursor can be replayed for offset extraction. It returns a
+            # ``CursorDecodeResult`` (offset + optional ns/ai/tool to
+            # project into ``options``) or one of the structured
+            # ``cursor_decode`` ``ToolErrorPayload`` errors. See
+            # ``openzim_mcp.cursor_decode`` for the full rationale.
+            cursor_result = decode_offset_cursor(
+                str(cursor_raw),
+                query=query,
+                q_emitting_tools=self._Q_EMITTING_CURSOR_TOOLS,
+            )
+            if isinstance(cursor_result, dict):
+                # ToolErrorPayload — surface it unchanged.
+                return cursor_result
+            options["offset"] = cursor_result.offset
+            # Only project ns/ai/tool when truthy (same condition as the
+            # former inline block); downstream handlers read these to
+            # reject namespace / archive-identity / cross-tool mismatches.
+            if cursor_result.ns:
+                options["_cursor_ns"] = cursor_result.ns
+            if cursor_result.ai:
+                options["_cursor_ai"] = cursor_result.ai
+            if cursor_result.tool:
+                options["_cursor_t"] = cursor_result.tool
         # Normalize hallucinated ``zim_file_path`` BEFORE branching to the
         # synthesize pipeline. Small models pass bare filenames
         # (``"wikipedia.zim"``) or article titles (``"Big Rapids,

@@ -10,7 +10,6 @@ existing test patches against the shim's symbols continue to work
 without changes.
 """
 
-import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
@@ -26,6 +25,7 @@ from openzim_mcp.exceptions import (
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.pagination import Cursor
 from openzim_mcp.responses import ToolErrorPayload, tool_error
+from openzim_mcp.zim._ops_base import _json
 from openzim_mcp.zim.content import reject_path_traversal
 
 if TYPE_CHECKING:
@@ -89,6 +89,9 @@ class _StructureMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
+        def _validate_zim_path(self, zim_file_path: str) -> Path:
+            """Resolve via ``_ArchiveAccessMixin`` on the concrete coordinator."""
+
         def _resolve_entry_with_fallback(
             self, archive: Archive, entry_path: str
         ) -> Tuple[Any, str]:
@@ -109,8 +112,7 @@ class _StructureMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -145,11 +147,7 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If structure extraction fails
         """
-        return json.dumps(
-            self.get_article_structure_data(zim_file_path, entry_path),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.get_article_structure_data(zim_file_path, entry_path))
 
     def _extract_article_structure_data(
         self,
@@ -287,8 +285,7 @@ class _StructureMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity (Phase B #11): a cursor issued for archive A
         # must not be honoured when resubmitted against archive B.
@@ -409,16 +406,14 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If link extraction fails
         """
-        return json.dumps(
+        return _json(
             self.extract_article_links_data(
                 zim_file_path,
                 entry_path,
                 limit=limit,
                 offset=offset,
                 kind=kind,
-            ),
-            indent=2,
-            ensure_ascii=False,
+            )
         )
 
     def get_table_of_contents_data(
@@ -436,8 +431,7 @@ class _StructureMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -475,11 +469,7 @@ class _StructureMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If TOC extraction fails
         """
-        return json.dumps(
-            self.get_table_of_contents_data(zim_file_path, entry_path),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.get_table_of_contents_data(zim_file_path, entry_path))
 
     def _extract_table_of_contents_data(
         self,
@@ -567,8 +557,7 @@ class _StructureMixin:
         """
         try:
             reject_path_traversal(entry_path)
-            validated_path = self.path_validator.validate_path(zim_file_path)
-            validated_path = self.path_validator.validate_zim_file(validated_path)
+            validated_path = self._validate_zim_path(zim_file_path)
             with _zim_ops_mod.zim_archive(validated_path) as archive:
                 return self._get_section_data(
                     archive,
@@ -837,8 +826,7 @@ class _StructureMixin:
         # (validated inside extract_article_links_data) but silently fails
         # in _resolve_outbound_titles, which would otherwise call
         # ``Path("~/zims/foo.zim")`` directly — Path does not expand ``~``.
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
         validated_str = str(validated_path)
 
         outbound: List[Dict[str, Any]] = []
@@ -993,11 +981,7 @@ class _StructureMixin:
 
         Find articles related to entry_path via outbound links.
         """
-        return json.dumps(
-            self.get_related_articles_data(zim_file_path, entry_path, limit),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.get_related_articles_data(zim_file_path, entry_path, limit))
 
     @staticmethod
     def _resolve_link_to_entry_path(url: str, source_entry_path: str) -> Optional[str]:

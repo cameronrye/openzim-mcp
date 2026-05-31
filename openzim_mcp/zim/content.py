@@ -23,6 +23,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.zim._ops_base import _json
 from openzim_mcp.zim.redirects import resolve_redirect_chain
 
 if TYPE_CHECKING:
@@ -119,6 +120,9 @@ class _ContentMixin:
         path_validator: "PathValidator"
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
+
+        def _validate_zim_path(self, zim_file_path: str) -> Path:
+            """Resolve via ``_ArchiveAccessMixin`` on the concrete coordinator."""
 
         # Provided by other mixins / coordinator class.
         def _find_entry_by_search(
@@ -246,8 +250,7 @@ class _ContentMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cheap response cache check: a hit avoids opening the archive
         # entirely, which is the whole point of caching here.
@@ -368,8 +371,7 @@ class _ContentMixin:
         if content_offset < 0:
             content_offset = 0
 
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key distinct from the legacy string cache so old persisted
         # entries (text payloads) don't collide with the new dict shape.
@@ -678,8 +680,7 @@ class _ContentMixin:
             # every entry in this group fails with the same error rather
             # than spending an archive open per entry.
             try:
-                validated_path = self.path_validator.validate_path(zim_file_path)
-                validated_path = self.path_validator.validate_zim_file(validated_path)
+                validated_path = self._validate_zim_path(zim_file_path)
             except Exception as e:  # noqa: BLE001 - per-group isolation
                 for index, zfp, entry_path in group:
                     results.append(
@@ -1177,8 +1178,7 @@ class _ContentMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key for invariant metadata (size, mime_type, etc.) — not data,
         # since data is potentially large and varies with max_size_bytes.
@@ -1304,12 +1304,10 @@ class _ContentMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If entry retrieval fails
         """
-        return json.dumps(
+        return _json(
             self.get_binary_entry_data(
                 zim_file_path, entry_path, max_size_bytes, include_data
-            ),
-            indent=2,
-            ensure_ascii=False,
+            )
         )
 
     def _format_binary_response(
@@ -1384,8 +1382,7 @@ class _ContentMixin:
         reject_path_traversal(entry_path)
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
@@ -1438,12 +1435,10 @@ class _ContentMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If summary extraction fails
         """
-        return json.dumps(
+        return _json(
             self.get_entry_summary_data(
                 zim_file_path, entry_path, max_words, compact=compact
-            ),
-            indent=2,
-            ensure_ascii=False,
+            )
         )
 
     def _extract_entry_summary_data(

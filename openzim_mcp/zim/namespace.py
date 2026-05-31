@@ -9,7 +9,6 @@ without changes.
 """
 
 import contextlib
-import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
@@ -27,6 +26,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.zim._ops_base import _json
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -92,6 +92,9 @@ class _NamespaceMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
+        def _validate_zim_path(self, zim_file_path: str) -> Path:
+            """Resolve via ``_ArchiveAccessMixin`` on the concrete coordinator."""
+
     def list_namespaces_data(self, zim_file_path: str) -> "ListNamespacesResponse":
         """Structured variant of ``list_namespaces``.
 
@@ -112,8 +115,7 @@ class _NamespaceMixin:
             OpenZimMcpArchiveError: If namespace listing fails
         """
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
         # shape: entry_count key) don't leak through after the rename to ``total``.
@@ -146,11 +148,7 @@ class _NamespaceMixin:
         responses out of these strings) keeps working unchanged. New
         callers should prefer ``list_namespaces_data``.
         """
-        return json.dumps(
-            self.list_namespaces_data(zim_file_path),
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json(self.list_namespaces_data(zim_file_path))
 
     def _list_archive_namespaces(self, archive: Archive) -> Dict[str, Any]:
         """List namespaces in the archive.
@@ -637,8 +635,7 @@ class _NamespaceMixin:
             )
 
         # Validate and resolve file path
-        validated_path = self.path_validator.validate_path(zim_file_path)
-        validated_path = self.path_validator.validate_zim_file(validated_path)
+        validated_path = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity: a cursor issued for archive A must not be
         # honoured when resubmitted against archive B (same guard as
@@ -776,10 +773,8 @@ class _NamespaceMixin:
             OpenZimMcpFileNotFoundError: If ZIM file not found
             OpenZimMcpArchiveError: If browsing fails
         """
-        return json.dumps(
-            self.browse_namespace_data(zim_file_path, namespace, limit, offset),
-            indent=2,
-            ensure_ascii=False,
+        return _json(
+            self.browse_namespace_data(zim_file_path, namespace, limit, offset)
         )
 
     def _browse_namespace_entries(  # NOSONAR(python:S3776)
@@ -1495,8 +1490,7 @@ class _NamespaceMixin:
         if namespace:
             namespace = self._canonicalise_namespace(namespace.strip())
 
-        validated = self.path_validator.validate_path(zim_file_path)
-        validated = self.path_validator.validate_zim_file(validated)
+        validated = self._validate_zim_path(zim_file_path)
 
         # Cursor integrity: a v2 cursor encodes the namespace it was
         # issued for and the archive identity. Rejecting on mismatch
@@ -1903,10 +1897,8 @@ class _NamespaceMixin:
         Raises:
             OpenZimMcpValidationError: If ``limit`` is outside ``1..500``.
         """
-        return json.dumps(
+        return _json(
             self.walk_namespace_data(
                 zim_file_path, namespace, cursor_state=cursor, limit=limit
-            ),
-            indent=2,
-            ensure_ascii=False,
+            )
         )
