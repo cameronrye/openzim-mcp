@@ -205,6 +205,56 @@ class SimpleToolsHandler(
 
         return probe
 
+    def _run_query_rewrite_probes(
+        self, query: str, zim_file_path: Optional[str]
+    ) -> Optional[Callable[[str], bool]]:
+        """Build the title probe and emit per-rule query-rewrite telemetry.
+
+        Returns the probe (or None when query-rewrite is disabled / no archive
+        in scope). The rule re-passes here exist ONLY to bump per-rule
+        telemetry counters; parse_intent does the actual rewrite using the
+        returned probe. (Extracted from handle_zim_query; behavior unchanged.)
+        """
+        # Sub-D-2: build the title probe (returns None when no archive
+        # is in scope; rules 2 and 3 degrade gracefully). Snapshot
+        # intermediate stages by running the rules individually to emit
+        # per-rule telemetry. This keeps parse_intent's responsibilities
+        # clean (it doesn't know about _track); the cost is two extra
+        # rule passes worth of CPU per query.
+        if self.zim_operations.config.query_rewrite.enabled:
+            # Post-b1 P1-D1: resolve the probe archive BEFORE
+            # building the probe so it sees the same archive
+            # ``handle_zim_query`` will auto-select downstream
+            # (single-archive case). Pre-fix, ``zim_file_path``
+            # was passed straight through and produced a None
+            # probe whenever the caller omitted the path — the
+            # documented-as-recommended pattern.
+            probe_path = self._probe_archive_path(zim_file_path)
+            title_probe = self._build_title_probe(probe_path)
+            after_lower = IntentParser._normalize_topic_case(query)
+            after_misspell = IntentParser._apply_misspelling_map(
+                after_lower, title_probe=title_probe
+            )
+            if after_misspell != after_lower:
+                self._track(_QUERY_REWRITE_MISSPELLING)
+            after_stopword = IntentParser._detect_stopword_phrase(
+                after_misspell, title_probe=title_probe
+            )
+            if after_stopword != after_misspell:
+                self._track(_QUERY_REWRITE_STOPWORD_PHRASE)
+            # Post-b1 P1-D3: pass the same probe so Rule 4 can
+            # suppress decomposition when the full query is itself
+            # a canonical title (``lord of the rings``,
+            # ``the art of war``, ``history of rome``).
+            _, hint_probe = IntentParser._decompose_x_of_y(
+                after_stopword, title_probe=title_probe
+            )
+            if hint_probe is not None:
+                self._track(_QUERY_REWRITE_X_OF_Y)
+        else:
+            title_probe = None
+        return title_probe
+
     def handle_zim_query(
         self,
         query: str,
@@ -377,44 +427,10 @@ class SimpleToolsHandler(
                 return chained_warning + (
                     "\n<!-- intent=chained_intent_rejected cert=1.00 -->"
                 )
-            # Sub-D-2: build the title probe (returns None when no archive
-            # is in scope; rules 2 and 3 degrade gracefully). Snapshot
-            # intermediate stages by running the rules individually to emit
-            # per-rule telemetry. This keeps parse_intent's responsibilities
-            # clean (it doesn't know about _track); the cost is two extra
-            # rule passes worth of CPU per query.
-            if self.zim_operations.config.query_rewrite.enabled:
-                # Post-b1 P1-D1: resolve the probe archive BEFORE
-                # building the probe so it sees the same archive
-                # ``handle_zim_query`` will auto-select downstream
-                # (single-archive case). Pre-fix, ``zim_file_path``
-                # was passed straight through and produced a None
-                # probe whenever the caller omitted the path — the
-                # documented-as-recommended pattern.
-                probe_path = self._probe_archive_path(zim_file_path)
-                title_probe = self._build_title_probe(probe_path)
-                after_lower = IntentParser._normalize_topic_case(query)
-                after_misspell = IntentParser._apply_misspelling_map(
-                    after_lower, title_probe=title_probe
-                )
-                if after_misspell != after_lower:
-                    self._track(_QUERY_REWRITE_MISSPELLING)
-                after_stopword = IntentParser._detect_stopword_phrase(
-                    after_misspell, title_probe=title_probe
-                )
-                if after_stopword != after_misspell:
-                    self._track(_QUERY_REWRITE_STOPWORD_PHRASE)
-                # Post-b1 P1-D3: pass the same probe so Rule 4 can
-                # suppress decomposition when the full query is itself
-                # a canonical title (``lord of the rings``,
-                # ``the art of war``, ``history of rome``).
-                _, hint_probe = IntentParser._decompose_x_of_y(
-                    after_stopword, title_probe=title_probe
-                )
-                if hint_probe is not None:
-                    self._track(_QUERY_REWRITE_X_OF_Y)
-            else:
-                title_probe = None
+            # Sub-D-2: build the title probe and emit per-rule
+            # query-rewrite telemetry (returns None when no archive is in
+            # scope or query-rewrite is disabled).
+            title_probe = self._run_query_rewrite_probes(query, zim_file_path)
 
             intent, params, confidence = self.intent_parser.parse_intent(
                 query,
@@ -655,113 +671,16 @@ class SimpleToolsHandler(
                 result = raw
                 handler_reason = None
                 handler_suggestions = None
-            if options.get("compact", False) and intent in self._TEXT_HEAVY_INTENTS:
-                # Strip markdown link-soup ([text](href "tooltip") -> text)
-                # from article-body and search-snippet responses. Wikipedia
-                # markdown is ~50% link syntax in the head of a typical
-                # article, ~86% in main-page nav lists. Stripping ~halves
-                # the context cost for the same prose payload, without
-                # losing any content that a small LLM was going to use
-                # anyway (small LLMs don't follow inline links from inside
-                # tool responses; they issue follow-up tool calls). The
-                # JSON-returning intents (structure / links / find_by_title
-                # / related / etc.) handle their own compact rendering and
-                # are deliberately not in _TEXT_HEAVY_INTENTS.
-                result = self._strip_markdown_links(result)
-            if options.get("compact", False) and intent in self._SEARCH_RENDER_INTENTS:
-                # Search snippets default to 3000 chars per result. For
-                # 5 results that's 15k chars of preview alone — a small
-                # LLM only needs ~250 chars to rank relevance. Truncate
-                # each snippet AFTER the link-soup strip so the cap
-                # applies to the post-stripped char count.
-                result = self._truncate_search_snippets(result)
-            result = result + low_confidence_note
-            # A11 Opp6: intent telemetry footer. Invisible to humans
-            # (HTML comment, not rendered) but visible in the raw token
-            # stream so a calling LLM can branch on the parsed intent
-            # and the parser's classification certainty. Cheaper than
-            # parsing the body to infer what the tool did. Skipped when
-            # the result is already a ToolErrorPayload (dict) — those
-            # carry ``operation`` themselves.
-            #
-            # The certainty is emitted as ``cert=`` (not the obvious
-            # ``confidence=``) so existing tests asserting
-            # ``"confidence" not in result`` for the visible-note path
-            # still hold — the visible note uses the prose word
-            # "confidence", the invisible telemetry uses the marker
-            # ``cert``.
-            if isinstance(result, str):
-                result = result + (f"\n<!-- intent={intent} cert={confidence:.2f} -->")
-                # Post-b1: surface reranker engagement state in-band so
-                # simple-tool callers (the default mode) can confirm
-                # whether D-1's cross-encoder rerank actually engaged
-                # for this request. Mirrors the intent telemetry shape
-                # (HTML comment, invisible to humans, addressable by a
-                # calling LLM). Emitted only when the request actually
-                # touched a search path — non-search intents leave the
-                # counter untouched and the comment is suppressed.
-                _rerank_state = self._compute_rerank_state(_RERANK_EVENTS_BEFORE)
-                if _rerank_state is not None:
-                    result = result + f"\n<!-- reranker={_rerank_state} -->"
-            if options.get("compact", False):
-                # Belt-and-suspenders cap: even after every per-intent
-                # trim, a backend can return more than the simple-mode
-                # budget can absorb (e.g. a future intent that doesn't
-                # know about compact, a backend error message that
-                # echoes a large payload, etc.). Hard-cap the response
-                # so the LLM's per-turn context cost is predictable.
-                # Budget is sizable to the calling model — 4k for an
-                # 8B-class model on an agentic prompt, 12k for a 70B
-                # assistant. The footer names the original size so the
-                # LLM knows it's seeing a tail.
-                budget = self._resolve_compact_budget(options.get("compact_budget"))
-                # Reserve room for the prompt-injection fence so its
-                # closing tag is never cut by the cap.
-                will_wrap = intent in self._PROMPT_INJECTION_FENCE_INTENTS
-                effective_budget = (
-                    budget - self._CONTENT_FENCE_OVERHEAD if will_wrap else budget
-                )
-                # Capture pre-cap size to report truncation in footer
-                pre_cap_chars = len(result)
-                if len(result) > effective_budget:
-                    self._track("response_truncated")
-                result = self._cap_response_size(
-                    result, effective_budget, intent=intent
-                )
-                # Determine if truncation occurred
-                was_truncated = len(result) < pre_cap_chars
-                if will_wrap:
-                    result = self._wrap_retrieved_content(result)
-
-                # Op5 (v2.0.0a9): simple-mode truncation comes from
-                # ``_cap_response_size`` capping the *rendered output*
-                # — the operation underneath doesn't support content-
-                # byte re-pagination from this layer. Passing
-                # ``content_chars=None`` suppresses the misleading
-                # ``pass offset=N for more`` footer hint (which
-                # interprets ``offset`` as a result-set index for
-                # search/browse, not a byte offset). The
-                # ``_cap_response_size`` body already carries the
-                # actionable recovery advice (``tighter query`` /
-                # ``compact=False``) so the user isn't blind.
-                # ``total_chars`` stays so callers can still see how
-                # much was elided. ``handler_reason`` /
-                # ``handler_suggestions`` (compact-mode zero-result
-                # search) drive the empty-result footer variant.
-                meta = build_meta(
-                    rendered=result,
-                    truncated=was_truncated,
-                    content_chars=None,
-                    total_chars=pre_cap_chars if was_truncated else None,
-                    reason=handler_reason,
-                    suggestions=handler_suggestions,
-                )
-                footer = format_footer(
-                    meta,
-                    footer_enabled=self.zim_operations.config.meta.footer_enabled,
-                )
-                if footer:
-                    result = result + "\n\n" + footer
+            result = self._finalize_compact_response(
+                result,
+                intent=intent,
+                confidence=confidence,
+                options=options,
+                low_confidence_note=low_confidence_note,
+                handler_reason=handler_reason,
+                handler_suggestions=handler_suggestions,
+                rerank_events_before=_RERANK_EVENTS_BEFORE,
+            )
             return result
 
         except Exception as e:
@@ -843,6 +762,130 @@ class SimpleToolsHandler(
                 f"3. Try a simpler query\n"
                 f"4. Check server logs for details"
             )
+
+    def _finalize_compact_response(  # NOSONAR(python:S3776)
+        self,
+        result: str,
+        *,
+        intent: str,
+        confidence: float,
+        options: Dict[str, Any],
+        low_confidence_note: str,
+        handler_reason: Optional[str],
+        handler_suggestions: Optional[List[Dict[str, str]]],
+        rerank_events_before: Dict[str, int],
+    ) -> str:
+        """Apply the compact-mode post-processing pipeline to a handler result:
+        link-strip, snippet-truncate, low-confidence note, intent/rerank
+        telemetry markers, size-cap, and footer. (Extracted verbatim from
+        handle_zim_query; behavior unchanged.)
+        """
+        if options.get("compact", False) and intent in self._TEXT_HEAVY_INTENTS:
+            # Strip markdown link-soup ([text](href "tooltip") -> text)
+            # from article-body and search-snippet responses. Wikipedia
+            # markdown is ~50% link syntax in the head of a typical
+            # article, ~86% in main-page nav lists. Stripping ~halves
+            # the context cost for the same prose payload, without
+            # losing any content that a small LLM was going to use
+            # anyway (small LLMs don't follow inline links from inside
+            # tool responses; they issue follow-up tool calls). The
+            # JSON-returning intents (structure / links / find_by_title
+            # / related / etc.) handle their own compact rendering and
+            # are deliberately not in _TEXT_HEAVY_INTENTS.
+            result = self._strip_markdown_links(result)
+        if options.get("compact", False) and intent in self._SEARCH_RENDER_INTENTS:
+            # Search snippets default to 3000 chars per result. For
+            # 5 results that's 15k chars of preview alone — a small
+            # LLM only needs ~250 chars to rank relevance. Truncate
+            # each snippet AFTER the link-soup strip so the cap
+            # applies to the post-stripped char count.
+            result = self._truncate_search_snippets(result)
+        result = result + low_confidence_note
+        # A11 Opp6: intent telemetry footer. Invisible to humans
+        # (HTML comment, not rendered) but visible in the raw token
+        # stream so a calling LLM can branch on the parsed intent
+        # and the parser's classification certainty. Cheaper than
+        # parsing the body to infer what the tool did. Skipped when
+        # the result is already a ToolErrorPayload (dict) — those
+        # carry ``operation`` themselves.
+        #
+        # The certainty is emitted as ``cert=`` (not the obvious
+        # ``confidence=``) so existing tests asserting
+        # ``"confidence" not in result`` for the visible-note path
+        # still hold — the visible note uses the prose word
+        # "confidence", the invisible telemetry uses the marker
+        # ``cert``.
+        if isinstance(result, str):
+            result = result + (f"\n<!-- intent={intent} cert={confidence:.2f} -->")
+            # Post-b1: surface reranker engagement state in-band so
+            # simple-tool callers (the default mode) can confirm
+            # whether D-1's cross-encoder rerank actually engaged
+            # for this request. Mirrors the intent telemetry shape
+            # (HTML comment, invisible to humans, addressable by a
+            # calling LLM). Emitted only when the request actually
+            # touched a search path — non-search intents leave the
+            # counter untouched and the comment is suppressed.
+            _rerank_state = self._compute_rerank_state(rerank_events_before)
+            if _rerank_state is not None:
+                result = result + f"\n<!-- reranker={_rerank_state} -->"
+        if options.get("compact", False):
+            # Belt-and-suspenders cap: even after every per-intent
+            # trim, a backend can return more than the simple-mode
+            # budget can absorb (e.g. a future intent that doesn't
+            # know about compact, a backend error message that
+            # echoes a large payload, etc.). Hard-cap the response
+            # so the LLM's per-turn context cost is predictable.
+            # Budget is sizable to the calling model — 4k for an
+            # 8B-class model on an agentic prompt, 12k for a 70B
+            # assistant. The footer names the original size so the
+            # LLM knows it's seeing a tail.
+            budget = self._resolve_compact_budget(options.get("compact_budget"))
+            # Reserve room for the prompt-injection fence so its
+            # closing tag is never cut by the cap.
+            will_wrap = intent in self._PROMPT_INJECTION_FENCE_INTENTS
+            effective_budget = (
+                budget - self._CONTENT_FENCE_OVERHEAD if will_wrap else budget
+            )
+            # Capture pre-cap size to report truncation in footer
+            pre_cap_chars = len(result)
+            if len(result) > effective_budget:
+                self._track("response_truncated")
+            result = self._cap_response_size(result, effective_budget, intent=intent)
+            # Determine if truncation occurred
+            was_truncated = len(result) < pre_cap_chars
+            if will_wrap:
+                result = self._wrap_retrieved_content(result)
+
+            # Op5 (v2.0.0a9): simple-mode truncation comes from
+            # ``_cap_response_size`` capping the *rendered output*
+            # — the operation underneath doesn't support content-
+            # byte re-pagination from this layer. Passing
+            # ``content_chars=None`` suppresses the misleading
+            # ``pass offset=N for more`` footer hint (which
+            # interprets ``offset`` as a result-set index for
+            # search/browse, not a byte offset). The
+            # ``_cap_response_size`` body already carries the
+            # actionable recovery advice (``tighter query`` /
+            # ``compact=False``) so the user isn't blind.
+            # ``total_chars`` stays so callers can still see how
+            # much was elided. ``handler_reason`` /
+            # ``handler_suggestions`` (compact-mode zero-result
+            # search) drive the empty-result footer variant.
+            meta = build_meta(
+                rendered=result,
+                truncated=was_truncated,
+                content_chars=None,
+                total_chars=pre_cap_chars if was_truncated else None,
+                reason=handler_reason,
+                suggestions=handler_suggestions,
+            )
+            footer = format_footer(
+                meta,
+                footer_enabled=self.zim_operations.config.meta.footer_enabled,
+            )
+            if footer:
+                result = result + "\n\n" + footer
+        return result
 
     def _zim_path_recovery_hint(self) -> Optional[str]:
         """Post-a20 PD2-4: render the recovery hint surfaced by the
@@ -3207,38 +3250,11 @@ class SimpleToolsHandler(
         # it as a topic ask — for plain ``search`` intents (the user
         # typed "berlin wall" directly), the raw query IS the search
         # query.
-        # Sub-D-2: build the title probe (returns None when no archive
-        # is in scope; rules 2 and 3 degrade gracefully). Snapshot
-        # intermediate stages by running the rules individually to emit
-        # per-rule telemetry. This keeps parse_intent's responsibilities
-        # clean (it doesn't know about _track); the cost is two extra
-        # rule passes worth of CPU per query.
-        if self.zim_operations.config.query_rewrite.enabled:
-            # Post-b1 P1-D1: mirror of the simple-branch fix at line
-            # ~624 — pre-resolve zim_file_path so the probe sees the
-            # single auto-selected archive when the caller omits it.
-            probe_path = self._probe_archive_path(zim_file_path)
-            title_probe = self._build_title_probe(probe_path)
-            after_lower = IntentParser._normalize_topic_case(query)
-            after_misspell = IntentParser._apply_misspelling_map(
-                after_lower, title_probe=title_probe
-            )
-            if after_misspell != after_lower:
-                self._track(_QUERY_REWRITE_MISSPELLING)
-            after_stopword = IntentParser._detect_stopword_phrase(
-                after_misspell, title_probe=title_probe
-            )
-            if after_stopword != after_misspell:
-                self._track(_QUERY_REWRITE_STOPWORD_PHRASE)
-            # Post-b1 P1-D3: pass probe to Rule 4 (mirror of the
-            # simple-branch wiring).
-            _, hint_probe = IntentParser._decompose_x_of_y(
-                after_stopword, title_probe=title_probe
-            )
-            if hint_probe is not None:
-                self._track(_QUERY_REWRITE_X_OF_Y)
-        else:
-            title_probe = None
+        # Sub-D-2: build the title probe + emit per-rule query-rewrite
+        # telemetry (shared with handle_zim_query's simple branch). The
+        # probe returns None when no archive is in scope; rules 2 and 3
+        # degrade gracefully.
+        title_probe = self._run_query_rewrite_probes(query, zim_file_path)
 
         try:
             intent, params, _confidence = self.intent_parser.parse_intent(

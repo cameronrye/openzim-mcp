@@ -610,9 +610,7 @@ class ZimOperations(
             logger.error(f"Validation failed for {validated_path}: {e}")
             raise OpenZimMcpArchiveError(f"Validation failed: {e}") from e
 
-    def _extract_zim_metadata(  # NOSONAR(python:S3776)
-        self, archive: Archive
-    ) -> Dict[str, Any]:
+    def _extract_zim_metadata(self, archive: Archive) -> Dict[str, Any]:
         """Extract metadata from ZIM archive."""
         # Basic archive information
         metadata: Dict[str, Any] = {
@@ -634,33 +632,6 @@ class ZimOperations(
         # Try to get metadata from M namespace
         metadata_entries = {}
         try:
-            # Common metadata entries in M namespace.
-            # A11 F6 (post-a10, second pass): for new-scheme
-            # archives, enumerate ``archive.metadata_keys`` directly
-            # instead of probing a hardcoded list — that's exactly
-            # what ``walk namespace M`` does, and using the same
-            # source guarantees the two operations agree on the set.
-            # Filter out illustration keys (binary, can't surface as
-            # text). The hardcoded list is retained as the old-scheme
-            # fallback since ``metadata_keys`` is a new-scheme API.
-            common_metadata = [
-                "Title",
-                "Description",
-                "Long_Description",
-                "Language",
-                "Creator",
-                "Publisher",
-                "Date",
-                "Source",
-                "License",
-                "Relation",
-                "Flavour",
-                "Tags",
-                "Counter",
-                "Name",
-                "Scraper",
-            ]
-
             # DD1 (beta, second pass): new-scheme ZIM archives serve
             # ``M/<key>`` via ``archive.get_metadata_item`` — the
             # entry-by-path API silently strips the ``M/`` prefix and
@@ -673,131 +644,16 @@ class ZimOperations(
             # fall back to ``get_entry_by_path`` since the M namespace
             # actually lives on the entry surface there.
             has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
-            if has_new_scheme:
-                try:
-                    # A11 post-a11 M1: shared filter — see
-                    # ``zim.namespace.is_human_readable_metadata_key``.
-                    # Walk-namespace M and metadata-for must agree on
-                    # what counts as metadata; sharing the predicate
-                    # guarantees that.
-                    from openzim_mcp.zim.namespace import (
-                        is_human_readable_metadata_key,
-                    )
-
-                    discovered = [
-                        k
-                        for k in (getattr(archive, "metadata_keys", []) or [])
-                        if is_human_readable_metadata_key(k)
-                    ]
-                except Exception as e:
-                    logger.debug(f"metadata_keys read failed: {e}")
-                    discovered = []
-                # Stable order: start with the conventional list (so
-                # the most common keys lead), then append any extras
-                # the archive exposes that aren't in the list. This
-                # keeps the previous response shape for archives
-                # whose key set exactly matches the conventional
-                # list and gracefully extends for archives that
-                # carry custom keys.
-                extras = [k for k in discovered if k not in common_metadata]
-                common_metadata = common_metadata + extras
+            common_metadata = self._discover_metadata_keys(archive, has_new_scheme)
             for meta_key in common_metadata:
                 try:
-                    if has_new_scheme:
-                        try:
-                            item = archive.get_metadata_item(meta_key)
-                        except Exception as e:
-                            logger.debug(
-                                f"get_metadata_item failed for {meta_key}: {e}"
-                            )
-                            continue
-                        if item is None:
-                            continue
-                        content = (
-                            bytes(item.content)
-                            .decode("utf-8", errors="replace")
-                            .strip()
-                        )
-                        if not content:
-                            continue
-                        # New-scheme metadata is plain text — Title is
-                        # ``"Wikipedia"``, Date is ``"2026-02-15"``.
-                        # Skip the HTML-extraction step entirely.
-                        if len(content) > _METADATA_PREVIEW_CAP:
-                            metadata_entries[meta_key] = (
-                                f"{content[:_METADATA_PREVIEW_CAP].rstrip()}… "
-                                f"[truncated, {len(content):,} chars total]"
-                            )
-                        else:
-                            metadata_entries[meta_key] = content
-                        continue
-                    entry = archive.get_entry_by_path(f"M/{meta_key}")
-                    if entry:
-                        # libzim raises RuntimeError if get_item() is called
-                        # on a redirect entry. Resolve the full redirect chain
-                        # (with cycle + depth bounds) so a legitimate metadata
-                        # redirect doesn't disappear from the response simply
-                        # because it points at the canonical key. A bare
-                        # ``get_redirect_entry`` only resolves one hop, which
-                        # would still raise RuntimeError on a 2-hop chain.
-                        seen_meta: set[str] = set()
-                        hops = 0
-                        while getattr(entry, "is_redirect", False):
-                            if hops >= MAX_REDIRECT_DEPTH or entry.path in seen_meta:
-                                break
-                            seen_meta.add(entry.path)
-                            entry = entry.get_redirect_entry()
-                            hops += 1
-                        if getattr(entry, "is_redirect", False):
-                            # Cycle or runaway chain — skip rather than raise,
-                            # metadata is best-effort.
-                            continue
-                        item = entry.get_item()
-                        content = (
-                            bytes(item.content)
-                            .decode("utf-8", errors="replace")
-                            .strip()
-                        )
-                        if content:
-                            # D4 / Op2 (v2.0.0a9): Wikipedia ZIMs store
-                            # ``M/Title``, ``M/Description``, ``M/Language``
-                            # etc. as full HTML documents (~1 MB each)
-                            # rather than bare strings. The original
-                            # a7 fix capped to 800 chars but every value
-                            # then leads with the SAME 800 chars of
-                            # ``<!DOCTYPE html>…<title>X</title>``
-                            # boilerplate — the actual field value
-                            # lives buried past the cap in ``<body>``.
-                            # Extract the readable text (preferring the
-                            # ``<title>`` element, then ``<body>`` text)
-                            # before the cap so the response surfaces
-                            # the actual archive title / description /
-                            # language instead of identical HTML
-                            # prefixes.
-                            extracted = _extract_metadata_text(content)
-                            original_chars = len(content)
-                            if len(extracted) > _METADATA_PREVIEW_CAP:
-                                preview = extracted[:_METADATA_PREVIEW_CAP].rstrip()
-                                metadata_entries[meta_key] = (
-                                    f"{preview}… "
-                                    f"[truncated, {original_chars:,} chars total]"
-                                )
-                            elif extracted != content:
-                                # The field was HTML — record the
-                                # extracted text alongside an indicator
-                                # of the source-document size so the
-                                # caller knows the value was distilled
-                                # from a larger HTML wrapper.
-                                metadata_entries[meta_key] = (
-                                    f"{extracted}"
-                                    if original_chars <= len(extracted) + 16
-                                    else (
-                                        f"{extracted} "
-                                        f"[extracted from {original_chars:,}-char HTML]"
-                                    )
-                                )
-                            else:
-                                metadata_entries[meta_key] = content
+                    value = (
+                        self._read_new_scheme_metadata_value(archive, meta_key)
+                        if has_new_scheme
+                        else self._read_old_scheme_metadata_value(archive, meta_key)
+                    )
+                    if value is not None:
+                        metadata_entries[meta_key] = value
                 except Exception as e:
                     # Entry doesn't exist or can't be read - expected for optional
                     logger.debug(f"Metadata 'M/{meta_key}' not available: {e}")
@@ -817,6 +673,171 @@ class ZimOperations(
                     metadata["counter_breakdown"] = breakdown
 
         return metadata
+
+    def _discover_metadata_keys(
+        self, archive: Archive, has_new_scheme: bool
+    ) -> List[str]:
+        """Build the ordered list of M-namespace keys to probe.
+
+        Starts from the conventional hardcoded list (so the most common
+        keys lead) and, for new-scheme archives, appends any extra keys
+        the archive exposes via ``archive.metadata_keys``.
+        """
+        # Common metadata entries in M namespace.
+        # A11 F6 (post-a10, second pass): for new-scheme
+        # archives, enumerate ``archive.metadata_keys`` directly
+        # instead of probing a hardcoded list — that's exactly
+        # what ``walk namespace M`` does, and using the same
+        # source guarantees the two operations agree on the set.
+        # Filter out illustration keys (binary, can't surface as
+        # text). The hardcoded list is retained as the old-scheme
+        # fallback since ``metadata_keys`` is a new-scheme API.
+        common_metadata = [
+            "Title",
+            "Description",
+            "Long_Description",
+            "Language",
+            "Creator",
+            "Publisher",
+            "Date",
+            "Source",
+            "License",
+            "Relation",
+            "Flavour",
+            "Tags",
+            "Counter",
+            "Name",
+            "Scraper",
+        ]
+
+        if has_new_scheme:
+            try:
+                # A11 post-a11 M1: shared filter — see
+                # ``zim.namespace.is_human_readable_metadata_key``.
+                # Walk-namespace M and metadata-for must agree on
+                # what counts as metadata; sharing the predicate
+                # guarantees that.
+                from openzim_mcp.zim.namespace import (
+                    is_human_readable_metadata_key,
+                )
+
+                discovered = [
+                    k
+                    for k in (getattr(archive, "metadata_keys", []) or [])
+                    if is_human_readable_metadata_key(k)
+                ]
+            except Exception as e:
+                logger.debug(f"metadata_keys read failed: {e}")
+                discovered = []
+            # Stable order: start with the conventional list (so
+            # the most common keys lead), then append any extras
+            # the archive exposes that aren't in the list. This
+            # keeps the previous response shape for archives
+            # whose key set exactly matches the conventional
+            # list and gracefully extends for archives that
+            # carry custom keys.
+            extras = [k for k in discovered if k not in common_metadata]
+            common_metadata = common_metadata + extras
+        return common_metadata
+
+    def _read_new_scheme_metadata_value(
+        self, archive: Archive, meta_key: str
+    ) -> Optional[str]:
+        """Read a single new-scheme ``M/<meta_key>`` value.
+
+        New-scheme archives serve metadata via ``get_metadata_item`` as
+        plain text (no HTML wrapper). Returns the (possibly capped) value,
+        or ``None`` to skip the key (missing item / empty content).
+        """
+        try:
+            item = archive.get_metadata_item(meta_key)
+        except Exception as e:
+            logger.debug(f"get_metadata_item failed for {meta_key}: {e}")
+            return None
+        if item is None:
+            return None
+        content = bytes(item.content).decode("utf-8", errors="replace").strip()
+        if not content:
+            return None
+        # New-scheme metadata is plain text — Title is
+        # ``"Wikipedia"``, Date is ``"2026-02-15"``.
+        # Skip the HTML-extraction step entirely.
+        if len(content) > _METADATA_PREVIEW_CAP:
+            return (
+                f"{content[:_METADATA_PREVIEW_CAP].rstrip()}… "
+                f"[truncated, {len(content):,} chars total]"
+            )
+        return content
+
+    def _read_old_scheme_metadata_value(
+        self, archive: Archive, meta_key: str
+    ) -> Optional[str]:
+        """Read a single old-scheme ``M/<meta_key>`` value.
+
+        Old-scheme archives expose the M namespace on the entry surface
+        (``get_entry_by_path``). Resolves redirects (bounded best-effort
+        walk), distils any HTML wrapper to readable text, and caps /
+        annotates the result. Returns the value, or ``None`` to skip.
+        """
+        entry = archive.get_entry_by_path(f"M/{meta_key}")
+        if not entry:
+            return None
+        # libzim raises RuntimeError if get_item() is called
+        # on a redirect entry. Resolve the full redirect chain
+        # (with cycle + depth bounds) so a legitimate metadata
+        # redirect doesn't disappear from the response simply
+        # because it points at the canonical key. A bare
+        # ``get_redirect_entry`` only resolves one hop, which
+        # would still raise RuntimeError on a 2-hop chain.
+        seen_meta: set[str] = set()
+        hops = 0
+        while getattr(entry, "is_redirect", False):
+            if hops >= MAX_REDIRECT_DEPTH or entry.path in seen_meta:
+                break
+            seen_meta.add(entry.path)
+            entry = entry.get_redirect_entry()
+            hops += 1
+        if getattr(entry, "is_redirect", False):
+            # Cycle or runaway chain — skip rather than raise,
+            # metadata is best-effort.
+            return None
+        item = entry.get_item()
+        content = bytes(item.content).decode("utf-8", errors="replace").strip()
+        if not content:
+            return None
+        return self._format_metadata_html_value(content)
+
+    def _format_metadata_html_value(self, content: str) -> str:
+        """Distil an old-scheme metadata value's HTML wrapper + cap it.
+
+        D4 / Op2 (v2.0.0a9): Wikipedia ZIMs store ``M/Title``,
+        ``M/Description``, ``M/Language`` etc. as full HTML documents
+        (~1 MB each) rather than bare strings. The original a7 fix capped
+        to 800 chars but every value then leads with the SAME 800 chars of
+        ``<!DOCTYPE html>…<title>X</title>`` boilerplate — the actual field
+        value lives buried past the cap in ``<body>``. Extract the readable
+        text (preferring the ``<title>`` element, then ``<body>`` text)
+        before the cap so the response surfaces the actual archive title /
+        description / language instead of identical HTML prefixes.
+        """
+        extracted = _extract_metadata_text(content)
+        original_chars = len(content)
+        if len(extracted) > _METADATA_PREVIEW_CAP:
+            preview = extracted[:_METADATA_PREVIEW_CAP].rstrip()
+            return f"{preview}… [truncated, {original_chars:,} chars total]"
+        elif extracted != content:
+            # The field was HTML — record the
+            # extracted text alongside an indicator
+            # of the source-document size so the
+            # caller knows the value was distilled
+            # from a larger HTML wrapper.
+            return (
+                f"{extracted}"
+                if original_chars <= len(extracted) + 16
+                else (f"{extracted} [extracted from {original_chars:,}-char HTML]")
+            )
+        else:
+            return content
 
     def get_main_page(self, zim_file_path: str, *, compact: bool = False) -> str:
         """Get the main page entry from W namespace.
