@@ -908,7 +908,14 @@ class _SearchMixin:
         stable) and to canonical hits whose path actually lives in
         the requested namespace.
         """
-        if offset != 0:
+
+        # Collapse the five identical legacy-path bail-outs into one
+        # closure so the guard chain below reads as a sequence of bail
+        # conditions. The closure reads ``limit`` at CALL time, so the
+        # ``offset != 0`` bail (which runs BEFORE the ``limit`` default)
+        # sees the original ``limit`` while every later bail sees the
+        # defaulted value — exactly matching the prior inline behavior.
+        def _delegate() -> str:
             return self.search_with_filters(
                 zim_file_path,
                 query,
@@ -918,6 +925,9 @@ class _SearchMixin:
                 offset,
                 display_query=display_query,
             )
+
+        if offset != 0:
+            return _delegate()
         if limit is None:
             limit = self.config.content.default_search_limit
 
@@ -936,15 +946,7 @@ class _SearchMixin:
             canonical = None
 
         if canonical is None:
-            return self.search_with_filters(
-                zim_file_path,
-                query,
-                namespace,
-                content_type,
-                limit,
-                offset,
-                display_query=display_query,
-            )
+            return _delegate()
 
         canonical_path = canonical["path"]
         # Namespace gate: when a namespace filter is in play, only
@@ -957,28 +959,45 @@ class _SearchMixin:
                 canonical_path.split("/", 1)[0] if "/" in canonical_path else "C"
             )
             if path_prefix != ns_letter:
-                return self.search_with_filters(
-                    zim_file_path,
-                    query,
-                    namespace,
-                    content_type,
-                    limit,
-                    offset,
-                    display_query=display_query,
-                )
+                return _delegate()
         # Same content-type gate when applicable; the title-index probe
         # doesn't carry mimetype info, so skip the splice rather than
         # mis-attribute one when the caller filtered by content-type.
         if content_type:
-            return self.search_with_filters(
-                zim_file_path,
-                query,
-                namespace,
-                content_type,
-                limit,
-                offset,
-                display_query=display_query,
-            )
+            return _delegate()
+
+        return self._splice_canonical_into_filtered(
+            zim_file_path=zim_file_path,
+            query=query,
+            namespace=namespace,
+            content_type=content_type,
+            limit=limit,
+            offset=offset,
+            display_query=display_query,
+            canonical=canonical,
+        )
+
+    def _splice_canonical_into_filtered(
+        self,
+        *,
+        zim_file_path: str,
+        query: str,
+        namespace: Optional[str],
+        content_type: Optional[str],
+        limit: int,
+        offset: int,
+        display_query: Optional[str],
+        canonical: Dict[str, Any],
+    ) -> str:
+        """Splice the canonical title match into the filtered-search render.
+
+        (Extracted verbatim from
+        ``search_with_filters_with_canonical_splice``.) The guards in the
+        caller guarantee: ``offset == 0``, ``limit`` is defaulted, a
+        canonical exists and lives in the requested namespace, and no
+        ``content_type`` filter is in play.
+        """
+        canonical_path = canonical["path"]
 
         # Get the structured payload, splice, then render via the same
         # ``_format_filtered_response`` the legacy path uses. The

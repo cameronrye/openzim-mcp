@@ -258,7 +258,12 @@ class TestD5FilteredSearchCanonicalSplice:
         # specific gate shape: ``top_path == canonical_path``. The
         # pre-fix shape used ``is_strong_title_match(query, ...)`` in
         # the same block; the post-fix shape uses path equality.
-        src = inspect.getsource(_SearchMixin.search_with_filters_with_canonical_splice)
+        # Tier-3 refactor: the gate moved verbatim into the extracted
+        # ``_splice_canonical_into_filtered`` helper, so inspect both the
+        # dispatcher and the splice body to keep locking the invariant.
+        src = inspect.getsource(
+            _SearchMixin.search_with_filters_with_canonical_splice
+        ) + inspect.getsource(_SearchMixin._splice_canonical_into_filtered)
         # New gate present.
         assert "top_path == canonical_path" in src
         # Old gate removed from the splice path (the predicate is
