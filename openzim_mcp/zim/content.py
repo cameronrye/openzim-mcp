@@ -120,8 +120,8 @@ class _ContentMixin:
         cache: "OpenZimMcpCache"
         content_processor: "ContentProcessor"
 
-        # Provided by _ArchiveAccessMixin on the concrete coordinator.
-        def _validate_zim_path(self, zim_file_path: str) -> Path: ...
+        def _validate_zim_path(self, zim_file_path: str) -> Path:
+            """Resolve via ``_ArchiveAccessMixin`` on the concrete coordinator."""
 
         # Provided by other mixins / coordinator class.
         def _find_entry_by_search(
