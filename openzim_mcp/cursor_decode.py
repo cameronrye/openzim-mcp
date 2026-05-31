@@ -20,11 +20,11 @@ caller's logging behavior is unchanged.
 import base64
 import json
 import logging
-import re
 from dataclasses import dataclass
 from typing import AbstractSet, Optional, Union
 
 from .responses import ToolErrorPayload, tool_error
+from .text_utils import tokenize_for_relevance
 
 logger = logging.getLogger(__name__)
 
@@ -207,14 +207,8 @@ def decode_offset_cursor(
             or cursor_t in q_emitting_tools
         )
         if isinstance(cursor_q, str) and cursor_q.strip() and cursor_t_emits_q:
-            cursor_tokens = {
-                t for t in re.findall(r"[a-z0-9]+", cursor_q.lower()) if len(t) >= 3
-            }
-            query_tokens = {
-                t
-                for t in re.findall(r"[a-z0-9]+", (query or "").lower())
-                if len(t) >= 3
-            }
+            cursor_tokens = tokenize_for_relevance(cursor_q)
+            query_tokens = tokenize_for_relevance(query or "")
             cursor_q_lower = cursor_q.lower()
             query_lower = (query or "").lower()
             # Three outcomes:

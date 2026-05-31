@@ -27,6 +27,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import find_title_match
 from openzim_mcp.zim._ops_base import _json
 
@@ -123,14 +124,6 @@ def _format_filter_text(namespace: Optional[str], content_type: Optional[str]) -
     return f" (filters: {', '.join(parts)})" if parts else ""
 
 
-# Tokens this short can't reliably indicate query relevance — "in", "of",
-# "the", "is" appear everywhere. The token-match relevance check ignores
-# them so a query like "of mice and men" doesn't get flagged low-relevance
-# because the content-bearing tokens ("mice", "men") matched but the
-# stopwords technically didn't.
-_RELEVANCE_TOKEN_MIN_LEN = 3
-
-
 # Wikipedia / MediaWiki pseudo-namespaces excluded from suggestion + title
 # probe results. These live in the C namespace (not separate ZIM
 # namespaces) but use a colon-prefixed title convention to mark
@@ -172,17 +165,6 @@ def _is_pseudo_namespace_entry(
     return any(title.startswith(p) for p in prefixes)
 
 
-def _tokenize_for_relevance(text: str) -> set[str]:
-    """Lowercase alphanumeric tokens of length >= _RELEVANCE_TOKEN_MIN_LEN."""
-    import re as _re
-
-    return {
-        tok
-        for tok in _re.findall(r"[a-z0-9]+", text.lower())
-        if len(tok) >= _RELEVANCE_TOKEN_MIN_LEN
-    }
-
-
 def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool:
     """Return True iff NONE of the search results carry any query token.
 
@@ -198,12 +180,12 @@ def _all_results_weakly_match(results: List[Dict[str, Any]], query: str) -> bool
     """
     if not results:
         return False
-    query_tokens = _tokenize_for_relevance(query)
+    query_tokens = tokenize_for_relevance(query)
     if not query_tokens:
         return False
     for r in results:
         haystack = f"{r.get('path', '')} {r.get('title', '')}"
-        r_tokens = _tokenize_for_relevance(haystack)
+        r_tokens = tokenize_for_relevance(haystack)
         if query_tokens & r_tokens:
             return False
     return True
