@@ -27,6 +27,7 @@ from openzim_mcp.exceptions import (
 )
 from openzim_mcp.meta import attach_meta
 from openzim_mcp.zim._ops_base import _json
+from openzim_mcp.zim.redirects import best_effort_redirect_chain
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -1110,23 +1111,10 @@ class _NamespaceMixin:
             logger.debug(f"main_entry resolution failed: {e}")
             return None
         # Follow the redirect chain so the rendered row points at the
-        # actual page rather than the redirect stub.
-        hops = 0
-        seen: set = set()
-        try:
-            while getattr(entry, "is_redirect", False) and hops < 10:
-                p = getattr(entry, "path", None)
-                if p is None or p in seen:
-                    break
-                seen.add(p)
-                entry = entry.get_redirect_entry()
-                hops += 1
-        except Exception as redirect_err:
-            # Best-effort redirect chase: if a hop raises (e.g. a stale
-            # redirect entry on a partially-rewritten archive), fall back
-            # to the last resolved ``entry`` rather than failing the whole
-            # main-page lookup.
-            logger.debug(f"main_entry redirect chase aborted: {redirect_err}")
+        # actual page rather than the redirect stub. Best-effort: a stale
+        # redirect on a partially-rewritten archive degrades to the last
+        # good entry rather than failing the whole main-page lookup.
+        entry = best_effort_redirect_chain(entry)
         title = getattr(entry, "title", None) or "Main Page"
         try:
             preview, content_type = self._render_entry_preview(entry, "W/mainPage")
