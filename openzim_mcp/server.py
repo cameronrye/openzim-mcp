@@ -29,6 +29,39 @@ from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
 
+# Loopback entries always present in the Host allow-list so localhost-direct
+# access keeps working alongside any proxied hostname. Both the bare host and
+# its ``:*`` wildcard-port form are listed: the SDK matcher treats a portless
+# ``Host`` header and a ``host:port`` header as distinct cases.
+_LOOPBACK_TRANSPORT_HOSTS = (
+    "127.0.0.1",
+    "127.0.0.1:*",
+    "localhost",
+    "localhost:*",
+    "[::1]",
+    "[::1]:*",
+)
+
+
+def _build_transport_allowed_hosts(configured_hosts: list[str]) -> list[str]:
+    """Build FastMCP Host allow-list entries from configured hostnames.
+
+    The MCP SDK matcher (``mcp.server.transport_security``) accepts a request
+    whose ``Host`` is ``base_host:port`` only when the allow-list holds a
+    pattern ending in ``:*``; a bare entry matches just the exact portless
+    host. A reverse proxy or Tailscale serve typically forwards
+    ``Host: mcp.example.com:443``, so a bare configured ``mcp.example.com``
+    would be rejected with 421. We therefore add a ``host:*`` variant for any
+    configured host that does not already carry a port/wildcard, while leaving
+    explicit ``host:*`` entries untouched (no double ``:*:*``).
+    """
+    allowed_hosts = list(_LOOPBACK_TRANSPORT_HOSTS)
+    for host in configured_hosts:
+        allowed_hosts.append(host)
+        if ":" not in host:
+            allowed_hosts.append(f"{host}:*")
+    return allowed_hosts
+
 
 class OpenZimMcpServer:
     """Main OpenZIM MCP server class with dependency injection."""
@@ -107,12 +140,7 @@ class OpenZimMcpServer:
             from mcp.server.transport_security import TransportSecuritySettings
 
             fastmcp_kwargs["transport_security"] = TransportSecuritySettings(
-                allowed_hosts=[
-                    "127.0.0.1:*",
-                    "localhost:*",
-                    "[::1]:*",
-                    *config.allowed_hosts,
-                ],
+                allowed_hosts=_build_transport_allowed_hosts(config.allowed_hosts),
                 allowed_origins=list(config.cors_origins),
             )
         self.mcp = FastMCP(config.server_name, **fastmcp_kwargs)

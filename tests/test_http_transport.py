@@ -130,6 +130,33 @@ def test_check_safe_startup_localhost_resolving_to_loopback_is_safe(monkeypatch)
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1:*", "localhost:*", "[::1]:*"}
+_BARE_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+
+
+def test_build_transport_allowed_hosts_port_expands_bare_hosts():
+    """A bare configured host is port-expanded so proxied ``Host: h:443`` passes.
+
+    The SDK matcher (``mcp.server.transport_security``) only matches a
+    ``base_host:port`` request against an allow-list pattern ending in
+    ``:*``; a bare entry like ``mcp.example.com`` matches ONLY the exact
+    portless host, so a reverse proxy forwarding ``Host: mcp.example.com:443``
+    is rejected with 421. Expanding each bare host to also include
+    ``host:*`` fixes that without the operator having to know the rule.
+    """
+    from openzim_mcp.server import _build_transport_allowed_hosts
+
+    result = set(
+        _build_transport_allowed_hosts(["mcp.example.com", "alt.example.com:*"])
+    )
+
+    # Bare host gains a wildcard-port variant (the fix); an entry that already
+    # carries ``:*`` is left as-is. Assert via set algebra rather than ``in``
+    # so static analyzers don't read the host literals as URL substring checks.
+    assert {"mcp.example.com", "mcp.example.com:*", "alt.example.com:*"} <= result
+    # The explicit ``:*`` entry is NOT double-expanded to ``:*:*``.
+    assert result.isdisjoint({"alt.example.com:*:*"})
+    # Loopback stays reachable in both bare and wildcard-port forms.
+    assert (_LOOPBACK_HOSTS | _BARE_LOOPBACK_HOSTS) <= result
 
 
 def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
@@ -158,7 +185,14 @@ def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
     sec: TransportSecuritySettings = server.mcp.settings.transport_security  # type: ignore[union-attr]
     assert sec is not None
     hosts = set(sec.allowed_hosts)
-    assert hosts >= _LOOPBACK_HOSTS | {"mcp.example.com", "alt.example.com:*"}
+    # Bare ``mcp.example.com`` is port-expanded so a proxied ``Host: …:443``
+    # passes; the explicit ``alt.example.com:*`` is left as-is (not doubled).
+    assert hosts >= (
+        _LOOPBACK_HOSTS
+        | _BARE_LOOPBACK_HOSTS
+        | {"mcp.example.com", "mcp.example.com:*", "alt.example.com:*"}
+    )
+    assert hosts.isdisjoint({"alt.example.com:*:*"})
 
 
 def test_fastmcp_uses_sdk_default_when_hosts_unset(tmp_path):
