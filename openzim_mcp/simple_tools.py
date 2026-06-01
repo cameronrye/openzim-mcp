@@ -255,6 +255,146 @@ class SimpleToolsHandler(
             title_probe = None
         return title_probe
 
+    def _normalize_and_validate_query_params(
+        self, query: str, intent: str, params: Any
+    ) -> Optional[str]:
+        """Normalize freshly-parsed query ``params`` and validate the
+        extracted topic / search tail, mutating ``params`` in place.
+
+        Runs immediately after ``parse_intent`` and before intent
+        dispatch: stashes the pre-rewrite query, applies the
+        defence-in-depth trailing-politeness strip to the user-content
+        fields, and validates the ``tell_me_about`` topic / ``search``
+        tail. Returns a ready-to-emit guidance string when validation
+        rejects (the caller returns it unchanged), else ``None`` to
+        continue. ``params`` is mutated in place, so every downstream
+        consumer sees the cleaned values.
+        """
+        # Post-b1 P1-D2: stash the pre-rewrite, original-case query
+        # in params so user-facing guidance (multi-entity chain
+        # rejection, soft-connector footer) can echo entities back
+        # in the caller's casing instead of Rule 1's lowercased
+        # form. The leading underscore marks this as a wiring-layer
+        # hint — consumers should treat its absence as the legacy
+        # behaviour (use the lowercase value as-is).
+        if isinstance(params, dict):
+            params.setdefault("_pre_rewrite_query", query)
+        # Post-a21 P1-D1: defence-in-depth strip of trailing
+        # politeness on user-supplied content fields in ``params``.
+        # Idempotent when ``parse_intent`` already cleaned them
+        # (the post-a20 PD2-1 strip lives there), and a belt-and-
+        # suspenders catch for any future regression that returns
+        # ``params`` with politeness still attached (the live a21
+        # sweep observed ``Found N matches for "biology please"``
+        # despite the source-side ``parse_intent`` strip working
+        # correctly under direct unit test — the most likely cause
+        # was an in-process module cache on the live server that
+        # loaded only part of PR #152, but the user-visible defect
+        # is the same shape regardless of root cause). Idempotent
+        # by construction — the strip's regex is end-anchored and
+        # leaves clean content untouched.
+        if isinstance(params, dict):
+            # Post-a22 P1-D6: widen the defence-in-depth strip
+            # to ``section_name`` (carries user-content for
+            # ``section <X> of <Y>`` queries) — every other field
+            # set by an extractor that captures with a greedy tail
+            # is at risk if ``parse_intent``'s universal strip ever
+            # fails (in-process module cache, future regression).
+            # ``entries`` is a list of strings handled separately
+            # below because the universal scalar-string strip can't
+            # iterate it.
+            for _key in (
+                "query",
+                "topic",
+                "title",
+                "entry_path",
+                "partial_query",
+                "section_name",
+            ):
+                _v = params.get(_key)
+                if isinstance(_v, str) and _v:
+                    _v_clean = IntentParser._strip_trailing_politeness(_v).strip()
+                    if _v_clean != _v:
+                        params[_key] = _v_clean
+            # ``entries`` is a list of entry-path strings (from
+            # batched ``get N entries`` parses). Strip per-element
+            # so a trailing politeness on the last entry doesn't
+            # become part of the path.
+            _entries = params.get("entries")
+            if isinstance(_entries, list) and _entries:
+                _cleaned_entries: List[Any] = []
+                _changed = False
+                for _entry in _entries:
+                    if isinstance(_entry, str) and _entry:
+                        _entry_clean = IntentParser._strip_trailing_politeness(
+                            _entry
+                        ).strip()
+                        if _entry_clean != _entry:
+                            _changed = True
+                        _cleaned_entries.append(_entry_clean)
+                    else:
+                        _cleaned_entries.append(_entry)
+                if _changed:
+                    params["entries"] = _cleaned_entries
+        # A11 B2: ``tell me about <empty>`` (trailing-space input,
+        # punctuation-only topic) used to fall through to a topic
+        # of ``"tell me about"`` and disambiguate to article titles
+        # literally named "Tell Me About Tomorrow". Validate the
+        # extracted topic before the handler can search for it.
+        if intent == "tell_me_about" and isinstance(params, dict):
+            topic = (params.get("topic") or "").strip()
+            if not topic:
+                return (
+                    "**Topic Required**\n\n"
+                    "**Issue**: `tell me about` needs a non-empty "
+                    "topic to look up.\n\n"
+                    "**Examples**:\n"
+                    "- `tell me about Photosynthesis`\n"
+                    "- `who is Albert Einstein`\n"
+                    "- `describe DNA`\n"
+                    "<!-- intent=topic_required cert=1.00 -->"
+                )
+        # A11 B4: ``search for `` (trailing space, no terms) used
+        # to fall through to searching for the literal word "for".
+        # Validate the extracted query before dispatch.
+        if intent == "search" and isinstance(params, dict):
+            search_q = (params.get("query") or "").strip()
+            # If the extractor copied the full query verbatim because
+            # nothing followed "search for", the result equals the
+            # original query — accept that case only when there are
+            # ≥1 non-stopword content tokens. Otherwise reject.
+            #
+            # Post-a21 P1-D8: peel trailing politeness from the
+            # tail before the empty-check. Pre-fix, ``search for
+            # please`` (and ``search for ta`` after the P1-D6
+            # extension) returned tail=``"please"`` (non-empty),
+            # the guard didn't fire, ``_extract_search`` captured
+            # ``"for"`` as the search term and the user got a
+            # 200k-hit response dominated by the literal verb
+            # word. The strip is idempotent — when the tail
+            # carries real content the politeness substring is
+            # never trailing.
+            tail = self._search_query_tail(query)
+            if tail is not None:
+                tail = IntentParser._strip_trailing_politeness(tail).strip()
+            if tail is not None and not tail:
+                return (
+                    "**Search Terms Required**\n\n"
+                    "**Issue**: `search for` needs at least one "
+                    "search term.\n\n"
+                    "**Examples**:\n"
+                    '- `search for "quantum mechanics"`\n'
+                    "- `search for Berlin in namespace C`\n"
+                    "<!-- intent=search_terms_required cert=1.00 -->"
+                )
+            # Replace the params copy with the cleaned tail so the
+            # handler doesn't run on the verb-prefixed raw query.
+            if tail:
+                params["query"] = tail
+            else:
+                params["query"] = search_q
+        return None
+
     def handle_zim_query(
         self,
         query: str,
@@ -437,129 +577,13 @@ class SimpleToolsHandler(
                 title_probe=title_probe,
                 query_rewrite_enabled=self.zim_operations.config.query_rewrite.enabled,
             )
-            # Post-b1 P1-D2: stash the pre-rewrite, original-case query
-            # in params so user-facing guidance (multi-entity chain
-            # rejection, soft-connector footer) can echo entities back
-            # in the caller's casing instead of Rule 1's lowercased
-            # form. The leading underscore marks this as a wiring-layer
-            # hint — consumers should treat its absence as the legacy
-            # behaviour (use the lowercase value as-is).
-            if isinstance(params, dict):
-                params.setdefault("_pre_rewrite_query", query)
-            # Post-a21 P1-D1: defence-in-depth strip of trailing
-            # politeness on user-supplied content fields in ``params``.
-            # Idempotent when ``parse_intent`` already cleaned them
-            # (the post-a20 PD2-1 strip lives there), and a belt-and-
-            # suspenders catch for any future regression that returns
-            # ``params`` with politeness still attached (the live a21
-            # sweep observed ``Found N matches for "biology please"``
-            # despite the source-side ``parse_intent`` strip working
-            # correctly under direct unit test — the most likely cause
-            # was an in-process module cache on the live server that
-            # loaded only part of PR #152, but the user-visible defect
-            # is the same shape regardless of root cause). Idempotent
-            # by construction — the strip's regex is end-anchored and
-            # leaves clean content untouched.
-            if isinstance(params, dict):
-                # Post-a22 P1-D6: widen the defence-in-depth strip
-                # to ``section_name`` (carries user-content for
-                # ``section <X> of <Y>`` queries) — every other field
-                # set by an extractor that captures with a greedy tail
-                # is at risk if ``parse_intent``'s universal strip ever
-                # fails (in-process module cache, future regression).
-                # ``entries`` is a list of strings handled separately
-                # below because the universal scalar-string strip can't
-                # iterate it.
-                for _key in (
-                    "query",
-                    "topic",
-                    "title",
-                    "entry_path",
-                    "partial_query",
-                    "section_name",
-                ):
-                    _v = params.get(_key)
-                    if isinstance(_v, str) and _v:
-                        _v_clean = IntentParser._strip_trailing_politeness(_v).strip()
-                        if _v_clean != _v:
-                            params[_key] = _v_clean
-                # ``entries`` is a list of entry-path strings (from
-                # batched ``get N entries`` parses). Strip per-element
-                # so a trailing politeness on the last entry doesn't
-                # become part of the path.
-                _entries = params.get("entries")
-                if isinstance(_entries, list) and _entries:
-                    _cleaned_entries: List[Any] = []
-                    _changed = False
-                    for _entry in _entries:
-                        if isinstance(_entry, str) and _entry:
-                            _entry_clean = IntentParser._strip_trailing_politeness(
-                                _entry
-                            ).strip()
-                            if _entry_clean != _entry:
-                                _changed = True
-                            _cleaned_entries.append(_entry_clean)
-                        else:
-                            _cleaned_entries.append(_entry)
-                    if _changed:
-                        params["entries"] = _cleaned_entries
-            # A11 B2: ``tell me about <empty>`` (trailing-space input,
-            # punctuation-only topic) used to fall through to a topic
-            # of ``"tell me about"`` and disambiguate to article titles
-            # literally named "Tell Me About Tomorrow". Validate the
-            # extracted topic before the handler can search for it.
-            if intent == "tell_me_about" and isinstance(params, dict):
-                topic = (params.get("topic") or "").strip()
-                if not topic:
-                    return (
-                        "**Topic Required**\n\n"
-                        "**Issue**: `tell me about` needs a non-empty "
-                        "topic to look up.\n\n"
-                        "**Examples**:\n"
-                        "- `tell me about Photosynthesis`\n"
-                        "- `who is Albert Einstein`\n"
-                        "- `describe DNA`\n"
-                        "<!-- intent=topic_required cert=1.00 -->"
-                    )
-            # A11 B4: ``search for `` (trailing space, no terms) used
-            # to fall through to searching for the literal word "for".
-            # Validate the extracted query before dispatch.
-            if intent == "search" and isinstance(params, dict):
-                search_q = (params.get("query") or "").strip()
-                # If the extractor copied the full query verbatim because
-                # nothing followed "search for", the result equals the
-                # original query — accept that case only when there are
-                # ≥1 non-stopword content tokens. Otherwise reject.
-                #
-                # Post-a21 P1-D8: peel trailing politeness from the
-                # tail before the empty-check. Pre-fix, ``search for
-                # please`` (and ``search for ta`` after the P1-D6
-                # extension) returned tail=``"please"`` (non-empty),
-                # the guard didn't fire, ``_extract_search`` captured
-                # ``"for"`` as the search term and the user got a
-                # 200k-hit response dominated by the literal verb
-                # word. The strip is idempotent — when the tail
-                # carries real content the politeness substring is
-                # never trailing.
-                tail = self._search_query_tail(query)
-                if tail is not None:
-                    tail = IntentParser._strip_trailing_politeness(tail).strip()
-                if tail is not None and not tail:
-                    return (
-                        "**Search Terms Required**\n\n"
-                        "**Issue**: `search for` needs at least one "
-                        "search term.\n\n"
-                        "**Examples**:\n"
-                        '- `search for "quantum mechanics"`\n'
-                        "- `search for Berlin in namespace C`\n"
-                        "<!-- intent=search_terms_required cert=1.00 -->"
-                    )
-                # Replace the params copy with the cleaned tail so the
-                # handler doesn't run on the verb-prefixed raw query.
-                if tail:
-                    params["query"] = tail
-                else:
-                    params["query"] = search_q
+            # Normalize the freshly-parsed params (pre-rewrite stash +
+            # defence-in-depth politeness strip) and validate the
+            # extracted topic / search tail. Mutates ``params`` in place
+            # and returns a guidance payload when validation rejects.
+            early = self._normalize_and_validate_query_params(query, intent, params)
+            if early is not None:
+                return early
             logger.info(
                 f"Parsed intent: {intent}, params: {params}, "
                 f"confidence: {confidence:.2f}"
