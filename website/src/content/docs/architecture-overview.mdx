@@ -1,13 +1,13 @@
 ---
 title: Architecture overview
-summary: Module map, transports, and the zim/ package layout for OpenZIM MCP v2.0.0 — including the 8-tool consolidated surface, caching, smart-retrieval fallback, MCP transport layer, and subscription watcher.
+summary: Module map, transports, and the zim/ package layout for OpenZIM MCP — including the 8-tool consolidated surface, caching, smart-retrieval fallback, MCP transport layer, and subscription watcher.
 group: Operations
 sidebar_order: 3
 ---
 
 Module map, transports, and the `zim/` package layout.
 
-> **Notation:** examples on this page use Python pseudo-call syntax for tool calls. The MCP wire format is JSON-RPC; your client handles the framing. Tool names match the v2.0.0 8-tool surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
+> **Notation:** examples on this page use Python pseudo-call syntax for tool calls. The MCP wire format is JSON-RPC; your client handles the framing. Tool names match the 8-tool advanced surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
 
 > **Source of truth:** [openzim_mcp/](https://github.com/cameronrye/openzim-mcp/tree/main/openzim_mcp). The README's [Project Structure section](https://github.com/cameronrye/openzim-mcp#project-structure) mirrors the on-disk layout — this page explains *why* it's organized that way.
 
@@ -92,10 +92,9 @@ v2.0.0 collapsed the 22-tool v1 advanced surface into 8 tools. Each consolidated
 
   ┌──────────────────────────────┐
   │  zim_health                  │
-  │  • view="health"  (default)  │
-  │  • view="config"             │
-  │  • view="archives"           │
-  │  • consolidated payload too  │
+  │  • no arg → health + config  │
+  │    + archives (one payload)  │
+  │  • path → archive validation │
   └──────────────────────────────┘
 ```
 

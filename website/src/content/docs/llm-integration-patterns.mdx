@@ -1,13 +1,13 @@
 ---
 title: LLM integration patterns
-summary: Proven patterns for wiring OpenZIM MCP v2.0.0 into LLM applications — simple-mode dispatch, advanced-mode 8-tool composition, progressive discovery, batching, and error handling.
+summary: Proven patterns for wiring OpenZIM MCP into LLM applications — simple-mode dispatch, advanced-mode 8-tool composition, progressive discovery, batching, and error handling.
 group: Guides
 sidebar_order: 1
 ---
 
 Best practices and patterns for integrating OpenZIM MCP with large language models.
 
-> **Notation:** examples on this page use Python pseudo-call syntax (`zim_query(request="...")`, `zim_search(query="...", ...)`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. The argument names and types match the v2.0.0 8-tool surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_query(request="...")`, `zim_search(query="...", ...)`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. The argument names and types match the 8-tool advanced surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
 
 ## Overview
 
@@ -553,7 +553,7 @@ Subscribe to `zim://files` or `zim://{name}` for `notifications/resources/update
 
 In simple mode (the default) only `zim_query` is exposed — pass a natural-language request and the server's intent parser routes to the right underlying operation. If your host LLM is small or struggles with large tool catalogues, prefer simple mode and let the parser do the routing. For LLMs that handle the full 8-tool surface, switch to advanced mode (`OPENZIM_MCP_TOOL_MODE=advanced`) for fine-grained control.
 
-**The v2.0.0 8-tool surface fits comfortably below the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (~23.5KB vs the 25–50KB band)** — most 7-8B class open-weights models dispatch reliably against it. The 22-tool v1 surface (~36KB) sat squarely inside the band; if you saw dispatch confusion on v1 with a small model, v2 should be substantially better.
+**The 8-tool advanced surface fits comfortably below the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (~23.5KB vs the 25–50KB band)** — most 7-8B class open-weights models dispatch reliably against it. The 22-tool v1 surface (~36KB) sat squarely inside the band; if you saw dispatch confusion on v1 with a small model, v2 should be substantially better.
 
 ### Contextual content assembly
 
@@ -574,7 +574,7 @@ def create_comprehensive_answer(zim_path, entry_path):
 
 **Next steps:**
 
-- **[API reference](/openzim-mcp/docs/api-reference/)** — full v2.0.0 tool signatures.
+- **[API reference](/openzim-mcp/docs/api-reference/)** — full tool signatures.
 - **[Performance optimization](/openzim-mcp/docs/performance-optimization/)** — cache tuning, rate limiting, batching.
 - **[Smart retrieval](/openzim-mcp/docs/smart-retrieval/)** — how the search-fallback path resolution works.
 

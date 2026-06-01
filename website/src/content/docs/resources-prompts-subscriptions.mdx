@@ -1,6 +1,6 @@
 ---
 title: Resources, prompts & subscriptions
-summary: MCP resources (zim://files, zim://{name}, zim://{name}/entry/{path}), slash-command prompts (/research, /summarize, /explore), and the polling subscription system in v2.0.0.
+summary: MCP resources (zim://files, zim://{name}, zim://{name}/entry/{path}), slash-command prompts (/research, /summarize, /explore), and the polling subscription system.
 group: Reference
 sidebar_order: 3
 ---
@@ -96,7 +96,7 @@ For LLM workflows that need processed text + smart fallback, prefer the tool. Fo
 
 ## Prompts
 
-MCP prompts are pre-built workflows clients can invoke as slash commands. Each one returns a list of messages instructing the LLM to chain a specific multi-step ZIM operation against the v2.0.0 8-tool surface.
+MCP prompts are pre-built workflows clients can invoke as slash commands. Each one returns a list of messages instructing the LLM to chain a specific multi-step ZIM operation against the 8-tool advanced surface.
 
 > **Hardening:** user-supplied arguments are sanitized before interpolation — control characters replaced with spaces, backticks stripped (template delimiter), length capped at 200 characters. Apostrophes and double quotes are *preserved* (real entry paths contain them, e.g. `C/Schrödinger's_cat`). If args reduce to empty after sanitization, the prompt body asks the user to re-supply them.
 

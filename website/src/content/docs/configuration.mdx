@@ -1,11 +1,11 @@
 ---
 title: Configuration
-summary: Every supported environment variable, CLI flag, and configuration field for OpenZIM MCP v2.0.0 — transport, cache, content, rate limiting, subscriptions, and deployment profiles.
+summary: Every supported environment variable, CLI flag, and configuration field for OpenZIM MCP — transport, cache, content, rate limiting, subscriptions, and deployment profiles.
 group: Reference
 sidebar_order: 2
 ---
 
-Every supported environment variable, CLI flag, and configuration field for OpenZIM MCP v2.0.0.
+Every supported environment variable, CLI flag, and configuration field for OpenZIM MCP.
 
 > **Source of truth:** [openzim_mcp/config.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/config.py) and [openzim_mcp/defaults.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/defaults.py). If this page disagrees with code, code wins — please file an issue.
 
@@ -25,7 +25,7 @@ A bad value raises `OpenZimMcpConfigurationError` at startup with a human-readab
 
 ```bash
 # Default: simple — exposes one natural-language tool (zim_query)
-# Set to advanced for the full v2.0.0 8-tool surface
+# Set to advanced for the full 8-tool advanced surface
 export OPENZIM_MCP_TOOL_MODE=advanced
 ```
 
@@ -316,7 +316,7 @@ ExecStart=/usr/local/bin/openzim-mcp /srv/zim
 
 ## Stale env vars (not in code)
 
-The following env-var namespaces appeared in pre-1.0 / early-v2 documentation and **do not exist** in the v2.0.0 codebase. If a tool or example tells you to set them, the source is stale:
+The following env-var namespaces appeared in pre-1.0 / early-v2 documentation and **do not exist** in the current codebase. If a tool or example tells you to set them, the source is stale:
 
 - `OPENZIM_MCP_INSTANCE__*` — multi-instance conflict tracking was removed entirely.
 - `OPENZIM_MCP_SECURITY__*` — there is no `SecurityConfig`. Path validation, input sanitization, and limits are all controlled by the values listed above.

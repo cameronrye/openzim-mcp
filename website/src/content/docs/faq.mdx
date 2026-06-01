@@ -7,7 +7,7 @@ sidebar_order: 2
 
 Common questions and answers about OpenZIM MCP.
 
-> **Notation:** examples on this page use Python pseudo-call syntax (`zim_query(query="...")`). Argument names match the v2.0.0 8-tool surface.
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_query(query="...")`). Argument names match the 8-tool advanced surface.
 
 ## General questions
 
@@ -105,7 +105,7 @@ Prompts (`/research`, `/summarize`, `/explore`) and resources (`zim://files`, `z
 
 The [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) is the context cost an MCP server's tool schemas impose on every LLM request — the LLM has to read every tool description and parameter spec before it can pick one. There's an empirically observed pain band around 25–50KB of schema where small models start dropping accuracy and tool-call latency climbs.
 
-v1.x's 22-tool advanced surface was roughly 36KB of schema — squarely in the pain band. v2.0.0's 8-tool surface is roughly 23.5KB — just under the band. Same functionality, lower context tax, fewer wrong-tool calls. The detailed argument shapes still live inside the consolidated tools (in the `mode` / `view` discriminator), so frontier models keep their granularity.
+v1.x's 22-tool advanced surface was roughly 36KB of schema — squarely in the pain band. The v2 8-tool surface is roughly 23.5KB — just under the band. Same functionality, lower context tax, fewer wrong-tool calls. The detailed argument shapes still live inside the consolidated tools (in the `mode` / `view` discriminator), so frontier models keep their granularity.
 
 ### How do I search for content?
 

@@ -1,6 +1,6 @@
 # openzim-mcp Roadmap
 
-**Status:** v2.0.0 shipped (2026-05-27) — PyPI `2.0.0`, `ghcr.io/cameronrye/openzim-mcp:2.0.0`, GitHub Release with assets.
+**Status:** Latest release **v2.1.1** (2026-05-30) — PyPI `2.1.1` and `ghcr.io/cameronrye/openzim-mcp:2.1.1` / `:latest`, GitHub Release with assets. v2.0.0 GA shipped 2026-05-27 (as `:2.0.0`); the v2.0.x/v2.1.x line has been kept current via beta-sweep fixes plus the v2.1.0 native-libzim reader features.
 
 This document tracks open work past v2.0.0. Everything here is **additive**: opt-in extras, optional sidecars, or dispatch tuning. None of it changes the v2 tool surface or response contract.
 

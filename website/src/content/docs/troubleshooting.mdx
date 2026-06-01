@@ -1,17 +1,17 @@
 ---
 title: Troubleshooting
-summary: Common failure modes for OpenZIM MCP v2.0.0 — installation, ZIM file access, MCP client config, search/content issues, HTTP transport, cache, subscriptions, and the structured error payload shape.
+summary: Common failure modes for OpenZIM MCP — installation, ZIM file access, MCP client config, search/content issues, HTTP transport, cache, subscriptions, and the structured error payload shape.
 group: Operations
 sidebar_order: 1
 ---
 
-Common issues, error messages, and solutions for OpenZIM MCP v2.0.0.
+Common issues, error messages, and solutions for OpenZIM MCP.
 
-> **Notation:** examples on this page use Python pseudo-call syntax (`zim_health()`, `zim_search(query="...", mode="...")`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. Tool names match the v2.0.0 8-tool surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_health()`, `zim_search(query="...", mode="...")`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. Tool names match the 8-tool advanced surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
 
-## Error response shape (v2.0.0)
+## Error response shape
 
-Before diving into specific failure modes — v2.0.0 changed how errors come back from tools. Every tool catches exceptions and returns a structured `ToolErrorPayload` instead of raising:
+Before diving into specific failure modes — v2 changed how errors come back from tools. Every tool catches exceptions and returns a structured `ToolErrorPayload` instead of raising:
 
 ```json
 {
@@ -43,7 +43,7 @@ First, run the server health check to identify issues:
 "Check the server health and configuration"
 ```
 
-This will run `zim_health`, which in v2.0.0 returns combined health, configuration, and loaded-archives data in one response (consolidating three separate v1 tools into a single call).
+This will run `zim_health`, which returns combined health, configuration, and loaded-archives data in one response (consolidating three separate v1 tools into a single call).
 
 If the server is running over HTTP, you can also probe `/healthz` and `/readyz` directly without a token — both are auth-exempt.
 
@@ -411,7 +411,7 @@ Look for error patterns in server output:
 ### Before asking for help
 
 1. **Check this guide**: Review relevant sections above
-2. **Run diagnostics**: Use `zim_health` (v2.0.0 consolidates server health, configuration, and loaded-archives into one tool with `view="health" | "config" | "archives"`)
+2. **Run diagnostics**: Use `zim_health` — with no argument it consolidates server health, configuration, and loaded-archives into a single response (three v1 tools in one call); pass a `zim_file_path` to validate one archive (`Archive.check()` + checksum + index/identity)
 3. **Check logs**: Look for error messages — error text is safe to copy verbatim (paths and PIDs are redacted)
 4. **Test minimal case**: Reproduce with simple setup
 

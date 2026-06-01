@@ -24,7 +24,7 @@
 
 ---
 
-> 🆕 **v2.0.0 — 8-tool advanced surface.** Phase F consolidates 22 advanced tools into 8 (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). [Full release notes →](CHANGELOG.md#200--2026-05-27--phase-f-stage-d-ships) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
+> 🆕 **8-tool advanced surface.** Phase F (v2.0.0) consolidated 22 advanced tools into 8 (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). **New in v2.1:** native libzim archive validation via `zim_health(zim_file_path=...)`, plus archive identity / index introspection in `zim_metadata`. [Release notes →](CHANGELOG.md) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
 
 **OpenZIM MCP** is a modern, secure, high-performance [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI models structured, offline access to [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge archives — Wikipedia, Wiktionary, Stack Exchange, and the rest of the [Kiwix Library](https://library.kiwix.org/).
 
@@ -42,8 +42,8 @@ uv tool install openzim-mcp
 pip install openzim-mcp
 
 # Docker (multi-arch image, ghcr.io)
-docker pull ghcr.io/cameronrye/openzim-mcp:2.0.0
-docker run --rm -v /path/to/zim/files:/zim ghcr.io/cameronrye/openzim-mcp:2.0.0 /zim
+docker pull ghcr.io/cameronrye/openzim-mcp:2.1.1
+docker run --rm -v /path/to/zim/files:/zim ghcr.io/cameronrye/openzim-mcp:2.1.1 /zim
 ```
 
 Verify the install:
@@ -92,12 +92,13 @@ For full control, run in Advanced mode to expose all 8 specialized tools:
 
 For HTTP transport (long-running service with bearer auth, CORS, and health endpoints) see [HTTP & Docker deployment](https://cameronrye.github.io/openzim-mcp/docs/http-and-docker-deployment/).
 
-## What's in v2.0.0
+## Highlights
 
 - **8-tool advanced surface** — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. Down from 22; advanced-mode schema drops from ~36KB to ~23.5KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
 - **Streamable HTTP transport** — bearer-token auth, CORS, health endpoints, multi-arch Docker image. [HTTP & Docker deployment →](https://cameronrye.github.io/openzim-mcp/docs/http-and-docker-deployment/)
 - **Per-entry MCP resources + subscriptions** — `zim://{name}/entry/{path}` with native MIME types; clients subscribe and receive `notifications/resources/updated` when archives change. [Resources, prompts & subscriptions →](https://cameronrye.github.io/openzim-mcp/docs/resources-prompts-subscriptions/)
 - **Simple-mode `zim_query`** — one natural-language tool that dispatches to the right operation, tuned for small-model deployment targets. [Quick start →](https://cameronrye.github.io/openzim-mcp/docs/quick-start/)
+- **Native libzim introspection (v2.1)** — `zim_health(zim_file_path=...)` validates an archive's integrity (`Archive.check()` + checksum), and `zim_metadata` now reports archive identity, full-text / title index capabilities, and an `M/Counter` mimetype breakdown. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
 
 ## Modes
 

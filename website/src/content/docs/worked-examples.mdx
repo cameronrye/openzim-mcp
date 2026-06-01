@@ -1,13 +1,13 @@
 ---
 title: Worked examples
-summary: Five end-to-end case studies showing the OpenZIM MCP v2.0.0 8-tool surface in action — search, get, summarize, browse namespaces, and follow related links across a Wikipedia ZIM archive.
+summary: Five end-to-end case studies showing the OpenZIM MCP 8-tool advanced surface in action — search, get, summarize, browse namespaces, and follow related links across a Wikipedia ZIM archive.
 group: Guides
 sidebar_order: 6
 ---
 
-Five case studies that walk through real retrieval workflows against a Wikipedia ZIM archive. Each one starts from a research question, threads the v2.0.0 advanced-mode tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`) into an end-to-end answer, and notes the response shape at each step.
+Five case studies that walk through real retrieval workflows against a Wikipedia ZIM archive. Each one starts from a research question, threads the advanced-mode tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`) into an end-to-end answer, and notes the response shape at each step.
 
-> **Notation:** examples on this page use Python pseudo-call syntax (`zim_search(zim_file_path="...", query="...")`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. Argument names and types match the v2.0.0 8-tool surface.
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_search(zim_file_path="...", query="...")`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. Argument names and types match the 8-tool advanced surface.
 
 > All examples assume a Wikipedia ZIM file at `C:\zim\wikipedia_en_100_2025-08.zim`. Substitute your own archive path. Sample responses are truncated for readability.
 
@@ -38,7 +38,7 @@ Response (truncated):
 }
 ```
 
-`zim_health` is one tool with three views (`view="health"`, `view="config"`, `view="archives"`; default is the consolidated payload above) — server status, configuration, and loaded archives in a single call.
+`zim_health` returns server status, configuration, and loaded archives together in one consolidated payload (the shape above) — three v1 tools folded into a single call, with no view selector. Pass a `zim_file_path` to validate one archive instead (integrity + checksum + index/identity).
 
 ---
 
@@ -515,7 +515,7 @@ Simple mode is the default (one tool exposed) and is the right choice when your 
 
 **Next steps:**
 
-- **[API reference](/openzim-mcp/docs/api-reference/)** — full v2.0.0 tool signatures and argument shapes.
+- **[API reference](/openzim-mcp/docs/api-reference/)** — full tool signatures and argument shapes.
 - **[Smart retrieval](/openzim-mcp/docs/smart-retrieval/)** — the four-step fallback inside `zim_get`.
 - **[LLM integration patterns](/openzim-mcp/docs/llm-integration-patterns/)** — simple vs advanced mode, progressive discovery, batching, error handling.
 
