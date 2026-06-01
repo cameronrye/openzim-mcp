@@ -3422,179 +3422,28 @@ class SimpleToolsHandler(
         """
         from openzim_mcp.synthesize import synthesize_query
 
-        # Post-v2.0.4 D-I: mirror the meta-only / chained-intent guards
-        # the non-synthesize path fires at handle_zim_query lines 693
-        # and 710. Pre-fix the synthesize early-exit at line 626 skipped
-        # both: ``try again`` BM25-searched and returned Aaliyah's "Try
-        # Again" song; ``tell me about Berlin then list namespaces``
-        # silently RAG-searched the literal verb chain and returned
-        # Namespace + War articles instead of rejecting the chain.
-        # Same shape as the post-v2.0.0 D-G fix — return a structured
-        # tool_error envelope (synthesize's native error shape) with
-        # the full markdown guidance from the simple-mode helpers so
-        # callers get the same actionable recovery info.
-        if self._is_meta_only_query(query):
-            self._track("meta_only_guidance")
-            return tool_error(
-                operation="meta_only_guidance",
-                message=self._meta_query_guidance(),
-            )
-        chained_warning = self._chained_intent_guidance(query)
-        if chained_warning is not None:
-            self._track("chained_intent_rejected")
-            return tool_error(
-                operation="chained_intent_rejected",
-                message=chained_warning,
-            )
+        early = self._synthesize_reject_meta_or_chained(query)
+        if early is not None:
+            return early
 
-        # D5: distill the user's natural-language query down to the
-        # topic (or actual search terms) BEFORE handing it to BM25.
-        # The intent parser already knows how to pull "Berlin" out of
-        # "tell me about Berlin" / "who is Berlin" / "describe Berlin".
-        # Fall back to the raw query when the parser doesn't classify
-        # it as a topic ask — for plain ``search`` intents (the user
-        # typed "berlin wall" directly), the raw query IS the search
-        # query.
-        # Sub-D-2: build the title probe + emit per-rule query-rewrite
-        # telemetry (shared with handle_zim_query's simple branch). The
-        # probe returns None when no archive is in scope; rules 2 and 3
-        # degrade gracefully.
-        title_probe = self._run_query_rewrite_probes(query, zim_file_path)
+        intent, params = self._synthesize_parse_intent(query, zim_file_path)
 
-        try:
-            intent, params, _confidence = self.intent_parser.parse_intent(
-                query,
-                title_probe=title_probe,
-                query_rewrite_enabled=self.zim_operations.config.query_rewrite.enabled,
-            )
-        except Exception as e:  # pragma: no cover — defensive
-            logger.debug("intent_parser failed in synthesize prelude: %s", e)
-            intent, params = "search", {}
-        # Post-v2.0.0 D-G: mirror the empty-topic / empty-search guards
-        # the non-synthesize path fires at simple_tools.py:836-887.
-        # Pre-fix, ``tell me about `` (trailing whitespace, empty topic)
-        # with synthesize=True silently searched the literal verb prefix
-        # "tell me about" via BM25 and returned title-prefix matches
-        # (``Tell_Me_About_Tomorrow``, ``Tell_Me_About_Your_Day_Today``).
-        # Same shape for ``tell me about ?`` (punctuation-only) and
-        # ``tell me about ""`` (D-E quoted-empty on the synthesize path).
-        # Return a structured tool_error envelope — synthesize's native
-        # error shape — rather than the markdown the non-synthesize path
-        # emits, since the synthesize return type is already
-        # ``Union[SynthesizeResponse, ToolErrorPayload]``.
-        if intent == "tell_me_about" and isinstance(params, dict):
-            _topic_check = (params.get("topic") or "").strip()
-            if not _topic_check:
-                return tool_error(
-                    operation="topic_required",
-                    message=(
-                        "`tell me about` needs a non-empty topic to look up. "
-                        "Examples: `tell me about Photosynthesis`, "
-                        "`who is Albert Einstein`, `describe DNA`."
-                    ),
-                )
-        elif intent == "search" and isinstance(params, dict):
-            # Mirror the non-synthesize empty-search check at line ~869:
-            # ``_extract_search`` falls back to the whole query when no
-            # tail follows ``search for``, so ``params["query"]`` for
-            # ``search for `` is the full literal "search for " — which
-            # ``.strip()`` reduces to "search for", non-empty. Use
-            # ``_search_query_tail`` which peels the verb prefix and
-            # returns "" when no terms follow.
-            _search_tail = self._search_query_tail(query)
-            if _search_tail is not None:
-                _search_tail = IntentParser._strip_trailing_politeness(
-                    _search_tail
-                ).strip()
-            if _search_tail is not None and not _search_tail:
-                return tool_error(
-                    operation="search_terms_required",
-                    message=(
-                        "`search for` needs at least one search term. "
-                        'Examples: `search for "quantum mechanics"`, '
-                        "`search for Berlin in namespace C`."
-                    ),
-                )
-        # Post-v2.0.4 D-I: mirror the multi-entity chain rejection the
-        # non-synthesize path fires at handle_zim_query line 960.
-        # Pre-fix, ``tell me about Berlin and Munich and Cologne`` with
-        # synthesize=True silently RAG-searched the literal three-entity
-        # chain and returned Cologne plus unrelated articles — Berlin
-        # and Munich data dropped on the floor. ``_multi_entity_chain_
-        # guidance`` requires a real archive path to probe the title
-        # index (so canonical multi-entity titles like ``Earth, Wind &
-        # Fire`` aren't false-rejected). Resolve best-effort: use the
-        # explicit zim_file_path if given, else pick the first
-        # available archive. When no archive is available skip the
-        # probe — the synthesize pipeline will surface a
-        # no_archives_available error below anyway.
-        multi_probe_path: Optional[str] = zim_file_path
-        if not multi_probe_path:
-            try:
-                _file_entries = self.zim_operations.list_zim_files_data()
-                for _entry in _file_entries:
-                    _ep = _entry.get("path")
-                    if _ep:
-                        multi_probe_path = str(_ep)
-                        break
-            except Exception:
-                multi_probe_path = None
-        if multi_probe_path:
-            multi_entity_warning = self._multi_entity_chain_guidance(
-                intent, params, multi_probe_path
-            )
-            if multi_entity_warning is not None:
-                self._track("multi_entity_chain_rejected")
-                return tool_error(
-                    operation="multi_entity_chain_rejected",
-                    message=multi_entity_warning,
-                )
-        search_query = query
-        if intent == "tell_me_about" and isinstance(params, dict):
-            topic = params.get("topic")
-            if isinstance(topic, str) and topic.strip():
-                search_query = topic.strip()
-        elif intent == "search" and isinstance(params, dict):
-            extracted = params.get("query")
-            if isinstance(extracted, str) and extracted.strip():
-                search_query = extracted.strip()
+        invalid = self._synthesize_validate_parsed_intent(intent, params, query)
+        if invalid is not None:
+            return invalid
 
-        # Resolve the set of archive paths to open.
-        archives_to_open: list[Path] = []
-        if zim_file_path:
-            try:
-                validated = self.zim_operations.path_validator.validate_path(
-                    zim_file_path
-                )
-                validated = self.zim_operations.path_validator.validate_zim_file(
-                    validated
-                )
-                archives_to_open = [validated]
-            except Exception as e:
-                return tool_error(
-                    operation="invalid_path",
-                    message=f"Invalid ZIM file path: {e}",
-                )
-        else:
-            try:
-                file_entries = self.zim_operations.list_zim_files_data()
-                archives_to_open = [
-                    Path(str(entry["path"]))
-                    for entry in file_entries
-                    if entry.get("path")
-                ]
-            except Exception as e:
-                logger.warning("list_zim_files_data failed in synthesize: %s", e)
-                archives_to_open = []
+        multi_entity = self._synthesize_reject_multi_entity_chain(
+            intent, params, zim_file_path
+        )
+        if multi_entity is not None:
+            return multi_entity
 
-        if not archives_to_open:
-            return tool_error(
-                operation="no_archives_available",
-                message=(
-                    "No ZIM archives are available. "
-                    "Specify a zim_file_path or configure allowed_directories."
-                ),
-            )
+        search_query = self._synthesize_build_search_query(query, intent, params)
+
+        resolved = self._synthesize_resolve_archive_paths(zim_file_path)
+        if isinstance(resolved, dict):
+            return resolved
+        archives_to_open = resolved
 
         with ExitStack() as stack:
             archives: list = []
@@ -3641,6 +3490,232 @@ class SimpleToolsHandler(
                 omit_passage_text=compact,
                 strip_links=compact,
             )
+
+    def _synthesize_reject_meta_or_chained(
+        self, query: str
+    ) -> Optional[ToolErrorPayload]:
+        """Fire the meta-only / chained-intent front-door guards, returning
+        a ``tool_error`` envelope to short-circuit or ``None`` to continue.
+        """
+        # Post-v2.0.4 D-I: mirror the meta-only / chained-intent guards
+        # the non-synthesize path fires at handle_zim_query lines 693
+        # and 710. Pre-fix the synthesize early-exit at line 626 skipped
+        # both: ``try again`` BM25-searched and returned Aaliyah's "Try
+        # Again" song; ``tell me about Berlin then list namespaces``
+        # silently RAG-searched the literal verb chain and returned
+        # Namespace + War articles instead of rejecting the chain.
+        # Same shape as the post-v2.0.0 D-G fix — return a structured
+        # tool_error envelope (synthesize's native error shape) with
+        # the full markdown guidance from the simple-mode helpers so
+        # callers get the same actionable recovery info.
+        if self._is_meta_only_query(query):
+            self._track("meta_only_guidance")
+            return tool_error(
+                operation="meta_only_guidance",
+                message=self._meta_query_guidance(),
+            )
+        chained_warning = self._chained_intent_guidance(query)
+        if chained_warning is not None:
+            self._track("chained_intent_rejected")
+            return tool_error(
+                operation="chained_intent_rejected",
+                message=chained_warning,
+            )
+        return None
+
+    def _synthesize_parse_intent(
+        self, query: str, zim_file_path: Optional[str]
+    ) -> tuple[str, Any]:
+        """Build the query-rewrite title probe and parse the query into an
+        ``(intent, params)`` pair, defaulting to ``("search", {})`` when
+        the parser raises.
+        """
+        # D5: distill the user's natural-language query down to the
+        # topic (or actual search terms) BEFORE handing it to BM25.
+        # The intent parser already knows how to pull "Berlin" out of
+        # "tell me about Berlin" / "who is Berlin" / "describe Berlin".
+        # Fall back to the raw query when the parser doesn't classify
+        # it as a topic ask — for plain ``search`` intents (the user
+        # typed "berlin wall" directly), the raw query IS the search
+        # query.
+        # Sub-D-2: build the title probe + emit per-rule query-rewrite
+        # telemetry (shared with handle_zim_query's simple branch). The
+        # probe returns None when no archive is in scope; rules 2 and 3
+        # degrade gracefully.
+        title_probe = self._run_query_rewrite_probes(query, zim_file_path)
+
+        try:
+            intent, params, _confidence = self.intent_parser.parse_intent(
+                query,
+                title_probe=title_probe,
+                query_rewrite_enabled=self.zim_operations.config.query_rewrite.enabled,
+            )
+        except Exception as e:  # pragma: no cover — defensive
+            logger.debug("intent_parser failed in synthesize prelude: %s", e)
+            intent, params = "search", {}
+        return intent, params
+
+    def _synthesize_validate_parsed_intent(
+        self, intent: str, params: Any, query: str
+    ) -> Optional[ToolErrorPayload]:
+        """Empty-topic / empty-search-tail guards mirroring the
+        non-synthesize path; returns a ``tool_error`` envelope or ``None``.
+        """
+        # Post-v2.0.0 D-G: mirror the empty-topic / empty-search guards
+        # the non-synthesize path fires at simple_tools.py:836-887.
+        # Pre-fix, ``tell me about `` (trailing whitespace, empty topic)
+        # with synthesize=True silently searched the literal verb prefix
+        # "tell me about" via BM25 and returned title-prefix matches
+        # (``Tell_Me_About_Tomorrow``, ``Tell_Me_About_Your_Day_Today``).
+        # Same shape for ``tell me about ?`` (punctuation-only) and
+        # ``tell me about ""`` (D-E quoted-empty on the synthesize path).
+        # Return a structured tool_error envelope — synthesize's native
+        # error shape — rather than the markdown the non-synthesize path
+        # emits, since the synthesize return type is already
+        # ``Union[SynthesizeResponse, ToolErrorPayload]``.
+        if intent == "tell_me_about" and isinstance(params, dict):
+            _topic_check = (params.get("topic") or "").strip()
+            if not _topic_check:
+                return tool_error(
+                    operation="topic_required",
+                    message=(
+                        "`tell me about` needs a non-empty topic to look up. "
+                        "Examples: `tell me about Photosynthesis`, "
+                        "`who is Albert Einstein`, `describe DNA`."
+                    ),
+                )
+        elif intent == "search" and isinstance(params, dict):
+            # Mirror the non-synthesize empty-search check at line ~869:
+            # ``_extract_search`` falls back to the whole query when no
+            # tail follows ``search for``, so ``params["query"]`` for
+            # ``search for `` is the full literal "search for " — which
+            # ``.strip()`` reduces to "search for", non-empty. Use
+            # ``_search_query_tail`` which peels the verb prefix and
+            # returns "" when no terms follow.
+            _search_tail = self._search_query_tail(query)
+            if _search_tail is not None:
+                _search_tail = IntentParser._strip_trailing_politeness(
+                    _search_tail
+                ).strip()
+            if _search_tail is not None and not _search_tail:
+                return tool_error(
+                    operation="search_terms_required",
+                    message=(
+                        "`search for` needs at least one search term. "
+                        'Examples: `search for "quantum mechanics"`, '
+                        "`search for Berlin in namespace C`."
+                    ),
+                )
+        return None
+
+    def _synthesize_reject_multi_entity_chain(
+        self, intent: str, params: Any, zim_file_path: Optional[str]
+    ) -> Optional[ToolErrorPayload]:
+        """Resolve a best-effort archive path and run the multi-entity
+        chain guard; returns a ``tool_error`` envelope or ``None``.
+
+        Skips the guard entirely when no archive path is resolvable, so
+        canonical multi-entity titles aren't false-rejected without a
+        title index to probe.
+        """
+        # Post-v2.0.4 D-I: mirror the multi-entity chain rejection the
+        # non-synthesize path fires at handle_zim_query line 960.
+        # Pre-fix, ``tell me about Berlin and Munich and Cologne`` with
+        # synthesize=True silently RAG-searched the literal three-entity
+        # chain and returned Cologne plus unrelated articles — Berlin
+        # and Munich data dropped on the floor. ``_multi_entity_chain_
+        # guidance`` requires a real archive path to probe the title
+        # index (so canonical multi-entity titles like ``Earth, Wind &
+        # Fire`` aren't false-rejected). Resolve best-effort: use the
+        # explicit zim_file_path if given, else pick the first
+        # available archive. When no archive is available skip the
+        # probe — the synthesize pipeline will surface a
+        # no_archives_available error below anyway.
+        multi_probe_path: Optional[str] = zim_file_path
+        if not multi_probe_path:
+            try:
+                _file_entries = self.zim_operations.list_zim_files_data()
+                for _entry in _file_entries:
+                    _ep = _entry.get("path")
+                    if _ep:
+                        multi_probe_path = str(_ep)
+                        break
+            except Exception:
+                multi_probe_path = None
+        if multi_probe_path:
+            multi_entity_warning = self._multi_entity_chain_guidance(
+                intent, params, multi_probe_path
+            )
+            if multi_entity_warning is not None:
+                self._track("multi_entity_chain_rejected")
+                return tool_error(
+                    operation="multi_entity_chain_rejected",
+                    message=multi_entity_warning,
+                )
+        return None
+
+    @staticmethod
+    def _synthesize_build_search_query(query: str, intent: str, params: Any) -> str:
+        """Derive the BM25 search query from the parsed intent: the
+        ``tell_me_about`` topic, the ``search`` extracted query, else the
+        raw query (D5 prefix-strip already applied upstream).
+        """
+        search_query = query
+        if intent == "tell_me_about" and isinstance(params, dict):
+            topic = params.get("topic")
+            if isinstance(topic, str) and topic.strip():
+                search_query = topic.strip()
+        elif intent == "search" and isinstance(params, dict):
+            extracted = params.get("query")
+            if isinstance(extracted, str) and extracted.strip():
+                search_query = extracted.strip()
+        return search_query
+
+    def _synthesize_resolve_archive_paths(
+        self, zim_file_path: Optional[str]
+    ) -> Union[list[Path], ToolErrorPayload]:
+        """Resolve the archive paths to open: validate the single
+        ``zim_file_path`` or discover all available archives. Returns the
+        list of paths, or a ``tool_error`` envelope (``invalid_path`` /
+        ``no_archives_available``).
+        """
+        # Resolve the set of archive paths to open.
+        archives_to_open: list[Path] = []
+        if zim_file_path:
+            try:
+                validated = self.zim_operations.path_validator.validate_path(
+                    zim_file_path
+                )
+                validated = self.zim_operations.path_validator.validate_zim_file(
+                    validated
+                )
+                archives_to_open = [validated]
+            except Exception as e:
+                return tool_error(
+                    operation="invalid_path",
+                    message=f"Invalid ZIM file path: {e}",
+                )
+        else:
+            try:
+                file_entries = self.zim_operations.list_zim_files_data()
+                archives_to_open = [
+                    Path(str(entry["path"]))
+                    for entry in file_entries
+                    if entry.get("path")
+                ]
+            except Exception as e:
+                logger.warning("list_zim_files_data failed in synthesize: %s", e)
+                archives_to_open = []
+
+        if not archives_to_open:
+            return tool_error(
+                operation="no_archives_available",
+                message=(
+                    "No ZIM archives are available. "
+                    "Specify a zim_file_path or configure allowed_directories."
+                ),
+            )
+        return archives_to_open
 
     def _normalize_zim_file_path(self, candidate: str) -> str:
         """Resolve hallucinated ZIM file paths or fall back to auto-select.
