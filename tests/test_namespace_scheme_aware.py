@@ -155,11 +155,13 @@ class TestBrowseNamespaceNewScheme:
         ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
-        """browse_namespace('C') in new-scheme returns every iterable entry."""
+        """browse_namespace('C') returns iterable ARTICLE entries; non-article
+        assets (the favicon image) are filtered out."""
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.browse_namespace(str(zim), "C", limit=50))
         paths = {e["path"] for e in result["results"]}
-        assert {"favicon.png", "main.html"} <= paths
+        assert "main.html" in paths
+        assert "favicon.png" not in paths  # image asset filtered from C browse
 
     def test_browse_F_returns_empty(
         self,
@@ -211,11 +213,13 @@ class TestWalkNamespaceNewScheme:
         ops_for_zim_data: ZimOperations,
         basic_test_zim_files: Dict[str, Optional[Path]],
     ):
-        """walk_namespace('C') must surface every iterable entry."""
+        """walk_namespace('C') surfaces every iterable ARTICLE entry; the
+        favicon image is filtered as a non-article asset."""
         zim = _require(basic_test_zim_files["nons"])
         result = json.loads(ops_for_zim_data.walk_namespace(str(zim), "C", limit=500))
         paths = {e["path"] for e in result["results"]}
-        assert {"favicon.png", "main.html"} <= paths
+        assert "main.html" in paths
+        assert "favicon.png" not in paths  # image asset filtered from C walk
 
     def test_walk_F_empty(
         self,

@@ -84,25 +84,6 @@ _KNOWN_NAMESPACE_LETTERS = frozenset({"C", "M", "W", "X", "A", "I", "-"})
 _NAMESPACE_PROJECTION_MIN_SAMPLES = 3
 
 
-def _is_zimit_infra_path(path: str) -> bool:
-    """True for warc2zim infra assets stored under ``_zim_static/``.
-
-    New-scheme ZIMIT archives keep the replay runtime (``wombat.js``,
-    ``wombatSetup.js``) and the MathJax font set under ``_zim_static/`` in the
-    iterable C namespace, where they pollute ``browse_namespace`` /
-    ``walk_namespace`` page 1. This is intentionally NARROW — unlike the
-    extension-based ``_is_non_article_target`` (which drops the related-article
-    lead-image leak), it must NOT hide legitimately-navigable C entries that
-    merely carry an asset extension (e.g. ``favicon.png`` or a ``.pdf``
-    handout). Match only the ``_zim_static/`` prefix; new-scheme paths carry no
-    namespace prefix, but tolerate a stray leading slash or ``C/`` for safety.
-    """
-    p = path.lstrip("/")
-    if p.startswith("C/"):
-        p = p[2:]
-    return p.startswith("_zim_static/")
-
-
 class _NamespaceMixin:
     """Namespace listing / browsing / walking methods for ZimOperations."""
 
@@ -114,6 +95,9 @@ class _NamespaceMixin:
 
         def _validate_zim_path(self, zim_file_path: str) -> Path:
             """Resolve via ``_ArchiveAccessMixin`` on the concrete coordinator."""
+
+        def _is_non_article_target(self, path: str) -> bool:
+            """Resolve via ``_StructureMixin`` on the concrete coordinator."""
 
     def list_namespaces_data(self, zim_file_path: str) -> "ListNamespacesResponse":
         """Structured variant of ``list_namespaces``.
@@ -967,13 +951,14 @@ class _NamespaceMixin:
         """Build the v2 Phase B browse-namespace inner payload shape.
 
         Both the entry-id-range fast path (C) and the known-path probe (W)
-        report ``archive.entry_count`` as an authoritative total. The C path
-        now skips ``_zim_static`` infra assets, so the navigable count is a
-        handful below ``entry_count`` on warc2zim archives — a negligible
-        overcount we keep reporting as authoritative rather than re-labelling
-        every new-scheme C archive's total as a lower bound. (``done`` is
-        derived from scan-exhaustion, so pagination terminates correctly
-        regardless.)
+        report ``archive.entry_count`` as the total. The C path now skips
+        non-article assets (images / css / js / fonts / media), so the
+        navigable count is at or below ``entry_count`` — we keep reporting
+        ``entry_count`` as the (authoritative) total rather than invert the
+        ``lower_bound`` flag, which means "true count is at least this" and
+        would be backwards here. ``done`` is derived from scan-exhaustion, so
+        pagination still terminates correctly; the only cosmetic effect is that
+        a media-rich archive reaches ``done`` before ``returned == total``.
         """
         return {
             "namespace": namespace,
@@ -1003,11 +988,12 @@ class _NamespaceMixin:
         and slicing it (the legacy approach that triggered "session expired"
         crashes on real Wikipedia archives, D2).
 
-        ZIMIT/warc2zim archives additionally store ``_zim_static`` infra
-        assets (wombat.js + the MathJax font set) under C at low entry-ids, so
-        a plain ``[offset, offset+limit)`` slice surfaced them as page 1. We
-        now SCAN-FILL: ``offset`` is reinterpreted as an entry-id scan
-        position, ``_zim_static`` infra assets are skipped, and we keep
+        New-scheme archives also store non-article assets under C — ZIMIT
+        ``_zim_static`` infra (wombat.js + the MathJax font set), plus images /
+        css / fonts / media — so a plain ``[offset, offset+limit)`` slice
+        surfaced them as page 1. We now SCAN-FILL: ``offset`` is reinterpreted
+        as an entry-id scan position, ``_is_non_article_target`` assets are
+        skipped (``.html`` / ``.htm`` are kept as articles), and we keep
         scanning until the page holds ``limit`` real rows or the range is
         exhausted. ``next_scan_offset`` (the first unscanned id) and
         ``scan_exhausted`` are returned so ``browse_namespace_data`` can encode
@@ -1026,7 +1012,7 @@ class _NamespaceMixin:
                 scan_id += 1
                 continue
             scan_id += 1
-            if _is_zimit_infra_path(path):
+            if self._is_non_article_target(path):
                 continue
             page_paths.append(path)
         payload = self._new_scheme_browse_payload(
@@ -1649,11 +1635,11 @@ class _NamespaceMixin:
 
                 entries: List[Dict[str, Any]] = []
                 entry_id = scan_at
-                # Infra-asset filter applies ONLY to the new-scheme C surface,
-                # where ZIMIT ``_zim_static`` assets (wombat.js + the MathJax
-                # font set) leak into the iterable C namespace. Old-scheme or
-                # non-C walks (e.g. the ``I`` image namespace) must still
-                # surface their assets, so they are never filtered.
+                # Non-article asset filter applies ONLY to the new-scheme C
+                # surface, where every iterable entry (articles AND ZIMIT
+                # ``_zim_static`` infra, images, css, fonts, media) lives under
+                # C. Old-scheme or non-C walks (e.g. the ``I`` image namespace)
+                # must still surface their assets, so they are never filtered.
                 filter_assets = has_new_scheme and namespace == "C"
                 while entry_id < archive_entry_count and len(entries) < limit:
                     try:
@@ -1664,7 +1650,7 @@ class _NamespaceMixin:
                                 path, has_new_scheme=has_new_scheme
                             )
                             == namespace
-                        ) and not (filter_assets and _is_zimit_infra_path(path)):
+                        ) and not (filter_assets and self._is_non_article_target(path)):
                             entries.append(
                                 {
                                     "path": path,

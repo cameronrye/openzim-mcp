@@ -1,17 +1,16 @@
-"""Deferred defect: browse/walk must filter ZIMIT ``_zim_static`` infra assets.
+"""Deferred defect: browse/walk must filter non-article assets out of C.
 
 New-scheme ZIMIT/warc2zim archives store ``_zim_static/`` assets (wombat.js +
-the MathJax font set) under the C namespace at low entry-ids, so they
-dominated page 1 of both ``browse_namespace`` and ``walk_namespace``. Both
-surfaces now skip ``_zim_static/`` infra paths via ``_is_zimit_infra_path``
-(a NARROW prefix match — legit C entries with asset extensions like
-``favicon.png`` are kept). Walk already scan-filled with a scan-position
-cursor, so it only needed the
-predicate. Browse additionally had to switch from a fixed entry-id slice to a
-scan-fill loop, so a filtered page still returns ``limit`` real rows and its
-resume cursor encodes the next unscanned entry-id (a scan position) rather
-than ``offset + returned_count`` — which used to drift once filtering made
-matched-rows < ids-scanned.
+the MathJax font set) — and, more generally, images / css / fonts / media —
+under the C namespace at low entry-ids, so they dominated page 1 of both
+``browse_namespace`` and ``walk_namespace``. Both surfaces now skip non-article
+assets via ``_is_non_article_target`` (``.html`` / ``.htm`` are kept as
+articles). Walk already scan-filled with a scan-position cursor, so it only
+needed the predicate. Browse additionally had to switch from a fixed entry-id
+slice to a scan-fill loop, so a filtered page still returns ``limit`` real rows
+and its resume cursor encodes the next unscanned entry-id (a scan position)
+rather than ``offset + returned_count`` — which used to drift once filtering
+made matched-rows < ids-scanned.
 """
 
 from __future__ import annotations
@@ -133,22 +132,24 @@ def test_browse_namespace_skips_zim_static_assets(tmp_path, monkeypatch) -> None
     assert resp["page_info"].get("total_is_lower_bound") is None
 
 
-def test_browse_keeps_legit_asset_extension_entries(tmp_path, monkeypatch) -> None:
-    """Only ``_zim_static/`` infra is dropped — a legit C entry with an asset
-    extension (favicon.png, a .pdf handout) stays browsable. This would FAIL
-    under the broad extension-based ``_is_non_article_target`` predicate.
+def test_browse_hides_all_non_article_assets(tmp_path, monkeypatch) -> None:
+    """Broad scope: EVERY non-article asset (js/png/pdf/font/css/media) is
+    dropped from C browse, not only ``_zim_static/``. Article-like entries —
+    including ``.html`` / ``.htm``, which the predicate treats as articles —
+    survive.
     """
     entries = [
         "_zim_static/wombat.js",
         "favicon.png",
         "Apple",
         "handouts/diabetes.pdf",
+        "About.html",
     ]
     ops = _ops(tmp_path, monkeypatch, entries=entries)
     resp = ops.browse_namespace_data(str(tmp_path / "x.zim"), "C", limit=10)
     paths = [r["path"] for r in resp["results"]]
-    assert paths == ["favicon.png", "Apple", "handouts/diabetes.pdf"]
-    assert not any("_zim_static" in p for p in paths)
+    assert paths == ["Apple", "About.html"]
+    assert not any(p.endswith((".js", ".png", ".pdf")) for p in paths)
 
 
 def test_browse_scan_fills_full_page(tmp_path, monkeypatch) -> None:
