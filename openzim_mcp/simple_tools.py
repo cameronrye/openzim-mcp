@@ -2614,7 +2614,11 @@ class SimpleToolsHandler(
             top_path = promoted["path"]
             top_title = promoted["title"]
         return _TellMeAboutSearch(
-            results, top_path, top_title, search_limit, max_content_length
+            cast(List[Dict[str, Any]], results),
+            top_path,
+            top_title,
+            search_limit,
+            max_content_length,
         )
 
     def _collect_tell_me_about_strong_matches(
