@@ -89,6 +89,39 @@ class _HandlerResult:
     suggestions: Optional[List[Dict[str, str]]] = field(default=None)
 
 
+@dataclass(frozen=True)
+class _TellMeAboutSearch:
+    """Continue-state from ``_handle_tell_me_about``'s search/recover phase.
+
+    Carries the search results and the resolved top hit (plus the bounded
+    ``search_limit`` / ``max_content_length`` the later phases reuse) when
+    the topic produced usable results. The phase returns a plain ``str``
+    instead when it short-circuits to a rendered no-results response.
+    """
+
+    results: List[Dict[str, Any]]
+    top_path: str
+    top_title: str
+    search_limit: int
+    max_content_length: int
+
+
+@dataclass(frozen=True)
+class _TellMeAboutPick:
+    """Continue-state from ``_handle_tell_me_about``'s canonical auto-pick.
+
+    Carries the resolved article path/title and the disambig-twin /
+    related-extends footer hints. The phase returns a plain ``str`` instead
+    when the topic is genuinely ambiguous and a disambiguation page is
+    rendered.
+    """
+
+    top_path: str
+    top_title: str
+    disambig_twin_path: Optional[str]
+    related_extends_paths: List[str]
+
+
 class SimpleToolsHandler(
     _ArticleBodyMixin,
     _ChainMixin,
@@ -254,6 +287,146 @@ class SimpleToolsHandler(
         else:
             title_probe = None
         return title_probe
+
+    def _normalize_and_validate_query_params(
+        self, query: str, intent: str, params: Any
+    ) -> Optional[str]:
+        """Normalize freshly-parsed query ``params`` and validate the
+        extracted topic / search tail, mutating ``params`` in place.
+
+        Runs immediately after ``parse_intent`` and before intent
+        dispatch: stashes the pre-rewrite query, applies the
+        defence-in-depth trailing-politeness strip to the user-content
+        fields, and validates the ``tell_me_about`` topic / ``search``
+        tail. Returns a ready-to-emit guidance string when validation
+        rejects (the caller returns it unchanged), else ``None`` to
+        continue. ``params`` is mutated in place, so every downstream
+        consumer sees the cleaned values.
+        """
+        # Post-b1 P1-D2: stash the pre-rewrite, original-case query
+        # in params so user-facing guidance (multi-entity chain
+        # rejection, soft-connector footer) can echo entities back
+        # in the caller's casing instead of Rule 1's lowercased
+        # form. The leading underscore marks this as a wiring-layer
+        # hint — consumers should treat its absence as the legacy
+        # behaviour (use the lowercase value as-is).
+        if isinstance(params, dict):
+            params.setdefault("_pre_rewrite_query", query)
+        # Post-a21 P1-D1: defence-in-depth strip of trailing
+        # politeness on user-supplied content fields in ``params``.
+        # Idempotent when ``parse_intent`` already cleaned them
+        # (the post-a20 PD2-1 strip lives there), and a belt-and-
+        # suspenders catch for any future regression that returns
+        # ``params`` with politeness still attached (the live a21
+        # sweep observed ``Found N matches for "biology please"``
+        # despite the source-side ``parse_intent`` strip working
+        # correctly under direct unit test — the most likely cause
+        # was an in-process module cache on the live server that
+        # loaded only part of PR #152, but the user-visible defect
+        # is the same shape regardless of root cause). Idempotent
+        # by construction — the strip's regex is end-anchored and
+        # leaves clean content untouched.
+        if isinstance(params, dict):
+            # Post-a22 P1-D6: widen the defence-in-depth strip
+            # to ``section_name`` (carries user-content for
+            # ``section <X> of <Y>`` queries) — every other field
+            # set by an extractor that captures with a greedy tail
+            # is at risk if ``parse_intent``'s universal strip ever
+            # fails (in-process module cache, future regression).
+            # ``entries`` is a list of strings handled separately
+            # below because the universal scalar-string strip can't
+            # iterate it.
+            for _key in (
+                "query",
+                "topic",
+                "title",
+                "entry_path",
+                "partial_query",
+                "section_name",
+            ):
+                _v = params.get(_key)
+                if isinstance(_v, str) and _v:
+                    _v_clean = IntentParser._strip_trailing_politeness(_v).strip()
+                    if _v_clean != _v:
+                        params[_key] = _v_clean
+            # ``entries`` is a list of entry-path strings (from
+            # batched ``get N entries`` parses). Strip per-element
+            # so a trailing politeness on the last entry doesn't
+            # become part of the path.
+            _entries = params.get("entries")
+            if isinstance(_entries, list) and _entries:
+                _cleaned_entries: List[Any] = []
+                _changed = False
+                for _entry in _entries:
+                    if isinstance(_entry, str) and _entry:
+                        _entry_clean = IntentParser._strip_trailing_politeness(
+                            _entry
+                        ).strip()
+                        if _entry_clean != _entry:
+                            _changed = True
+                        _cleaned_entries.append(_entry_clean)
+                    else:
+                        _cleaned_entries.append(_entry)
+                if _changed:
+                    params["entries"] = _cleaned_entries
+        # A11 B2: ``tell me about <empty>`` (trailing-space input,
+        # punctuation-only topic) used to fall through to a topic
+        # of ``"tell me about"`` and disambiguate to article titles
+        # literally named "Tell Me About Tomorrow". Validate the
+        # extracted topic before the handler can search for it.
+        if intent == "tell_me_about" and isinstance(params, dict):
+            topic = (params.get("topic") or "").strip()
+            if not topic:
+                return (
+                    "**Topic Required**\n\n"
+                    "**Issue**: `tell me about` needs a non-empty "
+                    "topic to look up.\n\n"
+                    "**Examples**:\n"
+                    "- `tell me about Photosynthesis`\n"
+                    "- `who is Albert Einstein`\n"
+                    "- `describe DNA`\n"
+                    "<!-- intent=topic_required cert=1.00 -->"
+                )
+        # A11 B4: ``search for `` (trailing space, no terms) used
+        # to fall through to searching for the literal word "for".
+        # Validate the extracted query before dispatch.
+        if intent == "search" and isinstance(params, dict):
+            search_q = (params.get("query") or "").strip()
+            # If the extractor copied the full query verbatim because
+            # nothing followed "search for", the result equals the
+            # original query — accept that case only when there are
+            # ≥1 non-stopword content tokens. Otherwise reject.
+            #
+            # Post-a21 P1-D8: peel trailing politeness from the
+            # tail before the empty-check. Pre-fix, ``search for
+            # please`` (and ``search for ta`` after the P1-D6
+            # extension) returned tail=``"please"`` (non-empty),
+            # the guard didn't fire, ``_extract_search`` captured
+            # ``"for"`` as the search term and the user got a
+            # 200k-hit response dominated by the literal verb
+            # word. The strip is idempotent — when the tail
+            # carries real content the politeness substring is
+            # never trailing.
+            tail = self._search_query_tail(query)
+            if tail is not None:
+                tail = IntentParser._strip_trailing_politeness(tail).strip()
+            if tail is not None and not tail:
+                return (
+                    "**Search Terms Required**\n\n"
+                    "**Issue**: `search for` needs at least one "
+                    "search term.\n\n"
+                    "**Examples**:\n"
+                    '- `search for "quantum mechanics"`\n'
+                    "- `search for Berlin in namespace C`\n"
+                    "<!-- intent=search_terms_required cert=1.00 -->"
+                )
+            # Replace the params copy with the cleaned tail so the
+            # handler doesn't run on the verb-prefixed raw query.
+            if tail:
+                params["query"] = tail
+            else:
+                params["query"] = search_q
+        return None
 
     def handle_zim_query(
         self,
@@ -437,129 +610,13 @@ class SimpleToolsHandler(
                 title_probe=title_probe,
                 query_rewrite_enabled=self.zim_operations.config.query_rewrite.enabled,
             )
-            # Post-b1 P1-D2: stash the pre-rewrite, original-case query
-            # in params so user-facing guidance (multi-entity chain
-            # rejection, soft-connector footer) can echo entities back
-            # in the caller's casing instead of Rule 1's lowercased
-            # form. The leading underscore marks this as a wiring-layer
-            # hint — consumers should treat its absence as the legacy
-            # behaviour (use the lowercase value as-is).
-            if isinstance(params, dict):
-                params.setdefault("_pre_rewrite_query", query)
-            # Post-a21 P1-D1: defence-in-depth strip of trailing
-            # politeness on user-supplied content fields in ``params``.
-            # Idempotent when ``parse_intent`` already cleaned them
-            # (the post-a20 PD2-1 strip lives there), and a belt-and-
-            # suspenders catch for any future regression that returns
-            # ``params`` with politeness still attached (the live a21
-            # sweep observed ``Found N matches for "biology please"``
-            # despite the source-side ``parse_intent`` strip working
-            # correctly under direct unit test — the most likely cause
-            # was an in-process module cache on the live server that
-            # loaded only part of PR #152, but the user-visible defect
-            # is the same shape regardless of root cause). Idempotent
-            # by construction — the strip's regex is end-anchored and
-            # leaves clean content untouched.
-            if isinstance(params, dict):
-                # Post-a22 P1-D6: widen the defence-in-depth strip
-                # to ``section_name`` (carries user-content for
-                # ``section <X> of <Y>`` queries) — every other field
-                # set by an extractor that captures with a greedy tail
-                # is at risk if ``parse_intent``'s universal strip ever
-                # fails (in-process module cache, future regression).
-                # ``entries`` is a list of strings handled separately
-                # below because the universal scalar-string strip can't
-                # iterate it.
-                for _key in (
-                    "query",
-                    "topic",
-                    "title",
-                    "entry_path",
-                    "partial_query",
-                    "section_name",
-                ):
-                    _v = params.get(_key)
-                    if isinstance(_v, str) and _v:
-                        _v_clean = IntentParser._strip_trailing_politeness(_v).strip()
-                        if _v_clean != _v:
-                            params[_key] = _v_clean
-                # ``entries`` is a list of entry-path strings (from
-                # batched ``get N entries`` parses). Strip per-element
-                # so a trailing politeness on the last entry doesn't
-                # become part of the path.
-                _entries = params.get("entries")
-                if isinstance(_entries, list) and _entries:
-                    _cleaned_entries: List[Any] = []
-                    _changed = False
-                    for _entry in _entries:
-                        if isinstance(_entry, str) and _entry:
-                            _entry_clean = IntentParser._strip_trailing_politeness(
-                                _entry
-                            ).strip()
-                            if _entry_clean != _entry:
-                                _changed = True
-                            _cleaned_entries.append(_entry_clean)
-                        else:
-                            _cleaned_entries.append(_entry)
-                    if _changed:
-                        params["entries"] = _cleaned_entries
-            # A11 B2: ``tell me about <empty>`` (trailing-space input,
-            # punctuation-only topic) used to fall through to a topic
-            # of ``"tell me about"`` and disambiguate to article titles
-            # literally named "Tell Me About Tomorrow". Validate the
-            # extracted topic before the handler can search for it.
-            if intent == "tell_me_about" and isinstance(params, dict):
-                topic = (params.get("topic") or "").strip()
-                if not topic:
-                    return (
-                        "**Topic Required**\n\n"
-                        "**Issue**: `tell me about` needs a non-empty "
-                        "topic to look up.\n\n"
-                        "**Examples**:\n"
-                        "- `tell me about Photosynthesis`\n"
-                        "- `who is Albert Einstein`\n"
-                        "- `describe DNA`\n"
-                        "<!-- intent=topic_required cert=1.00 -->"
-                    )
-            # A11 B4: ``search for `` (trailing space, no terms) used
-            # to fall through to searching for the literal word "for".
-            # Validate the extracted query before dispatch.
-            if intent == "search" and isinstance(params, dict):
-                search_q = (params.get("query") or "").strip()
-                # If the extractor copied the full query verbatim because
-                # nothing followed "search for", the result equals the
-                # original query — accept that case only when there are
-                # ≥1 non-stopword content tokens. Otherwise reject.
-                #
-                # Post-a21 P1-D8: peel trailing politeness from the
-                # tail before the empty-check. Pre-fix, ``search for
-                # please`` (and ``search for ta`` after the P1-D6
-                # extension) returned tail=``"please"`` (non-empty),
-                # the guard didn't fire, ``_extract_search`` captured
-                # ``"for"`` as the search term and the user got a
-                # 200k-hit response dominated by the literal verb
-                # word. The strip is idempotent — when the tail
-                # carries real content the politeness substring is
-                # never trailing.
-                tail = self._search_query_tail(query)
-                if tail is not None:
-                    tail = IntentParser._strip_trailing_politeness(tail).strip()
-                if tail is not None and not tail:
-                    return (
-                        "**Search Terms Required**\n\n"
-                        "**Issue**: `search for` needs at least one "
-                        "search term.\n\n"
-                        "**Examples**:\n"
-                        '- `search for "quantum mechanics"`\n'
-                        "- `search for Berlin in namespace C`\n"
-                        "<!-- intent=search_terms_required cert=1.00 -->"
-                    )
-                # Replace the params copy with the cleaned tail so the
-                # handler doesn't run on the verb-prefixed raw query.
-                if tail:
-                    params["query"] = tail
-                else:
-                    params["query"] = search_q
+            # Normalize the freshly-parsed params (pre-rewrite stash +
+            # defence-in-depth politeness strip) and validate the
+            # extracted topic / search tail. Mutates ``params`` in place
+            # and returns a guidance payload when validation rejects.
+            early = self._normalize_and_validate_query_params(query, intent, params)
+            if early is not None:
+                return early
             logger.info(
                 f"Parsed intent: {intent}, params: {params}, "
                 f"confidence: {confidence:.2f}"
@@ -2266,6 +2323,99 @@ class SimpleToolsHandler(
         topic-lookup case ("who is X" today is two tool calls: search,
         then get_article).
         """
+        topic = self._resolve_tell_me_about_topic(query, zim_file_path, params)
+        namespace_redirect = self._tell_me_about_namespace_redirect(topic)
+        if namespace_redirect is not None:
+            return namespace_redirect
+        # A16 post-a16 D9: callers often paste a ZIM path form
+        # (``Sun_(disambiguation)``, ``Apollo_11``) into ``tell me about``,
+        # but the title index is whitespace-tokenised and the search
+        # ranker scores ``Sun_(disambiguation)`` as a single literal
+        # token (zero hits) rather than ``Sun (disambiguation)``
+        # (matches via title-index). Normalise underscores to spaces
+        # so pasted paths resolve the same way the equivalent title
+        # form does. Real article titles do not contain underscores
+        # on Wikipedia, so the normalisation is lossless.
+        if "_" in topic:
+            topic = topic.replace("_", " ").strip()
+        explicit_disambig = self._try_explicit_disambig_page(
+            topic, zim_file_path, options
+        )
+        if explicit_disambig is not None:
+            return explicit_disambig
+        searched = self._search_or_recover_tell_me_about(topic, zim_file_path, options)
+        if isinstance(searched, str):
+            return searched
+        results = searched.results
+        top_path = searched.top_path
+        top_title = searched.top_title
+        search_limit = searched.search_limit
+        max_content_length = searched.max_content_length
+
+        strong_matches = self._collect_tell_me_about_strong_matches(
+            topic, zim_file_path, results, top_title
+        )
+        picked = self._auto_pick_or_render_disambiguation(
+            topic, zim_file_path, strong_matches, top_path, top_title, params
+        )
+        if isinstance(picked, str):
+            return picked
+        top_path = picked.top_path
+        top_title = picked.top_title
+        disambig_twin_path = picked.disambig_twin_path
+        related_extends_paths = picked.related_extends_paths
+
+        # Subject-attribute decomposition (2026-05-18): when the
+        # original topic carried a subject category hint
+        # (``musician``, ``actor``, ``notable people``, ...) and the
+        # resolved entity's article has a section that maps to that
+        # hint, return the section body instead of the (often empty)
+        # lead. Motivating case: ``famous musician from big rapids
+        # michigan`` from the 2026-05-18 live transcript.
+        # Post-b1 P1-D2: thread the original-case query through so the
+        # nested soft-connector footer can recase its entity references.
+        original_query_for_subject = (
+            params.get("_pre_rewrite_query") if isinstance(params, dict) else None
+        )
+        subject_section_result = self._maybe_render_subject_section(
+            zim_file_path=zim_file_path,
+            topic=topic,
+            top_path=top_path,
+            top_title=top_title,
+            options=options,
+            original_query=(
+                original_query_for_subject
+                if isinstance(original_query_for_subject, str)
+                else None
+            ),
+        )
+        if subject_section_result is not None:
+            return subject_section_result
+
+        return self._render_tell_me_about_article(
+            topic,
+            zim_file_path,
+            top_path,
+            top_title,
+            max_content_length,
+            search_limit,
+            options,
+            params,
+            disambig_twin_path,
+            related_extends_paths,
+        )
+
+    def _resolve_tell_me_about_topic(
+        self, query: str, zim_file_path: str, params: Dict[str, Any]
+    ) -> str:
+        """Resolve the lookup topic for ``tell me about`` from ``params``
+        / ``query``.
+
+        Applies the Sub-D-2 decomposition-hint entity preference and the
+        post-b2 D3 possessive-shape retry; mutates
+        ``params['decomposition_hint']`` when the possessive retry
+        recovers a structured hint.
+        """
         topic = (params.get("topic") or query).strip()
         if not topic:
             topic = query
@@ -2320,6 +2470,16 @@ class SimpleToolsHandler(
                     # Surface the hint so downstream consumers see
                     # the same shape Rule 4 would have produced.
                     params["decomposition_hint"] = _retry_hint
+        return topic
+
+    def _tell_me_about_namespace_redirect(self, topic: str) -> Optional[str]:
+        """Redirect a ``X/Title`` namespace-path topic to the right tool
+        instead of running a fuzzy title search on it.
+
+        Returns the redirect guidance when ``topic`` looks like a ZIM
+        namespace path (ascii-alpha letter + ``/`` + ≥3-char suffix), else
+        ``None``.
+        """
         # A16 post-a16 D3: a topic like ``M/Title`` or ``c/Berlin`` is a
         # ZIM namespace path the caller pasted into ``tell me about``.
         # The downstream search either silently strips the prefix (libzim
@@ -2356,17 +2516,17 @@ class SimpleToolsHandler(
                 "title search on the bare name\n"
                 "<!-- intent=namespace_path_redirect cert=0.95 -->"
             )
-        # A16 post-a16 D9: callers often paste a ZIM path form
-        # (``Sun_(disambiguation)``, ``Apollo_11``) into ``tell me about``,
-        # but the title index is whitespace-tokenised and the search
-        # ranker scores ``Sun_(disambiguation)`` as a single literal
-        # token (zero hits) rather than ``Sun (disambiguation)``
-        # (matches via title-index). Normalise underscores to spaces
-        # so pasted paths resolve the same way the equivalent title
-        # form does. Real article titles do not contain underscores
-        # on Wikipedia, so the normalisation is lossless.
-        if "_" in topic:
-            topic = topic.replace("_", " ").strip()
+        return None
+
+    def _try_explicit_disambig_page(
+        self, topic: str, zim_file_path: str, options: Dict[str, Any]
+    ) -> Optional[str]:
+        """Resolve an explicit ``<X> (disambiguation)`` topic directly via
+        the title index.
+
+        Returns the rendered article when the probe resolves and the body
+        fetches, else ``None`` (the caller falls through to fuzzy search).
+        """
         # A16 post-a16 D8: when the topic explicitly names a disambig
         # page (``Berlin (disambiguation)``, ``Apollo 11
         # (disambiguation)``), the fuzzy title-search ranks unrelated
@@ -2398,6 +2558,18 @@ class SimpleToolsHandler(
                 # Fall through to fuzzy search if the title-index probe
                 # missed — the disambig auto-pick downstream will still
                 # try its best.
+        return None
+
+    def _search_or_recover_tell_me_about(
+        self, topic: str, zim_file_path: str, options: Dict[str, Any]
+    ) -> Union[str, _TellMeAboutSearch]:
+        """Run the bounded structured search for ``topic`` and recover the
+        top hit, or short-circuit to a rendered no-results response.
+
+        Returns a terminal rendered-search ``str`` (structured-search
+        failure, empty results, or promotion miss) or a
+        :class:`_TellMeAboutSearch` continue-state for the later phases.
+        """
         # Cap the search at 3 results: the auto-fetch path either inlines
         # the top article (in which case we don't render the others — see
         # below) or falls through to a plain rendered search, where 3 hits
@@ -2441,7 +2613,25 @@ class SimpleToolsHandler(
                 )
             top_path = promoted["path"]
             top_title = promoted["title"]
+        return _TellMeAboutSearch(
+            cast(List[Dict[str, Any]], results),
+            top_path,
+            top_title,
+            search_limit,
+            max_content_length,
+        )
 
+    def _collect_tell_me_about_strong_matches(
+        self,
+        topic: str,
+        zim_file_path: str,
+        results: List[Dict[str, Any]],
+        top_title: str,
+    ) -> List[Dict[str, Any]]:
+        """Collect the strong-title-match rows and, when the disambig /
+        lone-twin / lone-extends-topic gate fires, prepend the title-index
+        canonical row so the canonical is always considered.
+        """
         # Disambiguation: if MULTIPLE search hits strong-match the topic,
         # there's a real ambiguity (Mercury → planet/element/mythology;
         # Java → island/programming; Apollo → spacecraft/program/god).
@@ -2545,6 +2735,25 @@ class SimpleToolsHandler(
                     # the type-checker since the synthetic row carries
                     # only the keys downstream consumers actually read.
                     strong_matches = cast(Any, [canonical_row, *strong_matches])
+        return strong_matches
+
+    def _auto_pick_or_render_disambiguation(
+        self,
+        topic: str,
+        zim_file_path: str,
+        strong_matches: List[Dict[str, Any]],
+        top_path: str,
+        top_title: str,
+        params: Dict[str, Any],
+    ) -> Union[str, _TellMeAboutPick]:
+        """Auto-pick the canonical article over its disambig twin /
+        extends-topic siblings, or render the disambiguation page when the
+        topic is genuinely ambiguous.
+
+        Returns the rendered disambiguation ``str`` when ≥2 strong matches
+        remain with no canonical pick, else a :class:`_TellMeAboutPick`
+        continue-state with the resolved path/title and footer-hint paths.
+        """
         # A11 C1 + Opp1: when the disambig set contains exactly the
         # ``Foo`` article AND its ``Foo (disambiguation)`` twin, the
         # caller almost always wants the canonical ``Foo``. Drop the
@@ -2633,34 +2842,30 @@ class SimpleToolsHandler(
                     disambig_original if isinstance(disambig_original, str) else None
                 ),
             )
-
-        # Subject-attribute decomposition (2026-05-18): when the
-        # original topic carried a subject category hint
-        # (``musician``, ``actor``, ``notable people``, ...) and the
-        # resolved entity's article has a section that maps to that
-        # hint, return the section body instead of the (often empty)
-        # lead. Motivating case: ``famous musician from big rapids
-        # michigan`` from the 2026-05-18 live transcript.
-        # Post-b1 P1-D2: thread the original-case query through so the
-        # nested soft-connector footer can recase its entity references.
-        original_query_for_subject = (
-            params.get("_pre_rewrite_query") if isinstance(params, dict) else None
+        return _TellMeAboutPick(
+            top_path, top_title, disambig_twin_path, related_extends_paths
         )
-        subject_section_result = self._maybe_render_subject_section(
-            zim_file_path=zim_file_path,
-            topic=topic,
-            top_path=top_path,
-            top_title=top_title,
-            options=options,
-            original_query=(
-                original_query_for_subject
-                if isinstance(original_query_for_subject, str)
-                else None
-            ),
-        )
-        if subject_section_result is not None:
-            return subject_section_result
 
+    def _render_tell_me_about_article(
+        self,
+        topic: str,
+        zim_file_path: str,
+        top_path: str,
+        top_title: str,
+        max_content_length: int,
+        search_limit: int,
+        options: Dict[str, Any],
+        params: Dict[str, Any],
+        disambig_twin_path: Optional[str],
+        related_extends_paths: List[str],
+    ) -> str:
+        """Fetch the resolved article body and assemble the final response
+        with the disambig-twin / related-extends / soft-connector footers.
+
+        Degrades to plain search when the body can't be fetched, or when
+        the body is itself a disambiguation page for a multi-content-token
+        topic (the caller wanted a specific article).
+        """
         article_body = self._fetch_topic_article_body(
             zim_file_path, top_path, max_content_length, options
         )
@@ -3217,179 +3422,28 @@ class SimpleToolsHandler(
         """
         from openzim_mcp.synthesize import synthesize_query
 
-        # Post-v2.0.4 D-I: mirror the meta-only / chained-intent guards
-        # the non-synthesize path fires at handle_zim_query lines 693
-        # and 710. Pre-fix the synthesize early-exit at line 626 skipped
-        # both: ``try again`` BM25-searched and returned Aaliyah's "Try
-        # Again" song; ``tell me about Berlin then list namespaces``
-        # silently RAG-searched the literal verb chain and returned
-        # Namespace + War articles instead of rejecting the chain.
-        # Same shape as the post-v2.0.0 D-G fix — return a structured
-        # tool_error envelope (synthesize's native error shape) with
-        # the full markdown guidance from the simple-mode helpers so
-        # callers get the same actionable recovery info.
-        if self._is_meta_only_query(query):
-            self._track("meta_only_guidance")
-            return tool_error(
-                operation="meta_only_guidance",
-                message=self._meta_query_guidance(),
-            )
-        chained_warning = self._chained_intent_guidance(query)
-        if chained_warning is not None:
-            self._track("chained_intent_rejected")
-            return tool_error(
-                operation="chained_intent_rejected",
-                message=chained_warning,
-            )
+        early = self._synthesize_reject_meta_or_chained(query)
+        if early is not None:
+            return early
 
-        # D5: distill the user's natural-language query down to the
-        # topic (or actual search terms) BEFORE handing it to BM25.
-        # The intent parser already knows how to pull "Berlin" out of
-        # "tell me about Berlin" / "who is Berlin" / "describe Berlin".
-        # Fall back to the raw query when the parser doesn't classify
-        # it as a topic ask — for plain ``search`` intents (the user
-        # typed "berlin wall" directly), the raw query IS the search
-        # query.
-        # Sub-D-2: build the title probe + emit per-rule query-rewrite
-        # telemetry (shared with handle_zim_query's simple branch). The
-        # probe returns None when no archive is in scope; rules 2 and 3
-        # degrade gracefully.
-        title_probe = self._run_query_rewrite_probes(query, zim_file_path)
+        intent, params = self._synthesize_parse_intent(query, zim_file_path)
 
-        try:
-            intent, params, _confidence = self.intent_parser.parse_intent(
-                query,
-                title_probe=title_probe,
-                query_rewrite_enabled=self.zim_operations.config.query_rewrite.enabled,
-            )
-        except Exception as e:  # pragma: no cover — defensive
-            logger.debug("intent_parser failed in synthesize prelude: %s", e)
-            intent, params = "search", {}
-        # Post-v2.0.0 D-G: mirror the empty-topic / empty-search guards
-        # the non-synthesize path fires at simple_tools.py:836-887.
-        # Pre-fix, ``tell me about `` (trailing whitespace, empty topic)
-        # with synthesize=True silently searched the literal verb prefix
-        # "tell me about" via BM25 and returned title-prefix matches
-        # (``Tell_Me_About_Tomorrow``, ``Tell_Me_About_Your_Day_Today``).
-        # Same shape for ``tell me about ?`` (punctuation-only) and
-        # ``tell me about ""`` (D-E quoted-empty on the synthesize path).
-        # Return a structured tool_error envelope — synthesize's native
-        # error shape — rather than the markdown the non-synthesize path
-        # emits, since the synthesize return type is already
-        # ``Union[SynthesizeResponse, ToolErrorPayload]``.
-        if intent == "tell_me_about" and isinstance(params, dict):
-            _topic_check = (params.get("topic") or "").strip()
-            if not _topic_check:
-                return tool_error(
-                    operation="topic_required",
-                    message=(
-                        "`tell me about` needs a non-empty topic to look up. "
-                        "Examples: `tell me about Photosynthesis`, "
-                        "`who is Albert Einstein`, `describe DNA`."
-                    ),
-                )
-        elif intent == "search" and isinstance(params, dict):
-            # Mirror the non-synthesize empty-search check at line ~869:
-            # ``_extract_search`` falls back to the whole query when no
-            # tail follows ``search for``, so ``params["query"]`` for
-            # ``search for `` is the full literal "search for " — which
-            # ``.strip()`` reduces to "search for", non-empty. Use
-            # ``_search_query_tail`` which peels the verb prefix and
-            # returns "" when no terms follow.
-            _search_tail = self._search_query_tail(query)
-            if _search_tail is not None:
-                _search_tail = IntentParser._strip_trailing_politeness(
-                    _search_tail
-                ).strip()
-            if _search_tail is not None and not _search_tail:
-                return tool_error(
-                    operation="search_terms_required",
-                    message=(
-                        "`search for` needs at least one search term. "
-                        'Examples: `search for "quantum mechanics"`, '
-                        "`search for Berlin in namespace C`."
-                    ),
-                )
-        # Post-v2.0.4 D-I: mirror the multi-entity chain rejection the
-        # non-synthesize path fires at handle_zim_query line 960.
-        # Pre-fix, ``tell me about Berlin and Munich and Cologne`` with
-        # synthesize=True silently RAG-searched the literal three-entity
-        # chain and returned Cologne plus unrelated articles — Berlin
-        # and Munich data dropped on the floor. ``_multi_entity_chain_
-        # guidance`` requires a real archive path to probe the title
-        # index (so canonical multi-entity titles like ``Earth, Wind &
-        # Fire`` aren't false-rejected). Resolve best-effort: use the
-        # explicit zim_file_path if given, else pick the first
-        # available archive. When no archive is available skip the
-        # probe — the synthesize pipeline will surface a
-        # no_archives_available error below anyway.
-        multi_probe_path: Optional[str] = zim_file_path
-        if not multi_probe_path:
-            try:
-                _file_entries = self.zim_operations.list_zim_files_data()
-                for _entry in _file_entries:
-                    _ep = _entry.get("path")
-                    if _ep:
-                        multi_probe_path = str(_ep)
-                        break
-            except Exception:
-                multi_probe_path = None
-        if multi_probe_path:
-            multi_entity_warning = self._multi_entity_chain_guidance(
-                intent, params, multi_probe_path
-            )
-            if multi_entity_warning is not None:
-                self._track("multi_entity_chain_rejected")
-                return tool_error(
-                    operation="multi_entity_chain_rejected",
-                    message=multi_entity_warning,
-                )
-        search_query = query
-        if intent == "tell_me_about" and isinstance(params, dict):
-            topic = params.get("topic")
-            if isinstance(topic, str) and topic.strip():
-                search_query = topic.strip()
-        elif intent == "search" and isinstance(params, dict):
-            extracted = params.get("query")
-            if isinstance(extracted, str) and extracted.strip():
-                search_query = extracted.strip()
+        invalid = self._synthesize_validate_parsed_intent(intent, params, query)
+        if invalid is not None:
+            return invalid
 
-        # Resolve the set of archive paths to open.
-        archives_to_open: list[Path] = []
-        if zim_file_path:
-            try:
-                validated = self.zim_operations.path_validator.validate_path(
-                    zim_file_path
-                )
-                validated = self.zim_operations.path_validator.validate_zim_file(
-                    validated
-                )
-                archives_to_open = [validated]
-            except Exception as e:
-                return tool_error(
-                    operation="invalid_path",
-                    message=f"Invalid ZIM file path: {e}",
-                )
-        else:
-            try:
-                file_entries = self.zim_operations.list_zim_files_data()
-                archives_to_open = [
-                    Path(str(entry["path"]))
-                    for entry in file_entries
-                    if entry.get("path")
-                ]
-            except Exception as e:
-                logger.warning("list_zim_files_data failed in synthesize: %s", e)
-                archives_to_open = []
+        multi_entity = self._synthesize_reject_multi_entity_chain(
+            intent, params, zim_file_path
+        )
+        if multi_entity is not None:
+            return multi_entity
 
-        if not archives_to_open:
-            return tool_error(
-                operation="no_archives_available",
-                message=(
-                    "No ZIM archives are available. "
-                    "Specify a zim_file_path or configure allowed_directories."
-                ),
-            )
+        search_query = self._synthesize_build_search_query(query, intent, params)
+
+        resolved = self._synthesize_resolve_archive_paths(zim_file_path)
+        if isinstance(resolved, dict):
+            return resolved
+        archives_to_open = resolved
 
         with ExitStack() as stack:
             archives: list = []
@@ -3436,6 +3490,232 @@ class SimpleToolsHandler(
                 omit_passage_text=compact,
                 strip_links=compact,
             )
+
+    def _synthesize_reject_meta_or_chained(
+        self, query: str
+    ) -> Optional[ToolErrorPayload]:
+        """Fire the meta-only / chained-intent front-door guards, returning
+        a ``tool_error`` envelope to short-circuit or ``None`` to continue.
+        """
+        # Post-v2.0.4 D-I: mirror the meta-only / chained-intent guards
+        # the non-synthesize path fires at handle_zim_query lines 693
+        # and 710. Pre-fix the synthesize early-exit at line 626 skipped
+        # both: ``try again`` BM25-searched and returned Aaliyah's "Try
+        # Again" song; ``tell me about Berlin then list namespaces``
+        # silently RAG-searched the literal verb chain and returned
+        # Namespace + War articles instead of rejecting the chain.
+        # Same shape as the post-v2.0.0 D-G fix — return a structured
+        # tool_error envelope (synthesize's native error shape) with
+        # the full markdown guidance from the simple-mode helpers so
+        # callers get the same actionable recovery info.
+        if self._is_meta_only_query(query):
+            self._track("meta_only_guidance")
+            return tool_error(
+                operation="meta_only_guidance",
+                message=self._meta_query_guidance(),
+            )
+        chained_warning = self._chained_intent_guidance(query)
+        if chained_warning is not None:
+            self._track("chained_intent_rejected")
+            return tool_error(
+                operation="chained_intent_rejected",
+                message=chained_warning,
+            )
+        return None
+
+    def _synthesize_parse_intent(
+        self, query: str, zim_file_path: Optional[str]
+    ) -> tuple[str, Any]:
+        """Build the query-rewrite title probe and parse the query into an
+        ``(intent, params)`` pair, defaulting to ``("search", {})`` when
+        the parser raises.
+        """
+        # D5: distill the user's natural-language query down to the
+        # topic (or actual search terms) BEFORE handing it to BM25.
+        # The intent parser already knows how to pull "Berlin" out of
+        # "tell me about Berlin" / "who is Berlin" / "describe Berlin".
+        # Fall back to the raw query when the parser doesn't classify
+        # it as a topic ask — for plain ``search`` intents (the user
+        # typed "berlin wall" directly), the raw query IS the search
+        # query.
+        # Sub-D-2: build the title probe + emit per-rule query-rewrite
+        # telemetry (shared with handle_zim_query's simple branch). The
+        # probe returns None when no archive is in scope; rules 2 and 3
+        # degrade gracefully.
+        title_probe = self._run_query_rewrite_probes(query, zim_file_path)
+
+        try:
+            intent, params, _confidence = self.intent_parser.parse_intent(
+                query,
+                title_probe=title_probe,
+                query_rewrite_enabled=self.zim_operations.config.query_rewrite.enabled,
+            )
+        except Exception as e:  # pragma: no cover — defensive
+            logger.debug("intent_parser failed in synthesize prelude: %s", e)
+            intent, params = "search", {}
+        return intent, params
+
+    def _synthesize_validate_parsed_intent(
+        self, intent: str, params: Any, query: str
+    ) -> Optional[ToolErrorPayload]:
+        """Empty-topic / empty-search-tail guards mirroring the
+        non-synthesize path; returns a ``tool_error`` envelope or ``None``.
+        """
+        # Post-v2.0.0 D-G: mirror the empty-topic / empty-search guards
+        # the non-synthesize path fires at simple_tools.py:836-887.
+        # Pre-fix, ``tell me about `` (trailing whitespace, empty topic)
+        # with synthesize=True silently searched the literal verb prefix
+        # "tell me about" via BM25 and returned title-prefix matches
+        # (``Tell_Me_About_Tomorrow``, ``Tell_Me_About_Your_Day_Today``).
+        # Same shape for ``tell me about ?`` (punctuation-only) and
+        # ``tell me about ""`` (D-E quoted-empty on the synthesize path).
+        # Return a structured tool_error envelope — synthesize's native
+        # error shape — rather than the markdown the non-synthesize path
+        # emits, since the synthesize return type is already
+        # ``Union[SynthesizeResponse, ToolErrorPayload]``.
+        if intent == "tell_me_about" and isinstance(params, dict):
+            _topic_check = (params.get("topic") or "").strip()
+            if not _topic_check:
+                return tool_error(
+                    operation="topic_required",
+                    message=(
+                        "`tell me about` needs a non-empty topic to look up. "
+                        "Examples: `tell me about Photosynthesis`, "
+                        "`who is Albert Einstein`, `describe DNA`."
+                    ),
+                )
+        elif intent == "search" and isinstance(params, dict):
+            # Mirror the non-synthesize empty-search check at line ~869:
+            # ``_extract_search`` falls back to the whole query when no
+            # tail follows ``search for``, so ``params["query"]`` for
+            # ``search for `` is the full literal "search for " — which
+            # ``.strip()`` reduces to "search for", non-empty. Use
+            # ``_search_query_tail`` which peels the verb prefix and
+            # returns "" when no terms follow.
+            _search_tail = self._search_query_tail(query)
+            if _search_tail is not None:
+                _search_tail = IntentParser._strip_trailing_politeness(
+                    _search_tail
+                ).strip()
+            if _search_tail is not None and not _search_tail:
+                return tool_error(
+                    operation="search_terms_required",
+                    message=(
+                        "`search for` needs at least one search term. "
+                        'Examples: `search for "quantum mechanics"`, '
+                        "`search for Berlin in namespace C`."
+                    ),
+                )
+        return None
+
+    def _synthesize_reject_multi_entity_chain(
+        self, intent: str, params: Any, zim_file_path: Optional[str]
+    ) -> Optional[ToolErrorPayload]:
+        """Resolve a best-effort archive path and run the multi-entity
+        chain guard; returns a ``tool_error`` envelope or ``None``.
+
+        Skips the guard entirely when no archive path is resolvable, so
+        canonical multi-entity titles aren't false-rejected without a
+        title index to probe.
+        """
+        # Post-v2.0.4 D-I: mirror the multi-entity chain rejection the
+        # non-synthesize path fires at handle_zim_query line 960.
+        # Pre-fix, ``tell me about Berlin and Munich and Cologne`` with
+        # synthesize=True silently RAG-searched the literal three-entity
+        # chain and returned Cologne plus unrelated articles — Berlin
+        # and Munich data dropped on the floor. ``_multi_entity_chain_
+        # guidance`` requires a real archive path to probe the title
+        # index (so canonical multi-entity titles like ``Earth, Wind &
+        # Fire`` aren't false-rejected). Resolve best-effort: use the
+        # explicit zim_file_path if given, else pick the first
+        # available archive. When no archive is available skip the
+        # probe — the synthesize pipeline will surface a
+        # no_archives_available error below anyway.
+        multi_probe_path: Optional[str] = zim_file_path
+        if not multi_probe_path:
+            try:
+                _file_entries = self.zim_operations.list_zim_files_data()
+                for _entry in _file_entries:
+                    _ep = _entry.get("path")
+                    if _ep:
+                        multi_probe_path = str(_ep)
+                        break
+            except Exception:
+                multi_probe_path = None
+        if multi_probe_path:
+            multi_entity_warning = self._multi_entity_chain_guidance(
+                intent, params, multi_probe_path
+            )
+            if multi_entity_warning is not None:
+                self._track("multi_entity_chain_rejected")
+                return tool_error(
+                    operation="multi_entity_chain_rejected",
+                    message=multi_entity_warning,
+                )
+        return None
+
+    @staticmethod
+    def _synthesize_build_search_query(query: str, intent: str, params: Any) -> str:
+        """Derive the BM25 search query from the parsed intent: the
+        ``tell_me_about`` topic, the ``search`` extracted query, else the
+        raw query (D5 prefix-strip already applied upstream).
+        """
+        search_query = query
+        if intent == "tell_me_about" and isinstance(params, dict):
+            topic = params.get("topic")
+            if isinstance(topic, str) and topic.strip():
+                search_query = topic.strip()
+        elif intent == "search" and isinstance(params, dict):
+            extracted = params.get("query")
+            if isinstance(extracted, str) and extracted.strip():
+                search_query = extracted.strip()
+        return search_query
+
+    def _synthesize_resolve_archive_paths(
+        self, zim_file_path: Optional[str]
+    ) -> Union[list[Path], ToolErrorPayload]:
+        """Resolve the archive paths to open: validate the single
+        ``zim_file_path`` or discover all available archives. Returns the
+        list of paths, or a ``tool_error`` envelope (``invalid_path`` /
+        ``no_archives_available``).
+        """
+        # Resolve the set of archive paths to open.
+        archives_to_open: list[Path] = []
+        if zim_file_path:
+            try:
+                validated = self.zim_operations.path_validator.validate_path(
+                    zim_file_path
+                )
+                validated = self.zim_operations.path_validator.validate_zim_file(
+                    validated
+                )
+                archives_to_open = [validated]
+            except Exception as e:
+                return tool_error(
+                    operation="invalid_path",
+                    message=f"Invalid ZIM file path: {e}",
+                )
+        else:
+            try:
+                file_entries = self.zim_operations.list_zim_files_data()
+                archives_to_open = [
+                    Path(str(entry["path"]))
+                    for entry in file_entries
+                    if entry.get("path")
+                ]
+            except Exception as e:
+                logger.warning("list_zim_files_data failed in synthesize: %s", e)
+                archives_to_open = []
+
+        if not archives_to_open:
+            return tool_error(
+                operation="no_archives_available",
+                message=(
+                    "No ZIM archives are available. "
+                    "Specify a zim_file_path or configure allowed_directories."
+                ),
+            )
+        return archives_to_open
 
     def _normalize_zim_file_path(self, candidate: str) -> str:
         """Resolve hallucinated ZIM file paths or fall back to auto-select.
