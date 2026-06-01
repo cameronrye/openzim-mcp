@@ -89,6 +89,39 @@ class _HandlerResult:
     suggestions: Optional[List[Dict[str, str]]] = field(default=None)
 
 
+@dataclass(frozen=True)
+class _TellMeAboutSearch:
+    """Continue-state from ``_handle_tell_me_about``'s search/recover phase.
+
+    Carries the search results and the resolved top hit (plus the bounded
+    ``search_limit`` / ``max_content_length`` the later phases reuse) when
+    the topic produced usable results. The phase returns a plain ``str``
+    instead when it short-circuits to a rendered no-results response.
+    """
+
+    results: List[Dict[str, Any]]
+    top_path: str
+    top_title: str
+    search_limit: int
+    max_content_length: int
+
+
+@dataclass(frozen=True)
+class _TellMeAboutPick:
+    """Continue-state from ``_handle_tell_me_about``'s canonical auto-pick.
+
+    Carries the resolved article path/title and the disambig-twin /
+    related-extends footer hints. The phase returns a plain ``str`` instead
+    when the topic is genuinely ambiguous and a disambiguation page is
+    rendered.
+    """
+
+    top_path: str
+    top_title: str
+    disambig_twin_path: Optional[str]
+    related_extends_paths: List[str]
+
+
 class SimpleToolsHandler(
     _ArticleBodyMixin,
     _ChainMixin,
@@ -2290,6 +2323,99 @@ class SimpleToolsHandler(
         topic-lookup case ("who is X" today is two tool calls: search,
         then get_article).
         """
+        topic = self._resolve_tell_me_about_topic(query, zim_file_path, params)
+        namespace_redirect = self._tell_me_about_namespace_redirect(topic)
+        if namespace_redirect is not None:
+            return namespace_redirect
+        # A16 post-a16 D9: callers often paste a ZIM path form
+        # (``Sun_(disambiguation)``, ``Apollo_11``) into ``tell me about``,
+        # but the title index is whitespace-tokenised and the search
+        # ranker scores ``Sun_(disambiguation)`` as a single literal
+        # token (zero hits) rather than ``Sun (disambiguation)``
+        # (matches via title-index). Normalise underscores to spaces
+        # so pasted paths resolve the same way the equivalent title
+        # form does. Real article titles do not contain underscores
+        # on Wikipedia, so the normalisation is lossless.
+        if "_" in topic:
+            topic = topic.replace("_", " ").strip()
+        explicit_disambig = self._try_explicit_disambig_page(
+            topic, zim_file_path, options
+        )
+        if explicit_disambig is not None:
+            return explicit_disambig
+        searched = self._search_or_recover_tell_me_about(topic, zim_file_path, options)
+        if isinstance(searched, str):
+            return searched
+        results = searched.results
+        top_path = searched.top_path
+        top_title = searched.top_title
+        search_limit = searched.search_limit
+        max_content_length = searched.max_content_length
+
+        strong_matches = self._collect_tell_me_about_strong_matches(
+            topic, zim_file_path, results, top_title
+        )
+        picked = self._auto_pick_or_render_disambiguation(
+            topic, zim_file_path, strong_matches, top_path, top_title, params
+        )
+        if isinstance(picked, str):
+            return picked
+        top_path = picked.top_path
+        top_title = picked.top_title
+        disambig_twin_path = picked.disambig_twin_path
+        related_extends_paths = picked.related_extends_paths
+
+        # Subject-attribute decomposition (2026-05-18): when the
+        # original topic carried a subject category hint
+        # (``musician``, ``actor``, ``notable people``, ...) and the
+        # resolved entity's article has a section that maps to that
+        # hint, return the section body instead of the (often empty)
+        # lead. Motivating case: ``famous musician from big rapids
+        # michigan`` from the 2026-05-18 live transcript.
+        # Post-b1 P1-D2: thread the original-case query through so the
+        # nested soft-connector footer can recase its entity references.
+        original_query_for_subject = (
+            params.get("_pre_rewrite_query") if isinstance(params, dict) else None
+        )
+        subject_section_result = self._maybe_render_subject_section(
+            zim_file_path=zim_file_path,
+            topic=topic,
+            top_path=top_path,
+            top_title=top_title,
+            options=options,
+            original_query=(
+                original_query_for_subject
+                if isinstance(original_query_for_subject, str)
+                else None
+            ),
+        )
+        if subject_section_result is not None:
+            return subject_section_result
+
+        return self._render_tell_me_about_article(
+            topic,
+            zim_file_path,
+            top_path,
+            top_title,
+            max_content_length,
+            search_limit,
+            options,
+            params,
+            disambig_twin_path,
+            related_extends_paths,
+        )
+
+    def _resolve_tell_me_about_topic(
+        self, query: str, zim_file_path: str, params: Dict[str, Any]
+    ) -> str:
+        """Resolve the lookup topic for ``tell me about`` from ``params``
+        / ``query``.
+
+        Applies the Sub-D-2 decomposition-hint entity preference and the
+        post-b2 D3 possessive-shape retry; mutates
+        ``params['decomposition_hint']`` when the possessive retry
+        recovers a structured hint.
+        """
         topic = (params.get("topic") or query).strip()
         if not topic:
             topic = query
@@ -2344,6 +2470,16 @@ class SimpleToolsHandler(
                     # Surface the hint so downstream consumers see
                     # the same shape Rule 4 would have produced.
                     params["decomposition_hint"] = _retry_hint
+        return topic
+
+    def _tell_me_about_namespace_redirect(self, topic: str) -> Optional[str]:
+        """Redirect a ``X/Title`` namespace-path topic to the right tool
+        instead of running a fuzzy title search on it.
+
+        Returns the redirect guidance when ``topic`` looks like a ZIM
+        namespace path (ascii-alpha letter + ``/`` + ≥3-char suffix), else
+        ``None``.
+        """
         # A16 post-a16 D3: a topic like ``M/Title`` or ``c/Berlin`` is a
         # ZIM namespace path the caller pasted into ``tell me about``.
         # The downstream search either silently strips the prefix (libzim
@@ -2380,17 +2516,17 @@ class SimpleToolsHandler(
                 "title search on the bare name\n"
                 "<!-- intent=namespace_path_redirect cert=0.95 -->"
             )
-        # A16 post-a16 D9: callers often paste a ZIM path form
-        # (``Sun_(disambiguation)``, ``Apollo_11``) into ``tell me about``,
-        # but the title index is whitespace-tokenised and the search
-        # ranker scores ``Sun_(disambiguation)`` as a single literal
-        # token (zero hits) rather than ``Sun (disambiguation)``
-        # (matches via title-index). Normalise underscores to spaces
-        # so pasted paths resolve the same way the equivalent title
-        # form does. Real article titles do not contain underscores
-        # on Wikipedia, so the normalisation is lossless.
-        if "_" in topic:
-            topic = topic.replace("_", " ").strip()
+        return None
+
+    def _try_explicit_disambig_page(
+        self, topic: str, zim_file_path: str, options: Dict[str, Any]
+    ) -> Optional[str]:
+        """Resolve an explicit ``<X> (disambiguation)`` topic directly via
+        the title index.
+
+        Returns the rendered article when the probe resolves and the body
+        fetches, else ``None`` (the caller falls through to fuzzy search).
+        """
         # A16 post-a16 D8: when the topic explicitly names a disambig
         # page (``Berlin (disambiguation)``, ``Apollo 11
         # (disambiguation)``), the fuzzy title-search ranks unrelated
@@ -2422,6 +2558,18 @@ class SimpleToolsHandler(
                 # Fall through to fuzzy search if the title-index probe
                 # missed — the disambig auto-pick downstream will still
                 # try its best.
+        return None
+
+    def _search_or_recover_tell_me_about(
+        self, topic: str, zim_file_path: str, options: Dict[str, Any]
+    ) -> Union[str, _TellMeAboutSearch]:
+        """Run the bounded structured search for ``topic`` and recover the
+        top hit, or short-circuit to a rendered no-results response.
+
+        Returns a terminal rendered-search ``str`` (structured-search
+        failure, empty results, or promotion miss) or a
+        :class:`_TellMeAboutSearch` continue-state for the later phases.
+        """
         # Cap the search at 3 results: the auto-fetch path either inlines
         # the top article (in which case we don't render the others — see
         # below) or falls through to a plain rendered search, where 3 hits
@@ -2465,7 +2613,21 @@ class SimpleToolsHandler(
                 )
             top_path = promoted["path"]
             top_title = promoted["title"]
+        return _TellMeAboutSearch(
+            results, top_path, top_title, search_limit, max_content_length
+        )
 
+    def _collect_tell_me_about_strong_matches(
+        self,
+        topic: str,
+        zim_file_path: str,
+        results: List[Dict[str, Any]],
+        top_title: str,
+    ) -> List[Dict[str, Any]]:
+        """Collect the strong-title-match rows and, when the disambig /
+        lone-twin / lone-extends-topic gate fires, prepend the title-index
+        canonical row so the canonical is always considered.
+        """
         # Disambiguation: if MULTIPLE search hits strong-match the topic,
         # there's a real ambiguity (Mercury → planet/element/mythology;
         # Java → island/programming; Apollo → spacecraft/program/god).
@@ -2569,6 +2731,25 @@ class SimpleToolsHandler(
                     # the type-checker since the synthetic row carries
                     # only the keys downstream consumers actually read.
                     strong_matches = cast(Any, [canonical_row, *strong_matches])
+        return strong_matches
+
+    def _auto_pick_or_render_disambiguation(
+        self,
+        topic: str,
+        zim_file_path: str,
+        strong_matches: List[Dict[str, Any]],
+        top_path: str,
+        top_title: str,
+        params: Dict[str, Any],
+    ) -> Union[str, _TellMeAboutPick]:
+        """Auto-pick the canonical article over its disambig twin /
+        extends-topic siblings, or render the disambiguation page when the
+        topic is genuinely ambiguous.
+
+        Returns the rendered disambiguation ``str`` when ≥2 strong matches
+        remain with no canonical pick, else a :class:`_TellMeAboutPick`
+        continue-state with the resolved path/title and footer-hint paths.
+        """
         # A11 C1 + Opp1: when the disambig set contains exactly the
         # ``Foo`` article AND its ``Foo (disambiguation)`` twin, the
         # caller almost always wants the canonical ``Foo``. Drop the
@@ -2657,34 +2838,30 @@ class SimpleToolsHandler(
                     disambig_original if isinstance(disambig_original, str) else None
                 ),
             )
-
-        # Subject-attribute decomposition (2026-05-18): when the
-        # original topic carried a subject category hint
-        # (``musician``, ``actor``, ``notable people``, ...) and the
-        # resolved entity's article has a section that maps to that
-        # hint, return the section body instead of the (often empty)
-        # lead. Motivating case: ``famous musician from big rapids
-        # michigan`` from the 2026-05-18 live transcript.
-        # Post-b1 P1-D2: thread the original-case query through so the
-        # nested soft-connector footer can recase its entity references.
-        original_query_for_subject = (
-            params.get("_pre_rewrite_query") if isinstance(params, dict) else None
+        return _TellMeAboutPick(
+            top_path, top_title, disambig_twin_path, related_extends_paths
         )
-        subject_section_result = self._maybe_render_subject_section(
-            zim_file_path=zim_file_path,
-            topic=topic,
-            top_path=top_path,
-            top_title=top_title,
-            options=options,
-            original_query=(
-                original_query_for_subject
-                if isinstance(original_query_for_subject, str)
-                else None
-            ),
-        )
-        if subject_section_result is not None:
-            return subject_section_result
 
+    def _render_tell_me_about_article(
+        self,
+        topic: str,
+        zim_file_path: str,
+        top_path: str,
+        top_title: str,
+        max_content_length: int,
+        search_limit: int,
+        options: Dict[str, Any],
+        params: Dict[str, Any],
+        disambig_twin_path: Optional[str],
+        related_extends_paths: List[str],
+    ) -> str:
+        """Fetch the resolved article body and assemble the final response
+        with the disambig-twin / related-extends / soft-connector footers.
+
+        Degrades to plain search when the body can't be fetched, or when
+        the body is itself a disambiguation page for a multi-content-token
+        topic (the caller wanted a specific article).
+        """
         article_body = self._fetch_topic_article_body(
             zim_file_path, top_path, max_content_length, options
         )

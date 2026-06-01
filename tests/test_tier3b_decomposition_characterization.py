@@ -116,8 +116,11 @@ class TestTellMeAboutTopicResolutionCharacterization:
         mock = MagicMock()
         # Empty structured results -> the handler takes the early recovery
         # path after computing the topic, so we can assert the topic that
-        # reached the search backend.
+        # reached the search backend. ``search_zim_file`` returns rendered
+        # markdown (a real ``str``) in production — model that so the
+        # recovery-hint early-return is exercised faithfully.
         mock.search_zim_file_data.return_value = {"results": []}
+        mock.search_zim_file.return_value = "No results found."
         return SimpleToolsHandler(mock), mock
 
     def _searched_topic(self, mock: MagicMock) -> str:
