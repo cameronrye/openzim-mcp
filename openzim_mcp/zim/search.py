@@ -273,11 +273,8 @@ def _format_filtered_response(
         )
         # A14: when the result set is much larger than a small model can
         # productively page through, nudge toward refining the query
-        # instead. Pre-A14, a "notable people from X" search returning
-        # 4000 hits would lead an 8B model to either give up or mechanically
-        # page until its context budget died. The O2 saturation warning at
-        # ≥1M hits caught only stop-word collisions; mid-tier hit counts
-        # had no equivalent guidance.
+        # instead. Mid-tier hit counts otherwise get no guidance — the O2
+        # saturation warning only fires at ≥1M hits (stop-word collisions).
         if _is_large_result_set(scan.filtered_count, len(results)):
             parts.append(_refinement_nudge() + "\n")
     else:
@@ -2488,7 +2485,6 @@ class _SearchMixin:
             (extra ``o`` removed).
           * Single character insertion — ``"Photosythesis"`` →
             ``"Photosynthesis"`` (missing ``n`` between ``y`` and ``t``).
-            This was the named regression target of Phase A #14.
           * Single character substitution — ``"Wikipidia"`` →
             ``"Wikipedia"`` (i → e at position 5).
 
