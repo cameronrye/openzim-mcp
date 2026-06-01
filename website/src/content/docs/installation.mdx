@@ -1,6 +1,6 @@
 ---
 title: Installation
-summary: Install OpenZIM MCP v2.0.0 from PyPI (uv or pip), Docker, or source on Windows, macOS, or Linux, then wire it into Claude Desktop or any MCP client.
+summary: Install OpenZIM MCP from PyPI (uv or pip), Docker, or source on Windows, macOS, or Linux, then wire it into Claude Desktop or any MCP client.
 group: Get started
 sidebar_order: 2
 ---
@@ -232,14 +232,14 @@ OpenZIM MCP ships a multi-arch image at `ghcr.io/cameronrye/openzim-mcp` (`linux
 
 ```bash
 # Pull
-docker pull ghcr.io/cameronrye/openzim-mcp:2.0.0
+docker pull ghcr.io/cameronrye/openzim-mcp:2.1.1
 
 # Run with HTTP transport, bound to all interfaces (the image default).
 # The server REFUSES to bind 0.0.0.0 without OPENZIM_MCP_AUTH_TOKEN.
 docker run --rm -p 8000:8000 \
   -v /srv/zim:/data:ro \
   -e OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)" \
-  ghcr.io/cameronrye/openzim-mcp:2.0.0
+  ghcr.io/cameronrye/openzim-mcp:2.1.1
 ```
 
 The image entrypoint is `python -m openzim_mcp /data`, so mount your ZIM directory at `/data`. Default env vars in the image: `OPENZIM_MCP_TRANSPORT=http`, `OPENZIM_MCP_HOST=0.0.0.0`, `OPENZIM_MCP_PORT=8000`.
@@ -294,7 +294,7 @@ make test
 2026-05-27 15:30:00,001 - openzim_mcp.main - INFO - Allowed directories: /path/to/zim/files
 ```
 
-Default mode is **Simple** (one natural-language tool). For all 8 v2.0.0 tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`), pass `--mode advanced`.
+Default mode is **Simple** (one natural-language tool). For all 8 tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`), pass `--mode advanced`.
 
 ## MCP Client Configuration
 

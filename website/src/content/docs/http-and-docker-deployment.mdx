@@ -1,13 +1,13 @@
 ---
 title: HTTP and Docker deployment
-summary: Run OpenZIM MCP v2.0.0 as a long-running networked service — streamable HTTP transport, bearer-token auth, CORS, health probes, the published Docker image, and end-to-end deployment recipes (LAN, Tailscale, VPS with TLS).
+summary: Run OpenZIM MCP as a long-running networked service — streamable HTTP transport, bearer-token auth, CORS, health probes, the published Docker image, and end-to-end deployment recipes (LAN, Tailscale, VPS with TLS).
 group: Guides
 sidebar_order: 3
 ---
 
-How to run OpenZIM MCP v2.0.0 as a long-running networked service. Covers the streamable HTTP transport, the published Docker image, operational concerns (TLS, reverse proxy, health probes, systemd), and end-to-end deployment recipes for LAN, Tailscale tailnet, and public VPS topologies.
+How to run OpenZIM MCP as a long-running networked service. Covers the streamable HTTP transport, the published Docker image, operational concerns (TLS, reverse proxy, health probes, systemd), and end-to-end deployment recipes for LAN, Tailscale tailnet, and public VPS topologies.
 
-> **Notation:** examples on this page use JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`) for protocol-level snippets and shell snippets for environment / HTTP commands. Tool surfaces referenced match the v2.0.0 8-tool surface.
+> **Notation:** examples on this page use JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`) for protocol-level snippets and shell snippets for environment / HTTP commands. Tool surfaces referenced match the 8-tool advanced surface.
 
 > **Source of truth:** [openzim_mcp/http_app.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/http_app.py) and the [Dockerfile](https://github.com/cameronrye/openzim-mcp/blob/main/Dockerfile).
 
@@ -38,7 +38,7 @@ This binds the loopback interface only. Put a TLS-terminating reverse proxy in f
 docker run --rm -p 8000:8000 \
   -v /srv/zim:/data:ro \
   -e OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)" \
-  ghcr.io/cameronrye/openzim-mcp:2.0.0
+  ghcr.io/cameronrye/openzim-mcp:2.1.1
 ```
 
 The published image:
@@ -258,7 +258,7 @@ spec:
     spec:
       containers:
         - name: openzim-mcp
-          image: ghcr.io/cameronrye/openzim-mcp:2.0.0
+          image: ghcr.io/cameronrye/openzim-mcp:2.1.1
           ports:
             - containerPort: 8000
           env:
@@ -338,7 +338,7 @@ This recipe puts OpenZIM MCP on a single host, reachable from the rest of your L
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:2.0.0
+    image: ghcr.io/cameronrye/openzim-mcp:2.1.1
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -363,7 +363,7 @@ volumes:
 
 What's intentional here:
 
-- **Pinned tag** (`:2.0.0`, not `:latest`). Upgrades are deliberate — `docker compose pull` is a thing you do, not a thing that happens to you.
+- **Pinned tag** (`:2.1.1`, not `:latest`). Upgrades are deliberate — `docker compose pull` is a thing you do, not a thing that happens to you.
 - **Host port bound to `127.0.0.1`.** The container listens on all interfaces (the image's default `OPENZIM_MCP_HOST=0.0.0.0`), but Docker's port publish restricts external exposure to loopback. The Tailscale variant below lifts this restriction by binding to a specific interface.
 - **Read-only ZIM mount** (`:ro`). The server only reads ZIM files; mounting read-only ensures a server compromise can't damage them.
 - **Token via env, not hard-coded.** Put it in a `.env` file next to the compose file (and add `.env` to `.gitignore`). The image's defaults already set `TRANSPORT=http`, `HOST=0.0.0.0`, `PORT=8000`, so they're not repeated here.
@@ -472,7 +472,7 @@ This is the LAN compose file with two changes: a `caddy` service is added, and t
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:2.0.0
+    image: ghcr.io/cameronrye/openzim-mcp:2.1.1
     restart: unless-stopped
     expose:
       - "8000"
@@ -558,7 +558,7 @@ docker compose pull
 docker compose up -d
 ```
 
-The image tag in `docker-compose.yml` is pinned (`:2.0.0`) — change it to the new version before pulling. Pinning is deliberate: `:latest` makes upgrades a surprise, and the release notes for each tag tell you when an upgrade involves a breaking change. The v1.x → v2.0.0 jump is a breaking rename of the advanced-mode tool surface (22 tools → 8); see the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) before bumping.
+The image tag in `docker-compose.yml` is pinned (`:2.1.1`) — change it to the new version before pulling. Pinning is deliberate: `:latest` makes upgrades a surprise, and the release notes for each tag tell you when an upgrade involves a breaking change. The v1.x → v2.0.0 jump is a breaking rename of the advanced-mode tool surface (22 tools → 8); see the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) before bumping.
 
 #### Watching logs
 

@@ -23,9 +23,9 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <meta property="og:site_name" content="OpenZIM MCP">
     <meta property="og:url" content="https://cameronrye.github.io/openzim-mcp/">
     <meta property="og:title" content="OpenZIM MCP — Knowledge that works offline">
-    <meta property="og:description" content="MCP server for offline ZIM-archive access. 8-tool advanced surface, streamable HTTP, batch retrieval, per-entry resources, subscriptions. v2.0.0.">
+    <meta property="og:description" content="MCP server for offline ZIM-archive access. 8-tool advanced surface, streamable HTTP, batch retrieval, per-entry resources, subscriptions. v2.1.1.">
     <meta property="og:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
-    <meta property="og:image:alt" content="OpenZIM MCP 2.0.0 — Knowledge that works offline">
+    <meta property="og:image:alt" content="OpenZIM MCP 2.1.1 — Knowledge that works offline">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta property="og:locale" content="en_US">
@@ -38,9 +38,9 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <meta name="twitter:creator" content="@cameronrye">
     <meta name="twitter:url" content="https://cameronrye.github.io/openzim-mcp/">
     <meta name="twitter:title" content="OpenZIM MCP — Knowledge that works offline">
-    <meta name="twitter:description" content="MCP server for offline ZIM-archive access. 8-tool advanced surface, streamable HTTP, batch retrieval, per-entry resources, subscriptions. v2.0.0.">
+    <meta name="twitter:description" content="MCP server for offline ZIM-archive access. 8-tool advanced surface, streamable HTTP, batch retrieval, per-entry resources, subscriptions. v2.1.1.">
     <meta name="twitter:image" content="https://cameronrye.github.io/openzim-mcp/assets/og-image.svg">
-    <meta name="twitter:image:alt" content="OpenZIM MCP 2.0.0 — Knowledge that works offline">
+    <meta name="twitter:image:alt" content="OpenZIM MCP 2.1.1 — Knowledge that works offline">
 
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
     <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
@@ -75,7 +75,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       "alternateName": "OpenZIM MCP Server",
       "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
       "url": "https://cameronrye.github.io/openzim-mcp/",
-      "softwareVersion": "2.0.0",
+      "softwareVersion": "2.1.1",
       "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
       "applicationCategory": "DeveloperApplication",
       "applicationSubCategory": "AI Tools",
@@ -147,7 +147,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <section id="hero" class="hero">
       <div class="container hero__inner">
         <div class="hero__content">
-          <span class="eyebrow">MCP&nbsp;SERVER · v2.0.0</span>
+          <span class="eyebrow">MCP&nbsp;SERVER · v2.1.1</span>
           <h1 class="hero__title">Knowledge that works offline.</h1>
           <p class="hero__lead">
             OpenZIM MCP gives any AI model structured, secure access to ZIM archives —
@@ -169,7 +169,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
             </button>
           </div>
           <ul class="hero__stats">
-            <li><span class="hero__stat-num">v2.0.0</span><span class="hero__stat-label">Latest release</span></li>
+            <li><span class="hero__stat-num">v2.1.1</span><span class="hero__stat-label">Latest release</span></li>
             <li><span class="hero__stat-num">1 + 8</span><span class="hero__stat-label">Simple / advanced tools</span></li>
             <li><span class="hero__stat-num">80%+</span><span class="hero__stat-label">Test coverage</span></li>
             <li><span class="hero__stat-num">MIT</span><span class="hero__stat-label">License</span></li>
@@ -285,7 +285,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       <div class="container">
         <span class="v2__watermark" aria-hidden="true">2.0</span>
         <header class="section__header">
-          <span class="eyebrow">The 2.0 release</span>
+          <span class="eyebrow">The v2 surface</span>
           <h2>Eight tools. Same surface area.</h2>
           <p>v2.0.0 collapses the 22-tool advanced mode into 8 consolidated tools — schema text drops from ~36KB to ~23.5KB, clearing the <a href="https://www.mmntm.net/articles/mcp-context-tax">MCP Tax</a> pain band for small-model dispatch.</p>
         </header>
@@ -323,6 +323,18 @@ openzim-mcp --mode advanced /data/zim/
             <pre><code>tests/dispatch_eval/gate_0b_decision.json
 tests/test_phase_f_gate_decision_consistency.py</code></pre>
           </li>
+
+          <li class="v2__card">
+            <span class="v2__card-dot" aria-hidden="true"></span>
+            <h3>New in v2.1 · native libzim</h3>
+            <p>Per-archive validation through <code>zim_health(zim_file_path=…)</code> (<code>Archive.check()</code> + checksum), plus archive identity, full-text / title index capabilities, and an <code>M/Counter</code> mimetype breakdown surfaced in <code>zim_metadata</code>.</p>
+            <pre><code>{`{
+  "name": "zim_health",
+  "arguments": {
+    "zim_file_path": "wiki.zim"
+  }
+}`}</code></pre>
+          </li>
         </ul>
       </div>
     </section>
@@ -348,7 +360,7 @@ tests/test_phase_f_gate_decision_consistency.py</code></pre>
                 <pre><code>uv tool install openzim-mcp</code></pre>
               </div>
               <div class="tabs__panel" id="install-docker" role="tabpanel" aria-labelledby="tab-install-docker" hidden>
-                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:2.0.0</code></pre>
+                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:2.1.1</code></pre>
               </div>
               <div class="tabs__panel" id="install-source" role="tabpanel" aria-labelledby="tab-install-source" hidden>
                 <pre><code>git clone https://github.com/cameronrye/openzim-mcp.git

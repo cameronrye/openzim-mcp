@@ -1,6 +1,6 @@
 ---
 title: API reference
-summary: Every v2.0.0 tool, prompt, and resource — 8 consolidated advanced tools, 3 slash-command prompts, 3 resource templates, plus the v1 → v2 migration table.
+summary: Every tool, prompt, and resource — 8 consolidated advanced tools, 3 slash-command prompts, 3 resource templates, plus the v1 → v2 migration table.
 group: Reference
 sidebar_order: 1
 ---
@@ -224,7 +224,13 @@ Combined archive metadata + namespaces. Collapses the v1 `get_zim_metadata` + `l
 zim_metadata(zim_file_path: str) -> Any
 ```
 
-**Returns:** structured response with archive M-namespace metadata (`title`, `language`, `creator`, `flavour`, `date`, etc.) and a deterministic namespace breakdown (surfaces minority namespaces — `M`, `W`, `X`, `I` — that random sampling could miss).
+**Returns:** structured response with:
+
+- **`metadata`** — archive M-namespace fields (`title`, `language`, `creator`, `flavour`, `date`, etc.).
+- **`namespaces`** — a deterministic namespace breakdown (surfaces minority namespaces — `M`, `W`, `X`, `I` — that random sampling could miss).
+- **`archive_identity`** — `{uuid, is_multipart}`, the libzim archive identity (*added in v2.1*).
+- **`index_capabilities`** — `{has_fulltext_index, has_title_index}`: whether full-text search and title suggestions will work against this archive (*added in v2.1*).
+- **`counter_breakdown`** — `{mimetype: count}` parsed from the `M/Counter` metadata, so you can profile an archive's content composition without walking it. Omitted when the archive has no `M/Counter` entry (*added in v2.1*).
 
 ---
 
@@ -258,15 +264,18 @@ Relative hrefs are resolved against the source entry's directory; redirects are 
 
 ### `zim_health`
 
-Combined server health, configuration, and loaded archives. Collapses the v1 `get_server_health` + `get_server_configuration` + `list_zim_files` tools into a single call.
+Two calls in one. With **no argument**, returns combined server health, configuration, and loaded archives (collapses the v1 `get_server_health` + `get_server_configuration` + `list_zim_files` tools). With a **`zim_file_path`**, validates and diagnoses that one archive instead (*added in v2.1*).
 
 ```python
-zim_health() -> Any
+zim_health(zim_file_path: Optional[str] = None) -> Any
 ```
 
-No parameters.
+| Argument | Behavior |
+|----------|----------|
+| *(omitted)* | Combined server-state report: `{health, configuration, loaded_archives}`. |
+| `zim_file_path` | Per-archive integrity/identity check via libzim — runs `Archive.check()` and reports checksum, index capabilities, and identity. Lets a caller tell a valid archive from a corrupt one. |
 
-**Returns:** structured response with this shape (abbreviated):
+**Server-state response** (no argument) — shape (abbreviated):
 
 ```json
 {
@@ -297,6 +306,24 @@ No parameters.
 ```
 
 `process_id` / `server_pid` are **always** `"[REDACTED]"` — diagnostic output frequently lands in bug reports. Allowed directories are shown as `...basename` to avoid leaking the canonical layout.
+
+**Archive-validation response** (with `zim_file_path`, *added in v2.1*):
+
+```json
+{
+  "is_valid": true,
+  "has_checksum": true,
+  "checksum": "<hex>",
+  "has_fulltext_index": true,
+  "has_title_index": true,
+  "uuid": "<archive uuid>",
+  "is_multipart": false,
+  "path": "...archive.zim",
+  "name": "archive.zim"
+}
+```
+
+`is_valid` is the result of libzim's `Archive.check()` structural-integrity probe — a quick way to tell a valid archive from a corrupt or truncated one. A non-indexed archive reports `has_fulltext_index: false`; full-text `zim_search` against it then degrades gracefully to a `no_xapian_index` reason instead of erroring.
 
 ---
 

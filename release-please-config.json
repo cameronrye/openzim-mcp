@@ -69,7 +69,7 @@
       "extra-files": [
         {
           "type": "generic",
-          "path": "website/llms.txt",
+          "path": "website/public/llms.txt",
           "glob": false
         }
       ],

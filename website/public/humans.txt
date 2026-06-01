@@ -60,8 +60,8 @@
 
 # SITE
 
-    Last update: 2026-05-27
+    Last update: 2026-05-31
     Language: English
     Doctype: HTML5
     IDE: Various (VS Code, Vim, etc.)
-    Version: 2.0.0
+    Version: 2.1.1

@@ -1,13 +1,13 @@
 ---
 title: Performance optimization
-summary: Cache tuning, rate limiting, batching, and deployment-profile guidance for OpenZIM MCP v2.0.0 — including HTTP transport, monitoring endpoints, and latency targets.
+summary: Cache tuning, rate limiting, batching, and deployment-profile guidance for OpenZIM MCP — including HTTP transport, monitoring endpoints, and latency targets.
 group: Guides
 sidebar_order: 4
 ---
 
-Cache tuning, rate limiting, batching, and request-pattern guidance for OpenZIM MCP v2.0.0.
+Cache tuning, rate limiting, batching, and request-pattern guidance for OpenZIM MCP.
 
-> **Notation:** examples on this page use Python pseudo-call syntax (`zim_get(entry_path="...")`) for tool calls and shell snippets for environment / HTTP commands. The MCP wire format is JSON-RPC; your client handles the framing. Tool names and argument shapes match the v2.0.0 8-tool surface.
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_get(entry_path="...")`) for tool calls and shell snippets for environment / HTTP commands. The MCP wire format is JSON-RPC; your client handles the framing. Tool names and argument shapes match the 8-tool advanced surface.
 
 ## Where time goes
 
@@ -37,7 +37,7 @@ export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true    # cache survives restarts
 | Memory-constrained (RPi, small VPS) | `MAX_SIZE=25-50`, `TTL_SECONDS=900-1800` |
 | Volatile content (frequent ZIM swaps) | shorter TTL or rely on subscriptions to invalidate downstream |
 
-Cache stats surface in `zim_health().cache_performance` (`enabled`, `size`, `max_size`, `ttl_seconds`, `hits`, `misses`, `hit_rate`). There are no `warm_cache` / `cache_stats` / `cache_clear` tools in v2.0.0 — restart to flush.
+Cache stats surface in `zim_health().cache_performance` (`enabled`, `size`, `max_size`, `ttl_seconds`, `hits`, `misses`, `hit_rate`). There are no `warm_cache` / `cache_stats` / `cache_clear` tools — restart to flush.
 
 **Persistence path:** defaults to `~/.cache/openzim-mcp` (resolved to absolute). For containerized deployments, mount a volume there or override `OPENZIM_MCP_CACHE__PERSISTENCE_PATH`.
 
@@ -212,7 +212,7 @@ Wire `/healthz` and `/readyz` into your platform's uptime monitor. For Prometheu
 
 ### Pre-warming on startup
 
-There is no `warm_cache` tool in v2.0.0. To pre-warm, call the entry tools yourself at startup:
+There is no `warm_cache` tool. To pre-warm, call the entry tools yourself at startup:
 
 ```python
 # Wake the cache for high-value articles

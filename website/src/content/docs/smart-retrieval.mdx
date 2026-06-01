@@ -1,13 +1,13 @@
 ---
 title: Smart retrieval
-summary: How OpenZIM MCP v2.0.0 resolves entry paths when direct access fails — the four-step fallback inside zim_get, the path-mapping cache, and how to debug resolutions.
+summary: How OpenZIM MCP resolves entry paths when direct access fails — the four-step fallback inside zim_get, the path-mapping cache, and how to debug resolutions.
 group: Guides
 sidebar_order: 2
 ---
 
 How OpenZIM MCP resolves entry paths when direct access fails — and how to debug it when it doesn't.
 
-> **Notation:** examples on this page use Python pseudo-call syntax (`zim_get(entry_path="...")`). The wire format is MCP JSON-RPC; your client handles the framing. Tool names and argument shapes match the v2.0.0 8-tool surface.
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_get(entry_path="...")`). The wire format is MCP JSON-RPC; your client handles the framing. Tool names and argument shapes match the 8-tool advanced surface.
 
 > **Source of truth:** [openzim_mcp/zim/content.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/zim/content.py) (`_get_entry_content`) and [openzim_mcp/zim/search.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/zim/search.py) (`_extract_search_terms_from_path`, `_find_entry_by_search`).
 
@@ -15,7 +15,7 @@ How OpenZIM MCP resolves entry paths when direct access fails — and how to deb
 
 ZIM entry paths aren't always predictable. Wikipedia's "Photosynthesis" might live at `A/Photosynthesis`, `C/Photosynthesis`, `Photosynthesis`, or under a slug variant. Smart retrieval is the fallback path that turns "I have a guess at the path" into "here's the article" without forcing the LLM to do trial-and-error.
 
-In v2.0.0 the fallback is consolidated into `zim_get` — it runs automatically whenever `zim_get` is called with an `entry_path` that doesn't match directly. It applies to every view mode of `zim_get` (`view="content"` default, `view="summary"`, `view="toc"`, `view="structure"`), the binary form (`zim_get(binary=True, ...)`), and to `zim_links` (which resolves the source entry before extracting links).
+The fallback is consolidated into `zim_get` — it runs automatically whenever `zim_get` is called with an `entry_path` that doesn't match directly. It applies to every view mode of `zim_get` (`view="full"` default, `view="summary"`, `view="toc"`, `view="structure"`), the binary form (`zim_get(binary=True, ...)`), and to `zim_links` (which resolves the source entry before extracting links).
 
 Internally these all share `_resolve_entry_with_fallback` in `zim/structure.py`.
 
@@ -131,7 +131,7 @@ When something resolves "wrong":
 
 1. Get the right path with `zim_search(zim_file_path=..., query="Photosynthesis", mode="title")` — title-indexed lookup, doesn't go through smart retrieval.
 2. Or browse the namespace: `zim_browse(zim_file_path=..., namespace="C", mode="page", limit=20)`.
-3. Restart the server to flush the cache (there's no `cache_clear` tool in v2.0.0).
+3. Restart the server to flush the cache (there's no `cache_clear` tool).
 
 ## Troubleshooting
 

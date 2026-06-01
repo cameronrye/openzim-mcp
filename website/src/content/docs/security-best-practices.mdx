@@ -1,13 +1,13 @@
 ---
 title: Security best practices
-summary: OpenZIM MCP v2.0.0 security model and operator hardening — path validation, redaction, input sanitization, bearer-token auth, CORS, rate limiting, container hardening, and a production checklist.
+summary: OpenZIM MCP security model and operator hardening — path validation, redaction, input sanitization, bearer-token auth, CORS, rate limiting, container hardening, and a production checklist.
 group: Guides
 sidebar_order: 5
 ---
 
-OpenZIM MCP's security model and operator-level hardening. This page covers the in-process protections (path validation, redaction, input sanitization, prompt hardening, rate limiting) and the network-layer protections (bearer-token auth, CORS, safe-default startup, container hardening) that ship in v2.0.0.
+OpenZIM MCP's security model and operator-level hardening. This page covers the in-process protections (path validation, redaction, input sanitization, prompt hardening, rate limiting) and the network-layer protections (bearer-token auth, CORS, safe-default startup, container hardening) that ship in the v2 release.
 
-> **Notation:** examples on this page use JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`) and shell snippets. Tool names referenced match the v2.0.0 8-tool surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
+> **Notation:** examples on this page use JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`) and shell snippets. Tool names referenced match the 8-tool advanced surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
 
 > **Source of truth:** [openzim_mcp/security.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/security.py), [openzim_mcp/http_app.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/http_app.py), and the [SECURITY.md](https://github.com/cameronrye/openzim-mcp/blob/main/SECURITY.md) policy. Vulnerability reports go through [GitHub Private Vulnerability Reporting](https://github.com/cameronrye/openzim-mcp/security/advisories/new).
 
@@ -211,7 +211,7 @@ Response timeline (per [SECURITY.md](https://github.com/cameronrye/openzim-mcp/b
 
 ## Security review highlights
 
-These are the load-bearing protections that distinguish v2.0.0's posture:
+These are the load-bearing protections that distinguish v2's posture:
 
 - Path/PID redaction in error and diagnostics responses (regex handles wrapped/quoted/URL-encoded paths).
 - `OPTIONS /mcp` locked behind auth (closed preflight-bypass attack surface).
