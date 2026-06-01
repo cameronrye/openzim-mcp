@@ -221,6 +221,35 @@ UNWANTED_HTML_SELECTORS: List[str] = [
     ".geo-multi-punct",
 ]
 
+# In-article "furniture" headings to drop on ZIMIT/warc2zim pages. The
+# main-content landmark scoping (``select_main_content``) removes chrome
+# OUTSIDE the <article>, but MedlinePlus encodes boilerplate nav/quiz/metadata
+# blocks as ordinary headed sections INSIDE it. We strip a section whose
+# heading text EXACTLY matches one of these (case-insensitive, whitespace-
+# collapsed, trailing punctuation trimmed) up to the next same-or-higher-level
+# heading. Matching is exact — NOT substring — so a real section like
+# "Learn More About Diabetes" is never clipped by the "learn more" entry.
+# Kept intentionally conservative and MedlinePlus-shaped: only labels that are
+# unambiguously furniture (never a plausible prose-section title). Generic
+# medical words MedlinePlus also reuses as topic-nav ("Symptoms", "Causes",
+# "Diagnosis and Tests", ...) are deliberately EXCLUDED to avoid clipping real
+# article content; grow this list only with archive-confirmed evidence. The
+# strip is landmark-gated, so Wikipedia/mwoffliner pages never see it.
+FURNITURE_HEADING_DENYLIST: frozenset = frozenset(
+    {
+        "test your knowledge",
+        "see, play and learn",
+        "find an expert",
+        "patient handouts",
+        "related issues",
+        "related health topics",
+        "learn more",
+        "review date",
+        "reference desk",
+        "videos and tutorials",
+    }
+)
+
 # Rate limiter operation costs
 RATE_LIMIT_COSTS: Dict[str, int] = {
     "search": 2,

@@ -13,6 +13,7 @@ from .defaults import (  # noqa: F401
     CACHE,
     CACHE_PERFORMANCE,
     CONTENT,
+    FURNITURE_HEADING_DENYLIST,
     INPUT_LIMITS,
     NAMESPACE_SAMPLING,
     RATE_LIMIT,

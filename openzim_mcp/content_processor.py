@@ -9,7 +9,11 @@ from urllib.parse import urlparse
 import html2text
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
-from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
+from .constants import (
+    DEFAULT_SNIPPET_LENGTH,
+    FURNITURE_HEADING_DENYLIST,
+    UNWANTED_HTML_SELECTORS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +316,59 @@ def _collect_meta_tag_metadata(soup: BeautifulSoup) -> Dict[str, str]:
 # sidebar, the single article wins and the sidebar is excluded.
 _MAIN_CONTENT_SELECTORS = ("article", "main", "[role=main]")
 
+_HEADING_NAMES = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
+def _normalize_heading_text(text: str) -> str:
+    """Lowercase, collapse whitespace, and trim trailing punctuation so a
+    heading can be compared EXACTLY against ``FURNITURE_HEADING_DENYLIST``."""
+    collapsed = re.sub(r"\s+", " ", text).strip().lower()
+    return collapsed.rstrip(" :.–—")
+
+
+def _strip_furniture_sections(soup: BeautifulSoup) -> None:
+    """Remove in-article "furniture" sections in place (MedlinePlus etc.).
+
+    A heading whose normalized text is an EXACT member of
+    ``FURNITURE_HEADING_DENYLIST`` is decomposed together with everything that
+    follows it — its body and any deeper sub-headings — up to, but not
+    including, the next heading of the SAME OR HIGHER level. That mirrors the
+    section extent ``_build_sections`` uses, so a denylisted ``<h2>`` takes its
+    ``<h3>`` children with it but never bleeds into the next peer section.
+
+    Exact (not substring) matching means a real section like "Learn More About
+    Diabetes" is preserved even though "learn more" is denylisted. The walk is
+    re-run after each removal so decomposed siblings can't invalidate it. Call
+    sites must gate this to landmark-scoped content only (see
+    ``select_main_content``) so chrome-free pages stay byte-identical.
+    """
+    while True:
+        target: Optional[Tag] = None
+        for heading in soup.find_all(_HEADING_NAMES):
+            if not (isinstance(heading, Tag) and heading.name):
+                continue
+            if (
+                _normalize_heading_text(heading.get_text())
+                in FURNITURE_HEADING_DENYLIST
+            ):
+                target = heading
+                break
+        if target is None:
+            return
+        level = int(target.name[1])
+        doomed: List[Tag] = [target]
+        for sibling in target.find_next_siblings():
+            if (
+                isinstance(sibling, Tag)
+                and sibling.name in _HEADING_NAMES
+                and int(sibling.name[1]) <= level
+            ):
+                break
+            if isinstance(sibling, Tag):
+                doomed.append(sibling)
+        for node in doomed:
+            node.decompose()
+
 
 def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
     """Return the page's main-content subtree, or ``soup`` if none is clear.
@@ -332,7 +389,11 @@ def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
     for selector in _MAIN_CONTENT_SELECTORS:
         nodes = soup.select(selector)
         if len(nodes) == 1 and nodes[0].get_text(strip=True):
-            return BeautifulSoup(str(nodes[0]), HTML_PARSER)
+            scoped = BeautifulSoup(str(nodes[0]), HTML_PARSER)
+            # Only landmark-scoped content gets the furniture strip; the
+            # whole-document fallback below stays byte-identical.
+            _strip_furniture_sections(scoped)
+            return scoped
     return soup
 
 
