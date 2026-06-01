@@ -145,16 +145,18 @@ def test_build_transport_allowed_hosts_port_expands_bare_hosts():
     """
     from openzim_mcp.server import _build_transport_allowed_hosts
 
-    result = _build_transport_allowed_hosts(["mcp.example.com", "alt.example.com:*"])
+    result = set(
+        _build_transport_allowed_hosts(["mcp.example.com", "alt.example.com:*"])
+    )
 
-    # Bare host gains a wildcard-port variant (the fix).
-    assert "mcp.example.com" in result
-    assert "mcp.example.com:*" in result
-    # An entry that already carries ``:*`` is NOT double-expanded.
-    assert "alt.example.com:*" in result
-    assert "alt.example.com:*:*" not in result
+    # Bare host gains a wildcard-port variant (the fix); an entry that already
+    # carries ``:*`` is left as-is. Assert via set algebra rather than ``in``
+    # so static analyzers don't read the host literals as URL substring checks.
+    assert {"mcp.example.com", "mcp.example.com:*", "alt.example.com:*"} <= result
+    # The explicit ``:*`` entry is NOT double-expanded to ``:*:*``.
+    assert result.isdisjoint({"alt.example.com:*:*"})
     # Loopback stays reachable in both bare and wildcard-port forms.
-    assert (_LOOPBACK_HOSTS | _BARE_LOOPBACK_HOSTS) <= set(result)
+    assert (_LOOPBACK_HOSTS | _BARE_LOOPBACK_HOSTS) <= result
 
 
 def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
@@ -190,7 +192,7 @@ def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
         | _BARE_LOOPBACK_HOSTS
         | {"mcp.example.com", "mcp.example.com:*", "alt.example.com:*"}
     )
-    assert "alt.example.com:*:*" not in hosts
+    assert hosts.isdisjoint({"alt.example.com:*:*"})
 
 
 def test_fastmcp_uses_sdk_default_when_hosts_unset(tmp_path):
