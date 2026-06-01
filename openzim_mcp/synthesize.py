@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
 
 from openzim_mcp import bundle as _bundle_mod
+from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import (
     accept_possessive_promotion,
     find_title_match,
@@ -1236,6 +1237,78 @@ def _drop_low_relevance_tail(
     return filtered or top_hits[:1]
 
 
+def _drop_cross_archive_leakage(
+    top_hits: list[tuple[str, dict]],
+    *,
+    query: str,
+    fallback_used: str,
+    max_secondary_archive_hits: int,
+    min_overlap: int,
+) -> list[tuple[str, dict]]:
+    """Drop off-topic SECONDARY-archive hits from an RRF-fused result.
+
+    RRF fuses per-archive rankings by rank only (``search_top_k`` fabricates
+    ``score = 1/rank`` because libzim exposes no BM25), so a secondary
+    archive's rank-1 hit contributes ``1/(60+1)`` and can land in ``top_n``
+    with no relevance bar — e.g. a Blackadder subtitle entry surfacing in a
+    "french revolution" synthesis. This is the relevance floor for the default
+    install (no reranker extra).
+
+    The PRIMARY archive — the one whose best hit is most on-topic (highest
+    query/path token overlap) — keeps all its hits, preserving legitimate
+    depth like ``Reign_of_Terror`` for "french revolution". Primary is chosen
+    by topical overlap, NOT fused position: RRF ties every rank-1 hit at
+    ``1/(k+1)`` and the score-then-path tie-break in :func:`_rrf_fuse` can
+    float an off-topic hit to position 0, so trusting ``top_hits[0]`` would
+    crown the junk hit. A hit from any OTHER archive survives only if its entry
+    path shares at least ``min_overlap`` token(s) with the query, and each
+    secondary archive contributes at most ``max_secondary_archive_hits``. The
+    floor keys on the path (a discriminative signal), NOT the snippet — the
+    snippet is the matched passage and routinely carries a query term even for
+    a leaked junk hit. At least one hit is always kept.
+
+    No-op for the single-archive ``xapian_score`` path (relevance is already
+    handled by :func:`_drop_low_relevance_tail` there) and for sets of one.
+    """
+    if fallback_used != "rrf_fusion" or len(top_hits) <= 1:
+        return top_hits
+    query_tokens = tokenize_for_relevance(query)
+    if not query_tokens:
+        return top_hits
+
+    def _overlap(hit: dict) -> int:
+        return len(query_tokens & tokenize_for_relevance(str(hit.get("path", ""))))
+
+    # Best path-overlap per archive, in first-seen order; primary = the most
+    # on-topic archive, ties broken toward the earliest (best-fused) one.
+    best_overlap: dict[str, int] = {}
+    archive_order: list[str] = []
+    for archive_name, hit in top_hits:
+        ov = _overlap(hit)
+        if archive_name in best_overlap:
+            best_overlap[archive_name] = max(best_overlap[archive_name], ov)
+        else:
+            best_overlap[archive_name] = ov
+            archive_order.append(archive_name)
+    primary_archive = max(
+        archive_order,
+        key=lambda a: (best_overlap[a], -archive_order.index(a)),
+    )
+
+    kept: list[tuple[str, dict]] = []
+    per_archive_kept: dict[str, int] = defaultdict(int)
+    for archive_name, hit in top_hits:
+        if archive_name == primary_archive:
+            kept.append((archive_name, hit))
+            continue
+        if per_archive_kept[archive_name] >= max_secondary_archive_hits:
+            continue
+        if _overlap(hit) >= min_overlap:
+            kept.append((archive_name, hit))
+            per_archive_kept[archive_name] += 1
+    return kept or top_hits[:1]
+
+
 def _demote_list_articles(
     top_hits: list[tuple[str, dict]],
 ) -> list[tuple[str, dict]]:
@@ -1617,6 +1690,18 @@ def synthesize_query(
     # we can't compare scores (RRF-fused multi-archive sets where the
     # underlying scores aren't on the same scale).
     top_hits = _drop_low_relevance_tail(top_hits, fallback_used=fallback_used)
+    # Cross-archive relevance floor: RRF fuses by rank only, so a secondary
+    # archive's top hit can join top_n with no relevance bar (a Blackadder
+    # subtitle leaking into a "french revolution" synthesis). Drop secondary-
+    # archive hits whose entry path shares no query token, and cap per-archive
+    # contributions. Primary archive (the #1 fused hit's archive) is exempt.
+    top_hits = _drop_cross_archive_leakage(
+        top_hits,
+        query=query,
+        fallback_used=fallback_used,
+        max_secondary_archive_hits=config.max_secondary_archive_hits,
+        min_overlap=config.cross_archive_min_overlap,
+    )
     response_query = original_query if original_query is not None else query
     if not top_hits:
         # Even with empty BM25 hits, a canonical title hit might still
