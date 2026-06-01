@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
-from openzim_mcp.defaults import CONTENT as _CONTENT_DEFAULTS
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
@@ -30,11 +29,7 @@ from openzim_mcp.meta import attach_meta
 from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import find_title_match
 from openzim_mcp.zim._ops_base import _json
-
-# Mirror ``openzim_mcp.zim.archive.MAX_REDIRECT_DEPTH`` without importing
-# it directly — archive.py imports this module, so the reverse-import
-# would be circular at module-init time.
-MAX_REDIRECT_DEPTH = _CONTENT_DEFAULTS.MAX_REDIRECT_DEPTH
+from openzim_mcp.zim.redirects import best_effort_redirect_chain
 
 if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
@@ -2646,40 +2641,16 @@ class _SearchMixin:
 
     @staticmethod
     def _follow_redirect_chain(entry: Any) -> Any:
-        """Walk an entry's ``is_redirect`` chain to its canonical target.
+        """Best-effort redirect walk — thin wrapper over the shared helper.
 
-        Bounded by ``MAX_REDIRECT_DEPTH``; tolerates cycles by tracking
-        seen paths. Returns the last *real* entry on any failure so the
-        caller always gets something it can name — never ``None``.
-
-        Post-a14 sweep self-audit: the prior implementation could
-        return ``None`` when ``get_redirect_entry()`` returned None
-        (observed on archives with broken redirect chains). That
-        crashed every downstream ``entry.path`` access. The
-        ``last_good`` tracking keeps the most recent non-None Entry so
-        the caller can still emit a hit.
+        Delegates to
+        :func:`openzim_mcp.zim.redirects.best_effort_redirect_chain`.
+        Retained as a method so the existing call sites (and the
+        monkeypatch in ``test_find_entry_by_title_characterization``) keep
+        working unchanged. Returns the last real entry on any failure;
+        never raises, never returns ``None``.
         """
-        target = entry
-        last_good = entry
-        seen: set = set()
-        first_path = getattr(target, "path", None)
-        if first_path is not None:
-            seen.add(first_path)
-        for _ in range(MAX_REDIRECT_DEPTH):
-            if not getattr(target, "is_redirect", False):
-                return target
-            try:
-                target = target.get_redirect_entry()
-            except Exception:
-                return last_good
-            if target is None:
-                return last_good
-            tp = getattr(target, "path", None)
-            if tp is None or tp in seen:
-                return last_good
-            seen.add(tp)
-            last_good = target
-        return target
+        return best_effort_redirect_chain(entry)
 
     def _fast_path_row(
         self, archive: Any, title: str, file_path: str
