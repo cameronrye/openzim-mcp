@@ -84,6 +84,25 @@ _KNOWN_NAMESPACE_LETTERS = frozenset({"C", "M", "W", "X", "A", "I", "-"})
 _NAMESPACE_PROJECTION_MIN_SAMPLES = 3
 
 
+def _is_zimit_infra_path(path: str) -> bool:
+    """True for warc2zim infra assets stored under ``_zim_static/``.
+
+    New-scheme ZIMIT archives keep the replay runtime (``wombat.js``,
+    ``wombatSetup.js``) and the MathJax font set under ``_zim_static/`` in the
+    iterable C namespace, where they pollute ``browse_namespace`` /
+    ``walk_namespace`` page 1. This is intentionally NARROW — unlike the
+    extension-based ``_is_non_article_target`` (which drops the related-article
+    lead-image leak), it must NOT hide legitimately-navigable C entries that
+    merely carry an asset extension (e.g. ``favicon.png`` or a ``.pdf``
+    handout). Match only the ``_zim_static/`` prefix; new-scheme paths carry no
+    namespace prefix, but tolerate a stray leading slash or ``C/`` for safety.
+    """
+    p = path.lstrip("/")
+    if p.startswith("C/"):
+        p = p[2:]
+    return p.startswith("_zim_static/")
+
+
 class _NamespaceMixin:
     """Namespace listing / browsing / walking methods for ZimOperations."""
 
@@ -95,9 +114,6 @@ class _NamespaceMixin:
 
         def _validate_zim_path(self, zim_file_path: str) -> Path:
             """Resolve via ``_ArchiveAccessMixin`` on the concrete coordinator."""
-
-        def _is_non_article_target(self, path: str) -> bool:
-            """Resolve via ``_StructureMixin`` on the concrete coordinator."""
 
     def list_namespaces_data(self, zim_file_path: str) -> "ListNamespacesResponse":
         """Structured variant of ``list_namespaces``.
@@ -947,26 +963,29 @@ class _NamespaceMixin:
         limit: int,
         entries: List[Dict[str, Any]],
         discovery_method: str,
-        authoritative: bool = True,
     ) -> Dict[str, Any]:
         """Build the v2 Phase B browse-namespace inner payload shape.
 
-        The known-path probe (W) produces an authoritative total with no
-        sampling. The entry-id-range path (C) now FILTERS infra assets, so its
-        ``total`` (``archive.entry_count``) over-counts the navigable entries
-        and becomes a lower bound — callers pass ``authoritative=False`` there.
+        Both the entry-id-range fast path (C) and the known-path probe (W)
+        report ``archive.entry_count`` as an authoritative total. The C path
+        now skips ``_zim_static`` infra assets, so the navigable count is a
+        handful below ``entry_count`` on warc2zim archives — a negligible
+        overcount we keep reporting as authoritative rather than re-labelling
+        every new-scheme C archive's total as a lower bound. (``done`` is
+        derived from scan-exhaustion, so pagination terminates correctly
+        regardless.)
         """
         return {
             "namespace": namespace,
             "total_in_namespace": total,
-            "total_in_namespace_is_lower_bound": not authoritative,
+            "total_in_namespace_is_lower_bound": False,
             "offset": offset,
             "limit": limit,
             "returned_count": len(entries),
             "entries": entries,
             "sampling_based": False,
             "discovery_method": discovery_method,
-            "is_total_authoritative": authoritative,
+            "is_total_authoritative": True,
             "results_may_be_incomplete": False,
         }
 
@@ -988,13 +1007,12 @@ class _NamespaceMixin:
         assets (wombat.js + the MathJax font set) under C at low entry-ids, so
         a plain ``[offset, offset+limit)`` slice surfaced them as page 1. We
         now SCAN-FILL: ``offset`` is reinterpreted as an entry-id scan
-        position, ``_is_non_article_target`` assets are skipped, and we keep
+        position, ``_zim_static`` infra assets are skipped, and we keep
         scanning until the page holds ``limit`` real rows or the range is
         exhausted. ``next_scan_offset`` (the first unscanned id) and
         ``scan_exhausted`` are returned so ``browse_namespace_data`` can encode
         a resume cursor that survives filtering — ``offset + returned_count``
-        would drift once matched-rows < ids-scanned. ``total`` becomes a lower
-        bound (it still counts the filtered assets), so ``authoritative=False``.
+        would drift once matched-rows < ids-scanned.
         """
         total = int(getattr(archive, "entry_count", 0) or 0)
         page_paths: List[str] = []
@@ -1008,7 +1026,7 @@ class _NamespaceMixin:
                 scan_id += 1
                 continue
             scan_id += 1
-            if self._is_non_article_target(path):
+            if _is_zimit_infra_path(path):
                 continue
             page_paths.append(path)
         payload = self._new_scheme_browse_payload(
@@ -1020,7 +1038,6 @@ class _NamespaceMixin:
                 archive, page_paths, log_label="C-namespace"
             ),
             discovery_method="entry_id_range",
-            authoritative=False,
         )
         payload["next_scan_offset"] = scan_id
         payload["scan_exhausted"] = scan_id >= total
@@ -1647,7 +1664,7 @@ class _NamespaceMixin:
                                 path, has_new_scheme=has_new_scheme
                             )
                             == namespace
-                        ) and not (filter_assets and self._is_non_article_target(path)):
+                        ) and not (filter_assets and _is_zimit_infra_path(path)):
                             entries.append(
                                 {
                                     "path": path,

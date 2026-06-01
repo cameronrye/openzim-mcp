@@ -3,8 +3,10 @@
 New-scheme ZIMIT/warc2zim archives store ``_zim_static/`` assets (wombat.js +
 the MathJax font set) under the C namespace at low entry-ids, so they
 dominated page 1 of both ``browse_namespace`` and ``walk_namespace``. Both
-surfaces now skip non-article asset targets via ``_is_non_article_target``.
-Walk already scan-filled with a scan-position cursor, so it only needed the
+surfaces now skip ``_zim_static/`` infra paths via ``_is_zimit_infra_path``
+(a NARROW prefix match — legit C entries with asset extensions like
+``favicon.png`` are kept). Walk already scan-filled with a scan-position
+cursor, so it only needed the
 predicate. Browse additionally had to switch from a fixed entry-id slice to a
 scan-fill loop, so a filtered page still returns ``limit`` real rows and its
 resume cursor encodes the next unscanned entry-id (a scan position) rather
@@ -50,22 +52,22 @@ def _ctx(value):
     return _C()
 
 
-def _mock_archive() -> MagicMock:
+def _mock_archive(entries: list[str] = _ENTRIES) -> MagicMock:
     archive = MagicMock()
     archive.has_new_namespace_scheme = True
-    archive.entry_count = len(_ENTRIES)
+    archive.entry_count = len(entries)
 
     def _by_id(i: int) -> MagicMock:
         entry = MagicMock()
-        entry.path = _ENTRIES[i]
-        entry.title = _ENTRIES[i]
+        entry.path = entries[i]
+        entry.title = entries[i]
         return entry
 
     archive._get_entry_by_id.side_effect = _by_id
     return archive
 
 
-def _ops(tmp_path, monkeypatch) -> ZimOperations:
+def _ops(tmp_path, monkeypatch, entries: list[str] = _ENTRIES) -> ZimOperations:
     config = OpenZimMcpConfig(
         allowed_directories=[str(tmp_path)],
         cache=CacheConfig(enabled=False, max_size=10, ttl_seconds=60),
@@ -76,7 +78,7 @@ def _ops(tmp_path, monkeypatch) -> ZimOperations:
         OpenZimMcpCache(config.cache),
         ContentProcessor(),
     )
-    archive = _mock_archive()
+    archive = _mock_archive(entries)
     monkeypatch.setattr(
         "openzim_mcp.zim_operations.zim_archive", lambda *a, **kw: _ctx(archive)
     )
@@ -127,8 +129,26 @@ def test_browse_namespace_skips_zim_static_assets(tmp_path, monkeypatch) -> None
     paths = [r["path"] for r in resp["results"]]
     assert paths == _REAL
     assert resp["done"] is True
-    # entry_count still counts the filtered assets, so total is a lower bound.
-    assert resp["page_info"].get("total_is_lower_bound") is True
+    # Narrow scope keeps the authoritative total (no lower-bound relabel).
+    assert resp["page_info"].get("total_is_lower_bound") is None
+
+
+def test_browse_keeps_legit_asset_extension_entries(tmp_path, monkeypatch) -> None:
+    """Only ``_zim_static/`` infra is dropped — a legit C entry with an asset
+    extension (favicon.png, a .pdf handout) stays browsable. This would FAIL
+    under the broad extension-based ``_is_non_article_target`` predicate.
+    """
+    entries = [
+        "_zim_static/wombat.js",
+        "favicon.png",
+        "Apple",
+        "handouts/diabetes.pdf",
+    ]
+    ops = _ops(tmp_path, monkeypatch, entries=entries)
+    resp = ops.browse_namespace_data(str(tmp_path / "x.zim"), "C", limit=10)
+    paths = [r["path"] for r in resp["results"]]
+    assert paths == ["favicon.png", "Apple", "handouts/diabetes.pdf"]
+    assert not any("_zim_static" in p for p in paths)
 
 
 def test_browse_scan_fills_full_page(tmp_path, monkeypatch) -> None:

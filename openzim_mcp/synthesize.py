@@ -1290,11 +1290,26 @@ def _drop_cross_archive_leakage(
         else:
             best_overlap[archive_name] = ov
             archive_order.append(archive_name)
+    # If NO hit's path shares a query token, the path signal is useless here
+    # (the query matched on body text, or the archives title things
+    # differently): don't invent a primary and start dropping — leave the
+    # fused set intact and defer to ordering / the reranker.
+    if not any(best_overlap.values()):
+        return top_hits
     primary_archive = max(
         archive_order,
         key=lambda a: (best_overlap[a], -archive_order.index(a)),
     )
 
+    # NB: we do NOT blanket-exempt top_hits[0]. RRF ties every rank-1 hit and
+    # the path tie-break can float a junk secondary hit to position 0 (the very
+    # leak this guards against), so an unconditional rank-0 exemption would
+    # re-admit it. A genuine _promote_title_match canonical is by definition a
+    # title match, so its path shares query tokens and clears the floor on its
+    # own — it needs no special case. (Rare exception: a possessive/variant
+    # promotion whose path token differs from the query token, e.g.
+    # "shakespeare" vs "shakespeares"; that promoted hit can be dropped, which
+    # degrades to the next-best hit — an acceptable trade vs reopening the leak.)
     kept: list[tuple[str, dict]] = []
     per_archive_kept: dict[str, int] = defaultdict(int)
     for archive_name, hit in top_hits:

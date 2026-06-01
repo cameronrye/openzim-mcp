@@ -784,3 +784,71 @@ def test_synthesize_drops_off_topic_cross_archive_leak(
     assert "Baldrick" not in str(response)
     # The on-topic primary hit survives.
     assert "French Revolution" in response["answer_markdown"]
+
+
+def test_drop_cross_archive_leakage_keeps_overlapping_rank0_secondary() -> None:
+    """A _promote_title_match canonical lands at rank 0; because a title match
+    shares query tokens, its path clears the overlap floor on its own — no
+    rank-0 exemption is needed (and an unconditional one would re-admit a
+    tie-break-floated junk hit at position 0). Here the rank-0 hit is from a
+    SECONDARY archive but is on-topic, so it survives."""
+    from openzim_mcp.synthesize import _drop_cross_archive_leakage
+
+    top_hits = [
+        # Promoted on-topic canonical from a secondary archive (path overlaps).
+        ("histwiki", {"path": "A/French_Revolution", "snippet": "", "score": 0.05}),
+        (
+            "wiki",
+            {"path": "A/Causes_of_the_French_Revolution", "snippet": "", "score": 0.03},
+        ),
+    ]
+    kept = _drop_cross_archive_leakage(
+        top_hits,
+        query="french revolution",
+        fallback_used="rrf_fusion",
+        max_secondary_archive_hits=2,
+        min_overlap=1,
+    )
+    paths = [hit["path"] for _, hit in kept]
+    assert "A/French_Revolution" in paths
+    assert "A/Causes_of_the_French_Revolution" in paths
+
+
+def test_drop_cross_archive_leakage_noop_when_no_path_overlap() -> None:
+    """If NO hit's path shares a query token, the path signal is useless (the
+    query matched on body text), so keep the fused set intact rather than
+    invent a primary and start dropping."""
+    from openzim_mcp.synthesize import _drop_cross_archive_leakage
+
+    top_hits = [
+        ("wiki", {"path": "A/Foo", "snippet": "", "score": 0.03}),
+        ("other", {"path": "A/Bar", "snippet": "", "score": 0.016}),
+    ]
+    kept = _drop_cross_archive_leakage(
+        top_hits,
+        query="quantum entanglement",
+        fallback_used="rrf_fusion",
+        max_secondary_archive_hits=2,
+        min_overlap=1,
+    )
+    assert [hit["path"] for _, hit in kept] == ["A/Foo", "A/Bar"]
+
+
+def test_drop_cross_archive_leakage_noop_for_untokenizable_query() -> None:
+    """Documented limitation: a query that tokenizes to nothing (sub-3-char or
+    non-Latin terms) skips the floor entirely — over-filtering a genuine short
+    query is worse than letting the rare cross-archive leak through."""
+    from openzim_mcp.synthesize import _drop_cross_archive_leakage
+
+    top_hits = [
+        ("wiki", {"path": "A/UK", "snippet": "", "score": 0.03}),
+        ("other", {"path": "A/Xyz", "snippet": "", "score": 0.016}),
+    ]
+    kept = _drop_cross_archive_leakage(
+        top_hits,
+        query="uk",  # 'uk' < 3-char relevance floor -> empty query_tokens
+        fallback_used="rrf_fusion",
+        max_secondary_archive_hits=2,
+        min_overlap=1,
+    )
+    assert [hit["path"] for _, hit in kept] == ["A/UK", "A/Xyz"]

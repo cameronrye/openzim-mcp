@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from .constants import (
     DEFAULT_SNIPPET_LENGTH,
     FURNITURE_HEADING_DENYLIST,
+    FURNITURE_HEADING_PREFIXES,
     UNWANTED_HTML_SELECTORS,
 )
 
@@ -321,53 +322,77 @@ _HEADING_NAMES = ("h1", "h2", "h3", "h4", "h5", "h6")
 
 def _normalize_heading_text(text: str) -> str:
     """Lowercase, collapse whitespace, and trim trailing punctuation so a
-    heading can be compared EXACTLY against ``FURNITURE_HEADING_DENYLIST``."""
+    heading can be matched against the furniture denylist / prefixes."""
     collapsed = re.sub(r"\s+", " ", text).strip().lower()
     return collapsed.rstrip(" :.–—")
+
+
+def _is_furniture_heading(text: str) -> bool:
+    """True if a heading is furniture: an EXACT denylist member, or a PREFIX
+    match for a variable-suffix label (e.g. ``Review Date 2/10/2023``).
+
+    Prefix matching requires the prefix to be the whole string or to be
+    followed by a space, so ``review dates of treaties`` does NOT match the
+    ``review date`` prefix.
+    """
+    norm = _normalize_heading_text(text)
+    if norm in FURNITURE_HEADING_DENYLIST:
+        return True
+    return any(
+        norm == prefix or norm.startswith(prefix + " ")
+        for prefix in FURNITURE_HEADING_PREFIXES
+    )
 
 
 def _strip_furniture_sections(soup: BeautifulSoup) -> None:
     """Remove in-article "furniture" sections in place (MedlinePlus etc.).
 
-    A heading whose normalized text is an EXACT member of
-    ``FURNITURE_HEADING_DENYLIST`` is decomposed together with everything that
-    follows it — its body and any deeper sub-headings — up to, but not
-    including, the next heading of the SAME OR HIGHER level. That mirrors the
-    section extent ``_build_sections`` uses, so a denylisted ``<h2>`` takes its
-    ``<h3>`` children with it but never bleeds into the next peer section.
+    A furniture heading (see :func:`_is_furniture_heading`) is removed together
+    with everything that follows it — its body, bare text nodes, and any deeper
+    sub-headings — up to, but not including, the next heading of the SAME OR
+    HIGHER level, so a denylisted ``<h2>`` takes its ``<h3>`` children with it
+    but never bleeds into the next peer section.
 
-    Exact (not substring) matching means a real section like "Learn More About
-    Diabetes" is preserved even though "learn more" is denylisted. The walk is
-    re-run after each removal so decomposed siblings can't invalidate it. Call
-    sites must gate this to landmark-scoped content only (see
+    Matching is exact / bounded-prefix (never loose substring), so a real
+    section like "Learn More About Diabetes" survives the "learn more" entry.
+    The walk re-runs after each removal so decomposed siblings can't invalidate
+    it. Call sites must gate this to landmark-scoped content only (see
     ``select_main_content``) so chrome-free pages stay byte-identical.
+
+    Note: the extent is computed over DIRECT siblings of the heading, which
+    covers MedlinePlus's flat ``<article>`` layout. A furniture heading wrapped
+    in its own block (heading and body not siblings) is not handled — validate
+    against a live archive before broadening.
     """
     while True:
         target: Optional[Tag] = None
         for heading in soup.find_all(_HEADING_NAMES):
             if not (isinstance(heading, Tag) and heading.name):
                 continue
-            if (
-                _normalize_heading_text(heading.get_text())
-                in FURNITURE_HEADING_DENYLIST
-            ):
+            if _is_furniture_heading(heading.get_text()):
                 target = heading
                 break
         if target is None:
             return
         level = int(target.name[1])
-        doomed: List[Tag] = [target]
-        for sibling in target.find_next_siblings():
+        # Materialise the sibling list BEFORE removing anything (decomposing
+        # mutates the sibling chain). ``next_siblings`` (unlike
+        # ``find_next_siblings``) also yields bare NavigableString nodes, so
+        # loose furniture text between headings is removed too.
+        doomed: List[Any] = [target]
+        for sibling in list(target.next_siblings):
             if (
                 isinstance(sibling, Tag)
                 and sibling.name in _HEADING_NAMES
                 and int(sibling.name[1]) <= level
             ):
                 break
-            if isinstance(sibling, Tag):
-                doomed.append(sibling)
+            doomed.append(sibling)
         for node in doomed:
-            node.decompose()
+            if isinstance(node, Tag):
+                node.decompose()
+            else:
+                node.extract()  # NavigableString has no decompose()
 
 
 def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:

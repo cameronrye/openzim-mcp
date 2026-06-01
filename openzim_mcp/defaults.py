@@ -243,10 +243,24 @@ FURNITURE_HEADING_DENYLIST: frozenset = frozenset(
         "patient handouts",
         "related issues",
         "related health topics",
+        "related medlineplus health topics",
         "learn more",
         "review date",
         "reference desk",
         "videos and tutorials",
+    }
+)
+
+# Furniture headings whose label carries a VARIABLE trailing value (a date,
+# count, etc.) so exact match misses them — e.g. MedlinePlus renders the
+# "last reviewed" footer as ``Review Date 2/10/2023``. These match by prefix
+# (the normalized heading must equal the prefix or start with ``prefix + " "``,
+# so a real section like "Review Dates of Treaties" is NOT clipped). Kept
+# separate from the exact denylist and intentionally tiny — only labels that
+# are furniture even with a trailing value belong here.
+FURNITURE_HEADING_PREFIXES: frozenset = frozenset(
+    {
+        "review date",
     }
 )
 

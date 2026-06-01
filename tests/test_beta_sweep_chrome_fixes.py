@@ -531,3 +531,61 @@ def test_furniture_strip_not_applied_without_landmark(cp: ContentProcessor) -> N
     titles = [s["title"] for s in bundle["sections"]]
     assert "Test Your Knowledge" in titles
     assert "this content must survive" in bundle["rendered_markdown"]
+
+
+# Real MedlinePlus furniture as documented in the beta-sweep notes:
+# a date-suffixed "Review Date M/D/YYYY" and the interior-word
+# "Related MedlinePlus Health Topics". Exact-match alone misses both.
+MED_REAL_FORMAT_HTML = """\
+<html><body>
+<article>
+  <h1>Appendicitis</h1>
+  <p>Appendicitis is inflammation of the appendix.</p>
+  <h2>Review Date 2/10/2023</h2>
+  <p>Updated by the A.D.A.M. editorial team.</p>
+  <h2>Related MedlinePlus Health Topics</h2>
+  <ul><li><a href="x.htm">Abdominal Pain</a></li></ul>
+  <h2>Treatment</h2>
+  <p>An appendectomy is the standard treatment.</p>
+</article>
+</body></html>
+"""
+
+
+def test_strip_furniture_handles_real_medlineplus_formats() -> None:
+    """The date-suffixed 'Review Date 2/10/2023' (prefix match) and the
+    interior-word 'Related MedlinePlus Health Topics' (explicit entry) must be
+    removed; a real 'Treatment' section is kept."""
+    from bs4 import BeautifulSoup
+
+    from openzim_mcp.content_processor import _strip_furniture_sections
+
+    soup = BeautifulSoup(MED_REAL_FORMAT_HTML, "html.parser")
+    _strip_furniture_sections(soup)
+    headings = [h.get_text().strip() for h in soup.find_all(["h1", "h2"])]
+    assert headings == ["Appendicitis", "Treatment"]
+    text = soup.get_text()
+    assert "editorial team" not in text  # date-suffixed Review Date section gone
+    assert "Abdominal Pain" not in text  # Related MedlinePlus Health Topics gone
+    assert "standard treatment" in text  # real Treatment section preserved
+
+
+def test_strip_furniture_removes_loose_text_nodes() -> None:
+    """Bare NavigableString furniture between a denylisted heading and the next
+    same-level heading must be removed too — find_next_siblings() skipped it."""
+    from bs4 import BeautifulSoup
+
+    from openzim_mcp.content_processor import _strip_furniture_sections
+
+    html = (
+        "<article><h1>T</h1><p>lead body</p>"
+        "<h2>Related Issues</h2>loose furniture text<p>more furniture</p>"
+        "<h2>Real</h2><p>real body</p></article>"
+    )
+    soup = BeautifulSoup(html, "html.parser")
+    _strip_furniture_sections(soup)
+    text = soup.get_text()
+    assert "loose furniture text" not in text
+    assert "more furniture" not in text
+    assert "real body" in text
+    assert "lead body" in text
