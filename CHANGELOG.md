@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2](https://github.com/cameronrye/openzim-mcp/compare/v2.1.1...v2.1.2) (2026-06-01)
+
+
+### Bug Fixes
+
+* **http:** port-expand bare allowed-hosts so proxied Host:port passes ([55ad602](https://github.com/cameronrye/openzim-mcp/commit/55ad6025c47e883da90da43354d5fcd4bc574a66))
+
+
+### Documentation
+
+* sync README + website to the shipped v2.1.1 surface ([#246](https://github.com/cameronrye/openzim-mcp/issues/246)) ([9264f15](https://github.com/cameronrye/openzim-mcp/commit/9264f15a79e6d51f1e518620667093343685e93a))
+
 ## [2.1.1](https://github.com/cameronrye/openzim-mcp/compare/v2.1.0...v2.1.1) (2026-05-30)
 
 
