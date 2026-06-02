@@ -66,3 +66,53 @@ CACHE_HIGH_HIT_RATE_THRESHOLD = CACHE_PERFORMANCE.HIGH_HIT_RATE
 NAMESPACE_MAX_SAMPLE_SIZE = NAMESPACE_SAMPLING.MAX_SAMPLE_SIZE
 NAMESPACE_MAX_ENTRIES = NAMESPACE_SAMPLING.MAX_NAMESPACE_ENTRIES
 NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER = NAMESPACE_SAMPLING.MAX_SAMPLE_ATTEMPTS_MULTIPLIER
+
+# Declare the full public surface. This module is a backward-compat facade:
+# the names below are re-exported for external consumers (and several are
+# imported by sibling modules), so they are intentionally "unused" within
+# this file. Listing them in ``__all__`` marks them as the public API,
+# which suppresses the CodeQL ``py/unused-import`` note (it honours
+# ``__all__`` membership) the same way the per-line ``# noqa: F401`` silences
+# flake8 — without deleting re-exports the package depends on.
+__all__ = [
+    # Structured defaults re-exported from ``defaults`` (new code should
+    # import these from ``openzim_mcp.defaults`` directly).
+    "BATCH",
+    "CACHE",
+    "CACHE_PERFORMANCE",
+    "CONTENT",
+    "FURNITURE_HEADING_DENYLIST",
+    "FURNITURE_HEADING_PREFIXES",
+    "INPUT_LIMITS",
+    "NAMESPACE_SAMPLING",
+    "RATE_LIMIT",
+    "SERVER",
+    "TIMEOUTS",
+    "TOOL_MODE_ADVANCED",
+    "TOOL_MODE_SIMPLE",
+    "UNWANTED_HTML_SELECTORS",
+    "VALID_TOOL_MODES",
+    "VALID_TRANSPORT_TYPES",
+    "ZIM_FILE_EXTENSION",
+    # Legacy flat constant names (derived above) kept for backward compat.
+    "DEFAULT_SNIPPET_LENGTH",
+    "DEFAULT_MAX_CONTENT_LENGTH",
+    "DEFAULT_SEARCH_LIMIT",
+    "DEFAULT_CACHE_SIZE",
+    "DEFAULT_CACHE_TTL",
+    "DEFAULT_MAX_BINARY_SIZE",
+    "MAX_BATCH_SIZE",
+    "INPUT_LIMIT_FILE_PATH",
+    "INPUT_LIMIT_QUERY",
+    "INPUT_LIMIT_ENTRY_PATH",
+    "INPUT_LIMIT_NAMESPACE",
+    "INPUT_LIMIT_CONTENT_TYPE",
+    "INPUT_LIMIT_PARTIAL_QUERY",
+    "REGEX_TIMEOUT_SECONDS",
+    "DEFAULT_MAIN_PAGE_TRUNCATION",
+    "CACHE_LOW_HIT_RATE_THRESHOLD",
+    "CACHE_HIGH_HIT_RATE_THRESHOLD",
+    "NAMESPACE_MAX_SAMPLE_SIZE",
+    "NAMESPACE_MAX_ENTRIES",
+    "NAMESPACE_SAMPLE_ATTEMPTS_MULTIPLIER",
+]
