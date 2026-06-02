@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from openzim_mcp.content_processor import ContentProcessor
 
 from openzim_mcp import bundle as _bundle_mod
+from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import (
     accept_possessive_promotion,
     find_title_match,
@@ -939,6 +940,23 @@ def _build_pass0_promoted_hit(
     }
 
 
+def _mark_promoted(hit: dict) -> dict:
+    """Tag a title-promoted hit so :func:`_drop_cross_archive_leakage` exempts
+    it from the cross-archive relevance floor.
+
+    A possessive / redirect-target promotion produces a canonical whose PATH
+    can be lexically disjoint from the query — e.g. "darwins evolution" ->
+    ``On_the_Origin_of_Species`` shares no query token. The floor would drop it
+    despite the promotion deliberately placing it at rank 0. The tag carries
+    that provenance; tie-break-floated junk (the leak case) has no tag, so it
+    is still filtered. The marker is internal — ``_build_considered_articles``
+    and passage extraction read only ``path``/``title``/``score``, so it never
+    surfaces in the response.
+    """
+    hit["promoted"] = True
+    return hit
+
+
 def _promote_title_match(
     top_hits: list[tuple[str, dict]],
     *,
@@ -1072,7 +1090,7 @@ def _promote_title_match(
                 for n, h in top_hits
                 if n == archive_name and str(h.get("path", "")) == full_path
             )
-            return [(archive_name, promoted_hit_p0), *reordered_p0]
+            return [(archive_name, _mark_promoted(promoted_hit_p0)), *reordered_p0]
         # Not in top_hits — construct a properly-shaped hit. Re-probe
         # via ``title_match_hit`` using the resolved title (which the
         # fast-path lookup can match exactly now that we know the
@@ -1081,7 +1099,7 @@ def _promote_title_match(
         promoted_hit_built: dict = _build_pass0_promoted_hit(
             full_probe, archive, title_match_hit
         )
-        return [(archive_name, promoted_hit_built), *top_hits]
+        return [(archive_name, _mark_promoted(promoted_hit_built)), *top_hits]
 
     if not callable(title_match_hit):
         return top_hits
@@ -1125,8 +1143,8 @@ def _promote_title_match(
                     for n, h in top_hits
                     if n == archive_name and str(h.get("path", "")) == promoted_path
                 )
-                return [(archive_name, promoted_hit), *reordered]
-            return [(archive_name, promoted), *top_hits]
+                return [(archive_name, _mark_promoted(promoted_hit)), *reordered]
+            return [(archive_name, _mark_promoted(promoted)), *top_hits]
     return top_hits
 
 
@@ -1234,6 +1252,96 @@ def _drop_low_relevance_tail(
         if score is None or score >= threshold
     ]
     return filtered or top_hits[:1]
+
+
+def _drop_cross_archive_leakage(
+    top_hits: list[tuple[str, dict]],
+    *,
+    query: str,
+    fallback_used: str,
+    max_secondary_archive_hits: int,
+    min_overlap: int,
+) -> list[tuple[str, dict]]:
+    """Drop off-topic SECONDARY-archive hits from an RRF-fused result.
+
+    RRF fuses per-archive rankings by rank only (``search_top_k`` fabricates
+    ``score = 1/rank`` because libzim exposes no BM25), so a secondary
+    archive's rank-1 hit contributes ``1/(60+1)`` and can land in ``top_n``
+    with no relevance bar — e.g. a Blackadder subtitle entry surfacing in a
+    "french revolution" synthesis. This is the relevance floor for the default
+    install (no reranker extra).
+
+    The PRIMARY archive — the one whose best hit is most on-topic (highest
+    query/path token overlap) — keeps all its hits, preserving legitimate
+    depth like ``Reign_of_Terror`` for "french revolution". Primary is chosen
+    by topical overlap, NOT fused position: RRF ties every rank-1 hit at
+    ``1/(k+1)`` and the score-then-path tie-break in :func:`_rrf_fuse` can
+    float an off-topic hit to position 0, so trusting ``top_hits[0]`` would
+    crown the junk hit. A hit from any OTHER archive survives only if its entry
+    path shares at least ``min_overlap`` token(s) with the query, and each
+    secondary archive contributes at most ``max_secondary_archive_hits``. The
+    floor keys on the path (a discriminative signal), NOT the snippet — the
+    snippet is the matched passage and routinely carries a query term even for
+    a leaked junk hit. At least one hit is always kept.
+
+    No-op for the single-archive ``xapian_score`` path (relevance is already
+    handled by :func:`_drop_low_relevance_tail` there) and for sets of one.
+    """
+    if fallback_used != "rrf_fusion" or len(top_hits) <= 1:
+        return top_hits
+    query_tokens = tokenize_for_relevance(query)
+    if not query_tokens:
+        return top_hits
+
+    def _overlap(hit: dict) -> int:
+        return len(query_tokens & tokenize_for_relevance(str(hit.get("path", ""))))
+
+    # Best path-overlap per archive, in first-seen order; primary = the most
+    # on-topic archive, ties broken toward the earliest (best-fused) one.
+    best_overlap: dict[str, int] = {}
+    archive_order: list[str] = []
+    for archive_name, hit in top_hits:
+        ov = _overlap(hit)
+        if archive_name in best_overlap:
+            best_overlap[archive_name] = max(best_overlap[archive_name], ov)
+        else:
+            best_overlap[archive_name] = ov
+            archive_order.append(archive_name)
+    # When NO hit's path shares a query token, the path floor is blind — this
+    # happens for acronym/abbreviation queries whose canonical SPELLS OUT the
+    # term ("cpu" -> "Central_processing_unit"). Don't drop by overlap then
+    # (we'd nuke the real answer), but still CAP each non-primary archive so
+    # junk fan-in stays bounded. Primary = the best-fused (first-seen) archive.
+    all_zero = not any(best_overlap.values())
+    if all_zero:
+        primary_archive = archive_order[0]
+    else:
+        primary_archive = max(
+            archive_order,
+            key=lambda a: (best_overlap[a], -archive_order.index(a)),
+        )
+
+    # We do NOT blanket-exempt top_hits[0]: RRF ties every rank-1 hit and the
+    # path tie-break can float a junk secondary hit to position 0 (the very
+    # leak this guards against). Instead we exempt hits TAGGED by
+    # _promote_title_match (``promoted``) — a possessive/variant canonical's
+    # path can be lexically disjoint from the query (e.g. "darwins evolution"
+    # -> On_the_Origin_of_Species), and promotion deliberately placed it there.
+    # Tie-break junk carries no tag, so the leak stays closed.
+    kept: list[tuple[str, dict]] = []
+    per_archive_kept: dict[str, int] = defaultdict(int)
+    for archive_name, hit in top_hits:
+        if hit.get("promoted") or archive_name == primary_archive:
+            kept.append((archive_name, hit))
+            continue
+        if per_archive_kept[archive_name] >= max_secondary_archive_hits:
+            continue
+        # all_zero: cap only (overlap signal is useless). Otherwise also
+        # require lexical overlap on the path.
+        if all_zero or _overlap(hit) >= min_overlap:
+            kept.append((archive_name, hit))
+            per_archive_kept[archive_name] += 1
+    return kept or top_hits[:1]
 
 
 def _demote_list_articles(
@@ -1617,6 +1725,19 @@ def synthesize_query(
     # we can't compare scores (RRF-fused multi-archive sets where the
     # underlying scores aren't on the same scale).
     top_hits = _drop_low_relevance_tail(top_hits, fallback_used=fallback_used)
+    # Cross-archive relevance floor: RRF fuses by rank only, so a secondary
+    # archive's top hit can join top_n with no relevance bar (a Blackadder
+    # subtitle leaking into a "french revolution" synthesis). Drop secondary-
+    # archive hits whose entry path shares no query token, and cap per-archive
+    # contributions. The most on-topic archive (highest path overlap) and any
+    # title-promoted canonical are exempt.
+    top_hits = _drop_cross_archive_leakage(
+        top_hits,
+        query=query,
+        fallback_used=fallback_used,
+        max_secondary_archive_hits=config.max_secondary_archive_hits,
+        min_overlap=config.cross_archive_min_overlap,
+    )
     response_query = original_query if original_query is not None else query
     if not top_hits:
         # Even with empty BM25 hits, a canonical title hit might still

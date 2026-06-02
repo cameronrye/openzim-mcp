@@ -162,6 +162,27 @@ class SynthesizeConfig(BaseModel):
             "dominate strong BM25 hits."
         ),
     )
+    max_secondary_archive_hits: int = Field(
+        default=2,
+        ge=0,
+        le=50,
+        description=(
+            "Cap on hits each NON-primary archive may contribute to the "
+            "RRF-fused multi-archive result, bounding cross-archive flooding. "
+            "0 = primary archive only."
+        ),
+    )
+    cross_archive_min_overlap: int = Field(
+        default=1,
+        ge=1,
+        le=10,
+        description=(
+            "Minimum query-token overlap a secondary-archive hit's entry path "
+            "must have to survive the cross-archive relevance floor. RRF fuses "
+            "by rank only (no BM25), so this lexical floor is the relevance bar "
+            "on a default install. Primary-archive hits are exempt."
+        ),
+    )
 
 
 class RerankerConfig(BaseModel):

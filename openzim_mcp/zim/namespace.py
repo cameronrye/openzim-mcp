@@ -96,6 +96,9 @@ class _NamespaceMixin:
         def _validate_zim_path(self, zim_file_path: str) -> Path:
             """Resolve via ``_ArchiveAccessMixin`` on the concrete coordinator."""
 
+        def _is_non_article_target(self, path: str) -> bool:
+            """Resolve via ``_StructureMixin`` on the concrete coordinator."""
+
     def list_namespaces_data(self, zim_file_path: str) -> "ListNamespacesResponse":
         """Structured variant of ``list_namespaces``.
 
@@ -651,10 +654,13 @@ class _NamespaceMixin:
             except CursorMismatchError as e:
                 raise OpenZimMcpValidationError(str(e)) from e
 
-        # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
-        # shape: entries/total_in_namespace/...) don't leak through
-        # after the upgrade.
-        cache_key = f"browse_ns_data:v2b:{validated_path}:{namespace}:{limit}:{offset}"
+        # Cache key bumped v2b -> v2c: new-scheme C now filters non-article
+        # assets, so its results and cursor semantics changed (``s.o`` is an
+        # entry-id scan position, not a row offset; ``total`` stays the
+        # authoritative ``entry_count``). The bump stops pre-fix cached pages —
+        # with the old unfiltered rows and row-offset cursor — from leaking
+        # through after deploy.
+        cache_key = f"browse_ns_data:v2c:{validated_path}:{namespace}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespace browse dict for: {namespace}")
@@ -682,25 +688,43 @@ class _NamespaceMixin:
             results_may_be_incomplete = raw.get("results_may_be_incomplete", False)
 
             returned_count = len(entries)
-            last_index = offset + returned_count
-            # When the discovery method is sampling-based, ``total_in_namespace``
-            # is the size of the sample (capped at ``NAMESPACE_MAX_ENTRIES``),
-            # not the true namespace size. Reporting ``done=True`` once the
-            # caller has consumed the sample silently truncates pagination —
-            # the contract key says "no more pages" but in reality only a
-            # fraction of the namespace was returned. When sampling is in
-            # play and the page is full, keep emitting ``next_cursor`` so
-            # the caller can either continue paging or pivot to
-            # ``walk_namespace`` for exhaustive iteration. The
-            # ``page_info.total_is_lower_bound`` flag plus the new
-            # ``_meta.reason="sample_only"`` give the caller enough signal
-            # to interpret the situation correctly.
-            sample_exhausted = (
-                sampling_based
-                and returned_count >= limit
-                and last_index >= total_in_namespace
-            )
-            done = (last_index >= total_in_namespace) and not sample_exhausted
+            # New-scheme C uses entry-id scan-fill (it filters non-article
+            # assets), so its resume position is a SCAN position, not a
+            # matched-row offset: ``next_scan_offset`` is the next unscanned
+            # entry-id and ``done`` is scan-exhaustion. Encoding
+            # ``offset + returned_count`` instead would drift once filtering
+            # makes matched-rows < ids-scanned. Every other discovery method
+            # keeps the row-offset cursor.
+            next_scan_offset = raw.get("next_scan_offset")
+            # Surfaced so a consumer reads ``returned_count`` < ``limit`` (and,
+            # at ``done``, well below ``total`` on a media-rich archive) as
+            # filtering, not truncation. The scan-fill path counts genuine
+            # asset skips precisely (read errors / materialise drops excluded).
+            assets_filtered = bool(raw.get("assets_filtered"))
+            if next_scan_offset is not None:
+                resume_index = int(next_scan_offset)
+                done = bool(raw.get("scan_exhausted", True))
+                sample_exhausted = False
+            else:
+                last_index = offset + returned_count
+                # When the discovery method is sampling-based,
+                # ``total_in_namespace`` is the size of the sample (capped at
+                # ``NAMESPACE_MAX_ENTRIES``), not the true namespace size.
+                # Reporting ``done=True`` once the caller has consumed the
+                # sample silently truncates pagination — the contract key says
+                # "no more pages" but in reality only a fraction of the
+                # namespace was returned. When sampling is in play and the page
+                # is full, keep emitting ``next_cursor`` so the caller can
+                # continue paging or pivot to ``walk_namespace`` for exhaustive
+                # iteration. The ``page_info.total_is_lower_bound`` flag plus
+                # ``_meta.reason="sample_only"`` give the caller enough signal.
+                sample_exhausted = (
+                    sampling_based
+                    and returned_count >= limit
+                    and last_index >= total_in_namespace
+                )
+                done = (last_index >= total_in_namespace) and not sample_exhausted
+                resume_index = last_index
             next_cursor: Optional[str] = None
             if not done:
                 from openzim_mcp.pagination import archive_identity
@@ -708,7 +732,7 @@ class _NamespaceMixin:
                 next_cursor = Cursor.encode(
                     tool="browse_namespace",
                     state={
-                        "o": last_index,
+                        "o": resume_index,
                         "l": limit,
                         "ns": namespace,
                         "ai": archive_identity(validated_path),
@@ -722,6 +746,8 @@ class _NamespaceMixin:
             }
             if not is_total_authoritative:
                 page_info["total_is_lower_bound"] = True
+            if assets_filtered:
+                page_info["assets_filtered"] = True
 
             payload: Dict[str, Any] = {
                 "namespace": namespace,
@@ -932,10 +958,15 @@ class _NamespaceMixin:
     ) -> Dict[str, Any]:
         """Build the v2 Phase B browse-namespace inner payload shape.
 
-        Both the entry-id-range fast path (C) and the known-path probe
-        (W) produce authoritative totals with no sampling — every field
-        below is the same between them except ``discovery_method``,
-        so factor the dict to one place.
+        Both the entry-id-range fast path (C) and the known-path probe (W)
+        report ``archive.entry_count`` as the total. The C path now skips
+        non-article assets (images / css / js / fonts / media), so the
+        navigable count is at or below ``entry_count`` — we keep reporting
+        ``entry_count`` as the (authoritative) total rather than invert the
+        ``lower_bound`` flag, which means "true count is at least this" and
+        would be backwards here. ``done`` is derived from scan-exhaustion, so
+        pagination still terminates correctly; the only cosmetic effect is that
+        a media-rich archive reaches ``done`` before ``returned == total``.
         """
         return {
             "namespace": namespace,
@@ -960,25 +991,41 @@ class _NamespaceMixin:
     ) -> Dict[str, Any]:
         """Page through new-scheme C-namespace entries by entry-id range.
 
-        New-scheme archives store every iterable entry under C, so
-        pagination is just ``[offset, offset+limit)`` against the
-        entry-id range. The legacy code built a 27M-item list first and
-        then sliced — slow, memory-hostile, and triggered "session
-        expired" errors on real Wikipedia archives (D2). ``entry_count``
-        is the authoritative total; ``done`` falls out naturally from
-        ``offset + returned_count >= total``.
+        New-scheme archives store every iterable entry under C, so we page
+        directly over the entry-id range rather than building a 27M-item list
+        and slicing it (the legacy approach that triggered "session expired"
+        crashes on real Wikipedia archives, D2).
+
+        New-scheme archives also store non-article assets under C — ZIMIT
+        ``_zim_static`` infra (wombat.js + the MathJax font set), plus images /
+        css / fonts / media — so a plain ``[offset, offset+limit)`` slice
+        surfaced them as page 1. We now SCAN-FILL: ``offset`` is reinterpreted
+        as an entry-id scan position, ``_is_non_article_target`` assets are
+        skipped (``.html`` / ``.htm`` are kept as articles), and we keep
+        scanning until the page holds ``limit`` real rows or the range is
+        exhausted. ``next_scan_offset`` (the first unscanned id) and
+        ``scan_exhausted`` are returned so ``browse_namespace_data`` can encode
+        a resume cursor that survives filtering — ``offset + returned_count``
+        would drift once matched-rows < ids-scanned.
         """
         total = int(getattr(archive, "entry_count", 0) or 0)
         page_paths: List[str] = []
-        end = min(offset + limit, total)
-        for entry_id in range(offset, end):
+        assets_skipped = 0
+        scan_id = offset
+        while scan_id < total and len(page_paths) < limit:
             try:
-                entry = archive._get_entry_by_id(entry_id)
+                entry = archive._get_entry_by_id(scan_id)
+                path = entry.path
             except Exception as e:
-                logger.warning(f"Error reading entry id {entry_id}: {e}")
+                logger.warning(f"Error reading entry id {scan_id}: {e}")
+                scan_id += 1
                 continue
-            page_paths.append(entry.path)
-        return self._new_scheme_browse_payload(
+            scan_id += 1
+            if self._is_non_article_target(path):
+                assets_skipped += 1
+                continue
+            page_paths.append(path)
+        payload = self._new_scheme_browse_payload(
             namespace=namespace,
             total=total,
             offset=offset,
@@ -988,6 +1035,12 @@ class _NamespaceMixin:
             ),
             discovery_method="entry_id_range",
         )
+        payload["next_scan_offset"] = scan_id
+        payload["scan_exhausted"] = scan_id >= total
+        # Count ONLY genuine asset skips (not read errors / materialise drops)
+        # so the surfaced ``assets_filtered`` flag means exactly what it says.
+        payload["assets_filtered"] = assets_skipped > 0
+        return payload
 
     # Well-known W-namespace paths in new-scheme archives. The
     # ``has_entry_by_path`` probe is unreliable here — most Wikipedia
@@ -1595,6 +1648,12 @@ class _NamespaceMixin:
 
                 entries: List[Dict[str, Any]] = []
                 entry_id = scan_at
+                # Non-article asset filter applies ONLY to the new-scheme C
+                # surface, where every iterable entry (articles AND ZIMIT
+                # ``_zim_static`` infra, images, css, fonts, media) lives under
+                # C. Old-scheme or non-C walks (e.g. the ``I`` image namespace)
+                # must still surface their assets, so they are never filtered.
+                filter_assets = has_new_scheme and namespace == "C"
                 while entry_id < archive_entry_count and len(entries) < limit:
                     try:
                         entry = archive._get_entry_by_id(entry_id)
@@ -1604,7 +1663,7 @@ class _NamespaceMixin:
                                 path, has_new_scheme=has_new_scheme
                             )
                             == namespace
-                        ):
+                        ) and not (filter_assets and self._is_non_article_target(path)):
                             entries.append(
                                 {
                                     "path": path,

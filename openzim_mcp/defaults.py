@@ -221,6 +221,49 @@ UNWANTED_HTML_SELECTORS: List[str] = [
     ".geo-multi-punct",
 ]
 
+# In-article "furniture" headings to drop on ZIMIT/warc2zim pages. The
+# main-content landmark scoping (``select_main_content``) removes chrome
+# OUTSIDE the <article>, but MedlinePlus encodes boilerplate nav/quiz/metadata
+# blocks as ordinary headed sections INSIDE it. We strip a section whose
+# heading text EXACTLY matches one of these (case-insensitive, whitespace-
+# collapsed, trailing punctuation trimmed) up to the next same-or-higher-level
+# heading. Matching is exact — NOT substring — so a real section like
+# "Learn More About Diabetes" is never clipped by the "learn more" entry.
+# Kept intentionally conservative and MedlinePlus-shaped: only labels that are
+# unambiguously furniture (never a plausible prose-section title). Generic
+# medical words MedlinePlus also reuses as topic-nav ("Symptoms", "Causes",
+# "Diagnosis and Tests", ...) are deliberately EXCLUDED to avoid clipping real
+# article content; grow this list only with archive-confirmed evidence. The
+# strip is landmark-gated, so Wikipedia/mwoffliner pages never see it.
+FURNITURE_HEADING_DENYLIST: frozenset = frozenset(
+    {
+        "test your knowledge",
+        "see, play and learn",
+        "find an expert",
+        "patient handouts",
+        "related issues",
+        "related health topics",
+        "related medlineplus health topics",
+        "learn more",
+        "review date",
+        "reference desk",
+        "videos and tutorials",
+    }
+)
+
+# Furniture headings whose label carries a VARIABLE trailing value (a date,
+# count, etc.) so exact match misses them — e.g. MedlinePlus renders the
+# "last reviewed" footer as ``Review Date 2/10/2023``. These match by prefix
+# (the normalized heading must equal the prefix or start with ``prefix + " "``,
+# so a real section like "Review Dates of Treaties" is NOT clipped). Kept
+# separate from the exact denylist and intentionally tiny — only labels that
+# are furniture even with a trailing value belong here.
+FURNITURE_HEADING_PREFIXES: frozenset = frozenset(
+    {
+        "review date",
+    }
+)
+
 # Rate limiter operation costs
 RATE_LIMIT_COSTS: Dict[str, int] = {
     "search": 2,

@@ -9,7 +9,12 @@ from urllib.parse import urlparse
 import html2text
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
-from .constants import DEFAULT_SNIPPET_LENGTH, UNWANTED_HTML_SELECTORS
+from .constants import (
+    DEFAULT_SNIPPET_LENGTH,
+    FURNITURE_HEADING_DENYLIST,
+    FURNITURE_HEADING_PREFIXES,
+    UNWANTED_HTML_SELECTORS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +317,83 @@ def _collect_meta_tag_metadata(soup: BeautifulSoup) -> Dict[str, str]:
 # sidebar, the single article wins and the sidebar is excluded.
 _MAIN_CONTENT_SELECTORS = ("article", "main", "[role=main]")
 
+_HEADING_NAMES = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
+def _normalize_heading_text(text: str) -> str:
+    """Lowercase, collapse whitespace, and trim trailing punctuation so a
+    heading can be matched against the furniture denylist / prefixes."""
+    collapsed = re.sub(r"\s+", " ", text).strip().lower()
+    return collapsed.rstrip(" :.–—")
+
+
+def _is_furniture_heading(text: str) -> bool:
+    """True if a heading is furniture: an EXACT denylist member, or a PREFIX
+    match for a variable-suffix label (e.g. ``Review Date 2/10/2023``).
+
+    Prefix matching requires the prefix to be the whole string or to be
+    followed by a space, so ``review dates of treaties`` does NOT match the
+    ``review date`` prefix.
+    """
+    norm = _normalize_heading_text(text)
+    if norm in FURNITURE_HEADING_DENYLIST:
+        return True
+    return any(
+        norm == prefix or norm.startswith(prefix + " ")
+        for prefix in FURNITURE_HEADING_PREFIXES
+    )
+
+
+def _strip_furniture_sections(soup: BeautifulSoup) -> None:
+    """Remove in-article "furniture" sections in place (MedlinePlus etc.).
+
+    A furniture heading (see :func:`_is_furniture_heading`) is removed together
+    with everything that follows it — its body, bare text nodes, and any deeper
+    sub-headings — up to, but not including, the next heading of the SAME OR
+    HIGHER level, so a denylisted ``<h2>`` takes its ``<h3>`` children with it
+    but never bleeds into the next peer section.
+
+    Matching is exact / bounded-prefix (never loose substring), so a real
+    section like "Learn More About Diabetes" survives the "learn more" entry.
+    The walk re-runs after each removal so decomposed siblings can't invalidate
+    it. Call sites must gate this to landmark-scoped content only (see
+    ``select_main_content``) so chrome-free pages stay byte-identical.
+
+    Note: the extent is computed over DIRECT siblings of the heading, which
+    covers MedlinePlus's flat ``<article>`` layout. A furniture heading wrapped
+    in its own block (heading and body not siblings) is not handled — validate
+    against a live archive before broadening.
+    """
+    while True:
+        target: Optional[Tag] = None
+        for heading in soup.find_all(_HEADING_NAMES):
+            if not (isinstance(heading, Tag) and heading.name):
+                continue
+            if _is_furniture_heading(heading.get_text()):
+                target = heading
+                break
+        if target is None:
+            return
+        level = int(target.name[1])
+        # Materialise the sibling list BEFORE removing anything (decomposing
+        # mutates the sibling chain). ``next_siblings`` (unlike
+        # ``find_next_siblings``) also yields bare NavigableString nodes, so
+        # loose furniture text between headings is removed too.
+        doomed: List[Any] = [target]
+        for sibling in list(target.next_siblings):
+            if (
+                isinstance(sibling, Tag)
+                and sibling.name in _HEADING_NAMES
+                and int(sibling.name[1]) <= level
+            ):
+                break
+            doomed.append(sibling)
+        for node in doomed:
+            if isinstance(node, Tag):
+                node.decompose()
+            else:
+                node.extract()  # NavigableString has no decompose()
+
 
 def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
     """Return the page's main-content subtree, or ``soup`` if none is clear.
@@ -332,7 +414,11 @@ def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
     for selector in _MAIN_CONTENT_SELECTORS:
         nodes = soup.select(selector)
         if len(nodes) == 1 and nodes[0].get_text(strip=True):
-            return BeautifulSoup(str(nodes[0]), HTML_PARSER)
+            scoped = BeautifulSoup(str(nodes[0]), HTML_PARSER)
+            # Only landmark-scoped content gets the furniture strip; the
+            # whole-document fallback below stays byte-identical.
+            _strip_furniture_sections(scoped)
+            return scoped
     return soup
 
 

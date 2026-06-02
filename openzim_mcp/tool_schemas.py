@@ -27,6 +27,9 @@ class PageInfo(TypedDict):
     limit: int
     returned_count: int
     total_is_lower_bound: NotRequired[bool]
+    # Set by new-scheme C browse when non-article assets were skipped on the
+    # page (so a consumer reads returned_count < limit/total as filtering).
+    assets_filtered: NotRequired[bool]
 
 
 class MetaEnvelope(TypedDict, total=False):
