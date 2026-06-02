@@ -992,6 +992,71 @@ def _accept_possessive_redirect(promoted: Dict[str, Any], topic: str) -> bool:
     return bool(possessors & cand_tokens)
 
 
+def passes_z4(
+    promoted: Dict[str, Any],
+    topic: str,
+    title_probe: Callable[[str], Optional[Dict[str, Any]]],
+) -> bool:
+    """Post-b11 Z4 layer, shared by the tell_me_about
+    (``topic_preprocessing.promote_topic_via_title_index``) and
+    synthesize (``synthesize._promote_title_match``) promotion paths so
+    the two cannot drift.
+
+    Accept the promotion UNLESS it is a multi-token tangential canonical
+    (``is_tangential_multi_token_shape``) with none of the three
+    exemptions: biographical-canonical (a topic token probes to the same
+    canonical), digit-specificity (numbered instance), or type-extension
+    (canonical's leading tokens are a 2+-token contiguous topic slice).
+    Possessive topics bypass Z4 — their own accept gate
+    (``accept_possessive_promotion``) handles them.
+    """
+    if has_apostrophe_possessive(topic):
+        return True
+    if not is_tangential_multi_token_shape(promoted, topic):
+        return True
+    if probed_head_matches_promoted(topic, promoted, title_probe):
+        return True
+    if has_digit_specificity_match(promoted, topic):
+        return True
+    if has_topic_prefix_canonical_extension(promoted, topic):
+        return True
+    return False
+
+
+def accept_tail_promotion(
+    promoted: Dict[str, Any],
+    topic: str,
+    title_probe: Callable[[str], Optional[Dict[str, Any]]],
+) -> bool:
+    """Acceptance gate for a tail-iteration title promotion.
+
+    Shared by the tell_me_about tail loop (Pass 1 / Pass 2 of
+    ``promote_topic_via_title_index``) and the synthesize tail loop
+    (``_promote_title_match``) so a tail-hijack cannot slip through one
+    path while the other guards it — the post-b4 D3 / "synthesize never
+    got the treatment" drift class. ``title_probe`` resolves a single
+    topic token to a title-index hit (or ``None``); it is used by the
+    multi-entity discriminator and the Z4 biographical exemption.
+
+    Possessive topics defer entirely to ``accept_possessive_promotion``
+    (the b6/b7/b8 possessor-token rules). Non-possessive topics apply
+    the base accept gate; if it rejects as a single-token tail-hijack
+    (``Stalin USSR Russia`` -> ``Russia``, ``ssh connection refused`` ->
+    ``Refused``), the b10 single-entity escape re-accepts ONLY when the
+    topic is genuine filler-prose around one entity (fewer than two
+    OTHER strong entities probe successfully — ``what is the population
+    of detroit`` -> ``Detroit`` stays accepted). Otherwise the Z4
+    multi-token tangential layer applies.
+    """
+    if has_apostrophe_possessive(topic):
+        return accept_possessive_promotion(promoted, topic)
+    if not accept_possessive_promotion(promoted, topic):
+        if not is_tail_hijack_shape(promoted, topic):
+            return False
+        return count_non_tail_strong_entities(topic, title_probe, limit=2) < 2
+    return passes_z4(promoted, topic, title_probe)
+
+
 def iter_query_tails(
     query: str,
     *,

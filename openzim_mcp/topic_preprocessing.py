@@ -32,16 +32,12 @@ from typing import Any, Dict, Optional
 
 from .title_promotion import (
     accept_possessive_promotion,
-    count_non_tail_strong_entities,
+    accept_tail_promotion,
     find_title_match,
     has_apostrophe_possessive,
-    has_digit_specificity_match,
-    has_topic_prefix_canonical_extension,
-    is_tail_hijack_shape,
-    is_tangential_multi_token_shape,
     iter_query_tails,
     iter_query_windows,
-    probed_head_matches_promoted,
+    passes_z4,
 )
 
 # Preserve the pre-extraction log-record ``name`` field so the operator-
@@ -116,54 +112,34 @@ def promote_topic_via_title_index(
     def _probe(token_str: str) -> Optional[Dict[str, Any]]:
         return find_title_match(zim_operations, zim_file_path, token_str)
 
-    # Post-b11 Z4 layer. Multi-token tangential canonicals
-    # (``Lenin Russia`` → ``Leninist_Komsomol_of_the_Russian_Federation``,
-    # ``Tesla electricity`` → ``Tesla's_Wireless_Electricity``,
-    # ``Mozart Vienna`` → ``Mozarthaus_Vienna``,
-    # ``Beethoven symphony`` → ``Symphony_No._1_(Beethoven)``,
-    # ``Marie Curie radioactivity`` → ``Radioactive_(Redniss_book)``)
-    # surface where ``is_tail_hijack_shape`` doesn't fire (canonical
-    # is multi-token). Z4 rejects them UNLESS one of three
-    # exemptions applies: biographical-canonical (head probe
-    # matches promoted), digit-specificity (numbered-instance
-    # signal), or type-extension (canonical's leading tokens are
-    # a 2+-token contiguous topic slice with extras only at
-    # suffix — preserves ``Big Rapids Michigan Ferris State`` →
-    # ``Ferris_State_University``). The Z4 check is applied at
-    # every pass (0, 1, 2, 3) so the defect class can't slip
-    # through a different gate.
+    # Post-b11 Z4 layer + b10 Z3 multi-entity discriminator. The actual
+    # logic lives in ``title_promotion.passes_z4`` /
+    # ``title_promotion.accept_tail_promotion`` so the synthesize tail
+    # loop (``_promote_title_match``) shares the SAME gate and the two
+    # promotion paths can't drift (the post-b4 D3 /
+    # "synthesize never got the treatment" class — re-confirmed by the
+    # post-v2.1.3 sweep's HIGH ``ssh connection refused`` -> ``Refused``
+    # inversion). These thin closures just bind the per-call ``topic``
+    # and ``_probe`` so the four pass call-sites below stay terse.
+    #
+    # ``_passes_z4`` (Pass 0 / Pass 3): reject multi-token tangential
+    # canonicals (``Lenin Russia`` -> ``Leninist_Komsomol_...``,
+    # ``Mozart Vienna`` -> ``Mozarthaus_Vienna``) unless one of three
+    # exemptions applies (biographical-canonical, digit-specificity,
+    # type-extension like ``Big Rapids Michigan Ferris State`` ->
+    # ``Ferris_State_University``).
     def _passes_z4(promoted_arg: Dict[str, Any]) -> bool:
-        if has_apostrophe_possessive(topic):
-            return True
-        if not is_tangential_multi_token_shape(promoted_arg, topic):
-            return True
-        if probed_head_matches_promoted(topic, promoted_arg, _probe):
-            return True
-        if has_digit_specificity_match(promoted_arg, topic):
-            return True
-        if has_topic_prefix_canonical_extension(promoted_arg, topic):
-            return True
-        return False
+        return passes_z4(promoted_arg, topic, _probe)
 
-    # Post-b10 Z3 multi-entity discriminator wrapper. Pass 1 / Pass 2
-    # consult this gate, which layers the b10 single-entity escape
-    # over the b9 unconditional tail-hijack rejection, then applies
-    # the b11 Z4 check on top. Pass 0 / Pass 3 use the bare
-    # ``accept_possessive_promotion`` + ``_passes_z4`` pair (no
-    # single-entity escape — that escape exists for Pass 1's
-    # 1-token-tail filler-prose pattern, not for Pass 0's full-
-    # topic probe).
+    # ``_accept_with_multi_entity_check`` (Pass 1 / Pass 2): layers the
+    # b10 single-entity escape over the b9 tail-hijack rejection, then
+    # Z4. Pass 0 / Pass 3 use the bare ``accept_possessive_promotion`` +
+    # ``_passes_z4`` pair (no single-entity escape — that escape exists
+    # for Pass 1's 1-token-tail filler-prose pattern only).
     def _accept_with_multi_entity_check(
         promoted_arg: Dict[str, Any],
     ) -> bool:
-        if has_apostrophe_possessive(topic):
-            return accept_possessive_promotion(promoted_arg, topic)
-        base_accept = accept_possessive_promotion(promoted_arg, topic)
-        if not base_accept:
-            if not is_tail_hijack_shape(promoted_arg, topic):
-                return False
-            return count_non_tail_strong_entities(topic, _probe, limit=2) < 2
-        return _passes_z4(promoted_arg)
+        return accept_tail_promotion(promoted_arg, topic, _probe)
 
     # Pass 0 acceptance: base accept gate + Z4 layer. Stalin USSR
     # Russia → Russia (tail-hijack) is rejected here unconditionally
