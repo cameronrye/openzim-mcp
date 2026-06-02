@@ -1,9 +1,12 @@
 """End-to-end tests against the real FastEmbed reranker.
 
-These tests SKIP when the [reranker] extra is not installed. CI runs
-them in a dedicated job (see .github/workflows/test.yml). They confirm
-the FastEmbed API surface matches our wrapper and that the reranker
-actually reorders results in a predictable way.
+These tests SKIP when the [reranker] extra is not installed, and the
+download-dependent ones also SKIP when the model can't be fetched from
+HuggingFace (transient CDN/network outage — not a regression; see the
+`_require_live_model` fixture). CI runs them in a dedicated job (see
+.github/workflows/test.yml), which pre-stages the model with retries
+first. They confirm the FastEmbed API surface matches our wrapper and
+that the reranker actually reorders results in a predictable way.
 
 Model note: tests use Xenova/ms-marco-MiniLM-L-6-v2 (~80 MB) instead
 of the production default (BAAI/bge-reranker-base, ~1 GB) to keep
@@ -15,7 +18,8 @@ import pytest
 
 from openzim_mcp.config import RerankerConfig
 from openzim_mcp.ml.fallback import reset_kill_switches
-from openzim_mcp.ml.reranker import BGEReranker
+from openzim_mcp.ml.reranker import BGEReranker, _load_model
+from tests.ml._reranker_test_support import is_transient_download_failure
 
 # Lightweight cross-encoder available in fastembed 0.8+; verified to
 # produce correct semantic ordering for the test fixtures below.
@@ -28,15 +32,40 @@ def _reset() -> None:
     reset_kill_switches()
 
 
+@pytest.fixture(scope="module")
+def _require_live_model() -> None:
+    """Probe the test model once before the download-dependent tests run.
+
+    If FastEmbed can't fetch it because HuggingFace is unreachable (a
+    transient CDN/network outage — exactly what broke CI run #800, where
+    one runner downloaded fine and another got a CloudFront error on the
+    same commit), SKIP rather than fail: an external outage is not a code
+    regression. Genuine load errors (renamed kwarg, dropped model, API
+    drift) are re-raised and still fail the suite — see
+    `is_transient_download_failure` for where that line is drawn.
+
+    On success the model lands in FastEmbed's cache, so each test's
+    `BGEReranker.get()` call is a warm-cache hit."""
+    try:
+        _load_model(_TEST_MODEL, None)
+    except Exception as exc:  # noqa: BLE001 — re-raised unless transient
+        if is_transient_download_failure(exc):
+            pytest.skip(
+                f"reranker test model unavailable — transient download/"
+                f"network failure, not a regression: {exc}"
+            )
+        raise
+
+
 @pytest.mark.requires_reranker
 class TestRerankerIntegration:
-    def test_get_loads_model_on_first_call(self) -> None:
+    def test_get_loads_model_on_first_call(self, _require_live_model: None) -> None:
         # Generous timeout for cold-cache CI runs.
         cfg = RerankerConfig(model_id=_TEST_MODEL, first_call_timeout_seconds=120.0)
         reranker = BGEReranker.get(cfg)
         assert reranker is not None
 
-    def test_reranks_known_corpus_correctly(self) -> None:
+    def test_reranks_known_corpus_correctly(self, _require_live_model: None) -> None:
         cfg = RerankerConfig(model_id=_TEST_MODEL, first_call_timeout_seconds=120.0)
         reranker = BGEReranker.get(cfg)
         assert reranker is not None
@@ -75,7 +104,7 @@ class TestRerankerIntegration:
         assert result[0]["path"] == "Chlorophyll"
         assert all("rerank_score" in c for c in result)
 
-    def test_score_pairs_returns_one_per_pair(self) -> None:
+    def test_score_pairs_returns_one_per_pair(self, _require_live_model: None) -> None:
         cfg = RerankerConfig(model_id=_TEST_MODEL, first_call_timeout_seconds=120.0)
         reranker = BGEReranker.get(cfg)
         assert reranker is not None

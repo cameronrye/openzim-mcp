@@ -53,7 +53,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
-          file: ./coverage.xml
+          files: ./coverage.xml
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -63,7 +63,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
-          file: ./coverage.xml
+          files: ./coverage.xml
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: false
@@ -132,6 +132,35 @@ jobs:
       - name: Install dependencies with [reranker] extra
         run: |
           uv sync --extra reranker
+
+      - name: Pre-stage reranker test model (retry transient HF outages)
+        run: |
+          # The live reranker tests download Xenova/ms-marco-MiniLM-L-6-v2
+          # from HuggingFace at test time. HF's CDN intermittently 5xx's
+          # mid-run (CI run #800: one runner downloaded fine, another got a
+          # CloudFront error on the same commit). Pre-stage here with our
+          # own backoff — wider than fastembed's internal ~40s — to ride
+          # out transient blips before pytest runs. We deliberately never
+          # fail this step: if staging still can't complete, the
+          # `_require_live_model` fixture skips the download-dependent tests
+          # so an external outage never red-X's main.
+          staged=0
+          for attempt in 1 2 3 4 5; do
+            if uv run openzim-mcp download-models \
+                 --reranker-model-id Xenova/ms-marco-MiniLM-L-6-v2; then
+              echo "reranker model staged on attempt ${attempt}"
+              staged=1
+              break
+            fi
+            if [ "${attempt}" -lt 5 ]; then
+              backoff=$((attempt * 20))
+              echo "::warning::reranker model download attempt ${attempt} failed; retrying in ${backoff}s"
+              sleep "${backoff}"
+            fi
+          done
+          if [ "${staged}" -ne 1 ]; then
+            echo "::warning::reranker model could not be pre-staged after 5 attempts; live tests will skip if HuggingFace stays unreachable"
+          fi
 
       - name: Run ml tests including requires_reranker marker
         run: |
@@ -276,7 +305,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
-          file: ./coverage.xml
+          files: ./coverage.xml
           flags: comprehensive
           name: codecov-comprehensive
           fail_ci_if_error: false
