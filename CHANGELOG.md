@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3](https://github.com/cameronrye/openzim-mcp/compare/v2.1.2...v2.1.3) (2026-06-02)
+
+
+### Bug Fixes
+
+* clear three deferred defects — synthesize cross-archive leak, MedlinePlus furniture, non-article-asset browse/walk filter ([c494e6a](https://github.com/cameronrye/openzim-mcp/commit/c494e6a978313e70bc17596f618ebf6e6dbba8ea))
+
 ## [2.1.2](https://github.com/cameronrye/openzim-mcp/compare/v2.1.1...v2.1.2) (2026-06-01)
 
 
