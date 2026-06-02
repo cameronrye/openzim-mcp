@@ -687,18 +687,25 @@ class _NamespaceMixin:
             results_may_be_incomplete = raw.get("results_may_be_incomplete", False)
 
             returned_count = len(entries)
-            # New-scheme C uses entry-id scan-fill (it filters ``_zim_static``
-            # infra assets), so its resume position is a SCAN position, not a
+            # New-scheme C uses entry-id scan-fill (it filters non-article
+            # assets), so its resume position is a SCAN position, not a
             # matched-row offset: ``next_scan_offset`` is the next unscanned
             # entry-id and ``done`` is scan-exhaustion. Encoding
             # ``offset + returned_count`` instead would drift once filtering
-            # makes matched-rows < ids-scanned, and ``total`` is now a lower
-            # bound. Every other discovery method keeps the row-offset cursor.
+            # makes matched-rows < ids-scanned. Every other discovery method
+            # keeps the row-offset cursor.
             next_scan_offset = raw.get("next_scan_offset")
+            assets_filtered = False
             if next_scan_offset is not None:
                 resume_index = int(next_scan_offset)
                 done = bool(raw.get("scan_exhausted", True))
                 sample_exhausted = False
+                # More entry-ids scanned than rows returned ⇒ non-article
+                # assets were skipped on this page. Surface it so a consumer
+                # understands why ``returned_count`` can be < ``limit`` (and,
+                # at ``done``, why it can be well below ``total`` on a
+                # media-rich archive) — it's filtering, not truncation.
+                assets_filtered = (resume_index - offset) > returned_count
             else:
                 last_index = offset + returned_count
                 # When the discovery method is sampling-based,
@@ -740,6 +747,8 @@ class _NamespaceMixin:
             }
             if not is_total_authoritative:
                 page_info["total_is_lower_bound"] = True
+            if assets_filtered:
+                page_info["assets_filtered"] = True
 
             payload: Dict[str, Any] = {
                 "namespace": namespace,

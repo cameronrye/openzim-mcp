@@ -814,10 +814,41 @@ def test_drop_cross_archive_leakage_keeps_overlapping_rank0_secondary() -> None:
     assert "A/Causes_of_the_French_Revolution" in paths
 
 
+def test_drop_cross_archive_leakage_keeps_promoted_disjoint_canonical() -> None:
+    """A title-promoted canonical (tagged ``promoted``) is exempt from the
+    floor even when its PATH shares no query token — _promote_title_match
+    deliberately placed it. Models 'darwins evolution' ->
+    On_the_Origin_of_Species (possessive/redirect-target promotion)."""
+    from openzim_mcp.synthesize import _drop_cross_archive_leakage
+
+    top_hits = [
+        (
+            "wiki",
+            {
+                "path": "A/On_the_Origin_of_Species",
+                "snippet": "",
+                "score": 1.0,
+                "promoted": True,
+            },
+        ),
+        ("histbio", {"path": "A/Evolution_timeline", "snippet": "", "score": 0.016}),
+    ]
+    kept = _drop_cross_archive_leakage(
+        top_hits,
+        query="darwins evolution",
+        fallback_used="rrf_fusion",
+        max_secondary_archive_hits=2,
+        min_overlap=1,
+    )
+    paths = [hit["path"] for _, hit in kept]
+    assert "A/On_the_Origin_of_Species" in paths  # promoted, kept despite 0 overlap
+    assert "A/Evolution_timeline" in paths
+
+
 def test_drop_cross_archive_leakage_noop_when_no_path_overlap() -> None:
-    """If NO hit's path shares a query token, the path signal is useless (the
-    query matched on body text), so keep the fused set intact rather than
-    invent a primary and start dropping."""
+    """All-zero path overlap (the query matched on body text or an acronym
+    canonical spells the term): don't drop by overlap, and with only one
+    secondary hit the per-archive cap is not exceeded, so both survive."""
     from openzim_mcp.synthesize import _drop_cross_archive_leakage
 
     top_hits = [
@@ -832,6 +863,30 @@ def test_drop_cross_archive_leakage_noop_when_no_path_overlap() -> None:
         min_overlap=1,
     )
     assert [hit["path"] for _, hit in kept] == ["A/Foo", "A/Bar"]
+
+
+def test_drop_cross_archive_leakage_caps_secondary_when_no_overlap() -> None:
+    """All-zero path overlap (acronym query 'cpu' -> Central_processing_unit):
+    the floor is blind, but each secondary archive's fan-in is still capped so
+    junk cannot flood the answer unbounded."""
+    from openzim_mcp.synthesize import _drop_cross_archive_leakage
+
+    top_hits = [
+        ("wiki", {"path": "A/Central_processing_unit", "snippet": "", "score": 0.03}),
+        ("qa", {"path": "A/Thread_one", "snippet": "", "score": 0.02}),
+        ("qa", {"path": "A/Thread_two", "snippet": "", "score": 0.019}),
+        ("qa", {"path": "A/Thread_three", "snippet": "", "score": 0.018}),
+    ]
+    kept = _drop_cross_archive_leakage(
+        top_hits,
+        query="cpu architecture",
+        fallback_used="rrf_fusion",
+        max_secondary_archive_hits=2,
+        min_overlap=1,
+    )
+    qa_kept = [hit["path"] for archive, hit in kept if archive == "qa"]
+    assert len(qa_kept) == 2  # capped despite the all-zero path signal
+    assert "A/Central_processing_unit" in [hit["path"] for _, hit in kept]
 
 
 def test_drop_cross_archive_leakage_noop_for_untokenizable_query() -> None:

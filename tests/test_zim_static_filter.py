@@ -152,6 +152,31 @@ def test_browse_hides_all_non_article_assets(tmp_path, monkeypatch) -> None:
     assert not any(p.endswith((".js", ".png", ".pdf")) for p in paths)
 
 
+def test_browse_signals_assets_filtered(tmp_path, monkeypatch) -> None:
+    """page_info.assets_filtered flags pages where non-article assets were
+    skipped, so a consumer understands returned_count < limit/total (it's
+    filtering, not truncation). An all-article archive omits the flag."""
+    ops = _ops(tmp_path, monkeypatch)  # _ENTRIES interleaves assets
+    resp = ops.browse_namespace_data(str(tmp_path / "x.zim"), "C", limit=2)
+    assert resp["page_info"].get("assets_filtered") is True
+
+    ops2 = _ops(tmp_path, monkeypatch, entries=["Apple", "Banana", "Cherry"])
+    resp2 = ops2.browse_namespace_data(str(tmp_path / "x.zim"), "C", limit=2)
+    assert resp2["page_info"].get("assets_filtered") is None
+
+
+def test_browse_scan_fills_past_long_asset_run(tmp_path, monkeypatch) -> None:
+    """A long run of leading assets is scanned through to fill the page with
+    real articles — no short page, no premature done."""
+    entries = [f"_zim_static/font{i}.woff2" for i in range(50)] + ["Apple", "Banana"]
+    ops = _ops(tmp_path, monkeypatch, entries=entries)
+    resp = ops.browse_namespace_data(str(tmp_path / "x.zim"), "C", limit=2)
+    paths = [r["path"] for r in resp["results"]]
+    assert paths == ["Apple", "Banana"]
+    assert resp["done"] is True
+    assert resp["page_info"].get("assets_filtered") is True
+
+
 def test_browse_scan_fills_full_page(tmp_path, monkeypatch) -> None:
     ops = _ops(tmp_path, monkeypatch)
     resp = ops.browse_namespace_data(str(tmp_path / "x.zim"), "C", limit=2)

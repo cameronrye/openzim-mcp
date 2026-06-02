@@ -940,6 +940,23 @@ def _build_pass0_promoted_hit(
     }
 
 
+def _mark_promoted(hit: dict) -> dict:
+    """Tag a title-promoted hit so :func:`_drop_cross_archive_leakage` exempts
+    it from the cross-archive relevance floor.
+
+    A possessive / redirect-target promotion produces a canonical whose PATH
+    can be lexically disjoint from the query — e.g. "darwins evolution" ->
+    ``On_the_Origin_of_Species`` shares no query token. The floor would drop it
+    despite the promotion deliberately placing it at rank 0. The tag carries
+    that provenance; tie-break-floated junk (the leak case) has no tag, so it
+    is still filtered. The marker is internal — ``_build_considered_articles``
+    and passage extraction read only ``path``/``title``/``score``, so it never
+    surfaces in the response.
+    """
+    hit["promoted"] = True
+    return hit
+
+
 def _promote_title_match(
     top_hits: list[tuple[str, dict]],
     *,
@@ -1073,7 +1090,7 @@ def _promote_title_match(
                 for n, h in top_hits
                 if n == archive_name and str(h.get("path", "")) == full_path
             )
-            return [(archive_name, promoted_hit_p0), *reordered_p0]
+            return [(archive_name, _mark_promoted(promoted_hit_p0)), *reordered_p0]
         # Not in top_hits — construct a properly-shaped hit. Re-probe
         # via ``title_match_hit`` using the resolved title (which the
         # fast-path lookup can match exactly now that we know the
@@ -1082,7 +1099,7 @@ def _promote_title_match(
         promoted_hit_built: dict = _build_pass0_promoted_hit(
             full_probe, archive, title_match_hit
         )
-        return [(archive_name, promoted_hit_built), *top_hits]
+        return [(archive_name, _mark_promoted(promoted_hit_built)), *top_hits]
 
     if not callable(title_match_hit):
         return top_hits
@@ -1126,8 +1143,8 @@ def _promote_title_match(
                     for n, h in top_hits
                     if n == archive_name and str(h.get("path", "")) == promoted_path
                 )
-                return [(archive_name, promoted_hit), *reordered]
-            return [(archive_name, promoted), *top_hits]
+                return [(archive_name, _mark_promoted(promoted_hit)), *reordered]
+            return [(archive_name, _mark_promoted(promoted)), *top_hits]
     return top_hits
 
 
@@ -1290,35 +1307,38 @@ def _drop_cross_archive_leakage(
         else:
             best_overlap[archive_name] = ov
             archive_order.append(archive_name)
-    # If NO hit's path shares a query token, the path signal is useless here
-    # (the query matched on body text, or the archives title things
-    # differently): don't invent a primary and start dropping — leave the
-    # fused set intact and defer to ordering / the reranker.
-    if not any(best_overlap.values()):
-        return top_hits
-    primary_archive = max(
-        archive_order,
-        key=lambda a: (best_overlap[a], -archive_order.index(a)),
-    )
+    # When NO hit's path shares a query token, the path floor is blind — this
+    # happens for acronym/abbreviation queries whose canonical SPELLS OUT the
+    # term ("cpu" -> "Central_processing_unit"). Don't drop by overlap then
+    # (we'd nuke the real answer), but still CAP each non-primary archive so
+    # junk fan-in stays bounded. Primary = the best-fused (first-seen) archive.
+    all_zero = not any(best_overlap.values())
+    if all_zero:
+        primary_archive = archive_order[0]
+    else:
+        primary_archive = max(
+            archive_order,
+            key=lambda a: (best_overlap[a], -archive_order.index(a)),
+        )
 
-    # NB: we do NOT blanket-exempt top_hits[0]. RRF ties every rank-1 hit and
-    # the path tie-break can float a junk secondary hit to position 0 (the very
-    # leak this guards against), so an unconditional rank-0 exemption would
-    # re-admit it. A genuine _promote_title_match canonical is by definition a
-    # title match, so its path shares query tokens and clears the floor on its
-    # own — it needs no special case. (Rare exception: a possessive/variant
-    # promotion whose path token differs from the query token, e.g.
-    # "shakespeare" vs "shakespeares"; that promoted hit can be dropped, which
-    # degrades to the next-best hit — an acceptable trade vs reopening the leak.)
+    # We do NOT blanket-exempt top_hits[0]: RRF ties every rank-1 hit and the
+    # path tie-break can float a junk secondary hit to position 0 (the very
+    # leak this guards against). Instead we exempt hits TAGGED by
+    # _promote_title_match (``promoted``) — a possessive/variant canonical's
+    # path can be lexically disjoint from the query (e.g. "darwins evolution"
+    # -> On_the_Origin_of_Species), and promotion deliberately placed it there.
+    # Tie-break junk carries no tag, so the leak stays closed.
     kept: list[tuple[str, dict]] = []
     per_archive_kept: dict[str, int] = defaultdict(int)
     for archive_name, hit in top_hits:
-        if archive_name == primary_archive:
+        if hit.get("promoted") or archive_name == primary_archive:
             kept.append((archive_name, hit))
             continue
         if per_archive_kept[archive_name] >= max_secondary_archive_hits:
             continue
-        if _overlap(hit) >= min_overlap:
+        # all_zero: cap only (overlap signal is useless). Otherwise also
+        # require lexical overlap on the path.
+        if all_zero or _overlap(hit) >= min_overlap:
             kept.append((archive_name, hit))
             per_archive_kept[archive_name] += 1
     return kept or top_hits[:1]
