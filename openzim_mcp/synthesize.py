@@ -31,14 +31,12 @@ from openzim_mcp import bundle as _bundle_mod
 from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import (
     accept_possessive_promotion,
+    accept_tail_promotion,
     find_title_match,
     has_apostrophe_possessive,
-    has_digit_specificity_match,
-    has_topic_prefix_canonical_extension,
     is_strong_title_match,
-    is_tangential_multi_token_shape,
     iter_query_tails,
-    probed_head_matches_promoted,
+    passes_z4,
 )
 from openzim_mcp.tool_schemas import (
     Citation,
@@ -1053,28 +1051,20 @@ def _promote_title_match(
             continue
         if not accept_possessive_promotion(full_probe, query):
             continue
-        # Post-b11 Z4 layer (symmetric to simple_tools.py Pass 0):
-        # multi-token canonical tangential check + three exemptions
-        # (biographical-canonical, digit-specificity, type-extension).
-        # The synthesize Pass 0 has the same shape as simple_tools Pass
-        # 0 and is vulnerable to the same Z4 silent-wrong-answer
-        # pattern. The local ``_probe`` closure forwards to
-        # ``find_title_match`` against the same archive so the
-        # biographical exemption can probe head/tail tokens consistently
-        # with simple_tools.
-        if not has_apostrophe_possessive(query) and is_tangential_multi_token_shape(
-            full_probe, query
-        ):
 
-            def _z4_probe(tok: str, _vp: Path = vp) -> Optional[dict]:
-                return find_title_match(search_handler, str(_vp), tok)
+        # Post-b11 Z4 layer, shared with the tell_me_about path via
+        # ``title_promotion.passes_z4`` (post-v2.1.3 anti-drift extraction
+        # — Pass 0 previously hand-inlined this same check). Rejects a
+        # multi-token tangential canonical unless a biographical /
+        # digit-specificity / type-extension exemption applies; possessive
+        # queries bypass Z4 inside ``passes_z4``. ``_z4_probe`` forwards to
+        # ``find_title_match`` against the same archive so the exemption
+        # probes stay consistent with simple_tools.
+        def _z4_probe(tok: str, _vp: Path = vp) -> Optional[dict]:
+            return find_title_match(search_handler, str(_vp), tok)
 
-            if not (
-                probed_head_matches_promoted(query, full_probe, _z4_probe)
-                or has_digit_specificity_match(full_probe, query)
-                or has_topic_prefix_canonical_extension(full_probe, query)
-            ):
-                continue
+        if not passes_z4(full_probe, query, _z4_probe):
+            continue
         full_path = str(full_probe["path"])
         existing_paths_p0 = {(name, str(h.get("path", ""))) for name, h in top_hits}
         if (archive_name, full_path) in existing_paths_p0:
@@ -1128,6 +1118,22 @@ def _promote_title_match(
                 continue
             promoted_path = str(promoted.get("path", ""))
             if not promoted_path:
+                continue
+
+            # Post-v2.1.3 D1: guard the tail promotion with the SAME
+            # tail-hijack / multi-entity gate the tell_me_about path uses
+            # (``accept_tail_promotion``). Without it, an off-topic
+            # single-token tail that happens to be an exact article title
+            # (``ssh connection refused`` -> the punk band ``Refused``)
+            # was promoted to rank 0 AND tagged ``promoted``, so
+            # ``_drop_cross_archive_leakage`` exempted it from the
+            # cross-archive relevance floor — surfacing irrelevant
+            # content as the primary citation. The probe resolves a topic
+            # token against the SAME archive the candidate came from.
+            def _tail_probe(tok: str, _p: Path = _vp) -> Optional[dict]:
+                return find_title_match(search_handler, str(_p), tok)
+
+            if not accept_tail_promotion(promoted, query, _tail_probe):
                 continue
             if (archive_name, promoted_path) in existing_paths:
                 # Already present — re-rank it to first instead of duplicating.

@@ -457,14 +457,20 @@ class TestStructuralGuards:
         live Z3 silent-wrong-answer code path (1-token tail
         ``"russia"`` → direct match → returned without gating).
 
-        Post-b10 update: Pass 1 / Pass 2 now go through the
+        Post-b10 update: Pass 1 / Pass 2 go through the
         ``_accept_with_multi_entity_check`` wrapper (defined inside
-        ``_promote_topic_via_title_index``) which calls
-        ``accept_possessive_promotion`` once. So the dispatcher
-        source has three direct ``accept_possessive_promotion(`` call
-        sites — Pass 0, the wrapper, and Pass 3 — plus the helper
-        invocation. The pin asserts the wrapper is wired by name AND
-        every gate path is present.
+        ``_promote_topic_via_title_index``).
+
+        Post-v2.1.3 update: the wrapper body and the Z4 layer were
+        extracted to the SHARED ``title_promotion.accept_tail_promotion``
+        / ``title_promotion.passes_z4`` gate so the synthesize tail loop
+        (``_promote_title_match``) consults the identical logic and the
+        two promotion paths can't drift (the post-v2.1.3 HIGH
+        ``ssh connection refused`` -> ``Refused`` cross-archive
+        inversion). Pass 0 / Pass 3 still call
+        ``accept_possessive_promotion`` directly; Pass 1 / Pass 2 route
+        through the wrapper, which delegates to ``accept_tail_promotion``.
+        The pin asserts every gate path is still present.
         """
         # Phase F: orchestrator body lives in
         # ``openzim_mcp.topic_preprocessing.promote_topic_via_title_index``.
@@ -473,22 +479,28 @@ class TestStructuralGuards:
         from openzim_mcp.topic_preprocessing import promote_topic_via_title_index
 
         source = inspect.getsource(promote_topic_via_title_index)
-        # Pass 0, the multi-entity wrapper (which calls
-        # accept_possessive_promotion once), and Pass 3 → 3 direct
-        # ``accept_possessive_promotion(`` callsites.
+        # Post-v2.1.3: the wrapper body + Z4 layer were extracted to the
+        # shared title_promotion.accept_tail_promotion / passes_z4 gate
+        # (so the synthesize tail loop shares identical logic). Pass 0
+        # and Pass 3 still gate directly with accept_possessive_promotion.
         count = source.count("accept_possessive_promotion(")
-        assert count >= 3, (
+        assert count >= 2, (
             f"promote_topic_via_title_index must call "
-            f"accept_possessive_promotion on every pass; found "
-            f"{count} call(s), expected >= 3 (pass-0, multi-entity "
-            f"wrapper covering pass-1 + pass-2, pass-3)."
+            f"accept_possessive_promotion directly on pass-0 and pass-3; "
+            f"found {count} call(s), expected >= 2."
         )
         # The multi-entity wrapper must be wired by name into both
-        # Pass 1 (iter_query_tails) and Pass 2 (iter_query_windows).
+        # Pass 1 (iter_query_tails) and Pass 2 (iter_query_windows), and
+        # must delegate to the shared accept_tail_promotion gate.
         assert "_accept_with_multi_entity_check" in source, (
             "promote_topic_via_title_index must define + use the "
             "_accept_with_multi_entity_check wrapper to gate Pass 1 "
             "and Pass 2 with the post-b10 multi-entity discriminator"
+        )
+        assert "accept_tail_promotion(" in source, (
+            "the multi-entity wrapper must delegate to the shared "
+            "title_promotion.accept_tail_promotion gate (post-v2.1.3 "
+            "anti-drift extraction shared with synthesize)"
         )
 
     def test_possessive_redirect_has_canonical_possessor_fallback(self) -> None:
