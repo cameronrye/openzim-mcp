@@ -641,9 +641,11 @@ def test_select_top_hits_multi_credits_archive_with_best_rank() -> None:
 
 
 def test_synthesize_config_has_cross_archive_knobs() -> None:
+    # Assert the concrete defaults (not just the Field bounds) so a default
+    # regression is caught.
     cfg = SynthesizeConfig()
-    assert cfg.max_secondary_archive_hits >= 0
-    assert cfg.cross_archive_min_overlap >= 1
+    assert cfg.max_secondary_archive_hits == 2
+    assert cfg.cross_archive_min_overlap == 1
 
 
 def test_drop_cross_archive_leakage_drops_off_topic_secondary_hit() -> None:

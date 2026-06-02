@@ -55,6 +55,9 @@ def test_promote_title_match_promotes_canonical_over_derivative():
     )
     assert len(promoted) == 3
     assert promoted[0][1]["path"] == "Berlin"
+    # The prepended canonical is tagged so _drop_cross_archive_leakage exempts
+    # it (build-path writer guard against silent _mark_promoted regression).
+    assert promoted[0][1].get("promoted") is True
     # The derivative BM25 hits are preserved at lower ranks.
     paths = [h["path"] for _, h in promoted]
     assert "List_of_songs_about_Berlin" in paths
@@ -117,6 +120,8 @@ def test_promote_title_match_reorders_when_canonical_is_lower_ranked():
     assert paths.count("Berlin") == 1
     # Berlin is now first.
     assert promoted[0][1]["path"] == "Berlin"
+    # Reorder-path writer guard: the reordered canonical is tagged too.
+    assert promoted[0][1].get("promoted") is True
     # Other hits are preserved.
     assert "List_of_songs_about_Berlin" in paths
     assert "Berlin_Wall" in paths
@@ -142,6 +147,7 @@ def test_promote_title_match_empty_hits_finds_canonical_anyway():
     )
     assert len(promoted) == 1
     assert promoted[0][1]["path"] == "Berlin"
+    assert promoted[0][1].get("promoted") is True  # empty-hits build-path writer
 
 
 def test_synthesize_end_to_end_promotes_berlin(monkeypatch):
@@ -357,6 +363,7 @@ def test_promote_title_match_tail_probe_resolves_short_tail():
         search_handler=search_handler,
     )
     assert promoted[0][1]["path"] == "Big_Rapids,_Michigan"
+    assert promoted[0][1].get("promoted") is True  # tail build-path writer
 
 
 def test_promote_title_match_tail_probe_prefers_longest_resolving_tail():

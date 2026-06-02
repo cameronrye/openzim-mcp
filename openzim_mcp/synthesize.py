@@ -1729,7 +1729,8 @@ def synthesize_query(
     # archive's top hit can join top_n with no relevance bar (a Blackadder
     # subtitle leaking into a "french revolution" synthesis). Drop secondary-
     # archive hits whose entry path shares no query token, and cap per-archive
-    # contributions. Primary archive (the #1 fused hit's archive) is exempt.
+    # contributions. The most on-topic archive (highest path overlap) and any
+    # title-promoted canonical are exempt.
     top_hits = _drop_cross_archive_leakage(
         top_hits,
         query=query,

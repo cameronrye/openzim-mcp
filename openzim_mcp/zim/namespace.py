@@ -654,11 +654,12 @@ class _NamespaceMixin:
             except CursorMismatchError as e:
                 raise OpenZimMcpValidationError(str(e)) from e
 
-        # Cache key bumped v2b -> v2c: new-scheme C now filters ``_zim_static``
-        # infra assets, so its results/total/cursor semantics changed (total
-        # is a lower bound; ``s.o`` is an entry-id scan position). The bump
-        # stops pre-fix cached pages — with the old unfiltered rows and
-        # row-offset cursor — from leaking through after deploy.
+        # Cache key bumped v2b -> v2c: new-scheme C now filters non-article
+        # assets, so its results and cursor semantics changed (``s.o`` is an
+        # entry-id scan position, not a row offset; ``total`` stays the
+        # authoritative ``entry_count``). The bump stops pre-fix cached pages —
+        # with the old unfiltered rows and row-offset cursor — from leaking
+        # through after deploy.
         cache_key = f"browse_ns_data:v2c:{validated_path}:{namespace}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
@@ -695,17 +696,15 @@ class _NamespaceMixin:
             # makes matched-rows < ids-scanned. Every other discovery method
             # keeps the row-offset cursor.
             next_scan_offset = raw.get("next_scan_offset")
-            assets_filtered = False
+            # Surfaced so a consumer reads ``returned_count`` < ``limit`` (and,
+            # at ``done``, well below ``total`` on a media-rich archive) as
+            # filtering, not truncation. The scan-fill path counts genuine
+            # asset skips precisely (read errors / materialise drops excluded).
+            assets_filtered = bool(raw.get("assets_filtered"))
             if next_scan_offset is not None:
                 resume_index = int(next_scan_offset)
                 done = bool(raw.get("scan_exhausted", True))
                 sample_exhausted = False
-                # More entry-ids scanned than rows returned ⇒ non-article
-                # assets were skipped on this page. Surface it so a consumer
-                # understands why ``returned_count`` can be < ``limit`` (and,
-                # at ``done``, why it can be well below ``total`` on a
-                # media-rich archive) — it's filtering, not truncation.
-                assets_filtered = (resume_index - offset) > returned_count
             else:
                 last_index = offset + returned_count
                 # When the discovery method is sampling-based,
@@ -1011,6 +1010,7 @@ class _NamespaceMixin:
         """
         total = int(getattr(archive, "entry_count", 0) or 0)
         page_paths: List[str] = []
+        assets_skipped = 0
         scan_id = offset
         while scan_id < total and len(page_paths) < limit:
             try:
@@ -1022,6 +1022,7 @@ class _NamespaceMixin:
                 continue
             scan_id += 1
             if self._is_non_article_target(path):
+                assets_skipped += 1
                 continue
             page_paths.append(path)
         payload = self._new_scheme_browse_payload(
@@ -1036,6 +1037,9 @@ class _NamespaceMixin:
         )
         payload["next_scan_offset"] = scan_id
         payload["scan_exhausted"] = scan_id >= total
+        # Count ONLY genuine asset skips (not read errors / materialise drops)
+        # so the surfaced ``assets_filtered`` flag means exactly what it says.
+        payload["assets_filtered"] = assets_skipped > 0
         return payload
 
     # Well-known W-namespace paths in new-scheme archives. The
