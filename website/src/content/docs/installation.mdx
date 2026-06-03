@@ -232,14 +232,14 @@ OpenZIM MCP ships a multi-arch image at `ghcr.io/cameronrye/openzim-mcp` (`linux
 
 ```bash
 # Pull
-docker pull ghcr.io/cameronrye/openzim-mcp:2.1.1
+docker pull ghcr.io/cameronrye/openzim-mcp:2.1.4
 
 # Run with HTTP transport, bound to all interfaces (the image default).
 # The server REFUSES to bind 0.0.0.0 without OPENZIM_MCP_AUTH_TOKEN.
 docker run --rm -p 8000:8000 \
   -v /srv/zim:/data:ro \
   -e OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)" \
-  ghcr.io/cameronrye/openzim-mcp:2.1.1
+  ghcr.io/cameronrye/openzim-mcp:2.1.4
 ```
 
 The image entrypoint is `python -m openzim_mcp /data`, so mount your ZIM directory at `/data`. Default env vars in the image: `OPENZIM_MCP_TRANSPORT=http`, `OPENZIM_MCP_HOST=0.0.0.0`, `OPENZIM_MCP_PORT=8000`.

@@ -38,7 +38,7 @@ This binds the loopback interface only. Put a TLS-terminating reverse proxy in f
 docker run --rm -p 8000:8000 \
   -v /srv/zim:/data:ro \
   -e OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)" \
-  ghcr.io/cameronrye/openzim-mcp:2.1.1
+  ghcr.io/cameronrye/openzim-mcp:2.1.4
 ```
 
 The published image:
@@ -258,7 +258,7 @@ spec:
     spec:
       containers:
         - name: openzim-mcp
-          image: ghcr.io/cameronrye/openzim-mcp:2.1.1
+          image: ghcr.io/cameronrye/openzim-mcp:2.1.4
           ports:
             - containerPort: 8000
           env:
@@ -338,7 +338,7 @@ This recipe puts OpenZIM MCP on a single host, reachable from the rest of your L
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:2.1.1
+    image: ghcr.io/cameronrye/openzim-mcp:2.1.4
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -472,7 +472,7 @@ This is the LAN compose file with two changes: a `caddy` service is added, and t
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:2.1.1
+    image: ghcr.io/cameronrye/openzim-mcp:2.1.4
     restart: unless-stopped
     expose:
       - "8000"
