@@ -3,7 +3,6 @@
   "packages": {
     ".": {
       "release-type": "python",
-      "package-name": "openzim-mcp",
       "changelog-sections": [
         {
           "type": "feat",
