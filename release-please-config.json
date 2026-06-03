@@ -7,62 +7,62 @@
       "changelog-sections": [
         {
           "type": "feat",
-          "section": "### Added",
+          "section": "Added",
           "hidden": false
         },
         {
           "type": "fix",
-          "section": "### Fixed",
+          "section": "Fixed",
           "hidden": false
         },
         {
           "type": "perf",
-          "section": "### Performance",
+          "section": "Performance",
           "hidden": false
         },
         {
           "type": "deps",
-          "section": "### Dependencies",
+          "section": "Dependencies",
           "hidden": false
         },
         {
           "type": "revert",
-          "section": "### Reverted",
+          "section": "Reverted",
           "hidden": false
         },
         {
           "type": "docs",
-          "section": "### Documentation",
+          "section": "Documentation",
           "hidden": false
         },
         {
           "type": "style",
-          "section": "### Style",
+          "section": "Style",
           "hidden": true
         },
         {
           "type": "refactor",
-          "section": "### Refactored",
+          "section": "Refactored",
           "hidden": false
         },
         {
           "type": "test",
-          "section": "### Tests",
+          "section": "Tests",
           "hidden": true
         },
         {
           "type": "build",
-          "section": "### Build System",
+          "section": "Build System",
           "hidden": true
         },
         {
           "type": "ci",
-          "section": "### CI/CD",
+          "section": "CI/CD",
           "hidden": true
         },
         {
           "type": "chore",
-          "section": "### Maintenance",
+          "section": "Maintenance",
           "hidden": true
         }
       ],
@@ -75,7 +75,7 @@
       ],
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": false,
-      "draft": true,
+      "draft": false,
       "prerelease": false,
       "draft-pull-request": false,
       "include-component-in-tag": false,
@@ -84,7 +84,7 @@
       "pull-request-header": "🤖 **Automated Release**\n\nThis PR was created automatically by release-please based on conventional commits since the last release.\n\n**Changes included:**",
       "separate-pull-requests": false,
       "tag-separator": "-",
-      "skip-github-release": true,
+      "skip-github-release": false,
       "release-search-depth": 400,
       "commit-search-depth": 500
     }

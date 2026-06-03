@@ -22,10 +22,15 @@ jobs:
         id: release
         uses: googleapis/release-please-action@v5
         with:
-          # Release type for Python packages
-          release-type: python
-
-          # Configuration file location
+          # Pure manifest mode. release-type, changelog-sections, extra-files
+          # (the llms.txt x-release-please-version bump) and every other knob
+          # all come from release-please-config.json.
+          #
+          # Do NOT re-add a `release-type:` input here. Passing release-type
+          # alongside config-file/manifest-file forces the action into simple
+          # mode, which silently IGNORES the config file — extra-files and
+          # changelog-sections never apply (that bug pinned website/public/
+          # llms.txt at an old version across v2.1.2–v2.1.4).
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
