@@ -30,10 +30,12 @@ if TYPE_CHECKING:
 from openzim_mcp import bundle as _bundle_mod
 from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import (
+    _TAIL_TOKEN_RE,
     accept_possessive_promotion,
     accept_tail_promotion,
     find_title_match,
     has_apostrophe_possessive,
+    is_single_token_tail_match,
     is_strong_title_match,
     iter_query_tails,
     passes_z4,
@@ -959,6 +961,7 @@ def _promote_title_match(
     top_hits: list[tuple[str, dict]],
     *,
     query: str,
+    original_query: Optional[str] = None,
     archives: list[tuple[Archive, Path]],
     archives_searched: list[str],
     search_handler: Any,
@@ -986,7 +989,15 @@ def _promote_title_match(
     that resolves any tail wins. This picks the most specific entity
     that exists in any archive, biasing toward earlier-configured
     archives only when tails of equal length tie.
+
+    ``original_query`` is the raw, apostrophe-preserving user query
+    (``query`` is the BM25/topic-extracted form which has already had
+    the apostrophe stripped). Fix 2's tail-rescue probes it so
+    ``einstein's theory`` can reach ``Theory_of_relativity`` (unreachable
+    from the stripped ``einstein theory``). Defaults to ``query`` for
+    backwards-compat callers that don't supply it.
     """
+    rescue_query = original_query if original_query is not None else query
     if top_hits:
         top_hit_0 = top_hits[0][1]
         top_path = str(top_hit_0.get("path", ""))
@@ -1132,6 +1143,66 @@ def _promote_title_match(
             # token against the SAME archive the candidate came from.
             def _tail_probe(tok: str, _p: Path = _vp) -> Optional[dict]:
                 return find_title_match(search_handler, str(_p), tok)
+
+            # Fix 2 tail-rescue (#252): if we're about to promote a generic
+            # single-token tail, the apostrophe-stripped topic may have
+            # buried the real canonical (``einstein's theory`` ->
+            # Theory_of_relativity @1.0, unreachable from the stripped
+            # ``einstein theory`` which only resolves the bare ``Theory``).
+            # Probe the ORIGINAL apostrophe-preserving query; if it resolves
+            # to a more-specific MULTI-token canonical that CONTAINS the tail
+            # token, promote THAT instead — bypassing the gate that would
+            # otherwise wave the generic tail through. When no more-specific
+            # canonical exists (``planet earth`` -> ``Earth``, single token),
+            # fall through and keep the legitimate bare-tail promotion.
+            #
+            # Fix A (#252 review): gate the rescue on the ORIGINAL query
+            # being an apostrophe-possessive. The rescue deliberately
+            # bypasses the ``passes_z4`` / ``accept_possessive_promotion``
+            # gates (the correct canonical like ``Allegory_of_the_cave``
+            # is "tangential" and those gates wrongly reject it). Without a
+            # guard, a NON-possessive multi-token query could over-promote
+            # a tangential canonical (``planet earth orbit`` ->
+            # ``Low_Earth_Orbit``). The defect class this fixes is
+            # specifically apostrophe-stripped possessives, so restrict it.
+            if is_single_token_tail_match(
+                promoted, query
+            ) and has_apostrophe_possessive(rescue_query):
+                # Fix B (#252 review): match the established probe pattern in
+                # this loop — wrap the rescue ``find_title_match`` so a
+                # transient backend failure blanks the rescue rather than
+                # bubbling up.
+                try:
+                    rescued = find_title_match(
+                        search_handler, str(_vp), rescue_query, min_score=0.95
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "_promote_title_match: rescue probe failed for %r: %s",
+                        rescue_query,
+                        exc,
+                    )
+                    rescued = None
+                if isinstance(rescued, dict) and rescued.get("path"):
+                    rescued_tokens = _TAIL_TOKEN_RE.findall(
+                        str(rescued["path"]).lower()
+                    )
+                    # ``tail_tok`` is length-1 by the
+                    # ``is_single_token_tail_match`` invariant above, so
+                    # ``tail_tok[0]`` is the only (and the bare-tail) token.
+                    tail_tok = _TAIL_TOKEN_RE.findall(promoted_path.lower())
+                    if (
+                        len(rescued_tokens) > 1
+                        and tail_tok
+                        and tail_tok[0] in rescued_tokens
+                    ):
+                        rescued_hit = _build_pass0_promoted_hit(
+                            rescued, archive, title_match_hit
+                        )
+                        return [
+                            (archive_name, _mark_promoted(rescued_hit)),
+                            *top_hits,
+                        ]
 
             if not accept_tail_promotion(promoted, query, _tail_probe):
                 continue
@@ -1337,6 +1408,19 @@ def _drop_cross_archive_leakage(
     kept: list[tuple[str, dict]] = []
     per_archive_kept: dict[str, int] = defaultdict(int)
     for archive_name, hit in top_hits:
+        # A `promoted` hit normally bypasses the relevance floor (a
+        # possessive/variant canonical can be lexically disjoint from the
+        # query). EXCEPTION (#253): a single-token-tail promotion from a
+        # NON-PRIMARY archive is the cross-archive leak signature
+        # (`connection refused` -> wiki `Refused` while the relevant hits
+        # are in superuser). The path-overlap floor can't catch it — the
+        # tail token IS a query token — so drop it outright here.
+        if (
+            archive_name != primary_archive
+            and hit.get("promoted")
+            and is_single_token_tail_match(hit, query)
+        ):
+            continue
         if hit.get("promoted") or archive_name == primary_archive:
             kept.append((archive_name, hit))
             continue
@@ -1708,6 +1792,7 @@ def synthesize_query(
     top_hits = _promote_title_match(
         top_hits,
         query=query,
+        original_query=original_query,
         archives=archives,
         archives_searched=archives_searched,
         search_handler=search_handler,
@@ -1752,6 +1837,7 @@ def synthesize_query(
         promoted = _promote_title_match(
             [],
             query=query,
+            original_query=original_query,
             archives=archives,
             archives_searched=archives_searched,
             search_handler=search_handler,

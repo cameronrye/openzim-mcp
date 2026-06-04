@@ -479,6 +479,27 @@ def is_tail_hijack_shape(promoted: Dict[str, Any], topic: str) -> bool:
     return len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]
 
 
+def is_single_token_tail_match(promoted: Dict[str, Any], topic: str) -> bool:
+    """Floor-free sibling of :func:`is_tail_hijack_shape`: the promoted
+    canonical is a single token equal to the topic's LAST token,
+    regardless of topic length.
+
+    ``is_tail_hijack_shape`` carries a ``< 3 token`` floor (the b4
+    ``Berlin Germany`` carve-out) because, on the tell_me_about SOURCE
+    gate, a 2-token tail can be legitimate. The cross-archive LEAK gate
+    has an extra signal — provenance — so it can safely act on the
+    2-token shape too (``connection refused`` -> ``Refused`` from a
+    NON-PRIMARY archive). Used only by
+    ``synthesize._drop_cross_archive_leakage`` (Fix 1, #253) and the Fix 2
+    tail-rescue probe; the source gate keeps the floored predicate.
+    """
+    topic_tokens_seq = _TAIL_TOKEN_RE.findall(topic.lower())
+    if not topic_tokens_seq:
+        return False
+    cand_tokens_seq = _TAIL_TOKEN_RE.findall(str(promoted.get("path", "")).lower())
+    return len(cand_tokens_seq) == 1 and cand_tokens_seq == topic_tokens_seq[-1:]
+
+
 # English stop-word inventory used by the multi-entity discriminator
 # to skip tokens that are not entities even when libzim's title index
 # happens to resolve them (``What``, ``Is``, ``The``, ``Of`` all exist
