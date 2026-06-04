@@ -49,6 +49,27 @@ class TestNameAndWeakSignals:
             "medium",
         )
 
+    def test_wiktionary_name_without_scraper_is_medium(self) -> None:
+        assert detect_archive_type({"Name": "wiktionary_en_all"}) == (
+            "wiktionary",
+            "medium",
+        )
+
+    def test_ted_name_prefix_is_medium(self) -> None:
+        assert detect_archive_type({"Name": "ted_en_all"}) == ("ted", "medium")
+
+    def test_creator_stack_exchange_is_medium(self) -> None:
+        assert detect_archive_type({"Creator": "Stack Exchange"}) == (
+            "stackexchange",
+            "medium",
+        )
+
+    def test_tags_wiktionary_is_medium(self) -> None:
+        assert detect_archive_type({"Tags": "wiktionary;_category:foo"}) == (
+            "wiktionary",
+            "medium",
+        )
+
 
 class TestGracefulFallback:
     def test_empty_dict_is_generic_none(self) -> None:

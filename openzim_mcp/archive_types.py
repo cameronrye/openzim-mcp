@@ -16,6 +16,7 @@ Confidence = Literal["high", "medium", "none"]
 # instances all live under ``*.stackexchange.com``. Plain substring / prefix
 # checks only — no regex (ReDoS-safe).
 _SE_NETWORK_HOSTS = (
+    "stackexchange.com",
     "superuser.com",
     "serverfault.com",
     "askubuntu.com",
