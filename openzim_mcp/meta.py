@@ -81,6 +81,9 @@ def build_meta(
     truncated: bool = False,
     suggestions: Optional[List[Dict[str, str]]] = None,
     reason: Optional[str] = None,
+    detected_type: Optional[str] = None,
+    detection_confidence: Optional[str] = None,
+    preset_applied: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Construct a `_meta` envelope for a tool response.
 
@@ -125,6 +128,12 @@ def build_meta(
         meta["suggestions"] = suggestions
     if reason is not None:
         meta["reason"] = reason
+    if detected_type is not None:
+        meta["detected_type"] = detected_type
+    if detection_confidence is not None:
+        meta["detection_confidence"] = detection_confidence
+    if preset_applied is not None:
+        meta["preset_applied"] = preset_applied
     return meta
 
 
@@ -258,6 +267,9 @@ def attach_meta(
     suggestions: Optional[List[Dict[str, str]]] = None,
     reason: Optional[str] = None,
     rendered: Optional[str] = None,
+    detected_type: Optional[str] = None,
+    detection_confidence: Optional[str] = None,
+    preset_applied: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Attach a `_meta` envelope built from the JSON-rendered payload (sans _meta).
 
@@ -289,5 +301,8 @@ def attach_meta(
         content_chars=content_chars,
         suggestions=suggestions,
         reason=reason,
+        detected_type=detected_type,
+        detection_confidence=detection_confidence,
+        preset_applied=preset_applied,
     )
     return payload
