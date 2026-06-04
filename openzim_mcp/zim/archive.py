@@ -708,13 +708,21 @@ class ZimOperations(
 
         ``preset`` is ``None`` (generic behavior) when detection confidence
         is below ``high`` and no per-archive pin forces a type.
-        ``applied_type`` is the detected type when a preset applies, else
-        ``None``.
+        ``applied_type`` is the effective applied type when a preset applies
+        (the pin's forced type when a pin overrides detection, else the
+        detected type), or ``None`` when no preset applies.
         """
         atype, confidence, name = self._archive_type(validated_path)
         presets = load_presets(self.config.presets_override_path)
         preset = resolve_preset(presets, atype, confidence, name)
-        return preset, (atype if preset is not None else None)
+        if preset is None:
+            return None, None
+        # When a per-archive pin forces a different type, report that forced
+        # type rather than the raw detected type so callers see the actual
+        # type whose preset was applied.
+        pin = presets.pins.get(name)
+        effective_type = (pin.type or atype) if pin is not None else atype
+        return preset, effective_type
 
     def _discover_metadata_keys(
         self, archive: Archive, has_new_scheme: bool

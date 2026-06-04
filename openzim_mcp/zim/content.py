@@ -135,7 +135,14 @@ class _ContentMixin:
         ) -> Tuple[Any, str]:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
-    def _get_entry_snippet(self, entry: Any, query: Optional[str] = None) -> str:
+    def _get_entry_snippet(
+        self,
+        entry: Any,
+        query: Optional[str] = None,
+        *,
+        snippet_length: Optional[int] = None,
+        max_paragraphs: Optional[int] = None,
+    ) -> str:
         """Get content snippet for search result, optionally query-aware.
 
         Renders the entry's HTML with ``compact=True`` so the resulting
@@ -192,8 +199,13 @@ class _ContentMixin:
                     bytes(item.content), mime, compact=True
                 )
             entry_title = getattr(entry, "title", None) or ""
+            mp = max_paragraphs if max_paragraphs is not None else 2
             return self.content_processor.create_snippet(
-                content, query=query, title=entry_title
+                content,
+                query=query,
+                title=entry_title,
+                max_paragraphs=mp,
+                snippet_length=snippet_length,
             )
         except Exception as e:
             logger.warning(f"Error getting content snippet: {e}")

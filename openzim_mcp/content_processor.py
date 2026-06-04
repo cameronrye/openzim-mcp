@@ -974,6 +974,7 @@ class ContentProcessor:
         query: Optional[str] = None,
         max_paragraphs: int = 2,
         title: Optional[str] = None,
+        snippet_length: Optional[int] = None,
     ) -> str:
         """Create a snippet from content, optionally query-aware.
 
@@ -1005,6 +1006,10 @@ class ContentProcessor:
             content = self._strip_leading_title_heading(content, title)
             if not content:
                 return ""
+
+        effective_len = (
+            snippet_length if snippet_length is not None else self.snippet_length
+        )
 
         paragraphs = content.split("\n\n")
         start_idx = 0
@@ -1053,8 +1058,8 @@ class ContentProcessor:
 
         # Truncate if too long. Reserve 3 chars for the trailing "..." so the
         # final string respects snippet_length rather than overshooting it.
-        if len(snippet_text) > self.snippet_length:
-            cap = max(self.snippet_length - 3, 0)
+        if len(snippet_text) > effective_len:
+            cap = max(effective_len - 3, 0)
             snippet_text = snippet_text[:cap].rstrip() + "..."
 
         if query:
@@ -1062,8 +1067,8 @@ class ContentProcessor:
             # Re-check length after bold markers are inserted: they may push the
             # string over snippet_length. Hard-truncate if so, preserving the
             # trailing "..." sentinel so callers see a consistent format.
-            if len(snippet_text) > self.snippet_length:
-                cap = max(self.snippet_length - 3, 0)
+            if len(snippet_text) > effective_len:
+                cap = max(effective_len - 3, 0)
                 sliced = snippet_text[:cap].rstrip()
                 # Truncation can land inside a ``**term**`` highlight, leaving
                 # an unmatched opening marker (e.g. ``…**ter``) that downstream

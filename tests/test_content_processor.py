@@ -538,6 +538,22 @@ def test_html_to_plain_text_compact_replaces_large_tables():
     assert "After table." in out
 
 
+def test_create_snippet_per_call_length_override() -> None:
+    cp = ContentProcessor(snippet_length=3000)
+    content = "word " * 400  # ~2000 chars, one paragraph
+    short = cp.create_snippet(content, snippet_length=100)
+    assert len(short) <= 100
+    full = cp.create_snippet(content)  # uses self.snippet_length=3000
+    assert len(full) > 100
+
+
+def test_create_snippet_length_none_uses_instance_default() -> None:
+    cp = ContentProcessor(snippet_length=50)
+    content = "word " * 400
+    out = cp.create_snippet(content, snippet_length=None)
+    assert len(out) <= 50
+
+
 class TestResolveHeadingId:
     """Test the four-step heading-id resolution chain.
 

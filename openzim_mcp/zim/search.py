@@ -21,11 +21,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
 import openzim_mcp.zim_operations as _zim_ops_mod
+from openzim_mcp.archive_types import detect_archive_type
 from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.preset_data import load_presets, resolve_preset
 from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import find_title_match
 from openzim_mcp.zim._ops_base import _json
@@ -35,6 +37,7 @@ if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
+    from openzim_mcp.preset_data import ArchivePreset
     from openzim_mcp.security import PathValidator
     from openzim_mcp.tool_schemas import (
         FindEntryResponse,
@@ -342,8 +345,23 @@ class _SearchMixin:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
         # Resolve via the content mixin; declared here for type checking.
-        def _get_entry_snippet(self, entry: Any, query: Optional[str] = None) -> str:
+        def _get_entry_snippet(
+            self,
+            entry: Any,
+            query: Optional[str] = None,
+            *,
+            snippet_length: Optional[int] = None,
+            max_paragraphs: Optional[int] = None,
+        ) -> str:
             """Resolve via ``_ContentMixin`` on the concrete coordinator."""
+
+        def _resolve_archive_preset(
+            self, validated_path: "Path"
+        ) -> "Tuple[Optional[ArchivePreset], Optional[str]]":
+            """Resolve via ``ZimOperations`` on the concrete coordinator."""
+
+        def _extract_zim_metadata(self, archive: Archive) -> Dict[str, Any]:
+            """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
         # Resolve via the namespace mixin; declared here for type checking.
         def _canonicalise_namespace(self, namespace: str) -> str:
@@ -481,8 +499,43 @@ class _SearchMixin:
                             reason="no_xapian_index",
                         ),
                     )
+                # Resolve the archive-type preset once using the already-open
+                # archive handle (avoids a second archive open for metadata).
+                # Synthesize uses a different passage path, so it is unaffected.
+                # Fall back to no-preset gracefully on any failure.
+                try:
+                    _meta_entries = self._extract_zim_metadata(archive).get(
+                        "metadata_entries", {}
+                    )
+                    if not isinstance(_meta_entries, dict):
+                        _meta_entries = {}
+                    _atype, _confidence = detect_archive_type(_meta_entries)
+                    _name = _meta_entries.get("Name", "")
+                    if not isinstance(_name, str):
+                        _name = ""
+                    _presets = load_presets(self.config.presets_override_path)
+                    preset = resolve_preset(_presets, _atype, _confidence, _name)
+                    if preset is None:
+                        applied_type: Optional[str] = None
+                    else:
+                        _pin = _presets.pins.get(_name)
+                        applied_type = (
+                            (_pin.type or _atype) if _pin is not None else _atype
+                        )
+                except Exception:
+                    preset, applied_type = None, None
                 payload, total_results = self._perform_search(
-                    archive, query, limit, offset, validated_path=validated_path
+                    archive,
+                    query,
+                    limit,
+                    offset,
+                    validated_path=validated_path,
+                    snippet_length=(
+                        preset.snippet_length if preset is not None else None
+                    ),
+                    max_paragraphs=(
+                        preset.max_paragraphs if preset is not None else None
+                    ),
                 )
             logger.debug(f"Search completed: query='{query}', results found")
             reason: Optional[str] = "0_hits" if total_results == 0 else None
@@ -575,6 +628,7 @@ class _SearchMixin:
                 payload,
                 reason=reason,
                 suggestions=suggestions if suggestions else None,
+                preset_applied=applied_type,
             )
             # Cache the meta-attached payload so cold vs warm reads are
             # bit-identical. Skip the cache for zero-hit responses
@@ -604,6 +658,8 @@ class _SearchMixin:
         offset: int,
         *,
         validated_path: Optional[Path] = None,
+        snippet_length: Optional[int] = None,
+        max_paragraphs: Optional[int] = None,
     ) -> Tuple[Dict[str, Any], int]:
         """Perform the actual search operation.
 
@@ -666,7 +722,12 @@ class _SearchMixin:
             try:
                 entry = archive.get_entry_by_path(entry_id)
                 title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(entry, query=query)
+                snippet = self._get_entry_snippet(
+                    entry,
+                    query=query,
+                    snippet_length=snippet_length,
+                    max_paragraphs=max_paragraphs,
+                )
                 results.append({"path": entry_id, "title": title, "snippet": snippet})
             except Exception as e:
                 logger.warning(f"Error processing search result {entry_id}: {e}")
