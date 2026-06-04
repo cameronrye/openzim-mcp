@@ -34,6 +34,7 @@ from openzim_mcp.title_promotion import (
     accept_tail_promotion,
     find_title_match,
     has_apostrophe_possessive,
+    is_single_token_tail_match,
     is_strong_title_match,
     iter_query_tails,
     passes_z4,
@@ -1337,6 +1338,19 @@ def _drop_cross_archive_leakage(
     kept: list[tuple[str, dict]] = []
     per_archive_kept: dict[str, int] = defaultdict(int)
     for archive_name, hit in top_hits:
+        # A `promoted` hit normally bypasses the relevance floor (a
+        # possessive/variant canonical can be lexically disjoint from the
+        # query). EXCEPTION (#253): a single-token-tail promotion from a
+        # NON-PRIMARY archive is the cross-archive leak signature
+        # (`connection refused` -> wiki `Refused` while the relevant hits
+        # are in superuser). The path-overlap floor can't catch it — the
+        # tail token IS a query token — so drop it outright here.
+        if (
+            archive_name != primary_archive
+            and hit.get("promoted")
+            and is_single_token_tail_match(hit, query)
+        ):
+            continue
         if hit.get("promoted") or archive_name == primary_archive:
             kept.append((archive_name, hit))
             continue
