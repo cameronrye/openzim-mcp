@@ -19,6 +19,8 @@ from typing import Dict, Literal, Mapping, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from openzim_mcp.archive_types import detect_archive_type
+
 logger = logging.getLogger(__name__)
 
 SummaryStyle = Literal["first_section", "q_and_a"]
@@ -157,3 +159,30 @@ def resolve_preset(
     if confidence != "high":
         return None
     return presets.by_type.get(archive_type)
+
+
+def resolve_preset_from_entries(
+    entries: Mapping[str, object],
+    override_path: Optional[Path],
+) -> Tuple[Optional[ArchivePreset], Optional[str]]:
+    """Return ``(preset, applied_type)`` from already-extracted M-namespace entries.
+
+    The single resolution path shared by the metadata, search, and summary
+    callers — they differ only in how they SOURCE ``entries`` (cached
+    metadata response vs an already-open archive handle). ``override_path``
+    is forwarded to ``load_presets`` (cached, cheap). Returns ``(None, None)``
+    when no preset applies; never raises on odd inputs.
+    """
+    if not isinstance(entries, dict):
+        entries = {}
+    atype, confidence = detect_archive_type(entries)
+    name = entries.get("Name", "")
+    if not isinstance(name, str):
+        name = ""
+    presets = load_presets(override_path)
+    preset = resolve_preset(presets, atype, confidence, name)
+    if preset is None:
+        return None, None
+    pin = presets.pins.get(name)
+    effective_type: str = (pin.type or atype) if pin is not None else atype
+    return preset, effective_type

@@ -46,7 +46,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
 )
 from openzim_mcp.meta import attach_meta
-from openzim_mcp.preset_data import ArchivePreset, load_presets, resolve_preset
+from openzim_mcp.preset_data import ArchivePreset, resolve_preset_from_entries
 from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
 from openzim_mcp.zim._ops_base import _ArchiveAccessMixin, _json
@@ -528,7 +528,8 @@ class ZimOperations(
 
             # Detect archive type from the M-namespace dict and surface it
             # in _meta only (never the public body). detect_archive_type is
-            # pure + cheap; this does not call _archive_type (no recursion).
+            # pure + cheap; called directly here (not via resolve_preset_from_entries)
+            # because we only need the type/confidence for the _meta annotation.
             entries = metadata.get("metadata_entries", {})
             if not isinstance(entries, dict):
                 entries = {}
@@ -686,21 +687,6 @@ class ZimOperations(
 
         return metadata
 
-    def _archive_type(self, validated_path: Path) -> Tuple[str, str, str]:
-        """Return ``(archive_type, confidence, name)`` for an archive.
-
-        Reads the cached metadata response and runs the pure classifier.
-        Deterministic and cheap; recomputed per call (the metadata read is
-        cached, the classifier is a handful of string ops).
-        """
-        meta = self.get_zim_metadata_data(str(validated_path))
-        entries = meta.get("metadata_entries", {})
-        if not isinstance(entries, dict):
-            entries = {}
-        atype, confidence = detect_archive_type(entries)
-        name = entries.get("Name", "")
-        return atype, confidence, name if isinstance(name, str) else ""
-
     def _resolve_archive_preset(
         self, validated_path: Path
     ) -> Tuple[Optional[ArchivePreset], Optional[str]]:
@@ -708,21 +694,12 @@ class ZimOperations(
 
         ``preset`` is ``None`` (generic behavior) when detection confidence
         is below ``high`` and no per-archive pin forces a type.
-        ``applied_type`` is the effective applied type when a preset applies
-        (the pin's forced type when a pin overrides detection, else the
-        detected type), or ``None`` when no preset applies.
+        ``applied_type`` is the type whose preset was applied (the pin's
+        forced type when a pin overrides), else ``None``.
         """
-        atype, confidence, name = self._archive_type(validated_path)
-        presets = load_presets(self.config.presets_override_path)
-        preset = resolve_preset(presets, atype, confidence, name)
-        if preset is None:
-            return None, None
-        # When a per-archive pin forces a different type, report that forced
-        # type rather than the raw detected type so callers see the actual
-        # type whose preset was applied.
-        pin = presets.pins.get(name)
-        effective_type = (pin.type or atype) if pin is not None else atype
-        return preset, effective_type
+        meta = self.get_zim_metadata_data(str(validated_path))
+        entries = meta.get("metadata_entries", {})
+        return resolve_preset_from_entries(entries, self.config.presets_override_path)
 
     def _discover_metadata_keys(
         self, archive: Archive, has_new_scheme: bool
