@@ -1,0 +1,16 @@
+# Archive-type presets (v2.5 #17). Keyed by detected type. All keys are
+# optional; a missing key inherits the global default. Only types with a
+# [preset.<type>] table get behavior — wiktionary/ted are detected and
+# reported but intentionally have no preset here (a2 adds them as data).
+
+[preset.wikipedia]
+# Explicit baseline == current defaults; makes the baseline testable.
+summary_style = "first_section"
+
+[preset.stackexchange]
+# The one real behavior change in a1. q_and_a summaries surface the
+# accepted-answer section; the wider snippet shows more of the Q&A body.
+# NOTE: max_paragraphs is a starting value, refined via the live owl-atlas
+# superuser reprobe (build sequence step 6 in the spec).
+summary_style = "q_and_a"
+max_paragraphs = 3
