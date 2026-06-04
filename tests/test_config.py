@@ -457,7 +457,8 @@ def test_presets_override_path_defaults_to_none() -> None:
 
 
 def test_presets_override_path_accepts_path() -> None:
+    expected = Path(TMP_DIR) / "p.toml"
     cfg = OpenZimMcpConfig(
-        allowed_directories=[TMP_DIR], presets_override_path=Path("/tmp/p.toml")
+        allowed_directories=[TMP_DIR], presets_override_path=expected
     )
-    assert cfg.presets_override_path == Path("/tmp/p.toml")
+    assert cfg.presets_override_path == expected

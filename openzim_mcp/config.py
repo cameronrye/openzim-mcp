@@ -415,7 +415,7 @@ class OpenZimMcpConfig(BaseSettings):
             "never fire updates."
         ),
     )
-    presets_override_path: Optional[Path] = Field(
+    presets_override_path: Path | None = Field(
         default=None,
         description=(
             "Path to an operator TOML that overrides archive-type presets "
