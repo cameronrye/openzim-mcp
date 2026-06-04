@@ -108,3 +108,21 @@ def test_leak_gate_keeps_multitoken_promoted_exemption() -> None:
         min_overlap=1,
     )
     assert "On_the_Origin_of_Species" in [h["path"] for _, h in kept]
+
+
+def test_promote_title_match_accepts_original_query_kw() -> None:
+    # Plumbing-only: passing original_query must not change a no-op promote.
+    from openzim_mcp.synthesize import _promote_title_match
+
+    top_hits = [("wikipedia", {"path": "Berlin", "snippet": "", "score": 1.0})]
+    # Berlin is already a strong title match for "berlin" -> short-circuit,
+    # returns input unchanged regardless of original_query.
+    out = _promote_title_match(
+        top_hits,
+        query="berlin",
+        original_query="berlin",
+        archives=[],
+        archives_searched=[],
+        search_handler=object(),
+    )
+    assert out == top_hits

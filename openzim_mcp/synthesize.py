@@ -960,6 +960,7 @@ def _promote_title_match(
     top_hits: list[tuple[str, dict]],
     *,
     query: str,
+    original_query: Optional[str] = None,
     archives: list[tuple[Archive, Path]],
     archives_searched: list[str],
     search_handler: Any,
@@ -987,6 +988,13 @@ def _promote_title_match(
     that resolves any tail wins. This picks the most specific entity
     that exists in any archive, biasing toward earlier-configured
     archives only when tails of equal length tie.
+
+    ``original_query`` is the raw, apostrophe-preserving user query
+    (``query`` is the BM25/topic-extracted form which has already had
+    the apostrophe stripped). Fix 2's tail-rescue probes it so
+    ``einstein's theory`` can reach ``Theory_of_relativity`` (unreachable
+    from the stripped ``einstein theory``). Defaults to ``query`` for
+    backwards-compat callers that don't supply it.
     """
     if top_hits:
         top_hit_0 = top_hits[0][1]
@@ -1722,6 +1730,7 @@ def synthesize_query(
     top_hits = _promote_title_match(
         top_hits,
         query=query,
+        original_query=original_query,
         archives=archives,
         archives_searched=archives_searched,
         search_handler=search_handler,
@@ -1766,6 +1775,7 @@ def synthesize_query(
         promoted = _promote_title_match(
             [],
             query=query,
+            original_query=original_query,
             archives=archives,
             archives_searched=archives_searched,
             search_handler=search_handler,
