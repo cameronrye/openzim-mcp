@@ -1155,14 +1155,41 @@ def _promote_title_match(
             # otherwise wave the generic tail through. When no more-specific
             # canonical exists (``planet earth`` -> ``Earth``, single token),
             # fall through and keep the legitimate bare-tail promotion.
-            if is_single_token_tail_match(promoted, query):
-                rescued = find_title_match(
-                    search_handler, str(_vp), rescue_query, min_score=0.95
-                )
+            #
+            # Fix A (#252 review): gate the rescue on the ORIGINAL query
+            # being an apostrophe-possessive. The rescue deliberately
+            # bypasses the ``passes_z4`` / ``accept_possessive_promotion``
+            # gates (the correct canonical like ``Allegory_of_the_cave``
+            # is "tangential" and those gates wrongly reject it). Without a
+            # guard, a NON-possessive multi-token query could over-promote
+            # a tangential canonical (``planet earth orbit`` ->
+            # ``Low_Earth_Orbit``). The defect class this fixes is
+            # specifically apostrophe-stripped possessives, so restrict it.
+            if is_single_token_tail_match(
+                promoted, query
+            ) and has_apostrophe_possessive(rescue_query):
+                # Fix B (#252 review): match the established probe pattern in
+                # this loop — wrap the rescue ``find_title_match`` so a
+                # transient backend failure blanks the rescue rather than
+                # bubbling up.
+                try:
+                    rescued = find_title_match(
+                        search_handler, str(_vp), rescue_query, min_score=0.95
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "_promote_title_match: rescue probe failed for %r: %s",
+                        rescue_query,
+                        exc,
+                    )
+                    rescued = None
                 if isinstance(rescued, dict) and rescued.get("path"):
                     rescued_tokens = _TAIL_TOKEN_RE.findall(
                         str(rescued["path"]).lower()
                     )
+                    # ``tail_tok`` is length-1 by the
+                    # ``is_single_token_tail_match`` invariant above, so
+                    # ``tail_tok[0]`` is the only (and the bare-tail) token.
                     tail_tok = _TAIL_TOKEN_RE.findall(promoted_path.lower())
                     if (
                         len(rescued_tokens) > 1

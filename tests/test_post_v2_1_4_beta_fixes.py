@@ -215,3 +215,51 @@ def test_planet_earth_keeps_bare_tail_no_rescue() -> None:
         search_handler=handler,
     )
     assert out[0][1]["path"] == "Earth"
+
+
+def test_possessive_rescue_skips_when_canonical_lacks_tail_token() -> None:
+    # Fix D (#252 review): possessive original query whose canonical does
+    # NOT contain the tail token must NOT be rescued. ``einstein's theory``
+    # (stripped ``einstein theory``) resolves to ``Special_relativity``
+    # (tokens ``special``, ``relativity`` — no ``theory``). The rescue must
+    # not promote it. Because the query is an apostrophe-possessive, the
+    # tail loop runs with ``min_len=2`` and never probes the bare ``theory``
+    # tail, so the generic ``Theory`` is not promoted either — the result
+    # falls through to the untouched BM25 ranking. This is a regression
+    # guard: it already passes against the post-Fix-A/B/C code (the rescue's
+    # ``tail_tok[0] in rescued_tokens`` check would reject ``Special_relativity``
+    # anyway, and the ``min_len=2`` floor keeps the rescue from even being
+    # reached), so it documents that no path promotes the tail-less canonical.
+    from openzim_mcp.synthesize import _promote_title_match
+
+    handler = _rescue_handler(
+        title_index_by_query={
+            # Original possessive resolves to a multi-token canonical that
+            # does NOT contain the tail token "theory".
+            "einstein's theory": {
+                "path": "Special_relativity",
+                "title": "Special relativity",
+                "score": 1.0,
+            },
+            "theory": {"path": "Theory", "title": "Theory", "score": 1.0},
+        },
+        hit_by_title={
+            "theory": {"path": "Theory", "snippet": "...", "score": 1.0},
+            "special relativity": {
+                "path": "Special_relativity",
+                "snippet": "...",
+                "score": 1.0,
+            },
+        },
+    )
+    archive = object()
+    out = _promote_title_match(
+        [("wikipedia", {"path": "Some_BM25_Noise", "snippet": "", "score": 0.5})],
+        query="einstein theory",  # stripped topic
+        original_query="einstein's theory",  # raw possessive query
+        archives=[(archive, "wiki.zim")],
+        archives_searched=["wikipedia"],
+        search_handler=handler,
+    )
+    # The rescue must NOT fire: the canonical lacks the tail token.
+    assert out[0][1]["path"] != "Special_relativity"
