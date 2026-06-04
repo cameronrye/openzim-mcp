@@ -45,7 +45,12 @@ logger = logging.getLogger(__name__)
 # Common MIME-type prefix used to gate text-extraction logic.
 _TEXT_MIME_PREFIX = "text/"
 
-_ANSWER_HEADING_TOKENS = ("accepted answer", "answer")
+# Matched as a lowercase substring against a section heading to find the
+# Q&A answer block. Kept deliberately broad for a1; the exact sotoki
+# heading is pinned during the live owl-atlas reprobe, where a real
+# multi-answer page (with "Your Answer" / "N Answers" headings) must be
+# checked to confirm the right section is selected.
+_ANSWER_HEADING_TOKENS = ("answer",)
 
 
 def _is_answer_heading(title: str) -> bool:

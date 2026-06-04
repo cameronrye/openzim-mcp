@@ -129,6 +129,15 @@ def test_select_summary_default_is_first_section() -> None:
     assert _select_summary_section_md(sections, md, None) == md[:6]
 
 
+def test_summary_generic_path_unchanged(plain_zim: Path) -> None:
+    # No override -> wikipedia Name-prefix detection is MEDIUM -> no preset
+    # -> generic summary (first-section), no preset_applied in _meta.
+    ops = make_zim_ops(str(plain_zim.parent))
+    resp = ops.get_entry_summary_data(str(plain_zim), "C/Photosynthesis")
+    assert resp["summary"]
+    assert resp["_meta"].get("preset_applied") is None
+
+
 def test_summary_q_and_a_via_pin(tmp_path: Path, se_zim: Path) -> None:
     from openzim_mcp.preset_data import load_presets
 
