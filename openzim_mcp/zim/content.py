@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
+    from openzim_mcp.preset_data import ArchivePreset
     from openzim_mcp.security import PathValidator
     from openzim_mcp.tool_schemas import (
         BatchEntryResponse,
@@ -43,6 +44,40 @@ logger = logging.getLogger(__name__)
 
 # Common MIME-type prefix used to gate text-extraction logic.
 _TEXT_MIME_PREFIX = "text/"
+
+_ANSWER_HEADING_TOKENS = ("accepted answer", "answer")
+
+
+def _is_answer_heading(title: str) -> bool:
+    """True when a section heading looks like a Q&A answer block."""
+    t = title.strip().lower()
+    return any(tok in t for tok in _ANSWER_HEADING_TOKENS)
+
+
+def _select_summary_section_md(
+    sections: List[Any],
+    rendered_md: str,
+    summary_style: Optional[str],
+) -> str:
+    """Return the markdown slice for the summary, per ``summary_style``.
+
+    ``q_and_a`` returns the first section whose heading looks like an
+    answer; for any other style (including ``None``) or when no answer
+    heading is found, returns the first-section slice (the prior behavior).
+
+    NOTE: the exact answer-heading match is refined against the live
+    superuser (sotoki) archive during the owl-atlas reprobe. The fallback
+    guarantees a never-worse-than-baseline result.
+    """
+    if summary_style == "q_and_a":
+        for s in sections:
+            if _is_answer_heading(str(s.get("title", ""))):
+                start = int(s["char_start"])
+                end = int(s["char_end"])
+                return rendered_md[start:end]
+    if sections:
+        return rendered_md[: int(sections[0]["char_end"])]
+    return rendered_md
 
 
 # D12 (v2.0.0a9): regex captures the path-traversal shapes that
@@ -133,6 +168,11 @@ class _ContentMixin:
         def _resolve_entry_with_fallback(
             self, archive: Archive, entry_path: str
         ) -> Tuple[Any, str]:
+            """Resolve via ``ZimOperations`` on the concrete coordinator."""
+
+        def _resolve_preset_for_open_archive(
+            self, archive: Archive
+        ) -> "Tuple[Optional[ArchivePreset], Optional[str]]":
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
     def _get_entry_snippet(
@@ -1398,12 +1438,15 @@ class _ContentMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
+                preset, applied_type = self._resolve_preset_for_open_archive(archive)
+                summary_style = preset.summary_style if preset is not None else None
                 result = self._extract_entry_summary_data(
                     archive,
                     entry_path,
                     max_words,
                     compact=compact,
                     validated_path=validated_path,
+                    summary_style=summary_style,
                 )
 
             logger.info(f"Extracted summary for: {entry_path}")
@@ -1412,6 +1455,7 @@ class _ContentMixin:
                 attach_meta(
                     result,
                     truncated=bool(result.get("is_truncated")),
+                    preset_applied=applied_type,
                 ),
             )
 
@@ -1461,6 +1505,7 @@ class _ContentMixin:
         *,
         compact: bool = False,
         validated_path: Optional[Path] = None,
+        summary_style: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Extract summary from article content as a dict.
 
@@ -1508,20 +1553,9 @@ class _ContentMixin:
                     content_processor=self.content_processor,
                 )
                 md = bundle["rendered_markdown"]
-                if bundle["sections"]:
-                    first = bundle["sections"][0]
-                    # Many Wikipedia-style articles render with prose
-                    # before the first heading (the lead paragraph) and
-                    # no top-level h1 in the markdown. Slicing only the
-                    # first section's body silently drops that lead.
-                    # Take everything from the start of the markdown
-                    # through the end of the first section so the lead
-                    # is preserved when present; equivalent to the prior
-                    # behaviour for articles whose first heading sits at
-                    # offset 0.
-                    summary_md = md[: first["char_end"]]
-                else:
-                    summary_md = md
+                summary_md = _select_summary_section_md(
+                    bundle["sections"], md, summary_style
+                )
 
                 words = summary_md.split()
                 is_truncated = len(words) > max_words

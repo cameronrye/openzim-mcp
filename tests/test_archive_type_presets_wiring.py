@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from libzim.writer import Creator
 
+from openzim_mcp.zim.content import _select_summary_section_md
 from tests.conftest_v2_fixtures import _HtmlItem, make_zim_ops
 
 
@@ -43,9 +44,12 @@ def test_metadata_surfaces_detected_type(se_zim: Path) -> None:
     assert "detected_type" not in resp
 
 
-def test_resolve_archive_preset_returns_se_preset(se_zim: Path) -> None:
+def test_resolve_preset_for_open_archive_returns_se_preset(se_zim: Path) -> None:
+    import openzim_mcp.zim_operations as zim_ops_mod
+
     ops = make_zim_ops(str(se_zim.parent))
-    preset, applied = ops._resolve_archive_preset(Path(str(se_zim)))
+    with zim_ops_mod.zim_archive(Path(str(se_zim))) as archive:
+        preset, applied = ops._resolve_preset_for_open_archive(archive)
     assert applied == "stackexchange"
     assert preset is not None
     assert preset.summary_style == "q_and_a"
@@ -94,5 +98,49 @@ def test_search_snippet_uses_pinned_preset(tmp_path: Path, plain_zim: Path) -> N
     ops.config.presets_override_path = override
     resp = ops.search_zim_file_data(str(plain_zim), "photosynthesis")
     assert resp["results"], "expected a hit"
+    assert resp["_meta"]["preset_applied"] == "stackexchange"
+    load_presets.cache_clear()
+
+
+def test_select_summary_q_and_a_picks_answer_section() -> None:
+    md = "Question intro.\n\n## Answer\n\nThe accepted answer body.\n"
+    sections = [
+        {"title": "Question", "level": 2, "char_start": 0, "char_end": 16},
+        {"title": "Answer", "level": 2, "char_start": 16, "char_end": len(md)},
+    ]
+    out = _select_summary_section_md(sections, md, "q_and_a")
+    assert "accepted answer body" in out
+    assert "Question intro" not in out
+
+
+def test_select_summary_q_and_a_falls_back_to_first_section() -> None:
+    md = "Lead.\n\n## Details\n\nMore.\n"
+    sections = [
+        {"title": "Lead", "level": 2, "char_start": 0, "char_end": 6},
+        {"title": "Details", "level": 2, "char_start": 6, "char_end": len(md)},
+    ]
+    out = _select_summary_section_md(sections, md, "q_and_a")
+    assert out == md[:6]
+
+
+def test_select_summary_default_is_first_section() -> None:
+    md = "Lead.\n\n## Details\n\nMore.\n"
+    sections = [{"title": "Lead", "level": 2, "char_start": 0, "char_end": 6}]
+    assert _select_summary_section_md(sections, md, None) == md[:6]
+
+
+def test_summary_q_and_a_via_pin(tmp_path: Path, se_zim: Path) -> None:
+    from openzim_mcp.preset_data import load_presets
+
+    load_presets.cache_clear()
+    override = tmp_path / "ov.toml"
+    override.write_text(
+        '[archive."superuser.com_en_all"]\ntype = "stackexchange"\n',
+        encoding="utf-8",
+    )
+    ops = make_zim_ops(str(se_zim.parent))
+    ops.config.presets_override_path = override
+    resp = ops.get_entry_summary_data(str(se_zim), "C/Q1")
+    assert "accepted answer text" in resp["summary"].lower()
     assert resp["_meta"]["preset_applied"] == "stackexchange"
     load_presets.cache_clear()

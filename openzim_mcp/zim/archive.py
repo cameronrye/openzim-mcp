@@ -687,19 +687,23 @@ class ZimOperations(
 
         return metadata
 
-    def _resolve_archive_preset(
-        self, validated_path: Path
+    def _resolve_preset_for_open_archive(
+        self, archive: Archive
     ) -> Tuple[Optional[ArchivePreset], Optional[str]]:
-        """Return ``(preset, applied_type)`` for an archive.
+        """Resolve ``(preset, applied_type)`` from an already-open archive.
 
-        ``preset`` is ``None`` (generic behavior) when detection confidence
-        is below ``high`` and no per-archive pin forces a type.
-        ``applied_type`` is the type whose preset was applied (the pin's
-        forced type when a pin overrides), else ``None``.
+        Reuses the open handle (no second open) and funnels through the
+        single shared resolver. Never raises — degrades to no-preset on any
+        failure so a behavior-shaping read can't break the underlying tool.
         """
-        meta = self.get_zim_metadata_data(str(validated_path))
-        entries = meta.get("metadata_entries", {})
-        return resolve_preset_from_entries(entries, self.config.presets_override_path)
+        try:
+            entries = self._extract_zim_metadata(archive).get("metadata_entries", {})
+            return resolve_preset_from_entries(
+                entries, self.config.presets_override_path
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Preset resolution failed; using no-preset: %s", exc)
+            return None, None
 
     def _discover_metadata_keys(
         self, archive: Archive, has_new_scheme: bool

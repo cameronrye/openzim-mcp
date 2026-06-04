@@ -26,7 +26,6 @@ from openzim_mcp.exceptions import (
     OpenZimMcpValidationError,
 )
 from openzim_mcp.meta import attach_meta
-from openzim_mcp.preset_data import resolve_preset_from_entries
 from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import find_title_match
 from openzim_mcp.zim._ops_base import _json
@@ -36,6 +35,7 @@ if TYPE_CHECKING:
     from openzim_mcp.cache import OpenZimMcpCache
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.content_processor import ContentProcessor
+    from openzim_mcp.preset_data import ArchivePreset
     from openzim_mcp.security import PathValidator
     from openzim_mcp.tool_schemas import (
         FindEntryResponse,
@@ -353,7 +353,9 @@ class _SearchMixin:
         ) -> str:
             """Resolve via ``_ContentMixin`` on the concrete coordinator."""
 
-        def _extract_zim_metadata(self, archive: Archive) -> Dict[str, Any]:
+        def _resolve_preset_for_open_archive(
+            self, archive: Archive
+        ) -> "Tuple[Optional[ArchivePreset], Optional[str]]":
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
         # Resolve via the namespace mixin; declared here for type checking.
@@ -495,17 +497,8 @@ class _SearchMixin:
                 # Resolve the archive-type preset once using the already-open
                 # archive handle (avoids a second archive open for metadata).
                 # Synthesize uses a different passage path, so it is unaffected.
-                # Fall back to no-preset gracefully on any failure.
-                try:
-                    _entries = self._extract_zim_metadata(archive).get(
-                        "metadata_entries", {}
-                    )
-                    preset, applied_type = resolve_preset_from_entries(
-                        _entries, self.config.presets_override_path
-                    )
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.debug("Preset resolution failed; using no-preset: %s", exc)
-                    preset, applied_type = None, None
+                # Defensive fallback is inside _resolve_preset_for_open_archive.
+                preset, applied_type = self._resolve_preset_for_open_archive(archive)
                 payload, total_results = self._perform_search(
                     archive,
                     query,
