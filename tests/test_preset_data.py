@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from openzim_mcp.preset_data import (
     ArchivePreset,
@@ -96,7 +97,28 @@ class TestOverrideAndPins:
         # bad override for the type is dropped; bundled default survives.
         assert presets.by_type["stackexchange"].summary_style == "q_and_a"
 
+    def test_malformed_toml_override_falls_back_to_bundled(
+        self, tmp_path: Path
+    ) -> None:
+        override = tmp_path / "bad.toml"
+        override.write_text("this is not = valid = toml [[[", encoding="utf-8")
+        presets = load_presets(override)
+        assert presets.by_type["stackexchange"].summary_style == "q_and_a"
+
+    def test_override_can_introduce_new_type(self, tmp_path: Path) -> None:
+        override = tmp_path / "ov.toml"
+        override.write_text(
+            '[preset.wiktionary]\nsummary_style = "first_section"\n',
+            encoding="utf-8",
+        )
+        presets = load_presets(override)
+        assert presets.by_type["wiktionary"].summary_style == "first_section"
+        # high-confidence resolve now yields the newly-introduced type preset
+        preset = resolve_preset(presets, "wiktionary", "high", "x")
+        assert preset is not None
+        assert preset.summary_style == "first_section"
+
 
 def test_archive_preset_rejects_unknown_field() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ArchivePreset(bogus=1)  # type: ignore[call-arg]

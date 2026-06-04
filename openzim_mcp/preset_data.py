@@ -29,7 +29,7 @@ class ArchivePreset(BaseModel):
     inherits the global default. ``extra='forbid'`` turns a typo in the
     TOML into a load-time error rather than a silently-ignored key."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     snippet_length: Optional[int] = Field(default=None, ge=100)
     max_paragraphs: Optional[int] = Field(default=None, ge=1)
@@ -89,7 +89,12 @@ def _parse_doc(
 
 
 def _merge(base: Optional[ArchivePreset], overlay: Mapping[str, object]) -> dict:
-    """Shallow merge: overlay's set (non-None) fields win over base's."""
+    """Field-level overlay: base fields, overridden by any key in overlay.
+
+    Callers must pass overlay with None values already excluded
+    (``model_dump(exclude_none=True)``) so base fields the overlay leaves
+    unset are preserved.
+    """
     merged: dict = base.model_dump(exclude_none=True) if base is not None else {}
     merged.update(overlay)
     return merged
