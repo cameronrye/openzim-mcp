@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.6](https://github.com/cameronrye/openzim-mcp/compare/v2.1.5...v2.1.6) (2026-06-04)
+
+
+### Fixed
+
+* pyjwt 2.13.0 security floor + repair manifest-mode release tagging ([#258](https://github.com/cameronrye/openzim-mcp/issues/258)) ([9b290ad](https://github.com/cameronrye/openzim-mcp/commit/9b290ad617ae97173c50366ff711128879d2acc4))
+
 ## [2.1.5](https://github.com/cameronrye/openzim-mcp/compare/v2.1.4...v2.1.5) (2026-06-03)
 
 
