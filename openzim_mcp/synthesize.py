@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 from openzim_mcp import bundle as _bundle_mod
 from openzim_mcp.text_utils import tokenize_for_relevance
 from openzim_mcp.title_promotion import (
+    _TAIL_TOKEN_RE,
     accept_possessive_promotion,
     accept_tail_promotion,
     find_title_match,
@@ -996,6 +997,7 @@ def _promote_title_match(
     from the stripped ``einstein theory``). Defaults to ``query`` for
     backwards-compat callers that don't supply it.
     """
+    rescue_query = original_query if original_query is not None else query
     if top_hits:
         top_hit_0 = top_hits[0][1]
         top_path = str(top_hit_0.get("path", ""))
@@ -1141,6 +1143,39 @@ def _promote_title_match(
             # token against the SAME archive the candidate came from.
             def _tail_probe(tok: str, _p: Path = _vp) -> Optional[dict]:
                 return find_title_match(search_handler, str(_p), tok)
+
+            # Fix 2 tail-rescue (#252): if we're about to promote a generic
+            # single-token tail, the apostrophe-stripped topic may have
+            # buried the real canonical (``einstein's theory`` ->
+            # Theory_of_relativity @1.0, unreachable from the stripped
+            # ``einstein theory`` which only resolves the bare ``Theory``).
+            # Probe the ORIGINAL apostrophe-preserving query; if it resolves
+            # to a more-specific MULTI-token canonical that CONTAINS the tail
+            # token, promote THAT instead — bypassing the gate that would
+            # otherwise wave the generic tail through. When no more-specific
+            # canonical exists (``planet earth`` -> ``Earth``, single token),
+            # fall through and keep the legitimate bare-tail promotion.
+            if is_single_token_tail_match(promoted, query):
+                rescued = find_title_match(
+                    search_handler, str(_vp), rescue_query, min_score=0.95
+                )
+                if isinstance(rescued, dict) and rescued.get("path"):
+                    rescued_tokens = _TAIL_TOKEN_RE.findall(
+                        str(rescued["path"]).lower()
+                    )
+                    tail_tok = _TAIL_TOKEN_RE.findall(promoted_path.lower())
+                    if (
+                        len(rescued_tokens) > 1
+                        and tail_tok
+                        and tail_tok[0] in rescued_tokens
+                    ):
+                        rescued_hit = _build_pass0_promoted_hit(
+                            rescued, archive, title_match_hit
+                        )
+                        return [
+                            (archive_name, _mark_promoted(rescued_hit)),
+                            *top_hits,
+                        ]
 
             if not accept_tail_promotion(promoted, query, _tail_probe):
                 continue

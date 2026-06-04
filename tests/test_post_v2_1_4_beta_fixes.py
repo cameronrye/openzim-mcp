@@ -33,6 +33,9 @@ the live 118 GB title index); the mocks below encode the live-observed
 
 from __future__ import annotations
 
+from typing import Any, Dict
+from unittest.mock import MagicMock
+
 from openzim_mcp.title_promotion import is_single_token_tail_match
 
 
@@ -126,3 +129,89 @@ def test_promote_title_match_accepts_original_query_kw() -> None:
         search_handler=object(),
     )
     assert out == top_hits
+
+
+def _rescue_handler(
+    title_index_by_query: Dict[str, Dict[str, Any]],
+    hit_by_title: Dict[str, Dict[str, Any]],
+) -> Any:
+    """Mock search_handler: find_entry_by_title_data keyed by query,
+    title_match_hit keyed by resolved title."""
+    m = MagicMock()
+
+    def fake_fetbd(
+        _vp: str, q: str, *, cross_file: bool = False, limit: int = 3
+    ) -> Dict[str, Any]:
+        row = title_index_by_query.get(q.lower())
+        return {"results": [row] if row else []}
+
+    m.find_entry_by_title_data.side_effect = fake_fetbd
+    m.title_match_hit.side_effect = lambda _archive, title: hit_by_title.get(
+        title.lower()
+    )
+    return m
+
+
+def test_einsteins_theory_rescues_theory_of_relativity() -> None:
+    # tail "theory" -> generic "Theory"; original "einstein's theory"
+    # resolves to the more-specific multi-token canonical containing "theory".
+    from openzim_mcp.synthesize import _promote_title_match
+
+    handler = _rescue_handler(
+        title_index_by_query={
+            "einstein's theory": {
+                "path": "Theory_of_relativity",
+                "title": "Theory of relativity",
+                "score": 1.0,
+            },
+            "theory": {"path": "Theory", "title": "Theory", "score": 1.0},
+        },
+        hit_by_title={
+            "theory": {"path": "Theory", "snippet": "...", "score": 1.0},
+            "theory of relativity": {
+                "path": "Theory_of_relativity",
+                "snippet": "...",
+                "score": 1.0,
+            },
+        },
+    )
+    archive = object()
+    # A weak BM25 top hit that does NOT strong-title-match the 2-token
+    # query (a bare "Einstein" would prefix-match "einstein theory" and
+    # short-circuit _promote_title_match before the tail loop runs).
+    out = _promote_title_match(
+        [("wikipedia", {"path": "Some_BM25_Noise", "snippet": "", "score": 0.5})],
+        query="einstein theory",  # stripped topic (what synthesize gets today)
+        original_query="einstein's theory",  # raw query (apostrophe preserved)
+        archives=[(archive, "wiki.zim")],
+        archives_searched=["wikipedia"],
+        search_handler=handler,
+    )
+    assert out[0][1]["path"] == "Theory_of_relativity"
+    assert out[0][1].get("promoted") is True
+
+
+def test_planet_earth_keeps_bare_tail_no_rescue() -> None:
+    # original "planet earth" resolves only to single-token "Earth" -> no
+    # more-specific canonical -> keep the legitimate bare-tail promotion.
+    from openzim_mcp.synthesize import _promote_title_match
+
+    handler = _rescue_handler(
+        title_index_by_query={
+            "planet earth": {"path": "Earth", "title": "Earth", "score": 1.0},
+            "earth": {"path": "Earth", "title": "Earth", "score": 1.0},
+        },
+        hit_by_title={"earth": {"path": "Earth", "snippet": "...", "score": 1.0}},
+    )
+    archive = object()
+    # Weak BM25 top hit (a bare "Planet" would prefix-match "planet earth"
+    # and short-circuit before the promotion path runs).
+    out = _promote_title_match(
+        [("wikipedia", {"path": "Some_BM25_Noise", "snippet": "", "score": 0.5})],
+        query="planet earth",
+        original_query="planet earth",
+        archives=[(archive, "wiki.zim")],
+        archives_searched=["wikipedia"],
+        search_handler=handler,
+    )
+    assert out[0][1]["path"] == "Earth"
