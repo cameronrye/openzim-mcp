@@ -415,6 +415,14 @@ class OpenZimMcpConfig(BaseSettings):
             "never fire updates."
         ),
     )
+    presets_override_path: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Path to an operator TOML that overrides archive-type presets "
+            "(deep-merged per type) and defines per-archive pins. Loaded from "
+            "OPENZIM_MCP_PRESETS_OVERRIDE_PATH. Absent => bundled defaults only."
+        ),
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="OPENZIM_MCP_",
