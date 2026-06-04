@@ -11,6 +11,9 @@ jobs:
   test:
     name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Cap wall-clock so a hung step (network stall, deadlocked test) fails fast
+    # instead of riding GitHub's 6h default. Generous vs the ~10m normal run.
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -110,6 +113,10 @@ jobs:
   test-reranker:
     name: Test [reranker] extra on Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    # Backstop for a HuggingFace download *hang* (vs a 5xx, which the retry
+    # loop below already rides out). A stall otherwise burned the full 6h
+    # default and cancelled the whole CI run (the v2.1.5 release commit).
+    timeout-minutes: 35
     defaults:
       run:
         shell: bash
@@ -146,7 +153,14 @@ jobs:
           # so an external outage never red-X's main.
           staged=0
           for attempt in 1 2 3 4 5; do
-            if uv run openzim-mcp download-models \
+            # Bound each attempt with `timeout`: a 5xx returns fast and retries,
+            # but a stalled connection has no response to react to and would
+            # otherwise hang until the job's wall-clock limit. timeout turns a
+            # hang into a failed attempt that this same retry/skip path handles,
+            # so an HF stall degrades to "tests skip" rather than a 6h cancel.
+            # --kill-after forces SIGKILL if the downloader ignores SIGTERM.
+            if timeout --kill-after=30s 240s \
+                 uv run openzim-mcp download-models \
                  --reranker-model-id Xenova/ms-marco-MiniLM-L-6-v2; then
               echo "reranker model staged on attempt ${attempt}"
               staged=1
@@ -169,6 +183,7 @@ jobs:
   security:
     name: Security Scanning
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       security-events: write
       contents: read
@@ -263,6 +278,9 @@ jobs:
   test-comprehensive:
     name: Comprehensive Testing
     runs-on: ubuntu-latest
+    # Heaviest job (downloads the ZIM testing suite + full + slow suites);
+    # cap it so a hung ZIM-data fetch can't ride the 6h default either.
+    timeout-minutes: 45
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
