@@ -89,7 +89,8 @@ def build_meta(
 
     Always emits `tokens_est` (with a 5% pad to cover envelope cost),
     `chars`, `truncated`. Conditionally emits `more_at_offset`,
-    `total_chars`, `suggestions`, `reason`.
+    `total_chars`, `suggestions`, `reason`,
+    `detected_type`, `detection_confidence`, `preset_applied`.
 
     ``content_chars`` is the byte length of the *paginable content slice*
     in the response (e.g. ``len(payload["content"])`` for get_zim_entry).

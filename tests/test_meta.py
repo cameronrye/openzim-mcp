@@ -199,3 +199,15 @@ def test_build_meta_omits_detection_fields_when_none() -> None:
 def test_attach_meta_forwards_preset_applied() -> None:
     payload = attach_meta({"a": 1}, preset_applied="stackexchange")
     assert payload["_meta"]["preset_applied"] == "stackexchange"
+
+
+def test_build_meta_emits_all_three_detection_fields_together() -> None:
+    meta = build_meta(
+        rendered="x",
+        detected_type="stackexchange",
+        detection_confidence="high",
+        preset_applied="stackexchange",
+    )
+    assert meta["detected_type"] == "stackexchange"
+    assert meta["detection_confidence"] == "high"
+    assert meta["preset_applied"] == "stackexchange"
