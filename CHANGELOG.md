@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.7](https://github.com/cameronrye/openzim-mcp/compare/v2.1.6...v2.1.7) (2026-06-04)
+
+
+### Fixed
+
+* **synthesize:** resolve 2-token tail-hijack defect class ([#252](https://github.com/cameronrye/openzim-mcp/issues/252), [#253](https://github.com/cameronrye/openzim-mcp/issues/253)) ([#261](https://github.com/cameronrye/openzim-mcp/issues/261)) ([67c4f9c](https://github.com/cameronrye/openzim-mcp/commit/67c4f9c5c4b3f78fccecca87dc4db903e6e71e7f))
+
 ## [2.1.6](https://github.com/cameronrye/openzim-mcp/compare/v2.1.5...v2.1.6) (2026-06-04)
 
 
