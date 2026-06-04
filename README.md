@@ -42,8 +42,8 @@ uv tool install openzim-mcp
 pip install openzim-mcp
 
 # Docker (multi-arch image, ghcr.io)
-docker pull ghcr.io/cameronrye/openzim-mcp:2.1.4
-docker run --rm -v /path/to/zim/files:/zim ghcr.io/cameronrye/openzim-mcp:2.1.4 /zim
+docker pull ghcr.io/cameronrye/openzim-mcp:2.1.7
+docker run --rm -v /path/to/zim/files:/zim ghcr.io/cameronrye/openzim-mcp:2.1.7 /zim
 ```
 
 Verify the install:
