@@ -88,7 +88,13 @@ include = ["openzim_mcp*"]
 [tool.setuptools.package-data]
 openzim_mcp = ["data/*.txt", "tools/*.md"]
 
-
+[tool.uv]
+# pyjwt is pulled in transitively via mcp[cli] (which depends on pyjwt[crypto]).
+# Floor it at 2.13.0 so the release pip-audit gate stays clear of
+# PYSEC-2026-175 / -177 / -178 / -179 — four advisories against pyjwt 2.12.1,
+# all fixed in 2.13.0. mcp itself sets no upper bound, so this only raises the
+# floor. Drop this constraint once mcp's own pin guarantees >= 2.13.0.
+constraint-dependencies = ["pyjwt>=2.13.0"]
 
 [tool.black]
 line-length = 88
