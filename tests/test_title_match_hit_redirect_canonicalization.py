@@ -63,7 +63,9 @@ def test_title_match_hit_survives_redirect_chain_returning_none() -> None:
     )
 
     class _Stub(_SearchMixin):
-        def _get_entry_snippet(self, _entry, query=None):  # type: ignore[no-untyped-def]
+        def _get_entry_snippet(  # type: ignore[no-untyped-def]
+            self, entry, query=None, *, snippet_length=None, max_paragraphs=None
+        ):
             return ""
 
     stub = _Stub.__new__(_Stub)
@@ -110,7 +112,14 @@ def test_title_match_hit_returns_canonical_path_not_redirect_path() -> None:
     # instance carrying just the snippet path stub. The function
     # is structurally simple and only depends on ``self._get_entry_snippet``.
     class _Stub(_SearchMixin):
-        def _get_entry_snippet(self, _entry: Any, query: Any = None) -> str:
+        def _get_entry_snippet(
+            self,
+            entry: Any,
+            query: Any = None,
+            *,
+            snippet_length: Any = None,
+            max_paragraphs: Any = None,
+        ) -> str:
             return ""
 
     stub = _Stub.__new__(_Stub)

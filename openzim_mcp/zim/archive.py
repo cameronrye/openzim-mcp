@@ -35,6 +35,7 @@ from libzim.suggestion import (  # type: ignore[import-untyped]
     SuggestionSearcher,
 )
 
+from openzim_mcp.archive_types import detect_archive_type
 from openzim_mcp.cache import OpenZimMcpCache
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.constants import DEFAULT_MAIN_PAGE_TRUNCATION
@@ -45,6 +46,7 @@ from openzim_mcp.exceptions import (
     OpenZimMcpArchiveError,
 )
 from openzim_mcp.meta import attach_meta
+from openzim_mcp.preset_data import ArchivePreset, resolve_preset_from_entries
 from openzim_mcp.security import PathValidator
 from openzim_mcp.timeout_utils import run_with_timeout
 from openzim_mcp.zim._ops_base import _ArchiveAccessMixin, _json
@@ -524,9 +526,20 @@ class ZimOperations(
             with _zim_ops_shim.zim_archive(validated_path) as archive:
                 metadata = self._extract_zim_metadata(archive)
 
+            # Detect archive type from the M-namespace dict and surface it
+            # in _meta only (never the public body). detect_archive_type is
+            # pure + cheap; called directly here (not via resolve_preset_from_entries)
+            # because we only need the type/confidence for the _meta annotation.
+            entries = metadata.get("metadata_entries", {})
+            if not isinstance(entries, dict):
+                entries = {}
+            atype, confidence = detect_archive_type(entries)
+
             # Attach _meta before caching so cold and warm reads return
             # bit-identical responses (Phase B #12).
-            with_meta = attach_meta(metadata)
+            with_meta = attach_meta(
+                metadata, detected_type=atype, detection_confidence=confidence
+            )
             self.cache.set(cache_key, with_meta)
             logger.info(f"Retrieved metadata for: {validated_path}")
             return cast("ZimMetadataResponse", with_meta)
@@ -673,6 +686,24 @@ class ZimOperations(
                     metadata["counter_breakdown"] = breakdown
 
         return metadata
+
+    def _resolve_preset_for_open_archive(
+        self, archive: Archive
+    ) -> Tuple[Optional[ArchivePreset], Optional[str]]:
+        """Resolve ``(preset, applied_type)`` from an already-open archive.
+
+        Reuses the open handle (no second open) and funnels through the
+        single shared resolver. Never raises — degrades to no-preset on any
+        failure so a behavior-shaping read can't break the underlying tool.
+        """
+        try:
+            entries = self._extract_zim_metadata(archive).get("metadata_entries", {})
+            return resolve_preset_from_entries(
+                entries, self.config.presets_override_path
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Preset resolution failed; using no-preset: %s", exc)
+            return None, None
 
     def _discover_metadata_keys(
         self, archive: Archive, has_new_scheme: bool

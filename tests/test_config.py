@@ -449,3 +449,16 @@ def test_synthesize_config_rejects_invalid_section_affinity_bounds():
         SynthesizeConfig(section_affinity_boost=0.5)
     with pytest.raises(ValidationError):
         SynthesizeConfig(section_affinity_boost=10.5)
+
+
+def test_presets_override_path_defaults_to_none() -> None:
+    cfg = OpenZimMcpConfig(allowed_directories=[TMP_DIR])
+    assert cfg.presets_override_path is None
+
+
+def test_presets_override_path_accepts_path() -> None:
+    expected = Path(TMP_DIR) / "p.toml"
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[TMP_DIR], presets_override_path=expected
+    )
+    assert cfg.presets_override_path == expected

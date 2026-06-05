@@ -108,7 +108,7 @@ Open commitments referenced from production code (`openzim_mcp/tools/`) and test
 
 | Milestone | Items | Tag |
 | --- | --- | --- |
-| **v2.5.0a1** | `#17` archive-type presets (smallest scope, data-only) | _TBD_ |
+| **v2.5.0a1** | `#17` archive-type presets ([spec](specs/2026-06-04-v2.5-archive-type-presets-design.md), spec'd 2026-06-04 — snippet + summary seams, detect all 4 types, behavior for Wikipedia/Stack Exchange) | _TBD_ |
 | **v2.5.0a2** | `#16` link-graph sidecar + `build` CLI + `zim_links` `"inbound"` enum promotion | _TBD_ |
 | **v2.5.0a3** | `#199` `zim_query` sub-mode dispatch + `#18` `zim_get_section` raw-text path | _TBD_ |
 | **v2.5.0a4** | sub-D-3 if triggered + `zim_get` `compact` default revisit (telemetry-driven) | _TBD_ |

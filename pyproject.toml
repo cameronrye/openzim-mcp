@@ -86,7 +86,7 @@ where = ["."]
 include = ["openzim_mcp*"]
 
 [tool.setuptools.package-data]
-openzim_mcp = ["data/*.txt", "tools/*.md"]
+openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 
 [tool.uv]
 # pyjwt is pulled in transitively via mcp[cli] (which depends on pyjwt[crypto]).

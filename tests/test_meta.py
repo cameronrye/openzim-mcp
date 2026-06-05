@@ -180,3 +180,34 @@ def test_attach_meta_excludes_existing_meta_from_render():
     out = attach_meta(payload)
     # _meta is overwritten, not nested
     assert "old" not in out["_meta"]
+
+
+def test_build_meta_emits_detected_type_when_set() -> None:
+    meta = build_meta(
+        rendered="x", detected_type="wikipedia", detection_confidence="high"
+    )
+    assert meta["detected_type"] == "wikipedia"
+    assert meta["detection_confidence"] == "high"
+
+
+def test_build_meta_omits_detection_fields_when_none() -> None:
+    meta = build_meta(rendered="x")
+    assert "detected_type" not in meta
+    assert "preset_applied" not in meta
+
+
+def test_attach_meta_forwards_preset_applied() -> None:
+    payload = attach_meta({"a": 1}, preset_applied="stackexchange")
+    assert payload["_meta"]["preset_applied"] == "stackexchange"
+
+
+def test_build_meta_emits_all_three_detection_fields_together() -> None:
+    meta = build_meta(
+        rendered="x",
+        detected_type="stackexchange",
+        detection_confidence="high",
+        preset_applied="stackexchange",
+    )
+    assert meta["detected_type"] == "stackexchange"
+    assert meta["detection_confidence"] == "high"
+    assert meta["preset_applied"] == "stackexchange"
