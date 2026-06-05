@@ -55,6 +55,8 @@ The published image:
 
 Binding a non-loopback host (`0.0.0.0`) requires `OPENZIM_MCP_AUTH_TOKEN` as a safe default; the bind is refused without it.
 
+> **Upgrading an existing HTTP deployment?** Earlier images defaulted the *container* to HTTP, so a token-only `docker run -p 8000:8000 -e OPENZIM_MCP_AUTH_TOKEN=… <image>` was enough. The image now defaults to **stdio**, so that same command starts a stdio server instead — nothing listens on `:8000`. Add `-e OPENZIM_MCP_TRANSPORT=http -e OPENZIM_MCP_HOST=0.0.0.0` (as shown above) when you pull the new image.
+
 ## Authentication
 
 Bearer-token auth via `BearerTokenAuthMiddleware`:

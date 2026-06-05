@@ -32,7 +32,7 @@ OpenZIM MCP provides **intelligent, structured access** that LLMs need:
 - **Safe-default startup check** refuses to bind a non-localhost host without an auth token.
 - **Path and PID redaction** in error responses and diagnostics — rejected traversals no longer leak the canonical allowed-directory layout.
 - **Atomic rate limiting** — global + per-operation token-bucket acquire is single-pass; no transient over-consumption.
-- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp`, builds for `linux/amd64` and `linux/arm64`, runs as non-root with a built-in healthcheck.
+- **Multi-arch Docker image** — `ghcr.io/cameronrye/openzim-mcp`, builds for `linux/amd64` and `linux/arm64`, runs as non-root, and defaults to stdio (HTTP is an explicit opt-in).
 
 ## Use Cases
 

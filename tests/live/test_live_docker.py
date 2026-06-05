@@ -321,7 +321,10 @@ def test_container_speaks_mcp_over_stdio_by_default(
         )
     except subprocess.TimeoutExpired:
         proc.kill()
-        out, err = proc.communicate()
+        try:
+            out, err = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            out, err = b"", b""
         pytest.fail(
             "container did not answer the stdio initialize handshake within 90s "
             "(likely crashed on the HTTP bind check instead of running stdio).\n"

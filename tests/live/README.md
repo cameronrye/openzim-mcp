@@ -42,7 +42,7 @@ auto-skip otherwise, so you don't need to remember to filter.
 | `test_live_prompts.py` | MCP prompts (`/research`, `/summarize`, `/explore`) including v1.0 sanitization (control-char strip, length cap, ask-for-input fallback) |
 | `test_live_subscriptions.py` | `MtimeWatcher` + `notifications/resources/updated` over streamable-HTTP |
 | `test_live_cache_persistence.py` | Cache `persistence_path` survives a graceful shutdown / restart |
-| `test_live_docker.py` | `docker build` + `docker run` smoke: image boots, runs as `appuser` (uid 10001), `/healthz`+`/readyz` work, bearer auth on `/mcp`, `HEALTHCHECK` directive present. Auto-skips when docker daemon unavailable. First build may take ~10 min; subsequent runs reuse layer cache (~20s). |
+| `test_live_docker.py` | `docker build` + `docker run` smoke: image boots, runs as `appuser` (uid 10001), `/healthz`+`/readyz` work and bearer auth on `/mcp` (HTTP opt-in path), and the image **defaults to stdio** (no transport baked into `ENV`) — a bare `docker run -i` completes the MCP `initialize` handshake. Auto-skips when docker daemon unavailable. First build may take ~10 min; subsequent runs reuse layer cache (~20s). |
 
 ## Intentionally not live-tested
 
