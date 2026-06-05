@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.8](https://github.com/cameronrye/openzim-mcp/compare/v2.1.7...v2.1.8) (2026-06-04)
+
+
+### Documentation
+
+* sync version facts to v2.1.7 ([#263](https://github.com/cameronrye/openzim-mcp/issues/263)) ([17d8f6a](https://github.com/cameronrye/openzim-mcp/commit/17d8f6ab8a467af99ab2ab556492f03a04251980))
+
 ## [2.1.7](https://github.com/cameronrye/openzim-mcp/compare/v2.1.6...v2.1.7) (2026-06-04)
 
 
