@@ -152,8 +152,8 @@ The published image (`ghcr.io/cameronrye/openzim-mcp`) is hardened by default:
 - **Non-root user** — `appuser` (uid 10001, gid 10001).
 - **Multi-stage build** — runtime image only contains the venv and source, no build tools.
 - **Multi-arch** — `linux/amd64`, `linux/arm64`.
-- **Built-in `HEALTHCHECK`** — `curl -fsS http://localhost:8000/readyz`.
-- **`HOST=0.0.0.0` default** — but the safe-default startup check refuses to bind without `OPENZIM_MCP_AUTH_TOKEN`. Set the token, or override `OPENZIM_MCP_HOST=127.0.0.1` for loopback-only.
+- **Minimal runtime** — no `curl` or other extra tooling in the final image; it ships no `HEALTHCHECK` (the default stdio transport has no HTTP endpoint to probe). For HTTP deployments, define a `/readyz` probe in your orchestrator (see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/)).
+- **stdio by default** — opting into HTTP with `OPENZIM_MCP_HOST=0.0.0.0` triggers the safe-default startup check, which refuses to bind without `OPENZIM_MCP_AUTH_TOKEN`. Set the token, or keep the loopback-only default.
 
 See the [Dockerfile](https://github.com/cameronrye/openzim-mcp/blob/main/Dockerfile) for full details.
 

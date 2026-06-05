@@ -1,10 +1,12 @@
 """Live Docker image build + run smoke test.
 
-Covers v1.0 item 3: the multi-stage, multi-arch Docker image published
-to ``ghcr.io/cameronrye/openzim-mcp``. Builds the image locally, runs
-it under HTTP transport with a temp auth token, polls ``/readyz``
-through the host port mapping, and asserts the container runs as the
-non-root ``appuser``.
+Covers the multi-stage, multi-arch Docker image published to
+``ghcr.io/cameronrye/openzim-mcp``. Builds the image locally and checks
+both transports: the default **stdio** path (a bare ``docker run -i``
+completes the MCP ``initialize`` handshake — how Claude Desktop / Glama
+launch it) and the opt-in **HTTP** path (run with a temp auth token,
+poll ``/readyz`` through the host port mapping), plus the non-root
+``appuser`` invariant.
 
 Skipped automatically when:
   - the ``docker`` CLI is not on ``PATH``
@@ -89,7 +91,14 @@ def built_image() -> str:
 
 @pytest.fixture
 def running_container(built_image: str, zim_dir: Path) -> Iterator[dict]:
-    """Run the image with HTTP transport + temp token; yield container info."""
+    """Run the image with HTTP transport (opt-in) + temp token; yield info.
+
+    The image defaults to stdio transport (see
+    ``test_container_speaks_mcp_over_stdio_by_default``), so the HTTP
+    deployment path is opted into explicitly here via
+    ``OPENZIM_MCP_TRANSPORT=http`` + ``OPENZIM_MCP_HOST=0.0.0.0`` so the
+    bound port is reachable through the host port mapping.
+    """
     container_name = f"oz-mcp-livetest-{uuid.uuid4().hex[:8]}"
     host_port = _find_free_loopback_port()
     token = secrets.token_urlsafe(32)
@@ -106,6 +115,10 @@ def running_container(built_image: str, zim_dir: Path) -> Iterator[dict]:
             f"127.0.0.1:{host_port}:8000",
             "-v",
             f"{zim_dir}:/data:ro",
+            "-e",
+            "OPENZIM_MCP_TRANSPORT=http",
+            "-e",
+            "OPENZIM_MCP_HOST=0.0.0.0",
             "-e",
             f"OPENZIM_MCP_AUTH_TOKEN={token}",
             built_image,
@@ -224,8 +237,16 @@ def test_container_mcp_endpoint_accepts_valid_token(
     )
 
 
-def test_image_has_healthcheck_directive(built_image: str) -> None:
-    """``docker inspect`` must show the HEALTHCHECK from the Dockerfile."""
+def test_image_does_not_force_http_transport(built_image: str) -> None:
+    """The image must NOT bake in HTTP transport / a public bind host.
+
+    Regression guard: the image used to ship ``OPENZIM_MCP_TRANSPORT=http``
+    and ``OPENZIM_MCP_HOST=0.0.0.0`` as ``ENV``. That made every tokenless
+    ``docker run`` crash on the safe-default bind check, and left the
+    server uninstallable by stdio MCP clients (Claude Desktop, Glama).
+    The image must inherit the code's stdio/127.0.0.1 defaults so HTTP is
+    an explicit opt-in, not the baked-in default.
+    """
     cp = subprocess.run(
         ["docker", "inspect", built_image],
         capture_output=True,
@@ -235,11 +256,101 @@ def test_image_has_healthcheck_directive(built_image: str) -> None:
     assert cp.returncode == 0
     inspected = json.loads(cp.stdout)
     assert inspected, "docker inspect returned empty array"
-    config = inspected[0].get("Config", {})
-    healthcheck = config.get("Healthcheck") or {}
-    test_field = healthcheck.get("Test") or []
-    assert test_field, f"image has no HEALTHCHECK directive: {config!r}"
-    # Joined check covers both shell-form and exec-form
-    assert "readyz" in " ".join(
-        test_field
-    ), f"healthcheck doesn't probe /readyz: {test_field!r}"
+    env = inspected[0].get("Config", {}).get("Env", []) or []
+    assert (
+        "OPENZIM_MCP_TRANSPORT=http" not in env
+    ), f"image forces HTTP transport via ENV; stdio clients can't run it: {env!r}"
+    assert (
+        "OPENZIM_MCP_HOST=0.0.0.0" not in env
+    ), f"image bakes in a public bind host via ENV: {env!r}"
+
+
+def test_container_speaks_mcp_over_stdio_by_default(
+    built_image: str, zim_dir: Path
+) -> None:
+    """A bare ``docker run -i`` (no transport env) speaks MCP over stdio.
+
+    This is how Claude Desktop and the Glama registry run a containerized
+    MCP server: ``docker run -i --rm -v ...:/data <image>`` with no auth
+    token and no port mapping, talking JSON-RPC over stdin/stdout. It must
+    complete the ``initialize`` handshake rather than crashing on the
+    HTTP safe-default bind check.
+    """
+    init_req = (
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "docker-stdio-livetest", "version": "0"},
+                },
+            }
+        )
+        + "\n"
+    )
+    initialized = (
+        json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"
+    )
+
+    proc = subprocess.Popen(
+        [
+            "docker",
+            "run",
+            "-i",
+            "--rm",
+            "-v",
+            f"{zim_dir}:/data:ro",
+            built_image,
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    # Pre-initialize so static analysis can see these are always bound; the
+    # except branch raises via pytest.fail (NoReturn) so they're never read
+    # unset, but CodeQL doesn't model pytest.fail's NoReturn.
+    stdout, stderr = b"", b""
+    try:
+        # Closing stdin (via communicate's input) signals EOF, so the stdio
+        # server shuts down after answering initialize and stdout reaches EOF.
+        stdout, stderr = proc.communicate(
+            input=(init_req + initialized).encode(), timeout=90
+        )
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            out, err = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            out, err = b"", b""
+        pytest.fail(
+            "container did not answer the stdio initialize handshake within 90s "
+            "(likely crashed on the HTTP bind check instead of running stdio).\n"
+            f"--- stdout ---\n{out.decode(errors='replace')[-2000:]}\n"
+            f"--- stderr ---\n{err.decode(errors='replace')[-2000:]}"
+        )
+
+    resp = None
+    for line in stdout.decode(errors="replace").splitlines():
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if msg.get("id") == 0:
+            resp = msg
+            break
+
+    assert resp is not None, (
+        "no JSON-RPC initialize response on stdout — the container did not "
+        "run as a stdio MCP server.\n"
+        f"--- stdout ---\n{stdout.decode(errors='replace')[-2000:]}\n"
+        f"--- stderr ---\n{stderr.decode(errors='replace')[-2000:]}"
+    )
+    assert "result" in resp, f"initialize returned an error: {resp!r}"
+    result = resp["result"]
+    assert "protocolVersion" in result, f"missing protocolVersion: {result!r}"
+    assert result.get("serverInfo", {}).get(
+        "name"
+    ), f"initialize result missing serverInfo.name: {result!r}"
