@@ -22,6 +22,12 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
+<p align="center">
+  <a href="https://glama.ai/mcp/servers/cameronrye/openzim-mcp">
+    <img width="380" height="200" src="https://glama.ai/mcp/servers/cameronrye/openzim-mcp/badge" alt="OpenZIM MCP server quality badge">
+  </a>
+</p>
+
 ---
 
 > 🆕 **8-tool advanced surface.** Phase F (v2.0.0) consolidated 22 advanced tools into 8 (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). **New in v2.1:** native libzim archive validation via `zim_health(zim_file_path=...)`, plus archive identity / index introspection in `zim_metadata`. [Release notes →](CHANGELOG.md) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
@@ -41,10 +47,12 @@ uv tool install openzim-mcp
 # pip
 pip install openzim-mcp
 
-# Docker (multi-arch image, ghcr.io)
-docker pull ghcr.io/cameronrye/openzim-mcp:2.1.7
-docker run --rm -v /path/to/zim/files:/zim ghcr.io/cameronrye/openzim-mcp:2.1.7 /zim
+# Docker (multi-arch image, ghcr.io) — runs as a local stdio MCP server
+docker pull ghcr.io/cameronrye/openzim-mcp
+docker run -i --rm -v /path/to/zim/files:/data ghcr.io/cameronrye/openzim-mcp
 ```
+
+The container defaults to **stdio** transport, so `docker run -i` speaks MCP over stdin/stdout — wire it into an MCP client the same way as the binary (see [Quick start](#quick-start)). For the long-running **HTTP** service (bearer auth, CORS, health endpoints), opt in at runtime with `-e OPENZIM_MCP_TRANSPORT=http -e OPENZIM_MCP_HOST=0.0.0.0 -e OPENZIM_MCP_AUTH_TOKEN=… -p 8000:8000`; see [HTTP & Docker deployment](https://cameronrye.github.io/openzim-mcp/docs/http-and-docker-deployment/).
 
 Verify the install:
 

@@ -22,12 +22,11 @@ RUN uv sync --frozen --no-dev
 # ---- final stage ----
 FROM python:3.13-slim
 
-# Create non-root user and install curl for HEALTHCHECK in a single layer
+# Create the non-root runtime user. No extra apt packages are needed —
+# the image defaults to stdio transport (see ENTRYPOINT note below), so
+# there is no HTTP server to health-probe and thus no need for curl.
 RUN groupadd --gid 10001 appuser \
- && useradd --uid 10001 --gid appuser --shell /bin/bash --create-home appuser \
- && apt-get update \
- && apt-get install -y --no-install-recommends curl \
- && rm -rf /var/lib/apt/lists/*
+ && useradd --uid 10001 --gid appuser --shell /bin/bash --create-home appuser
 
 WORKDIR /app
 
@@ -43,18 +42,22 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Default mount point for ZIM files
 VOLUME ["/data"]
 
-# HTTP transport defaults — exposed bind requires OPENZIM_MCP_AUTH_TOKEN at
-# runtime; the safe-default startup check refuses to bind 0.0.0.0 without it.
-ENV OPENZIM_MCP_TRANSPORT=http \
-    OPENZIM_MCP_HOST=0.0.0.0 \
-    OPENZIM_MCP_PORT=8000
-
+# Document the HTTP port for the opt-in deployment path below. EXPOSE is
+# metadata only; it publishes nothing unless `docker run -p` maps it.
 EXPOSE 8000
 
 # Drop privileges
 USER appuser
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -fsS http://localhost:8000/readyz || exit 1
-
+# Default to stdio transport (inherited from the code defaults — we set no
+# OPENZIM_MCP_TRANSPORT here), so `docker run -i --rm -v <zim>:/data <image>`
+# runs as a local MCP server over stdin/stdout. That is how Claude Desktop
+# and the Glama registry launch a containerized MCP server.
+#
+# To run the long-lived HTTP service instead, opt in at runtime:
+#   docker run --rm -p 8000:8000 \
+#     -e OPENZIM_MCP_TRANSPORT=http -e OPENZIM_MCP_HOST=0.0.0.0 \
+#     -e OPENZIM_MCP_AUTH_TOKEN=$(openssl rand -hex 32) \
+#     -v <zim>:/data <image>
+# (binding a non-loopback host without a token is refused by design.)
 ENTRYPOINT ["python", "-m", "openzim_mcp", "/data"]

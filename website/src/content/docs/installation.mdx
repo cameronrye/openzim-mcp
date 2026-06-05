@@ -228,21 +228,27 @@ uv sync
 
 ## Docker Installation
 
-OpenZIM MCP ships a multi-arch image at `ghcr.io/cameronrye/openzim-mcp` (`linux/amd64` + `linux/arm64`). Runs as non-root (uid 10001), includes a built-in healthcheck.
+OpenZIM MCP ships a multi-arch image at `ghcr.io/cameronrye/openzim-mcp` (`linux/amd64` + `linux/arm64`). Runs as non-root (uid 10001). The image defaults to **stdio** transport, so it drops into an MCP client like the binary does.
 
 ```bash
 # Pull
-docker pull ghcr.io/cameronrye/openzim-mcp:2.1.7
+docker pull ghcr.io/cameronrye/openzim-mcp
 
-# Run with HTTP transport, bound to all interfaces (the image default).
-# The server REFUSES to bind 0.0.0.0 without OPENZIM_MCP_AUTH_TOKEN.
-docker run --rm -p 8000:8000 \
-  -v /srv/zim:/data:ro \
-  -e OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)" \
-  ghcr.io/cameronrye/openzim-mcp:2.1.7
+# Run as a local stdio MCP server (default). -i keeps stdin open so the
+# client can speak JSON-RPC over stdin/stdout. Mount ZIM files at /data.
+docker run -i --rm -v /srv/zim:/data ghcr.io/cameronrye/openzim-mcp
 ```
 
-The image entrypoint is `python -m openzim_mcp /data`, so mount your ZIM directory at `/data`. Default env vars in the image: `OPENZIM_MCP_TRANSPORT=http`, `OPENZIM_MCP_HOST=0.0.0.0`, `OPENZIM_MCP_PORT=8000`.
+The image entrypoint is `python -m openzim_mcp /data`, so mount your ZIM directory at `/data`. To run the long-running **HTTP** service instead, opt in at runtime — the server refuses to bind a non-loopback host without `OPENZIM_MCP_AUTH_TOKEN`:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -v /srv/zim:/data:ro \
+  -e OPENZIM_MCP_TRANSPORT=http \
+  -e OPENZIM_MCP_HOST=0.0.0.0 \
+  -e OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)" \
+  ghcr.io/cameronrye/openzim-mcp
+```
 
 For full deployment guidance (CORS, reverse proxy, healthchecks, systemd) see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
 
