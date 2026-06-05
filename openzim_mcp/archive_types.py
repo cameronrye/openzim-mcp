@@ -12,9 +12,11 @@ from typing import Literal, Mapping, Tuple
 ArchiveType = Literal["wikipedia", "wiktionary", "stackexchange", "ted", "generic"]
 Confidence = Literal["high", "medium", "none"]
 
-# Stack Exchange "network" sites have their own apex domains; per-site SE
-# instances all live under ``*.stackexchange.com``. Plain substring / prefix
-# checks only — no regex (ReDoS-safe).
+# Stack Exchange host segments. Network sites have their own apex domains;
+# per-site SE instances live under ``*.stackexchange.com`` (matched via
+# endswith on the extracted host). Anchored host matching only — no regex
+# (ReDoS-safe) and no unanchored substring (CodeQL
+# py/incomplete-url-substring-sanitization).
 _SE_NETWORK_HOSTS = (
     "stackexchange.com",
     "superuser.com",
@@ -71,7 +73,13 @@ def detect_archive_type(
         return ("wiktionary", "medium")
     if name.startswith("ted_") or name.startswith("ted-"):
         return ("ted", "medium")
-    if ".stackexchange.com" in name or name.startswith(_SE_NETWORK_HOSTS):
+    # ZIM Name convention is ``<host>_<lang>_<flavour>[_<date>]``; isolate the
+    # host segment and match it anchored (equality / endswith), never as an
+    # unanchored substring — so a stray host fragment elsewhere in the name
+    # can't trip detection (and clears CodeQL py/incomplete-url-substring-
+    # sanitization).
+    host = name.split("_", 1)[0]
+    if host in _SE_NETWORK_HOSTS or host.endswith(".stackexchange.com"):
         return ("stackexchange", "medium")
 
     # 3. Creator / Tags — weak corroboration only.
