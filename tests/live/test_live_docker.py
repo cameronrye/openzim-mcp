@@ -309,6 +309,10 @@ def test_container_speaks_mcp_over_stdio_by_default(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    # Pre-initialize so static analysis can see these are always bound; the
+    # except branch raises via pytest.fail (NoReturn) so they're never read
+    # unset, but CodeQL doesn't model pytest.fail's NoReturn.
+    stdout, stderr = b"", b""
     try:
         # Closing stdin (via communicate's input) signals EOF, so the stdio
         # server shuts down after answering initialize and stdout reaches EOF.
