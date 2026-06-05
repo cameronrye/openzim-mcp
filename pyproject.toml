@@ -94,7 +94,13 @@ openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 # PYSEC-2026-175 / -177 / -178 / -179 — four advisories against pyjwt 2.12.1,
 # all fixed in 2.13.0. mcp itself sets no upper bound, so this only raises the
 # floor. Drop this constraint once mcp's own pin guarantees >= 2.13.0.
-constraint-dependencies = ["pyjwt>=2.13.0"]
+#
+# pip is pulled in transitively via pip-api (a pip-audit dependency); it is a
+# dev/tooling artifact, not a runtime dependency. Floor it at 26.1.2 so the
+# release pip-audit gate stays clear of PYSEC-2026-196 (an advisory against
+# pip 26.1, fixed in 26.1.2). Drop this constraint once pip-api's own pin
+# guarantees a patched pip.
+constraint-dependencies = ["pyjwt>=2.13.0", "pip>=26.1.2"]
 
 [tool.black]
 line-length = 88
