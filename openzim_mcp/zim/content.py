@@ -46,10 +46,13 @@ logger = logging.getLogger(__name__)
 _TEXT_MIME_PREFIX = "text/"
 
 # Matched as a lowercase substring against a section heading to find the
-# Q&A answer block. Kept deliberately broad for a1; the exact sotoki
-# heading is pinned during the live owl-atlas reprobe, where a real
-# multi-answer page (with "Your Answer" / "N Answers" headings) must be
-# checked to confirm the right section is selected.
+# Q&A answer block. Validated against the live superuser (sotoki v3.0.2)
+# archive during the v2.2.0 reprobe: real Q&A pages carry exactly one
+# heading, always "N AnswersN" (sotoki pluralizes even N=1 -> "1 Answers1",
+# e.g. "3 Answers3", "5 Answers5"), so this substring selects the answers
+# block on every page. The answer-submission form is stripped by sotoki,
+# so there is no competing "Your Answer" heading to false-match; zero-answer
+# pages have no heading and fall through to the first-section fallback below.
 _ANSWER_HEADING_TOKENS = ("answer",)
 
 
@@ -70,9 +73,9 @@ def _select_summary_section_md(
     answer; for any other style (including ``None``) or when no answer
     heading is found, returns the first-section slice (the prior behavior).
 
-    NOTE: the exact answer-heading match is refined against the live
-    superuser (sotoki) archive during the owl-atlas reprobe. The fallback
-    guarantees a never-worse-than-baseline result.
+    NOTE: the answer-heading match was validated against the live superuser
+    (sotoki) archive in the v2.2.0 reprobe (see _ANSWER_HEADING_TOKENS). The
+    fallback guarantees a never-worse-than-baseline result.
     """
     if summary_style == "q_and_a":
         for s in sections:
