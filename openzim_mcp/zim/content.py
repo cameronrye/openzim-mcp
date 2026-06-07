@@ -54,7 +54,7 @@ _ANSWER_HEADING_TOKENS = ("answer",)
 
 
 def _is_answer_heading(title: str) -> bool:
-    """True when a section heading looks like a Q&A answer block."""
+    """Return True when a section heading looks like a Q&A answer block."""
     t = title.strip().lower()
     return any(tok in t for tok in _ANSWER_HEADING_TOKENS)
 
@@ -103,7 +103,7 @@ _PATH_TRAVERSAL_MARKERS = (
 
 
 def _looks_like_path_traversal(entry_path: str) -> bool:
-    """Return True iff ``entry_path`` carries a path-traversal shape.
+    r"""Return True iff ``entry_path`` carries a path-traversal shape.
 
     Conservative — only well-known injection markers trigger. Catches
     ``../etc/passwd``, ``..\\\\windows``, URL-encoded variants, leading
@@ -121,15 +121,11 @@ def _looks_like_path_traversal(entry_path: str) -> bool:
     # ``../foo``, ``..\\foo``, ``..%2Ffoo``, etc.
     if entry_path.startswith(".."):
         return True
-    for marker in _PATH_TRAVERSAL_MARKERS:
-        if marker in entry_path:
-            return True
-    return False
+    return any(marker in entry_path for marker in _PATH_TRAVERSAL_MARKERS)
 
 
 def reject_path_traversal(entry_path: str) -> None:
-    """Raise OpenZimMcpArchiveError when ``entry_path`` looks like a
-    path-traversal injection attempt.
+    """Raise OpenZimMcpArchiveError on a path-traversal-shaped ``entry_path``.
 
     Public (no leading underscore) so every tool method that accepts a
     caller-supplied entry path can call this at its boundary. D12 added
