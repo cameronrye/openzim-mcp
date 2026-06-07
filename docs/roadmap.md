@@ -1,10 +1,10 @@
 # openzim-mcp Roadmap
 
-**Status:** Latest release **v2.1.7** (2026-06-04) — PyPI `2.1.7` and `ghcr.io/cameronrye/openzim-mcp:2.1.7` / `:latest`, GitHub Release with assets. v2.0.0 GA shipped 2026-05-27 (as `:2.0.0`); the v2.0.x/v2.1.x line has been kept current via beta-sweep fixes plus the v2.1.0 native-libzim reader features.
+**Status:** Latest release **v2.2.1** (2026-06-05) — PyPI `2.2.1` and `ghcr.io/cameronrye/openzim-mcp:2.2.1` / `:latest`, GitHub Release with assets. v2.0.0 GA shipped 2026-05-27 (as `:2.0.0`); the v2.0.x/v2.1.x line was kept current via beta-sweep fixes plus the v2.1.0 native-libzim reader features. **v2.2.0 shipped the first v2.5 roadmap item — `#17` archive-type presets (the v2.5.0a1 milestone)** — validated against the live superuser (sotoki v3.0.2) archive in the v2.2.0 reprobe; v2.2.1 was a Docker stdio-default fix.
 
 This document tracks open work past v2.0.0. Everything here is **additive**: opt-in extras, optional sidecars, or dispatch tuning. None of it changes the v2 tool surface or response contract.
 
-The next release tag is **v2.5.0** (minor, additive). v3 is reserved for a future breaking change (libzim major bump or a deeper surface restructure).
+v3 is reserved for a future breaking change (libzim major bump or a deeper surface restructure). **Release cadence note:** the additive v2.5 items are shipping incrementally on the normal **v2.2.x+** minor/patch line (e.g. `#17` landed in v2.2.0), not as standalone `v2.5.0aN` pre-releases. The `v2.5.0` tag is retained below as the rollup marker for when the in-scope set lands; the per-milestone `v2.5.0aN` labels are bookkeeping, not literal release tags.
 
 ---
 
@@ -66,11 +66,19 @@ Independent of runtime code; both items add operator-build commands that produce
 
 **Build cost.** Estimated 30–60 minutes per multi-million-article archive (single-pass entry walk + bulk SQLite insert). Storage: ~500 MB – 2 GB per archive depending on link density.
 
-#### `#17` — Archive-type presets
+#### `#17` — Archive-type presets — ✅ **SHIPPED (a1) in v2.2.0**
 
-**Current state.** Wikipedia, Wiktionary, Stack Exchange, and TED-style ZIMs behave differently (encyclopedic prose vs. dictionary entries vs. Q&A vs. transcripts), but the server treats them uniformly. Models waste turns discovering archive shape.
+**Target (met for a1).** Detect archive type via the `M`-namespace metadata + heuristics on `Creator` / `Name` / `Title`. Each detected type has a preset that adjusts snippet shape and summary style. Presets are data, not code — bundled [`openzim_mcp/data/presets.toml`](../openzim_mcp/data/presets.toml), with `OPENZIM_MCP_PRESETS_OVERRIDE_PATH` deep-merge and per-archive pins. See [the design spec](specs/2026-06-04-v2.5-archive-type-presets-design.md).
 
-**Target.** Detect archive type via the `M`-namespace metadata + heuristics on `Creator` / `Name` / `Title`. Each detected type has a preset that adjusts: snippet shape, summary style, default namespace for unfiltered queries, and intent-parser priors. Presets are data, not code — `openzim_mcp/presets/wikipedia.toml` etc. Users can override per-archive in config.
+**Shipped a1 scope.** Deterministic classifier ([`archive_types.py`](../openzim_mcp/archive_types.py)) detects all four types + `generic` and surfaces `_meta.detected_type` / `_meta.detection_confidence`. Behavior presets attach to `wikipedia` (explicit baseline) and `stackexchange` (`q_and_a` summary + wider snippet) only; `_meta.preset_applied` flags shaped responses. No tool-surface or response-contract change.
+
+**Reprobe outcome (v2.2.0, live superuser sotoki v3.0.2).** Detection lands `stackexchange`/`high`. The `q_and_a` selector matches the sole `"N AnswersN"` heading on every real Q&A page (sotoki pluralizes even N=1 → `"1 Answers1"`); the answer-submission form is stripped, so there is no false-match, and zero-answer pages fall back to first-section. `max_paragraphs = 3` validated for SE search snippets. The selector token and `max_paragraphs` are confirmed — no change needed.
+
+**Deferred to a2 (pure data + minor refinement).**
+
+- `wiktionary` (`gloss`) and `ted` (transcript) behavior presets — detected and reported today, but no behavior preset; adding them needs a new `summary_style` value + selection logic, not just data.
+- **Score-prefix cleanup:** SE answer sections open with a bare vote-score line (e.g. `3`, `18`) that becomes the first token of the `q_and_a` summary. Harmless within the 200-word window; a candidate trim for a2.
+- The default-namespace seam and intent-parser priors remain out of scope per the spec's Non-goals.
 
 ### v2.0 surface refinements pending v2.5
 
@@ -106,10 +114,10 @@ Open commitments referenced from production code (`openzim_mcp/tools/`) and test
 
 ## v2.5 milestones (proposed)
 
-| Milestone | Items | Tag |
+| Milestone | Items | Status / Tag |
 | --- | --- | --- |
-| **v2.5.0a1** | `#17` archive-type presets ([spec](specs/2026-06-04-v2.5-archive-type-presets-design.md), spec'd 2026-06-04 — snippet + summary seams, detect all 4 types, behavior for Wikipedia/Stack Exchange) | _TBD_ |
-| **v2.5.0a2** | `#16` link-graph sidecar + `build` CLI + `zim_links` `"inbound"` enum promotion | _TBD_ |
+| **v2.5.0a1** | `#17` archive-type presets ([spec](specs/2026-06-04-v2.5-archive-type-presets-design.md) — snippet + summary seams, detect all 4 types, behavior for Wikipedia/Stack Exchange) | ✅ **Shipped in v2.2.0** (reprobe-validated; a2 follow-ons noted above) |
+| **v2.5.0a2** | `#16` link-graph sidecar + `build` CLI + `zim_links` `"inbound"` enum promotion | _Next — not started_ |
 | **v2.5.0a3** | `#199` `zim_query` sub-mode dispatch + `#18` `zim_get_section` raw-text path | _TBD_ |
 | **v2.5.0a4** | sub-D-3 if triggered + `zim_get` `compact` default revisit (telemetry-driven) | _TBD_ |
 | **v2.5.0a5** | sub-D-4 if triggered | _TBD_ |
