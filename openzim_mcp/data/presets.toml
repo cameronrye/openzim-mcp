@@ -10,7 +10,8 @@ summary_style = "first_section"
 [preset.stackexchange]
 # The one real behavior change in a1. q_and_a summaries surface the
 # accepted-answer section; the wider snippet shows more of the Q&A body.
-# NOTE: max_paragraphs is a starting value, refined via the live owl-atlas
-# superuser reprobe (build sequence step 6 in the spec).
+# max_paragraphs = 3 was validated in the v2.2.0 live superuser reprobe:
+# it covers the question plus the start of the accepted answer in SE search
+# snippets without dragging in trailing answers.
 summary_style = "q_and_a"
 max_paragraphs = 3

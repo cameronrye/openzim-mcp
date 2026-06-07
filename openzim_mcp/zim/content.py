@@ -46,15 +46,18 @@ logger = logging.getLogger(__name__)
 _TEXT_MIME_PREFIX = "text/"
 
 # Matched as a lowercase substring against a section heading to find the
-# Q&A answer block. Kept deliberately broad for a1; the exact sotoki
-# heading is pinned during the live owl-atlas reprobe, where a real
-# multi-answer page (with "Your Answer" / "N Answers" headings) must be
-# checked to confirm the right section is selected.
+# Q&A answer block. Validated against the live superuser (sotoki v3.0.2)
+# archive during the v2.2.0 reprobe: real Q&A pages carry exactly one
+# heading, always "N AnswersN" (sotoki pluralizes even N=1 -> "1 Answers1",
+# e.g. "3 Answers3", "5 Answers5"), so this substring selects the answers
+# block on every page. The answer-submission form is stripped by sotoki,
+# so there is no competing "Your Answer" heading to false-match; zero-answer
+# pages have no heading and fall through to the first-section fallback below.
 _ANSWER_HEADING_TOKENS = ("answer",)
 
 
 def _is_answer_heading(title: str) -> bool:
-    """True when a section heading looks like a Q&A answer block."""
+    """Return True when a section heading looks like a Q&A answer block."""
     t = title.strip().lower()
     return any(tok in t for tok in _ANSWER_HEADING_TOKENS)
 
@@ -70,9 +73,9 @@ def _select_summary_section_md(
     answer; for any other style (including ``None``) or when no answer
     heading is found, returns the first-section slice (the prior behavior).
 
-    NOTE: the exact answer-heading match is refined against the live
-    superuser (sotoki) archive during the owl-atlas reprobe. The fallback
-    guarantees a never-worse-than-baseline result.
+    NOTE: the answer-heading match was validated against the live superuser
+    (sotoki) archive in the v2.2.0 reprobe (see _ANSWER_HEADING_TOKENS). The
+    fallback guarantees a never-worse-than-baseline result.
     """
     if summary_style == "q_and_a":
         for s in sections:
@@ -103,7 +106,7 @@ _PATH_TRAVERSAL_MARKERS = (
 
 
 def _looks_like_path_traversal(entry_path: str) -> bool:
-    """Return True iff ``entry_path`` carries a path-traversal shape.
+    r"""Return True iff ``entry_path`` carries a path-traversal shape.
 
     Conservative — only well-known injection markers trigger. Catches
     ``../etc/passwd``, ``..\\\\windows``, URL-encoded variants, leading
@@ -121,15 +124,11 @@ def _looks_like_path_traversal(entry_path: str) -> bool:
     # ``../foo``, ``..\\foo``, ``..%2Ffoo``, etc.
     if entry_path.startswith(".."):
         return True
-    for marker in _PATH_TRAVERSAL_MARKERS:
-        if marker in entry_path:
-            return True
-    return False
+    return any(marker in entry_path for marker in _PATH_TRAVERSAL_MARKERS)
 
 
 def reject_path_traversal(entry_path: str) -> None:
-    """Raise OpenZimMcpArchiveError when ``entry_path`` looks like a
-    path-traversal injection attempt.
+    """Raise OpenZimMcpArchiveError on a path-traversal-shaped ``entry_path``.
 
     Public (no leading underscore) so every tool method that accepts a
     caller-supplied entry path can call this at its boundary. D12 added
