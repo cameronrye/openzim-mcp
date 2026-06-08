@@ -242,7 +242,7 @@ Outbound / related link-graph dispatch. Collapses the v1 `extract_article_links`
 zim_links(
     zim_file_path: str,
     entry_path: str,
-    direction: Literal["outbound", "related"] = "outbound",
+    direction: Literal["outbound", "inbound", "related"] = "outbound",
     cursor: Optional[str] = None,
     limit: Optional[int] = None,
     offset: int = 0,
@@ -252,15 +252,16 @@ zim_links(
 | Direction | Behavior |
 |-----------|----------|
 | `"outbound"` (default) | All internal + external links extracted from the article body. Drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`) |
+| `"inbound"` | Pages that link TO this entry, ranked by linker importance. Requires a pre-built link-graph sidecar (see below) |
 | `"related"` | Outbound link-graph neighbors with deduplication |
 
-`cursor` / `offset` apply to `direction="outbound"` only; `"related"` returns a single ranked set and rejects a `cursor`.
+`cursor` / `offset` apply to `"outbound"` and `"inbound"`; `"related"` returns a single ranked set and rejects a `cursor`.
 
-`direction="inbound"` is reserved for v2.5 (lands with the link-graph sidecar).
+`direction="inbound"` requires the link-graph sidecar to be built first: `openzim-mcp build link-graph <archive>.zim` walks the archive once and writes `<archive>.zim.linkgraph.sqlite` next to it (`--force` overwrites an existing sidecar; `--output PATH` relocates it). When the sidecar is absent or stale (archive mtime changed since the build), `zim_links` returns a structured `inbound_sidecar_unavailable` error rather than failing.
 
 Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
 
-**Returns:** `{outbound_links: [...], internal_count, external_count, media_count}` (outbound) or `{related: [...]}` (related).
+**Returns:** `{outbound_links: [...], internal_count, external_count, media_count}` (outbound), `{inbound_links: [...], total_count}` (inbound), or `{related: [...]}` (related).
 
 ---
 
@@ -427,6 +428,7 @@ All tools are subject to a global token-bucket limiter (default 10 req/s, burst 
 | `zim_metadata` | `get_metadata` | 1 |
 | `zim_links(direction="related")` | `get_related_articles` | 2 |
 | `zim_links(direction="outbound")` | default | 1 |
+| `zim_links(direction="inbound")` | `get_inbound_links` | 1 |
 | `zim_health`, `zim_get_section`, `zim_query` (per-intent) | default | 1 |
 
 Tune via `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND`, `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE`, and `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS`. See [Configuration](/openzim-mcp/docs/configuration/#rate-limiting).
