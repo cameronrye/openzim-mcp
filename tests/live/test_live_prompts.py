@@ -126,9 +126,9 @@ def test_research_prompt_interpolates_topic(stdio_session) -> None:
     """``research`` prompt body interpolates the ``topic`` argument."""
     body = _get_prompt(stdio_session, 2, "research", {"topic": "Aristotle"})
     assert "Aristotle" in body
-    # Should mention search_all and get_entry_summary as part of the workflow.
-    assert "search_all" in body
-    assert "get_entry_summary" in body
+    # Should drive the v2 tools the workflow uses (zim_search + zim_get).
+    assert "zim_search" in body
+    assert "zim_get" in body
 
 
 def test_summarize_prompt_interpolates_paths(stdio_session, zim_dir) -> None:
@@ -150,7 +150,7 @@ def test_explore_prompt_interpolates_zim_file(stdio_session, zim_dir) -> None:
     zims = sorted(zim_dir.glob("*.zim"))
     body = _get_prompt(stdio_session, 4, "explore", {"zim_file_path": str(zims[0])})
     assert str(zims[0]) in body
-    assert "get_zim_metadata" in body
+    assert "zim_metadata" in body
 
 
 def test_research_strips_control_chars(stdio_session) -> None:
@@ -164,7 +164,7 @@ def test_research_empty_topic_asks_for_input(stdio_session) -> None:
     """Empty ``topic`` returns the ask-for-input fallback, not a workflow."""
     body = _get_prompt(stdio_session, 6, "research", {"topic": ""})
     # The ask-for-input fallback should not contain a tool-call workflow.
-    assert "search_all" not in body
+    assert "zim_search" not in body
     # Should mention the prompt name so user knows what to provide.
     assert "research" in body.lower()
 

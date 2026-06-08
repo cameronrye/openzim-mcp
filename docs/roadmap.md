@@ -26,7 +26,7 @@ Phase D shipped `#6` cross-encoder reranker and `#8` Tier 1 rules-based query re
 
 #### sub-D-3 — Hybrid intent parser + Tier 2 decomposition (`#8` Tier 2 + `#12`)
 
-**Current state.** [`openzim_mcp/intent_parser.py`](../openzim_mcp/intent_parser.py) is regex-based with 19 weighted patterns. Confidence < 0.7 routes to a low-confidence path; confidence < 0.55 marks "low confidence" with a footer.
+**Current state.** [`openzim_mcp/intent_parser.py`](../openzim_mcp/intent_parser.py) is regex-based with 25 weighted patterns. Confidence < 0.7 routes to a low-confidence path; confidence < 0.55 marks "low confidence" with a footer.
 
 **Target.** Hybrid path: regex stays as the fast path; below confidence 0.7, route to a small intent classifier (fastText / distilled sentence-transformer / lightweight rules-tree). Tier 2 decomposition adds entity-then-property lookups for multi-hop queries like "what year did the inventor of X die." Behind `pip install openzim-mcp[planner]`.
 

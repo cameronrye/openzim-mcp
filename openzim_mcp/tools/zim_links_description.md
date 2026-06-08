@@ -22,7 +22,7 @@ PARAMETERS:
   offset            Pagination offset (outbound mode only).
 
 RESPONSE:
-  ArticleLinksResponse (direction="outbound") or
+  LinksResponse (direction="outbound") or
   RelatedArticlesResponse (direction="related"). Both carry
   pagination metadata.
 

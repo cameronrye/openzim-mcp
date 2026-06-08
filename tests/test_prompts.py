@@ -1,5 +1,7 @@
 """Tests for MCP prompts (research, summarize, explore)."""
 
+import re
+
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
@@ -17,6 +19,50 @@ class TestPromptsRegistered:
     def test_server_starts_with_prompts(self, server: OpenZimMcpServer):
         """register_prompts wires without raising; server has FastMCP attached."""
         assert server.mcp is not None
+
+
+class TestPromptsReferenceRegisteredTools:
+    """Prompt bodies must only instruct tools present on the v2 surface.
+
+    Regression guard for the Phase F surface collapse: prompts.py predates the
+    v2 tool consolidation, so the workflow bodies must not drift back to (or
+    keep) pre-v2 names — ``search_all``, ``get_entry_summary``,
+    ``get_table_of_contents``, ``extract_article_links``, ``get_zim_metadata``,
+    ``list_namespaces``, ``get_main_page``, ``walk_namespace`` — that the server
+    no longer exposes. A model invoking such a workflow would hit
+    tool-not-found errors mid-run.
+    """
+
+    # Captures the identifier in "Call <tool>" / "call <tool>(" instructions.
+    _CALL_RE = re.compile(r"\bcall\s+([a-z_][a-z0-9_]*)", re.IGNORECASE)
+
+    def _rendered_prompt_text(self) -> str:
+        from openzim_mcp.tools.prompts import (
+            _explore_body,
+            _research_body,
+            _summarize_body,
+        )
+
+        bodies = [
+            _research_body("climate change"),
+            _summarize_body("/zim/wikipedia.zim", "C/Photosynthesis"),
+            _explore_body("/zim/wikipedia.zim"),
+        ]
+        return "\n".join(m["content"]["text"] for body in bodies for m in body)
+
+    def test_prompt_tool_calls_are_registered(
+        self, test_config: OpenZimMcpConfig
+    ) -> None:
+        """No prompt body may instruct a tool name absent from the live registry."""
+        registered = set(OpenZimMcpServer(test_config).mcp._tool_manager._tools)
+        referenced = set(self._CALL_RE.findall(self._rendered_prompt_text()))
+
+        assert referenced, "prompt bodies should instruct at least one tool call"
+        unknown = referenced - registered
+        assert not unknown, (
+            "prompt bodies reference tool(s) not on the v2 surface: "
+            f"{sorted(unknown)}; registered tools: {sorted(registered)}"
+        )
 
 
 class TestPromptRendering:
@@ -65,7 +111,7 @@ class TestPromptRendering:
         messages = _research_body("")
         body = "\n".join(m["content"]["text"] for m in messages)
         assert "research" in body.lower() or "topic" in body.lower()
-        assert "search_all" not in body  # don't render the workflow
+        assert "zim_search" not in body  # don't render the workflow
 
     def test_summarize_empty_args_asks_for_input(self):
         """Summarize with empty zim_file_path or entry_path returns guard."""
@@ -74,7 +120,7 @@ class TestPromptRendering:
         messages = _summarize_body("", "")
         body = "\n".join(m["content"]["text"] for m in messages)
         assert "summarize" in body.lower() or "path" in body.lower()
-        assert "get_table_of_contents" not in body
+        assert "zim_get" not in body
 
     def test_explore_empty_path_asks_for_input(self):
         """explore('') returns a guard message."""
@@ -83,7 +129,7 @@ class TestPromptRendering:
         messages = _explore_body("")
         body = "\n".join(m["content"]["text"] for m in messages)
         assert "explore" in body.lower() or "path" in body.lower()
-        assert "get_zim_metadata" not in body
+        assert "zim_metadata" not in body
 
 
 class TestPromptInputSanitization:
@@ -204,8 +250,8 @@ class TestPromptInputSanitization:
         # Should match the asking-message early-return text
         assert "summarize" in body.lower() or "path" in body.lower()
         # Workflow body must NOT be rendered
-        assert "get_table_of_contents" not in body
-        assert "get_entry_summary" not in body
+        assert "zim_get" not in body
+        assert "zim_links" not in body
         # Must NOT render a tool call with empty single-quoted args
         assert "''" not in body
 
@@ -216,7 +262,7 @@ class TestPromptInputSanitization:
         messages = _summarize_body("/zim/file.zim", "\x00\x01\x02")
         body = "\n".join(m["content"]["text"] for m in messages)
         assert "summarize" in body.lower() or "path" in body.lower()
-        assert "get_table_of_contents" not in body
+        assert "zim_get" not in body
         assert "''" not in body
 
     def test_explore_body_returns_asking_message_when_input_collapses_to_empty(
@@ -228,7 +274,7 @@ class TestPromptInputSanitization:
         messages = _explore_body("\x00\x01\x02")
         body = "\n".join(m["content"]["text"] for m in messages)
         assert "explore" in body.lower() or "path" in body.lower()
-        assert "get_zim_metadata" not in body
+        assert "zim_metadata" not in body
         assert "''" not in body
 
     def test_research_topic_apostrophe_preserved(self):
