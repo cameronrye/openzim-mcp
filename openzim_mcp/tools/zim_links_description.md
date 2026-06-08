@@ -17,14 +17,14 @@ PARAMETERS:
   direction         "outbound" (default) — outgoing links by bucket.
                     "related" — related articles via outbound-link
                     overlap.
-  cursor            Phase B cursor pagination handle.
+  cursor            Cursor handle (outbound only).
   limit             Page size.
   offset            Pagination offset (outbound mode only).
 
 RESPONSE:
   LinksResponse (direction="outbound") or
-  RelatedArticlesResponse (direction="related"). Both carry
-  pagination metadata.
+  RelatedArticlesResponse (direction="related"). Outbound
+  paginates; related is one ranked set (no pagination).
 
 NOTE (v2.0 scope): `"inbound"` is NOT in the direction enum. Inbound
 link discovery requires a link-graph sidecar that lands in v2.5 —
