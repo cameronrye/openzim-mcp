@@ -345,3 +345,19 @@ class TestMainEntryPoint:
 
         # Verify main was called
         mock_main.assert_called_once()
+
+
+def test_build_subcommand_dispatches(monkeypatch):
+    """`openzim-mcp build ...` dispatches to build_main with the remaining argv."""
+    import openzim_mcp.main as main_mod
+
+    monkeypatch.setattr(
+        main_mod.sys, "argv", ["openzim-mcp", "build", "link-graph", "/x.zim"]
+    )
+    with (
+        patch("openzim_mcp.cli.build.build_main", return_value=0) as mock_build,
+        pytest.raises(SystemExit) as exc,
+    ):
+        main_mod.main()
+    assert exc.value.code == 0
+    mock_build.assert_called_once_with(argv=["link-graph", "/x.zim"])
