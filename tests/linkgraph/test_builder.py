@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from openzim_mcp.linkgraph.builder import build_from_link_stream
+from openzim_mcp.linkgraph.builder import build_from_link_stream, iter_article_links
 from openzim_mcp.linkgraph.reader import sidecar_path_for
 
 
@@ -66,3 +67,45 @@ def test_build_force_overwrites_atomically(tmp_path: Path) -> None:
     Path(out).write_text("existing")
     build_from_link_stream(out, archive_uuid="u1", link_stream=iter([]), force=True)
     assert not Path(out + ".tmp").exists()
+
+
+class _FakeEntry:
+    """Minimal stand-in for a libzim entry."""
+
+    def __init__(self, path: str, html: str, is_redirect: bool = False) -> None:
+        """Store the entry's path, HTML body, and redirect flag."""
+        self.path = path
+        self._html = html
+        self.is_redirect = is_redirect
+
+    def get_item(self) -> MagicMock:
+        """Return an item whose ``.content`` is the encoded HTML bytes."""
+        # Mirrors the real idiom: bytes(entry.get_item().content).decode(...)
+        item = MagicMock()
+        item.content = self._html.encode()
+        return item
+
+
+def test_iter_article_links_walks_content_entries() -> None:
+    """Walk yields (source, internal targets) for C entries, skipping non-C + redirects."""
+    # The href is relative to the source entry's directory (C/A lives in C/),
+    # so "T" resolves to the canonical target path "C/T" — matching how real
+    # ZIM HTML stores intra-namespace links.
+    entries = [
+        _FakeEntry("C/A", '<a href="T">t</a>'),
+        _FakeEntry("M/Counter", "metadata"),  # non-content: skipped
+        _FakeEntry("C/Redir", "", is_redirect=True),  # redirect: skipped as source
+    ]
+    archive = MagicMock()
+    archive.entry_count = len(entries)
+    archive._get_entry_by_id.side_effect = lambda i: entries[i]
+    # _parse_internal_link_targets canonicalizes each target through the
+    # redirect chain via archive.get_entry_by_path. With no such entry in
+    # this fake archive the lookup raises and the path-normalized target
+    # ("C/T") survives unchanged — the honest "target not found" path.
+    archive.get_entry_by_path.side_effect = KeyError("no entry")
+
+    pairs = list(iter_article_links(archive))
+    assert ("C/A", ["C/T"]) in pairs
+    assert all(src.startswith("C/") for src, _ in pairs)
+    assert not any(src == "C/Redir" for src, _ in pairs)

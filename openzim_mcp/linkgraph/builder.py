@@ -12,7 +12,16 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+)
 
 from .schema import SCHEMA_VERSION, apply_build_pragmas, create_schema
 
@@ -106,3 +115,69 @@ def build_from_link_stream(
         edge_count=edge_count,
         bytes_written=Path(out_path).stat().st_size,
     )
+
+
+def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[str]]]:
+    """Yield ``(source_path, [canonical internal target paths])`` per content entry.
+
+    Walk the open archive once via ``_get_entry_by_id`` over
+    ``entry_count``, skip non-content (non-``C/``) entries and
+    redirects-as-source, and reuse ``_parse_internal_link_targets`` for
+    extraction + redirect canonicalization. Per-entry read failures are
+    skipped so one bad entry never aborts the whole build.
+    """
+    # Imported here (not at module scope) so the pure ``build_from_link_stream``
+    # core keeps no dependency on the ZIM/structure layer.
+    from openzim_mcp.zim.structure import _StructureMixin
+
+    total = int(getattr(archive, "entry_count", 0) or 0)
+    for entry_id in range(total):
+        try:
+            entry = archive._get_entry_by_id(entry_id)
+        except Exception:  # nosec B112 - skip unreadable entry, keep walking
+            continue
+        path = getattr(entry, "path", "")
+        if not path.startswith("C/"):
+            continue
+        if getattr(entry, "is_redirect", False):
+            continue
+        try:
+            html = bytes(entry.get_item().content).decode("utf-8", "replace")
+        except Exception:  # nosec B112 - skip entry whose content won't read
+            continue
+        targets = _StructureMixin._parse_internal_link_targets(
+            html, source_path=path, archive=archive
+        )
+        yield (path, targets)
+
+
+def build_link_graph(
+    archive_path: str,
+    out_path: Optional[str] = None,
+    *,
+    force: bool = False,
+    progress: Optional[Callable[[int, int], None]] = None,
+) -> BuildStats:
+    """Open ``archive_path`` once, walk it, and write the sidecar atomically.
+
+    Streams ``iter_article_links`` straight into ``build_from_link_stream``
+    so the whole graph is never held in memory. ``progress`` (if given) is
+    invoked as ``progress(processed, total)`` every 10,000 source entries.
+    """
+    from openzim_mcp.linkgraph.reader import sidecar_path_for
+    from openzim_mcp.zim_operations import zim_archive
+
+    out = out_path or sidecar_path_for(archive_path)
+    with zim_archive(Path(archive_path)) as archive:
+        archive_uuid = str(archive.uuid)
+        total = int(getattr(archive, "entry_count", 0) or 0)
+
+        def _stream() -> Iterator[Tuple[str, List[str]]]:
+            for i, pair in enumerate(iter_article_links(archive)):
+                if progress and i % 10_000 == 0:
+                    progress(i, total)
+                yield pair
+
+        return build_from_link_stream(
+            out, archive_uuid=archive_uuid, link_stream=_stream(), force=force
+        )
