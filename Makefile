@@ -69,18 +69,7 @@ security:  ## Run security scans (fails on bandit/pip-audit findings)
 	# emits "Dependency not found on PyPI and could not be audited:
 	# openzim-mcp (X.Y.ZaN)" and exits 1, blocking the release. Only
 	# our project is editable; third-party deps still get audited.
-	#
-	# --ignore-vuln PYSEC-2025-183 (CVE-2025-45768): disputed pyjwt
-	# advisory about "weak encryption" in HS256. pyjwt's maintainer
-	# disputes the claim — key length is chosen by the application
-	# that uses the library, not by pyjwt itself. No fix version is
-	# documented (2.12.1 is the latest as of 2026-05-20), and openzim-
-	# mcp pulls pyjwt only transitively via ``mcp``; the MCP server
-	# uses pyjwt for OAuth bearer-token validation where key length
-	# is controlled by the auth-provider configuration upstream, not
-	# by this codebase. Re-evaluate when pyjwt ships a fix release or
-	# the advisory database resolves the dispute.
-	uv run pip-audit --skip-editable --ignore-vuln PYSEC-2025-183
+	uv run pip-audit --skip-editable
 
 download-test-data:  ## Download ZIM test data files
 	uv run python scripts/download_test_data.py --priority 1

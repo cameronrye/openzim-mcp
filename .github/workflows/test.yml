@@ -204,12 +204,6 @@ jobs:
         run: |
           uv sync
 
-      - name: Run safety check
-        run: |
-          uv run pip install safety
-          # Run safety check and create report (continue on failure)
-          uv run safety check --json --output safety-report.json || echo '{"vulnerabilities": [], "scanned_packages": 0}' > safety-report.json
-
       - name: Run bandit security linter
         run: |
           uv run pip install bandit[toml]
@@ -226,8 +220,20 @@ jobs:
           sarif_file: bandit-report.sarif
           category: bandit
 
+      # Blocking dependency-vulnerability gate on every PR/push. Previously this
+      # job ran only a non-blocking ``safety check`` whose ``|| echo`` fallback
+      # always wrote an empty report (and the Safety CLI is deprecated), so a
+      # newly-vulnerable transitive dependency passed CI and was caught only by
+      # the release-time ``make security`` run. pip-audit (already a dev
+      # dependency, and the same tool that gate uses) closes that window.
+      # --skip-editable so it doesn't try to resolve the editable openzim-mcp
+      # project itself on PyPI. Placed after the bandit steps so their reports
+      # still upload when a dependency advisory fails this step.
+      - name: Run pip-audit dependency scan (blocking)
+        run: uv run pip-audit --skip-editable
+
       - name: Generate security scan summary
-        if: always() && (hashFiles('bandit-report.json') != '' || hashFiles('safety-report.json') != '')
+        if: always() && hashFiles('bandit-report.json') != ''
         run: |
           echo "## Security Scan Results" >> $GITHUB_STEP_SUMMARY
 
@@ -238,17 +244,6 @@ jobs:
               echo "[OK] No security issues found by Bandit" >> $GITHUB_STEP_SUMMARY
             else
               echo "[WARN] Found $BANDIT_ISSUES potential security issues" >> $GITHUB_STEP_SUMMARY
-            fi
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [ -f "safety-report.json" ]; then
-            echo "### Safety Vulnerability Check" >> $GITHUB_STEP_SUMMARY
-            SAFETY_VULNS=$(jq '.vulnerabilities | length' safety-report.json 2>/dev/null || echo "0")
-            if [ "$SAFETY_VULNS" = "0" ]; then
-              echo "[OK] No known vulnerabilities found by Safety" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "[WARN] Found $SAFETY_VULNS known vulnerabilities" >> $GITHUB_STEP_SUMMARY
             fi
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
@@ -267,11 +262,10 @@ jobs:
 
       - name: Upload security scan results
         uses: actions/upload-artifact@v7
-        if: always() && (hashFiles('safety-report.json') != '' || hashFiles('bandit-report.json') != '' || hashFiles('bandit-report.sarif') != '')
+        if: always() && (hashFiles('bandit-report.json') != '' || hashFiles('bandit-report.sarif') != '')
         with:
           name: security-reports
           path: |
-            safety-report.json
             bandit-report.json
             bandit-report.sarif
 
