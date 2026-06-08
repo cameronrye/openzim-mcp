@@ -117,19 +117,45 @@ def build_from_link_stream(
     )
 
 
+def _is_content_source(path: str, *, has_new_scheme: bool) -> bool:
+    """Return whether ``path`` names a content (C-namespace) source entry.
+
+    Scheme-aware, mirroring ``_extract_namespace_from_path`` in
+    ``openzim_mcp/zim/namespace.py``:
+
+    * **new-scheme:** libzim's iterable entry surface IS the C namespace and
+      entry paths carry no prefix (``Evolution``, not ``C/Evolution``), so
+      every iterated entry is a content source — accept all (a non-empty path).
+    * **old-scheme:** paths are namespace-prefixed; the namespace is the first
+      ``/``-delimited segment (or the first char if no ``/``). Keep only those
+      whose namespace is ``C``.
+    """
+    if not path:
+        return False
+    if has_new_scheme:
+        return True
+    # Old-scheme: first segment before '/' (or first char) is the namespace.
+    namespace = path.split("/", 1)[0] if "/" in path else path[0]
+    return namespace.upper() == "C"
+
+
 def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[str]]]:
     """Yield ``(source_path, [canonical internal target paths])`` per content entry.
 
-    Walk the open archive once via ``_get_entry_by_id`` over
-    ``entry_count``, skip non-content (non-``C/``) entries and
+    Walk the open archive once via ``_get_entry_by_id`` over ``entry_count``,
+    keep only content sources (scheme-aware: see ``_is_content_source``), skip
     redirects-as-source, and reuse ``_parse_internal_link_targets`` for
-    extraction + redirect canonicalization. Per-entry read failures are
-    skipped so one bad entry never aborts the whole build.
+    extraction + redirect canonicalization. The yielded ``source_path`` is the
+    raw ``entry.path`` exactly as libzim returns it for that scheme
+    (``"C/Evolution"`` old-scheme, ``"Evolution"`` new-scheme) so it stays
+    consistent with what the runtime query layer looks up. Per-entry read
+    failures are skipped so one bad entry never aborts the whole build.
     """
     # Imported here (not at module scope) so the pure ``build_from_link_stream``
     # core keeps no dependency on the ZIM/structure layer.
     from openzim_mcp.zim.structure import _StructureMixin
 
+    has_new_scheme = bool(getattr(archive, "has_new_namespace_scheme", False))
     total = int(getattr(archive, "entry_count", 0) or 0)
     for entry_id in range(total):
         try:
@@ -137,7 +163,7 @@ def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[str]]]:
         except Exception:  # nosec B112 - skip unreadable entry, keep walking
             continue
         path = getattr(entry, "path", "")
-        if not path.startswith("C/"):
+        if not _is_content_source(path, has_new_scheme=has_new_scheme):
             continue
         if getattr(entry, "is_redirect", False):
             continue
@@ -174,7 +200,9 @@ def build_link_graph(
 
         def _stream() -> Iterator[Tuple[str, List[str]]]:
             for i, pair in enumerate(iter_article_links(archive)):
-                if progress and i % 10_000 == 0:
+                # ``i and`` guards against the spurious 0 % 10_000 == 0 call at
+                # the very first entry; report every 10,000 thereafter.
+                if progress and i and i % 10_000 == 0:
                     progress(i, total)
                 yield pair
 

@@ -97,6 +97,10 @@ def test_iter_article_links_walks_content_entries() -> None:
         _FakeEntry("C/Redir", "", is_redirect=True),  # redirect: skipped as source
     ]
     archive = MagicMock()
+    # Old-scheme archive: paths are namespace-prefixed (``C/``, ``M/``). A bare
+    # MagicMock would auto-return a truthy ``has_new_namespace_scheme``, so set
+    # it explicitly to exercise the old-scheme content filter.
+    archive.has_new_namespace_scheme = False
     archive.entry_count = len(entries)
     archive._get_entry_by_id.side_effect = lambda i: entries[i]
     # _parse_internal_link_targets canonicalizes each target through the
@@ -109,3 +113,31 @@ def test_iter_article_links_walks_content_entries() -> None:
     assert ("C/A", ["C/T"]) in pairs
     assert all(src.startswith("C/") for src, _ in pairs)
     assert not any(src == "C/Redir" for src, _ in pairs)
+
+
+def test_iter_article_links_new_scheme_has_no_prefix() -> None:
+    """New-scheme entries carry no namespace prefix; all are content sources.
+
+    In new-scheme ZIMs libzim's iterable surface IS the C namespace, and entry
+    paths have no prefix (``Evolution`` not ``C/Evolution``). The walk must
+    accept every prefix-less entry as a content source and still skip
+    redirects — the old ``startswith("C/")`` filter dropped them all.
+    """
+    # href "Photosynthesis" is relative to the source entry's directory (root),
+    # so it path-normalizes to "Photosynthesis" — the prefix-less canonical
+    # target form libzim returns for new-scheme content.
+    entries = [
+        _FakeEntry("Evolution", '<a href="Photosynthesis">p</a>'),
+        _FakeEntry("Redir", "", is_redirect=True),  # redirect: skipped as source
+    ]
+    archive = MagicMock()
+    archive.has_new_namespace_scheme = True
+    archive.entry_count = len(entries)
+    archive._get_entry_by_id.side_effect = lambda i: entries[i]
+    # No such entry for canonicalization -> path-normalized target survives.
+    archive.get_entry_by_path.side_effect = KeyError("no entry")
+
+    pairs = list(iter_article_links(archive))
+    assert ("Evolution", ["Photosynthesis"]) in pairs
+    assert all(not src.startswith("C/") for src, _ in pairs)
+    assert not any(src == "Redir" for src, _ in pairs)
