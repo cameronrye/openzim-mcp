@@ -112,6 +112,55 @@ jobs:
               console.log('Failed to add comment:', error.message);
             }
 
+  # Keep uv.lock's root-package version in lockstep with each release PR.
+  # release-please bumps pyproject.toml but cannot touch the auto-generated
+  # uv.lock: there is no x-release-please annotation hook for a TOML lockfile,
+  # and uv would strip any comment we added. So the lockfile's own ``version``
+  # field drifts one release behind every cut (it sat at 2.2.1 while
+  # pyproject.toml was already 2.2.2). Whenever release-please opens/updates the
+  # release PR, regenerate uv.lock on that branch and commit it back so the bump
+  # ships inside the same PR. ``uv lock`` rewrites only the root version line
+  # here — dependencies are re-resolved only if pyproject's requirements
+  # changed — so this is a one-line, churn-free commit. GITHUB_TOKEN pushes do
+  # not retrigger CI, but release PRs never run the required checks anyway (they
+  # are merged via admin), so nothing is gated on this commit. Worst case (this
+  # job fails): the lockfile drifts for that release exactly as it does today —
+  # a release is never blocked or broken by this job.
+  sync-uv-lock:
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: needs.release-please.outputs.pr && !needs.release-please.outputs.release_created
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: release-please--branches--main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Regenerate uv.lock for the bumped version
+        run: uv lock
+
+      - name: Commit lockfile if it changed
+        run: |
+          if git diff --quiet uv.lock; then
+            echo "uv.lock already in sync — nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock
+          git commit -m "chore: sync uv.lock to release version"
+          git push origin HEAD:release-please--branches--main
+
   # Validate version synchronization after release creation
   validate-release:
     runs-on: ubuntu-latest
