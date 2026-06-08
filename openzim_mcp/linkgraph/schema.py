@@ -19,13 +19,23 @@ _DDL = """
 CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT) STRICT;
 CREATE TABLE nodes (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE,
                     inbound_degree INTEGER NOT NULL DEFAULT 0) STRICT;
+-- No UNIQUE(target_id, source_id): the builder already guarantees each
+-- (source, target) pair is unique (it dedups targets within a source and
+-- visits each source entry exactly once), so a uniqueness index would only
+-- slow the bulk insert without changing the data. inbound_degree is a plain
+-- COUNT over these rows, so the by-construction uniqueness keeps it accurate.
 CREATE TABLE edges (target_id INTEGER NOT NULL, source_id INTEGER NOT NULL) STRICT;
 CREATE INDEX edges_by_target ON edges(target_id);
 """
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
-    """Create all tables + indexes on a fresh connection."""
+    """Create the tables + index on a fresh connection.
+
+    Call once before opening any transaction: ``executescript`` issues an
+    implicit ``COMMIT`` first, and the DDL has no ``IF NOT EXISTS`` so a second
+    call on the same connection raises ``sqlite3.OperationalError``.
+    """
     conn.executescript(_DDL)
 
 

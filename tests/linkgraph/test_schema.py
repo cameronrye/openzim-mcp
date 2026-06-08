@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import sqlite3
 
-from openzim_mcp.linkgraph.schema import SCHEMA_VERSION, create_schema
+from openzim_mcp.linkgraph.schema import (
+    SCHEMA_VERSION,
+    apply_build_pragmas,
+    create_schema,
+)
 
 
 def test_create_schema_makes_expected_tables_and_index() -> None:
@@ -26,3 +30,10 @@ def test_create_schema_makes_expected_tables_and_index() -> None:
 def test_schema_version_is_a_positive_int() -> None:
     """SCHEMA_VERSION is a positive integer."""
     assert isinstance(SCHEMA_VERSION, int) and SCHEMA_VERSION >= 1
+
+
+def test_apply_build_pragmas_runs_without_error() -> None:
+    """Build pragmas apply cleanly on a fresh connection."""
+    conn = sqlite3.connect(":memory:")
+    apply_build_pragmas(conn)  # must not raise
+    assert conn.execute("PRAGMA synchronous").fetchone()[0] == 0
