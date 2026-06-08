@@ -66,6 +66,8 @@ Independent of runtime code; both items add operator-build commands that produce
 
 **Build cost.** Estimated 30–60 minutes per multi-million-article archive (single-pass entry walk + bulk SQLite insert). Storage: ~500 MB – 2 GB per archive depending on link density.
 
+**Design spec.** [docs/specs/2026-06-08-v2.5-link-graph-design.md](specs/2026-06-08-v2.5-link-graph-design.md) — full vertical slice (build CLI + integer-keyed SQLite sidecar + runtime inbound read ranked by linker importance + `"inbound"` enum promotion), strict staleness refusal, graceful absence.
+
 #### `#17` — Archive-type presets — ✅ **SHIPPED (a1) in v2.2.0**
 
 **Target (met for a1).** Detect archive type via the `M`-namespace metadata + heuristics on `Creator` / `Name` / `Title`. Each detected type has a preset that adjusts snippet shape and summary style. Presets are data, not code — bundled [`openzim_mcp/data/presets.toml`](../openzim_mcp/data/presets.toml), with `OPENZIM_MCP_PRESETS_OVERRIDE_PATH` deep-merge and per-archive pins. See [the design spec](specs/2026-06-04-v2.5-archive-type-presets-design.md).
@@ -117,7 +119,7 @@ Open commitments referenced from production code (`openzim_mcp/tools/`) and test
 | Milestone | Items | Status / Tag |
 | --- | --- | --- |
 | **v2.5.0a1** | `#17` archive-type presets ([spec](specs/2026-06-04-v2.5-archive-type-presets-design.md) — snippet + summary seams, detect all 4 types, behavior for Wikipedia/Stack Exchange) | ✅ **Shipped in v2.2.0** (reprobe-validated; a2 follow-ons noted above) |
-| **v2.5.0a2** | `#16` link-graph sidecar + `build` CLI + `zim_links` `"inbound"` enum promotion | _Next — not started_ |
+| **v2.5.0a2** | `#16` link-graph sidecar + `build` CLI + `zim_links` `"inbound"` enum promotion ([spec](specs/2026-06-08-v2.5-link-graph-design.md)) | _Design spec written 2026-06-08 — implementation not started_ |
 | **v2.5.0a3** | `#199` `zim_query` sub-mode dispatch + `#18` `zim_get_section` raw-text path | _TBD_ |
 | **v2.5.0a4** | sub-D-3 if triggered + `zim_get` `compact` default revisit (telemetry-driven) | sub-D-3 → **close-by-default 2026-07-19** unless a field trigger fires (see status above); compact revisit _TBD_ |
 | **v2.5.0a5** | sub-D-4 if triggered | **close-by-default 2026-07-19** unless triggers fire (see status above) |
