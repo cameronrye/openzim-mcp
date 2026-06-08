@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0](https://github.com/cameronrye/openzim-mcp/compare/v2.2.2...v2.3.0) (2026-06-08)
+
+
+### Added
+
+* inbound link-graph sidecar (v2.5 [#16](https://github.com/cameronrye/openzim-mcp/issues/16)) ([#274](https://github.com/cameronrye/openzim-mcp/issues/274)) ([f87a214](https://github.com/cameronrye/openzim-mcp/commit/f87a21410b6a6395905f90816563fa52351107c5))
+
+
+### Fixed
+
+* **prompts:** route MCP prompts to the v2 tool surface + correct response docs ([f625ba4](https://github.com/cameronrye/openzim-mcp/commit/f625ba4bae5ce4c8c705f1503baa39c0d7102c87))
+* **zim_browse,zim_links:** wire cursor pagination through to the data layer ([7fd0222](https://github.com/cameronrye/openzim-mcp/commit/7fd0222ac8732bea765b07fb685f2f7edadc8ce5))
+
+
+### Documentation
+
+* align tool-surface references with the v2 contract ([3d9168c](https://github.com/cameronrye/openzim-mcp/commit/3d9168c8a5358a3334ebaa395159c4e9904f8e38))
+* **roadmap:** make the sub-D-3/sub-D-4 close-by-default decision explicit ([85a5d8b](https://github.com/cameronrye/openzim-mcp/commit/85a5d8b85ad57f5bc45d68ebbbea613fc9ba23bf))
+
 ## [2.2.2](https://github.com/cameronrye/openzim-mcp/compare/v2.2.1...v2.2.2) (2026-06-07)
 
 
