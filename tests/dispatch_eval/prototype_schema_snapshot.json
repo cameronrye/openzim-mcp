@@ -243,10 +243,28 @@
     }
   },
   "zim_links": {
-    "bytes": 2386,
-    "description": "Look up links from one article \u2014 outbound link buckets or\nrelated-article suggestions.\n\nEXTRACT the direction before calling. `direction=\"outbound\"` returns\nthe article's own outgoing links (internal / external / media\nbuckets, paginated). `direction=\"related\"` returns articles\nconnected to this one by outbound-link overlap \u2014 the canonical\n\"see also\" experience.\n\nALIASES: callers may say \"links in <article>\", \"what does <article>\nlink to\", \"related to <article>\", \"articles like <article>\". Route\nthrough THIS tool with the matching direction.\n\nPARAMETERS:\n  zim_file_path     REQUIRED. The archive containing the article.\n  entry_path        REQUIRED. The article whose links to inspect.\n  direction         \"outbound\" (default) \u2014 outgoing links by bucket.\n                    \"related\" \u2014 related articles via outbound-link\n                    overlap.\n  cursor            Phase B cursor pagination handle.\n  limit             Page size.\n  offset            Pagination offset (outbound mode only).\n\nRESPONSE:\n  ArticleLinksResponse (direction=\"outbound\") or\n  RelatedArticlesResponse (direction=\"related\"). Both carry\n  pagination metadata.\n\nNOTE (v2.0 scope): `\"inbound\"` is NOT in the direction enum. Inbound\nlink discovery requires a link-graph sidecar that lands in v2.5 \u2014\nreserving an unusable enum value at v2.0 would create a small-model\nfailure mode where the model attempts it, eats an error, and gives\nup. The schema-additive promotion to add `\"inbound\"` in v2.5 is\nnon-breaking.\n\nERRORS:\n  Invalid `direction` returns `invalid_direction`. Missing or\n  unknown `entry_path` returns the underlying data-layer error\n  envelope.\n",
+    "bytes": 2383,
+    "description": "Look up links from one article \u2014 outbound/inbound link buckets or\nrelated-article suggestions.\n\nEXTRACT the direction before calling. `direction=\"outbound\"` returns\nthe article's own outgoing links (internal / external / media\nbuckets). `direction=\"inbound\"` returns pages that link TO this\nentry. `direction=\"related\"` returns articles connected by\noutbound-link overlap \u2014 the canonical \"see also\" experience.\n\nALIASES: \"links in <article>\" / \"what does <article> link to\"\n(outbound); \"what links here\" / \"pages linking to <article>\"\n(inbound); \"related to <article>\" / \"articles like <article>\"\n(related). Route through THIS tool with the matching direction.\n\nDIRECTIONS:\n  `\"outbound\"` (default) \u2014 paginated.\n  `\"inbound\"`  \u2014 ranked by linker importance; paginated. Requires a\n                 built link-graph sidecar (`openzim-mcp build\n                 link-graph`); absent/stale \u2192 structured error.\n  `\"related\"`  \u2014 one ranked set (no pagination).\n\nPARAMETERS:\n  zim_file_path   REQUIRED. The archive containing the article.\n  entry_path      REQUIRED. The article whose links to inspect.\n  direction       See DIRECTIONS above.\n  cursor          Cursor handle (outbound/inbound).\n  limit           Page size.\n  offset          Pagination offset (outbound/inbound).\n\nRESPONSE:\n  LinksResponse (outbound) or RelatedArticlesResponse (inbound /\n  related). Outbound/inbound paginate; related is one ranked set.\n\nERRORS:\n  Invalid `direction` \u2192 `invalid_direction`. Missing/stale inbound\n  sidecar \u2192 `inbound_sidecar_unavailable`. Missing/unknown\n  `entry_path` \u2192 the underlying data-layer error envelope.\n",
     "inputSchema": {
       "properties": {
+        "zim_file_path": {
+          "title": "Zim File Path",
+          "type": "string"
+        },
+        "entry_path": {
+          "title": "Entry Path",
+          "type": "string"
+        },
+        "direction": {
+          "default": "outbound",
+          "enum": [
+            "outbound",
+            "inbound",
+            "related"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
         "cursor": {
           "anyOf": [
             {
@@ -258,19 +276,6 @@
           ],
           "default": null,
           "title": "Cursor"
-        },
-        "direction": {
-          "default": "outbound",
-          "enum": [
-            "outbound",
-            "related"
-          ],
-          "title": "Direction",
-          "type": "string"
-        },
-        "entry_path": {
-          "title": "Entry Path",
-          "type": "string"
         },
         "limit": {
           "anyOf": [
@@ -288,10 +293,6 @@
           "default": 0,
           "title": "Offset",
           "type": "integer"
-        },
-        "zim_file_path": {
-          "title": "Zim File Path",
-          "type": "string"
         }
       },
       "required": [

@@ -1,7 +1,7 @@
 """Tests for the Phase F ``zim_links`` tool (Task D9).
 
-Collapses ``extract_article_links`` + ``get_related_articles`` via
-the ``direction`` parameter. v2.0 omits ``"inbound"`` per spec.
+Collapses ``extract_article_links`` + ``get_related_articles`` +
+``get_inbound_links`` via the ``direction`` parameter.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from openzim_mcp.tools.zim_links import register as register_zim_links
 
 @pytest.fixture
 def server() -> MagicMock:
+    """Return a stand-in server whose ``mcp.tool`` decorator stores the fn."""
     srv = MagicMock()
     tools_store: dict[str, Any] = {}
 
@@ -34,6 +35,7 @@ def server() -> MagicMock:
 def _patch_async_ops(
     monkeypatch: pytest.MonkeyPatch, **method_returns: Any
 ) -> MagicMock:
+    """Patch AsyncZimOperations so each named data method is an AsyncMock."""
     mock_ops = MagicMock()
     for name, value in method_returns.items():
         setattr(mock_ops, name, AsyncMock(return_value=value))
@@ -47,6 +49,7 @@ def _patch_async_ops(
 def test_zim_links_registers(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The tool registers under the name ``zim_links``."""
     _patch_async_ops(monkeypatch)
     register_zim_links(server)
     assert "zim_links" in server._tools_store
@@ -56,6 +59,7 @@ def test_zim_links_registers(
 async def test_outbound_dispatches_to_extract_article_links(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """`direction='outbound'` dispatches to extract_article_links_data."""
     ops = _patch_async_ops(monkeypatch, extract_article_links_data={"results": []})
     register_zim_links(server)
     fn, _ = server._tools_store["zim_links"]
@@ -69,6 +73,7 @@ async def test_outbound_dispatches_to_extract_article_links(
 async def test_related_dispatches_to_get_related_articles(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """`direction='related'` dispatches to get_related_articles_data."""
     ops = _patch_async_ops(monkeypatch, get_related_articles_data={"results": []})
     register_zim_links(server)
     fn, _ = server._tools_store["zim_links"]
@@ -77,13 +82,12 @@ async def test_related_dispatches_to_get_related_articles(
 
 
 @pytest.mark.asyncio
-async def test_inbound_rejected(
+async def test_unknown_direction_rejected(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """v2.0: 'inbound' is NOT in the enum (link-graph sidecar lands in v2.5)."""
+    """An unsupported `direction` value returns a structured error."""
     _patch_async_ops(monkeypatch)
     register_zim_links(server)
     fn, _ = server._tools_store["zim_links"]
-    result = await fn(zim_file_path="/x.zim", entry_path="A/Cat", direction="inbound")  # type: ignore[arg-type]
+    result = await fn(zim_file_path="/x.zim", entry_path="A/Cat", direction="sideways")  # type: ignore[arg-type]
     assert result["operation"] == "invalid_direction"
-    assert "v2.5" in result["message"]
