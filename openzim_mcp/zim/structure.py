@@ -945,6 +945,97 @@ class _StructureMixin:
         meta_reason = "scan_truncated" if links_scan_truncated else None
         return cast("RelatedArticlesResponse", attach_meta(payload, reason=meta_reason))
 
+    def get_inbound_links_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 10,
+        offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
+    ) -> "RelatedArticlesResponse":
+        """Return the inbound linkers for ``entry_path`` from the sidecar.
+
+        Ranked by each linker's own inbound-degree. Raises
+        ``LinkGraphUnavailable`` when the sidecar is absent or stale (the
+        tool layer renders that as a structured error). Phase-B five-key
+        contract; paginated.
+
+        ``entry_path`` is looked up in the sidecar exactly as passed — the
+        sidecar stores scheme-native paths (prefix-less on new-scheme
+        archives, ``C/``-prefixed on old-scheme), and the runtime caller
+        passes the archive-native path the search/get tools already use, so
+        no namespace munging is applied here.
+        """
+        if limit < 1 or limit > 100:
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 100 (provided: {limit})"
+            )
+        if offset < 0:
+            raise OpenZimMcpValidationError(
+                f"offset must be non-negative (provided: {offset})"
+            )
+        reject_path_traversal(entry_path)
+        validated_path = self._validate_zim_path(zim_file_path)
+        validated_str = str(validated_path)
+
+        from openzim_mcp.linkgraph.reader import (
+            LinkGraphReader,
+            LinkGraphUnavailable,
+        )
+        from openzim_mcp.pagination import archive_identity
+
+        with _zim_ops_mod.zim_archive(Path(validated_str)) as archive:
+            live_uuid = str(archive.uuid)
+        reader = LinkGraphReader.open_for(validated_str, live_archive_uuid=live_uuid)
+        if reader is None:
+            raise LinkGraphUnavailable(
+                "Inbound links require a link-graph sidecar for this archive. "
+                f"Run `openzim-mcp build link-graph {validated_str}` "
+                "(rebuild it if the archive changed)."
+            )
+        try:
+            page = reader.query_inbound(entry_path, limit=limit, offset=offset)
+        finally:
+            reader.close()
+
+        results: List[Dict[str, Any]] = [
+            {
+                "path": r["path"],
+                "title": r["path"],
+                "inbound_degree": r["inbound_degree"],
+            }
+            for r in page.rows
+        ]
+        self._resolve_outbound_titles(validated_str, results)
+
+        returned = len(results)
+        has_more = offset + returned < page.total
+        next_cursor = None
+        if has_more:
+            next_cursor = Cursor.encode(
+                tool="get_inbound_links",
+                state={
+                    "o": offset + returned,
+                    "l": limit,
+                    "ep": entry_path,
+                    "ai": archive_identity(validated_path),
+                },
+            )
+        payload: Dict[str, Any] = {
+            "entry_path": entry_path,
+            "results": results,
+            "next_cursor": next_cursor,
+            "total": page.total,
+            "done": not has_more,
+            "page_info": {
+                "offset": offset,
+                "limit": limit,
+                "returned_count": returned,
+            },
+        }
+        return cast("RelatedArticlesResponse", attach_meta(payload, reason=None))
+
     @staticmethod
     def _resolve_outbound_titles(
         zim_file_path: str, outbound: List[Dict[str, Any]]

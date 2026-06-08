@@ -689,6 +689,25 @@ class AsyncZimOperations:
             limit,
         )
 
+    async def get_inbound_links_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 10,
+        offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
+    ) -> "RelatedArticlesResponse":
+        """Structured variant of inbound link lookup (async)."""
+        return await asyncio.to_thread(
+            self._ops.get_inbound_links_data,
+            zim_file_path,
+            entry_path,
+            limit,
+            offset,
+            cursor_archive_identity=cursor_archive_identity,
+        )
+
     async def get_section_data(
         self,
         zim_file_path: str,
@@ -723,10 +742,11 @@ class AsyncZimOperations:
     async def get_archive_metadata_data(
         self, zim_file_path: str
     ) -> "ArchiveMetadataResponse":
-        """Combined ``zim_metadata`` response — M-namespace fields plus
-        list-form namespaces. Async-safe; defers both source calls to a
-        thread pool concurrently because they touch different archive
-        slices and run independently.
+        """Build the combined ``zim_metadata`` response.
+
+        M-namespace fields plus list-form namespaces. Async-safe; defers
+        both source calls to a thread pool concurrently because they touch
+        different archive slices and run independently.
         """
         metadata_resp, namespaces_resp = await asyncio.gather(
             asyncio.to_thread(self._ops.get_zim_metadata_data, zim_file_path),
@@ -784,8 +804,9 @@ class AsyncZimOperations:
     async def get_health_data(
         self, server: "OpenZimMcpServer"
     ) -> "ServerHealthResponse":
-        """Combined ``zim_health`` response — health + configuration +
-        loaded_archives in one envelope.
+        """Build the combined ``zim_health`` response.
+
+        Health + configuration + loaded_archives in one envelope.
 
         The health and configuration builders live in
         ``tools/server_tools`` (the legacy registration site) so this
