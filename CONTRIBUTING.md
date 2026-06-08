@@ -324,7 +324,7 @@ open htmlcov/index.html
 
 ### Security Testing
 
-- Run security scans: `uv run bandit -r openzim_mcp`
+- Run security scans: `make security` (bandit code scan + pip-audit dependency scan)
 - Test with malicious inputs
 - Verify path traversal protection
 - Check for information disclosure in error messages

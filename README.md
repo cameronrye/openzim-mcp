@@ -34,7 +34,7 @@
 
 **OpenZIM MCP** is a modern, secure, high-performance [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI models structured, offline access to [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge archives — Wikipedia, Wiktionary, Stack Exchange, and the rest of the [Kiwix Library](https://library.kiwix.org/).
 
-Built for research assistants, knowledge chatbots, and content-analysis systems that need *intelligent* access to vast knowledge repositories — not just a raw text dump. Smart navigation by namespace (articles, metadata, media), structure-aware retrieval (sections, tables of contents, related articles), full-text search with suggestions and multi-archive `search_all`, and link-graph extraction to map content relationships. Cached, paginated operations keep things responsive across massive archives; comprehensive input validation and path-traversal protection keep things safe.
+Built for research assistants, knowledge chatbots, and content-analysis systems that need *intelligent* access to vast knowledge repositories — not just a raw text dump. Smart navigation by namespace (articles, metadata, media), structure-aware retrieval (sections, tables of contents, related articles), full-text search with suggestions and multi-archive search, and link-graph extraction to map content relationships. Cached, paginated operations keep things responsive across massive archives; comprehensive input validation and path-traversal protection keep things safe.
 
 Streamable HTTP transport, per-entry MCP resources with subscriptions, and dual Simple / Advanced modes ship in v2.0.0.
 

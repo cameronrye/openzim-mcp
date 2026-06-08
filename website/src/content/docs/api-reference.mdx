@@ -254,6 +254,8 @@ zim_links(
 | `"outbound"` (default) | All internal + external links extracted from the article body. Drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`) |
 | `"related"` | Outbound link-graph neighbors with deduplication |
 
+`cursor` / `offset` apply to `direction="outbound"` only; `"related"` returns a single ranked set and rejects a `cursor`.
+
 `direction="inbound"` is reserved for v2.5 (lands with the link-graph sidecar).
 
 Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
