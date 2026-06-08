@@ -11,6 +11,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.request import pathname2url
 
 from .schema import SCHEMA_VERSION
 
@@ -47,7 +48,12 @@ class LinkGraphReader:
         path = sidecar_path_for(archive_path)
         if not Path(path).is_file():
             return None
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        # Percent-encode the path for the file: URI so archives whose path
+        # contains a space or other URI-significant character still open
+        # read-only (otherwise the URI is malformed and a valid sidecar would
+        # silently look absent).
+        uri = f"file:{pathname2url(str(Path(path).resolve()))}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
         try:
             meta = dict(conn.execute("SELECT key, value FROM meta"))
         except sqlite3.DatabaseError:

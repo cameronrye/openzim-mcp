@@ -84,6 +84,19 @@ def test_query_inbound_paginates(tmp_path: Path) -> None:
     reader.close()
 
 
+def test_open_for_handles_archive_path_with_spaces(tmp_path: Path) -> None:
+    """A valid sidecar opens even when the archive path contains a space."""
+    spaced = tmp_path / "My Archives"
+    spaced.mkdir()
+    archive = spaced / "wiki test.zim"
+    archive.write_bytes(b"")
+    _make_sidecar(archive, uuid="u1")
+    reader = LinkGraphReader.open_for(str(archive), live_archive_uuid="u1")
+    assert reader is not None
+    assert reader.query_inbound("C/T", limit=10, offset=0).total == 2
+    reader.close()
+
+
 def test_query_inbound_unknown_target_is_empty_not_error(tmp_path: Path) -> None:
     """An unknown target returns an empty page, not an error."""
     archive = tmp_path / "x.zim"
