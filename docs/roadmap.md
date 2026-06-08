@@ -60,7 +60,7 @@ Independent of runtime code; both items add operator-build commands that produce
 
 #### `#16` — Inbound link-graph sidecar — ✅ **IMPLEMENTED on `feat/inbound-link-graph` (pending merge)**
 
-**Shipped scope.** `openzim-mcp build link-graph <archive>.zim` produces `<archive>.zim.linkgraph.sqlite` next to the archive (integer-keyed SQLite sidecar). At runtime, `zim_links(direction="inbound", entry_path=...)` returns pages that link TO the entry, ranked by linker importance, cursor-paginated. Strict staleness refusal: if the archive mtime has changed since the build, the call returns a structured `inbound_sidecar_unavailable` error; absence is reported the same way rather than raising.
+**Shipped scope.** `openzim-mcp build link-graph <archive>.zim` produces `<archive>.zim.linkgraph.sqlite` next to the archive (integer-keyed SQLite sidecar). At runtime, `zim_links(direction="inbound", entry_path=...)` returns pages that link TO the entry, ranked by linker importance, cursor-paginated. Strict staleness refusal: if the archive's UUID no longer matches the one recorded at build time (the archive was rebuilt or replaced), the call returns a structured `inbound_sidecar_unavailable` error; absence is reported the same way rather than raising.
 
 **Design spec.** [docs/specs/2026-06-08-v2.5-link-graph-design.md](specs/2026-06-08-v2.5-link-graph-design.md) — full vertical slice (build CLI + integer-keyed SQLite sidecar + runtime inbound read ranked by linker importance + `"inbound"` enum promotion), strict staleness refusal, graceful absence.
 

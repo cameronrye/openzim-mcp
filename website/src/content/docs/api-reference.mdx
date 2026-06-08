@@ -257,11 +257,11 @@ zim_links(
 
 `cursor` / `offset` apply to `"outbound"` and `"inbound"`; `"related"` returns a single ranked set and rejects a `cursor`.
 
-`direction="inbound"` requires the link-graph sidecar to be built first: `openzim-mcp build link-graph <archive>.zim` walks the archive once and writes `<archive>.zim.linkgraph.sqlite` next to it (`--force` overwrites an existing sidecar; `--output PATH` relocates it). When the sidecar is absent or stale (archive mtime changed since the build), `zim_links` returns a structured `inbound_sidecar_unavailable` error rather than failing.
+`direction="inbound"` requires the link-graph sidecar to be built first: `openzim-mcp build link-graph <archive>.zim` walks the archive once and writes `<archive>.zim.linkgraph.sqlite` next to it (`--force` overwrites an existing sidecar; `--output PATH` relocates it). When the sidecar is absent or stale (the archive's UUID no longer matches the one recorded at build time — i.e. it was rebuilt or replaced), `zim_links` returns a structured `inbound_sidecar_unavailable` error rather than failing.
 
 Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
 
-**Returns:** `{outbound_links: [...], internal_count, external_count, media_count}` (outbound), `{inbound_links: [...], total_count}` (inbound), or `{related: [...]}` (related).
+**Returns:** `{outbound_links: [...], internal_count, external_count, media_count}` (outbound), or a paginated `{results, next_cursor, total, done, page_info}` envelope where each `results` entry is `{path, title, inbound_degree}` (inbound) / a related-article row (related).
 
 ---
 
