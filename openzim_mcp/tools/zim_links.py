@@ -1,14 +1,15 @@
-"""zim_links — outbound link buckets or related-article suggestions.
+"""zim_links — outbound/inbound link buckets or related-article suggestions.
 
-Collapses ``extract_article_links`` + ``get_related_articles`` (2 → 1)
-via a ``direction: Literal["outbound", "related"]`` dispatch.
-v2.0 omits ``"inbound"`` per spec — see description file.
+Collapses ``extract_article_links`` + ``get_related_articles`` +
+``get_inbound_links`` (3 → 1) via a
+``direction: Literal["outbound", "inbound", "related"]`` dispatch.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+from ..linkgraph.reader import LinkGraphUnavailable
 from ..responses import tool_error
 from ._common import (
     cursor_context_mismatch,
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 _DESCRIPTION = load_description("zim_links")
 
-_VALID_DIRECTIONS = {"outbound", "related"}
+_VALID_DIRECTIONS = {"outbound", "inbound", "related"}
 
 
 def register(server: "OpenZimMcpServer") -> None:
@@ -35,7 +36,7 @@ def register(server: "OpenZimMcpServer") -> None:
     async def zim_links(
         zim_file_path: str,
         entry_path: str,
-        direction: Literal["outbound", "related"] = "outbound",
+        direction: Literal["outbound", "inbound", "related"] = "outbound",
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -46,8 +47,7 @@ def register(server: "OpenZimMcpServer") -> None:
                     operation="invalid_direction",
                     message=(
                         f"`direction` must be one of {sorted(_VALID_DIRECTIONS)} "
-                        f"(provided: {direction!r}). 'inbound' lands in v2.5 "
-                        "with the link-graph sidecar."
+                        f"(provided: {direction!r})."
                     ),
                 )
 
@@ -79,6 +79,35 @@ def register(server: "OpenZimMcpServer") -> None:
                     limit=eff_limit,
                     offset=offset,
                 )
+
+            if direction == "inbound":
+                state, cursor_error = decode_cursor_state(
+                    cursor, expected_tool="get_inbound_links"
+                )
+                if cursor_error is not None:
+                    return cursor_error
+                eff_offset = offset
+                if state is not None:
+                    # Guard against replaying entry A's cursor against entry B,
+                    # which would apply A's offset to B's inbound list.
+                    ep_error = cursor_context_mismatch(
+                        state, field="ep", expected=entry_path, label="entry"
+                    )
+                    if ep_error is not None:
+                        return ep_error
+                    eff_offset = int(state.get("o", 0) or 0)
+                try:
+                    return await ops.get_inbound_links_data(
+                        zim_file_path,
+                        entry_path,
+                        limit=limit if limit is not None else 10,
+                        offset=eff_offset,
+                        cursor_archive_identity=state.get("ai") if state else None,
+                    )
+                except LinkGraphUnavailable as e:
+                    return tool_error(
+                        operation="inbound_sidecar_unavailable", message=str(e)
+                    )
 
             # direction == "related" — a single ranked set, never paginated
             # (the data layer always returns next_cursor=None), so a cursor

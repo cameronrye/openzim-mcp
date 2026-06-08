@@ -107,6 +107,7 @@ For HTTP transport (long-running service with bearer auth, CORS, and health endp
 - **Per-entry MCP resources + subscriptions** — `zim://{name}/entry/{path}` with native MIME types; clients subscribe and receive `notifications/resources/updated` when archives change. [Resources, prompts & subscriptions →](https://cameronrye.github.io/openzim-mcp/docs/resources-prompts-subscriptions/)
 - **Simple-mode `zim_query`** — one natural-language tool that dispatches to the right operation, tuned for small-model deployment targets. [Quick start →](https://cameronrye.github.io/openzim-mcp/docs/quick-start/)
 - **Native libzim introspection (v2.1)** — `zim_health(zim_file_path=...)` validates an archive's integrity (`Archive.check()` + checksum), and `zim_metadata` now reports archive identity, full-text / title index capabilities, and an `M/Counter` mimetype breakdown. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
+- **Inbound link discovery ("what links here")** — `zim_links(direction="inbound")` returns pages that link to an entry, ranked by linker importance. Requires a pre-built sidecar: `openzim-mcp build link-graph <archive>.zim` (writes `<archive>.zim.linkgraph.sqlite` next to the archive). [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
 
 ## Modes
 

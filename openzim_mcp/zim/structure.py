@@ -738,7 +738,7 @@ class _StructureMixin:
 
     @staticmethod
     def _is_non_article_target(path: str) -> bool:
-        """True when ``path`` points at a binary asset, not a navigable article.
+        """Report whether ``path`` is a binary asset, not a navigable article.
 
         ZIMIT / warc2zim wraps an article's lead image in an
         ``<a href="…/plato.jpg">`` anchor, so the image leaks into the
@@ -945,6 +945,97 @@ class _StructureMixin:
         meta_reason = "scan_truncated" if links_scan_truncated else None
         return cast("RelatedArticlesResponse", attach_meta(payload, reason=meta_reason))
 
+    def get_inbound_links_data(
+        self,
+        zim_file_path: str,
+        entry_path: str,
+        limit: int = 10,
+        offset: int = 0,
+        *,
+        cursor_archive_identity: Optional[str] = None,
+    ) -> "RelatedArticlesResponse":
+        """Return the inbound linkers for ``entry_path`` from the sidecar.
+
+        Ranked by each linker's own inbound-degree. Raises
+        ``LinkGraphUnavailable`` when the sidecar is absent or stale (the
+        tool layer renders that as a structured error). Phase-B five-key
+        contract; paginated.
+
+        ``entry_path`` is looked up in the sidecar exactly as passed — the
+        sidecar stores scheme-native paths (prefix-less on new-scheme
+        archives, ``C/``-prefixed on old-scheme), and the runtime caller
+        passes the archive-native path the search/get tools already use, so
+        no namespace munging is applied here.
+        """
+        if limit < 1 or limit > 100:
+            raise OpenZimMcpValidationError(
+                f"limit must be between 1 and 100 (provided: {limit})"
+            )
+        if offset < 0:
+            raise OpenZimMcpValidationError(
+                f"offset must be non-negative (provided: {offset})"
+            )
+        reject_path_traversal(entry_path)
+        validated_path = self._validate_zim_path(zim_file_path)
+        validated_str = str(validated_path)
+
+        from openzim_mcp.linkgraph.reader import (
+            LinkGraphReader,
+            LinkGraphUnavailable,
+        )
+        from openzim_mcp.pagination import archive_identity
+
+        with _zim_ops_mod.zim_archive(Path(validated_str)) as archive:
+            live_uuid = str(archive.uuid)
+        reader = LinkGraphReader.open_for(validated_str, live_archive_uuid=live_uuid)
+        if reader is None:
+            raise LinkGraphUnavailable(
+                "Inbound links require a link-graph sidecar for this archive. "
+                f"Run `openzim-mcp build link-graph {validated_str}` "
+                "(rebuild it if the archive changed)."
+            )
+        try:
+            page = reader.query_inbound(entry_path, limit=limit, offset=offset)
+        finally:
+            reader.close()
+
+        results: List[Dict[str, Any]] = [
+            {
+                "path": r["path"],
+                "title": r["path"],
+                "inbound_degree": r["inbound_degree"],
+            }
+            for r in page.rows
+        ]
+        self._resolve_outbound_titles(validated_str, results)
+
+        returned = len(results)
+        has_more = offset + returned < page.total
+        next_cursor = None
+        if has_more:
+            next_cursor = Cursor.encode(
+                tool="get_inbound_links",
+                state={
+                    "o": offset + returned,
+                    "l": limit,
+                    "ep": entry_path,
+                    "ai": archive_identity(validated_path),
+                },
+            )
+        payload: Dict[str, Any] = {
+            "entry_path": entry_path,
+            "results": results,
+            "next_cursor": next_cursor,
+            "total": page.total,
+            "done": not has_more,
+            "page_info": {
+                "offset": offset,
+                "limit": limit,
+                "returned_count": returned,
+            },
+        }
+        return cast("RelatedArticlesResponse", attach_meta(payload, reason=None))
+
     @staticmethod
     def _resolve_outbound_titles(
         zim_file_path: str, outbound: List[Dict[str, Any]]
@@ -1037,3 +1128,99 @@ class _StructureMixin:
         if had_trailing_slash and not resolved.endswith("/"):
             resolved += "/"
         return resolved
+
+    @staticmethod
+    def _parse_internal_link_targets(
+        html: str,
+        *,
+        source_path: str,
+        archive: "Optional[Archive]",
+    ) -> List[str]:
+        """Return one source entry's deduped, canonical INTERNAL link targets.
+
+        Parses ``html`` with the same anchor classifier the bundle uses
+        (``ContentProcessor._classify_anchor``), so "internal" here means
+        exactly what ``extract_article_links``'s internal bucket means:
+        every ``<a href>`` whose scheme is not external (``http(s)://``,
+        protocol-relative ``//``) and not a non-navigable scheme
+        (``javascript:``/``mailto:``/etc.). Media-element sources
+        (``<img src>`` and friends) are NOT anchors and never appear.
+
+        Each surviving internal href is then canonicalized to a fetchable
+        ZIM entry path the way ``get_related_articles_data`` does:
+
+        * ``_resolve_link_to_entry_path`` resolves the href against
+          ``source_path``'s directory (posixpath semantics) and drops bare
+          fragments, query-only, and non-resolvable inputs;
+        * targets equal to ``source_path`` are dropped (no self-edges);
+        * asset targets (``.png``/``.css``/``.mp4``/… via
+          ``_is_non_article_target``) are dropped — ZIMIT wraps lead images
+          in anchors, so they leak into the internal bucket otherwise.
+
+        When ``archive`` is provided, each resolved target is additionally
+        followed through its redirect chain (best-effort via
+        ``best_effort_redirect_chain``) so the returned path is the
+        canonical (non-redirect) entry actually served — this is what the
+        offline builder needs to invert into a stable reverse-edge graph.
+        When ``archive`` is ``None`` the redirect step is skipped and the
+        path-normalized target is returned as-is, which keeps the helper
+        unit-testable without a ZIM.
+
+        Results preserve first-appearance order and are deduplicated.
+        """
+        from bs4 import BeautifulSoup, Tag
+
+        from openzim_mcp.content_processor import (
+            HTML_PARSER,
+            _classify_anchor,
+        )
+        from openzim_mcp.zim.redirects import best_effort_redirect_chain
+
+        try:
+            soup = BeautifulSoup(html, HTML_PARSER)
+        except Exception as e:  # pragma: no cover - defensive parse guard
+            logger.warning(f"Internal-link parse failed for {source_path}: {e}")
+            return []
+
+        # Reuse the exact anchor classifier the bundle path uses so the
+        # set of "internal" anchors here matches the extract_article_links
+        # internal bucket. We only consume the ``internal_links`` list.
+        links_data: Dict[str, Any] = {
+            "internal_links": [],
+            "external_links": [],
+            "media_links": [],
+        }
+        for link in soup.find_all("a", href=True):
+            if not isinstance(link, Tag):
+                continue
+            _classify_anchor(link, links_data)
+
+        seen: set = set()
+        targets: List[str] = []
+        for link in links_data["internal_links"]:
+            target = _StructureMixin._resolve_link_to_entry_path(
+                link.get("url", ""), source_path
+            )
+            if not target or target == source_path:
+                continue
+            if _StructureMixin._is_non_article_target(target):
+                continue
+            if archive is not None:
+                # Canonicalize through the redirect chain so the builder
+                # inverts edges against the served (non-redirect) path.
+                # Best-effort: a missing entry or malformed chain falls
+                # back to the path-normalized target rather than dropping
+                # an otherwise-valid edge.
+                try:
+                    entry = archive.get_entry_by_path(target)
+                    resolved = best_effort_redirect_chain(entry)
+                    resolved_path = getattr(resolved, "path", None)
+                    if resolved_path:
+                        target = resolved_path
+                except Exception as e:
+                    logger.debug(f"redirect canonicalization for {target} failed: {e}")
+            if target in seen or target == source_path:
+                continue
+            seen.add(target)
+            targets.append(target)
+        return targets

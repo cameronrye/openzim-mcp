@@ -115,6 +115,11 @@ def main() -> None:
 
         sys.exit(download_models_main(argv=sys.argv[2:]))
 
+    if len(sys.argv) >= 2 and sys.argv[1] == "build":
+        from openzim_mcp.cli.build import build_main
+
+        sys.exit(build_main(argv=sys.argv[2:]))
+
     parser = _build_arg_parser()
 
     if len(sys.argv) == 1:

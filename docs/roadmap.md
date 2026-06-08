@@ -58,13 +58,11 @@ Phase D shipped `#6` cross-encoder reranker and `#8` Tier 1 rules-based query re
 
 Independent of runtime code; both items add operator-build commands that produce optional sidecars. Default behavior is unchanged.
 
-#### `#16` — Inbound link-graph sidecar
+#### `#16` — Inbound link-graph sidecar — ✅ **IMPLEMENTED on `feat/inbound-link-graph` (pending merge)**
 
-**Current state.** [`openzim_mcp/zim/content.py`](../openzim_mcp/zim/content.py) `get_related_articles` is outbound-only. Inbound link discovery was removed in v0.9.0 because the runtime cost is prohibitive on a multi-million-article archive.
+**Shipped scope.** `openzim-mcp build link-graph <archive>.zim` produces `<archive>.zim.linkgraph.sqlite` next to the archive (integer-keyed SQLite sidecar). At runtime, `zim_links(direction="inbound", entry_path=...)` returns pages that link TO the entry, ranked by linker importance, cursor-paginated. Strict staleness refusal: if the archive's UUID no longer matches the one recorded at build time (the archive was rebuilt or replaced), the call returns a structured `inbound_sidecar_unavailable` error; absence is reported the same way rather than raising.
 
-**Target.** `openzim-mcp build link-graph <archive>.zim` produces `<archive>.zim.linkgraph.sqlite` (or similar) with reverse-edge indexes. At runtime, `get_related_articles(direction="inbound")` becomes a SQLite lookup. Sidecar is optional; absence is reported gracefully.
-
-**Build cost.** Estimated 30–60 minutes per multi-million-article archive (single-pass entry walk + bulk SQLite insert). Storage: ~500 MB – 2 GB per archive depending on link density.
+**Design spec.** [docs/specs/2026-06-08-v2.5-link-graph-design.md](specs/2026-06-08-v2.5-link-graph-design.md) — full vertical slice (build CLI + integer-keyed SQLite sidecar + runtime inbound read ranked by linker importance + `"inbound"` enum promotion), strict staleness refusal, graceful absence.
 
 #### `#17` — Archive-type presets — ✅ **SHIPPED (a1) in v2.2.0**
 
@@ -104,11 +102,9 @@ Open commitments referenced from production code (`openzim_mcp/tools/`) and test
 
 **Target.** Revisit the default after adoption telemetry shows whether small-model callers consistently pass `compact=True`. If usage skews heavily one way, flip the default in v2.5. Schema-compatible either direction; the change is documentation + a constructor default.
 
-#### `zim_links` `"inbound"` direction enum promotion
+#### `zim_links` `"inbound"` direction enum promotion — ✅ **IMPLEMENTED with `#16`**
 
-**Current state.** [`openzim_mcp/tools/zim_links.py`](../openzim_mcp/tools/zim_links.py) deliberately omits `"inbound"` from the direction enum at v2.0 — without the link-graph sidecar (`#16`), it would create a small-model failure mode where the model attempts it, eats an error, and gives up.
-
-**Target.** When `#16` ships, promote `"inbound"` into the direction enum. Schema-additive; no caller has to change.
+`"inbound"` is now present in the `direction` enum. Schema-additive; no caller had to change. Ships on `feat/inbound-link-graph` alongside `#16`.
 
 ---
 
@@ -117,7 +113,7 @@ Open commitments referenced from production code (`openzim_mcp/tools/`) and test
 | Milestone | Items | Status / Tag |
 | --- | --- | --- |
 | **v2.5.0a1** | `#17` archive-type presets ([spec](specs/2026-06-04-v2.5-archive-type-presets-design.md) — snippet + summary seams, detect all 4 types, behavior for Wikipedia/Stack Exchange) | ✅ **Shipped in v2.2.0** (reprobe-validated; a2 follow-ons noted above) |
-| **v2.5.0a2** | `#16` link-graph sidecar + `build` CLI + `zim_links` `"inbound"` enum promotion | _Next — not started_ |
+| **v2.5.0a2** | `#16` link-graph sidecar + `build` CLI + `zim_links` `"inbound"` enum promotion ([spec](specs/2026-06-08-v2.5-link-graph-design.md)) | _Implemented on `feat/inbound-link-graph` (pending merge)_ |
 | **v2.5.0a3** | `#199` `zim_query` sub-mode dispatch + `#18` `zim_get_section` raw-text path | _TBD_ |
 | **v2.5.0a4** | sub-D-3 if triggered + `zim_get` `compact` default revisit (telemetry-driven) | sub-D-3 → **close-by-default 2026-07-19** unless a field trigger fires (see status above); compact revisit _TBD_ |
 | **v2.5.0a5** | sub-D-4 if triggered | **close-by-default 2026-07-19** unless triggers fire (see status above) |
