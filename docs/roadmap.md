@@ -35,7 +35,7 @@ Phase D shipped `#6` cross-encoder reranker and `#8` Tier 1 rules-based query re
 - ≥5% of `parse_intent` calls land in the existing low-confidence path (regex confidence < 0.7), OR
 - Small-model transcript review surfaces multi-hop queries that the regex path fails on at ≥1 per 100 queries.
 
-**Status as of 2026-05-27.** Beta sweep cycles (b2 → b13) drove the regex path to roughly 99% accuracy on labeled queries. No live evidence has met either trigger. If neither fires by 2026-07-19 (8 weeks post-sub-D-2 deploy), formally close sub-D-3 as "not justified by live evidence."
+**Status (updated 2026-06-08; decision due 2026-07-19).** Beta sweep cycles (b2 → b13) drove the regex path to roughly 99% accuracy on labeled queries, and no live evidence has met either trigger. **The trigger is not an auto-computed in-process rate** and was never promised as one: the per-call `<!-- intent=… cert=… -->` marker appended to every response exposes each `parse_intent` confidence, so an operator recovers the low-confidence rate (the fraction with `cert < 0.7`) by grepping their own transcript/log retention across the window; the second leg (multi-hop failures) is a qualitative transcript review. As of 2026-06-08 no such operator evidence and no transcript-review report has surfaced. **Default outcome:** absent an operator report before 2026-07-19, sub-D-3 formally closes as "not justified by live evidence" (recorded in CHANGELOG) and reopens only if the trigger later fires in the field.
 
 **Reference design.** Previous draft of the fastText classifier path preserved at commit [`a92d04e`](https://github.com/cameronrye/openzim-mcp/commit/a92d04e).
 
@@ -50,7 +50,7 @@ Phase D shipped `#6` cross-encoder reranker and `#8` Tier 1 rules-based query re
 - Reranker hit rate is meaningful (≥15% of search-tool calls past the skip-on-short-query gate), AND
 - Operators or end-users report that semantic-divergent queries consistently miss in Xapian-only search even with the reranker active.
 
-**Status as of 2026-05-27.** Telemetry not yet collected at the required granularity. No operator reports.
+**Status (updated 2026-06-08; closes with sub-D-3 on 2026-07-19).** Telemetry is still not collected at the required granularity and there are no operator reports. As with sub-D-3, both legs are operator-observable rather than server-aggregated: the reranker emits a per-call INFO line and the four `reranker_*` counters in the `zim_health` server-health report give the hit-rate denominator (see [extras-reranker.md](extras-reranker.md)), while the semantic-miss leg is inherently qualitative (operator / end-user reports). As of 2026-06-08 neither leg has produced evidence. **Default outcome:** absent both legs before 2026-07-19, sub-D-4 formally closes alongside sub-D-3 as "not justified by live evidence" (recorded in CHANGELOG) and reopens only if the triggers later fire.
 
 **Reference design.** Previous draft preserved at commit [`a92d04e`](https://github.com/cameronrye/openzim-mcp/commit/a92d04e).
 
@@ -119,11 +119,11 @@ Open commitments referenced from production code (`openzim_mcp/tools/`) and test
 | **v2.5.0a1** | `#17` archive-type presets ([spec](specs/2026-06-04-v2.5-archive-type-presets-design.md) — snippet + summary seams, detect all 4 types, behavior for Wikipedia/Stack Exchange) | ✅ **Shipped in v2.2.0** (reprobe-validated; a2 follow-ons noted above) |
 | **v2.5.0a2** | `#16` link-graph sidecar + `build` CLI + `zim_links` `"inbound"` enum promotion | _Next — not started_ |
 | **v2.5.0a3** | `#199` `zim_query` sub-mode dispatch + `#18` `zim_get_section` raw-text path | _TBD_ |
-| **v2.5.0a4** | sub-D-3 if triggered + `zim_get` `compact` default revisit (telemetry-driven) | _TBD_ |
-| **v2.5.0a5** | sub-D-4 if triggered | _TBD_ |
+| **v2.5.0a4** | sub-D-3 if triggered + `zim_get` `compact` default revisit (telemetry-driven) | sub-D-3 → **close-by-default 2026-07-19** unless a field trigger fires (see status above); compact revisit _TBD_ |
+| **v2.5.0a5** | sub-D-4 if triggered | **close-by-default 2026-07-19** unless triggers fire (see status above) |
 | **v2.5.0** | Final after all triggered items ship (closed sub-Ds annotated in CHANGELOG) | _TBD_ |
 
-The deferred Phase D sub-Ds are conditional — if their triggers never fire, v2.5 ships with `#16` + `#17` + `#199` only, and sub-D-3 / sub-D-4 formally close with a CHANGELOG entry citing the lack of live evidence.
+The deferred Phase D sub-Ds are conditional — if their triggers never fire, v2.5 ships with `#16` + `#17` + `#199` only, and sub-D-3 / sub-D-4 formally close with a CHANGELOG entry citing the lack of live evidence. As of 2026-06-08 no field evidence has been collected and both triggers are operator-observable only (not server-aggregated; see each sub-D's status), so the standing decision is **close-by-default on 2026-07-19** unless an operator report arrives first.
 
 ---
 
