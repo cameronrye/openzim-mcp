@@ -56,6 +56,29 @@ TABLE_HTML = """\
 """
 
 
+INFOBOX_TABLE_HTML = """\
+<html><body>
+<h1>Country</h1>
+<table class="infobox"><tr><th>Capital</th><td>Metropolis</td></tr></table>
+<p>Country is a sovereign state.</p>
+<h2>Demographics</h2>
+<table>
+<tr><th>Year</th><th>Population</th></tr>
+<tr><td>2001</td><td>alpha</td></tr>
+<tr><td>2002</td><td>beta</td></tr>
+<tr><td>2003</td><td>gamma</td></tr>
+<tr><td>2004</td><td>delta</td></tr>
+<tr><td>2005</td><td>epsilon</td></tr>
+<tr><td>2006</td><td>zeta</td></tr>
+<tr><td>2007</td><td>eta</td></tr>
+<tr><td>2008</td><td>theta</td></tr>
+<tr><td>2009</td><td>iota</td></tr>
+<tr><td>2010</td><td>kappa</td></tr>
+</table>
+</body></html>
+"""
+
+
 def _make_archive_with_entry(
     html: str,
     *,
