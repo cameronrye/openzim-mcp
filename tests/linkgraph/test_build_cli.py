@@ -95,3 +95,25 @@ def test_build_cannot_write_sidecar(tmp_path, capsys):
         rc = build_main(["link-graph", str(archive)])
     assert rc == 1
     assert "cannot write sidecar" in capsys.readouterr().err
+
+
+def test_build_archive_is_a_directory(tmp_path, capsys):
+    """A directory passed as the archive is reported as 'not a file' (exit 1)."""
+    with patch("openzim_mcp.cli.build.build_link_graph") as mock_build:
+        rc = build_main(["link-graph", str(tmp_path)])
+    assert rc == 1
+    assert "not a file" in capsys.readouterr().err
+    mock_build.assert_not_called()
+
+
+def test_build_cannot_write_sidecar_oserror(tmp_path, capsys):
+    """A bare OSError from the builder is reported as 'cannot write sidecar' (exit 1)."""
+    archive = tmp_path / "wiki.zim"
+    archive.write_bytes(b"")
+    with patch(
+        "openzim_mcp.cli.build.build_link_graph",
+        side_effect=OSError("permission denied"),
+    ):
+        rc = build_main(["link-graph", str(archive)])
+    assert rc == 1
+    assert "cannot write sidecar" in capsys.readouterr().err
