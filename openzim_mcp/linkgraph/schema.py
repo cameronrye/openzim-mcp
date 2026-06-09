@@ -2,9 +2,10 @@
 
 Layout is integer-keyed: ``nodes`` interns each entry path to a small id and
 carries the precomputed ``inbound_degree`` used to rank linkers by importance;
-``edges`` stores ``(target_id, source_id)`` pairs indexed by target for the
-inbound lookup. ``meta`` holds the archive UUID + schema version the reader
-fingerprints against (strict staleness check).
+``edges`` stores ``(target_id, source_id, anchor_text)`` rows indexed by target
+for the inbound lookup (``anchor_text`` is the visible link text of each edge).
+``meta`` holds the archive UUID + schema version the reader fingerprints against
+(strict staleness check).
 """
 
 from __future__ import annotations
