@@ -107,3 +107,22 @@ def test_query_inbound_unknown_target_is_empty_not_error(tmp_path: Path) -> None
     page = reader.query_inbound("C/Nonexistent", limit=10, offset=0)
     assert page.rows == [] and page.total == 0
     reader.close()
+
+
+def test_query_inbound_includes_anchor_text(tmp_path: Path) -> None:
+    """Row dicts include anchor_text from the edge that linked to the target."""
+    import sqlite3 as _sqlite3
+
+    from openzim_mcp.linkgraph.builder import build_from_link_stream
+
+    out = str(tmp_path / "a.zim.linkgraph.sqlite")
+    stream = [("A/Src", [("A/Tgt", "anchor for tgt")])]
+    build_from_link_stream(out, archive_uuid="u", link_stream=iter(stream))
+    reader = LinkGraphReader(_sqlite3.connect(out))
+    try:
+        page = reader.query_inbound("A/Tgt", limit=10, offset=0)
+    finally:
+        reader.close()
+    assert page.total == 1
+    assert page.rows[0]["path"] == "A/Src"
+    assert page.rows[0]["anchor_text"] == "anchor for tgt"

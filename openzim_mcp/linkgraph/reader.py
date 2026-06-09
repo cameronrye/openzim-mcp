@@ -82,7 +82,7 @@ class LinkGraphReader:
         ).fetchone()[0]
         cur = self._conn.execute(
             """
-            SELECT n.path, n.inbound_degree
+            SELECT n.path, n.inbound_degree, e.anchor_text
               FROM edges e JOIN nodes n ON n.id = e.source_id
              WHERE e.target_id = ?
              ORDER BY n.inbound_degree DESC, n.path ASC
@@ -90,7 +90,10 @@ class LinkGraphReader:
             """,
             (target_id, limit, offset),
         )
-        rows = [{"path": p, "inbound_degree": d} for (p, d) in cur.fetchall()]
+        rows = [
+            {"path": p, "inbound_degree": d, "anchor_text": a}
+            for (p, d, a) in cur.fetchall()
+        ]
         return InboundPage(rows=rows, total=int(total))
 
     def close(self) -> None:
