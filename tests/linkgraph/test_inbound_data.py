@@ -71,11 +71,11 @@ def _build_sidecar(
     archive_path: Path,
     *,
     uuid: str,
-    stream: List[Tuple[str, List[str]]],
+    stream: List[Tuple[str, List[Tuple[str, str]]]],
 ) -> None:
     """Build a real sidecar next to ``archive_path`` from a synthetic stream."""
 
-    def _iter() -> Iterator[Tuple[str, List[str]]]:
+    def _iter() -> Iterator[Tuple[str, List[Tuple[str, str]]]]:
         yield from stream
 
     build_from_link_stream(
@@ -96,11 +96,11 @@ def test_inbound_returns_ranked_results(
         archive,
         uuid="u1",
         stream=[
-            ("C/A", ["C/T"]),
-            ("C/B", ["C/T"]),
-            ("C/C1", ["C/A"]),
-            ("C/C2", ["C/A"]),
-            ("C/C3", ["C/B"]),
+            ("C/A", [("C/T", "")]),
+            ("C/B", [("C/T", "")]),
+            ("C/C1", [("C/A", "")]),
+            ("C/C2", [("C/A", "")]),
+            ("C/C3", [("C/B", "")]),
         ],
     )
     _patch_archive_open(monkeypatch, uuid="u1")
@@ -133,6 +133,28 @@ def test_inbound_missing_sidecar_raises_unavailable(
         )
 
 
+def test_inbound_results_include_anchor_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each inbound result carries anchor_text from the stored edge."""
+    archive = tmp_path / "x.zim"
+    _build_sidecar(
+        archive,
+        uuid="u1",
+        stream=[
+            ("C/A", [("C/T", "the target page")]),
+        ],
+    )
+    _patch_archive_open(monkeypatch, uuid="u1")
+
+    result = _StructureMixin.get_inbound_links_data(
+        _stub_self(archive), str(archive), "C/T", limit=10, offset=0
+    )
+
+    assert result["total"] == 1
+    assert result["results"][0]["anchor_text"] == "the target page"
+
+
 def test_inbound_paginates_emits_cursor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -142,8 +164,8 @@ def test_inbound_paginates_emits_cursor(
         archive,
         uuid="u1",
         stream=[
-            ("C/A", ["C/T"]),
-            ("C/B", ["C/T"]),
+            ("C/A", [("C/T", "")]),
+            ("C/B", [("C/T", "")]),
         ],
     )
     _patch_archive_open(monkeypatch, uuid="u1")

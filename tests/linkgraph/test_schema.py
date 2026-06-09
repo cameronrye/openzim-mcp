@@ -32,6 +32,19 @@ def test_schema_version_is_a_positive_int() -> None:
     assert isinstance(SCHEMA_VERSION, int) and SCHEMA_VERSION >= 1
 
 
+def test_edges_has_anchor_text_column(tmp_path) -> None:
+    """Edges table carries target_id, source_id, and anchor_text columns."""
+    conn = sqlite3.connect(":memory:")
+    create_schema(conn)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(edges)")}
+    assert cols == {"target_id", "source_id", "anchor_text"}
+
+
+def test_schema_version_is_2() -> None:
+    """SCHEMA_VERSION equals 2."""
+    assert SCHEMA_VERSION == 2
+
+
 def test_apply_build_pragmas_runs_without_error() -> None:
     """Build pragmas apply cleanly on a fresh connection."""
     conn = sqlite3.connect(":memory:")

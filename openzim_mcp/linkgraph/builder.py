@@ -23,6 +23,8 @@ from typing import (
     Tuple,
 )
 
+from openzim_mcp import __version__
+
 from .schema import SCHEMA_VERSION, apply_build_pragmas, create_schema
 
 _BATCH = 50_000
@@ -41,9 +43,10 @@ def build_from_link_stream(
     out_path: str,
     *,
     archive_uuid: str,
-    link_stream: Iterable[Tuple[str, List[str]]],
+    link_stream: Iterable[Tuple[str, List[Tuple[str, str]]]],
     force: bool = False,
     now_iso: Optional[str] = None,
+    builder_version: Optional[str] = None,
 ) -> BuildStats:
     """Invert ``link_stream`` into the sidecar at ``out_path`` (atomic write)."""
     if Path(out_path).exists() and not force:
@@ -68,25 +71,28 @@ def build_from_link_stream(
         apply_build_pragmas(conn)
         create_schema(conn)
         edge_count = 0
-        batch: List[Tuple[int, int]] = []
+        batch: List[Tuple[int, int, str]] = []
         for source_path, targets in link_stream:
             source_id = _intern(source_path)
             seen: set[str] = set()
-            for target in targets:
+            for target, anchor in targets:
                 if target == source_path or target in seen:
                     continue
                 seen.add(target)
                 target_id = _intern(target)
-                batch.append((target_id, source_id))
+                batch.append((target_id, source_id, anchor))
                 edge_count += 1
                 if len(batch) >= _BATCH:
                     conn.executemany(
-                        "INSERT INTO edges(target_id, source_id) VALUES (?,?)", batch
+                        "INSERT INTO edges(target_id, source_id, anchor_text) "
+                        "VALUES (?,?,?)",
+                        batch,
                     )
                     batch.clear()
         if batch:
             conn.executemany(
-                "INSERT INTO edges(target_id, source_id) VALUES (?,?)", batch
+                "INSERT INTO edges(target_id, source_id, anchor_text) VALUES (?,?,?)",
+                batch,
             )
         conn.executemany(
             "INSERT INTO nodes(id, path) VALUES (?,?)",
@@ -104,6 +110,7 @@ def build_from_link_stream(
                 ("built_at", now_iso or datetime.now(timezone.utc).isoformat()),
                 ("node_count", str(len(ids))),
                 ("edge_count", str(edge_count)),
+                ("builder_version", builder_version or __version__),
             ],
         )
         conn.commit()
@@ -139,12 +146,12 @@ def _is_content_source(path: str, *, has_new_scheme: bool) -> bool:
     return namespace.upper() == "C"
 
 
-def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[str]]]:
-    """Yield ``(source_path, [canonical internal target paths])`` per content entry.
+def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]]]]:
+    """Yield ``(source_path, [(target, anchor_text), ...])`` per content entry.
 
     Walk the open archive once via ``_get_entry_by_id`` over ``entry_count``,
     keep only content sources (scheme-aware: see ``_is_content_source``), skip
-    redirects-as-source, and reuse ``_parse_internal_link_targets`` for
+    redirects-as-source, and reuse ``_parse_internal_link_edges`` for
     extraction + redirect canonicalization. The yielded ``source_path`` is the
     raw ``entry.path`` exactly as libzim returns it for that scheme
     (``"C/Evolution"`` old-scheme, ``"Evolution"`` new-scheme) so it stays
@@ -171,10 +178,10 @@ def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[str]]]:
             html = bytes(entry.get_item().content).decode("utf-8", "replace")
         except Exception:  # nosec B112 - skip entry whose content won't read
             continue
-        targets = _StructureMixin._parse_internal_link_targets(
+        edges = _StructureMixin._parse_internal_link_edges(
             html, source_path=path, archive=archive
         )
-        yield (path, targets)
+        yield (path, edges)
 
 
 def build_link_graph(
@@ -198,7 +205,7 @@ def build_link_graph(
         archive_uuid = str(archive.uuid)
         total = int(getattr(archive, "entry_count", 0) or 0)
 
-        def _stream() -> Iterator[Tuple[str, List[str]]]:
+        def _stream() -> Iterator[Tuple[str, List[Tuple[str, str]]]]:
             for i, pair in enumerate(iter_article_links(archive)):
                 # ``i and`` guards against the spurious 0 % 10_000 == 0 call at
                 # the very first entry; report every 10,000 thereafter.

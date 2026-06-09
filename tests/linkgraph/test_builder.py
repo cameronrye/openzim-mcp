@@ -14,8 +14,8 @@ from openzim_mcp.linkgraph.reader import sidecar_path_for
 
 def _stream():
     # A->T, B->T, A->B  =>  T linked by {A,B}; B linked by {A}
-    yield ("C/A", ["C/T", "C/B"])
-    yield ("C/B", ["C/T"])
+    yield ("C/A", [("C/T", ""), ("C/B", "")])
+    yield ("C/B", [("C/T", "")])
     yield ("C/T", [])
 
 
@@ -47,7 +47,7 @@ def test_build_rejects_self_links_and_dedups(tmp_path: Path) -> None:
     out = sidecar_path_for(tmp_path / "x.zim")
 
     def stream():
-        yield ("C/A", ["C/A", "C/T", "C/T"])  # self-link + duplicate
+        yield ("C/A", [("C/A", ""), ("C/T", ""), ("C/T", "")])  # self-link + duplicate
 
     stats = build_from_link_stream(out, archive_uuid="u1", link_stream=stream())
     assert stats.edge_count == 1  # only A->T survives
@@ -103,14 +103,14 @@ def test_iter_article_links_walks_content_entries() -> None:
     archive.has_new_namespace_scheme = False
     archive.entry_count = len(entries)
     archive._get_entry_by_id.side_effect = lambda i: entries[i]
-    # _parse_internal_link_targets canonicalizes each target through the
+    # _parse_internal_link_edges canonicalizes each target through the
     # redirect chain via archive.get_entry_by_path. With no such entry in
     # this fake archive the lookup raises and the path-normalized target
     # ("C/T") survives unchanged — the honest "target not found" path.
     archive.get_entry_by_path.side_effect = KeyError("no entry")
 
     pairs = list(iter_article_links(archive))
-    assert ("C/A", ["C/T"]) in pairs
+    assert ("C/A", [("C/T", "t")]) in pairs
     assert all(src.startswith("C/") for src, _ in pairs)
     assert not any(src == "C/Redir" for src, _ in pairs)
 
@@ -138,6 +138,23 @@ def test_iter_article_links_new_scheme_has_no_prefix() -> None:
     archive.get_entry_by_path.side_effect = KeyError("no entry")
 
     pairs = list(iter_article_links(archive))
-    assert ("Evolution", ["Photosynthesis"]) in pairs
+    assert ("Evolution", [("Photosynthesis", "p")]) in pairs
     assert all(not src.startswith("C/") for src, _ in pairs)
     assert not any(src == "Redir" for src, _ in pairs)
+
+
+def test_builder_writes_anchor_text_and_builder_version(tmp_path: Path) -> None:
+    """Builder stores anchor_text per edge and writes a builder_version meta row."""
+    import openzim_mcp
+
+    out = str(tmp_path / "a.zim.linkgraph.sqlite")
+    stream = [("A/Src", [("A/Tgt", "see Tgt")])]
+    build_from_link_stream(out, archive_uuid="uuid-1", link_stream=iter(stream))
+
+    conn = sqlite3.connect(out)
+    anchors = conn.execute("SELECT anchor_text FROM edges").fetchall()
+    assert anchors == [("see Tgt",)]
+    meta = dict(conn.execute("SELECT key, value FROM meta"))
+    assert meta["builder_version"] == openzim_mcp.__version__
+    assert meta["schema_version"] == "2"
+    conn.close()
