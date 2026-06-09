@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0](https://github.com/cameronrye/openzim-mcp/compare/v2.3.0...v2.4.0) (2026-06-09)
+
+
+### Added
+
+* dispatch-eval honours either_acceptable for prose sub-modes (v2.5 [#199](https://github.com/cameronrye/openzim-mcp/issues/199)) ([#281](https://github.com/cameronrye/openzim-mcp/issues/281)) ([d8ab040](https://github.com/cameronrye/openzim-mcp/commit/d8ab040fcd41ab1bb040cbbecf856efb9ded7578))
+* finer-grained build link-graph CLI errors (v2.5 [#16](https://github.com/cameronrye/openzim-mcp/issues/16)) ([#279](https://github.com/cameronrye/openzim-mcp/issues/279)) ([75fb0e8](https://github.com/cameronrye/openzim-mcp/commit/75fb0e8db38dfcabb4a008db540ab34bf4347d9d))
+* link-graph sidecar v2 — builder_version + per-edge anchor_text (v2.5 [#16](https://github.com/cameronrye/openzim-mcp/issues/16)) ([#280](https://github.com/cameronrye/openzim-mcp/issues/280)) ([709d4c3](https://github.com/cameronrye/openzim-mcp/commit/709d4c3d5ca52633fb1070c25fe46666a0a9bb0a))
+* zim_get_section true raw-text path (v2.5 [#18](https://github.com/cameronrye/openzim-mcp/issues/18)) ([#277](https://github.com/cameronrye/openzim-mcp/issues/277)) ([6057b6c](https://github.com/cameronrye/openzim-mcp/commit/6057b6c6d554497677231345b1c76049662c67c7))
+
+
+### Documentation
+
+* **roadmap:** v2.5.0a2 shipped (v2.3.0), v2.5.0a3 landed ([#282](https://github.com/cameronrye/openzim-mcp/issues/282)) ([0408551](https://github.com/cameronrye/openzim-mcp/commit/0408551bae05211eef70ef8f455a2f2897f39beb))
+
 ## [2.3.0](https://github.com/cameronrye/openzim-mcp/compare/v2.2.2...v2.3.0) (2026-06-08)
 
 
