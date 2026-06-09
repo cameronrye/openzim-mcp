@@ -63,7 +63,7 @@ def archive_stat_token(validated_path: Any) -> str:
         return "0:0"
 
 
-def _bundle_cache_key(validated_path: "Path", entry_path: str) -> str:
+def _bundle_cache_key(validated_path: "Path", entry_path: str, compact: bool) -> str:
     """Cache key that invalidates when the underlying ZIM is replaced.
 
     Includes `st_mtime_ns` so an atomic file replacement (a monthly
@@ -72,11 +72,19 @@ def _bundle_cache_key(validated_path: "Path", entry_path: str) -> str:
     cheap defence-in-depth against filesystems with low-precision mtime
     or in-place rewrites that preserve the timestamp.
 
+    The `compact` render mode is part of the key: a compact bundle
+    (table placeholders) and a raw bundle (full tables) for the same
+    entry are distinct entries and must never collide.
+
     Falls back gracefully when stat() fails (path no longer exists, race
     with replacement): the key drops to the prior shape so the cache
     still works, just without the invalidation guarantee.
     """
-    return f"{_BUNDLE_KEY_PREFIX}:{validated_path}:{archive_stat_token(validated_path)}:{entry_path}"
+    mode = "compact" if compact else "raw"
+    return (
+        f"{_BUNDLE_KEY_PREFIX}:{validated_path}:"
+        f"{archive_stat_token(validated_path)}:{entry_path}:{mode}"
+    )
 
 
 def _normalize_heading_text(text: str) -> str:
@@ -85,11 +93,10 @@ def _normalize_heading_text(text: str) -> str:
 
 
 def _loose_escaped_text(text: str) -> str:
-    """Regex source matching ``text`` even when html2text backslash-escaped
-    interior punctuation.
+    r"""Return regex source matching ``text`` with optional backslash-escaping.
 
     html2text escapes markdown-significant punctuation by prefixing a
-    backslash — a numbered heading ``1. Topic`` renders as ``1\\. Topic``,
+    backslash — a numbered heading ``1. Topic`` renders as ``1\. Topic``,
     so a plain ``re.escape`` pattern never matches and the section is dropped
     (this is the root cause of the IEP "flattened TOC": every ``## 1.``,
     ``## 2.`` ... H2 vanished, leaving the H3 subsections misnested under the
@@ -282,10 +289,15 @@ def extract_entry_bundle(
     entry_path: str,
     *,
     content_processor: "ContentProcessor",
+    compact: bool = True,
 ) -> EntryBundle:
     """Run the single HTML parse and produce the bundle.
 
     Pure: no caching, no I/O beyond the archive read.
+
+    ``compact`` selects the render fidelity: ``True`` (default) replaces
+    oversized tables with ``[Table N: ...]`` placeholders matching the
+    ``get_zim_entry`` path; ``False`` keeps full pipe-delimited tables.
     """
     from bs4 import BeautifulSoup
 
@@ -326,14 +338,13 @@ def extract_entry_bundle(
     raw_links = content_processor.extract_html_links(str(content_root))
     link_buckets = _build_link_buckets(raw_links)
     infobox = _extract_infobox(content_root, content_processor)
-    # Render with compact=True so that the bundle's rendered_markdown
-    # carries the same table-stripping placeholders that direct
-    # ``get_zim_entry`` callers see. Without this, get_section returns
-    # raw pipe-soup tables for the climate / standings / etc. data
-    # tables embedded in Wikipedia articles — a UX regression vs. the
-    # surrounding article-fetch path. The infobox is already
-    # ``decompose()``d above, so compact rendering won't re-extract it.
-    rendered = content_processor._render_soup_to_text(content_root, compact=True)
+    # Render in the requested mode. ``compact=True`` (the default, used by
+    # summary/TOC/structure/synthesize) carries the same table-stripping
+    # placeholders that direct ``get_zim_entry`` callers see, so a section
+    # slice matches the article-fetch path. ``compact=False`` (the #18
+    # raw-text path) keeps full pipe-delimited tables. The infobox is
+    # already ``decompose()``d above in both modes.
+    rendered = content_processor._render_soup_to_text(content_root, compact=compact)
     sections = _compute_section_offsets(rendered, headings)
 
     bundle: EntryBundle = cast(
@@ -360,16 +371,17 @@ def get_or_build_bundle(
     cache: OpenZimMcpCache,
     validated_path: Path,
     content_processor: ContentProcessor,
+    compact: bool = True,
 ) -> EntryBundle:
     """Cache-aware bundle accessor. Builds on miss; returns cached on hit."""
-    key = _bundle_cache_key(validated_path, entry_path)
+    key = _bundle_cache_key(validated_path, entry_path, compact)
     cached = cache.get(key)
     if cached is not None:
-        logger.debug("Bundle cache hit: %s", entry_path)
+        logger.debug("Bundle cache hit: %s (compact=%s)", entry_path, compact)
         return cast("EntryBundle", cached)
-    logger.debug("Bundle cache miss: %s — building", entry_path)
+    logger.debug("Bundle cache miss: %s (compact=%s) — building", entry_path, compact)
     bundle = extract_entry_bundle(
-        archive, entry_path, content_processor=content_processor
+        archive, entry_path, content_processor=content_processor, compact=compact
     )
     cache.set(key, bundle)
     return bundle

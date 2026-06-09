@@ -34,6 +34,27 @@ SAMPLE_HTML = """\
 </body></html>
 """
 
+TABLE_HTML = """\
+<html><body>
+<h1>Data</h1>
+<p>Intro paragraph.</p>
+<h2>Stats</h2>
+<table>
+<tr><th>Year</th><th>Label</th></tr>
+<tr><td>2001</td><td>alpha</td></tr>
+<tr><td>2002</td><td>beta</td></tr>
+<tr><td>2003</td><td>gamma</td></tr>
+<tr><td>2004</td><td>delta</td></tr>
+<tr><td>2005</td><td>epsilon</td></tr>
+<tr><td>2006</td><td>zeta</td></tr>
+<tr><td>2007</td><td>eta</td></tr>
+<tr><td>2008</td><td>theta</td></tr>
+<tr><td>2009</td><td>iota</td></tr>
+<tr><td>2010</td><td>kappa</td></tr>
+</table>
+</body></html>
+"""
+
 
 def _make_archive_with_entry(
     html: str,
@@ -57,10 +78,12 @@ def _make_archive_with_entry(
 
 @pytest.fixture
 def cp() -> ContentProcessor:
+    """Return a default ContentProcessor instance."""
     return ContentProcessor()
 
 
 def test_bundle_has_rendered_markdown(cp: ContentProcessor) -> None:
+    """Bundle includes entry_path, title, and rendered_markdown with article text."""
     archive = _make_archive_with_entry(SAMPLE_HTML)
     bundle = extract_entry_bundle(archive, "A/Berlin", content_processor=cp)
     assert bundle["entry_path"] == "A/Berlin"
@@ -69,6 +92,7 @@ def test_bundle_has_rendered_markdown(cp: ContentProcessor) -> None:
 
 
 def test_bundle_sections_have_offsets(cp: ContentProcessor) -> None:
+    """Sections are extracted in document order with correct titles and levels."""
     archive = _make_archive_with_entry(SAMPLE_HTML)
     bundle = extract_entry_bundle(archive, "A/Berlin", content_processor=cp)
     sections = bundle["sections"]
@@ -80,6 +104,7 @@ def test_bundle_sections_have_offsets(cp: ContentProcessor) -> None:
 
 
 def test_bundle_section_offsets_are_sorted_and_disjoint(cp: ContentProcessor) -> None:
+    """Section char_start values are ascending and each [char_start, char_end) is valid."""
     archive = _make_archive_with_entry(SAMPLE_HTML)
     bundle = extract_entry_bundle(archive, "A/Berlin", content_processor=cp)
     sections = bundle["sections"]
@@ -113,6 +138,7 @@ def test_bundle_slice_returns_section_body_without_heading(
 
 
 def test_bundle_section_ids_unique(cp: ContentProcessor) -> None:
+    """Every section carries a unique id slug."""
     archive = _make_archive_with_entry(SAMPLE_HTML)
     bundle = extract_entry_bundle(archive, "A/Berlin", content_processor=cp)
     ids = [s["id"] for s in bundle["sections"]]
@@ -120,6 +146,7 @@ def test_bundle_section_ids_unique(cp: ContentProcessor) -> None:
 
 
 def test_bundle_links_categorized(cp: ContentProcessor) -> None:
+    """Internal, external, and media links are extracted into separate buckets."""
     archive = _make_archive_with_entry(SAMPLE_HTML)
     bundle = extract_entry_bundle(archive, "A/Berlin", content_processor=cp)
     links = bundle["links"]
@@ -177,6 +204,7 @@ def test_bundle_handles_markdown_significant_chars_in_heading(
 
 
 def test_bundle_word_and_char_counts(cp: ContentProcessor) -> None:
+    """word_count and char_count reflect the rendered_markdown length."""
     archive = _make_archive_with_entry(SAMPLE_HTML)
     bundle = extract_entry_bundle(archive, "A/Berlin", content_processor=cp)
     md = bundle["rendered_markdown"]
@@ -311,6 +339,7 @@ DEEP_NESTED_HTML = """\
 
 
 def test_bundle_parent_child_range_nesting(cp: ContentProcessor) -> None:
+    """Child section offsets fall inside the parent's offset range."""
     archive = _make_archive_with_entry(DEEP_NESTED_HTML)
     bundle = extract_entry_bundle(archive, "A/Test", content_processor=cp)
     sections = bundle["sections"]
@@ -333,3 +362,26 @@ def test_bundle_same_level_disjoint(cp: ContentProcessor) -> None:
     assert len(h2s) == 2
     a, b = h2s
     assert a["char_end"] <= b["char_start"]
+
+
+def test_bundle_compact_false_keeps_full_table(cp: ContentProcessor) -> None:
+    """compact=False retains full table rows; compact=True replaces oversized tables."""
+    archive = _make_archive_with_entry(TABLE_HTML, title="Data", entry_path="A/Data")
+    raw = extract_entry_bundle(archive, "A/Data", content_processor=cp, compact=False)
+    compact = extract_entry_bundle(
+        archive, "A/Data", content_processor=cp, compact=True
+    )
+    # compact=False keeps the real table cells; compact=True replaces with a placeholder
+    assert "alpha" in raw["rendered_markdown"]
+    assert "[Table" not in raw["rendered_markdown"]
+    assert "[Table" in compact["rendered_markdown"]
+    assert "alpha" not in compact["rendered_markdown"]
+
+
+def test_bundle_cache_key_distinguishes_compact_mode(tmp_path) -> None:
+    """Cache keys for compact=True and compact=False are distinct for the same entry."""
+    from openzim_mcp.bundle import _bundle_cache_key
+
+    p = tmp_path / "x.zim"
+    p.touch()
+    assert _bundle_cache_key(p, "A/Data", True) != _bundle_cache_key(p, "A/Data", False)
