@@ -16,6 +16,7 @@ from openzim_mcp.tools.zim_get_section import register as register_zim_get_secti
 
 @pytest.fixture
 def server() -> MagicMock:
+    """Return a MagicMock server with a tool-registration helper."""
     srv = MagicMock()
     tools_store: dict[str, Any] = {}
 
@@ -34,6 +35,7 @@ def server() -> MagicMock:
 def _patch_async_ops(
     monkeypatch: pytest.MonkeyPatch, **method_returns: Any
 ) -> MagicMock:
+    """Patch AsyncZimOperations and return the mock instance."""
     mock_ops = MagicMock()
     for name, value in method_returns.items():
         setattr(mock_ops, name, AsyncMock(return_value=value))
@@ -47,6 +49,7 @@ def _patch_async_ops(
 def test_zim_get_section_registers(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """register() adds zim_get_section to the server's tool store."""
     _patch_async_ops(monkeypatch)
     register_zim_get_section(server)
     assert "zim_get_section" in server._tools_store
@@ -56,12 +59,32 @@ def test_zim_get_section_registers(
 async def test_dispatches_to_get_section_data(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Tool call with defaults forwards to ops.get_section_data with compact=True."""
     ops = _patch_async_ops(monkeypatch, get_section_data={"section": "..."})
     register_zim_get_section(server)
     fn, _ = server._tools_store["zim_get_section"]
     await fn(zim_file_path="/x.zim", entry_path="A/Cat", section_id="History")
     ops.get_section_data.assert_awaited_once_with(
-        "/x.zim", "A/Cat", "History", max_chars=None
+        "/x.zim", "A/Cat", "History", max_chars=None, compact=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_forwards_compact_false(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """compact=False is forwarded to ops.get_section_data."""
+    ops = _patch_async_ops(monkeypatch, get_section_data={"section": "..."})
+    register_zim_get_section(server)
+    fn, _ = server._tools_store["zim_get_section"]
+    await fn(
+        zim_file_path="/x.zim",
+        entry_path="A/Cat",
+        section_id="History",
+        compact=False,
+    )
+    ops.get_section_data.assert_awaited_once_with(
+        "/x.zim", "A/Cat", "History", max_chars=None, compact=False
     )
 
 
@@ -69,6 +92,7 @@ async def test_dispatches_to_get_section_data(
 async def test_empty_section_id_rejected(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """An empty section_id returns an invalid_section error before reaching ops."""
     _patch_async_ops(monkeypatch)
     register_zim_get_section(server)
     fn, _ = server._tools_store["zim_get_section"]
