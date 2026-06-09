@@ -13,7 +13,7 @@ import sqlite3
 
 # Bump on any incompatible layout change; the reader rejects mismatches and
 # forces an operator rebuild.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL = """
 CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT) STRICT;
@@ -24,7 +24,8 @@ CREATE TABLE nodes (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE,
 -- visits each source entry exactly once), so a uniqueness index would only
 -- slow the bulk insert without changing the data. inbound_degree is a plain
 -- COUNT over these rows, so the by-construction uniqueness keeps it accurate.
-CREATE TABLE edges (target_id INTEGER NOT NULL, source_id INTEGER NOT NULL) STRICT;
+CREATE TABLE edges (target_id INTEGER NOT NULL, source_id INTEGER NOT NULL,
+                    anchor_text TEXT NOT NULL DEFAULT '') STRICT;
 CREATE INDEX edges_by_target ON edges(target_id);
 """
 
