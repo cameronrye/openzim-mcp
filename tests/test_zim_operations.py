@@ -1478,7 +1478,7 @@ class TestZimOperations:
         # same way the code does so the seed lands at the right slot.
         from openzim_mcp.bundle import _bundle_cache_key
 
-        bundle_cache_key = _bundle_cache_key(validated_path, "A/Test")
+        bundle_cache_key = _bundle_cache_key(validated_path, "A/Test", compact=True)
         zim_operations.cache.set(
             bundle_cache_key,
             {

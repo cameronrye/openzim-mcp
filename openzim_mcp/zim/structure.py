@@ -539,6 +539,7 @@ class _StructureMixin:
         *,
         max_chars: "Optional[int]" = None,
         include_subsections: bool = True,
+        compact: bool = True,
     ) -> "Union[GetSectionResponse, ToolErrorPayload]":
         """Public entry point for the get_section tool.
 
@@ -566,6 +567,7 @@ class _StructureMixin:
                     section_id,
                     max_chars,
                     include_subsections=include_subsections,
+                    compact=compact,
                 )
         except OpenZimMcpFileNotFoundError as e:
             return tool_error(operation="file_not_found", message=str(e))
@@ -581,6 +583,7 @@ class _StructureMixin:
         max_chars: "Optional[int]",
         *,
         include_subsections: bool = True,
+        compact: bool = True,
     ) -> "Union[GetSectionResponse, ToolErrorPayload]":
         """Build the bundle, find the section by id, and return GetSectionResponse.
 
@@ -594,6 +597,7 @@ class _StructureMixin:
             cache=self.cache,
             validated_path=validated_path,
             content_processor=self.content_processor,
+            compact=compact,
         )
 
         section_idx = next(

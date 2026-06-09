@@ -2,16 +2,17 @@
 
 Phase F renames Phase C's ``get_section`` to ``zim_get_section`` and
 adds ``compact`` / ``compact_budget`` parameters for surface uniformity
-with the rest of the family (``zim_query`` / ``zim_get`` /
-``zim_get_section``). At v2.0 both parameters are **no-ops at the
-data layer** — ``get_section_data`` reads the bundle's
-``rendered_markdown`` which is always compact-rendered (see
-``openzim_mcp/bundle.py`` line 300+: compact rendering keeps the
-section slice shape identical to ``get_zim_entry`` for UX
-consistency, a load-bearing invariant of the v1.x → v2.0 rename).
-v2.5 #18 will wire a true raw-text path; until then, ``compact=True``
-and ``compact=False`` produce identical responses, and the migration
-from legacy ``get_section`` is **behavior-preserving** (rename only).
+with the rest of the family (``zim_query`` / ``zim_get``).
+
+``compact`` is wired at the data layer (v2.5 #18): ``compact=True``
+(default) ships the bundle's compact rendering — oversized tables
+collapsed to ``[Table N: ...]`` placeholders, matching the
+``get_zim_entry`` slice shape — while ``compact=False`` returns the
+unrendered section body with full pipe-delimited tables. The lead
+section's infobox is not inlined in either mode (the bundle decomposes
+it for all consumers); callers wanting the infobox-bearing lead should
+use ``zim_get(view="full", compact=False)``. ``compact_budget`` remains
+a surface-only no-op.
 
 The data layer (``zim_operations.get_section_data``) and response
 shape (``GetSectionResponse``) are unchanged from Phase C.
@@ -51,17 +52,17 @@ def register(server: "OpenZimMcpServer") -> None:
                     operation="invalid_section",
                     message="`section_id` is required and cannot be empty.",
                 )
-            # `compact` / `compact_budget` are surface-uniformity params;
-            # at v2.0 they are no-ops at the data layer because the bundle
-            # is always compact-rendered (see module docstring). The
-            # parameters stay on the surface so callers can adopt the
-            # zim_get_section shape today and v2.5 #18 can wire the
-            # raw-text path without another rename.
+            # `compact` selects render fidelity: True (default) ships the
+            # bundle's compact rendering (oversized tables collapsed to
+            # `[Table N: ...]` placeholders), matching get_zim_entry;
+            # False returns the unrendered section body with full tables
+            # (v2.5 #18). `compact_budget` is still a surface-only no-op.
             return await ops.get_section_data(
                 zim_file_path,
                 entry_path,
                 section_id,
                 max_chars=max_chars,
+                compact=compact,
             )
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
             return tool_error_response(
