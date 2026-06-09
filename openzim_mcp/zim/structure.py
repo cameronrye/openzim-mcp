@@ -1134,13 +1134,13 @@ class _StructureMixin:
         return resolved
 
     @staticmethod
-    def _parse_internal_link_targets(
+    def _parse_internal_link_edges(
         html: str,
         *,
         source_path: str,
         archive: "Optional[Archive]",
-    ) -> List[str]:
-        """Return one source entry's deduped, canonical INTERNAL link targets.
+    ) -> List[Tuple[str, str]]:
+        """Return one source entry's deduped, canonical INTERNAL ``(target, anchor_text)`` edges.
 
         Parses ``html`` with the same anchor classifier the bundle uses
         (``ContentProcessor._classify_anchor``), so "internal" here means
@@ -1200,7 +1200,7 @@ class _StructureMixin:
             _classify_anchor(link, links_data)
 
         seen: set = set()
-        targets: List[str] = []
+        edges: List[Tuple[str, str]] = []
         for link in links_data["internal_links"]:
             target = _StructureMixin._resolve_link_to_entry_path(
                 link.get("url", ""), source_path
@@ -1209,6 +1209,7 @@ class _StructureMixin:
                 continue
             if _StructureMixin._is_non_article_target(target):
                 continue
+            anchor = (link.get("text") or "").strip()
             if archive is not None:
                 # Canonicalize through the redirect chain so the builder
                 # inverts edges against the served (non-redirect) path.
@@ -1226,5 +1227,5 @@ class _StructureMixin:
             if target in seen or target == source_path:
                 continue
             seen.add(target)
-            targets.append(target)
-        return targets
+            edges.append((target, anchor))
+        return edges

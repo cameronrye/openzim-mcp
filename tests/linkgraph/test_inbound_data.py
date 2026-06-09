@@ -71,11 +71,11 @@ def _build_sidecar(
     archive_path: Path,
     *,
     uuid: str,
-    stream: List[Tuple[str, List[str]]],
+    stream: List[Tuple[str, List[Tuple[str, str]]]],
 ) -> None:
     """Build a real sidecar next to ``archive_path`` from a synthetic stream."""
 
-    def _iter() -> Iterator[Tuple[str, List[str]]]:
+    def _iter() -> Iterator[Tuple[str, List[Tuple[str, str]]]]:
         yield from stream
 
     build_from_link_stream(
@@ -96,11 +96,11 @@ def test_inbound_returns_ranked_results(
         archive,
         uuid="u1",
         stream=[
-            ("C/A", ["C/T"]),
-            ("C/B", ["C/T"]),
-            ("C/C1", ["C/A"]),
-            ("C/C2", ["C/A"]),
-            ("C/C3", ["C/B"]),
+            ("C/A", [("C/T", "")]),
+            ("C/B", [("C/T", "")]),
+            ("C/C1", [("C/A", "")]),
+            ("C/C2", [("C/A", "")]),
+            ("C/C3", [("C/B", "")]),
         ],
     )
     _patch_archive_open(monkeypatch, uuid="u1")
@@ -142,8 +142,8 @@ def test_inbound_paginates_emits_cursor(
         archive,
         uuid="u1",
         stream=[
-            ("C/A", ["C/T"]),
-            ("C/B", ["C/T"]),
+            ("C/A", [("C/T", "")]),
+            ("C/B", [("C/T", "")]),
         ],
     )
     _patch_archive_open(monkeypatch, uuid="u1")
