@@ -803,6 +803,39 @@ def test_non_either_acceptable_zim_query_unchanged():
     assert s.dispatch_correct == 0
 
 
+def test_either_acceptable_non_prose_class_not_relaxed():
+    """A zim_query dispatch on a non-prose either_acceptable probe still misses.
+
+    binary/batch/browse/metadata/health requests are tagged either_acceptable
+    too, but zim_query does not fulfil them — relaxing them would mask a real
+    routing regression toward zim_query, so they must keep counting as misses.
+    """
+    outcomes = _miss_outcomes(10, tool_called="zim_query")
+    probe_meta = _make_probe_meta(
+        10, classes=["zim_get-binary"], tool_eligibility="either_acceptable"
+    )
+    s = aggregate_cell(outcomes, probe_meta)
+    assert s.per_class["zim_get-binary"] == (10, 0)
+    assert s.dispatch_correct == 0
+
+
+def test_relaxed_outcome_credits_co_tagged_classes():
+    """A relaxed prose probe credits every class it carries (mixed F1+F2).
+
+    The f2x probes carry both a hardened F1 tag (e.g. Z4) and a prose F2 class
+    (zim_get-summary); one relaxed zim_query outcome credits both.
+    """
+    outcomes = _miss_outcomes(8, tool_called="zim_query")
+    probe_meta = _make_probe_meta(
+        8,
+        classes=["Z4", "zim_get-summary"],
+        tool_eligibility="either_acceptable",
+    )
+    s = aggregate_cell(outcomes, probe_meta)
+    assert s.per_class["zim_get-summary"] == (8, 8)
+    assert s.per_class["Z4"] == (8, 8)
+
+
 def test_disagreement_rule_observational_secondary_does_not_block() -> None:
     """Secondary unavailable + primary pass → gate passes."""
     criteria = {

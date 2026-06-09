@@ -332,19 +332,44 @@ class CellSummary:
     z4_zqp_answer_degrading: int = 0
 
 
-def _effective_dispatch_correct(o: "Outcome", probe: Dict[str, Any]) -> bool:
-    """``dispatch_correct``, relaxed to honour the probe's ``tool_eligibility``.
+# Operation classes where ``zim_query`` (the natural-language entry path)
+# genuinely fulfils the request, so a ``zim_query`` dispatch is an acceptable
+# outcome (#199). These are the prose content-retrieval sub-modes: "summarize
+# X", "outline of X", "table of contents of X", "show the main page". The
+# relaxation is scoped to these classes ON PURPOSE — most other F2 probes are
+# ALSO tagged ``either_acceptable`` (binary fetch, batch fetch, namespace walk,
+# metadata, health, link listing), but for those a ``zim_query`` *search* does
+# NOT fulfil the request, so it must keep counting as a miss; otherwise a real
+# routing regression toward ``zim_query`` on those classes would be masked.
+_ZIM_QUERY_FALLBACK_CLASSES = frozenset(
+    {
+        "zim_get-summary",
+        "zim_get-structure",
+        "zim_get-toc",
+        "zim_get-main-page",
+    }
+)
 
-    A probe tagged ``either_acceptable`` declares that BOTH its
-    ``expected_tool`` and ``zim_query`` (the documented natural-language
-    entry path) are correct outcomes, so a ``zim_query`` dispatch counts
-    as correct. A dispatch to any other tool still misses.
+
+def _effective_dispatch_correct(o: "Outcome", probe: Dict[str, Any]) -> bool:
+    """``dispatch_correct``, relaxed for the prose sub-mode classes (#199).
+
+    A probe in one of the ``_ZIM_QUERY_FALLBACK_CLASSES`` (a natural-language
+    "summarize / outline / TOC / main-page" request) tagged
+    ``either_acceptable`` is acceptably answered by either its ``expected_tool``
+    OR ``zim_query`` (the documented natural-language entry path), so a
+    ``zim_query`` dispatch counts as correct. A dispatch to any other tool — or
+    a ``zim_query`` dispatch on a non-prose either_acceptable probe (binary /
+    batch / browse / metadata / health) — still misses.
     """
     if o.dispatch_correct:
         return True
     if (
         probe.get("tool_eligibility") == "either_acceptable"
         and o.tool_called == "zim_query"
+        and not _ZIM_QUERY_FALLBACK_CLASSES.isdisjoint(
+            probe.get("operational_classes") or ()
+        )
     ):
         return True
     return False
