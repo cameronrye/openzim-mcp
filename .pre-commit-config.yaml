@@ -19,6 +19,11 @@ repos:
       - id: debug-statements
       - id: name-tests-test
         args: ["--pytest-test-first"]
+        # tests/dispatch_eval/ holds support modules (analyze, runner,
+        # check_probe_coverage, gate_0_1_emission_spike, check_transport,
+        # oneof_parse_benchmark) that are NOT pytest files; exclude every
+        # non-``test_`` Python module there so editing one is committable.
+        exclude: ^tests/dispatch_eval/(?!test_).*\.py$
 
   # Python code formatting — keep in lockstep with the dev-deps pin in
   # pyproject.toml so ``make format`` and pre-commit don't drift.

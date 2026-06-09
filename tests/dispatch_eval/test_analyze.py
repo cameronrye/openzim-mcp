@@ -222,7 +222,7 @@ def test_criterion_c1_ceiling_5pp_enforced() -> None:
                 parameters={"mode": "title"},
                 dispatch_correct=False,
                 parameter_validity="schema_only",
-                spurious_route=True if i < 6 else False,
+                spurious_route=i < 6,
                 spurious_route_kind="answer_degrading" if i < 6 else None,
                 resolved_entry_path=None,
                 cell_variant="phase-f",
@@ -245,7 +245,7 @@ def test_criterion_c1_ceiling_5pp_enforced() -> None:
                 parameters={"mode": "title"},
                 dispatch_correct=False,
                 parameter_validity="schema_only",
-                spurious_route=True if i < 4 else False,
+                spurious_route=i < 4,
                 spurious_route_kind="answer_degrading" if i < 4 else None,
                 resolved_entry_path=None,
                 cell_variant="phase-f",
@@ -746,6 +746,94 @@ def test_disagreement_rule_primary_d_failure_blocks() -> None:
         },
     )
     assert gate_passed is False
+
+
+def _miss_outcomes(n, *, tool_called, probe_id_prefix="p"):
+    return [
+        Outcome(
+            probe_id=f"{probe_id_prefix}-{i}",
+            rep=0,
+            tool_called=tool_called,
+            parameters={},
+            dispatch_correct=False,
+            parameter_validity="load_bearing_match",
+            spurious_route=False,
+            spurious_route_kind=None,
+            resolved_entry_path=None,
+            cell_variant="rc1",
+            cell_mode="advanced",
+            cell_model="qwen3-8b-q4",
+        )
+        for i in range(n)
+    ]
+
+
+def test_either_acceptable_zim_query_counts_correct():
+    """zim_query dispatch on an either_acceptable probe is relaxed to correct."""
+    outcomes = _miss_outcomes(10, tool_called="zim_query")
+    probe_meta = _make_probe_meta(
+        10, classes=["zim_get-summary"], tool_eligibility="either_acceptable"
+    )
+    s = aggregate_cell(outcomes, probe_meta)
+    # zim_query on an either_acceptable probe is relaxed to correct
+    assert s.per_class["zim_get-summary"] == (10, 10)
+    assert s.dispatch_correct == 10
+    assert s.composite_correct == 10  # parameter_validity != "fail"
+
+
+def test_either_acceptable_wrong_tool_still_misses():
+    """A dispatch to a third tool on an either_acceptable probe still misses."""
+    outcomes = _miss_outcomes(10, tool_called="zim_metadata")
+    probe_meta = _make_probe_meta(
+        10, classes=["zim_get-main-page"], tool_eligibility="either_acceptable"
+    )
+    s = aggregate_cell(outcomes, probe_meta)
+    # a dispatch to a third tool is NOT relaxed
+    assert s.per_class["zim_get-main-page"] == (10, 0)
+    assert s.dispatch_correct == 0
+
+
+def test_non_either_acceptable_zim_query_unchanged():
+    """Strict scoring stands when the probe is not either_acceptable."""
+    outcomes = _miss_outcomes(10, tool_called="zim_query")
+    probe_meta = _make_probe_meta(10, classes=["X"], tool_eligibility="any")
+    s = aggregate_cell(outcomes, probe_meta)
+    # strict scoring stands when the probe is not either_acceptable
+    assert s.per_class["X"] == (10, 0)
+    assert s.dispatch_correct == 0
+
+
+def test_either_acceptable_non_prose_class_not_relaxed():
+    """A zim_query dispatch on a non-prose either_acceptable probe still misses.
+
+    binary/batch/browse/metadata/health requests are tagged either_acceptable
+    too, but zim_query does not fulfil them — relaxing them would mask a real
+    routing regression toward zim_query, so they must keep counting as misses.
+    """
+    outcomes = _miss_outcomes(10, tool_called="zim_query")
+    probe_meta = _make_probe_meta(
+        10, classes=["zim_get-binary"], tool_eligibility="either_acceptable"
+    )
+    s = aggregate_cell(outcomes, probe_meta)
+    assert s.per_class["zim_get-binary"] == (10, 0)
+    assert s.dispatch_correct == 0
+
+
+def test_relaxed_outcome_credits_co_tagged_classes():
+    """A relaxed prose probe credits every class it carries (mixed F1+F2).
+
+    The f2x probes carry both a hardened F1 tag (e.g. Z4) and a prose F2 class
+    (zim_get-summary); one relaxed zim_query outcome credits both.
+    """
+    outcomes = _miss_outcomes(8, tool_called="zim_query")
+    probe_meta = _make_probe_meta(
+        8,
+        classes=["Z4", "zim_get-summary"],
+        tool_eligibility="either_acceptable",
+    )
+    s = aggregate_cell(outcomes, probe_meta)
+    assert s.per_class["zim_get-summary"] == (8, 8)
+    assert s.per_class["Z4"] == (8, 8)
 
 
 def test_disagreement_rule_observational_secondary_does_not_block() -> None:
