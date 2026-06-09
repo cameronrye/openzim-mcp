@@ -1,4 +1,4 @@
-"""Gate 0b non-inferiority analyzer.
+r"""Gate 0b non-inferiority analyzer.
 
 Reads per-cell outcome JSONL files (produced by ``tests/dispatch_eval/runner.py``)
 and emits the criterion verdicts per the spec's tiered decision rule.
@@ -148,6 +148,8 @@ _MODEL_FAMILY = {
 
 @dataclass
 class Outcome:
+    """One dispatcher outcome row loaded from a JSONL run file."""
+
     probe_id: str
     rep: int
     tool_called: Optional[str]
@@ -164,6 +166,7 @@ class Outcome:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Outcome":
+        """Construct an Outcome from a raw JSONL row dict."""
         return cls(
             probe_id=d.get("probe_id", ""),
             rep=int(d.get("rep", 0)),
@@ -329,6 +332,24 @@ class CellSummary:
     z4_zqp_answer_degrading: int = 0
 
 
+def _effective_dispatch_correct(o: "Outcome", probe: Dict[str, Any]) -> bool:
+    """``dispatch_correct``, relaxed to honour the probe's ``tool_eligibility``.
+
+    A probe tagged ``either_acceptable`` declares that BOTH its
+    ``expected_tool`` and ``zim_query`` (the documented natural-language
+    entry path) are correct outcomes, so a ``zim_query`` dispatch counts
+    as correct. A dispatch to any other tool still misses.
+    """
+    if o.dispatch_correct:
+        return True
+    if (
+        probe.get("tool_eligibility") == "either_acceptable"
+        and o.tool_called == "zim_query"
+    ):
+        return True
+    return False
+
+
 def aggregate_cell(
     outcomes: Iterable[Outcome], probe_meta: Dict[str, Dict[str, Any]]
 ) -> CellSummary:
@@ -343,19 +364,21 @@ def aggregate_cell(
             summary.model = o.cell_model
             summary.family = _family_of(o.cell_model) or "primary"
         summary.n += 1
-        if o.dispatch_correct:
+
+        probe = probe_meta.get(o.probe_id, {})
+        eff = _effective_dispatch_correct(o, probe)
+        if eff:
             summary.dispatch_correct += 1
         if o.parameter_validity == "load_bearing_match":
             summary.load_bearing_match += 1
-        if o.dispatch_correct and o.parameter_validity != "fail":
+        if eff and o.parameter_validity != "fail":
             summary.composite_correct += 1
 
         # Per-class accounting (F1/F2)
-        probe = probe_meta.get(o.probe_id, {})
         classes = probe.get("operational_classes", []) or []
         for cls in classes:
             per_class_n[cls] += 1
-            if o.dispatch_correct:
+            if eff:
                 per_class_correct[cls] += 1
 
         # Criterion C — zim_query_preferred subset
@@ -388,8 +411,7 @@ def aggregate_cell(
 def split_outcomes_by_cell(
     outcomes: Iterable[Outcome],
 ) -> Dict[Tuple[str, str, str], List[Outcome]]:
-    """Group outcomes by (variant, mode, model) so each cell is summarized
-    independently."""
+    """Group outcomes by (variant, mode, model) so each cell is summarized independently."""
     out: Dict[Tuple[str, str, str], List[Outcome]] = defaultdict(list)
     for o in outcomes:
         out[(o.cell_variant, o.cell_mode, o.cell_model)].append(o)
@@ -425,8 +447,7 @@ def criterion_a_b_d(
 
 
 def criterion_c1(phase_f_advanced_primary: CellSummary) -> Dict[str, Any]:
-    """C1: answer-degrading spurious-routing rate over the
-    zim_query_preferred denominator. Ceiling: 5%.
+    """C1: answer-degrading spurious-routing rate over the zim_query_preferred denominator. Ceiling 5%.
 
     Vacuous when no zim_query_preferred probes ran (events=0): pass=True with
     rate=None — no events means no measured harm, can't block on it.
@@ -451,6 +472,7 @@ def criterion_c1(phase_f_advanced_primary: CellSummary) -> Dict[str, Any]:
 
 def criterion_c2(phase_f_advanced_primary: CellSummary) -> Dict[str, Any]:
     """C2: conditional on misrouting, fraction whose resolved entry differs.
+
     Underpowered below 10 events (returns rate=None, pass=None — hand-audit
     required, gate authors record verdict).
     """
@@ -469,6 +491,7 @@ def criterion_c2(phase_f_advanced_primary: CellSummary) -> Dict[str, Any]:
 
 def criterion_c3(phase_f_advanced_primary: CellSummary) -> Dict[str, Any]:
     """C3: Z4 zim_query_preferred answer-degrading rate. Ceiling: 5%.
+
     Underpowered below 20 events (returns rate=None, pass=None).
     """
     events = phase_f_advanced_primary.z4_zqp_n
@@ -672,11 +695,8 @@ def apply_disagreement_rule(
                 if fam == "primary":
                     # Any primary A/B/D failure blocks — including A/B; D
                     # is the load-bearing one but A/B are also tracked.
-                    if crit_name == "D":
-                        blocking = True
-                    elif crit_name in ("A", "B"):
-                        # A/B failures on primary are also blocking — they
-                        # imply Criterion D is at risk.
+                    # A/B failures imply Criterion D is at risk.
+                    if (crit_name == "D") or (crit_name in ("A", "B")):
                         blocking = True
                 else:
                     family_failures[f"{fam}_blocking_failures"].append(
@@ -737,7 +757,7 @@ def _build_gate_decision(
     # Identify the PRIMARY phase-f advanced cell for C1/C2/C3 + F1/F2
     primary_phase_f: Optional[CellSummary] = None
     primary_b13: Optional[CellSummary] = None
-    for key, summary in cells.items():
+    for _key, summary in cells.items():
         if summary.family == "primary" and summary.mode == "advanced":
             if summary.variant == "phase-f":
                 primary_phase_f = summary
@@ -926,7 +946,7 @@ def _sweep_report(
             per_class.setdefault(cls, {"n": 0, "correct": 0})
             per_class[cls]["n"] += n
             per_class[cls]["correct"] += correct
-    for cls, stats in per_class.items():
+    for _cls, stats in per_class.items():
         stats["rate"] = stats["correct"] / stats["n"] if stats["n"] else 0.0
 
     report: Dict[str, Any] = {
@@ -1053,6 +1073,7 @@ def _expand_globs(patterns: Optional[str]) -> List[str]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """Entry point for the Gate 0b non-inferiority analyzer CLI."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
