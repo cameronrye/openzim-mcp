@@ -133,6 +133,28 @@ def test_inbound_missing_sidecar_raises_unavailable(
         )
 
 
+def test_inbound_results_include_anchor_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each inbound result carries anchor_text from the stored edge."""
+    archive = tmp_path / "x.zim"
+    _build_sidecar(
+        archive,
+        uuid="u1",
+        stream=[
+            ("C/A", [("C/T", "the target page")]),
+        ],
+    )
+    _patch_archive_open(monkeypatch, uuid="u1")
+
+    result = _StructureMixin.get_inbound_links_data(
+        _stub_self(archive), str(archive), "C/T", limit=10, offset=0
+    )
+
+    assert result["total"] == 1
+    assert result["results"][0]["anchor_text"] == "the target page"
+
+
 def test_inbound_paginates_emits_cursor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

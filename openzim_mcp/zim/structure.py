@@ -1008,6 +1008,7 @@ class _StructureMixin:
                 "path": r["path"],
                 "title": r["path"],
                 "inbound_degree": r["inbound_degree"],
+                "anchor_text": r["anchor_text"],
             }
             for r in page.rows
         ]
