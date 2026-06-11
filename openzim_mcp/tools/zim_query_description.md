@@ -50,11 +50,13 @@ Args:
         paths that don't match a loaded archive are silently
         auto-corrected when only one archive is loaded, and
         surface a path-listing error otherwise.
-    limit: Max search/browse results (default: 3). Ignored
-        for atomic intents that return a single item or a
-        fixed-shape payload — `tell me about <topic>`,
+    limit: Max results to return. When omitted, each list
+        intent applies its own per-intent default (search 10,
+        browse 50, walk 200, links 25, search-all 5/archive);
+        pass a value to override. Ignored for atomic intents
+        that return a single item or a fixed-shape payload —
+        `tell me about <topic>`,
         `get article <name>`, `show structure of <name>`,
-        `links in <name>`, `articles related to <name>`,
         `show main page`, `list namespaces`, `metadata for
         <file>`, `list available ZIM files`, `summary of
         <name>`, `table of contents <name>`, `section <X>

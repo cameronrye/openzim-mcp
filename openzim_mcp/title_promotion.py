@@ -23,16 +23,13 @@ from typing import Any, Callable, Dict, Iterator, Optional
 logger = logging.getLogger(__name__)
 
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
-
-# Unicode equivalent of _TOKEN_RE (word chars except underscore). The ASCII
-# _TOKEN_RE silently DELETES non-ASCII letters, so a diacritic-bearing topic
-# whose ASCII residue collapses to a short token (``Łódź`` → ``d``, ``café`` →
-# ``caf``) could exact-match an unrelated short-titled article (M24), and a
-# non-ASCII possessor (``Ampère``) shredded into ``amp``/``re`` could never
-# intersect its own canonical path (M25). Used where those comparisons must be
-# Unicode-correct. _TOKEN_RE itself is kept for the external importers that
-# still rely on the ASCII tokenisation.
+# Unicode word-char tokenizer (word chars except underscore). The plain ASCII
+# ``[a-z0-9]+`` tokenizer (``text_utils._TOKEN_RE``) silently DELETES non-ASCII
+# letters, so a diacritic-bearing topic whose ASCII residue collapses to a short
+# token (``Łódź`` → ``d``, ``café`` → ``caf``) could exact-match an unrelated
+# short-titled article (M24), and a non-ASCII possessor (``Ampère``) shredded
+# into ``amp``/``re`` could never intersect its own canonical path (M25). Used
+# where those comparisons must be Unicode-correct.
 _UNICODE_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
@@ -969,11 +966,11 @@ def _accept_possessive_fuzzy_suggest(promoted: Dict[str, Any], topic: str) -> bo
     any of the topic's possessor tokens. Original b6 attack surfaces
     continue to reject — ``Darwin's evolution`` → ``Evolution`` has
     no ``darwin`` in path, ``Plato's republic philosophy`` →
-    ``Czech_philosophy`` has no ``plato`` in path. Uses ``_TOKEN_RE``
-    (apostrophe-splitting) so ``newton's`` in the canonical surfaces
-    as the bare token ``newton`` for comparison with the possessor
-    list — the same tokenizer the redirect-branch subset rule uses,
-    keeping both branches symmetric.
+    ``Czech_philosophy`` has no ``plato`` in path. Uses
+    ``_UNICODE_TOKEN_RE`` (apostrophe-splitting) so ``newton's`` in the
+    canonical surfaces as the bare token ``newton`` for comparison with
+    the possessor list — the same tokenizer the redirect-branch subset
+    rule uses, keeping both branches symmetric.
     """
     cand_path = str(promoted.get("path", ""))
     cand_tokens = set(_UNICODE_TOKEN_RE.findall(cand_path.lower()))
