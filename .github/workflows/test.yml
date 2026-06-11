@@ -206,7 +206,9 @@ jobs:
 
       - name: Run bandit security linter
         run: |
-          uv run pip install bandit[toml]
+          # ``bandit-sarif-formatter`` registers the ``sarif`` output format used
+          # below; without it ``bandit -f sarif`` fails with "invalid choice: 'sarif'".
+          uv run pip install bandit[toml] bandit-sarif-formatter
           # ``--exit-zero`` keeps the real report that ``-o`` already wrote: bandit
           # exits 1 whenever it finds ANY issue, and the previous ``|| echo '{}' >``
           # fallback then clobbered the populated report with an empty one, so the
