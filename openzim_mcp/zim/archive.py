@@ -733,8 +733,8 @@ class ZimOperations(
             if cache_key is not None:
                 try:
                     self.cache.set(cache_key, entries)
-                except Exception:  # pragma: no cover - cache is best-effort
-                    pass
+                except Exception as exc:  # pragma: no cover - cache is best-effort
+                    logger.debug("preset metadata cache set failed: %s", exc)
         try:
             return resolve_preset_from_entries(
                 entries, self.config.presets_override_path

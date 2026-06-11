@@ -281,8 +281,8 @@ class _ContentMixin:
             if render_cache_key:
                 try:
                     self.cache.set(render_cache_key, content)
-                except Exception:  # pragma: no cover - cache is best-effort
-                    pass
+                except Exception as exc:  # pragma: no cover - cache is best-effort
+                    logger.debug("snippet render cache set failed: %s", exc)
             entry_title = getattr(entry, "title", None) or ""
             mp = max_paragraphs if max_paragraphs is not None else 2
             return self.content_processor.create_snippet(

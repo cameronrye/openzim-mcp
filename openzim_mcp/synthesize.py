@@ -1654,7 +1654,10 @@ def _build_section_lookups(
     for archive_name, hit in top_hits:
         try:
             b = bundle_lookup(archive_name, hit["path"])
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "bundle lookup failed for %s/%s: %s", archive_name, hit["path"], exc
+            )
             continue
         if b is None:
             continue

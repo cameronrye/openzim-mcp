@@ -687,7 +687,8 @@ def count_non_tail_strong_entities(
             continue
         try:
             result = title_probe(tok)
-        except Exception:
+        except Exception as exc:
+            logger.debug("title probe failed for %r: %s", tok, exc)
             continue
         if result is None:
             continue
@@ -845,7 +846,8 @@ def probed_head_matches_promoted(
             continue
         try:
             result = title_probe(tok)
-        except Exception:
+        except Exception as exc:
+            logger.debug("title probe failed for %r: %s", tok, exc)
             continue
         if result is None:
             continue
