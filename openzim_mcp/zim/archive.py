@@ -688,16 +688,54 @@ class ZimOperations(
         return metadata
 
     def _resolve_preset_for_open_archive(
-        self, archive: Archive
+        self, archive: Archive, validated_path: Optional[str] = None
     ) -> Tuple[Optional[ArchivePreset], Optional[str]]:
         """Resolve ``(preset, applied_type)`` from an already-open archive.
 
         Reuses the open handle (no second open) and funnels through the
         single shared resolver. Never raises — degrades to no-preset on any
         failure so a behavior-shaping read can't break the underlying tool.
+
+        M32: the expensive part is ``_extract_zim_metadata`` (probes ~15
+        M-namespace keys and, on old-scheme archives, decodes + BeautifulSoup-
+        parses ~1MB HTML per field). The result depends only on the archive, so
+        when ``validated_path`` is supplied the JSON-safe ``metadata_entries``
+        dict is cached per (path, archive stat token) — turning a per-uncached-
+        search cost into a one-time-per-archive cost. ``resolve_preset_from_
+        entries`` itself is pure and cheap, so it is re-run on the cached dict.
         """
+        # Caching is isolated from resolution: a cache failure must never
+        # prevent the (working) preset resolution from running.
+        entries: Optional[Dict[str, str]] = None
+        cache_key: Optional[str] = None
+        if validated_path is not None:
+            try:
+                from openzim_mcp.bundle import archive_stat_token
+
+                cache_key = (
+                    f"preset_entries:v1:{validated_path}:"
+                    f"{archive_stat_token(Path(validated_path))}"
+                )
+                cached = self.cache.get(cache_key)
+                if isinstance(cached, dict):
+                    entries = cached
+            except Exception:  # pragma: no cover - cache is best-effort
+                cache_key = None
+        if entries is None:
+            try:
+                extracted = self._extract_zim_metadata(archive).get(
+                    "metadata_entries", {}
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("Preset metadata extraction failed: %s", exc)
+                return None, None
+            entries = extracted if isinstance(extracted, dict) else {}
+            if cache_key is not None:
+                try:
+                    self.cache.set(cache_key, entries)
+                except Exception:  # pragma: no cover - cache is best-effort
+                    pass
         try:
-            entries = self._extract_zim_metadata(archive).get("metadata_entries", {})
             return resolve_preset_from_entries(
                 entries, self.config.presets_override_path
             )

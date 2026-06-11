@@ -350,11 +350,12 @@ class _SearchMixin:
             *,
             snippet_length: Optional[int] = None,
             max_paragraphs: Optional[int] = None,
+            validated_path: Optional[str] = None,
         ) -> str:
             """Resolve via ``_ContentMixin`` on the concrete coordinator."""
 
         def _resolve_preset_for_open_archive(
-            self, archive: Archive
+            self, archive: Archive, validated_path: Optional[str] = None
         ) -> "Tuple[Optional[ArchivePreset], Optional[str]]":
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
@@ -498,7 +499,9 @@ class _SearchMixin:
                 # archive handle (avoids a second archive open for metadata).
                 # Synthesize uses a different passage path, so it is unaffected.
                 # Defensive fallback is inside _resolve_preset_for_open_archive.
-                preset, applied_type = self._resolve_preset_for_open_archive(archive)
+                preset, applied_type = self._resolve_preset_for_open_archive(
+                    archive, str(validated_path)
+                )
                 payload, total_results = self._perform_search(
                     archive,
                     query,
@@ -702,6 +705,7 @@ class _SearchMixin:
                     query=query,
                     snippet_length=snippet_length,
                     max_paragraphs=max_paragraphs,
+                    validated_path=str(validated_path) if validated_path else None,
                 )
                 results.append({"path": entry_id, "title": title, "snippet": snippet})
             except Exception as e:
@@ -1083,32 +1087,14 @@ class _SearchMixin:
         if not results:
             results = [synthetic_canonical]
         else:
-            # a13 D5: only short-circuit when BM25's top hit IS the
-            # canonical (exact path match) — otherwise we should still
-            # splice/reorder. Pre-fix, ``is_strong_title_match`` returned
-            # True for any candidate that token-prefixed the topic
-            # (``Berlin`` → ``Berlin_(disambiguation)`` qualifies via
-            # candidate-extends-topic), and the early-return fell back
-            # to the legacy ``search_with_filters`` markdown path that
-            # neither spliced the canonical nor demoted list articles.
-            # Result: ``search for Berlin in namespace C`` rendered
-            # ``[List_of_songs_about_Berlin, Berlin_(disambiguation),
-            # Timeline_of_Berlin]`` with the actual ``Berlin`` canonical
-            # absent. Tightening to exact-path match preserves the
-            # "don't duplicate when canonical is already at top"
-            # invariant while letting the splice/reorder logic do its
-            # job for every other shape.
-            top = results[0]
-            top_path = str(top.get("path") or "") if isinstance(top, dict) else ""
-            if top_path == canonical_path:
-                return self.search_with_filters(
-                    zim_file_path,
-                    query,
-                    namespace,
-                    content_type,
-                    limit,
-                    offset,
-                )
+            # M33: when the canonical IS already the BM25 top hit we used to
+            # ``return self.search_with_filters(...)``, re-running the ENTIRE
+            # filtered search from scratch (a second Xapian scan + per-result
+            # snippet renders) on a cold ``search_filtered:`` cache namespace.
+            # Instead, fall through and render the structured ``payload`` we
+            # already computed: the reorder branch below is a no-op when the
+            # canonical is already first, so the result is identical without
+            # the doubled scan.
             existing_paths = {
                 str(r.get("path", "")) for r in results if isinstance(r, dict)
             }
@@ -2625,6 +2611,14 @@ class _SearchMixin:
         """
         if len(title) < self.config.search.fuzzy_title_min_query_len:
             return None, []
+        # H15: the typo sweep generates ~26*(n+1) insertions + ~25*n
+        # substitutions per probe (each itself up to 11 index lookups), so a
+        # single failed multi-word window costs ~10k+ index probes. A
+        # multi-word title is never a SINGLE-edit typo of a real entry title,
+        # so restrict the sweep to single-token probes — this is where the
+        # promotion fan-out's sliding windows otherwise burned the most time.
+        if len(title.split()) > 1:
+            return None, []
 
         best: Optional[Any] = None
         best_is_canonical = False
@@ -2896,6 +2890,33 @@ class _SearchMixin:
             validated = self._validate_zim_path(zim_file_path)
             files = [str(validated)]
 
+        # H15: cache single-archive title lookups per (path, stat token, title,
+        # limit). find_entry_by_title_data is otherwise uncached and re-opens
+        # the archive on EVERY call, yet a single zim_query fans out to it
+        # dozens of times (query-rewrite probes, sliding-window promotion
+        # passes, Z3/Z4 discriminator probes). The result depends only on the
+        # archive content, so the stat-token key invalidates on file change.
+        # This also collapses the M30 Pass-1/Pass-3 and L4 duplicate-probe
+        # re-queries into cache hits. cross_file aggregates multiple archives,
+        # so it is left uncached.
+        find_cache_key: Optional[str] = None
+        if not cross_file:
+            try:
+                from openzim_mcp.bundle import archive_stat_token
+
+                find_cache_key = (
+                    f"find_title:v1:{files[0]}:"
+                    f"{archive_stat_token(Path(files[0]))}:{title}:{limit}"
+                )
+            except Exception:
+                # Stat failed (e.g. a not-yet-existent / mocked path) — skip
+                # caching and run uncached rather than break the lookup.
+                find_cache_key = None
+            if find_cache_key is not None:
+                cached_find = self.cache.get(find_cache_key)
+                if cached_find is not None:
+                    return cast("FindEntryResponse", cached_find)
+
         aggregate_results: List[Dict[str, Any]] = []
         fast_path_hit = False
         fuzzy_path_hit = False
@@ -3050,7 +3071,7 @@ class _SearchMixin:
                     raise
                 logger.debug(f"find_entry_by_title: skipped {file_path}: {e}")
 
-        return self._assemble_find_response(
+        response = self._assemble_find_response(
             aggregate_results,
             title=title,
             limit=limit,
@@ -3059,6 +3080,9 @@ class _SearchMixin:
             fuzzy_path_hit=fuzzy_path_hit,
             verified_variants=verified_variants,
         )
+        if find_cache_key is not None:
+            self.cache.set(find_cache_key, response)
+        return response
 
     def find_entry_by_title(
         self,

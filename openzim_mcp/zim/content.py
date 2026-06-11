@@ -175,7 +175,7 @@ class _ContentMixin:
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
         def _resolve_preset_for_open_archive(
-            self, archive: Archive
+            self, archive: Archive, validated_path: Optional[str] = None
         ) -> "Tuple[Optional[ArchivePreset], Optional[str]]":
             """Resolve via ``ZimOperations`` on the concrete coordinator."""
 
@@ -186,6 +186,7 @@ class _ContentMixin:
         *,
         snippet_length: Optional[int] = None,
         max_paragraphs: Optional[int] = None,
+        validated_path: Optional[str] = None,
     ) -> str:
         """Get content snippet for search result, optionally query-aware.
 
@@ -213,6 +214,41 @@ class _ContentMixin:
         available for callers that want raw rendering.
         """
         try:
+            # M31: the compact render below (BeautifulSoup parse + html2text
+            # over the whole document) is the dominant CPU cost of a cold
+            # search — it runs once per result and, in a synthesize request, the
+            # SAME entries are re-rendered by get_or_build_bundle. The render is
+            # query-INDEPENDENT (highlighting happens later in create_snippet),
+            # so cache the rendered markdown per (path, entry, stat token) when
+            # the caller supplies ``validated_path``; create_snippet then runs
+            # per-query over the cached text.
+            render_cache_key: Optional[str] = None
+            entry_path_attr = getattr(entry, "path", "") or ""
+            if validated_path and entry_path_attr:
+                try:
+                    from openzim_mcp.bundle import archive_stat_token
+
+                    render_cache_key = (
+                        f"snippet_render:v1:{validated_path}:"
+                        f"{archive_stat_token(Path(validated_path))}:"
+                        f"{entry_path_attr}"
+                    )
+                except Exception:
+                    render_cache_key = None
+            cached_content = (
+                self.cache.get(render_cache_key) if render_cache_key else None
+            )
+            if isinstance(cached_content, str):
+                entry_title = getattr(entry, "title", None) or ""
+                mp = max_paragraphs if max_paragraphs is not None else 2
+                return self.content_processor.create_snippet(
+                    cached_content,
+                    query=query,
+                    title=entry_title,
+                    max_paragraphs=mp,
+                    snippet_length=snippet_length,
+                )
+
             item = entry.get_item()
             mime = item.mimetype or ""
             if not mime.startswith(_TEXT_MIME_PREFIX):
@@ -242,6 +278,11 @@ class _ContentMixin:
                 content = self.content_processor.process_mime_content(
                     bytes(item.content), mime, compact=True
                 )
+            if render_cache_key:
+                try:
+                    self.cache.set(render_cache_key, content)
+                except Exception:  # pragma: no cover - cache is best-effort
+                    pass
             entry_title = getattr(entry, "title", None) or ""
             mp = max_paragraphs if max_paragraphs is not None else 2
             return self.content_processor.create_snippet(
@@ -1442,7 +1483,9 @@ class _ContentMixin:
 
         try:
             with _zim_ops_mod.zim_archive(validated_path) as archive:
-                preset, applied_type = self._resolve_preset_for_open_archive(archive)
+                preset, applied_type = self._resolve_preset_for_open_archive(
+                    archive, str(validated_path)
+                )
                 summary_style = preset.summary_style if preset is not None else None
                 result = self._extract_entry_summary_data(
                     archive,
