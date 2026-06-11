@@ -16,7 +16,7 @@ the handler returns that section instead of the article lead.
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from .title_promotion import _TOKEN_RE
+from .text_utils import _TOKEN_RE
 
 # Subject-attribute resolution: when the resolved entity's title
 # doesn't cover all of the topic's tokens, the residual tokens often

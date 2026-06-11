@@ -39,10 +39,10 @@ from .rerank import (
 from .responses import ToolErrorPayload, tool_error
 from .security import sanitize_context_for_error
 from .subject_section import _SubjectSectionMixin
+from .text_utils import _TOKEN_RE
 from .title_promotion import (
     _DISCRIMINATOR_STOP_WORDS,
     _TAIL_TOKEN_RE,
-    _TOKEN_RE,
     find_title_match,
     has_apostrophe_possessive,
     is_strong_title_match,
