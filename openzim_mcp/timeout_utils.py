@@ -63,9 +63,21 @@ class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
     """
 
     def _adjust_thread_count(self) -> None:  # pragma: no cover - thread spawn
-        # Mirrors CPython 3.12/3.13 ThreadPoolExecutor._adjust_thread_count but
-        # marks the worker daemon and intentionally does NOT register it in
-        # ``_threads_queues`` (so the atexit join hook ignores it).
+        # The daemon path reimplements CPython 3.12/3.13's
+        # ``_adjust_thread_count`` (it must, to mark the worker daemon and skip
+        # the ``_threads_queues`` atexit join). Those internals are not stable
+        # across Python versions — e.g. 3.14 dropped ``_initializer`` /
+        # ``_initargs`` and changed ``_worker``'s signature. If the internals
+        # we rely on are absent / changed, fall back to the stdlib (non-daemon)
+        # behaviour so the pool keeps working: the exit-hang mitigation (M21)
+        # is lost on that interpreter, but correctness is preserved and nothing
+        # crashes mid-submission.
+        try:
+            self._spawn_daemon_worker()
+        except Exception:
+            super()._adjust_thread_count()
+
+    def _spawn_daemon_worker(self) -> None:  # pragma: no cover - thread spawn
         if self._idle_semaphore.acquire(timeout=0):
             return
 
@@ -73,23 +85,25 @@ class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
             q.put(None)  # type: ignore[attr-defined]
 
         num_threads = len(self._threads)
-        if num_threads < self._max_workers:
-            thread_name = "%s_%d" % (self._thread_name_prefix or self, num_threads)
-            t = threading.Thread(
-                name=thread_name,
-                target=_worker,
-                args=(
-                    weakref.ref(self, weakref_cb),
-                    self._work_queue,
-                    self._initializer,
-                    self._initargs,
-                ),
-                daemon=True,
-            )
-            t.start()
-            self._threads.add(t)  # type: ignore[attr-defined]
-            # Deliberately NOT added to ``_threads_queues``: a daemon worker
-            # must never be joined at interpreter shutdown.
+        if num_threads >= self._max_workers:
+            return
+        thread_name = "%s_%d" % (self._thread_name_prefix or self, num_threads)
+        # Build the args tuple first — accessing ``_initializer`` / ``_initargs``
+        # here is what raises on an interpreter whose internals changed, BEFORE
+        # any thread is created, so the caller's fallback can run cleanly.
+        worker_args = (
+            weakref.ref(self, weakref_cb),
+            self._work_queue,
+            self._initializer,
+            self._initargs,
+        )
+        t = threading.Thread(
+            name=thread_name, target=_worker, args=worker_args, daemon=True
+        )
+        t.start()
+        self._threads.add(t)  # type: ignore[attr-defined]
+        # Deliberately NOT added to ``_threads_queues``: a daemon worker must
+        # never be joined at interpreter shutdown.
 
 
 def _env_int(name: str, default: int) -> int:

@@ -57,6 +57,24 @@ def test_worker_threads_are_daemon_and_unjoined():
     assert all(t not in _cf_thread._threads_queues for t in io._threads)
 
 
+def test_daemon_executor_degrades_gracefully_when_internals_change():
+    """M21 robustness: if the reimplemented stdlib internals are absent/changed
+    (e.g. a future Python like 3.14 dropping _initializer / changing _worker),
+    the executor must fall back to the stdlib behaviour, NOT crash mid-submit.
+    """
+    ex = tu._DaemonThreadPoolExecutor(max_workers=2, thread_name_prefix="probe")
+    try:
+        # Simulate the version-incompatibility: spawning the daemon worker
+        # raises, exactly as accessing a removed _initializer would.
+        ex._spawn_daemon_worker = lambda: (_ for _ in ()).throw(
+            AttributeError("_initializer")
+        )
+        future = ex.submit(lambda: 42)
+        assert future.result(timeout=5) == 42  # fell back to a stdlib worker
+    finally:
+        ex.shutdown(wait=False)
+
+
 def test_shutdown_is_idempotent_and_clears_pools():
     tu.run_with_timeout(lambda: None, 1.0, "x", pool="io")
     tu.shutdown_timeout_executors()
