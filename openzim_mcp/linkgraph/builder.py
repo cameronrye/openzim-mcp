@@ -193,9 +193,13 @@ def build_link_graph(
 ) -> BuildStats:
     """Open ``archive_path`` once, walk it, and write the sidecar atomically.
 
-    Streams ``iter_article_links`` straight into ``build_from_link_stream``
-    so the whole graph is never held in memory. ``progress`` (if given) is
-    invoked as ``progress(processed, total)`` every 10,000 source entries.
+    Streams ``iter_article_links`` straight into ``build_from_link_stream`` so
+    EDGES are written in batches rather than buffered whole. Note that NODES are
+    still held in memory: ``build_from_link_stream`` interns every node path in
+    an in-memory id map and materialises the full node list for insertion, so
+    peak RSS scales with the article count (GB-scale on a full Wikipedia build),
+    not with the edge count. ``progress`` (if given) is invoked as
+    ``progress(processed, total)`` every 10,000 source entries.
     """
     from openzim_mcp.linkgraph.reader import sidecar_path_for
     from openzim_mcp.zim_operations import zim_archive
