@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -137,7 +138,21 @@ def download_file(url: str, dest_path: Path, description: str) -> bool:
                 ):  # Update every 100 blocks or at completion
                     logger.debug(f"Progress: {percent}%")
 
-        urlretrieve(url, dest_path, reporthook=progress_hook)
+        # Download to a temporary ".part" path and atomically move it into place
+        # only on success. Writing straight to dest_path left a truncated file
+        # behind on a mid-stream failure, which the next run's
+        # ``dest_path.exists()`` check (in download_files) then treated as a
+        # complete, already-downloaded file forever — and create_manifest() would
+        # record the sha256 of the corrupt file as authoritative.
+        tmp_path = dest_path.with_name(dest_path.name + ".part")
+        try:
+            urlretrieve(url, tmp_path, reporthook=progress_hook)
+        except BaseException:
+            # Remove the partial file so a retry starts clean and the corrupt
+            # bytes are never promoted to dest_path.
+            tmp_path.unlink(missing_ok=True)
+            raise
+        os.replace(tmp_path, dest_path)
         logger.info(f"[OK] Downloaded: {dest_path.name}")
         return True
 

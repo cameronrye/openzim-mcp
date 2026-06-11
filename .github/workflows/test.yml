@@ -207,10 +207,17 @@ jobs:
       - name: Run bandit security linter
         run: |
           uv run pip install bandit[toml]
-          # Run bandit and create reports (continue on failure)
-          uv run bandit -r openzim_mcp -f json -o bandit-report.json || echo '{"results": [], "errors": []}' > bandit-report.json
+          # ``--exit-zero`` keeps the real report that ``-o`` already wrote: bandit
+          # exits 1 whenever it finds ANY issue, and the previous ``|| echo '{}' >``
+          # fallback then clobbered the populated report with an empty one, so the
+          # SARIF uploaded to the Security tab and the summary count were always
+          # fabricated as zero. ``-c pyproject.toml`` applies the project [tool.bandit]
+          # config (e.g. the B101 assert skip) which was otherwise ignored here.
+          # This step is intentionally non-blocking (truthful reporting only); the
+          # blocking severity gate is ``make security`` (bandit -ll) at release time.
+          uv run bandit -c pyproject.toml -r openzim_mcp --exit-zero -f json -o bandit-report.json
           # Also generate SARIF format for GitHub Security tab
-          uv run bandit -r openzim_mcp -f sarif -o bandit-report.sarif || echo '{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "bandit"}}, "results": []}]}' > bandit-report.sarif
+          uv run bandit -c pyproject.toml -r openzim_mcp --exit-zero -f sarif -o bandit-report.sarif
 
       - name: Upload Bandit SARIF results to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
