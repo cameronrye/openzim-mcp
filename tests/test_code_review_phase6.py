@@ -1,10 +1,12 @@
 """Regression tests for code-review 2026-06-10 Phase 6 (synthesize / rerank).
 
 H9 (search_all rerank passthrough zeroes later archives), M17 (affinity boost
-inverts for negative scores), M19 (low-relevance tail filter uses the 1/rank
-proxy as relevance).
+inverts for negative scores), M18 (possessive tail-rescue prepends a duplicate
+already in top_hits), M19 (low-relevance tail filter uses the 1/rank proxy as
+relevance).
 """
 
+from typing import Any, Dict
 from unittest.mock import MagicMock
 
 import openzim_mcp.ml.reranker as reranker_mod
@@ -12,6 +14,7 @@ from openzim_mcp.rerank import _RerankMixin
 from openzim_mcp.synthesize import (
     _boost_by_section_affinity,
     _drop_low_relevance_tail,
+    _promote_title_match,
 )
 
 
@@ -121,6 +124,79 @@ def test_m17_negative_score_passage_promoted_not_demoted(monkeypatch):
     assert boosted[0]["cite_id"] == "w/Einstein#s1"
     # Its boosted score moved toward zero (greater than its input -1.0).
     assert boosted[0]["score"] > -1.0
+
+
+# M18 — possessive tail-rescue must not prepend a canonical already in top_hits
+def _rescue_handler(title_index_by_query, hit_by_title):
+    """Stub ZimOperations for ``_promote_title_match``'s rescue path.
+
+    ``find_entry_by_title_data`` answers the (apostrophe-preserving) title-index
+    probes; ``title_match_hit`` answers the bare-tail fast-path probes.
+    """
+    m = MagicMock()
+
+    def fake_fetbd(
+        _vp: str, q: str, *, cross_file: bool = False, limit: int = 3
+    ) -> Dict[str, Any]:
+        row = title_index_by_query.get(q.lower())
+        return {"results": [row] if row else []}
+
+    m.find_entry_by_title_data.side_effect = fake_fetbd
+    m.title_match_hit.side_effect = lambda _archive, title: hit_by_title.get(
+        title.lower()
+    )
+    return m
+
+
+def test_m18_rescue_reorders_existing_canonical_no_duplicate():
+    # ``einstein's theory`` (stripped to ``einstein theory``) tail-rescues the
+    # multi-token canonical ``Theory_of_relativity``. Here that canonical is
+    # ALREADY a BM25 hit (rank 2): the rescue must reorder it to front, not
+    # prepend a second copy (duplicate cite_id / passage / budget spend).
+    handler = _rescue_handler(
+        title_index_by_query={
+            "einstein's theory": {
+                "path": "Theory_of_relativity",
+                "title": "Theory of relativity",
+                "score": 1.0,
+            },
+            "theory": {"path": "Theory", "title": "Theory", "score": 1.0},
+        },
+        hit_by_title={
+            "theory": {"path": "Theory", "snippet": "...", "score": 1.0},
+            "theory of relativity": {
+                "path": "Theory_of_relativity",
+                "snippet": "rebuilt",
+                "score": 1.0,
+            },
+        },
+    )
+    archive = object()
+    top_hits = [
+        ("wikipedia", {"path": "Some_BM25_Noise", "snippet": "", "score": 0.5}),
+        # Canonical already present at rank 2 (the documented Einstein case).
+        (
+            "wikipedia",
+            {"path": "Theory_of_relativity", "snippet": "orig", "score": 0.4},
+        ),
+    ]
+    out = _promote_title_match(
+        top_hits,
+        query="einstein theory",
+        original_query="einstein's theory",
+        archives=[(archive, "wiki.zim")],
+        archives_searched=["wikipedia"],
+        search_handler=handler,
+    )
+    # Canonical reordered to front and tagged promoted.
+    assert out[0][1]["path"] == "Theory_of_relativity"
+    assert out[0][1].get("promoted") is True
+    # No duplicate: length preserved and exactly one canonical entry.
+    assert len(out) == len(top_hits)
+    canonical = [h for _, h in out if h["path"] == "Theory_of_relativity"]
+    assert len(canonical) == 1
+    # The existing hit was reused (snippet "orig"), not a freshly built copy.
+    assert canonical[0]["snippet"] == "orig"
 
 
 # M19 — the relevance-tail filter must not drop the rank-5 hit on the 1/rank proxy

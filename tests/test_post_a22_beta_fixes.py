@@ -607,7 +607,7 @@ class TestP1D5LimitNudgeEnumeratesAllAtomicIntents:
         # regex with ``.+?(?=...)`` so SonarCloud's S6019 (reluctant
         # quantifier) stays quiet — the regex equivalent works fine
         # but the explicit two-step is plainer to read.
-        anchor = "limit: Max search/browse results"
+        anchor = "limit: Max results to return"
         limit_idx = src.find(anchor)
         assert limit_idx != -1, (
             "Could not locate `limit:` docstring block in server.py — "
