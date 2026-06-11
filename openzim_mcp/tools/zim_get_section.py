@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from ..responses import tool_error
-from ._common import load_description, tool_error_response
+from ._common import enforce_rate_limit, load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -47,6 +47,9 @@ def register(server: "OpenZimMcpServer") -> None:
         compact_budget: Optional[Union[str, int]] = None,
     ) -> Any:
         try:
+            rl = enforce_rate_limit(server, "zim_get_section")
+            if rl is not None:
+                return rl
             if not section_id:
                 return tool_error(
                     operation="invalid_section",

@@ -420,9 +420,21 @@ class SimpleToolsHandler(
                     "- `search for Berlin in namespace C`\n"
                     "<!-- intent=search_terms_required cert=1.00 -->"
                 )
-            # Replace the params copy with the cleaned tail so the
-            # handler doesn't run on the verb-prefixed raw query.
-            if tail:
+            # H11: keep the extractor's query (``search_q``). It already went
+            # through the full Tier-1 rewrite pipeline (Rule 1 lowercase, Rule 2
+            # misspelling map, param-leak strip, politeness strip, quote strip)
+            # AND _extract_search stripped the verb prefix. The raw ``tail`` is
+            # recomputed only for the empty-tail guard above; overwriting
+            # params["query"] with it silently reverted every rewrite —
+            # ``search for photosythesis`` searched the misspelling,
+            # ``search for biology limit=10`` searched the literal
+            # ``biology limit=10``, and quoted queries kept their quotes.
+            # Fall back to ``tail`` only when the extractor could NOT strip the
+            # verb (search_q still begins with a search verb), so the handler
+            # never searches the literal verb word.
+            if tail and re.match(
+                r"^\s*(?:search|find|look)\b", search_q, re.IGNORECASE
+            ):
                 params["query"] = tail
             else:
                 params["query"] = search_q
@@ -2175,10 +2187,18 @@ class SimpleToolsHandler(
         synthesize ranker agree on which hits are catalog-shaped
         noise.
 
-        Mutates and returns ``payload`` — callers treat the response as
-        new-shape regardless of caching upstream because the splice is
-        applied per-request after the cache read.
+        H12: returns a SHALLOW COPY of ``payload`` (with fresh ``results`` /
+        ``page_info``) and never mutates the input. ``search_zim_file_data``
+        caches the exact dict it returns and ``cache.get()`` hands it back by
+        reference, so mutating it here in place poisoned the cached entry for
+        the whole TTL — every later cache hit on the same key (the advanced
+        ``zim_search`` tool, the legacy text-search path, ``tell_me_about``)
+        then served the spliced/demoted/truncated payload, complete with a
+        fabricated "(canonical title match)" row and a real BM25 hit dropped,
+        and two concurrent requests raced mutating the same dict. Copying keeps
+        the cached object byte-identical to what the backend produced.
         """
+        payload = dict(payload)
         results = payload.get("results") or []
         if not results:
             return payload
@@ -2234,16 +2254,18 @@ class SimpleToolsHandler(
         # room for the canonical splice; the dropped result is the
         # lowest-ranked of the BM25 set, so the displacement carries
         # the least information loss.
-        page_info = payload.get("page_info") or {}
+        # H12: copy page_info before mutating returned_count — the nested dict
+        # is shared with the cached payload (shallow copy above only duplicated
+        # the top level).
+        page_info = dict(payload.get("page_info") or {})
         requested_limit = page_info.get("limit") or len(results)
         spliced = [synthetic, *results][:requested_limit]
         payload["results"] = spliced
         # Keep ``page_info.returned_count`` consistent with the spliced
         # length so renderers don't claim to show more rows than they
         # actually do.
-        if isinstance(page_info, dict):
-            page_info["returned_count"] = len(spliced)
-            payload["page_info"] = page_info
+        page_info["returned_count"] = len(spliced)
+        payload["page_info"] = page_info
         return payload
 
     def _promote_topic_via_title_index(
@@ -3183,85 +3205,63 @@ class SimpleToolsHandler(
                 "- 'find entry named \"World War II\"'\n"
                 "- 'what's the path for Cellular_respiration'\n"
             )
-        # A15 post-a15: namespace-prefixed input like ``M/Title`` is a
-        # ZIM path, not a title. The title index only stores titles
-        # (e.g. M/Title's title is just "Title"), so passing the path
-        # to ``find_entry_by_title_data`` returns silently 0 hits with
-        # no signal that the user used the wrong tool. Redirect upfront
-        # so the caller knows to use ``get article`` for path lookup.
-        # Pattern: single alpha letter + ``/`` + ≥3-char suffix. Both
-        # uppercase and lowercase namespace letters are accepted because
-        # Sub-D-2 Rule 1 lowercases the query before intent parsing, so
-        # an originally uppercase ``M/Title`` arrives as ``m/title``.
-        # libzim namespace lookups are case-insensitive, so normalising
-        # to uppercase in the suggestion is still correct.
-        # The ≥3-char floor avoids false-positiving real short titles
-        # that legitimately contain ``/`` (the Wikipedia ``A/B`` testing
-        # article has a 1-char suffix).
-        if (
+        # M15: namespace-prefixed input like ``M/Title`` is a ZIM path, not a
+        # title — the title index stores only titles (``M/Title``'s title is
+        # just "Title"), so a path lookup silently returns 0 hits. The redirect
+        # must consult the index FIRST and fire only on zero hits. The old
+        # version redirected UPFRONT for any ``[A-Z]/...`` shape accepting
+        # lowercase, but Sub-D-2 Rule 1 lowercases every query, so it fired for
+        # EVERY slash-title before the index was consulted — blocking real
+        # lowercase-first titles like ``A/B testing`` / ``I/O scheduling``
+        # (arriving as ``a/b testing`` / ``i/o scheduling``) from ever being
+        # found, and making the post-lookup branch dead code. Probe the index
+        # for slash-shaped titles and redirect only when it returns nothing;
+        # otherwise render the real hits. The ≥3-char suffix floor avoids
+        # false-positiving genuinely short slash titles (``a/b``).
+        limit = options.get("limit", 10)
+        compact = options.get("compact", False)
+        looks_like_namespace_path = (
             len(title) >= 4
             and title[0].isascii()
             and title[0].isalpha()
             and title[1] == "/"
             and len(title[2:].strip()) >= 3
-        ):
-            normalized_title = title[0].upper() + title[1:]
-            return (
-                "**Namespace Path, Not a Title**\n\n"
-                f"`{title}` looks like a ZIM namespace path. The title "
-                "index only stores entry titles, so a path lookup "
-                "returns no hits.\n"
-                "**Try one of**:\n"
-                f"- `get article {normalized_title}` — direct path lookup\n"
-                f"- `find article titled {title[2:].strip()}` — "
-                "title-only lookup (drops the namespace prefix)\n"
-            )
-        if options.get("compact", False):
+        )
+        if looks_like_namespace_path:
             data = self.zim_operations.find_entry_by_title_data(
-                zim_file_path,
-                title,
-                cross_file=False,
-                limit=options.get("limit", 10),
+                zim_file_path, title, cross_file=False, limit=limit
             )
-            # A16 post-a16 D7: lowercase-first-char namespace-path shape
-            # (``m/Title``, ``c/Berlin``, ``w/mainPage``) couldn't fire
-            # the upfront uppercase-only redirect because some real
-            # article titles ARE lowercase-first-char + ``/`` (e.g.
-            # the Wikipedia ``A/B`` testing article via ``a/b``). Now
-            # that we've actually consulted the title index and got
-            # zero hits, the shape unambiguously means "namespace
-            # path the caller misrouted to find_by_title". Emit the
-            # same redirect the uppercase upfront path uses, with the
-            # suggestion paths normalised to uppercase (the
-            # conventional ZIM form). libzim namespace lookups are
-            # case-insensitive (see ``openzim_mcp/zim/namespace.py``).
             results = data.get("results") if isinstance(data, dict) else None
-            if (
-                not results
-                and len(title) >= 4
-                and title[0].isascii()
-                and title[0].isalpha()
-                and title[1] == "/"
-                and len(title[2:].strip()) >= 3
-            ):
+            if not results:
+                # Confirmed: a slash-shaped title with no title-index hit is a
+                # misrouted namespace path. libzim namespace lookups are
+                # case-insensitive, so normalise the suggestion's first char.
                 normalized = title[0].upper() + title[1:]
                 return (
                     "**Namespace Path, Not a Title**\n\n"
-                    f"`{title}` looks like a ZIM namespace path. The "
-                    "title index only stores entry titles, so a path "
-                    "lookup returns no hits.\n"
+                    f"`{title}` looks like a ZIM namespace path. The title "
+                    "index only stores entry titles, so a path lookup "
+                    "returns no hits.\n"
                     "**Try one of**:\n"
                     f"- `get article {normalized}` — direct path lookup "
                     "(namespace letters are case-insensitive)\n"
                     f"- `find article titled {title[2:].strip()}` — "
                     "title-only lookup (drops the namespace prefix)\n"
                 )
+            # Real title that happens to contain '/': render its hits.
+            if compact:
+                return compact_renderers.render_find_by_title(data, title)
+            return self.zim_operations.find_entry_by_title(
+                zim_file_path, title, cross_file=False, limit=limit
+            )
+
+        if compact:
+            data = self.zim_operations.find_entry_by_title_data(
+                zim_file_path, title, cross_file=False, limit=limit
+            )
             return compact_renderers.render_find_by_title(data, title)
         return self.zim_operations.find_entry_by_title(
-            zim_file_path,
-            title,
-            cross_file=False,
-            limit=options.get("limit", 10),
+            zim_file_path, title, cross_file=False, limit=limit
         )
 
     def _handle_related(

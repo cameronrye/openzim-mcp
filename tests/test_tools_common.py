@@ -37,13 +37,18 @@ class _FakeServer:
 # ---------------------------------------------------------------------------
 
 
-def test_tool_error_response_returns_sentinel() -> None:
+def test_tool_error_response_returns_structured_envelope() -> None:
+    # L6: the broad-except path now returns a ToolErrorPayload envelope (not a
+    # bare string) carrying the enhanced markdown in ``message``.
     server = _FakeServer(sentinel="MY_SENTINEL")
     err = ValueError("boom")
     result = tool_error_response(
         server, operation="zim_links", error=err, context="ctx"
     )
-    assert result == "MY_SENTINEL"
+    assert result["error"] is True
+    assert result["operation"] == "zim_links"
+    assert result["message"] == "MY_SENTINEL"
+    assert result["context"] == "ctx"
 
 
 def test_tool_error_response_passes_kwargs() -> None:

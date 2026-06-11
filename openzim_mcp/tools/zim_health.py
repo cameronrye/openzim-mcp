@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
-from ._common import load_description, tool_error_response
+from ._common import enforce_rate_limit, load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -26,6 +26,9 @@ def register(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool(description=_DESCRIPTION)
     async def zim_health(zim_file_path: Optional[str] = None) -> Any:
         try:
+            rl = enforce_rate_limit(server, "zim_health")
+            if rl is not None:
+                return rl
             # No argument → combined server state (health + config + files).
             # With a path → validate/diagnose that one archive
             # (Archive.check() + checksum + index/identity).

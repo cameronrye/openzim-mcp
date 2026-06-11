@@ -12,9 +12,10 @@ get_article_structure) into one 4-branch entry point.
   - Single binary: requires `entry_path` + `binary=True`. `view`
     locked to ``"full"``. Forbidden: `entry_paths`,
     `view∈{summary,toc,structure}`, `main_page=True`.
-  - Batch: requires `entry_paths`. Optional `view`,
-    `max_content_length`, `compact`, `compact_budget`. Forbidden:
-    `entry_path`, `binary=True`, `main_page=True`.
+  - Batch: requires `entry_paths`. Full-body only — `view` is locked to
+    "full" (a non-full `view` returns `invalid_path_combination`).
+    Optional `max_content_length`, `compact`. Forbidden: `entry_path`,
+    `binary=True`, `main_page=True`.
   - Main page: requires `main_page=True`. `view` ignored (defaults to
     full-shaped response). Forbidden: `entry_path`, `entry_paths`,
     `binary=True`, `view∈{summary,toc,structure}`.
@@ -39,7 +40,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from ..responses import tool_error
-from ._common import load_description, tool_error_response
+from ._common import enforce_rate_limit, load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -69,6 +70,9 @@ def register(server: "OpenZimMcpServer") -> None:
         compact_budget: Optional[Union[str, int]] = None,
     ) -> Any:
         try:
+            rl = enforce_rate_limit(server, "zim_get")
+            if rl is not None:
+                return rl
             # Post-v2.0.0 D-F (sibling fix from pass-4): mirror the
             # input-validation envelopes ``zim_query`` adopted in pass-3.
             # Pre-fix this advanced surface silently passed
@@ -170,6 +174,20 @@ def _validate_branch_combination(
         return tool_error(
             operation="invalid_path_combination",
             message="`entry_path` and `entry_paths` are mutually exclusive.",
+        )
+    if entry_paths and view != "full":
+        # H13: the batch branch calls get_entries_data, which has no ``view``
+        # parameter and always returns full article bodies. Silently ignoring a
+        # requested ``view`` (the model believes it asked for summaries and
+        # gets full bodies at much higher token cost) is worse than an explicit
+        # rejection. Batch is full-body only; fetch other views per entry.
+        return tool_error(
+            operation="invalid_path_combination",
+            message=(
+                "Batch mode (`entry_paths`) returns full article bodies only; "
+                f"`view={view!r}` is not supported. Fetch a summary / toc / "
+                "structure with a single-entry `entry_path` call instead."
+            ),
         )
     if binary:
         if entry_paths:

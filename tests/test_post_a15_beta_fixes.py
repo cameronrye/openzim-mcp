@@ -147,11 +147,12 @@ class TestD6FindByTitleNamespacePathRedirect:
         mock = MagicMock()
         mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
         mock.config.meta.footer_enabled = False
-        # If the redirect fires, these never get called — make them
-        # explode if they do, so accidental call surfaces clearly.
-        mock.find_entry_by_title_data.side_effect = AssertionError(
-            "find_entry_by_title_data should not be called for namespace paths"
-        )
+        # M15: the redirect now consults the title index FIRST and fires on
+        # zero hits (so real lowercase-first slash-titles like ``a/b testing``
+        # remain findable). A genuine namespace path returns no hits.
+        mock.find_entry_by_title_data.return_value = {"results": [], "total": 0}
+        # The rendered (string) variant must NOT be reached — the redirect
+        # returns before it on the zero-hits path.
         mock.find_entry_by_title.side_effect = AssertionError(
             "find_entry_by_title should not be called for namespace paths"
         )

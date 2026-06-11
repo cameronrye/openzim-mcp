@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from ..responses import ToolErrorPayload, tool_error
 from ..synthesize import SynthesizeResponse
-from ._common import load_description, tool_error_response
+from ._common import enforce_rate_limit, load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -56,6 +56,9 @@ def register(server: "OpenZimMcpServer") -> None:
         synthesize: bool = False,
     ) -> Union[str, SynthesizeResponse, ToolErrorPayload]:
         try:
+            rl = enforce_rate_limit(server, "zim_query")
+            if rl is not None:
+                return rl
             if content_offset < 0:
                 return tool_error(
                     operation="invalid_content_offset",
@@ -96,13 +99,23 @@ def register(server: "OpenZimMcpServer") -> None:
             # comfortably in an 8B Q4 model's agentic prompt window.
             # Callers can override via explicit limit / max_content_length.
             options: Dict[str, Any] = {
-                "limit": limit if limit is not None else 3,
                 "max_content_length": (
                     max_content_length if max_content_length is not None else 4000
                 ),
                 "compact": compact,
                 "synthesize": synthesize,
             }
+            # M14: only set ``limit`` when the caller explicitly passed one
+            # (mirroring offset / content_offset below). Forcing ``limit=3``
+            # for every intent made all per-intent defaults unreachable via the
+            # MCP surface — ``links in X`` returned 3 of thousands (not 25),
+            # ``browse`` 3 (not 50), ``walk`` 3 (not 200),
+            # find_by_title/related/suggestions 3 (not 10), search_all 3 per
+            # file (not 5). With ``limit`` unset, each handler's
+            # ``options.get("limit", N)`` per-intent default applies; the
+            # tell_me_about body-fetch path still self-caps at 3.
+            if limit is not None:
+                options["limit"] = limit
             if offset != 0:
                 options["offset"] = offset
             if content_offset != 0:

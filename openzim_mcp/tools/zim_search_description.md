@@ -42,19 +42,19 @@ PARAMETERS:
   content_type Only valid in mode="fulltext". Restricts search to
                one MIME bucket (e.g. "text/html").
   limit        Maximum results to return (default depends on mode).
-  offset       Pagination offset (default 0).
-  cursor       Phase B cursor pagination handle; overrides `offset`
-               when set.
+  offset       Pagination offset (default 0). Single-archive
+               fulltext only (else rejected).
+  cursor       Unsupported (`invalid_combination`); page fulltext
+               via `offset`.
 
 RESPONSE:
-  Search-shape dict with `results` array. Each result carries
-  `path`, `title`, and (mode-dependent) `snippet` — pass a hit's
-  `path` as the `entry_path` argument to `zim_get` / `zim_links`
-  to fetch or expand it. The
-  `_meta` envelope on title-mode results sets `promotion_applied`
-  to True when the wired Criterion-C path hoisted a Z3/Z4/OPP-1
-  candidate; False with a `hint` when cross-archive blocked the
-  promotion pass.
+  Mode-dependent dict with a `results` array. fulltext/title rows
+  carry `path`, `title`, `snippet` — pass `path` as `entry_path` to
+  `zim_get`/`zim_links`. cross_file=True returns SearchAllResponse
+  whose `results[]` are per-archive wrappers; hits nest under
+  `results[].result.results`. suggest items are `{text, path, type}`.
+  Title-mode `_meta.promotion_applied` is True when Criterion-C
+  hoisted a candidate; False with a `hint` when cross-archive blocked.
 
 ERRORS:
   Returns a ToolErrorPayload on:

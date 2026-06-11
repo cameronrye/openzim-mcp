@@ -46,15 +46,14 @@ repos:
     rev: 7.3.0
     hooks:
       - id: flake8
-        additional_dependencies:
-          - flake8-docstrings
-          - flake8-bugbear
-          - flake8-comprehensions
-          - flake8-simplify
-        # Read the same .flake8 that ``make lint`` (and CI) use, so the
-        # local hook can't drift away from CI. The previous inline args
-        # set max-line-length=88 while .flake8 says 128, which silently
-        # blocked commits on lines CI was happy with.
+        # No flake8 plugins here: ``make lint`` / CI run plain flake8 from the
+        # dev venv (no flake8-docstrings/bugbear/comprehensions/simplify), so
+        # bundling those plugins as additional_dependencies made the local hook
+        # STRICTER than CI — it blocked commits on ~hundreds of pre-existing
+        # docstring (D-rule) / simplify violations the codebase already ships
+        # and CI never flags. Keeping the plugin set empty makes the hook match
+        # CI exactly, per this hook's own "can't drift away from CI" intent.
+        # Read the same .flake8 that make lint / CI use (max-line-length=128).
         args: ["--config=.flake8"]
 
   # Type checking
@@ -73,7 +72,11 @@ repos:
     rev: 1.9.4
     hooks:
       - id: bandit
-        args: ["-c", "pyproject.toml"]
+        # ``-ll`` (report MEDIUM+ only) matches the blocking CI gate
+        # ``make security`` (``bandit -r openzim_mcp -ll``); without it the
+        # hook flagged pre-existing LOW B110/B112 try/except findings that CI
+        # never gates on, blocking commits to otherwise-clean files.
+        args: ["-c", "pyproject.toml", "-ll"]
         additional_dependencies: ["bandit[toml]"]
 
   # Markdown linting

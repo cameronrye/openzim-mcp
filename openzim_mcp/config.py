@@ -491,6 +491,27 @@ class OpenZimMcpConfig(BaseSettings):
             )
         return v
 
+    @field_validator("auth_token")
+    @classmethod
+    def reject_blank_auth_token(cls, v: Optional[SecretStr]) -> Optional[SecretStr]:
+        """Reject an empty/whitespace auth token (it would disable auth).
+
+        ``OPENZIM_MCP_AUTH_TOKEN=""`` parses to ``SecretStr('')`` (not None),
+        which would pass the non-loopback safe-startup check (``is not None``)
+        yet authenticate any request presenting an empty Bearer token
+        (``hmac.compare_digest('', '') == True``). Treat a blank token as a
+        misconfiguration: unset the env var to run without auth (localhost
+        only), or supply a real secret.
+        """
+        if v is not None and not v.get_secret_value().strip():
+            raise OpenZimMcpConfigurationError(
+                "OPENZIM_MCP_AUTH_TOKEN is set but empty or whitespace. An "
+                "empty token would authenticate every request. Unset the "
+                "variable to run without auth (localhost only), or set a real "
+                "secret value."
+            )
+        return v
+
     def setup_logging(self) -> None:
         """Configure logging based on settings."""
         logging.basicConfig(

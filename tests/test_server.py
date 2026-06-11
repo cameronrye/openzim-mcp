@@ -853,7 +853,10 @@ class TestOpenZimMcpServerErrorFormatting:
         assert "**File Not Found Error**" in result
         assert "**Operation**: search" in result
         assert "**Context**: test.zim" in result
-        assert "Use `list_zim_files()` to see available ZIM files" in result
+        assert (
+            'Use `zim_query("list available ZIM files")` to see available files'
+            in result
+        )
         assert "**Technical Details**: File not found: test.zim" in result
 
     def test_format_error_message_archive_error(self, server: OpenZimMcpServer):
@@ -868,7 +871,7 @@ class TestOpenZimMcpServerErrorFormatting:
         assert "**Operation**: get_entry" in result
         assert "**Context**: test.zim/A/Article" in result
         assert "Verify the ZIM file is not corrupted" in result
-        assert "Use `get_server_health()` to check overall server status" in result
+        assert "Use `zim_health()` to check overall server status" in result
         assert "**Technical Details**: Archive corrupted" in result
 
     def test_format_error_message_security_error(self, server: OpenZimMcpServer):
@@ -883,7 +886,9 @@ class TestOpenZimMcpServerErrorFormatting:
         assert "**Operation**: get_entry" in result
         assert "**Context**: ../../../etc/passwd" in result
         assert "Check for path traversal attempts (../ sequences)" in result
-        assert "Use `get_server_configuration()` to see allowed directories" in result
+        assert (
+            "Use `zim_health()` to see server state and allowed directories" in result
+        )
         assert "**Technical Details**: Path traversal detected" in result
 
     def test_format_error_message_validation_error(self, server: OpenZimMcpServer):
@@ -978,9 +983,9 @@ class TestOpenZimMcpServerErrorFormatting:
         assert "**Error Type**: RuntimeError" in result
         assert "**Context**: some context" in result
         assert "Try the operation again (temporary issues may resolve)" in result
-        assert "Use `get_server_health()` to check for server issues" in result
+        assert "Use `zim_health()` to check for server issues" in result
         assert "**Technical Details**: Unexpected runtime error" in result
-        assert "**Need Help?** Use `get_server_configuration()`" in result
+        assert "**Need Help?** Use `zim_health()`" in result
 
 
 class TestOpenZimMcpServerParameterValidation:
@@ -1200,7 +1205,10 @@ class TestSimpleModeWrapperDefaults:
         asyncio.run(tool_fn(query="search for evolution"))
 
         assert captured["options"]["max_content_length"] == 4000
-        assert captured["options"]["limit"] == 3
+        # M14: ``limit`` is no longer force-injected when unspecified — it is
+        # omitted so each intent's per-intent default (links=25, browse=50,
+        # walk=200, …) applies. The tell_me_about body path still self-caps at 3.
+        assert "limit" not in captured["options"]
         assert "offset" not in captured["options"]  # default 0 is suppressed
 
     def test_zim_query_caller_overrides_take_precedence(

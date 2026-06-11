@@ -24,7 +24,7 @@ def test_truncates_oversize_text_body_with_notice():
     assert truncated.startswith("x")
     # Notice must point callers at the paging tool.
     assert "truncated" in truncated.lower()
-    assert "get_zim_entry" in truncated
+    assert "zim_get(content_offset=" in truncated
 
 
 def test_under_cap_body_returned_unchanged():
@@ -106,5 +106,5 @@ class TestBinaryResourceCap:
             with pytest.raises(OpenZimMcpArchiveError) as exc:
                 await resource.read()
         msg = str(exc.value)
-        assert "get_binary_entry" in msg, msg
-        assert "max_size_bytes" in msg, msg
+        assert "zim_get(binary=True)" in msg, msg
+        assert "max_content_length" in msg, msg

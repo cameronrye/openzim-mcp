@@ -3,16 +3,17 @@ Fetch entries from a ZIM archive — single, batch, binary, or main page.
 EXTRACT the right path-shape before calling — the parameters form four
 mutually-exclusive branches:
 
-  - Single entry, body view (default): pass `entry_path` + optional
+- Single entry, body view (default): pass `entry_path` + optional
     `view`. Returns the article body for view="full", a short summary
     for view="summary", a TOC tree for view="toc", a flat section
     list for view="structure".
-  - Single entry, binary: pass `entry_path` + `binary=True`. Returns
+- Single entry, binary: pass `entry_path` + `binary=True`. Returns
     raw bytes (image, video, PDF, etc.). `view` is locked to "full"
     in this branch.
-  - Batch: pass `entry_paths` (list of strings) + optional `view`.
-    Returns the same shape as the single-entry body view, per entry.
-  - Main page: pass `main_page=True` (no entry_path). Returns the
+- Batch: pass `entry_paths` (list of strings). Returns full bodies
+    per entry; `view` is locked to "full" (a non-full `view` returns
+    `invalid_path_combination`).
+- Main page: pass `main_page=True` (no entry_path). Returns the
     archive's main page. `view`, `entry_path`, `entry_paths`,
     `binary` are all forbidden in this branch.
 
@@ -41,8 +42,8 @@ PARAMETERS:
                        `pass content_offset=N` hint.
   compact              Default **False** (v2.0). Set True for
                        small-LLM compaction. v2.5 revisits the default.
-  compact_budget       Named profile ("tiny"/"small"/"medium"/"large")
-                       or raw integer char cap when compact=True.
+  compact_budget       Inert in zim_get at v2.x (honored by `zim_query`,
+                       not here) — does not cap the response.
 
 RESPONSE:
   Branch-dependent dict — EntryResponse / BatchEntryResponse /

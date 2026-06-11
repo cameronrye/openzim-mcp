@@ -214,7 +214,19 @@ class _RerankMixin:
             candidates=tagged_hits,
             top_k=reranker_cfg.final_top_k,
         )
-        self._redistribute_reranked_hits(per_file, reranked_tagged)
+        # H9: BGEReranker.rerank's skip paths (the short-query gate that fires
+        # for any query under min_query_tokens words — i.e. most real queries —
+        # and the inference-failure passthrough) return ``candidates[:top_k]``
+        # in ARCHIVE order with NO ``rerank_score``. Redistributing that
+        # truncated, un-reranked slice silently zeroes out the third-and-later
+        # archives (results=[], has_hits=False) and reorders by archive index —
+        # telling the user those archives had no hits when Xapian found some.
+        # Only redistribute when reranking actually happened (mirrors the
+        # synthesize passthrough guard); otherwise return per_file untouched.
         scored = bool(reranked_tagged and "rerank_score" in reranked_tagged[0])
-        self._track(_RERANKER_ENGAGED if scored else _RERANKER_SKIPPED_PASSTHROUGH)
+        if not scored:
+            self._track(_RERANKER_SKIPPED_PASSTHROUGH)
+            return per_file
+        self._redistribute_reranked_hits(per_file, reranked_tagged)
+        self._track(_RERANKER_ENGAGED)
         return per_file

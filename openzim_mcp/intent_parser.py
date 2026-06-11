@@ -55,6 +55,7 @@ def safe_regex_search(
         timeout_seconds,
         f"Regex operation timed out after {timeout_seconds} seconds",
         RegexTimeoutError,
+        pool="regex",
     )
 
 
@@ -64,6 +65,13 @@ def safe_regex_search(
 _QUOTE_CHARS = "'\"‘’“”"
 _QUOTE_OPEN = f"[{_QUOTE_CHARS}]"
 _QUOTE_NOT = f"[^{_QUOTE_CHARS}]"
+
+# Section/title names legitimately contain apostrophes (``Earth's atmosphere``,
+# ``Murphy's law``), so a value capture that must tolerate them excludes only
+# the DOUBLE-quote delimiters, not the apostrophe / single-quote chars in
+# _QUOTE_CHARS (M8). The lazy quantifier plus the surrounding optional
+# _QUOTE_OPEN still peels an explicitly single-quoted value cleanly.
+_QUOTE_NOT_APOS = '[^"“”]'
 
 
 def _strip_quote_pair(value: str) -> str:
@@ -104,6 +112,7 @@ def safe_regex_findall(
         timeout_seconds,
         f"Regex operation timed out after {timeout_seconds} seconds",
         RegexTimeoutError,
+        pool="regex",
     )
 
 
@@ -131,12 +140,14 @@ def safe_regex_sub(
             timeout_seconds,
             f"Regex operation timed out after {timeout_seconds} seconds",
             RegexTimeoutError,
+            pool="regex",
         )
     return run_with_timeout(
         lambda: re.sub(pattern, repl, text, flags=flags),
         timeout_seconds,
         f"Regex operation timed out after {timeout_seconds} seconds",
         RegexTimeoutError,
+        pool="regex",
     )
 
 
@@ -165,9 +176,15 @@ def _extract_browse(query: str, params: Dict[str, Any]) -> None:
 
 
 def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
+    # H5: anchor the capture's end on the real ``in namespace`` / ``in type``
+    # filter keyword. Without the trailing ``\b`` + lookahead the lazy capture
+    # stopped at the FIRST whitespace-preceded ``in``-prefixed word (internet,
+    # insulin, India…), silently truncating the query — e.g. ``search for
+    # history of the internet in namespace A`` captured only ``history of the``.
     search_match = safe_regex_search(
         rf"(?:search|find|look)\s+(?:for\s+)?{_QUOTE_OPEN}?"
-        rf"({_QUOTE_NOT}+?){_QUOTE_OPEN}?\s+(?:in|within)",
+        rf"({_QUOTE_NOT}+?){_QUOTE_OPEN}?\s+(?:in|within)\b"
+        rf"(?=\s+(?:namespace|type)\b)",
         query,
         re.IGNORECASE,
     )
@@ -267,8 +284,15 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     free-form title like ``United States`` resolves to the canonical
     stored path ``United_States``.
     """
+    # M8: only treat a quote char as a value delimiter when it sits at a token
+    # boundary (start/space before the opener, space/end/punct after the
+    # closer). Otherwise possessive apostrophes were read as quote delimiters,
+    # so ``links in Murphy's law and Sod's law`` matched the span between the
+    # two apostrophes and captured ``s law and Sod``.
     quoted_match = safe_regex_search(
-        rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}", query
+        rf"(?:^|(?<=\s)){_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}"
+        rf"(?=\s|$|[?.,;:!])",
+        query,
     )
     if quoted_match:
         # Post-v2.0.4 D-E sibling: ``get article "  "`` /
@@ -283,16 +307,20 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
             params["entry_path"] = captured
         return
 
-    # Find every keyword position; take the LAST so that
-    # "table of contents for Biology" picks "Biology" (after "for")
-    # rather than "contents for Biology" (after "of"). The keyword set
-    # intentionally excludes "contents" so the "of contents" pair
-    # doesn't shadow the trailing "for <target>" anchor.
+    # H6: prefer an explicit object keyword (article / entry / page). Everything
+    # after the LAST such keyword is the title, so title-internal prepositions
+    # are preserved — ``get article History of France`` → ``History of France``,
+    # ``get article Lord of the Rings`` → ``Lord of the Rings`` (previously the
+    # last-preposition anchor truncated these to ``France`` / ``the Rings``).
+    # Only when no object keyword is present do we fall back to the last
+    # preposition anchor, which keeps ``table of contents for Biology`` →
+    # ``Biology`` (picking ``for`` over the title-internal ``of``).
+    object_re = re.compile(r"\b(?:article|entry|page)\s+", re.IGNORECASE)
     keyword_re = re.compile(
-        r"\b(?:article|entry|page|of|for|in|from|to)\s+",
+        r"\b(?:of|for|in|from|to)\s+",
         re.IGNORECASE,
     )
-    matches = list(keyword_re.finditer(query))
+    matches = list(object_re.finditer(query)) or list(keyword_re.finditer(query))
     if matches:
         tail = query[matches[-1].end() :].strip().rstrip("?.,;:!").strip()
         # Post-v2.0.0 D-C: ``table of contents X`` anchors on ``of`` →
@@ -334,12 +362,30 @@ def _extract_binary(query: str, params: Dict[str, Any]) -> None:
     else:
         # "get binary content from I/image.png", "extract pdf I/document.pdf",
         # "retrieve image logo.png".
+        #
+        # H7: require the connector (from/of/for) AFTER the anchor instead of
+        # listing connectors as anchors. re.search matches leftmost, so the old
+        # alternation matched ``content`` first and then captured the next
+        # token ``from`` as the path — ``get binary content from I/image.png``
+        # yielded entry_path ``from``. The connector is now optional but, when
+        # present, is consumed before the capture so a bare connector can never
+        # be returned as the path.
         binary_pattern = (
-            r"(?:content|data|entry|from|of|for|"
-            r"pdf|image|video|audio|media)"
-            rf"\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?"
+            r"(?:content|data|entry|pdf|image|video|audio|media)"
+            r"\s+(?:from|of|for)\s+"
+            rf"{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?"
         )
         path_match = safe_regex_search(binary_pattern, query, re.IGNORECASE)
+        if not path_match:
+            # No connector form: ``extract pdf I/document.pdf``,
+            # ``retrieve image logo.png`` — anchor directly on the media word.
+            binary_pattern_no_conn = (
+                r"(?:content|data|entry|pdf|image|video|audio|media)"
+                rf"\s+{_QUOTE_OPEN}?(?!(?:from|of|for)\b)"
+                r"([A-Za-z0-9_/.-]+)"
+                rf"{_QUOTE_OPEN}?"
+            )
+            path_match = safe_regex_search(binary_pattern_no_conn, query, re.IGNORECASE)
         if path_match:
             params["entry_path"] = path_match.group(1)
 
@@ -352,7 +398,9 @@ def _extract_binary(query: str, params: Dict[str, Any]) -> None:
 
 def _extract_suggestions(query: str, params: Dict[str, Any]) -> None:
     suggest_pattern = (
-        r"(?:suggestions?|autocomplete|complete|hints?)"
+        # M9: kept in lockstep with the suggestions INTENT_PATTERN — bare
+        # ``complete`` removed; ``autocomplete`` still anchors the verb form.
+        r"(?:suggestions?|autocomplete|hints?)"
         rf"\s+(?:for\s+)?{_QUOTE_OPEN}?({_QUOTE_NOT}+){_QUOTE_OPEN}?"
     )
     suggest_match = safe_regex_search(suggest_pattern, query, re.IGNORECASE)
@@ -402,6 +450,7 @@ def _extract_search_all(query: str, params: Dict[str, Any]) -> None:
             REGEX_TIMEOUT_SECONDS,
             f"Regex operation timed out after {REGEX_TIMEOUT_SECONDS} seconds",
             RegexTimeoutError,
+            pool="regex",
         ).strip()
         params["query"] = cleaned
     except RegexTimeoutError:
@@ -607,7 +656,12 @@ def _extract_get_zim_entries(query: str, params: Dict[str, Any]) -> None:
     ``wikipedia.zim`` while matching ZIM entry paths (``a/foo``,
     ``m/image.png``, etc.).
     """
-    entries = safe_regex_findall(r"[A-Za-z]/[\w\-./%]+", query)
+    # M7: a negative lookbehind anchors the namespace letter so only a
+    # standalone single-letter namespace matches. Without it the last letter of
+    # a longer word qualified — ``get entries A/Foo and/or B/Bar`` captured the
+    # bogus ``d/or`` (from ``an[d/or]``); ``km/h``, ``either/or``, URLs, etc.
+    # produced the same false captures.
+    entries = safe_regex_findall(r"(?<![A-Za-z0-9])[A-Za-z]/[\w\-./%]+", query)
     if entries:
         # Strip trailing sentence punctuation that the character class
         # greedily captures (e.g. "A/Bar." -> "A/Bar").
@@ -646,8 +700,11 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
         params["narrow"] = True
         query = query[narrow_match.end() :]
     # Form A: ``[the] section <name> of|in|from <path>``
+    # M8: ``{_QUOTE_NOT_APOS}`` lets a possessive section name keep its
+    # apostrophe (``section Earth's atmosphere of Earth``) instead of the
+    # capture aborting at the ``'``.
     m = safe_regex_search(
-        rf"\b(?:the\s+)?section\s+{_QUOTE_OPEN}?({_QUOTE_NOT}+?){_QUOTE_OPEN}?"
+        rf"\b(?:the\s+)?section\s+{_QUOTE_OPEN}?({_QUOTE_NOT_APOS}+?){_QUOTE_OPEN}?"
         rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
         query,
         re.IGNORECASE,
@@ -658,7 +715,7 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
         return
     # Form B: ``the <name> section of|in|from <path>``
     m = safe_regex_search(
-        rf"\bthe\s+{_QUOTE_OPEN}?({_QUOTE_NOT}+?){_QUOTE_OPEN}?\s+section"
+        rf"\bthe\s+{_QUOTE_OPEN}?({_QUOTE_NOT_APOS}+?){_QUOTE_OPEN}?\s+section"
         rf"\s+(?:of|in|from)\s+{_QUOTE_OPEN}?(.+?){_QUOTE_OPEN}?\s*\??\s*$",
         query,
         re.IGNORECASE,
@@ -734,9 +791,25 @@ class IntentParser:
             0.95,
             10,
         ),
-        # Metadata - specific keywords
-        (r"\b(metadata|info|details?)\s+(for|about|of)\b", "metadata", 0.9, 9),
-        (r"\binfo\s+about\b", "metadata", 0.9, 9),
+        # Metadata - specific keywords.
+        # H8: the literal word ``metadata`` is an unambiguous archive cue, so
+        # ``metadata for|about|of <X>`` routes to metadata as before. But
+        # ``info`` / ``details`` are ambiguous — ``info about Python`` /
+        # ``details of the French Revolution`` are TOPIC asks, not file
+        # metadata — so they only route to ``metadata`` when the target is
+        # file-shaped (a ``.zim`` token, or ``this/the/that file|archive|zim``).
+        # Bare topic forms now fall through to ``tell_me_about``. (The
+        # ``metadata\s+(for|about|of)`` anchor also keeps the binary
+        # ``... content metadata only for X`` query out of this branch.)
+        (r"\bmetadata\s+(?:for|about|of)\b", "metadata", 0.9, 9),
+        (
+            r"\b(info|details?)\s+(?:for|about|of)\s+"
+            r"(?:[A-Za-z0-9_.\-]+\.zim\b|"
+            r"(?:this|the|that)\s+(?:zim|file|archive))",
+            "metadata",
+            0.9,
+            9,
+        ),
         # Main page - very specific
         (r"\b(main|home|start)\s+page\b", "main_page", 0.95, 10),
         # Namespace listing - very specific
@@ -800,8 +873,12 @@ class IntentParser:
         # ``(for|of)?`` group failed before a quote char and the query
         # silently fell through to the ``search`` general fallback.
         (
-            r"\b(suggestions?|autocomplete|complete|hints?)\s+(for|of)?"
-            r"(?=\b|['\"‘’“”])",
+            # M9: the bare verb ``complete`` was dropped — the adjective
+            # ``complete`` (``complete works of Shakespeare``,
+            # ``complete history of X``) is far more common than the verb and
+            # hijacked get_article/topic queries into autocomplete.
+            # ``autocomplete`` / ``suggestions`` / ``hints`` remain reliable.
+            r"\b(suggestions?|autocomplete|hints?)\s+(for|of)?" r"(?=\b|['\"‘’“”])",
             "suggestions",
             0.85,
             7,
@@ -1193,27 +1270,27 @@ class IntentParser:
         rules 2 and 3 run in degraded mode (substitute without
         probing, strip without probing).
         """
-        # Sub-D-2 Tier 1 rewrites — runs BEFORE the existing _strip_*
-        # chain so downstream regexes see a normalized query. Master
-        # kill switch is honored inside _apply_tier1_rewrites.
+        # M10: peel param-leak and politeness suffixes BEFORE the Tier 1
+        # rewrites. Rule 4 (_decompose_x_of_y) is the last Tier 1 rule and
+        # moves the entity capture mid-string (``population of berlin please``
+        # → ``berlin please population``), where the end-anchored strips can no
+        # longer remove the junk and the decomposition_hint entity already
+        # carries it. Stripping first (both strips are IGNORECASE, so running
+        # them on the original-case query is safe) feeds Rule 4 a clean topic.
+        #
+        # Param-leak strip runs before politeness (post-a23 P1-D3): the
+        # politeness regex then sees the clean topic without ``limit=10`` /
+        # ``offset=5`` confusing its leading word-boundary anchor.
+        query = cls._strip_param_leaks(query)
+        query = cls._strip_trailing_politeness(query)
+
+        # Sub-D-2 Tier 1 rewrites. Master kill switch honored inside
+        # _apply_tier1_rewrites.
         query, decomposition_hint = cls._apply_tier1_rewrites(
             query,
             title_probe=title_probe,
             enabled=query_rewrite_enabled,
         )
-
-        # Post-a23 P1-D3: peel leaked ``param=value`` suffixes BEFORE
-        # politeness so the politeness regex (and every downstream
-        # extractor) sees the clean topic. See ``_PARAM_LEAK_RE`` for
-        # the live-observed defect class. Order matters: politeness
-        # then runs over the cleaned topic without ``limit=10`` /
-        # ``offset=5`` confusing its leading word-boundary anchor.
-        query = cls._strip_param_leaks(query)
-        # Post-a20 PD2-1: peel trailing politeness BEFORE pattern
-        # matching + extraction so every extractor sees the cleaned
-        # query. See ``_TRAILING_POLITENESS_RE`` above for rationale +
-        # sibling-defect enumeration.
-        query = cls._strip_trailing_politeness(query)
         query_lower = query.lower()
 
         # Collect all matching patterns

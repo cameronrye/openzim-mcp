@@ -193,7 +193,7 @@ class TestFormatGenericError:
         )
 
         assert "Troubleshooting" in result
-        assert "get_server_health" in result
+        assert "zim_health" in result
 
 
 class TestGetErrorConfig:

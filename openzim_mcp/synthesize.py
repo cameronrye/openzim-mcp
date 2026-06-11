@@ -461,7 +461,16 @@ def _maybe_boost_passage(
         return new_p
     affinity = len(heading_tokens & query_tokens) / len(heading_tokens)
     if affinity >= threshold:
-        new_p["score"] = float(passage["score"]) * boost
+        # M17: a section-affinity match must always PROMOTE the passage. When
+        # the [reranker] extra is engaged, score is overwritten with the raw
+        # cross-encoder logit, which is routinely NEGATIVE for moderately
+        # relevant passages. ``score * boost`` (boost >= 1) makes a negative
+        # score MORE negative, demoting the matching passage below
+        # non-matching ones — the opposite of the intent. Divide when negative
+        # so the score moves toward zero (up in the descending sort)
+        # regardless of sign; the magnitude of promotion stays symmetric.
+        score = float(passage["score"])
+        new_p["score"] = score * boost if score >= 0 else score / boost
     return new_p
 
 
@@ -1196,6 +1205,34 @@ def _promote_title_match(
                         and tail_tok
                         and tail_tok[0] in rescued_tokens
                     ):
+                        rescued_path = str(rescued["path"])
+                        # M18: the other two promotion paths dedup against
+                        # top_hits before prepending; this rescue path did not.
+                        # When the rescued canonical is ALREADY in BM25 top_hits
+                        # (the documented Einstein's-theory case where
+                        # Theory_of_relativity sits at rank 6) it was rendered
+                        # TWICE — duplicate cite_id, duplicate passage, double
+                        # char-budget spend. Reorder the existing entry to front
+                        # instead of prepending a duplicate.
+                        if (archive_name, rescued_path) in existing_paths:
+                            reordered_rescue = [
+                                (n, h)
+                                for n, h in top_hits
+                                if not (
+                                    n == archive_name
+                                    and str(h.get("path", "")) == rescued_path
+                                )
+                            ]
+                            existing_hit = next(
+                                h
+                                for n, h in top_hits
+                                if n == archive_name
+                                and str(h.get("path", "")) == rescued_path
+                            )
+                            return [
+                                (archive_name, _mark_promoted(existing_hit)),
+                                *reordered_rescue,
+                            ]
                         rescued_hit = _build_pass0_promoted_hit(
                             rescued, archive, title_match_hit
                         )
@@ -1290,9 +1327,10 @@ def _drop_low_relevance_tail(
     ``Rephlex_Records_discography`` as rank-2 with score 1.0 because
     RRF normalizes scores to ``1/(k+rank)`` regardless of underlying
     relevance — a weak match looks identical to a strong one. The
-    original Xapian score is preserved on each hit (when search
-    returns it) as ``score`` or ``xapian_score``; use that as the
-    relevance signal.
+    threshold therefore reads ONLY a genuine relevance key
+    (``xapian_score`` / ``relevance``); the fabricated ``1/rank``
+    ``score`` key is NOT a relevance signal and is ignored (M19). When
+    no genuine score is present this becomes a no-op.
 
     Conservative behavior:
       * Single-archive (``xapian_score`` fallback): apply the
@@ -1307,12 +1345,19 @@ def _drop_low_relevance_tail(
     if not top_hits or fallback_used != "xapian_score":
         return top_hits
 
-    # Read the Xapian relevance score off each hit. Possible keys
-    # (varies by search path): ``xapian_score`` (preferred),
-    # ``score`` (legacy), ``relevance`` (alt). Fall back to None when
-    # absent.
+    # Read a GENUINE Xapian relevance score off each hit. Keys tried:
+    # ``xapian_score`` (preferred), ``relevance`` (alt).
+    #
+    # M19: the legacy ``score`` key is deliberately EXCLUDED. ``search_top_k``
+    # fabricates ``score = 1.0/rank`` because libzim's Python API exposes no
+    # raw BM25, so reading it turned this relevance threshold into a pure rank
+    # cutoff (with threshold_ratio=0.25 and a top score of 1.0, only rank<=4
+    # survives) — unconditionally dropping the rank-5 hit on EVERY single-
+    # archive synthesize regardless of how relevant it actually is. When no
+    # real relevance signal is present the threshold is a no-op (``top_score``
+    # is None below), so all hits are preserved.
     def _xapian_score(hit: dict) -> Optional[float]:
-        for key in ("xapian_score", "score", "relevance"):
+        for key in ("xapian_score", "relevance"):
             value = hit.get(key)
             if isinstance(value, (int, float)) and value > 0:
                 return float(value)

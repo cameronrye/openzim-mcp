@@ -7,6 +7,7 @@ This module exists so server.py stays focused on MCP-protocol concerns and
 HTTP-specific behavior is grouped here.
 """
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -37,6 +38,10 @@ READYZ_PATH = "/readyz"
 
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {HEALTHZ_PATH, READYZ_PATH}
+
+# Upper bound on the /readyz allowed-directory stat probe. A hung network mount
+# returns a fast 503 after this instead of stalling the event loop.
+READYZ_PROBE_TIMEOUT_SECONDS = 5.0
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -145,11 +150,35 @@ async def healthz(request: Request) -> JSONResponse:
 def _make_readyz(
     server: "OpenZimMcpServer",
 ) -> Callable[[Request], Awaitable[JSONResponse]]:
+    def _any_readable_dir() -> bool:
+        return any(
+            os.path.isdir(d) and os.access(d, os.R_OK)
+            for d in server.config.allowed_directories
+        )
+
     async def readyz(request: Request) -> JSONResponse:
         """Readiness — at least one allowed directory is readable."""
-        for d in server.config.allowed_directories:
-            if os.path.isdir(d) and os.access(d, os.R_OK):
-                return JSONResponse({"status": "ready"})
+        # os.path.isdir / os.access are blocking stat-family syscalls. On a
+        # hung network mount (NFS/SMB) they freeze the event loop — and every
+        # in-flight MCP request — for the full uninterruptible stat, exactly
+        # the condition a readiness probe is meant to detect. Offload to a
+        # thread and bound it so a wedged mount returns a fast 503 instead of
+        # stalling the server (mirrors MtimeWatcher._scan's to_thread offload).
+        try:
+            ready = await asyncio.wait_for(
+                asyncio.to_thread(_any_readable_dir),
+                timeout=READYZ_PROBE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            return JSONResponse(
+                {
+                    "status": "not_ready",
+                    "reason": "allowed-directory readiness probe timed out",
+                },
+                status_code=503,
+            )
+        if ready:
+            return JSONResponse({"status": "ready"})
         return JSONResponse(
             {"status": "not_ready", "reason": "no readable allowed directories"},
             status_code=503,
@@ -203,7 +232,12 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
         """Capture the expected token from config (None disables auth)."""
         super().__init__(app)
         token = getattr(config, "auth_token", None)
-        self._expected = token.get_secret_value() if token is not None else None
+        secret = token.get_secret_value() if token is not None else None
+        # Defense in depth: an empty/whitespace secret must NOT authenticate
+        # every request via ``hmac.compare_digest('', '')``. Config validation
+        # already rejects a blank token at load time (H4); normalise here too
+        # so the ``is None`` fast-path below treats it as "no auth configured".
+        self._expected = secret if secret and secret.strip() else None
 
     async def dispatch(
         self,
