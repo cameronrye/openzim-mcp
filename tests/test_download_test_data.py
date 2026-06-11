@@ -90,7 +90,7 @@ def test_failed_download_leaves_no_truncated_file(mod, tmp_path, monkeypatch):
 
     monkeypatch.setattr(mod, "urlretrieve", fake_urlretrieve)
 
-    ok = mod.download_file("http://example/small.zim", dest, "small")
+    ok = mod.download_file("https://example/small.zim", dest, "small")
 
     assert ok is False
     assert not dest.exists(), "truncated file must not be promoted to dest_path"
@@ -106,7 +106,7 @@ def test_successful_download_atomically_replaces(mod, tmp_path, monkeypatch):
 
     monkeypatch.setattr(mod, "urlretrieve", fake_urlretrieve)
 
-    ok = mod.download_file("http://example/small.zim", dest, "small")
+    ok = mod.download_file("https://example/small.zim", dest, "small")
 
     assert ok is True
     assert dest.read_bytes() == b"complete-zim-bytes"

@@ -106,7 +106,10 @@ def test_bind_all_with_allowed_hosts_keeps_validation(tmp_path):
     )
     settings, warning = _build_transport_security(cfg)
     assert settings.enable_dns_rebinding_protection is True
-    assert "mcp.example.com" in set(settings.allowed_hosts)
+    # Exact-match membership (not ``"host" in <str>``) so CodeQL's
+    # py/incomplete-url-substring-sanitization heuristic doesn't misread an
+    # exact allowlist check as substring URL sanitization.
+    assert any(host == "mcp.example.com" for host in settings.allowed_hosts)
     assert warning is None
 
 
