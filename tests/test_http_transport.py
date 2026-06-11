@@ -196,10 +196,12 @@ def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
 
 
 def test_fastmcp_uses_sdk_default_when_hosts_unset(tmp_path):
-    """Empty allowed_hosts ⇒ no transport_security passed; SDK default applies.
+    """Loopback bind + empty allowed_hosts ⇒ loopback-only Host allow-list.
 
-    The SDK default is loopback-only, which is the right behavior for
-    purely local deployments.
+    For a loopback bind (the default host 127.0.0.1) we now always construct
+    TransportSecuritySettings explicitly (H10), but its allow-list is the
+    loopback entries only — the right behavior for purely local deployments,
+    and unchanged from the previous SDK-auto-enable default.
     """
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.server import OpenZimMcpServer

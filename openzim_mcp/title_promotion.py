@@ -25,6 +25,16 @@ logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+# Unicode equivalent of _TOKEN_RE (word chars except underscore). The ASCII
+# _TOKEN_RE silently DELETES non-ASCII letters, so a diacritic-bearing topic
+# whose ASCII residue collapses to a short token (``Łódź`` → ``d``, ``café`` →
+# ``caf``) could exact-match an unrelated short-titled article (M24), and a
+# non-ASCII possessor (``Ampère``) shredded into ``amp``/``re`` could never
+# intersect its own canonical path (M25). Used where those comparisons must be
+# Unicode-correct. _TOKEN_RE itself is kept for the external importers that
+# still rely on the ASCII tokenisation.
+_UNICODE_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
 
 def is_strong_title_match(topic: str, path: str, title: str) -> bool:
     """Return True iff ``path`` or ``title`` looks like the article for ``topic``.
@@ -49,14 +59,16 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
     The 3-char-minimum guard on each side prevents trivially-short
     tokens (``Pi``) from driving prefix matches.
     """
-    topic_tokens = tuple(_TOKEN_RE.findall(topic.lower()))
+    # M24: Unicode-aware tokeniser so non-Latin topics aren't mutilated into
+    # short ASCII residues that spuriously exact-match short article titles.
+    topic_tokens = tuple(_UNICODE_TOKEN_RE.findall(topic.lower()))
     if not topic_tokens:
         return False
 
     for candidate in (path, title):
         if not candidate:
             continue
-        cand_tokens = tuple(_TOKEN_RE.findall(candidate.lower()))
+        cand_tokens = tuple(_UNICODE_TOKEN_RE.findall(candidate.lower()))
         if not cand_tokens:
             continue
         if topic_tokens == cand_tokens:
@@ -675,7 +687,8 @@ def count_non_tail_strong_entities(
             continue
         try:
             result = title_probe(tok)
-        except Exception:
+        except Exception as exc:
+            logger.debug("title probe failed for %r: %s", tok, exc)
             continue
         if result is None:
             continue
@@ -833,7 +846,8 @@ def probed_head_matches_promoted(
             continue
         try:
             result = title_probe(tok)
-        except Exception:
+        except Exception as exc:
+            logger.debug("title probe failed for %r: %s", tok, exc)
             continue
         if result is None:
             continue
@@ -962,7 +976,7 @@ def _accept_possessive_fuzzy_suggest(promoted: Dict[str, Any], topic: str) -> bo
     keeping both branches symmetric.
     """
     cand_path = str(promoted.get("path", ""))
-    cand_tokens = set(_TOKEN_RE.findall(cand_path.lower()))
+    cand_tokens = set(_UNICODE_TOKEN_RE.findall(cand_path.lower()))
     possessors = set(extract_possessor_tokens(topic))
     return bool(possessors & cand_tokens)
 
@@ -993,22 +1007,23 @@ def _accept_possessive_redirect(promoted: Dict[str, Any], topic: str) -> bool:
     ``darwin`` is not in ``Evolution``.
     """
     pre_path = promoted.get("pre_redirect_path", "") or promoted.get("path", "")
-    # ``_TOKEN_RE`` is the same ASCII-alphanumerics tokenizer
-    # ``is_strong_title_match`` uses, so pre-path-vs-topic
-    # comparison stays symmetric with the rest of the title-
-    # promotion pipeline.
-    pre_tokens = set(_TOKEN_RE.findall(pre_path.lower()))
+    # ``_UNICODE_TOKEN_RE`` is the same Unicode-aware tokenizer
+    # ``is_strong_title_match`` uses (M25), so pre-path-vs-topic comparison
+    # stays symmetric with the rest of the title-promotion pipeline AND a
+    # non-ASCII possessor (``Ampère``, ``Gödel``) is not shredded into
+    # ASCII fragments that can never intersect its own canonical path.
+    pre_tokens = set(_UNICODE_TOKEN_RE.findall(pre_path.lower()))
     if not pre_tokens:
         # Empty pre-path (shouldn't happen in practice but the data
         # layer doesn't strictly require non-empty) — fall back to
         # accept so we don't silently reject a row a sibling code
         # path depends on.
         return True
-    topic_tokens = set(_TOKEN_RE.findall(topic.lower()))
+    topic_tokens = set(_UNICODE_TOKEN_RE.findall(topic.lower()))
     if pre_tokens.issubset(topic_tokens):
         return True
     cand_path = str(promoted.get("path", ""))
-    cand_tokens = set(_TOKEN_RE.findall(cand_path.lower()))
+    cand_tokens = set(_UNICODE_TOKEN_RE.findall(cand_path.lower()))
     possessors = set(extract_possessor_tokens(topic))
     return bool(possessors & cand_tokens)
 

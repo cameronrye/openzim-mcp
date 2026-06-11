@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import weakref
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -55,52 +56,76 @@ class SubscriberRegistry:
     """
 
     def __init__(self) -> None:
-        """Create an empty registry."""
-        # Set-backed storage so subscribe/unsubscribe/clear_session are all
-        # O(1) per (uri, session) pair. The previous list-based backing made
-        # subscribe O(n) (linear `not in` scan for idempotency), unsubscribe
-        # O(n) (linear search + shift), and clear_session O(URIs * sessions).
-        self._by_uri: dict[str, set[Hashable]] = {}
+        """Create an empty registry.
+
+        M16: a live ``ServerSession`` is held WEAKLY (in a per-URI
+        ``WeakSet``) so a client that disconnects without ever triggering a
+        broadcast — the common case when the watched ``.zim`` files rarely
+        change — is dropped automatically when its session is garbage
+        collected, instead of accumulating dead sessions (and their streams /
+        buffers) without bound. ``clear_session`` only ran on a failed
+        broadcast send, so it could never reclaim those.
+
+        The public contract still accepts "any hashable" session, but a
+        non-weak-referenceable value (e.g. a plain ``str`` / ``int`` used in
+        tests) can't go in a ``WeakSet``, so those fall back to a strong set —
+        bounded by construction and never the production leak source.
+        """
+        self._weak_by_uri: dict[str, "weakref.WeakSet[Any]"] = {}
+        self._strong_by_uri: dict[str, set[Hashable]] = {}
         self._lock = asyncio.Lock()
 
     async def subscribe(self, uri: str, session: Hashable) -> None:
         """Register interest. Idempotent for the same (uri, session) pair."""
         async with self._lock:
-            # ``set.add`` is inherently idempotent — no membership pre-check needed.
-            self._by_uri.setdefault(uri, set()).add(session)
+            try:
+                self._weak_by_uri.setdefault(uri, weakref.WeakSet()).add(session)
+            except TypeError:
+                # Not weak-referenceable (e.g. a str/int session stand-in).
+                self._strong_by_uri.setdefault(uri, set()).add(session)
             logger.debug("subscribe uri=%s session=%r", uri, session)
 
     async def unsubscribe(self, uri: str, session: Hashable) -> None:
         """Drop interest. Silent if the (uri, session) pair was never registered."""
         async with self._lock:
-            sessions = self._by_uri.get(uri)
-            if not sessions:
-                return
-            sessions.discard(session)  # silent on missing
-            if not sessions:
-                self._by_uri.pop(uri, None)
+            weak = self._weak_by_uri.get(uri)
+            if weak is not None:
+                # WeakSet.discard weak-refs its arg, so a non-weak-referenceable
+                # session (never in the weak set) raises TypeError — ignore it.
+                with contextlib.suppress(TypeError):
+                    weak.discard(session)
+                if not weak:
+                    self._weak_by_uri.pop(uri, None)
+            strong = self._strong_by_uri.get(uri)
+            if strong is not None:
+                strong.discard(session)
+                if not strong:
+                    self._strong_by_uri.pop(uri, None)
 
     async def sessions_for(self, uri: str) -> List[Any]:
-        """Return a snapshot of sessions subscribed to ``uri``.
+        """Return a snapshot of the LIVE sessions subscribed to ``uri``.
 
-        Order is not guaranteed (set iteration order); callers (the broadcast
-        fan-out in particular) don't rely on ordering.
+        Order is not guaranteed; callers (the broadcast fan-out in particular)
+        don't rely on ordering. Garbage-collected weak sessions are absent.
         """
         async with self._lock:
-            return list(self._by_uri.get(uri, ()))
+            return [*self._weak_by_uri.get(uri, ()), *self._strong_by_uri.get(uri, ())]
 
     async def clear_session(self, session: Hashable) -> None:
-        """Drop ``session`` from every URI (called on session teardown)."""
+        """Drop ``session`` from every URI (called on broadcast-send failure)."""
         async with self._lock:
-            empty_uris = []
-            for uri, sessions in self._by_uri.items():
-                # ``discard`` is O(1) and silent on missing membership, so
-                # this loop is O(URIs) rather than O(URIs * sessions_per_uri).
-                sessions.discard(session)
-                if not sessions:
-                    empty_uris.append(uri)
-            for uri in empty_uris:
-                self._by_uri.pop(uri, None)
+            for store in (self._weak_by_uri, self._strong_by_uri):
+                empty_uris = []
+                for uri, sessions in store.items():
+                    # ``discard`` on a WeakSet weak-refs its arg; a
+                    # non-weak-referenceable session raises TypeError (it was
+                    # never in the weak set) — ignore it.
+                    with contextlib.suppress(TypeError):
+                        sessions.discard(session)
+                    if not sessions:
+                        empty_uris.append(uri)
+                for uri in empty_uris:
+                    store.pop(uri, None)
 
 
 OnChange = Callable[[str, str], Awaitable[None]]

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ._common import load_description, tool_error_response
+from ._common import enforce_rate_limit, load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -27,6 +27,9 @@ def register(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool(description=_DESCRIPTION)
     async def zim_metadata(zim_file_path: str) -> Any:
         try:
+            rl = enforce_rate_limit(server, "zim_metadata")
+            if rl is not None:
+                return rl
             return await ops.get_archive_metadata_data(zim_file_path)
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
             return tool_error_response(

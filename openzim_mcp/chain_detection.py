@@ -157,6 +157,13 @@ class _ChainMixin:
             left, right = parts[0].strip(), parts[1].strip()
             if not left or not right:
                 continue
+            # H2: don't treat a period after a 1-2 char initial / abbreviation
+            # as a chain boundary — it's a name's middle initial (``Franklin D.
+            # Roosevelt``, ``John F. Kennedy``) or an abbreviation (``Mount St.
+            # Helens``, ``the St. Louis Cardinals``), not two joined operations.
+            # Only the period connector carries a literal ``\.``.
+            if r"\." in connector_pat and cls._ends_with_initial_or_abbrev(left):
+                continue
             # A11 post-a11 L2: when the connector is ``then`` (not ``and
             # then``), an ``and`` may dangle on the end of the left half
             # — ``tell me about berlin and then list namespaces`` splits
@@ -876,6 +883,21 @@ class _ChainMixin:
         if not isinstance(first, dict):
             return False
         return str(first.get("path") or "") == top_path
+
+    @classmethod
+    def _ends_with_initial_or_abbrev(cls, text: str) -> bool:
+        """True when ``text``'s last whitespace token is a 1-2 char initial /
+        abbreviation (``D``, ``F``, ``St``, ``Mt``, ``Jr``, ``Dr``).
+
+        H2: a period immediately following such a token is a name's middle
+        initial or an abbreviation, so the period-connector chain split must be
+        suppressed (``Franklin D. Roosevelt`` is one topic, not two).
+        """
+        tokens = text.split()
+        if not tokens:
+            return False
+        last = tokens[-1].rstrip(".")
+        return 1 <= len(last) <= 2
 
     @classmethod
     def _is_substantive_topic(cls, text: str) -> bool:

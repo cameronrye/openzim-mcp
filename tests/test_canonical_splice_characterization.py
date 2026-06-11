@@ -257,10 +257,11 @@ class TestCanonicalSpliceHappyPath:
         # Splice row precedes the existing first hit in the rendering.
         assert out.index("Berlin") < out.index("Berlin Wall")
 
-    def test_canonical_is_top_hit_short_circuits_to_legacy(self) -> None:
-        """When the BM25 top hit IS the canonical (exact path match),
-        the method short-circuits to the legacy path (no duplicate
-        splice). This is the 6-arg delegation inside the splice body.
+    def test_canonical_is_top_hit_renders_payload_without_rescan(self) -> None:
+        """M33: when the BM25 top hit IS the canonical (exact path match), the
+        method renders the structured payload it already computed instead of
+        re-running the entire filtered search via the legacy markdown path (a
+        second Xapian scan). The legacy delegate must NOT be called.
         """
         payload = {
             "query": "berlin",
@@ -284,11 +285,11 @@ class TestCanonicalSpliceHappyPath:
         out = stub.search_with_filters_with_canonical_splice(
             "/x.zim", "berlin", namespace="C", limit=10, offset=0
         )
-        assert out == _LEGACY_SENTINEL
-        assert len(stub.legacy_calls) == 1
-        # The short-circuit uses the 6-arg legacy call (no display_query
-        # keyword), so the recorded call has display_query at its default.
-        assert stub.legacy_calls[0]["display_query"] is None
+        # No second filtered scan; the canonical (already top) is rendered
+        # straight from the structured payload.
+        assert stub.legacy_calls == []
+        assert out != _LEGACY_SENTINEL
+        assert "Berlin" in out
 
     def test_empty_results_surfaces_canonical(self) -> None:
         """Empty BM25 page + reachable canonical → canonical surfaces as

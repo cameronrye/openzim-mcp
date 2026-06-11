@@ -302,20 +302,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG_NAME="${{ steps.tag.outputs.tag_name }}"
           echo "📦 Uploading build artifacts to existing release: $TAG_NAME"
 
-          # Upload each file in dist/
+          # Upload each file in dist/. A swallowed upload failure here is
+          # unrecoverable: under immutable releases the "Publish draft release"
+          # step below locks the asset list, so a warning-and-continue produces a
+          # permanently asset-less published release with a green pipeline (the
+          # rc0/rc1 empty-Releases failure mode). Fail the job instead.
+          upload_count=0
           for file in dist/*; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               echo "Uploading: $filename"
-              # Use --clobber to overwrite if asset already exists
-              gh release upload "$TAG_NAME" "$file" --clobber || echo "Warning: Failed to upload $filename"
+              # Use --clobber to overwrite if asset already exists.
+              gh release upload "$TAG_NAME" "$file" --clobber
+              upload_count=$((upload_count + 1))
             fi
           done
 
-          echo "✅ Assets uploaded to release $TAG_NAME"
+          if [ "$upload_count" -eq 0 ]; then
+            echo "::error::No artifacts found in dist/ to upload to $TAG_NAME"
+            exit 1
+          fi
+
+          echo "✅ Uploaded $upload_count asset(s) to release $TAG_NAME"
 
       - name: Create new release (draft)
         # Manual `git tag` push path: no release-please draft shell exists,

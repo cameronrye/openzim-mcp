@@ -232,6 +232,6 @@ class BGEReranker:
                 cfg.model_id,
                 getattr(fastembed, "__version__", "unknown"),
             )
-        except Exception:  # pragma: no cover — diagnostic-only path
-            pass
+        except Exception as exc:  # pragma: no cover — diagnostic-only path
+            logger.debug("reranker load-audit log skipped: %s", exc)
         return cls(model=model, config=cfg)

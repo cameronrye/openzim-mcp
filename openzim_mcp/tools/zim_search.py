@@ -40,7 +40,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ..responses import tool_error
-from ._common import load_description, tool_error_response
+from ._common import enforce_rate_limit, load_description, tool_error_response
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -81,6 +81,9 @@ def register(server: "OpenZimMcpServer") -> None:
         # The TypedDict union doesn't help small MCP clients here, and
         # narrowing per-branch hurts readability without runtime payoff.
         try:
+            rl = enforce_rate_limit(server, "zim_search")
+            if rl is not None:
+                return rl
             if mode not in _VALID_MODES:
                 return tool_error(
                     operation="invalid_mode",
@@ -100,6 +103,35 @@ def register(server: "OpenZimMcpServer") -> None:
                 return tool_error(
                     operation="invalid_offset",
                     message=(f"`offset` must be non-negative (provided: {offset})."),
+                )
+            # H14: ``cursor`` was accepted and documented as overriding
+            # ``offset``, but no mode ever decoded it — a client following the
+            # documented ``next_cursor`` loop silently got page 1 forever.
+            # Until cursor pagination is wired for this tool, reject a provided
+            # cursor with a clear pointer to ``offset`` instead of looping.
+            # (zim_browse / zim_links DO honor their cursors.)
+            if cursor is not None and str(cursor).strip():
+                return tool_error(
+                    operation="invalid_combination",
+                    message=(
+                        "`cursor` pagination is not supported by zim_search. "
+                        "Paginate single-archive `mode='fulltext'` results with "
+                        "`offset` instead."
+                    ),
+                )
+            # M28: only single-archive fulltext honors ``offset`` — the suggest,
+            # title, and cross-file fulltext data calls have no offset parameter
+            # and silently returned the same first page. Reject a non-zero
+            # offset in those modes rather than dropping it.
+            if offset and not (mode == "fulltext" and not cross_file):
+                return tool_error(
+                    operation="invalid_combination",
+                    message=(
+                        "`offset` pagination is only supported in single-archive "
+                        f"fulltext mode; mode={mode!r}"
+                        f"{', cross_file=True' if cross_file else ''} does not "
+                        "paginate. Drop `offset`."
+                    ),
                 )
             if cross_file and zim_file_path is not None:
                 return tool_error(

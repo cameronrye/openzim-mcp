@@ -28,23 +28,60 @@ def tool_error_response(
     operation: str,
     error: Exception,
     context: Optional[str] = None,
-) -> str:
-    """Log + build the standard enhanced error payload for a broad ``except``.
+) -> ToolErrorPayload:
+    """Log + build the standard structured error envelope for a broad ``except``.
 
-    Mirrors the b13 envelope every wrapper repeats. The log is emitted under
-    ``openzim_mcp.tools.<operation>`` so each tool's records keep the same
-    logger name they had when every wrapper logged via its own module-level
-    ``getLogger(__name__)`` (operation is the module basename, e.g.
-    ``zim_links`` → ``...tools.zim_links``).
+    The log is emitted under ``openzim_mcp.tools.<operation>`` so each tool's
+    records keep the same logger name they had when every wrapper logged via
+    its own module-level ``getLogger(__name__)`` (operation is the module
+    basename, e.g. ``zim_links`` → ``...tools.zim_links``).
+
+    L6: returns a ``ToolErrorPayload`` (``{error: True, operation, message}``)
+    rather than a bare markdown string, so a data-layer failure shares the SAME
+    envelope shape as the parameter/combination errors the wrappers already
+    return via ``tool_error``. ``responses.py`` and the tool descriptions
+    promise "every tool emits a recognisable envelope on failure"; before this
+    a client branching on ``error: true`` silently missed broad-except
+    failures. The enhanced markdown is preserved in the ``message`` field.
     """
     import logging
 
     logging.getLogger(f"openzim_mcp.tools.{operation}").error(
         "Error in %s: %s", operation, error
     )
-    return server._create_enhanced_error_message(
+    enhanced = server._create_enhanced_error_message(
         operation=operation, error=error, context=context or ""
     )
+    return tool_error(operation=operation, message=enhanced, context=context)
+
+
+def enforce_rate_limit(
+    server: "OpenZimMcpServer", operation: str
+) -> Optional[ToolErrorPayload]:
+    """Apply the configured rate limit for ``operation`` to the current client.
+
+    Returns ``None`` when the call is allowed, or a structured
+    ``ToolErrorPayload`` the wrapper should return directly when the limit is
+    exceeded. Buckets are keyed on ``(client_id, operation)``; the client id is
+    read from ``request_context`` (set per-request by the HTTP auth middleware),
+    so concurrent HTTP callers are isolated while stdio shares the ``"default"``
+    bucket. A no-op when ``rate_limit.enabled`` is False.
+
+    This is the enforcement seam the limiter was missing — it was constructed in
+    ``OpenZimMcpServer.__init__`` but never called, so configured
+    ``OPENZIM_MCP_RATE_LIMIT__*`` limits were silently inert.
+    """
+    from ..exceptions import OpenZimMcpRateLimitError
+
+    try:
+        server.rate_limiter.check_rate_limit(operation=operation)
+    except OpenZimMcpRateLimitError as exc:
+        return tool_error(
+            operation="rate_limited",
+            message=str(exc),
+            context=str(getattr(exc, "details", "") or "") or None,
+        )
+    return None
 
 
 def decode_cursor_state(

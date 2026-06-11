@@ -12,7 +12,7 @@
   "results": [
     {
       "path": "A/Einstein",
-      "snippet": "Albert **Einstein** was a German-born theoretical physicist. He developed the theory of relativity, one of the two pillars of modern physics.\n\n[Table 1: 15 rows x 2 cols - pass compact=False to exp...",
+      "snippet": "Albert **Einstein** was a German-born theoretical physicist. He developed the theory of relativity, one of the two pillars of modern physics....",
       "title": "Einstein"
     }
   ],

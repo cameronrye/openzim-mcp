@@ -35,7 +35,7 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
         steps=[
             "Verify the file path is correct",
             "Check that the file exists in one of the allowed directories",
-            "Use `list_zim_files()` to see available ZIM files",
+            'Use `zim_query("list available ZIM files")` to see available files',
             "Ensure you have read permissions for the file",
         ],
     ),
@@ -47,7 +47,7 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
             "Check if the file is currently being written to",
             "Ensure sufficient system resources (memory/disk space)",
             "Try with a different ZIM file to isolate the issue",
-            "Use `get_server_health()` to check overall server status",
+            "Use `zim_health()` to check overall server status",
         ],
     ),
     OpenZimMcpSecurityError: ErrorConfig(
@@ -57,7 +57,7 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
             "Ensure the file path is within allowed directories",
             "Check for path traversal attempts (../ sequences)",
             "Verify the file path doesn't contain suspicious characters",
-            "Use `get_server_configuration()` to see allowed directories",
+            "Use `zim_health()` to see server state and allowed directories",
         ],
     ),
     OpenZimMcpValidationError: ErrorConfig(
@@ -91,7 +91,7 @@ PERMISSION_ERROR_CONFIG = ErrorConfig(
         "Ensure the server process has read access",
         "Verify the file is not locked by another process",
         "Try running with appropriate permissions",
-        "Use `get_server_health()` for environment validation",
+        "Use `zim_health()` for environment validation",
     ],
 )
 
@@ -117,14 +117,14 @@ GENERIC_ERROR_TEMPLATE = """**Operation Failed**
 
 **Troubleshooting Steps**:
 1. Try the operation again (temporary issues may resolve)
-2. Use `get_server_health()` to check for server issues
+2. Use `zim_health()` to check for server issues
 3. Verify your input parameters are correct
 4. Check if other operations work with the same file
 5. Consider using alternative tools or approaches
 
 **Technical Details**: {details}
 
-**Need Help?** Use `get_server_configuration()` to check server status \
+**Need Help?** Use `zim_health()` to check server status \
 or try simpler operations first."""
 
 
@@ -197,6 +197,16 @@ def get_error_config(error: Exception) -> ErrorConfig | None:
         ErrorConfig if found, None otherwise
     """
     message = str(error).lower()
+
+    # M5: security rejections (security.py raises "Access denied - Path is
+    # outside allowed directories" / "... resolves outside ...") must render
+    # the security template. Check the type BEFORE the "access denied" /
+    # "permission" message-pattern shortcut below — otherwise both primary
+    # raise sites were routed to the generic Permission template, whose
+    # guidance ("try running with appropriate permissions") is actively wrong
+    # for a blocked path traversal.
+    if isinstance(error, OpenZimMcpSecurityError):
+        return ERROR_CONFIGS[OpenZimMcpSecurityError]
 
     # Specific failure modes detectable from the message take priority.
     if "entry not found" in message or "does not exist" in message:

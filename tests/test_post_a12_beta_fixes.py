@@ -264,14 +264,11 @@ class TestD5FilteredSearchCanonicalSplice:
         src = inspect.getsource(
             _SearchMixin.search_with_filters_with_canonical_splice
         ) + inspect.getsource(_SearchMixin._splice_canonical_into_filtered)
-        # New gate present.
-        assert "top_path == canonical_path" in src
-        # Old gate removed from the splice path (the predicate is
-        # still imported for other callers, but the splice no longer
-        # uses it for the early-return).
-        # Match the specific call shape rather than the bare symbol —
-        # the import line ``from … import …, is_strong_title_match``
-        # remains in the file.
+        # M33: the canonical-is-top short-circuit (which re-ran the legacy
+        # filtered search from scratch) was removed entirely — the structured
+        # payload is rendered directly. The loose ``is_strong_title_match``
+        # predicate is therefore still NOT used for any early-return decision
+        # in the splice path (the import elsewhere in the file is unaffected).
         assert "is_strong_title_match(\n                query," not in src
         assert "is_strong_title_match(query," not in src
 

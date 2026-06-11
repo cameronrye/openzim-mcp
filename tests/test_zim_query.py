@@ -78,11 +78,22 @@ async def test_zim_query_dispatches_to_simple_tools_handler(
     assert args[0] == "hello"
     assert args[1] is None
     options = args[2]
-    # Default simple-mode options preserved from b13.
-    assert options["limit"] == 3
+    # M14: ``limit`` is no longer force-injected — it is omitted when the
+    # caller doesn't pass one, so each intent's per-intent default applies.
+    assert "limit" not in options
     assert options["max_content_length"] == 4000
     assert options["compact"] is True
     assert options["synthesize"] is False
+
+
+@pytest.mark.asyncio
+async def test_zim_query_forwards_explicit_limit(server: MagicMock) -> None:
+    """An explicitly-passed limit IS threaded into options (M14)."""
+    register_zim_query(server)
+    fn, _ = server._tools_store["zim_query"]
+    await fn(query="hello", limit=25)
+    args, _kwargs = server.simple_tools_handler.handle_zim_query.call_args
+    assert args[2]["limit"] == 25
 
 
 @pytest.mark.asyncio

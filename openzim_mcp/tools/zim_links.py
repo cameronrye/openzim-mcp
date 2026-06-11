@@ -14,6 +14,7 @@ from ..responses import tool_error
 from ._common import (
     cursor_context_mismatch,
     decode_cursor_state,
+    enforce_rate_limit,
     load_description,
     tool_error_response,
 )
@@ -42,6 +43,9 @@ def register(server: "OpenZimMcpServer") -> None:
         offset: int = 0,
     ) -> Any:
         try:
+            rl = enforce_rate_limit(server, "zim_links")
+            if rl is not None:
+                return rl
             if direction not in _VALID_DIRECTIONS:
                 return tool_error(
                     operation="invalid_direction",

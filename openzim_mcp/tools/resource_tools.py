@@ -67,8 +67,8 @@ def _truncate_text_body(body: str, max_bytes: int) -> str:
     """
     notice_template = (
         "\n\n[Resource truncated at {limit:,} bytes. The full entry has "
-        "{total:,} bytes. Use the get_zim_entry tool with `content_offset` "
-        "to page through the rest, or get_binary_entry for raw bytes.]"
+        "{total:,} bytes. Use `zim_get(content_offset=...)` to page through "
+        "the rest, or `zim_get(binary=True)` for raw bytes.]"
     )
     encoded = body.encode("utf-8")
     total = len(encoded)
@@ -194,8 +194,8 @@ class ZimEntryResource(Resource):
             raise OpenZimMcpArchiveError(
                 f"Binary resource {self.entry_path!r} is "
                 f"{len(raw):,} bytes — over the {DEFAULT_RESOURCE_MAX_BYTES:,} "
-                f"byte resource cap. Use the get_binary_entry tool with "
-                f"max_size_bytes set to fetch large media (PDFs, video, etc.) "
+                f"byte resource cap. Use `zim_get(binary=True)` with "
+                f"`max_content_length` to fetch large media (PDFs, video, etc.) "
                 f"safely; the tool returns a truncated flag and pages by size."
             )
         return raw
@@ -358,7 +358,7 @@ def register_resources(server: "OpenZimMcpServer") -> None:
             "IMPORTANT: clients MUST URL-encode '/' as '%2F' in {path} "
             "(other RFC 3986 reserved characters too). Example: "
             "zim://wikipedia_en/entry/C%2FClimate_change. "
-            "Use the get_zim_entry tool for processed/truncated text output."
+            "Use the zim_get tool for processed/truncated text output."
         ),
         # Placeholder; the per-call MIME is set on each ZimEntryResource.
         mime_type=DEFAULT_BINARY_MIME,

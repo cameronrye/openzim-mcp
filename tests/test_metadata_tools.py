@@ -1,6 +1,6 @@
 """Tests for metadata_tools module."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -27,17 +27,20 @@ class TestGetZimMetadataTool:
         return OpenZimMcpServer(test_config)
 
     @pytest.mark.asyncio
-    async def test_get_zim_metadata_success(self, server: OpenZimMcpServer):
-        """Test successful metadata retrieval."""
-        server.async_zim_operations.get_zim_metadata = AsyncMock(
+    async def test_get_zim_metadata_forwards_to_ops_layer(
+        self, server: OpenZimMcpServer
+    ):
+        """L7: exercise the REAL async wrapper by mocking the sync ops one
+        level down (the previous test awaited the AsyncMock itself, testing
+        unittest.mock rather than any server code)."""
+        server.zim_operations.get_zim_metadata = MagicMock(
             return_value='{"title": "Test", "language": "en"}'
         )
-        server.rate_limiter.check_rate_limit = MagicMock()
 
         result = await server.async_zim_operations.get_zim_metadata("/path/to/file.zim")
 
         assert "title" in result
-        server.async_zim_operations.get_zim_metadata.assert_called_once_with(
+        server.zim_operations.get_zim_metadata.assert_called_once_with(
             "/path/to/file.zim"
         )
 
@@ -53,9 +56,12 @@ class TestGetZimMetadataTool:
         assert "get ZIM metadata" in error_msg or "Operation" in error_msg
 
     @pytest.mark.asyncio
-    async def test_get_zim_metadata_generic_exception(self, server: OpenZimMcpServer):
-        """Test generic exception handling in get_zim_metadata."""
-        server.async_zim_operations.get_zim_metadata = AsyncMock(
+    async def test_get_zim_metadata_propagates_ops_exception(
+        self, server: OpenZimMcpServer
+    ):
+        """L7: the async wrapper propagates a sync-ops exception across the
+        to_thread boundary (real code path, not an AsyncMock side_effect)."""
+        server.zim_operations.get_zim_metadata = MagicMock(
             side_effect=Exception("Test error")
         )
 
@@ -73,19 +79,17 @@ class TestGetMainPageTool:
         return OpenZimMcpServer(test_config)
 
     @pytest.mark.asyncio
-    async def test_get_main_page_success(self, server: OpenZimMcpServer):
-        """Test successful main page retrieval."""
-        server.async_zim_operations.get_main_page = AsyncMock(
+    async def test_get_main_page_forwards_to_ops_layer(self, server: OpenZimMcpServer):
+        """L7: exercise the real async wrapper (mock the sync ops one level
+        down) instead of awaiting the AsyncMock itself."""
+        server.zim_operations.get_main_page = MagicMock(
             return_value="Main page content"
         )
-        server.rate_limiter.check_rate_limit = MagicMock()
 
         result = await server.async_zim_operations.get_main_page("/path/to/file.zim")
 
         assert result == "Main page content"
-        server.async_zim_operations.get_main_page.assert_called_once_with(
-            "/path/to/file.zim"
-        )
+        server.zim_operations.get_main_page.assert_called_once_with("/path/to/file.zim")
 
     @pytest.mark.asyncio
     async def test_get_main_page_rate_limit_error(self, server: OpenZimMcpServer):
@@ -108,17 +112,19 @@ class TestListNamespacesTool:
         return OpenZimMcpServer(test_config)
 
     @pytest.mark.asyncio
-    async def test_list_namespaces_success(self, server: OpenZimMcpServer):
-        """Test successful namespace listing."""
-        server.async_zim_operations.list_namespaces = AsyncMock(
+    async def test_list_namespaces_forwards_to_ops_layer(
+        self, server: OpenZimMcpServer
+    ):
+        """L7: exercise the real async wrapper (mock the sync ops one level
+        down) instead of awaiting the AsyncMock itself."""
+        server.zim_operations.list_namespaces = MagicMock(
             return_value='{"namespaces": ["A", "C", "M"]}'
         )
-        server.rate_limiter.check_rate_limit = MagicMock()
 
         result = await server.async_zim_operations.list_namespaces("/path/to/file.zim")
 
         assert "namespaces" in result
-        server.async_zim_operations.list_namespaces.assert_called_once_with(
+        server.zim_operations.list_namespaces.assert_called_once_with(
             "/path/to/file.zim"
         )
 
@@ -134,9 +140,12 @@ class TestListNamespacesTool:
         assert "list namespaces" in error_msg or "Operation" in error_msg
 
     @pytest.mark.asyncio
-    async def test_list_namespaces_generic_exception(self, server: OpenZimMcpServer):
-        """Test generic exception handling in list_namespaces."""
-        server.async_zim_operations.list_namespaces = AsyncMock(
+    async def test_list_namespaces_propagates_ops_exception(
+        self, server: OpenZimMcpServer
+    ):
+        """L7: the async wrapper propagates a sync-ops exception across the
+        to_thread boundary (real code path, not an AsyncMock side_effect)."""
+        server.zim_operations.list_namespaces = MagicMock(
             side_effect=Exception("Test error")
         )
 

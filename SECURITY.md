@@ -166,6 +166,32 @@ OpenZIM MCP implements several security measures:
 - Avoid logging sensitive information
 - Implement appropriate access controls
 
+### HTTP Transport Authentication
+
+The HTTP transport (`--transport http`) is the only network-exposed surface.
+Its authentication is controlled by two environment variables:
+
+- **`OPENZIM_MCP_AUTH_TOKEN`** — the Bearer token required on every request.
+  Set this whenever the server binds a non-loopback host. An **empty or
+  whitespace-only** value is rejected at startup (an empty token would
+  authenticate every request); unset the variable entirely to run
+  localhost-only without auth.
+- **`OPENZIM_MCP_INSECURE_DISABLE_AUTH=1`** — an explicit, operator-acknowledged
+  escape hatch that allows a non-loopback bind **without** a token. Use it
+  **only** on closed networks (Docker bridge, Tailscale-only, isolated LAN)
+  where the network itself is the trust boundary. The server logs a `WARNING`
+  naming the bound host on every startup. It does **not** apply to
+  `--transport sse`, which remains localhost-only. Anyone who can reach the
+  address can call every tool — never enable this on an internet-reachable
+  interface.
+
+When binding `0.0.0.0` (all interfaces) without setting
+`OPENZIM_MCP_ALLOWED_HOSTS`, DNS-rebinding Host validation is automatically
+disabled (because no single client-facing Host can be pinned) and a warning is
+logged; the Bearer token is then the sole access control. Pin
+`OPENZIM_MCP_ALLOWED_HOSTS` to your reachable hostname(s) to re-enable Host
+validation.
+
 ## Disclosure Policy
 
 ### Coordinated Disclosure

@@ -91,9 +91,36 @@ async def test_registry_uses_set_backed_storage_for_o1_membership():
     for s in sessions:
         await registry.subscribe("zim://x", s)
 
-    backing = registry._by_uri["zim://x"]
+    # M16: non-weak-referenceable (str) sessions live in the strong set.
+    backing = registry._strong_by_uri["zim://x"]
     assert isinstance(backing, set), f"expected set, got {type(backing).__name__}"
     assert len(backing) == 10000
+
+
+@pytest.mark.asyncio
+async def test_weak_session_auto_pruned_on_gc():
+    """M16: a weak-referenceable session is dropped automatically once it is
+    garbage-collected (e.g. the client disconnected) — even with no broadcast
+    ever firing — so dead sessions can't accumulate without bound.
+    """
+    import gc
+
+    from openzim_mcp.subscriptions import SubscriberRegistry
+
+    registry = SubscriberRegistry()
+
+    class _Session:  # weak-referenceable stand-in for a ServerSession
+        pass
+
+    sess = _Session()
+    await registry.subscribe("zim://files", sess)
+    assert await registry.sessions_for("zim://files") == [sess]
+
+    # Client disconnects: drop the only strong ref and collect.
+    del sess
+    gc.collect()
+
+    assert await registry.sessions_for("zim://files") == []
 
 
 @pytest.mark.asyncio

@@ -196,6 +196,35 @@ _HIGHLIGHT_SKIP_RE = re.compile(
     r"|`[^`\n]+`",
 )
 
+# A complete markdown link starting at a given ``[``.
+_COMPLETE_LINK_RE = re.compile(r"\[[^\]\n]*\]\([^\n)]*\)")
+# A markdown link whose syntax started (``[`` with no closing ``]``, or
+# ``[text](`` with no closing ``)``) but was cut off at end-of-string.
+_DANGLING_LINK_RE = re.compile(r"\[[^\]\n]*$|\[[^\]\n]*\]\([^\n)]*$")
+
+
+def _truncate_before_dangling_link(text: str) -> str:
+    """Back ``text`` up to before an unterminated trailing markdown link.
+
+    M3: ``create_snippet`` truncates ``snippet_text[:cap]`` BEFORE highlighting.
+    A cut landing inside a ``[text](url "title")`` construct leaves a dangling
+    link; ``_HIGHLIGHT_SKIP_RE`` then no longer matches it (it requires a
+    complete ``[..](..)``), so ``_highlight_terms`` bolds query terms inside the
+    link text / URL — the exact malformed-markdown shape the skip-regex exists
+    to prevent. Detect a dangling trailing link and drop the fragment, mirroring
+    the existing dangling-``**`` repair. A bare bracket (``[1]`` / ``[edit]``
+    with a closing ``]`` but no ``(``) is left alone — it is not a link.
+    """
+    open_idx = text.rfind("[")
+    if open_idx == -1:
+        return text
+    tail = text[open_idx:]
+    if _COMPLETE_LINK_RE.match(tail):
+        return text
+    if _DANGLING_LINK_RE.match(tail):
+        return text[:open_idx].rstrip()
+    return text
+
 
 def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     """Wrap the first `max_hits` occurrences of any query term in **bold**.
@@ -563,7 +592,17 @@ def _build_sections(soup: BeautifulSoup) -> List[Dict[str, Union[str, int]]]:
                 "word_count": 0,
             }
         elif current_section and element.name in ("p", "div"):
-            _append_section_content(current_section, element)
+            # H3: only collect "leaf" blocks — a <p>/<div> with no nested
+            # heading / <p> / <div> descendant. ``element.get_text()`` includes
+            # ALL descendant text, so collecting both a wrapper and its nested
+            # blocks counted the same prose 2-3x (word_count 21 instead of 7 on
+            # ``<div><div><p>…</p></div></div>``). Worse, a container <div>
+            # holding the whole article body appears BEFORE its nested headings
+            # in document order, so its get_text() dumped every later section's
+            # text into the section preceding it. Collecting only leaf blocks
+            # fixes both — wrapper text is gathered via its block children.
+            if element.find(["h1", "h2", "h3", "h4", "h5", "h6", "p", "div"]) is None:
+                _append_section_content(current_section, element)
 
     if current_section:
         sections.append(current_section)
@@ -859,8 +898,19 @@ class ContentProcessor:
                         section_emitted_count += 1
                     if len(rows) >= kv_limit:
                         break
-            node.decompose()
-            return rows
+            # M2: only remove the matched node when we actually extracted KV
+            # rows. The KV loop only emits rows pairing a <th> with a <td>, so
+            # a div-based infobox, a <td class="infobox-label"> layout, or any
+            # non-table element matched by the broad ``.infobox`` / ``.vcard``
+            # selectors yields zero rows — decomposing it then deleted the
+            # content from the soup with no placeholder and no signal (compact
+            # mode rendered neither the infobox markdown nor the original
+            # element). Leave a zero-row node in place so its content still
+            # renders, and try the next selector.
+            if rows:
+                node.decompose()
+                return rows
+            continue
         return []
 
     def replace_oversized_tables(
@@ -1060,7 +1110,10 @@ class ContentProcessor:
         # final string respects snippet_length rather than overshooting it.
         if len(snippet_text) > effective_len:
             cap = max(effective_len - 3, 0)
-            snippet_text = snippet_text[:cap].rstrip() + "..."
+            # M3: repair a link the cut split before highlighting runs, so
+            # _highlight_terms doesn't bold terms inside a now-dangling link.
+            snippet_text = _truncate_before_dangling_link(snippet_text[:cap].rstrip())
+            snippet_text += "..."
 
         if query:
             snippet_text = _highlight_terms(snippet_text, query, max_hits=5)
@@ -1070,6 +1123,10 @@ class ContentProcessor:
             if len(snippet_text) > effective_len:
                 cap = max(effective_len - 3, 0)
                 sliced = snippet_text[:cap].rstrip()
+                # M3: a complete link can be re-split by this post-highlight
+                # truncation; back up before a dangling link first, then let
+                # the dangling-``**`` repair recount on the shortened slice.
+                sliced = _truncate_before_dangling_link(sliced)
                 # Truncation can land inside a ``**term**`` highlight, leaving
                 # an unmatched opening marker (e.g. ``…**ter``) that downstream
                 # markdown renderers will treat as runaway bold. Detect an

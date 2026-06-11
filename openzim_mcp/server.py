@@ -1,7 +1,7 @@
 """Main OpenZIM MCP server implementation."""
 
 import logging
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -61,6 +61,89 @@ def _build_transport_allowed_hosts(configured_hosts: list[str]) -> list[str]:
         if ":" not in host:
             allowed_hosts.append(f"{host}:*")
     return allowed_hosts
+
+
+# Bind-all sentinels: a server bound here has no single client-facing Host to
+# pin into the DNS-rebinding allow-list. These are literals we DETECT, not an
+# address we bind — the actual bind host comes from config. (nosec B104.)
+_BIND_ALL_HOSTS = frozenset({"0.0.0.0", "::", "[::]"})  # nosec B104
+
+
+def _is_loopback_literal(host: str) -> bool:
+    """Best-effort check that a configured bind host is a loopback literal."""
+    return host.strip().lower() in {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def _build_transport_security(
+    config: OpenZimMcpConfig,
+) -> tuple[Any, Optional[str]]:
+    """Build SDK transport-security settings for an HTTP bind (returns settings + warning).
+
+    Closes the gap where FastMCP, constructed without a ``host`` kwarg, defaults
+    its DNS-rebinding allow-list to loopback only — so a non-loopback bind
+    (0.0.0.0 or a fixed LAN IP) that passes the auth safe-startup check then
+    421-rejects every MCP request because the real ``Host`` header is not in the
+    loopback allow-list, while /healthz and /readyz still answer 200.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    host = config.host
+    allowed_origins = list(config.cors_origins)
+    allowed_hosts = _build_transport_allowed_hosts(config.allowed_hosts)
+
+    if _is_loopback_literal(host):
+        # Loopback bind: the always-present loopback entries already cover it.
+        return (
+            TransportSecuritySettings(
+                allowed_hosts=allowed_hosts, allowed_origins=allowed_origins
+            ),
+            None,
+        )
+
+    if host in _BIND_ALL_HOSTS:
+        if config.allowed_hosts:
+            # Operator pinned their public hostname(s); keep Host validation on.
+            return (
+                TransportSecuritySettings(
+                    allowed_hosts=allowed_hosts, allowed_origins=allowed_origins
+                ),
+                None,
+            )
+        # Bound to all interfaces with no pinned Host. The client-facing Host
+        # varies by reachable IP / container, so any Host allow-list would 421
+        # every request. Disable DNS-rebinding Host validation — the auth token
+        # (or the explicitly-acknowledged OPENZIM_MCP_INSECURE_DISABLE_AUTH) is
+        # the access gate here — and surface the trade-off loudly.
+        warning = (
+            f"HTTP transport bound to {host} with no OPENZIM_MCP_ALLOWED_HOSTS "
+            "set; disabling DNS-rebinding Host validation so direct-IP clients "
+            "are not rejected with 421 Misdirected Request. Set "
+            "OPENZIM_MCP_ALLOWED_HOSTS to your reachable hostname(s) to "
+            "re-enable Host validation."
+        )
+        return (
+            TransportSecuritySettings(
+                enable_dns_rebinding_protection=False,
+                allowed_hosts=allowed_hosts,
+                allowed_origins=allowed_origins,
+            ),
+            warning,
+        )
+
+    # Bound to a specific non-loopback interface (e.g. a fixed LAN IP). Allow
+    # direct access to that host (and its ":*" port form) so the deployment
+    # works without forcing the operator to duplicate the bind host into
+    # OPENZIM_MCP_ALLOWED_HOSTS.
+    if host not in allowed_hosts:
+        allowed_hosts.append(host)
+        if ":" not in host:
+            allowed_hosts.append(f"{host}:*")
+    return (
+        TransportSecuritySettings(
+            allowed_hosts=allowed_hosts, allowed_origins=allowed_origins
+        ),
+        None,
+    )
 
 
 class OpenZimMcpServer:
@@ -136,13 +219,11 @@ class OpenZimMcpServer:
         # decision: an origin we let into CORS is one we let past the
         # rebinding check.
         fastmcp_kwargs: dict = {}
-        if config.transport == "http" and config.allowed_hosts:
-            from mcp.server.transport_security import TransportSecuritySettings
-
-            fastmcp_kwargs["transport_security"] = TransportSecuritySettings(
-                allowed_hosts=_build_transport_allowed_hosts(config.allowed_hosts),
-                allowed_origins=list(config.cors_origins),
-            )
+        if config.transport == "http":
+            transport_security, host_warning = _build_transport_security(config)
+            fastmcp_kwargs["transport_security"] = transport_security
+            if host_warning:
+                logger.warning(host_warning)
         self.mcp = FastMCP(config.server_name, **fastmcp_kwargs)
         self.mcp._mcp_server.version = __version__
         self._register_tools()
@@ -317,4 +398,11 @@ class OpenZimMcpServer:
             logger.error(f"Server error: {e}")
             raise
         finally:
+            # M21: cancel queued timeout work and release the daemon pools so a
+            # finite runaway doesn't delay exit by its full remaining duration.
+            # (A truly-hung libzim worker runs on a daemon thread and is
+            # abandoned rather than joined, so this never blocks.)
+            from .timeout_utils import shutdown_timeout_executors
+
+            shutdown_timeout_executors()
             logger.info("OpenZIM MCP server stopped")
