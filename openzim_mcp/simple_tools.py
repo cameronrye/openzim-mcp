@@ -440,6 +440,33 @@ class SimpleToolsHandler(
                 params["query"] = search_q
         return None
 
+    @staticmethod
+    def _path_failure_reason(
+        zim_file_path: Optional[str], error_lower: str, safe_error: str
+    ) -> str:
+        """Reword a ZIM-path failure so a harmless non-matching NAME isn't
+        reported with the security ``outside allowed directories`` wording.
+
+        The path validator raises the same ``OpenZimMcpSecurityError`` for a
+        genuine out-of-sandbox path (``/etc/passwd``, ``../..``) AND for a
+        bare token that simply doesn't resolve to a loaded archive
+        (``superuser`` — missing its ``.zim`` extension). Reserve the
+        security phrasing for paths that actually contain separators / ``..``
+        (a real traversal shape); a bare in-scope name gets a plain
+        not-found reason instead of leaking the allowlisting mechanism.
+        """
+        original = zim_file_path or ""
+        is_security_denial = "outside allowed directories" in error_lower
+        looks_like_bare_name = (
+            "/" not in original and "\\" not in original and ".." not in original
+        )
+        if is_security_denial and looks_like_bare_name:
+            return (
+                "the path did not match any loaded archive "
+                "(likely a typo or a missing `.zim` extension)"
+            )
+        return safe_error
+
     def handle_zim_query(
         self,
         query: str,
@@ -810,12 +837,15 @@ class SimpleToolsHandler(
                     # (path outside allowed tree vs typoed filename).
                     # Including ``**Reason**`` keeps the diagnostic
                     # context while still surfacing the recovery hint.
+                    reason_text = self._path_failure_reason(
+                        zim_file_path, error_lower, safe_error
+                    )
                     return (
                         f"**ZIM File Not Found**\n\n"
                         f"**Query**: {safe_query}\n"
                         f"**Issue**: the `zim_file_path` value passed "
                         f"doesn't match any loaded archive.\n"
-                        f"**Reason**: {safe_error}\n\n"
+                        f"**Reason**: {reason_text}\n\n"
                         f"{hint}\n\n"
                         f"<!-- intent=zim_path_not_found cert=1.00 -->"
                     )
@@ -1186,6 +1216,57 @@ class SimpleToolsHandler(
     # as valid JSON, trimming summaries / recording ``headings_omitted``
     # rather than letting the generic byte-cap sever the JSON mid-heading).
     _SELF_CAPPED_INTENTS = frozenset({"structure"})
+
+    # ``synthesize=True`` is a multi-archive CONTENT/topic operation (open
+    # every archive, fuse the best hits). Structural / navigation intents
+    # (``show main page``, ``list namespaces``, ``metadata for X`` …) have
+    # no meaningful "synthesis": fuzzy full-text searching their command
+    # words returns junk (``show main page`` -> an actor surnamed "Page"),
+    # so they fall through to normal structural handling. Everything else —
+    # including meta-only / chained queries, which the synthesize path
+    # handles with its own structured-error guards — still synthesizes.
+    _NON_SYNTHESIZABLE_INTENTS = frozenset(
+        {
+            "main_page",
+            "list_namespaces",
+            "list_files",
+            "metadata",
+            "browse",
+            "walk_namespace",
+            "toc",
+            "structure",
+            "get_section",
+            "links",
+            "suggestions",
+            "find_by_title",
+            "related",
+            "get_zim_entries",
+            "binary",
+        }
+    )
+
+    def _synthesize_reject_structural_intent(
+        self, intent: str
+    ) -> Optional[ToolErrorPayload]:
+        """Reject a pure structural/navigation intent on the synthesize path.
+
+        Runs AFTER the meta-only / chained guards, so chained queries that
+        happen to classify as a structural intent (``... then list
+        namespaces``) are already handled. A standalone ``show main page``
+        with ``synthesize=True`` reaches here and is refused with a clear
+        pointer to the non-synthesize call, instead of fuzzy-searching the
+        command words (which surfaced an actor named "Page").
+        """
+        if intent not in self._NON_SYNTHESIZABLE_INTENTS:
+            return None
+        return tool_error(
+            operation="synthesize_not_applicable",
+            message=(
+                f"`synthesize=True` performs multi-archive content synthesis "
+                f"and does not apply to the structural `{intent}` operation. "
+                f"Re-run the same query without `synthesize`."
+            ),
+        )
 
     # Post-a20 P1-D1: the set of cursor-emitting tools that legitimately
     # carry an ``s.q`` field in their cursor payload (``search_zim_file``
@@ -3476,6 +3557,10 @@ class SimpleToolsHandler(
             return early
 
         intent, params = self._synthesize_parse_intent(query, zim_file_path)
+
+        structural = self._synthesize_reject_structural_intent(intent)
+        if structural is not None:
+            return structural
 
         invalid = self._synthesize_validate_parsed_intent(intent, params, query)
         if invalid is not None:
