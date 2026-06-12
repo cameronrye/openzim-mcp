@@ -726,9 +726,14 @@ class TestZimOperations:
             assert "bio" in result
 
     def test_get_search_suggestions_short_query(self, zim_operations: ZimOperations):
-        """Test search suggestions with too short query."""
-        result = zim_operations.get_search_suggestions("test.zim", "a", limit=5)
-        # Phase B contract: short queries return the empty contract envelope
+        """Test search suggestions with an empty query.
+
+        The single-character floor was removed (a 1-char prefix matches
+        thousands of titles and must not be silently floored to zero), so
+        the early-return now fires only for an empty / whitespace prefix.
+        """
+        result = zim_operations.get_search_suggestions("test.zim", "", limit=5)
+        # Phase B contract: empty queries return the empty contract envelope
         # (``done=True``, ``total=0``) instead of a free-form ``message``.
         assert '"results": []' in result
         assert '"done": true' in result
@@ -2271,9 +2276,11 @@ class TestZimOperations:
         zim_file = temp_dir / "test.zim"
         zim_file.touch()
 
-        # Test search suggestions with short query — Phase B drops the
+        # Test search suggestions with an empty query — Phase B drops the
         # free-form ``message`` and returns the empty contract envelope.
-        result = zim_operations.get_search_suggestions(str(zim_file), "a")
+        # (A single-character prefix no longer short-circuits here; the
+        # floor is empty/whitespace-only.)
+        result = zim_operations.get_search_suggestions(str(zim_file), "")
         assert '"results": []' in result
         assert '"done": true' in result
 

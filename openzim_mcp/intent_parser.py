@@ -10,6 +10,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote
 
 from .constants import REGEX_TIMEOUT_SECONDS
 from .exceptions import RegexTimeoutError
@@ -492,6 +493,27 @@ def _extract_related(query: str, params: Dict[str, Any]) -> None:
             params["entry_path"] = entry_path
 
 
+def _normalize_url_topic(topic: str) -> str:
+    """Collapse a pasted ``http(s)://host/path/Title`` URL to its final
+    path segment as the topic.
+
+    A pasted Wikipedia URL was otherwise tokenised on ``/`` downstream and
+    the scheme token (``https:``) was taken as the topic, returning the
+    wrong article. Only fires on an ``http(s)://host/<path>`` shape with a
+    non-empty last segment; anything else is returned unchanged so ordinary
+    topics (including ones that merely contain a slash) are not disturbed.
+    """
+    m = re.match(r"^\s*https?://[^/\s]+/(.+?)\s*$", topic, re.IGNORECASE)
+    if not m:
+        return topic
+    path = m.group(1).split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    if not path:
+        return topic
+    segment = path.rsplit("/", 1)[-1]
+    segment = unquote(segment).replace("_", " ").strip()
+    return segment or topic
+
+
 def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     """Extract the topic from a ``tell_me_about``-shaped query.
 
@@ -551,6 +573,8 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     m = safe_regex_search(
         r"^\s*("
         r"tell\s+me\s+about\b|"
+        r"show\s+me\s+(?:everything|all|more)\s+(?:about|on)\b|"
+        r"everything\s+(?:about|on)\b|"
         r"who\s+(?:is|was|are|were)\b|"
         r"what\s+(?:is|are|was|were)\b|"
         r"describe\b|"
@@ -643,6 +667,7 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     # ``tell me about "Photosynthesis"`` now searches the bare topic
     # instead of the quoted form, which is a cleaner search input.
     topic = _strip_quote_pair(topic)
+    topic = _normalize_url_topic(topic)
     params["topic"] = topic
 
 
@@ -948,6 +973,8 @@ class IntentParser:
         # ``walk_namespace`` / ``search_all`` (>= 0.9).
         (
             r"\b(tell\s+me\s+about|"
+            r"show\s+me\s+(everything|all|more)\s+(about|on)|"
+            r"everything\s+(about|on)|"
             r"who\s+(is|was|are|were)|"
             r"what\s+(is|are|was|were)|"
             r"describe|explain|"
@@ -1332,7 +1359,8 @@ class IntentParser:
             # * Anything else — keep the legacy bare-search fallback.
             if cls._looks_like_bare_topic(query):
                 params = cls._attach_decomposition_hint(
-                    {"topic": query.strip()}, decomposition_hint
+                    {"topic": _normalize_url_topic(query.strip())},
+                    decomposition_hint,
                 )
                 return "tell_me_about", params, 0.7
             params = cls._attach_decomposition_hint(
