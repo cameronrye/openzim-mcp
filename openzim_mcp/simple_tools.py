@@ -1734,14 +1734,28 @@ class SimpleToolsHandler(
                 # default and keeps it well clear of the previous 20-link
                 # convention).
                 limit = options.get("limit") or 25
+                # Honour the caller's result-list offset so the documented
+                # pagination works: the renderer's footer instructs "pass
+                # offset=N for the next page", but the handler previously
+                # hardcoded offset=0, so every page returned links 1..limit
+                # and the tail was unreachable.
+                offset = int(options.get("offset", 0) or 0)
                 # v2 Phase B: extract_article_links_data returns one category
                 # per call. The compact view shows internal + external; fetch
                 # both and pass merged data to the renderer.
                 internal = self.zim_operations.extract_article_links_data(
-                    zim_file_path, entry_path, limit=limit, offset=0, kind="internal"
+                    zim_file_path,
+                    entry_path,
+                    limit=limit,
+                    offset=offset,
+                    kind="internal",
                 )
                 external = self.zim_operations.extract_article_links_data(
-                    zim_file_path, entry_path, limit=limit, offset=0, kind="external"
+                    zim_file_path,
+                    entry_path,
+                    limit=limit,
+                    offset=offset,
+                    kind="external",
                 )
                 return compact_renderers.render_links(internal, external)
             return self.zim_operations.extract_article_links(zim_file_path, entry_path)
