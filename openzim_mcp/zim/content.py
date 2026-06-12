@@ -42,6 +42,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _strip_markdown_links_shared(text: str) -> str:
+    """Strip ``[text](href)`` / ``![alt](src)`` markdown link soup.
+
+    Delegates to the tested ``_CompactFormatMixin._strip_markdown_links``
+    (idempotent, timeout-bounded). Imported lazily to avoid an import-time
+    cycle between the ``zim`` package and ``compact_format``.
+    """
+    from openzim_mcp.compact_format import _CompactFormatMixin
+
+    return _CompactFormatMixin._strip_markdown_links(text)
+
+
 # Common MIME-type prefix used to gate text-extraction logic.
 _TEXT_MIME_PREFIX = "text/"
 
@@ -659,6 +671,12 @@ class _ContentMixin:
             content = f"(Error retrieving content: {e})"
             content_ok = False
 
+        # See ``_get_entry_content_direct``: strip links in the content layer
+        # (compact) before measuring/slicing so total_chars / content_offset
+        # match the served text rather than the link-laden intermediate.
+        if compact:
+            content = _strip_markdown_links_shared(content)
+
         total_length = len(content)
         offset_applied = False
         offset_past_end = False
@@ -1207,6 +1225,16 @@ class _ContentMixin:
             logger.warning(f"Error getting entry content: {e}")
             content = f"(Error retrieving content: {e})"
             content_ok = False
+
+        # Strip markdown link soup IN the content layer when compact, BEFORE
+        # measuring/slicing, so ``total_length`` and ``content_offset`` are
+        # computed against the same text the caller receives. Otherwise the
+        # body was measured/sliced with link markup (~146k chars) but served
+        # link-stripped (~83k) by the downstream compact post-processing, and
+        # content_offset addressed positions that didn't exist in the served
+        # text. (The downstream strip is now idempotent on this content.)
+        if compact:
+            content = _strip_markdown_links_shared(content)
 
         total_length = len(content)
         offset_applied = False
