@@ -662,9 +662,10 @@ class TestD4FilteredSearchEchoQualifier:
         wording is unchanged (no leading-``filtered`` qualifier)."""
         from openzim_mcp.zim.search import _SearchMixin
 
+        # ``done`` is True with a single row, so the exhausted-set count is 1.
         payload = self._make_payload(
             "biology",
-            5,
+            1,
             [
                 {"title": "Biology", "path": "Biology", "snippet": "..."},
             ],
@@ -674,8 +675,8 @@ class TestD4FilteredSearchEchoQualifier:
             payload,  # type: ignore[arg-type]
             display_query="Biology",
         )
-        # Old shape preserved.
-        assert "Found 5 matches" in out
+        # Old shape preserved (no leading "filtered" qualifier).
+        assert "Found 1 matches" in out
         assert "filtered matches" not in out
 
     def test_filtered_no_results_uses_terse_echo(self) -> None:

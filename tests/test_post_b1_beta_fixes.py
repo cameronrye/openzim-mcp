@@ -794,9 +794,11 @@ class TestPass3SearchBackendEchoPlumbing:
     def test_format_search_text_with_results_uses_display_query(self) -> None:
         from openzim_mcp.zim.search import _SearchMixin
 
+        # ``done`` is True and one row is returned, so the exhausted-set
+        # count is 1; the formatter reports the true enumerated count.
         payload = self._make_format_payload(
             query="biology",
-            total=10,
+            total=1,
             results=[
                 {"title": "Biology", "path": "Biology", "snippet": "..."},
             ],
@@ -807,7 +809,7 @@ class TestPass3SearchBackendEchoPlumbing:
 
         fn = _SearchMixin._format_search_text
         out = fn(_Stub(), payload, display_query="Biology")  # type: ignore[arg-type]
-        assert 'Found 10 matches for "Biology"' in out
+        assert 'Found 1 matches for "Biology"' in out
 
     def test_format_search_text_offset_exceeds_uses_display_query(self) -> None:
         from openzim_mcp.zim.search import _SearchMixin

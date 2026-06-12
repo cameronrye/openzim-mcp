@@ -20,6 +20,7 @@ Layout:
 """
 
 import logging
+import re
 from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -144,24 +145,56 @@ def configure_libzim_caches(
         _LIBZIM_DIRENT_CACHE_MAX_COUNT = dirent_cache_max_count
 
 
+_COUNTER_COMPLETE_RE = re.compile(r"=\d+\s*$")
+
+
 def _parse_counter_metadata(counter_str: str) -> Dict[str, int]:
     """Parse an ``M/Counter`` value into a ``{mimetype: count}`` mapping.
 
     The ``Counter`` metadata value is a ``;``-separated list of
     ``mimetype=count`` pairs (e.g. ``"text/html=123;image/png=45"``).
-    Malformed pairs — missing ``=`` or a non-integer count — are skipped
-    rather than failing the whole parse; metadata is best-effort.
+
+    A content-type may itself be *parameterized* and so contain ``;`` and
+    ``=`` (e.g. ``image/svg+xml; charset=utf-8; profile="..."=575138``). A
+    naive ``split(';')`` shatters those buckets and silently drops their
+    counts, so we reassemble them: a fragment whose head (text before its
+    first ``=``) looks like a ``type/subtype`` mimetype starts a new bucket;
+    any other fragment is a parameter continuation of the still-open bucket
+    (unless that bucket is already complete, in which case the stray
+    fragment is dropped). The terminal ``=count`` is split off with
+    ``rpartition`` so embedded ``param=value`` segments stay in the key.
+
+    Malformed pairs — no terminal integer count — are skipped rather than
+    failing the whole parse; metadata is best-effort.
     """
     breakdown: Dict[str, int] = {}
-    for pair in counter_str.split(";"):
-        if "=" not in pair:
+
+    def _emit(bucket: str) -> None:
+        mime, sep, count_str = bucket.rpartition("=")
+        count_str = count_str.strip()
+        if not sep or not count_str.isdigit():
+            logger.debug("Skipping malformed Counter pair: %r", bucket)
+            return
+        breakdown[mime.strip()] = int(count_str)
+
+    current: Optional[str] = None
+    for frag in counter_str.split(";"):
+        head = frag.split("=", 1)[0].strip()
+        starts_new_bucket = "/" in head and head[:1].isalnum()
+        if starts_new_bucket:
+            if current is not None:
+                _emit(current)
+            current = frag
+        elif current is None:
+            # Stray fragment with no open bucket (e.g. ``bad-pair``).
             continue
-        mime, _, count_str = pair.partition("=")
-        mime = mime.strip()
-        try:
-            breakdown[mime] = int(count_str.strip())
-        except ValueError:
-            logger.debug("Skipping malformed Counter pair: %r", pair)
+        elif _COUNTER_COMPLETE_RE.search(current):
+            # Current bucket is already complete; the stray fragment is junk.
+            continue
+        else:
+            current += ";" + frag
+    if current is not None:
+        _emit(current)
     return breakdown
 
 

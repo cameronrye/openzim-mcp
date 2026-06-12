@@ -843,8 +843,24 @@ class _SearchMixin:
                 f"but offset {offset} exceeds total results."
             )
 
+        # ``total_results`` is libzim's ``getEstimatedMatches()`` — an
+        # *estimate* that is exact only coincidentally and is known to
+        # over-report (often as a round ceiling like 500/20000) for
+        # multi-term queries. Don't present it as an exact count:
+        #   * if the set is exhausted (``done``), we've enumerated every
+        #     hit, so report the true count we actually saw;
+        #   * otherwise mark the estimate approximate (``~N``) whenever it
+        #     claims more than we've shown.
+        shown_through = offset + len(results)
+        if done:
+            display_total: int = shown_through
+            count_approx = ""
+        else:
+            display_total = total_results
+            count_approx = "~" if total_results > shown_through else ""
+
         result_text = (
-            f"Found {total_results}{match_qualifier} matches for "
+            f"Found {count_approx}{display_total}{match_qualifier} matches for "
             f'"{echo_query}"{filter_suffix}, '
             f"showing {offset + 1}-{offset + len(results)}:\n\n"
         )
@@ -893,7 +909,7 @@ class _SearchMixin:
                 next_offset = offset + len(results)
             result_text += (
                 f"Showing {offset + 1}-{offset + len(results)} "
-                f"of {total_results} — "
+                f"of {count_approx}{display_total} — "
                 f"pass `offset={next_offset}` for the next page\n"
             )
             # A14: see ``_format_filtered_response`` for the rationale —
@@ -908,7 +924,7 @@ class _SearchMixin:
         else:
             result_text += (
                 f"Showing {offset + 1}-{offset + len(results)} "
-                f"of {total_results} (end of results)\n"
+                f"of {display_total} (end of results)\n"
             )
 
         return result_text
@@ -1882,7 +1898,7 @@ class _SearchMixin:
         # Validate parameters
         if limit < 1 or limit > 50:
             raise OpenZimMcpValidationError("Limit must be between 1 and 50")
-        if not partial_query or len(partial_query.strip()) < 2:
+        if not partial_query or not partial_query.strip():
             empty_payload: Dict[str, Any] = {
                 "partial_query": partial_query,
                 "results": [],
@@ -1916,12 +1932,22 @@ class _SearchMixin:
             suggestions = raw.get("suggestions", [])
             actual_count = len(suggestions)
 
+            # The suggestion pool is capped at ``limit``; we don't enumerate
+            # the full match set. A full page therefore can't claim the set
+            # is exhausted — reporting ``done=True`` with ``returned==limit``
+            # falsely signals completeness for prefixes with many matches.
+            # ``done`` is only True when we returned fewer than we asked for
+            # (the candidate pool was genuinely exhausted). ``total`` is the
+            # number actually returned, which is exact when ``done`` and a
+            # lower bound otherwise (flagged in ``_meta`` via ``reason``).
+            done = actual_count < limit
+
             payload: Dict[str, Any] = {
                 "partial_query": partial_query,
                 "results": suggestions,
                 "next_cursor": None,
                 "total": actual_count,
-                "done": True,
+                "done": done,
                 "page_info": {
                     "offset": 0,
                     "limit": limit,
@@ -1929,7 +1955,10 @@ class _SearchMixin:
                 },
             }
 
-            with_meta = attach_meta(payload)
+            with_meta = attach_meta(
+                payload,
+                reason=None if done else "suggestion_total_is_lower_bound",
+            )
             # Cache the post-attach payload (Phase B #12). A cold-cache
             # request that hits before the libzim title index has warmed
             # up can return zero suggestions for a query that will
