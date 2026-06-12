@@ -78,6 +78,56 @@ _NAMESPACE_DESCRIPTIONS = {
 # layout/templates pseudo-namespace.
 _KNOWN_NAMESPACE_LETTERS = frozenset({"C", "M", "W", "X", "A", "I", "-"})
 
+
+def _scan_fill_c_namespace(
+    entry_count: int,
+    get_path: "Any",
+    is_asset: "Any",
+    limit: int,
+    offset: int,
+) -> Tuple[List[str], int, bool, int]:
+    """Scan new-scheme C entries by id, collecting up to ``limit`` real
+    content rows starting after ``offset`` content rows.
+
+    ``offset`` is a CONTENT-ROW offset (entries to skip among real content),
+    not a raw entry-id scan position. The previous implementation used
+    ``offset`` directly as the starting entry id, so offsets 1..N (which all
+    fall inside the run of leading asset/redirect entries that get filtered)
+    collapsed to the same first content row with the same resume cursor.
+    Treating it as a row offset makes ``offset += limit`` paging advance by
+    real rows. The cost is an O(offset) rescan from id 0 per page, which is
+    acceptable for a navigation tool (id reads are cheap, no content decode).
+
+    Unaddressable entries (empty path — the phantom empty-path/empty-title
+    row that ``browse`` emitted at offset 0 but ``walk`` omitted) and assets
+    are skipped and do not consume the offset budget.
+
+    Returns ``(page_paths, next_row_offset, scan_exhausted, assets_skipped)``
+    where ``next_row_offset = offset + len(page_paths)``.
+    """
+    page_paths: List[str] = []
+    assets_skipped = 0
+    content_seen = 0
+    scan_id = 0
+    while scan_id < entry_count and len(page_paths) < limit:
+        path = get_path(scan_id)
+        scan_id += 1
+        if not path or not str(path).strip():
+            # Read error (get_path returned None) or an unaddressable
+            # empty-path entry — skip without consuming the offset budget.
+            continue
+        if is_asset(path):
+            assets_skipped += 1
+            continue
+        if content_seen < offset:
+            content_seen += 1
+            continue
+        page_paths.append(path)
+    scan_exhausted = scan_id >= entry_count
+    next_row_offset = offset + len(page_paths)
+    return page_paths, next_row_offset, scan_exhausted, assets_skipped
+
+
 # Minimum sampled hits required before we project a per-namespace total
 # from the sampling ratio. Below this we report the lower-bound (sampled +
 # probed) instead of fabricating numbers from single-hit projections.
@@ -654,13 +704,13 @@ class _NamespaceMixin:
             except CursorMismatchError as e:
                 raise OpenZimMcpValidationError(str(e)) from e
 
-        # Cache key bumped v2b -> v2c: new-scheme C now filters non-article
-        # assets, so its results and cursor semantics changed (``s.o`` is an
-        # entry-id scan position, not a row offset; ``total`` stays the
-        # authoritative ``entry_count``). The bump stops pre-fix cached pages —
-        # with the old unfiltered rows and row-offset cursor — from leaking
-        # through after deploy.
-        cache_key = f"browse_ns_data:v2c:{validated_path}:{namespace}:{limit}:{offset}"
+        # Cache key bumped v2c -> v2d: new-scheme C now treats ``offset`` as a
+        # content-row offset (skip N real rows) rather than a raw entry-id
+        # scan position, and skips unaddressable empty-path entries. The
+        # cursor ``s.o`` is therefore a row offset again; ``total`` stays the
+        # authoritative ``entry_count``. The bump stops pre-fix cached pages —
+        # with the old entry-id-offset cursor — from leaking through.
+        cache_key = f"browse_ns_data:v2d:{validated_path}:{namespace}:{limit}:{offset}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespace browse dict for: {namespace}")
@@ -695,14 +745,14 @@ class _NamespaceMixin:
             # ``offset + returned_count`` instead would drift once filtering
             # makes matched-rows < ids-scanned. Every other discovery method
             # keeps the row-offset cursor.
-            next_scan_offset = raw.get("next_scan_offset")
+            next_row_offset = raw.get("next_row_offset")
             # Surfaced so a consumer reads ``returned_count`` < ``limit`` (and,
             # at ``done``, well below ``total`` on a media-rich archive) as
             # filtering, not truncation. The scan-fill path counts genuine
             # asset skips precisely (read errors / materialise drops excluded).
             assets_filtered = bool(raw.get("assets_filtered"))
-            if next_scan_offset is not None:
-                resume_index = int(next_scan_offset)
+            if next_row_offset is not None:
+                resume_index = int(next_row_offset)
                 done = bool(raw.get("scan_exhausted", True))
                 sample_exhausted = False
             else:
@@ -1009,22 +1059,19 @@ class _NamespaceMixin:
         would drift once matched-rows < ids-scanned.
         """
         total = int(getattr(archive, "entry_count", 0) or 0)
-        page_paths: List[str] = []
-        assets_skipped = 0
-        scan_id = offset
-        while scan_id < total and len(page_paths) < limit:
+
+        def _get_path(scan_id: int) -> Optional[str]:
             try:
-                entry = archive._get_entry_by_id(scan_id)
-                path = entry.path
+                return str(archive._get_entry_by_id(scan_id).path)
             except Exception as e:
                 logger.warning(f"Error reading entry id {scan_id}: {e}")
-                scan_id += 1
-                continue
-            scan_id += 1
-            if self._is_non_article_target(path):
-                assets_skipped += 1
-                continue
-            page_paths.append(path)
+                return None
+
+        page_paths, next_row_offset, scan_exhausted, assets_skipped = (
+            _scan_fill_c_namespace(
+                total, _get_path, self._is_non_article_target, limit, offset
+            )
+        )
         payload = self._new_scheme_browse_payload(
             namespace=namespace,
             total=total,
@@ -1035,8 +1082,12 @@ class _NamespaceMixin:
             ),
             discovery_method="entry_id_range",
         )
-        payload["next_scan_offset"] = scan_id
-        payload["scan_exhausted"] = scan_id >= total
+        # ``offset`` is a content-row offset, so the resume position is the
+        # next row offset (``offset + rows returned``) — consistent with the
+        # raw-``offset`` contract so ``offset += limit`` paging advances by
+        # real rows instead of stalling on a raw entry-id scan position.
+        payload["next_row_offset"] = next_row_offset
+        payload["scan_exhausted"] = scan_exhausted
         # Count ONLY genuine asset skips (not read errors / materialise drops)
         # so the surfaced ``assets_filtered`` flag means exactly what it says.
         payload["assets_filtered"] = assets_skipped > 0
@@ -1530,6 +1581,31 @@ class _NamespaceMixin:
         # not silently iterate to completion with zero matches.
         if namespace:
             namespace = self._canonicalise_namespace(namespace.strip())
+
+        # Fast-reject unknown namespace letters with the SAME signal
+        # ``browse_namespace_data`` uses (``reason="bad_namespace"``). Pre-fix
+        # walk treated an unknown letter (``Z``) as a valid-but-empty
+        # namespace while browse rejected it, so the two siblings disagreed
+        # on whether the letter was legal.
+        if namespace not in _KNOWN_NAMESPACE_LETTERS:
+            return cast(
+                "WalkNamespaceResponse",
+                attach_meta(
+                    self._build_walk_result(
+                        namespace=namespace,
+                        scan_at=scan_at,
+                        limit=limit,
+                        entries=[],
+                        scanned_count=0,
+                        scanned_through_id=None,
+                        done=True,
+                        next_cursor=None,
+                        archive_entry_count=0,
+                        namespace_entry_count=0,
+                    ),
+                    reason="bad_namespace",
+                ),
+            )
 
         validated = self._validate_zim_path(zim_file_path)
 

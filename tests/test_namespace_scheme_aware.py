@@ -283,7 +283,11 @@ class TestWalkNamespaceTotalInNamespace:
         results plus ``done=True`` already convey the same information.
         """
         zim = _require(basic_test_zim_files["nons"])
-        result = ops_for_zim_data.walk_namespace_data(str(zim), "Z", limit=500)
+        # ``A`` is a valid namespace letter that is empty in this archive.
+        # (An *unknown* letter like ``Z`` is now fast-rejected as
+        # ``bad_namespace``, matching browse, so it no longer stands in for
+        # a valid-but-empty namespace.)
+        result = ops_for_zim_data.walk_namespace_data(str(zim), "A", limit=500)
         assert result["results"] == []
         assert result["total"] is None
         # archive_entry_count is still the file total — make this explicit

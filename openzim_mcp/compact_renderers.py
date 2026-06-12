@@ -503,13 +503,24 @@ def render_namespaces(data: Mapping[str, Any]) -> str:
     if per_ns_sum and per_ns_sum != total_entries:
         diff = per_ns_sum - total_entries
         if diff > 0:
-            diff_note = f"+{diff:,} well-knowns/redirects"
+            # The per-namespace rows sum to MORE than ``entry_count`` because
+            # ``entry_count`` excludes the W/M well-known + metadata entries
+            # the rows include. Lead with the true inventory (the sum) and
+            # state the relationship as an explicit equation so the arithmetic
+            # is legible instead of reading like an unexplained shortfall.
+            header = (
+                f"# Namespaces — per-namespace sum: {per_ns_sum:,} entries "
+                f"(= entry_count {total_str} +{diff:,} W/M well-knowns/metadata "
+                f"excluded from entry_count)"
+            )
         else:
-            diff_note = f"{diff:,} (sampling under-count)"
-        header = (
-            f"# Namespaces — {total_str} archive entries "
-            f"(per-namespace sum: {per_ns_sum:,}; {diff_note})"
-        )
+            # Sampling under-count: the sampled per-namespace sum is a lower
+            # bound below the authoritative ``entry_count``.
+            header = (
+                f"# Namespaces — entry_count {total_str} "
+                f"(per-namespace sample sum: {per_ns_sum:,}; "
+                f"{-diff:,} fewer — sampling under-count)"
+            )
     else:
         header = f"# Namespaces — {total_str} total entries"
     lines = [

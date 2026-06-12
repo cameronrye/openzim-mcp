@@ -189,10 +189,10 @@ def test_browse_scan_fills_full_page(tmp_path, monkeypatch) -> None:
 def test_browse_resume_cursor_no_drift(tmp_path, monkeypatch) -> None:
     ops = _ops(tmp_path, monkeypatch)
     page1 = ops.browse_namespace_data(str(tmp_path / "x.zim"), "C", limit=2)
-    # The resume cursor's offset is an ENTRY-ID scan position, not a row count:
-    # page 1 scanned through Banana (id 4), so the next unscanned id is 5.
+    # The resume cursor's offset is a CONTENT-ROW offset: page 1 returned 2
+    # real rows (Apple, Banana), so the next row offset is 2.
     state = Cursor.decode(page1["next_cursor"], expected_tool="browse_namespace")["s"]
-    assert state["o"] == 5
+    assert state["o"] == 2
     page2 = ops.browse_namespace_data(
         str(tmp_path / "x.zim"), "C", limit=2, offset=state["o"]
     )
