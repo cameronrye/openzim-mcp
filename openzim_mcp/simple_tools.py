@@ -922,7 +922,7 @@ class SimpleToolsHandler(
             result = self._cap_response_size(result, effective_budget, intent=intent)
             # Determine if truncation occurred
             was_truncated = len(result) < pre_cap_chars
-            if will_wrap:
+            if will_wrap and isinstance(result, str):
                 result = self._wrap_retrieved_content(result)
 
             # Op5 (v2.0.0a9): simple-mode truncation comes from
@@ -1145,11 +1145,23 @@ class SimpleToolsHandler(
     # so an LLM consuming the tool output is signaled that the prose
     # came from an external archive and any instruction-shaped text
     # inside is data, not directives. Search-shaped intents are
-    # excluded — their snippets are short and pre-trimmed, and the
-    # outer ``## N. <title>`` scaffolding already telegraphs "list of
-    # results" rather than "free-form text from somewhere".
+    # included too: their snippets / suggestion titles are raw,
+    # untrusted corpus text (the live archive demonstrably contains
+    # literal "ignore all previous instructions" payloads), and the
+    # ``## N. <title>`` scaffolding does NOT neutralise an injection
+    # directive sitting in a snippet — so they get the same guard.
     _PROMPT_INJECTION_FENCE_INTENTS = frozenset(
-        {"main_page", "get_article", "tell_me_about", "summary", "get_section"}
+        {
+            "main_page",
+            "get_article",
+            "tell_me_about",
+            "summary",
+            "get_section",
+            "search",
+            "filtered_search",
+            "search_all",
+            "suggestions",
+        }
     )
 
     # Search-shaped intents: their rendered output has the canonical

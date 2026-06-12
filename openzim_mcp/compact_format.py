@@ -143,19 +143,46 @@ class _CompactFormatMixin:
             return max(cls._COMPACT_BUDGET_MIN, min(raw, cls._COMPACT_BUDGET_MAX))
         return default
 
+    # Any literal ``<retrieved_archive_content>`` / ``</...>`` fence tag the
+    # (untrusted) body contains — including whitespace / case variants — must
+    # be neutralised before wrapping so the body can't forge the close tag
+    # (pushing trailing text outside the trust boundary) or an open tag.
+    _FENCE_TOKEN_RE = re.compile(
+        r"<\s*/?\s*retrieved_archive_content\s*>", re.IGNORECASE
+    )
+
+    @classmethod
+    def _neutralize_fence_tokens(cls, text: str) -> str:
+        return cls._FENCE_TOKEN_RE.sub(
+            lambda m: m.group(0).replace("<", "‹").replace(">", "›"), text
+        )
+
     @classmethod
     def _wrap_retrieved_content(cls, text: str) -> str:
         """Wrap article-shaped content in a "treat as data" fence.
 
         Standard prompt-injection mitigation pattern — the LLM gets a
         clear delimiter saying "the prose between these markers is
-        third-party data." Idempotent on already-wrapped text.
+        third-party data."
+
+        The body is untrusted (and reaches us after html2text decodes HTML
+        entities, so a planted ``&lt;/retrieved_archive_content&gt;`` becomes
+        a real tag), so we (1) only treat text as already-wrapped when it
+        carries our FULL open marker — disclaimer included — and ends with
+        the close tag, instead of the old ``startswith("<tag>")`` shortcut
+        that any body could satisfy to suppress the disclaimer; and (2)
+        neutralise every fence delimiter inside the body so it cannot forge
+        or break out of the fence.
         """
         if not text:
             return text
-        if text.lstrip().startswith("<retrieved_archive_content>"):
+        if text.lstrip().startswith(cls._CONTENT_FENCE_OPEN) and text.rstrip().endswith(
+            cls._CONTENT_FENCE_CLOSE
+        ):
+            # Already our own wrapper — idempotent, don't re-neutralise.
             return text
-        return cls._CONTENT_FENCE_OPEN + text + cls._CONTENT_FENCE_CLOSE
+        safe = cls._neutralize_fence_tokens(text)
+        return cls._CONTENT_FENCE_OPEN + safe + cls._CONTENT_FENCE_CLOSE
 
     @classmethod
     def _truncate_search_snippets(cls, text: str, max_chars: int = 250) -> str:
