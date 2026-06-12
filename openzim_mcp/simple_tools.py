@@ -30,6 +30,7 @@ from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
 from .meta import build_meta, format_footer
 from .rerank import (
     _INFO_LEVEL_TELEMETRY_EVENTS,
+    _RERANK_STATE_VAR,
     _RERANKER_ENGAGED,
     _RERANKER_SKIPPED_NO_RESULTS,
     _RERANKER_SKIPPED_NOT_INSTALLED,
@@ -559,17 +560,15 @@ class SimpleToolsHandler(
                     operation="synthesize_pipeline_error",
                     message=f"Synthesize pipeline failed: {e}",
                 )
-        # Post-b1: snapshot reranker telemetry counters so the response
-        # envelope can surface whether rerank engaged for this specific
-        # request. The four counters (engaged / skipped.not_installed /
-        # skipped.no_results / skipped.passthrough) live in
-        # ``self._telemetry`` and are advanced-mode-only via
-        # ``get_server_health``; HTTP-MCP hosts that filter that tool
-        # out leave simple-tool callers with no in-band visibility.
-        # The delta-based check is best-effort and matches the existing
-        # telemetry-Counter concurrency model (Counter mutations are not
-        # atomic across threads, so a parallel request could leak its
-        # event in — same tradeoff the post-b1 INFO log already accepts).
+        # Reset the per-request reranker-state contextvar at the top of every
+        # request so a prior request's outcome can never leak into this
+        # request's ``<!-- reranker=<state> -->`` marker. The marker is read
+        # from ``_RERANK_STATE_VAR`` (stamped as the rerank runs), not the
+        # process-wide Counter below — see ``_compute_rerank_state``.
+        _RERANK_STATE_VAR.set(None)
+        # The ``_RERANK_EVENTS_BEFORE`` snapshot is retained only for the
+        # ``get_server_health`` telemetry contract; the in-band marker no
+        # longer derives from it.
         _RERANK_EVENTS_BEFORE = {
             _RERANKER_ENGAGED: self._telemetry.get(_RERANKER_ENGAGED, 0),
             _RERANKER_SKIPPED_NOT_INSTALLED: self._telemetry.get(

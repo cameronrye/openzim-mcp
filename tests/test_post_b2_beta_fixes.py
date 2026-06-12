@@ -493,6 +493,9 @@ class TestD2RerankerCounterOnNoResults:
             def _track(self, event: str) -> None:
                 self._telemetry[event] += 1
 
+            def _record_rerank_event(self, event: str) -> None:
+                SimpleToolsHandler._record_rerank_event(self, event)  # type: ignore[arg-type]
+
         # When BGEReranker.get returns None, _maybe_rerank_compact
         # bumps NOT_INSTALLED on the empty payload.
         handler = _Handler()

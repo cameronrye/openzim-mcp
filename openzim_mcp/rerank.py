@@ -13,6 +13,7 @@ them next to the reranker logic and importing back avoids the circular
 import that the reverse direction would create.
 """
 
+import contextvars
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 # Names this module deliberately exports to ``simple_tools`` (the reranker
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 # ``_INFO_LEVEL_TELEMETRY_EVENTS``, whose only reader is ``simple_tools``.
 __all__ = [
     "_INFO_LEVEL_TELEMETRY_EVENTS",
+    "_RERANK_STATE_VAR",
     "_RERANKER_ENGAGED",
     "_RERANKER_SKIPPED_NO_RESULTS",
     "_RERANKER_SKIPPED_NOT_INSTALLED",
@@ -34,6 +36,26 @@ _RERANKER_ENGAGED = "reranker_engaged"
 _RERANKER_SKIPPED_NOT_INSTALLED = "reranker_skipped.not_installed"
 _RERANKER_SKIPPED_NO_RESULTS = "reranker_skipped.no_results"
 _RERANKER_SKIPPED_PASSTHROUGH = "reranker_skipped.passthrough"
+
+# Per-request reranker engagement state, recorded as the rerank actually
+# runs. The in-band ``<!-- reranker=<state> -->`` marker reads this instead
+# of diffing the process-wide telemetry Counter — the diff was racy (a
+# concurrent request's event leaked into the delta) and mis-attributed
+# (priority order surfaced an internal sub-search's ``no_results`` over the
+# main search's real ``engaged``/``passthrough`` outcome), so the marker
+# flapped for identical inputs. A ``ContextVar`` is isolated per request /
+# async-context and records the LAST rerank outcome, which is the main
+# search's. ``None`` means no rerank attempt (non-search intent).
+_RERANK_STATE_VAR: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "openzim_rerank_state", default=None
+)
+
+_RERANK_EVENT_LABELS = {
+    _RERANKER_ENGAGED: "engaged",
+    _RERANKER_SKIPPED_NOT_INSTALLED: "skipped:not_installed",
+    _RERANKER_SKIPPED_NO_RESULTS: "skipped:no_results",
+    _RERANKER_SKIPPED_PASSTHROUGH: "skipped:passthrough",
+}
 
 # Telemetry events that also emit an INFO log on every increment. The
 # in-memory counter is only visible via ``get_server_health`` (advanced
@@ -67,38 +89,36 @@ class _RerankMixin:
 
         def _track(self, event: str) -> None: ...
 
-    def _compute_rerank_state(self, before: Dict[str, int]) -> Optional[str]:
-        """Post-b1: compute the per-request reranker engagement state
-        from a pre-call snapshot of the four reranker counters.
+    def _record_rerank_event(self, event: str) -> None:
+        """Record a reranker outcome: bump the process-wide telemetry
+        Counter (for ``get_server_health``) AND stamp the per-request
+        ``_RERANK_STATE_VAR`` (for the in-band marker)."""
+        self._track(event)
+        _RERANK_STATE_VAR.set(_RERANK_EVENT_LABELS.get(event))
 
-        Returns one of ``engaged`` / ``skipped:not_installed`` /
-        ``skipped:no_results`` / ``skipped:passthrough`` when the
-        current request bumped a counter, else ``None`` (non-search
-        intent, no rerank attempt). Surfaced as
-        ``<!-- reranker=<state> -->`` in the response envelope so
-        callers using the simple-tool surface alone (without access
-        to ``get_server_health``) can confirm whether D-1's
-        cross-encoder rerank actually engaged. Priority order
-        favours ``engaged`` then the more specific skip reasons so
-        a request that hits both ``no_results`` and ``passthrough``
-        (rare; multi-archive partial failure) is summarised
-        unambiguously."""
-        order = (
-            _RERANKER_ENGAGED,
-            _RERANKER_SKIPPED_NOT_INSTALLED,
-            _RERANKER_SKIPPED_NO_RESULTS,
-            _RERANKER_SKIPPED_PASSTHROUGH,
-        )
-        labels = {
-            _RERANKER_ENGAGED: "engaged",
-            _RERANKER_SKIPPED_NOT_INSTALLED: "skipped:not_installed",
-            _RERANKER_SKIPPED_NO_RESULTS: "skipped:no_results",
-            _RERANKER_SKIPPED_PASSTHROUGH: "skipped:passthrough",
-        }
-        for event in order:
-            if self._telemetry.get(event, 0) > before.get(event, 0):
-                return labels[event]
-        return None
+    def _compute_rerank_state(
+        self, before: Optional[Dict[str, int]] = None
+    ) -> Optional[str]:
+        """Return the per-request reranker engagement state for the
+        ``<!-- reranker=<state> -->`` marker.
+
+        Reads the per-request ``_RERANK_STATE_VAR`` (set by
+        ``_record_rerank_event`` as the rerank runs) and consumes it so it
+        can't leak into the next request. Returns one of ``engaged`` /
+        ``skipped:not_installed`` / ``skipped:no_results`` /
+        ``skipped:passthrough``, or ``None`` when no rerank was attempted
+        (non-search intent).
+
+        This replaces the previous process-wide telemetry-Counter diff,
+        which made the marker non-deterministic for identical inputs: a
+        concurrent request's increment leaked into the delta, and the
+        priority order surfaced an internal sub-search's ``no_results`` over
+        the main search's real outcome. ``before`` is accepted (and ignored)
+        for backward compatibility with the old call signature.
+        """
+        state = _RERANK_STATE_VAR.get()
+        _RERANK_STATE_VAR.set(None)
+        return state
 
     def _maybe_rerank_compact(
         self,
@@ -124,10 +144,10 @@ class _RerankMixin:
         candidates = payload.get(results_key, [])
 
         if reranker is None:
-            self._track(_RERANKER_SKIPPED_NOT_INSTALLED)
+            self._record_rerank_event(_RERANKER_SKIPPED_NOT_INSTALLED)
             return payload
         if not candidates:
-            self._track(_RERANKER_SKIPPED_NO_RESULTS)
+            self._record_rerank_event(_RERANKER_SKIPPED_NO_RESULTS)
             return payload
 
         if limit is not None and limit > 0:
@@ -142,9 +162,9 @@ class _RerankMixin:
         )
         payload = {**payload, results_key: reranked}
         if reranked and "rerank_score" in reranked[0]:
-            self._track(_RERANKER_ENGAGED)
+            self._record_rerank_event(_RERANKER_ENGAGED)
         else:
-            self._track(_RERANKER_SKIPPED_PASSTHROUGH)
+            self._record_rerank_event(_RERANKER_SKIPPED_PASSTHROUGH)
         return payload
 
     @staticmethod
@@ -203,10 +223,10 @@ class _RerankMixin:
         tagged_hits = self._flatten_archive_hits(per_file)
 
         if reranker is None:
-            self._track(_RERANKER_SKIPPED_NOT_INSTALLED)
+            self._record_rerank_event(_RERANKER_SKIPPED_NOT_INSTALLED)
             return per_file
         if not tagged_hits:
-            self._track(_RERANKER_SKIPPED_NO_RESULTS)
+            self._record_rerank_event(_RERANKER_SKIPPED_NO_RESULTS)
             return per_file
 
         reranked_tagged = reranker.rerank(
@@ -225,8 +245,8 @@ class _RerankMixin:
         # synthesize passthrough guard); otherwise return per_file untouched.
         scored = bool(reranked_tagged and "rerank_score" in reranked_tagged[0])
         if not scored:
-            self._track(_RERANKER_SKIPPED_PASSTHROUGH)
+            self._record_rerank_event(_RERANKER_SKIPPED_PASSTHROUGH)
             return per_file
         self._redistribute_reranked_hits(per_file, reranked_tagged)
-        self._track(_RERANKER_ENGAGED)
+        self._record_rerank_event(_RERANKER_ENGAGED)
         return per_file
