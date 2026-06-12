@@ -748,6 +748,22 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
     if m:
         params["section_name"] = m.group(1).strip()
         params["entry_path"] = m.group(2).strip().rstrip("?.,;:!")
+        return
+    # Form C: ``[get article] <path> section <name>`` — section name as a
+    # trailing suffix with no of/in/from connector (``get article Quantum
+    # computing section History``). Strip an optional leading get-article
+    # verb so the path is just the article title.
+    m = safe_regex_search(
+        r"^\s*(?:(?:get|show|read|display|fetch|open)\s+"
+        r"(?:article|entry|page)?\s*)?"
+        rf"(.+?)\s+section\s+{_QUOTE_OPEN}?({_QUOTE_NOT_APOS}+?){_QUOTE_OPEN}?"
+        r"\s*\??\s*$",
+        query,
+        re.IGNORECASE,
+    )
+    if m:
+        params["entry_path"] = m.group(1).strip().rstrip("?.,;:!")
+        params["section_name"] = m.group(2).strip()
 
 
 # Post-v2.0.0 D-B: filename hint extractor for the ``metadata`` intent.
@@ -862,6 +878,18 @@ class IntentParser:
             "get_section",
             0.95,
             10,
+        ),
+        # Trailing-suffix form: ``[get article] <path> section <name>`` —
+        # the section name follows the path with no of/in/from connector.
+        # The live tool mis-routed this to ``structure`` (which also matches
+        # ``section``) and then errored "Cannot find entry" looking up the
+        # whole literal phrase as a title. Specificity 9 beats ``structure``
+        # (8) but stays below the ``... of <path>`` forms (10).
+        (
+            r"\bsection\s+\S+\s*\??\s*$",
+            "get_section",
+            0.9,
+            9,
         ),
         # Article structure - moderately specific
         (

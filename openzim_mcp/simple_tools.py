@@ -917,11 +917,20 @@ class SimpleToolsHandler(
             )
             # Capture pre-cap size to report truncation in footer
             pre_cap_chars = len(result)
-            if len(result) > effective_budget:
-                self._track("response_truncated")
-            result = self._cap_response_size(result, effective_budget, intent=intent)
-            # Determine if truncation occurred
-            was_truncated = len(result) < pre_cap_chars
+            # ``_SELF_CAPPED_INTENTS`` render their own budget-aware,
+            # structurally-valid output (e.g. ``structure`` keeps the whole
+            # heading skeleton as valid JSON). The generic byte-cap would
+            # sever that mid-JSON and drop trailing sections, so skip it.
+            if intent in self._SELF_CAPPED_INTENTS:
+                was_truncated = False
+            else:
+                if len(result) > effective_budget:
+                    self._track("response_truncated")
+                result = self._cap_response_size(
+                    result, effective_budget, intent=intent
+                )
+                # Determine if truncation occurred
+                was_truncated = len(result) < pre_cap_chars
             if will_wrap and isinstance(result, str):
                 result = self._wrap_retrieved_content(result)
 
@@ -1171,6 +1180,12 @@ class SimpleToolsHandler(
     _SEARCH_RENDER_INTENTS = frozenset(
         {"search", "filtered_search", "search_all", "tell_me_about"}
     )
+
+    # Intents whose handler renders its own budget-aware, structurally-valid
+    # output (currently ``structure``: it keeps the entire heading skeleton
+    # as valid JSON, trimming summaries / recording ``headings_omitted``
+    # rather than letting the generic byte-cap sever the JSON mid-heading).
+    _SELF_CAPPED_INTENTS = frozenset({"structure"})
 
     # Post-a20 P1-D1: the set of cursor-emitting tools that legitimately
     # carry an ``s.q`` field in their cursor payload (``search_zim_file``
@@ -1457,7 +1472,15 @@ class SimpleToolsHandler(
                 payload = self.zim_operations.get_article_structure_data(
                     zim_file_path, entry_path
                 )
-                return compact_renderers.compact_structure_payload(payload)
+                # Self-fit to the compact budget so the generic char-cap
+                # never severs the JSON mid-heading. ``structure`` is in
+                # ``_SELF_CAPPED_INTENTS`` so the generic cap is skipped for
+                # it. Reserve a small margin for the trailing intent/reranker
+                # telemetry comments appended after the body.
+                budget = self._resolve_compact_budget(options.get("compact_budget"))
+                return compact_renderers.compact_structure_payload(
+                    payload, budget=max(budget - 200, 500)
+                )
             return self.zim_operations.get_article_structure(zim_file_path, entry_path)
         except Exception as e:
             return self._render_not_found_recovery(entry_path, e, "show structure of")

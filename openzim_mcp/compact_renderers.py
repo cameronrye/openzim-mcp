@@ -17,7 +17,9 @@ import json
 from typing import Any, Dict, Mapping, Optional
 
 
-def compact_structure_payload(payload: Mapping[str, Any]) -> str:
+def compact_structure_payload(
+    payload: Mapping[str, Any], budget: Optional[int] = None
+) -> str:
     """Render a compact JSON view of an article-structure payload.
 
     Drops the per-heading 300-char ``content_preview`` and substitutes
@@ -33,6 +35,14 @@ def compact_structure_payload(payload: Mapping[str, Any]) -> str:
     Returns a JSON string (matching the shape of the legacy
     ``get_article_structure`` text path) so callers can swap in
     compact mode without changing how they parse the result.
+
+    ``budget`` (when given) makes the render self-fitting so the generic
+    char-cap never severs the JSON mid-string and silently drops trailing
+    headings — for an OUTLINE operation, losing sections is the worst
+    failure. To fit the budget we degrade gracefully WITHOUT ever leaving
+    invalid JSON: first drop the per-heading summaries, then (only if the
+    bare heading skeleton still overflows) drop trailing headings and record
+    the count in ``headings_omitted``.
     """
     if not isinstance(payload, dict):
         return json.dumps(payload)
@@ -73,18 +83,50 @@ def compact_structure_payload(payload: Mapping[str, Any]) -> str:
             entry["summary"] = summary
         compact_headings.append(entry)
 
-    compact: Dict[str, Any] = {
-        "title": payload.get("title"),
-        "path": payload.get("path"),
-        "headings": compact_headings,
+    extras = {
+        k: payload[k]
+        for k in ("word_count", "character_count", "content_type")
+        if k in payload
     }
-    # Preserve a couple of small article-level summary fields that
-    # callers may want for context — they're a few bytes each, not a
-    # response-budget concern.
-    for k in ("word_count", "character_count", "content_type"):
-        if k in payload:
-            compact[k] = payload[k]
-    return json.dumps(compact)
+
+    def _emit(headings: list, omitted: int = 0) -> str:
+        compact: Dict[str, Any] = {
+            "title": payload.get("title"),
+            "path": payload.get("path"),
+            "headings": headings,
+        }
+        if omitted:
+            compact["headings_omitted"] = omitted
+        # Preserve a couple of small article-level summary fields that
+        # callers may want for context — they're a few bytes each, not a
+        # response-budget concern.
+        compact.update(extras)
+        return json.dumps(compact)
+
+    full = _emit(compact_headings)
+    if budget is None or len(full) <= budget:
+        return full
+
+    # 1) Drop the per-heading summaries (the bulky part); keep every heading.
+    bare = [{k: v for k, v in h.items() if k != "summary"} for h in compact_headings]
+    bare_json = _emit(bare)
+    if len(bare_json) <= budget:
+        return bare_json
+
+    # 2) Even the bare skeleton overflows — drop trailing headings, but keep
+    # valid JSON and report how many were omitted. Binary-search the largest
+    # prefix that fits (output length is monotonic in the heading count).
+    total = len(bare)
+    lo, hi, best = 0, total, _emit([], omitted=total)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        cand = _emit(bare[:mid], omitted=total - mid)
+        if len(cand) <= budget:
+            best = cand
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
 
 
 def render_links(
