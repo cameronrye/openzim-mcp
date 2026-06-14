@@ -19,5 +19,9 @@
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1",
+    "yaml": "^2.8.3"
   }
 }
