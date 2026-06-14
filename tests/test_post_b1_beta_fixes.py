@@ -528,96 +528,103 @@ class TestP1D2RecaseHelper:
 
 
 class TestRerankerStateComment:
-    """Post-b1: ``_compute_rerank_state`` returns the per-request
-    reranker engagement state by comparing the current telemetry
-    counter to a pre-call snapshot. Used to emit the
-    ``<!-- reranker=<state> -->`` HTML comment in the response."""
+    """The ``<!-- reranker=<state> -->`` marker is computed per request from
+    the ``_RERANK_STATE_VAR`` contextvar (stamped by ``_record_rerank_event``
+    as the rerank runs), NOT a process-wide telemetry-Counter diff. The diff
+    was non-deterministic for identical inputs (a concurrent request leaked
+    into the delta; an internal sub-search's ``no_results`` was surfaced over
+    the main outcome)."""
 
     def _make_handler_stub(self) -> Any:
-        """Build a minimal stub carrying just the ``_telemetry``
-        Counter. The ``_compute_rerank_state`` method is called
-        unbound (passing the stub as ``self``) so this stays decoupled
-        from SimpleToolsHandler's heavier construction surface."""
+        """Minimal stub carrying a ``_telemetry`` Counter and ``_track`` so
+        ``_record_rerank_event`` / ``_compute_rerank_state`` can be called
+        unbound without SimpleToolsHandler's heavier construction surface."""
 
         class _Stub:
             def __init__(self) -> None:
                 self._telemetry: Counter[str] = Counter()
 
-            def compute(self, before: Dict[str, int]) -> Optional[str]:
+            def _track(self, event: str) -> None:
+                self._telemetry[event] += 1
+
+            def record(self, event: str) -> None:
                 from openzim_mcp.simple_tools import SimpleToolsHandler
 
-                fn = SimpleToolsHandler._compute_rerank_state
-                return fn(self, before)  # type: ignore[arg-type]
+                SimpleToolsHandler._record_rerank_event(self, event)  # type: ignore[arg-type]
+
+            def compute(self) -> Optional[str]:
+                from openzim_mcp.simple_tools import SimpleToolsHandler
+
+                return SimpleToolsHandler._compute_rerank_state(self)  # type: ignore[arg-type]
 
         return _Stub()
 
-    def test_no_event_returns_none(self) -> None:
-        from openzim_mcp.simple_tools import (
-            _RERANKER_ENGAGED,
-            _RERANKER_SKIPPED_NO_RESULTS,
-            _RERANKER_SKIPPED_NOT_INSTALLED,
-            _RERANKER_SKIPPED_PASSTHROUGH,
-        )
+    def setup_method(self) -> None:
+        from openzim_mcp.simple_tools import _RERANK_STATE_VAR
 
-        stub = self._make_handler_stub()
-        before = {
-            _RERANKER_ENGAGED: 0,
-            _RERANKER_SKIPPED_NOT_INSTALLED: 0,
-            _RERANKER_SKIPPED_NO_RESULTS: 0,
-            _RERANKER_SKIPPED_PASSTHROUGH: 0,
-        }
-        # Counters unchanged — non-search intent, no rerank attempt.
-        assert stub.compute(before) is None
+        _RERANK_STATE_VAR.set(None)
+
+    def teardown_method(self) -> None:
+        from openzim_mcp.simple_tools import _RERANK_STATE_VAR
+
+        _RERANK_STATE_VAR.set(None)
+
+    def test_no_event_returns_none(self) -> None:
+        # No rerank attempt -> contextvar stays None.
+        assert self._make_handler_stub().compute() is None
 
     def test_engaged_detected(self) -> None:
         from openzim_mcp.simple_tools import _RERANKER_ENGAGED
 
         stub = self._make_handler_stub()
-        before = {_RERANKER_ENGAGED: 0}
-        stub._telemetry[_RERANKER_ENGAGED] = 1
-        assert stub.compute(before) == "engaged"
+        stub.record(_RERANKER_ENGAGED)
+        assert stub.compute() == "engaged"
+        # Bumping the telemetry Counter is preserved for get_server_health.
+        assert stub._telemetry[_RERANKER_ENGAGED] == 1
 
     def test_skipped_not_installed_detected(self) -> None:
         from openzim_mcp.simple_tools import _RERANKER_SKIPPED_NOT_INSTALLED
 
         stub = self._make_handler_stub()
-        before = {_RERANKER_SKIPPED_NOT_INSTALLED: 5}
-        stub._telemetry[_RERANKER_SKIPPED_NOT_INSTALLED] = 6
-        assert stub.compute(before) == "skipped:not_installed"
+        stub.record(_RERANKER_SKIPPED_NOT_INSTALLED)
+        assert stub.compute() == "skipped:not_installed"
 
     def test_skipped_no_results_detected(self) -> None:
         from openzim_mcp.simple_tools import _RERANKER_SKIPPED_NO_RESULTS
 
         stub = self._make_handler_stub()
-        before = {_RERANKER_SKIPPED_NO_RESULTS: 0}
-        stub._telemetry[_RERANKER_SKIPPED_NO_RESULTS] = 1
-        assert stub.compute(before) == "skipped:no_results"
+        stub.record(_RERANKER_SKIPPED_NO_RESULTS)
+        assert stub.compute() == "skipped:no_results"
 
     def test_skipped_passthrough_detected(self) -> None:
         from openzim_mcp.simple_tools import _RERANKER_SKIPPED_PASSTHROUGH
 
         stub = self._make_handler_stub()
-        before = {_RERANKER_SKIPPED_PASSTHROUGH: 0}
-        stub._telemetry[_RERANKER_SKIPPED_PASSTHROUGH] = 1
-        assert stub.compute(before) == "skipped:passthrough"
+        stub.record(_RERANKER_SKIPPED_PASSTHROUGH)
+        assert stub.compute() == "skipped:passthrough"
 
-    def test_engaged_priority_over_skip(self) -> None:
-        # If both ``engaged`` and a skip counter bump (rare; cross-
-        # archive partial failure), ``engaged`` wins so the caller
-        # sees the most favourable summary.
+    def test_last_outcome_wins(self) -> None:
+        # An internal sub-search's no_results followed by the main search's
+        # passthrough must report passthrough — the main (last) outcome —
+        # NOT no_results (which the old priority-order diff surfaced).
         from openzim_mcp.simple_tools import (
-            _RERANKER_ENGAGED,
+            _RERANKER_SKIPPED_NO_RESULTS,
             _RERANKER_SKIPPED_PASSTHROUGH,
         )
 
         stub = self._make_handler_stub()
-        before = {
-            _RERANKER_ENGAGED: 0,
-            _RERANKER_SKIPPED_PASSTHROUGH: 0,
-        }
-        stub._telemetry[_RERANKER_ENGAGED] = 1
-        stub._telemetry[_RERANKER_SKIPPED_PASSTHROUGH] = 1
-        assert stub.compute(before) == "engaged"
+        stub.record(_RERANKER_SKIPPED_NO_RESULTS)
+        stub.record(_RERANKER_SKIPPED_PASSTHROUGH)
+        assert stub.compute() == "skipped:passthrough"
+
+    def test_state_is_consumed_so_it_cannot_leak(self) -> None:
+        from openzim_mcp.simple_tools import _RERANKER_ENGAGED
+
+        stub = self._make_handler_stub()
+        stub.record(_RERANKER_ENGAGED)
+        assert stub.compute() == "engaged"
+        # Second read (next request, no rerank) must not see the stale value.
+        assert stub.compute() is None
 
 
 # ===========================================================================
@@ -794,9 +801,11 @@ class TestPass3SearchBackendEchoPlumbing:
     def test_format_search_text_with_results_uses_display_query(self) -> None:
         from openzim_mcp.zim.search import _SearchMixin
 
+        # ``done`` is True and one row is returned, so the exhausted-set
+        # count is 1; the formatter reports the true enumerated count.
         payload = self._make_format_payload(
             query="biology",
-            total=10,
+            total=1,
             results=[
                 {"title": "Biology", "path": "Biology", "snippet": "..."},
             ],
@@ -807,7 +816,7 @@ class TestPass3SearchBackendEchoPlumbing:
 
         fn = _SearchMixin._format_search_text
         out = fn(_Stub(), payload, display_query="Biology")  # type: ignore[arg-type]
-        assert 'Found 10 matches for "Biology"' in out
+        assert 'Found 1 matches for "Biology"' in out
 
     def test_format_search_text_offset_exceeds_uses_display_query(self) -> None:
         from openzim_mcp.zim.search import _SearchMixin

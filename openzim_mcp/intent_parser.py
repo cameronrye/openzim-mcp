@@ -10,6 +10,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote
 
 from .constants import REGEX_TIMEOUT_SECONDS
 from .exceptions import RegexTimeoutError
@@ -492,6 +493,31 @@ def _extract_related(query: str, params: Dict[str, Any]) -> None:
             params["entry_path"] = entry_path
 
 
+def _normalize_url_topic(topic: str) -> str:
+    """Collapse a pasted ``http(s)://host/path/Title`` URL to its final
+    path segment as the topic.
+
+    A pasted Wikipedia URL was otherwise tokenised on ``/`` downstream and
+    the scheme token (``https:``) was taken as the topic, returning the
+    wrong article. Only fires on an ``http(s)://host/<path>`` shape with a
+    non-empty last segment; anything else is returned unchanged so ordinary
+    topics (including ones that merely contain a slash) are not disturbed.
+    """
+    # Capture the path greedily and trim in code: the older ``(.+?)\s*$`` let
+    # the lazy dot and the trailing ``\s*`` overlap on whitespace, which is
+    # polynomial-backtracking (ReDoS) bait. ``(.+)$`` is linear, and the
+    # match runs under the timeout-bounded wrapper like every other regex here.
+    m = safe_regex_search(r"^\s*https?://[^/\s]+/(.+)$", topic, re.IGNORECASE)
+    if not m:
+        return topic
+    path = m.group(1).strip().split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    if not path:
+        return topic
+    segment = path.rsplit("/", 1)[-1]
+    segment = unquote(segment).replace("_", " ").strip()
+    return segment or topic
+
+
 def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     """Extract the topic from a ``tell_me_about``-shaped query.
 
@@ -551,6 +577,8 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     m = safe_regex_search(
         r"^\s*("
         r"tell\s+me\s+about\b|"
+        r"show\s+me\s+(?:everything|all|more)\s+(?:about|on)\b|"
+        r"everything\s+(?:about|on)\b|"
         r"who\s+(?:is|was|are|were)\b|"
         r"what\s+(?:is|are|was|were)\b|"
         r"describe\b|"
@@ -643,6 +671,7 @@ def _extract_tell_me_about(query: str, params: Dict[str, Any]) -> None:
     # ``tell me about "Photosynthesis"`` now searches the bare topic
     # instead of the quoted form, which is a cleaner search input.
     topic = _strip_quote_pair(topic)
+    topic = _normalize_url_topic(topic)
     params["topic"] = topic
 
 
@@ -723,6 +752,22 @@ def _extract_get_section(query: str, params: Dict[str, Any]) -> None:
     if m:
         params["section_name"] = m.group(1).strip()
         params["entry_path"] = m.group(2).strip().rstrip("?.,;:!")
+        return
+    # Form C: ``[get article] <path> section <name>`` — section name as a
+    # trailing suffix with no of/in/from connector (``get article Quantum
+    # computing section History``). Strip an optional leading get-article
+    # verb so the path is just the article title.
+    m = safe_regex_search(
+        r"^\s*(?:(?:get|show|read|display|fetch|open)\s+"
+        r"(?:article|entry|page)?\s*)?"
+        rf"(.+?)\s+section\s+{_QUOTE_OPEN}?({_QUOTE_NOT_APOS}+?){_QUOTE_OPEN}?"
+        r"\s*\??\s*$",
+        query,
+        re.IGNORECASE,
+    )
+    if m:
+        params["entry_path"] = m.group(1).strip().rstrip("?.,;:!")
+        params["section_name"] = m.group(2).strip()
 
 
 # Post-v2.0.0 D-B: filename hint extractor for the ``metadata`` intent.
@@ -838,6 +883,18 @@ class IntentParser:
             0.95,
             10,
         ),
+        # Trailing-suffix form: ``[get article] <path> section <name>`` —
+        # the section name follows the path with no of/in/from connector.
+        # The live tool mis-routed this to ``structure`` (which also matches
+        # ``section``) and then errored "Cannot find entry" looking up the
+        # whole literal phrase as a title. Specificity 9 beats ``structure``
+        # (8) but stays below the ``... of <path>`` forms (10).
+        (
+            r"\bsection\s+\S+\s*\??\s*$",
+            "get_section",
+            0.9,
+            9,
+        ),
         # Article structure - moderately specific
         (
             r"\b(structure|outline|sections?|headings?)\s+(of|for)?\b",
@@ -948,6 +1005,8 @@ class IntentParser:
         # ``walk_namespace`` / ``search_all`` (>= 0.9).
         (
             r"\b(tell\s+me\s+about|"
+            r"show\s+me\s+(everything|all|more)\s+(about|on)|"
+            r"everything\s+(about|on)|"
             r"who\s+(is|was|are|were)|"
             r"what\s+(is|are|was|were)|"
             r"describe|explain|"
@@ -1332,7 +1391,8 @@ class IntentParser:
             # * Anything else — keep the legacy bare-search fallback.
             if cls._looks_like_bare_topic(query):
                 params = cls._attach_decomposition_hint(
-                    {"topic": query.strip()}, decomposition_hint
+                    {"topic": _normalize_url_topic(query.strip())},
+                    decomposition_hint,
                 )
                 return "tell_me_about", params, 0.7
             params = cls._attach_decomposition_hint(

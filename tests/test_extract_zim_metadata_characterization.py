@@ -552,6 +552,54 @@ def test_counter_breakdown_new_scheme(test_config):
     }
 
 
+def test_parse_counter_metadata_preserves_parameterized_mimetypes():
+    """Parameterized content-types (``; charset=...; profile="..."``) are
+    kept as whole buckets instead of being shattered on the inner ``;``/``=``.
+
+    Regression for the real-world Wikipedia ``Counter`` where the
+    575,138-entry profiled-SVG bucket and the iso-8859-1 HTML bucket were
+    silently dropped by a naive ``split(';')`` / ``partition('=')``.
+    """
+    from openzim_mcp.zim.archive import _parse_counter_metadata
+
+    raw = (
+        "image/svg+xml=25;"
+        "image/svg+xml; charset=utf-8; "
+        'profile="https://www.mediawiki.org/wiki/Specs/SVG/1.0.0"=575138;'
+        "image/webp=7585596;"
+        "text/html=8425786;"
+        "text/html; charset=iso-8859-1=1;"
+        "text/javascript=3"
+    )
+    result = _parse_counter_metadata(raw)
+
+    assert result["image/svg+xml"] == 25
+    assert (
+        result[
+            "image/svg+xml; charset=utf-8; "
+            'profile="https://www.mediawiki.org/wiki/Specs/SVG/1.0.0"'
+        ]
+        == 575138
+    )
+    assert result["image/webp"] == 7585596
+    assert result["text/html"] == 8425786
+    assert result["text/html; charset=iso-8859-1"] == 1
+    assert result["text/javascript"] == 3
+    # No bucket is silently lost.
+    assert sum(result.values()) == 25 + 575138 + 7585596 + 8425786 + 1 + 3
+
+
+def test_parse_counter_metadata_drops_truly_malformed_pairs():
+    """A standalone junk token with no ``=count`` (``bad-pair``) is dropped,
+    not merged into an adjacent bucket."""
+    from openzim_mcp.zim.archive import _parse_counter_metadata
+
+    result = _parse_counter_metadata(
+        "text/html=123;image/png=45;bad-pair;image/svg+xml=7"
+    )
+    assert result == {"text/html": 123, "image/png": 45, "image/svg+xml": 7}
+
+
 def test_counter_breakdown_old_scheme(test_config):
     """The Counter parse fires identically on the old-scheme path."""
     zim_ops = _make_server(test_config)

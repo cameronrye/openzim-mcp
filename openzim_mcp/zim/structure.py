@@ -46,6 +46,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _section_preview(
+    md: str, char_start: int, char_end: int, preview_chars: int
+) -> str:
+    """Slice a section's lead preview, bounded by ``char_end``.
+
+    ``char_end`` is the start of the next equal-or-higher-level heading, so
+    bounding the slice there keeps the preview to the section's OWN content.
+    Previously the slice was a fixed ``char_start + preview_chars`` window
+    that bled the heading and body of the following section into a short
+    section's preview.
+    """
+    end = min(char_start + preview_chars, char_end)
+    return md[char_start:end]
+
+
 def _sections_to_toc_tree(sections: "List[SectionMeta]") -> "List[TocHeading]":
     """Build a hierarchical TOC tree from a flat SectionMeta list.
 
@@ -193,9 +208,9 @@ class _StructureMixin:
                 {
                     "title": s["title"],
                     "level": s["level"],
-                    "content_preview": md[
-                        s["char_start"] : s["char_start"] + PREVIEW_CHARS
-                    ],
+                    "content_preview": _section_preview(
+                        md, s["char_start"], s["char_end"], PREVIEW_CHARS
+                    ),
                 }
                 for s in bundle["sections"]
             ]

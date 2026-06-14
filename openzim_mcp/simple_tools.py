@@ -30,6 +30,7 @@ from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
 from .meta import build_meta, format_footer
 from .rerank import (
     _INFO_LEVEL_TELEMETRY_EVENTS,
+    _RERANK_STATE_VAR,
     _RERANKER_ENGAGED,
     _RERANKER_SKIPPED_NO_RESULTS,
     _RERANKER_SKIPPED_NOT_INSTALLED,
@@ -440,6 +441,33 @@ class SimpleToolsHandler(
                 params["query"] = search_q
         return None
 
+    @staticmethod
+    def _path_failure_reason(
+        zim_file_path: Optional[str], error_lower: str, safe_error: str
+    ) -> str:
+        """Reword a ZIM-path failure so a harmless non-matching NAME isn't
+        reported with the security ``outside allowed directories`` wording.
+
+        The path validator raises the same ``OpenZimMcpSecurityError`` for a
+        genuine out-of-sandbox path (``/etc/passwd``, ``../..``) AND for a
+        bare token that simply doesn't resolve to a loaded archive
+        (``superuser`` — missing its ``.zim`` extension). Reserve the
+        security phrasing for paths that actually contain separators / ``..``
+        (a real traversal shape); a bare in-scope name gets a plain
+        not-found reason instead of leaking the allowlisting mechanism.
+        """
+        original = zim_file_path or ""
+        is_security_denial = "outside allowed directories" in error_lower
+        looks_like_bare_name = (
+            "/" not in original and "\\" not in original and ".." not in original
+        )
+        if is_security_denial and looks_like_bare_name:
+            return (
+                "the path did not match any loaded archive "
+                "(likely a typo or a missing `.zim` extension)"
+            )
+        return safe_error
+
     def handle_zim_query(
         self,
         query: str,
@@ -532,17 +560,15 @@ class SimpleToolsHandler(
                     operation="synthesize_pipeline_error",
                     message=f"Synthesize pipeline failed: {e}",
                 )
-        # Post-b1: snapshot reranker telemetry counters so the response
-        # envelope can surface whether rerank engaged for this specific
-        # request. The four counters (engaged / skipped.not_installed /
-        # skipped.no_results / skipped.passthrough) live in
-        # ``self._telemetry`` and are advanced-mode-only via
-        # ``get_server_health``; HTTP-MCP hosts that filter that tool
-        # out leave simple-tool callers with no in-band visibility.
-        # The delta-based check is best-effort and matches the existing
-        # telemetry-Counter concurrency model (Counter mutations are not
-        # atomic across threads, so a parallel request could leak its
-        # event in — same tradeoff the post-b1 INFO log already accepts).
+        # Reset the per-request reranker-state contextvar at the top of every
+        # request so a prior request's outcome can never leak into this
+        # request's ``<!-- reranker=<state> -->`` marker. The marker is read
+        # from ``_RERANK_STATE_VAR`` (stamped as the rerank runs), not the
+        # process-wide Counter below — see ``_compute_rerank_state``.
+        _RERANK_STATE_VAR.set(None)
+        # The ``_RERANK_EVENTS_BEFORE`` snapshot is retained only for the
+        # ``get_server_health`` telemetry contract; the in-band marker no
+        # longer derives from it.
         _RERANK_EVENTS_BEFORE = {
             _RERANKER_ENGAGED: self._telemetry.get(_RERANKER_ENGAGED, 0),
             _RERANKER_SKIPPED_NOT_INSTALLED: self._telemetry.get(
@@ -810,12 +836,15 @@ class SimpleToolsHandler(
                     # (path outside allowed tree vs typoed filename).
                     # Including ``**Reason**`` keeps the diagnostic
                     # context while still surfacing the recovery hint.
+                    reason_text = self._path_failure_reason(
+                        zim_file_path, error_lower, safe_error
+                    )
                     return (
                         f"**ZIM File Not Found**\n\n"
                         f"**Query**: {safe_query}\n"
                         f"**Issue**: the `zim_file_path` value passed "
                         f"doesn't match any loaded archive.\n"
-                        f"**Reason**: {safe_error}\n\n"
+                        f"**Reason**: {reason_text}\n\n"
                         f"{hint}\n\n"
                         f"<!-- intent=zim_path_not_found cert=1.00 -->"
                     )
@@ -917,12 +946,21 @@ class SimpleToolsHandler(
             )
             # Capture pre-cap size to report truncation in footer
             pre_cap_chars = len(result)
-            if len(result) > effective_budget:
-                self._track("response_truncated")
-            result = self._cap_response_size(result, effective_budget, intent=intent)
-            # Determine if truncation occurred
-            was_truncated = len(result) < pre_cap_chars
-            if will_wrap:
+            # ``_SELF_CAPPED_INTENTS`` render their own budget-aware,
+            # structurally-valid output (e.g. ``structure`` keeps the whole
+            # heading skeleton as valid JSON). The generic byte-cap would
+            # sever that mid-JSON and drop trailing sections, so skip it.
+            if intent in self._SELF_CAPPED_INTENTS:
+                was_truncated = False
+            else:
+                if len(result) > effective_budget:
+                    self._track("response_truncated")
+                result = self._cap_response_size(
+                    result, effective_budget, intent=intent
+                )
+                # Determine if truncation occurred
+                was_truncated = len(result) < pre_cap_chars
+            if will_wrap and isinstance(result, str):
                 result = self._wrap_retrieved_content(result)
 
             # Op5 (v2.0.0a9): simple-mode truncation comes from
@@ -1145,11 +1183,23 @@ class SimpleToolsHandler(
     # so an LLM consuming the tool output is signaled that the prose
     # came from an external archive and any instruction-shaped text
     # inside is data, not directives. Search-shaped intents are
-    # excluded — their snippets are short and pre-trimmed, and the
-    # outer ``## N. <title>`` scaffolding already telegraphs "list of
-    # results" rather than "free-form text from somewhere".
+    # included too: their snippets / suggestion titles are raw,
+    # untrusted corpus text (the live archive demonstrably contains
+    # literal "ignore all previous instructions" payloads), and the
+    # ``## N. <title>`` scaffolding does NOT neutralise an injection
+    # directive sitting in a snippet — so they get the same guard.
     _PROMPT_INJECTION_FENCE_INTENTS = frozenset(
-        {"main_page", "get_article", "tell_me_about", "summary", "get_section"}
+        {
+            "main_page",
+            "get_article",
+            "tell_me_about",
+            "summary",
+            "get_section",
+            "search",
+            "filtered_search",
+            "search_all",
+            "suggestions",
+        }
     )
 
     # Search-shaped intents: their rendered output has the canonical
@@ -1159,6 +1209,63 @@ class SimpleToolsHandler(
     _SEARCH_RENDER_INTENTS = frozenset(
         {"search", "filtered_search", "search_all", "tell_me_about"}
     )
+
+    # Intents whose handler renders its own budget-aware, structurally-valid
+    # output (currently ``structure``: it keeps the entire heading skeleton
+    # as valid JSON, trimming summaries / recording ``headings_omitted``
+    # rather than letting the generic byte-cap sever the JSON mid-heading).
+    _SELF_CAPPED_INTENTS = frozenset({"structure"})
+
+    # ``synthesize=True`` is a multi-archive CONTENT/topic operation (open
+    # every archive, fuse the best hits). Structural / navigation intents
+    # (``show main page``, ``list namespaces``, ``metadata for X`` …) have
+    # no meaningful "synthesis": fuzzy full-text searching their command
+    # words returns junk (``show main page`` -> an actor surnamed "Page"),
+    # so they fall through to normal structural handling. Everything else —
+    # including meta-only / chained queries, which the synthesize path
+    # handles with its own structured-error guards — still synthesizes.
+    _NON_SYNTHESIZABLE_INTENTS = frozenset(
+        {
+            "main_page",
+            "list_namespaces",
+            "list_files",
+            "metadata",
+            "browse",
+            "walk_namespace",
+            "toc",
+            "structure",
+            "get_section",
+            "links",
+            "suggestions",
+            "find_by_title",
+            "related",
+            "get_zim_entries",
+            "binary",
+        }
+    )
+
+    def _synthesize_reject_structural_intent(
+        self, intent: str
+    ) -> Optional[ToolErrorPayload]:
+        """Reject a pure structural/navigation intent on the synthesize path.
+
+        Runs AFTER the meta-only / chained guards, so chained queries that
+        happen to classify as a structural intent (``... then list
+        namespaces``) are already handled. A standalone ``show main page``
+        with ``synthesize=True`` reaches here and is refused with a clear
+        pointer to the non-synthesize call, instead of fuzzy-searching the
+        command words (which surfaced an actor named "Page").
+        """
+        if intent not in self._NON_SYNTHESIZABLE_INTENTS:
+            return None
+        return tool_error(
+            operation="synthesize_not_applicable",
+            message=(
+                f"`synthesize=True` performs multi-archive content synthesis "
+                f"and does not apply to the structural `{intent}` operation. "
+                f"Re-run the same query without `synthesize`."
+            ),
+        )
 
     # Post-a20 P1-D1: the set of cursor-emitting tools that legitimately
     # carry an ``s.q`` field in their cursor payload (``search_zim_file``
@@ -1445,7 +1552,15 @@ class SimpleToolsHandler(
                 payload = self.zim_operations.get_article_structure_data(
                     zim_file_path, entry_path
                 )
-                return compact_renderers.compact_structure_payload(payload)
+                # Self-fit to the compact budget so the generic char-cap
+                # never severs the JSON mid-heading. ``structure`` is in
+                # ``_SELF_CAPPED_INTENTS`` so the generic cap is skipped for
+                # it. Reserve a small margin for the trailing intent/reranker
+                # telemetry comments appended after the body.
+                budget = self._resolve_compact_budget(options.get("compact_budget"))
+                return compact_renderers.compact_structure_payload(
+                    payload, budget=max(budget - 200, 500)
+                )
             return self.zim_operations.get_article_structure(zim_file_path, entry_path)
         except Exception as e:
             return self._render_not_found_recovery(entry_path, e, "show structure of")
@@ -1734,14 +1849,28 @@ class SimpleToolsHandler(
                 # default and keeps it well clear of the previous 20-link
                 # convention).
                 limit = options.get("limit") or 25
+                # Honour the caller's result-list offset so the documented
+                # pagination works: the renderer's footer instructs "pass
+                # offset=N for the next page", but the handler previously
+                # hardcoded offset=0, so every page returned links 1..limit
+                # and the tail was unreachable.
+                offset = int(options.get("offset", 0) or 0)
                 # v2 Phase B: extract_article_links_data returns one category
                 # per call. The compact view shows internal + external; fetch
                 # both and pass merged data to the renderer.
                 internal = self.zim_operations.extract_article_links_data(
-                    zim_file_path, entry_path, limit=limit, offset=0, kind="internal"
+                    zim_file_path,
+                    entry_path,
+                    limit=limit,
+                    offset=offset,
+                    kind="internal",
                 )
                 external = self.zim_operations.extract_article_links_data(
-                    zim_file_path, entry_path, limit=limit, offset=0, kind="external"
+                    zim_file_path,
+                    entry_path,
+                    limit=limit,
+                    offset=offset,
+                    kind="external",
                 )
                 return compact_renderers.render_links(internal, external)
             return self.zim_operations.extract_article_links(zim_file_path, entry_path)
@@ -3427,6 +3556,10 @@ class SimpleToolsHandler(
             return early
 
         intent, params = self._synthesize_parse_intent(query, zim_file_path)
+
+        structural = self._synthesize_reject_structural_intent(intent)
+        if structural is not None:
+            return structural
 
         invalid = self._synthesize_validate_parsed_intent(intent, params, query)
         if invalid is not None:

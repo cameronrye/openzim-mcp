@@ -42,6 +42,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _strip_markdown_links_shared(text: str) -> str:
+    """Strip ``[text](href)`` / ``![alt](src)`` markdown link soup.
+
+    Delegates to the tested ``_CompactFormatMixin._strip_markdown_links``
+    (idempotent, timeout-bounded). Imported lazily to avoid an import-time
+    cycle between the ``zim`` package and ``compact_format``.
+    """
+    from openzim_mcp.compact_format import _CompactFormatMixin
+
+    return _CompactFormatMixin._strip_markdown_links(text)
+
+
 # Common MIME-type prefix used to gate text-extraction logic.
 _TEXT_MIME_PREFIX = "text/"
 
@@ -659,11 +671,19 @@ class _ContentMixin:
             content = f"(Error retrieving content: {e})"
             content_ok = False
 
+        # See ``_get_entry_content_direct``: strip links in the content layer
+        # (compact) before measuring/slicing so total_chars / content_offset
+        # match the served text rather than the link-laden intermediate.
+        if compact:
+            content = _strip_markdown_links_shared(content)
+
         total_length = len(content)
         offset_applied = False
+        offset_past_end = False
         if content_offset and content_offset > 0:
             if content_offset >= total_length:
                 content = ""
+                offset_past_end = True
             else:
                 content = content[content_offset:]
             offset_applied = True
@@ -697,6 +717,8 @@ class _ContentMixin:
         if offset_applied:
             payload["content_offset"] = content_offset
             payload["total_chars"] = total_length
+            if offset_past_end:
+                payload["content_offset_past_end"] = True
         # Hints stripped before the dict is returned to the caller; they
         # drive the eventual ``attach_meta`` call.
         if was_truncated or offset_applied:
@@ -1204,11 +1226,23 @@ class _ContentMixin:
             content = f"(Error retrieving content: {e})"
             content_ok = False
 
+        # Strip markdown link soup IN the content layer when compact, BEFORE
+        # measuring/slicing, so ``total_length`` and ``content_offset`` are
+        # computed against the same text the caller receives. Otherwise the
+        # body was measured/sliced with link markup (~146k chars) but served
+        # link-stripped (~83k) by the downstream compact post-processing, and
+        # content_offset addressed positions that didn't exist in the served
+        # text. (The downstream strip is now idempotent on this content.)
+        if compact:
+            content = _strip_markdown_links_shared(content)
+
         total_length = len(content)
         offset_applied = False
+        offset_past_end = False
         if content_offset and content_offset > 0:
             if content_offset >= total_length:
                 content = ""
+                offset_past_end = True
             else:
                 content = content[content_offset:]
             offset_applied = True
@@ -1232,12 +1266,20 @@ class _ContentMixin:
         else:
             result_text += f"Path: {actual_path}\n"
         result_text += f"Type: {content_type or 'Unknown'}\n"
-        if offset_applied:
+        if offset_past_end:
+            result_text += (
+                f"Content Offset: {content_offset} is past the end of the "
+                f"{total_length:,}-character body — no content at this offset.\n"
+            )
+        elif offset_applied:
             result_text += (
                 f"Content Offset: {content_offset} of {total_length:,} characters\n"
             )
         result_text += "## Content\n\n"
-        result_text += content or "(No content)"
+        if offset_past_end:
+            result_text += "(No content — offset beyond end of body)"
+        else:
+            result_text += content or "(No content)"
 
         return result_text, content_ok, actual_path
 

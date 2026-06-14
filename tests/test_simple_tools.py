@@ -3349,23 +3349,16 @@ class TestPromptInjectionFence:
         first_line = backend_value.split("\n", 1)[0]
         assert first_line in body, f"backend content lost: {body[:200]!r}"
 
-    def test_search_results_not_wrapped(self):
-        """Search-shaped intents already telegraph 'list of results' via
-        the ``## N. <title>`` scaffolding — adding a fence on top would
-        be redundant noise. They are deliberately excluded from
-        ``_PROMPT_INJECTION_FENCE_INTENTS``.
+    def test_search_intents_are_fenced(self):
+        """Search snippets / suggestion titles are raw, untrusted corpus
+        text (the live archive contains literal injection payloads), so
+        search-shaped intents are now covered by the do-not-execute fence.
+        (End-to-end wrapping is exercised against a real archive in
+        ``tests/test_injection_fence_hardening.py``.)
         """
-        from unittest.mock import MagicMock
-
-        mock = MagicMock()
-        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
-        mock.search_zim_file.return_value = (
-            'Found 1 matches for "biology":\n\n## 1. Biology\nPath: Biology\n'
-            "Snippet: short.\n"
-        )
-        h = SimpleToolsHandler(mock)
-        out = h.handle_zim_query("search for biology", options={"compact": True})
-        assert "<retrieved_archive_content>" not in out
+        fenced = SimpleToolsHandler._PROMPT_INJECTION_FENCE_INTENTS
+        for intent in ("search", "filtered_search", "search_all", "suggestions"):
+            assert intent in fenced
 
     def test_non_compact_mode_unwrapped(self):
         """Verbose mode preserves the legacy raw-text shape — fencing
