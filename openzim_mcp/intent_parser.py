@@ -503,10 +503,14 @@ def _normalize_url_topic(topic: str) -> str:
     non-empty last segment; anything else is returned unchanged so ordinary
     topics (including ones that merely contain a slash) are not disturbed.
     """
-    m = re.match(r"^\s*https?://[^/\s]+/(.+?)\s*$", topic, re.IGNORECASE)
+    # Capture the path greedily and trim in code: the older ``(.+?)\s*$`` let
+    # the lazy dot and the trailing ``\s*`` overlap on whitespace, which is
+    # polynomial-backtracking (ReDoS) bait. ``(.+)$`` is linear, and the
+    # match runs under the timeout-bounded wrapper like every other regex here.
+    m = safe_regex_search(r"^\s*https?://[^/\s]+/(.+)$", topic, re.IGNORECASE)
     if not m:
         return topic
-    path = m.group(1).split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    path = m.group(1).strip().split("#", 1)[0].split("?", 1)[0].rstrip("/")
     if not path:
         return topic
     segment = path.rsplit("/", 1)[-1]

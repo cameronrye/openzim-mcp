@@ -147,14 +147,21 @@ class _CompactFormatMixin:
     # (untrusted) body contains — including whitespace / case variants — must
     # be neutralised before wrapping so the body can't forge the close tag
     # (pushing trailing text outside the trust boundary) or an open tag.
+    # Use a single optional ``(?:/\s*)?`` group rather than ``\s*/?\s*`` so the
+    # two whitespace runs can't ambiguously partition a long space sequence —
+    # that ambiguity is polynomial-backtracking (ReDoS) bait on adversarial
+    # bodies. This form is linear; the body is still untrusted, so the .sub()
+    # below also runs under the timeout-bounded wrapper.
     _FENCE_TOKEN_RE = re.compile(
-        r"<\s*/?\s*retrieved_archive_content\s*>", re.IGNORECASE
+        r"<\s*(?:/\s*)?retrieved_archive_content\s*>", re.IGNORECASE
     )
 
     @classmethod
     def _neutralize_fence_tokens(cls, text: str) -> str:
-        return cls._FENCE_TOKEN_RE.sub(
-            lambda m: m.group(0).replace("<", "‹").replace(">", "›"), text
+        return safe_regex_sub(
+            cls._FENCE_TOKEN_RE,
+            lambda m: m.group(0).replace("<", "‹").replace(">", "›"),
+            text,
         )
 
     @classmethod
