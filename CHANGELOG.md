@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.2](https://github.com/cameronrye/openzim-mcp/compare/v2.4.1...v2.4.2) (2026-06-15)
+
+
+### Fixed
+
+* **deps:** clear website npm-audit advisories (esbuild, yaml) ([#288](https://github.com/cameronrye/openzim-mcp/issues/288)) ([41dffd6](https://github.com/cameronrye/openzim-mcp/commit/41dffd61fa07cc6c0cfacc5035d77b3cc3b85506))
+* resolve 16 findings from real-world zim_query testing ([#287](https://github.com/cameronrye/openzim-mcp/issues/287)) ([bbb9382](https://github.com/cameronrye/openzim-mcp/commit/bbb93823d89739e94fa2b2df1d0a8ec05a1588b8))
+
 ## [2.4.1](https://github.com/cameronrye/openzim-mcp/compare/v2.4.0...v2.4.1) (2026-06-11)
 
 
