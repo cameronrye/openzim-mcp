@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
+from ..constants import MAX_SEARCH_RESULT_LIMIT
 from ..responses import ToolErrorPayload, tool_error
 from ..synthesize import SynthesizeResponse
 from ._common import enforce_rate_limit, load_description, tool_error_response
@@ -72,6 +73,15 @@ def register(server: "OpenZimMcpServer") -> None:
                     operation="invalid_limit",
                     message=(
                         "`limit` must be a positive integer " f"(provided: {limit})."
+                    ),
+                )
+            if limit is not None and limit > MAX_SEARCH_RESULT_LIMIT:
+                return tool_error(
+                    operation="invalid_limit",
+                    message=(
+                        f"`limit` must not exceed {MAX_SEARCH_RESULT_LIMIT} "
+                        f"(provided: {limit}). Page through larger result sets "
+                        "with `offset` instead."
                     ),
                 )
             if offset < 0:

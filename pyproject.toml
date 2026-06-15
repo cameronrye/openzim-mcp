@@ -100,7 +100,21 @@ openzim_mcp = ["data/*.txt", "data/*.toml", "tools/*.md"]
 # release pip-audit gate stays clear of PYSEC-2026-196 (an advisory against
 # pip 26.1, fixed in 26.1.2). Drop this constraint once pip-api's own pin
 # guarantees a patched pip.
-constraint-dependencies = ["pyjwt>=2.13.0", "pip>=26.1.2"]
+#
+# cryptography / python-multipart / starlette are pulled in transitively via
+# mcp[cli] (uvicorn + starlette for the HTTP/SSE transport; cryptography via
+# pyjwt[crypto]). Floor each at its first patched release so the pip-audit gate
+# stays clear of: GHSA-537c-gmf6-5ccf (cryptography < 48.0.1); CVE-2026-53538 /
+# -53539 / -53540 (python-multipart < 0.0.31); and CVE-2026-48817 / -48818 /
+# -54282 / -54283 (starlette < 1.3.1). Floors only — mcp sets no upper bound;
+# drop each once mcp's own pins guarantee patched versions.
+constraint-dependencies = [
+    "pyjwt>=2.13.0",
+    "pip>=26.1.2",
+    "cryptography>=48.0.1",
+    "python-multipart>=0.0.31",
+    "starlette>=1.3.1",
+]
 
 [tool.black]
 line-length = 88

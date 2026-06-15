@@ -144,6 +144,15 @@ class SearchDefaults:
     STRUCTURED_SUGGESTIONS_LIMIT: int = 5
     FUZZY_TITLE_MIN_QUERY_LEN: int = 4
     FUZZY_TITLE_SCORE_PENALTY: float = 0.85
+    # Upper bound on a caller-supplied ``limit`` for the search family
+    # (zim_search / zim_query). The legacy granular search tools capped at
+    # 100; the v2 rewrite kept only the ``limit >= 1`` floor, so an
+    # unbounded ``limit`` (e.g. 999999) would ask the data layer to
+    # materialise every match — a real resource/token blow-up on a
+    # multi-million-entry archive. Reject above this ceiling and point the
+    # caller at ``offset`` pagination instead. Generous (10x the legacy
+    # cap) so no legitimate single-page request is affected.
+    MAX_RESULT_LIMIT: int = 1000
 
 
 # Instantiate defaults for easy access
