@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.3](https://github.com/cameronrye/openzim-mcp/compare/v2.4.2...v2.4.3) (2026-06-15)
+
+
+### Fixed
+
+* cap search-family limit to prevent unbounded result materialization ([#291](https://github.com/cameronrye/openzim-mcp/issues/291)) ([650a150](https://github.com/cameronrye/openzim-mcp/commit/650a15045d1b4e02d64c1fab5999e0d03262d850))
+* **deps:** floor cryptography&gt;=48.0.1, python-multipart&gt;=0.0.31, starlette&gt;=1.3.1 to clear 8 pip-audit advisories (GHSA-537c-gmf6-5ccf; CVE-2026-53538/-53539/-53540; CVE-2026-48817/-48818/-54282/-54283). ([650a150](https://github.com/cameronrye/openzim-mcp/commit/650a15045d1b4e02d64c1fab5999e0d03262d850))
+
 ## [2.4.2](https://github.com/cameronrye/openzim-mcp/compare/v2.4.1...v2.4.2) (2026-06-15)
 
 
