@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from openzim_mcp.constants import MAX_SEARCH_RESULT_LIMIT
 from openzim_mcp.tools.zim_query import register as register_zim_query
 
 
@@ -114,6 +115,16 @@ async def test_zim_query_rejects_non_positive_limit(server: MagicMock) -> None:
     result = await fn(query="x", limit=0)
     assert result["error"] is True
     assert result["operation"] == "invalid_limit"
+
+
+@pytest.mark.asyncio
+async def test_zim_query_rejects_limit_above_ceiling(server: MagicMock) -> None:
+    register_zim_query(server)
+    fn, _ = server._tools_store["zim_query"]
+    result = await fn(query="x", limit=MAX_SEARCH_RESULT_LIMIT + 1)
+    assert result["error"] is True
+    assert result["operation"] == "invalid_limit"
+    assert str(MAX_SEARCH_RESULT_LIMIT) in result["message"]
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from openzim_mcp.constants import MAX_SEARCH_RESULT_LIMIT
 from openzim_mcp.tools.zim_search import register as register_zim_search
 
 
@@ -123,6 +124,35 @@ async def test_zim_search_rejects_negative_offset(
     fn, _ = server._tools_store["zim_search"]
     result = await fn(query="x", offset=-1)
     assert result["operation"] == "invalid_offset"
+
+
+@pytest.mark.asyncio
+async def test_zim_search_rejects_limit_above_ceiling(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A limit past the ceiling would ask the data layer to materialise an
+    # unbounded result set; reject it before any work happens.
+    _patch_async_ops(monkeypatch)
+    register_zim_search(server)
+    fn, _ = server._tools_store["zim_search"]
+    result = await fn(query="x", limit=MAX_SEARCH_RESULT_LIMIT + 1)
+    assert result["operation"] == "invalid_limit"
+    assert str(MAX_SEARCH_RESULT_LIMIT) in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_zim_search_allows_limit_at_ceiling(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Exactly at the ceiling is allowed — it reaches the data layer and the
+    # value passes through unchanged. Cross-file path avoids an auto_select patch.
+    ops = _patch_async_ops(monkeypatch, search_all_data={"results": []})
+    register_zim_search(server)
+    fn, _ = server._tools_store["zim_search"]
+    await fn(query="x", mode="fulltext", cross_file=True, limit=MAX_SEARCH_RESULT_LIMIT)
+    ops.search_all_data.assert_awaited_once_with(
+        "x", limit_per_file=MAX_SEARCH_RESULT_LIMIT
+    )
 
 
 # ---------------------------------------------------------------------------

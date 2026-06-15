@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+from ..constants import MAX_SEARCH_RESULT_LIMIT
 from ..responses import tool_error
 from ._common import enforce_rate_limit, load_description, tool_error_response
 
@@ -97,6 +98,15 @@ def register(server: "OpenZimMcpServer") -> None:
                     operation="invalid_limit",
                     message=(
                         f"`limit` must be a positive integer (provided: {limit})."
+                    ),
+                )
+            if limit is not None and limit > MAX_SEARCH_RESULT_LIMIT:
+                return tool_error(
+                    operation="invalid_limit",
+                    message=(
+                        f"`limit` must not exceed {MAX_SEARCH_RESULT_LIMIT} "
+                        f"(provided: {limit}). Page through larger result sets "
+                        "with `offset` instead."
                     ),
                 )
             if offset < 0:
