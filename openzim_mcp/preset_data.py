@@ -23,7 +23,12 @@ from openzim_mcp.archive_types import detect_archive_type
 
 logger = logging.getLogger(__name__)
 
-SummaryStyle = Literal["first_section", "q_and_a", "gloss", "transcript"]
+# "gloss" (wiktionary) and "transcript" (ted) are deferred from a2: a
+# 2026-06-16 live probe showed ted2zim transcripts live in text/vtt files
+# (not body headings) and no wiktionary archive was available to validate a
+# gloss selector. Re-add them here + in zim/content._STYLE_HEADING_TOKENS +
+# data/presets.toml once a real archive pins the heading token.
+SummaryStyle = Literal["first_section", "q_and_a"]
 
 
 class ArchivePreset(BaseModel):

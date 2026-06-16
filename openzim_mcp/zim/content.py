@@ -69,33 +69,18 @@ _TEXT_MIME_PREFIX = "text/"
 # block on every page. The answer-submission form is stripped by sotoki,
 # so there is no competing "Your Answer" heading to false-match; zero-answer
 # pages have no heading and fall through to the first-section fallback below.
+#
+# The a2 ``gloss`` (wiktionary) and ``transcript`` (ted) styles are deferred:
+# a 2026-06-16 live probe found ted2zim ``ted_mul_all`` pages are heading-less
+# multilingual stubs whose transcripts live in text/vtt subtitle files (not
+# the HTML body), so a heading-token slice can never match; and no mwoffliner
+# wiktionary archive was available to pin a gloss token. Re-add their entries
+# here (and to SummaryStyle + data/presets.toml) once a real archive validates
+# the selector. See docs/superpowers/plans/2026-06-15-v2.5-remaining-work.md.
 _ANSWER_HEADING_TOKENS = ("answer",)
-# live-reprobe-pending: tokens not yet validated against a real mwoffliner
-# wiktionary archive (see docs/superpowers/plans/2026-06-15-v2.5-remaining-
-# work.md). Best-effort part-of-speech headings; if none match, gloss falls
-# back to the first-section slice (never worse than baseline).
-_GLOSS_HEADING_TOKENS = (
-    "noun",
-    "verb",
-    "adjective",
-    "adverb",
-    "pronoun",
-    "preposition",
-    "conjunction",
-    "interjection",
-    "determiner",
-    "numeral",
-)
-# live-reprobe-pending: token not yet validated against a real ted2zim
-# archive (see docs/superpowers/plans/2026-06-15-v2.5-remaining-work.md).
-# Best-effort transcript heading; if it never matches, transcript falls back
-# to the first-section slice (never worse than baseline).
-_TRANSCRIPT_HEADING_TOKENS = ("transcript",)
 
 _STYLE_HEADING_TOKENS: Dict[str, Tuple[str, ...]] = {
     "q_and_a": _ANSWER_HEADING_TOKENS,
-    "gloss": _GLOSS_HEADING_TOKENS,
-    "transcript": _TRANSCRIPT_HEADING_TOKENS,
 }
 
 
@@ -114,11 +99,11 @@ def _strip_leading_score(md: str) -> str:
     content — including a single line with no trailing newline — is returned
     unchanged so a real one-line answer is never destroyed.
 
-    live-reprobe-pending: the exact trigger position is not yet validated
-    against a real sotoki page — the bare score may sit after the answers
-    heading rather than as the first body line of the slice (see
-    docs/superpowers/plans/2026-06-15-v2.5-remaining-work.md). The
-    digits-only guard makes a mis-fire harmless on non-score content.
+    Validated 2026-06-16 against the live superuser.com_en_all_2026-02
+    archive: a real q_and_a summary opens with the bare vote score on its
+    own line ("2\\nCheck user A's .ssh/config ..."), so the strip fires on
+    real output. The digits-only guard keeps a mis-fire harmless on
+    non-score content.
     """
     stripped = md.lstrip("\n")
     head, sep, rest = stripped.partition("\n")

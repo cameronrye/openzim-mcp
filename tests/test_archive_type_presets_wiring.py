@@ -148,10 +148,9 @@ def test_strip_leading_score_keeps_non_score_content() -> None:
 def test_select_summary_q_and_a_strips_score_prefix() -> None:
     # The answers-section slice must begin with the bare vote score on its own
     # line for the strip to fire — assert it is genuinely removed (not merely
-    # preceded by a heading). live-reprobe-pending: whether a real sotoki slice
-    # leads with the score or with the "N Answers" heading is unvalidated, so
-    # _strip_leading_score may be a no-op on real output until reprobe confirms
-    # the shape (see the helper's docstring).
+    # preceded by a heading). Validated 2026-06-16 against the live
+    # superuser.com_en_all_2026-02 archive: a real q_and_a summary opens with
+    # the bare score ("2\nCheck user A's .ssh/config ...").
     md = "Question body.\n5\nThe accepted answer body.\n"
     sections = [
         {"title": "Question", "level": 2, "char_start": 0, "char_end": 15},
@@ -159,41 +158,6 @@ def test_select_summary_q_and_a_strips_score_prefix() -> None:
     ]
     out = _select_summary_section_md(sections, md, "q_and_a")
     assert out == "The accepted answer body.\n"
-
-
-def test_select_summary_gloss_picks_first_pos_section() -> None:
-    # live-reprobe-pending: real mwoffliner wiktionary section shape not yet
-    # validated; synthetic POS-heading layout exercises the mechanism.
-    md = "Etymology blurb.\n\n## Noun\n\nA defined sense.\n"
-    sections = [
-        {"title": "Etymology", "level": 2, "char_start": 0, "char_end": 18},
-        {"title": "Noun", "level": 2, "char_start": 18, "char_end": len(md)},
-    ]
-    out = _select_summary_section_md(sections, md, "gloss")
-    assert "defined sense" in out
-    assert "Etymology blurb" not in out
-
-
-def test_select_summary_gloss_falls_back_to_first_section() -> None:
-    md = "Lead.\n\n## Pronunciation\n\nIPA.\n"
-    sections = [
-        {"title": "Lead", "level": 2, "char_start": 0, "char_end": 6},
-        {"title": "Pronunciation", "level": 2, "char_start": 6, "char_end": len(md)},
-    ]
-    assert _select_summary_section_md(sections, md, "gloss") == md[:6]
-
-
-def test_select_summary_transcript_picks_transcript_section() -> None:
-    # live-reprobe-pending: real ted2zim section shape not yet validated;
-    # synthetic transcript-heading layout exercises the mechanism.
-    md = "Talk blurb.\n\n## Transcript\n\nThe spoken words.\n"
-    sections = [
-        {"title": "About", "level": 2, "char_start": 0, "char_end": 13},
-        {"title": "Transcript", "level": 2, "char_start": 13, "char_end": len(md)},
-    ]
-    out = _select_summary_section_md(sections, md, "transcript")
-    assert "spoken words" in out
-    assert "Talk blurb" not in out
 
 
 def test_summary_generic_path_unchanged(plain_zim: Path) -> None:

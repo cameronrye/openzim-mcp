@@ -1,7 +1,11 @@
 # Archive-type presets (v2.5 #17). Keyed by detected type. All keys are
 # optional; a missing key inherits the global default. Only types with a
 # [preset.<type>] table get behavior. a1 shipped wikipedia + stackexchange;
-# a2 adds wiktionary (gloss) and ted (transcript) below.
+# a2 added the Stack Exchange answer score-prefix trim (code, in
+# zim/content.py). The wiktionary (gloss) and ted (transcript) presets are
+# deferred — a 2026-06-16 live probe showed ted2zim transcripts live in
+# text/vtt subtitle files (not body headings) so a heading slice can't work,
+# and no mwoffliner wiktionary archive was available to pin a gloss token.
 
 [preset.wikipedia]
 # Explicit baseline == current defaults; makes the baseline testable.
@@ -15,17 +19,3 @@ summary_style = "first_section"
 # snippets without dragging in trailing answers.
 summary_style = "q_and_a"
 max_paragraphs = 3
-
-[preset.wiktionary]
-# a2: gloss summaries surface the first part-of-speech sense rather than the
-# Etymology/Pronunciation lead. live-reprobe-pending: heading tokens not yet
-# validated against a real mwoffliner wiktionary archive (see
-# _GLOSS_HEADING_TOKENS); a miss falls back to the first-section slice.
-summary_style = "gloss"
-
-[preset.ted]
-# a2: transcript summaries surface the talk transcript rather than the
-# About/description lead. live-reprobe-pending: heading token not yet
-# validated against a real ted2zim archive (see _TRANSCRIPT_HEADING_TOKENS);
-# a miss falls back to the first-section slice.
-summary_style = "transcript"
