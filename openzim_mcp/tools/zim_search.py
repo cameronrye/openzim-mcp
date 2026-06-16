@@ -256,9 +256,10 @@ async def _handle_fulltext_mode(
                     "specific `zim_file_path` to use them."
                 ),
             )
-        return await ops.search_all_data(
+        payload = await ops.search_all_data(
             query, limit_per_file=limit if limit is not None else 5
         )
+        return _strip_next_cursor(payload)
 
     resolved_path = _resolve_path(server, zim_file_path)
     if resolved_path is None:
@@ -272,7 +273,7 @@ async def _handle_fulltext_mode(
         )
 
     if namespace is not None or content_type is not None:
-        return await ops.search_with_filters_data(
+        payload = await ops.search_with_filters_data(
             resolved_path,
             query,
             namespace=namespace,
@@ -280,10 +281,53 @@ async def _handle_fulltext_mode(
             limit=limit,
             offset=offset,
         )
+        return _strip_next_cursor(payload)
 
-    return await ops.search_zim_file_data(
+    payload = await ops.search_zim_file_data(
         resolved_path, query, limit=limit, offset=offset
     )
+    return _strip_next_cursor(payload)
+
+
+def _strip_next_cursor(payload: Any) -> Any:
+    """Return a copy of ``payload`` with every followable ``next_cursor`` nulled.
+
+    H14 residue: ``search_zim_file_data`` / ``search_with_filters_data`` encode
+    a real ``next_cursor`` handle (tool="search_zim_file" / "search_with_filters")
+    whenever a page is unexhausted, and ``search_all_data`` nests one per archive
+    under ``results[].result.next_cursor``. zim_search has no cursor pagination —
+    it *rejects* a caller-provided ``cursor`` (see the ``invalid_combination``
+    guard above) and pages via ``offset`` — so returning any data-layer cursor
+    verbatim would advertise a handle the tool then refuses. Blank them all.
+
+    COPY-ON-WRITE: the data layer hands out cache-by-reference dicts (``cache.get``
+    returns the stored object), shared with the zim_query path which DOES surface
+    ``next_cursor``. Mutating in place would poison the cache (the H12 defect
+    class), so this never mutates the input — it shallow-copies only the dicts it
+    has to touch.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    if "next_cursor" in out:
+        out["next_cursor"] = None
+    # Cross-file (search_all_data): null the per-archive nested cursors too.
+    results = out.get("results")
+    if isinstance(results, list):
+        new_results = []
+        changed = False
+        for row in results:
+            if (
+                isinstance(row, dict)
+                and isinstance(row.get("result"), dict)
+                and row["result"].get("next_cursor") is not None
+            ):
+                row = {**row, "result": {**row["result"], "next_cursor": None}}
+                changed = True
+            new_results.append(row)
+        if changed:
+            out["results"] = new_results
+    return out
 
 
 async def _handle_title_mode(
@@ -394,7 +438,11 @@ def _merge_promotion_into_title_results(raw: dict, promoted: Optional[dict]) -> 
     hoisted = [
         m for m in matches if (m.get("entry_path") or m.get("path")) != promoted_path
     ]
-    raw["results"] = [promoted] + hoisted
-    meta = raw.setdefault("_meta", {})
-    meta["promotion_applied"] = True
-    return raw
+    # COPY-ON-WRITE: ``raw`` is the cached ``find_title:v1`` object (H15 caches
+    # single-archive title lookups, returned by reference) and is shared with
+    # the internal promotion probes that read the same key. Mutating it in place
+    # would poison that cache (the H12 defect class), so build a new dict.
+    out = dict(raw)
+    out["results"] = [promoted] + hoisted
+    out["_meta"] = {**raw.get("_meta", {}), "promotion_applied": True}
+    return out

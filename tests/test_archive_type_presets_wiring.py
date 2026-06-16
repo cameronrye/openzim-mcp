@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 from libzim.writer import Creator
 
-from openzim_mcp.zim.content import _select_summary_section_md
+from openzim_mcp.zim.content import (
+    _select_summary_section_md,
+    _strip_leading_score,
+)
 from tests.conftest_v2_fixtures import _HtmlItem, make_zim_ops
 
 
@@ -127,6 +130,34 @@ def test_select_summary_default_is_first_section() -> None:
     md = "Lead.\n\n## Details\n\nMore.\n"
     sections = [{"title": "Lead", "level": 2, "char_start": 0, "char_end": 6}]
     assert _select_summary_section_md(sections, md, None) == md[:6]
+
+
+def test_strip_leading_score_removes_bare_score_line() -> None:
+    assert _strip_leading_score("3\nThe answer body.\n") == "The answer body.\n"
+    assert _strip_leading_score("\n\n18\nBody.") == "Body."
+
+
+def test_strip_leading_score_keeps_non_score_content() -> None:
+    md = "The answer body has 3 points.\nMore.\n"
+    assert _strip_leading_score(md) == md
+    # A single line that is only a score and has no newline is left intact
+    # (never nuke the whole slice).
+    assert _strip_leading_score("42") == "42"
+
+
+def test_select_summary_q_and_a_strips_score_prefix() -> None:
+    # The answers-section slice must begin with the bare vote score on its own
+    # line for the strip to fire — assert it is genuinely removed (not merely
+    # preceded by a heading). Validated 2026-06-16 against the live
+    # superuser.com_en_all_2026-02 archive: a real q_and_a summary opens with
+    # the bare score ("2\nCheck user A's .ssh/config ...").
+    md = "Question body.\n5\nThe accepted answer body.\n"
+    sections = [
+        {"title": "Question", "level": 2, "char_start": 0, "char_end": 15},
+        {"title": "3 Answers3", "level": 2, "char_start": 15, "char_end": len(md)},
+    ]
+    out = _select_summary_section_md(sections, md, "q_and_a")
+    assert out == "The accepted answer body.\n"
 
 
 def test_summary_generic_path_unchanged(plain_zim: Path) -> None:

@@ -1,7 +1,11 @@
 # Archive-type presets (v2.5 #17). Keyed by detected type. All keys are
 # optional; a missing key inherits the global default. Only types with a
-# [preset.<type>] table get behavior — wiktionary/ted are detected and
-# reported but intentionally have no preset here (a2 adds them as data).
+# [preset.<type>] table get behavior. a1 shipped wikipedia + stackexchange;
+# a2 added the Stack Exchange answer score-prefix trim (code, in
+# zim/content.py). The wiktionary (gloss) and ted (transcript) presets are
+# deferred — a 2026-06-16 live probe showed ted2zim transcripts live in
+# text/vtt subtitle files (not body headings) so a heading slice can't work,
+# and no mwoffliner wiktionary archive was available to pin a gloss token.
 
 [preset.wikipedia]
 # Explicit baseline == current defaults; makes the baseline testable.

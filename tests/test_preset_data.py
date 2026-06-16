@@ -25,7 +25,10 @@ class TestBundledDefaults:
         assert presets.by_type["wikipedia"].summary_style == "first_section"
         assert presets.by_type["stackexchange"].summary_style == "q_and_a"
 
-    def test_bundled_has_no_wiktionary_or_ted(self) -> None:
+    def test_wiktionary_and_ted_have_no_bundled_preset(self) -> None:
+        # a2 deferred the gloss/transcript presets (see preset_data.py): both
+        # types are still detected but carry no bundled behavior, so they are
+        # absent from by_type. Re-add when a live archive validates a selector.
         presets = load_presets(None)
         assert "wiktionary" not in presets.by_type
         assert "ted" not in presets.by_type
@@ -43,8 +46,13 @@ class TestResolve:
         assert resolve_preset(presets, "stackexchange", "medium", "x") is None
 
     def test_unknown_type_high_returns_none(self) -> None:
+        # A type with no [preset.<type>] table returns None even at high
+        # confidence. ``generic`` never has a preset; ``wiktionary``/``ted``
+        # are detected but their a2 presets are deferred (no bundled table).
         presets = load_presets(None)
+        assert resolve_preset(presets, "generic", "high", "x") is None
         assert resolve_preset(presets, "wiktionary", "high", "x") is None
+        assert resolve_preset(presets, "ted", "high", "x") is None
 
 
 class TestOverrideAndPins:
