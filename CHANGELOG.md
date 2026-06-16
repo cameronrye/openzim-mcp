@@ -8,8 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.4.4](https://github.com/cameronrye/openzim-mcp/compare/v2.4.3...v2.4.4) (2026-06-16)
 
 
+### Added
+
+* **presets:** trim the Stack Exchange answer vote-score prefix from `q_and_a` summaries (v2.5 [#17](https://github.com/cameronrye/openzim-mcp/issues/17) a2) ([#294](https://github.com/cameronrye/openzim-mcp/issues/294)) ([6a583fe](https://github.com/cameronrye/openzim-mcp/commit/6a583fea4bd8eea7d172cbaee6b99bad2c31ac11))
+
+
 ### Fixed
 
+* close the H14/M31 residuals from the 2026-06-10 review — strip the rejected `cursor` param copy-on-write in `zim_search`, thread `validated_path` into the synthesize snippet render cache, and rebuild the title-merge result copy-on-write to stop cache poisoning ([#294](https://github.com/cameronrye/openzim-mcp/issues/294)) ([6a583fe](https://github.com/cameronrye/openzim-mcp/commit/6a583fea4bd8eea7d172cbaee6b99bad2c31ac11))
 * **deps:** clear website vite + astro security advisories (npm audit → 0) ([#295](https://github.com/cameronrye/openzim-mcp/issues/295)) ([0e86731](https://github.com/cameronrye/openzim-mcp/commit/0e86731bdaf030575daef6f172738ec9e6f8d723))
 
 ## [2.4.3](https://github.com/cameronrye/openzim-mcp/compare/v2.4.2...v2.4.3) (2026-06-15)
