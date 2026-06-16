@@ -96,18 +96,52 @@ def _rrf_fuse(
 # ---------------------------------------------------------------------------
 
 
+def _call_title_match_hit(
+    title_match_hit: Any,
+    archive: Any,
+    title: str,
+    *,
+    validated_path: Optional[str] = None,
+) -> Optional[dict]:
+    """Call ``title_match_hit`` forwarding ``validated_path`` (M31 residue).
+
+    The production ``ZimOperations.title_match_hit`` accepts a keyword
+    ``validated_path`` so the snippet render engages the snippet_render
+    cache on the synthesize path. Test stubs (and any older handler) only
+    accept ``(archive, title)``; fall back to the two-arg form on a
+    ``TypeError`` so they keep working unchanged.
+    """
+    if not callable(title_match_hit):
+        return None
+    try:
+        return cast(
+            Optional[dict],
+            title_match_hit(archive, title, validated_path=validated_path),
+        )
+    except TypeError:
+        return cast(Optional[dict], title_match_hit(archive, title))
+
+
 def _per_archive_search(
     archive: Archive,
     *,
     search_handler: Any,  # SearchToolsHandler — typed loosely to avoid circular import
     query: str,
     k: int,
+    validated_path: Optional[str] = None,
 ) -> list[dict]:
     """Run Xapian search on one archive, return top-K hits as dicts.
 
     Hit shape: {"path": str, "snippet": str, "score": float}.
+
+    ``validated_path`` (M31 residue) is forwarded to ``search_top_k`` so the
+    snippet render engages the per-(path, entry, stat-token) cache rather
+    than re-rendering entries the EntryBundle later renders again.
     """
-    return cast(list[dict], search_handler.search_top_k(archive, query, k=k))
+    return cast(
+        list[dict],
+        search_handler.search_top_k(archive, query, k=k, validated_path=validated_path),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -890,7 +924,11 @@ def _do_per_archive_search(
         archive_by_name[archive_name] = (archive, validated_path)
         per_archive_hits.append(
             _per_archive_search(
-                archive, search_handler=search_handler, query=query, k=k
+                archive,
+                search_handler=search_handler,
+                query=query,
+                k=k,
+                validated_path=str(validated_path),
             )
         )
     return per_archive_hits, archives_searched, archive_by_name
@@ -900,10 +938,15 @@ def _build_pass0_promoted_hit(
     full_probe: dict,
     archive: Any,
     title_match_hit: Any,
+    *,
+    validated_path: Optional[str] = None,
 ) -> dict:
     """Build a ``search_top_k``-shaped hit (``{path, snippet, score}``)
     from a ``find_title_match`` result so downstream extraction and
     score-based ranking handle the pass-0 promotion correctly.
+
+    ``validated_path`` (M31 residue) is forwarded to the ``title_match_hit``
+    re-probe so the promoted hit's snippet render engages the snippet cache.
 
     Post-b6 Z2: pre-fix, ``_promote_title_match`` passed the raw
     ``find_title_match`` dict (shape ``{path, title, zim_file,
@@ -925,7 +968,12 @@ def _build_pass0_promoted_hit(
     canonical_title = str(full_probe.get("title") or full_path.replace("_", " "))
     if callable(title_match_hit):
         try:
-            reprobed = title_match_hit(archive, canonical_title)
+            reprobed = _call_title_match_hit(
+                title_match_hit,
+                archive,
+                canonical_title,
+                validated_path=validated_path,
+            )
         except Exception as exc:
             logger.debug(
                 "_build_pass0_promoted_hit: title_match_hit re-probe failed "
@@ -1107,7 +1155,7 @@ def _promote_title_match(
         # canonical), so the resulting dict carries ``snippet`` and
         # ``score`` per the ``search_top_k`` shape.
         promoted_hit_built: dict = _build_pass0_promoted_hit(
-            full_probe, archive, title_match_hit
+            full_probe, archive, title_match_hit, validated_path=str(vp)
         )
         return [(archive_name, _mark_promoted(promoted_hit_built)), *top_hits]
 
@@ -1123,7 +1171,9 @@ def _promote_title_match(
     for tail in iter_query_tails(query, min_len=pass_tail_min_len):
         for (archive, _vp), archive_name in zip(archives, archives_searched):
             try:
-                promoted = title_match_hit(archive, tail)
+                promoted = _call_title_match_hit(
+                    title_match_hit, archive, tail, validated_path=str(_vp)
+                )
             except Exception as e:
                 logger.debug(
                     "title_match_hit failed for %s on tail %r: %s",
@@ -1234,7 +1284,10 @@ def _promote_title_match(
                                 *reordered_rescue,
                             ]
                         rescued_hit = _build_pass0_promoted_hit(
-                            rescued, archive, title_match_hit
+                            rescued,
+                            archive,
+                            title_match_hit,
+                            validated_path=str(_vp),
                         )
                         return [
                             (archive_name, _mark_promoted(rescued_hit)),

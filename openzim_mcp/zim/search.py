@@ -3459,7 +3459,14 @@ class _SearchMixin:
         """
         return _json(self.search_all_data(query, limit_per_file))
 
-    def search_top_k(self, archive: "Archive", query: str, *, k: int) -> list[dict]:
+    def search_top_k(
+        self,
+        archive: "Archive",
+        query: str,
+        *,
+        k: int,
+        validated_path: Optional[str] = None,
+    ) -> list[dict]:
         """Top-K Xapian results from an open archive as a flat dict list.
 
         Used by synthesize.py as the primary stage of the pipeline.  Each hit
@@ -3472,6 +3479,12 @@ class _SearchMixin:
         ``score`` is set to the hit's rank-based inverse (1 / rank) as a
         lightweight proxy — libzim's Xapian binding does not expose raw BM25
         scores through the public Python API.
+
+        ``validated_path`` (M31 residue): the on-disk path of ``archive``.
+        Threaded into ``_get_entry_snippet`` so the query-independent
+        snippet render is cached per (path, entry, stat-token) — without it
+        the synthesize hot path re-renders the same entries the EntryBundle
+        already rendered (the snippet-vs-bundle double render M31 targeted).
         """
         query_obj = _zim_ops_mod.Query().set_query(query)
         searcher = _zim_ops_mod.Searcher(archive)
@@ -3485,7 +3498,9 @@ class _SearchMixin:
         for rank, entry_id in enumerate(entry_ids, start=1):
             try:
                 entry = archive.get_entry_by_path(entry_id)
-                snippet = self._get_entry_snippet(entry, query=query)
+                snippet = self._get_entry_snippet(
+                    entry, query=query, validated_path=validated_path
+                )
             except Exception as exc:
                 logger.warning(
                     f"search_top_k: error fetching entry {entry_id!r}: {exc}"
@@ -3496,7 +3511,11 @@ class _SearchMixin:
         return hits
 
     def title_match_hit(
-        self, archive: "Archive", title: str
+        self,
+        archive: "Archive",
+        title: str,
+        *,
+        validated_path: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Resolve ``title`` against an open archive's title-index fast path
         and return a search-top-k-shaped hit on success, ``None`` on miss.
@@ -3522,6 +3541,11 @@ class _SearchMixin:
         strongest possible signal we can produce, and the caller uses
         the value only to label the promoted entry; subsequent fusion
         respects positional order anyway.
+
+        ``validated_path`` (M31 residue): the on-disk path of ``archive``,
+        threaded into ``_get_entry_snippet`` so the snippet render engages
+        the same per-(path, entry, stat-token) cache the interactive search
+        path uses, instead of re-rendering on the synthesize hot path.
         """
         try:
             entry = self._find_entry_fast_path(archive, title)
@@ -3532,7 +3556,9 @@ class _SearchMixin:
             return None
         entry = self._follow_redirect_chain(entry)
         try:
-            snippet = self._get_entry_snippet(entry, query=title)
+            snippet = self._get_entry_snippet(
+                entry, query=title, validated_path=validated_path
+            )
         except Exception as e:
             logger.debug(f"title_match_hit snippet failed for {title!r}: {e}")
             snippet = ""

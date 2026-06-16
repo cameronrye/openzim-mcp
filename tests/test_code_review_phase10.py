@@ -18,6 +18,7 @@ from openzim_mcp.config import (
 )
 from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.security import PathValidator
+from openzim_mcp.zim.archive import zim_archive
 from openzim_mcp.zim_operations import ZimOperations
 
 
@@ -70,3 +71,31 @@ def test_m31_snippet_render_cached_on_search(ops, v2_phase_a_zim):
     assert _cache_keys(
         ops, "snippet_render:v1:"
     ), "expected a snippet_render cache entry"
+
+
+# M31 residue — the synthesize hot path (search_top_k / title_match_hit) must
+# also engage the snippet_render cache. These hold an OPEN archive, so they
+# need ``validated_path`` threaded through to ``_get_entry_snippet`` for the
+# cache key to be built. Without the thread-through the cache never engages on
+# the synthesize path and the snippet-vs-bundle double render M31 targeted
+# persists.
+def test_m31_snippet_render_cached_on_search_top_k(ops, v2_phase_a_zim):
+    path = str(v2_phase_a_zim)
+    with zim_archive(v2_phase_a_zim) as archive:
+        hits = ops.search_top_k(archive, "Einstein", k=2, validated_path=path)
+    assert hits, "expected search_top_k to return hits for the fixture"
+    assert _cache_keys(ops, "snippet_render:v1:"), (
+        "expected search_top_k to engage the snippet_render cache when "
+        "validated_path is supplied"
+    )
+
+
+def test_m31_snippet_render_cached_on_title_match_hit(ops, v2_phase_a_zim):
+    path = str(v2_phase_a_zim)
+    with zim_archive(v2_phase_a_zim) as archive:
+        hit = ops.title_match_hit(archive, "Einstein", validated_path=path)
+    assert hit is not None, "expected title_match_hit to resolve the fixture title"
+    assert _cache_keys(ops, "snippet_render:v1:"), (
+        "expected title_match_hit to engage the snippet_render cache when "
+        "validated_path is supplied"
+    )
