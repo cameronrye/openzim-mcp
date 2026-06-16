@@ -25,10 +25,17 @@ class TestBundledDefaults:
         assert presets.by_type["wikipedia"].summary_style == "first_section"
         assert presets.by_type["stackexchange"].summary_style == "q_and_a"
 
-    def test_bundled_has_no_wiktionary_or_ted(self) -> None:
+    def test_bundled_wiktionary_preset_loads(self) -> None:
+        load_presets.cache_clear()
         presets = load_presets(None)
-        assert "wiktionary" not in presets.by_type
-        assert "ted" not in presets.by_type
+        assert presets.by_type["wiktionary"].summary_style == "gloss"
+        load_presets.cache_clear()
+
+    def test_bundled_ted_preset_loads(self) -> None:
+        load_presets.cache_clear()
+        presets = load_presets(None)
+        assert presets.by_type["ted"].summary_style == "transcript"
+        load_presets.cache_clear()
 
 
 class TestResolve:
@@ -43,8 +50,11 @@ class TestResolve:
         assert resolve_preset(presets, "stackexchange", "medium", "x") is None
 
     def test_unknown_type_high_returns_none(self) -> None:
+        # A type with no [preset.<type>] table returns None even at high
+        # confidence. ``generic`` has no bundled preset (wiktionary/ted
+        # gained presets in a2, so they no longer exercise this path).
         presets = load_presets(None)
-        assert resolve_preset(presets, "wiktionary", "high", "x") is None
+        assert resolve_preset(presets, "generic", "high", "x") is None
 
 
 class TestOverrideAndPins:

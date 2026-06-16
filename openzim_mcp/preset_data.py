@@ -23,7 +23,7 @@ from openzim_mcp.archive_types import detect_archive_type
 
 logger = logging.getLogger(__name__)
 
-SummaryStyle = Literal["first_section", "q_and_a"]
+SummaryStyle = Literal["first_section", "q_and_a", "gloss", "transcript"]
 
 
 class ArchivePreset(BaseModel):

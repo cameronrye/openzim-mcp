@@ -57,8 +57,12 @@ def _strip_markdown_links_shared(text: str) -> str:
 # Common MIME-type prefix used to gate text-extraction logic.
 _TEXT_MIME_PREFIX = "text/"
 
-# Matched as a lowercase substring against a section heading to find the
-# Q&A answer block. Validated against the live superuser (sotoki v3.0.2)
+# Heading tokens (lowercase substring match) that mark the summary section
+# for each non-default summary_style. A style with no token table, or whose
+# token never matches, falls back to the first-section slice (never worse
+# than baseline).
+#
+# ``q_and_a`` was validated against the live superuser (sotoki v3.0.2)
 # archive during the v2.2.0 reprobe: real Q&A pages carry exactly one
 # heading, always "N AnswersN" (sotoki pluralizes even N=1 -> "1 Answers1",
 # e.g. "3 Answers3", "5 Answers5"), so this substring selects the answers
@@ -66,12 +70,61 @@ _TEXT_MIME_PREFIX = "text/"
 # so there is no competing "Your Answer" heading to false-match; zero-answer
 # pages have no heading and fall through to the first-section fallback below.
 _ANSWER_HEADING_TOKENS = ("answer",)
+# live-reprobe-pending: tokens not yet validated against a real mwoffliner
+# wiktionary archive (see docs/superpowers/plans/2026-06-15-v2.5-remaining-
+# work.md). Best-effort part-of-speech headings; if none match, gloss falls
+# back to the first-section slice (never worse than baseline).
+_GLOSS_HEADING_TOKENS = (
+    "noun",
+    "verb",
+    "adjective",
+    "adverb",
+    "pronoun",
+    "preposition",
+    "conjunction",
+    "interjection",
+    "determiner",
+    "numeral",
+)
+# live-reprobe-pending: token not yet validated against a real ted2zim
+# archive (see docs/superpowers/plans/2026-06-15-v2.5-remaining-work.md).
+# Best-effort transcript heading; if it never matches, transcript falls back
+# to the first-section slice (never worse than baseline).
+_TRANSCRIPT_HEADING_TOKENS = ("transcript",)
+
+_STYLE_HEADING_TOKENS: Dict[str, Tuple[str, ...]] = {
+    "q_and_a": _ANSWER_HEADING_TOKENS,
+    "gloss": _GLOSS_HEADING_TOKENS,
+    "transcript": _TRANSCRIPT_HEADING_TOKENS,
+}
 
 
-def _is_answer_heading(title: str) -> bool:
-    """Return True when a section heading looks like a Q&A answer block."""
+def _heading_matches(title: str, tokens: Tuple[str, ...]) -> bool:
+    """Return True when a section heading contains any of ``tokens``."""
     t = title.strip().lower()
-    return any(tok in t for tok in _ANSWER_HEADING_TOKENS)
+    return any(tok in t for tok in tokens)
+
+
+def _strip_leading_score(md: str) -> str:
+    """Drop a bare leading vote-score line from a Stack Exchange answer slice.
+
+    sotoki answer bodies open with the answer's vote score on its own line
+    (e.g. ``3``), which is noise as the first token of a summary. A leading
+    line that is only digits (optionally signed) is removed; any other
+    content — including a single line with no trailing newline — is returned
+    unchanged so a real one-line answer is never destroyed.
+
+    live-reprobe-pending: the exact trigger position is not yet validated
+    against a real sotoki page — the bare score may sit after the answers
+    heading rather than as the first body line of the slice (see
+    docs/superpowers/plans/2026-06-15-v2.5-remaining-work.md). The
+    digits-only guard makes a mis-fire harmless on non-score content.
+    """
+    stripped = md.lstrip("\n")
+    head, sep, rest = stripped.partition("\n")
+    if sep and head.strip().lstrip("+-").isdigit():
+        return rest.lstrip("\n")
+    return md
 
 
 def _select_summary_section_md(
@@ -81,20 +134,22 @@ def _select_summary_section_md(
 ) -> str:
     """Return the markdown slice for the summary, per ``summary_style``.
 
-    ``q_and_a`` returns the first section whose heading looks like an
-    answer; for any other style (including ``None``) or when no answer
-    heading is found, returns the first-section slice (the prior behavior).
-
-    NOTE: the answer-heading match was validated against the live superuser
-    (sotoki) archive in the v2.2.0 reprobe (see _ANSWER_HEADING_TOKENS). The
-    fallback guarantees a never-worse-than-baseline result.
+    A style listed in ``_STYLE_HEADING_TOKENS`` selects the first section
+    whose heading matches its token set; ``q_and_a`` additionally strips a
+    leading vote-score line. Any other style (including ``None``), or no
+    matching heading, returns the first-section slice (the prior behavior),
+    which guarantees a never-worse-than-baseline result.
     """
-    if summary_style == "q_and_a":
+    tokens = _STYLE_HEADING_TOKENS.get(summary_style or "")
+    if tokens is not None:
         for s in sections:
-            if _is_answer_heading(str(s.get("title", ""))):
+            if _heading_matches(str(s.get("title", "")), tokens):
                 start = int(s["char_start"])
                 end = int(s["char_end"])
-                return rendered_md[start:end]
+                slice_md = rendered_md[start:end]
+                if summary_style == "q_and_a":
+                    slice_md = _strip_leading_score(slice_md)
+                return slice_md
     if sections:
         return rendered_md[: int(sections[0]["char_end"])]
     return rendered_md
