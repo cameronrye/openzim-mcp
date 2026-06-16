@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.4](https://github.com/cameronrye/openzim-mcp/compare/v2.4.3...v2.4.4) (2026-06-16)
+
+
+### Fixed
+
+* **deps:** clear website vite + astro security advisories (npm audit → 0) ([#295](https://github.com/cameronrye/openzim-mcp/issues/295)) ([0e86731](https://github.com/cameronrye/openzim-mcp/commit/0e86731bdaf030575daef6f172738ec9e6f8d723))
+
 ## [2.4.3](https://github.com/cameronrye/openzim-mcp/compare/v2.4.2...v2.4.3) (2026-06-15)
 
 
