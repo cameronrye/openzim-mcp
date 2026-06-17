@@ -62,6 +62,18 @@ openzim-mcp --help
 
 Download ZIM files from the [Kiwix Library](https://library.kiwix.org/) into a directory of your choice before running the server.
 
+### Smithery & one-click install
+
+OpenZIM MCP is listed on the [Smithery registry](https://smithery.ai/servers/rye/openzim-mcp). Add it to your MCP client with the Smithery CLI:
+
+```bash
+npx @smithery/cli mcp add rye/openzim-mcp --client claude
+```
+
+For a one-click **Claude Desktop extension**, download the `openzim-mcp-<version>.mcpb` asset from the [latest release](https://github.com/cameronrye/openzim-mcp/releases/latest) and double-click it. The bundle launches `uvx openzim-mcp` (so the host needs [uv](https://docs.astral.sh/uv/)) and prompts for your ZIM directory. Maintainer runbook: [docs/distribution.md](docs/distribution.md).
+
+<!-- mcp-name: io.github.cameronrye/openzim-mcp -->
+
 ## Quick start
 
 Run the server in Simple mode (default — exposes one natural-language tool, `zim_query`):

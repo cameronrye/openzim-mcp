@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cameronrye/openzim-mcp",
+  "description": "Offline MCP access to ZIM knowledge archives — Wikipedia, Wiktionary, Stack Exchange, Kiwix.",
+  "version": "2.4.4",
+  "repository": {
+    "url": "https://github.com/cameronrye/openzim-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "openzim-mcp",
+      "version": "2.4.4",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "valueHint": "zim_directory",
+          "description": "Path to a directory containing your .zim archive files. Repeat for multiple directories. Download archives from the Kiwix library (https://library.kiwix.org/).",
+          "format": "filepath",
+          "isRequired": true,
+          "isRepeated": true
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "OPENZIM_MCP_TOOL_MODE",
+          "description": "Tool surface: 'advanced' (the default here) registers all 8 tools (zim_query, zim_search, zim_get, zim_get_section, zim_browse, zim_metadata, zim_links, zim_health); 'simple' registers only the zim_query natural-language entry point.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "advanced"
+        }
+      ]
+    }
+  ]
+}
