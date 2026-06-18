@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cameronrye/openzim-mcp",
   "description": "Offline MCP access to ZIM knowledge archives — Wikipedia, Wiktionary, Stack Exchange, Kiwix.",
-  "version": "2.4.4",
+  "version": "2.4.5",
   "repository": {
     "url": "https://github.com/cameronrye/openzim-mcp",
     "source": "github"
@@ -12,7 +12,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "openzim-mcp",
-      "version": "2.4.4",
+      "version": "2.4.5",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

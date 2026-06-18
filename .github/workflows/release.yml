@@ -163,6 +163,23 @@ jobs:
           name: dist
           path: dist/
 
+      # The .mcpb bundle (Smithery listing + Claude Desktop one-click extension)
+      # is built into a SEPARATE directory/artifact, never dist/. The
+      # publish-pypi job uploads everything in the `dist` artifact to PyPI, and a
+      # .mcpb is not a valid distribution — keeping it out of `dist` avoids a
+      # failed/garbage PyPI upload. create-release merges it back in for the
+      # GitHub release only. `uv run` syncs the project venv (installs openzim_mcp
+      # + libzim) before running, which build_mcpb.py needs to spawn the server
+      # and capture live tool schemas.
+      - name: Build .mcpb bundle
+        run: uv run python scripts/build_mcpb.py --output dist-mcpb
+
+      - name: Upload .mcpb bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcpb
+          path: dist-mcpb/
+
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
@@ -218,6 +235,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: dist
+          path: dist/
+
+      # Merge the .mcpb bundle (+ its .sha256) into dist/ so the existing
+      # dist/* upload paths below attach it to the GitHub release. This artifact
+      # is intentionally kept out of the PyPI publish (see the build job).
+      - name: Download .mcpb bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: mcpb
           path: dist/
 
       - name: Determine tag name

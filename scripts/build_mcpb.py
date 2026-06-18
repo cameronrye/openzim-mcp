@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess  # nosec B404 - spawns this project's own server, fixed argv
@@ -49,7 +50,7 @@ PYPI_NAME = "openzim-mcp"
 # pins this against the live server, so adding/removing a tool fails CI here.
 EXPECTED_TOOL_COUNT = 8
 
-# Variable substitution the host (Claude Desktop / Smithery) performs at launch.
+# Max seconds for the whole tool-capture handshake (initialize + tools/list).
 HANDSHAKE_TIMEOUT_S = 120
 
 
@@ -66,11 +67,25 @@ def capture_tools(timeout_s: int = HANDSHAKE_TIMEOUT_S) -> list[dict]:
     ``inputSchema``, and ``outputSchema`` when present) so the manifest carries
     the exact JSON Schemas Smithery scores.
     """
+    if sys.platform == "win32":
+        # The handshake below waits on the server's stdout via select(), which
+        # on Windows accepts sockets only — not pipe handles — and raises
+        # WinError 10038. Fail fast with a clear message. The *bundle* this
+        # script produces is still cross-platform (it just launches uvx); only
+        # this build host must be POSIX.
+        raise SystemExit(
+            "build_mcpb: build host must be macOS/Linux — the stdio tool-capture "
+            "handshake uses select() on a pipe, which is unsupported on Windows. "
+            "The produced .mcpb bundle is itself cross-platform."
+        )
     with tempfile.TemporaryDirectory(prefix="openzim_mcp_build_") as zim_dir:
         env = {
             **os.environ,
             "OPENZIM_MCP_TOOL_MODE": "advanced",
-            "LOG_LEVEL": "error",
+            # Quiet the server's stderr during capture. The level is read from
+            # OPENZIM_MCP_LOGGING__LEVEL (env_prefix OPENZIM_MCP_, nested
+            # delimiter __); a bare LOG_LEVEL is silently ignored.
+            "OPENZIM_MCP_LOGGING__LEVEL": "ERROR",
         }
         proc = subprocess.Popen(  # nosec B603 - sys.executable + fixed module
             [sys.executable, "-m", "openzim_mcp", zim_dir],
@@ -87,9 +102,12 @@ def capture_tools(timeout_s: int = HANDSHAKE_TIMEOUT_S) -> list[dict]:
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=10)
+                # communicate() drains stdout/stderr while waiting, so the child
+                # can't wedge on a full pipe during shutdown.
+                proc.communicate(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.communicate()
 
     if len(tools) != EXPECTED_TOOL_COUNT:
         names = sorted(t.get("name", "?") for t in tools)
@@ -105,6 +123,10 @@ def _handshake_list_tools(proc: subprocess.Popen, timeout_s: int) -> list[dict]:
     """Minimal MCP stdio handshake: initialize -> initialized -> tools/list."""
     import select
 
+    # One shared budget for the whole handshake, so initialize + tools/list
+    # together are bounded by HANDSHAKE_TIMEOUT_S (not 2x it).
+    deadline = _monotonic() + timeout_s
+
     def send(obj: dict) -> None:
         assert proc.stdin is not None
         proc.stdin.write(json.dumps(obj) + "\n")
@@ -112,7 +134,6 @@ def _handshake_list_tools(proc: subprocess.Popen, timeout_s: int) -> list[dict]:
 
     def read_id(target_id: int) -> dict:
         assert proc.stdout is not None
-        deadline = _monotonic() + timeout_s
         while True:
             remaining = deadline - _monotonic()
             if remaining <= 0:
@@ -173,20 +194,48 @@ def build_manifest(version: str, tools: list[dict]) -> dict:
     return manifest
 
 
+def _fixed_date_time() -> tuple[int, int, int, int, int, int]:
+    """A constant zip entry timestamp so two builds of one commit match byte-for-byte.
+
+    Honors ``SOURCE_DATE_EPOCH`` when set, else the zip epoch (1980-01-01).
+    Without this, ``writestr`` stamps wall-clock time and ``write`` inherits the
+    file mtime, both of which vary between builds and break hash verification.
+    """
+    epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if epoch:
+        import time
+
+        return time.gmtime(int(epoch))[:6]  # type: ignore[return-value]
+    return (1980, 1, 1, 0, 0, 0)
+
+
+def _add_entry(zf: zipfile.ZipFile, arcname: str, data: bytes, date_time) -> None:
+    """Add one file with a pinned timestamp + mode, for a reproducible archive."""
+    info = zipfile.ZipInfo(arcname, date_time=date_time)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o644 << 16  # -rw-r--r--
+    zf.writestr(info, data)
+
+
 def pack(manifest: dict, output: Path) -> Path:
     """Write a plain zip with manifest.json at the root + the server shim.
 
     Plain zip (not ``mcpb pack``) preserves the ``inputSchema``/``outputSchema``
-    keys in ``tools`` that ``mcpb validate`` would reject.
+    keys in ``tools`` that ``mcpb validate`` would reject. Every entry is stamped
+    with a fixed timestamp/mode (see ``_fixed_date_time``) so rebuilding the same
+    commit yields a byte-identical ``.mcpb``.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         output.unlink()
+    date_time = _fixed_date_time()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
+        manifest_bytes = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
+        _add_entry(zf, "manifest.json", manifest_bytes, date_time)
         for path in sorted((BUNDLE_SRC / "server").rglob("*")):
             if path.is_file():
-                zf.write(path, str(path.relative_to(BUNDLE_SRC)))
+                arcname = str(path.relative_to(BUNDLE_SRC))
+                _add_entry(zf, arcname, path.read_bytes(), date_time)
     return output
 
 
@@ -210,7 +259,16 @@ def main() -> int:
     output = args.output / f"{PYPI_NAME}-{version}.mcpb"
     pack(manifest, output)
     size_kb = output.stat().st_size / 1024
+
+    # Emit a `shasum -a 256 -c`-compatible sidecar so a release downloader can
+    # verify the asset they fetched matches what CI built.
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    checksum = output.with_name(output.name + ".sha256")
+    checksum.write_text(f"{digest}  {output.name}\n", encoding="utf-8")
+
     print(f"build_mcpb: wrote {output} ({size_kb:.1f} KB)")
+    print(f"build_mcpb: sha256 {digest}")
+    print(f"build_mcpb: wrote {checksum}")
     print(
         f"build_mcpb: publish with -> smithery mcp publish {output} -n rye/openzim-mcp"
     )

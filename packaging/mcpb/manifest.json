@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "openzim-mcp",
   "display_name": "OpenZIM MCP",
-  "version": "2.4.4",
+  "version": "2.4.5",
   "description": "ZIM MCP server that gives AI models offline access to ZIM knowledge archives (Wikipedia, Wiktionary, Stack Exchange, and the Kiwix library).",
   "long_description": "OpenZIM MCP is a secure, high-performance Model Context Protocol server that gives AI models structured, offline access to ZIM-format knowledge archives. It provides namespace-aware browsing, structure-aware retrieval (sections, tables of contents, related articles), full-text search with suggestions across one or more archives, and link-graph extraction. Point it at a local directory of .zim files (download archives from the Kiwix library) and it exposes the advanced 8-tool surface: zim_query, zim_search, zim_get, zim_get_section, zim_browse, zim_metadata, zim_links, and zim_health.",
   "author": {
@@ -35,7 +35,7 @@
     "mcp_config": {
       "command": "uvx",
       "args": [
-        "openzim-mcp@2.4.4",
+        "openzim-mcp",
         "${user_config.allowed_directories}"
       ],
       "env": {

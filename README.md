@@ -70,7 +70,7 @@ OpenZIM MCP is listed on the [Smithery registry](https://smithery.ai/servers/rye
 npx @smithery/cli mcp add rye/openzim-mcp --client claude
 ```
 
-For a one-click **Claude Desktop extension**, download the `openzim-mcp-<version>.mcpb` asset from the [latest release](https://github.com/cameronrye/openzim-mcp/releases/latest) and double-click it. The bundle launches `uvx openzim-mcp` (so the host needs [uv](https://docs.astral.sh/uv/)) and prompts for your ZIM directory. Maintainer runbook: [docs/distribution.md](docs/distribution.md).
+For a one-click **Claude Desktop extension**, download the `openzim-mcp-<version>.mcpb` asset (and its `.sha256`) from the [latest release](https://github.com/cameronrye/openzim-mcp/releases/latest) and double-click it. The bundle launches the version-pinned `uvx openzim-mcp@<version>` (so the host needs [uv](https://docs.astral.sh/uv/)) and prompts for your ZIM directory. Maintainer runbook: [docs/distribution.md](docs/distribution.md).
 
 <!-- mcp-name: io.github.cameronrye/openzim-mcp -->
 

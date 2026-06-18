@@ -70,8 +70,18 @@ def test_manifest_version_matches_package(manifest: dict) -> None:
     )
 
 
-def test_manifest_launch_arg_pins_package_version(manifest: dict) -> None:
-    args = manifest["server"]["mcp_config"]["args"]
+def test_built_manifest_launch_arg_pins_package_version(build_mcpb) -> None:
+    """The *shipped* bundle pins ``openzim-mcp@<version>``.
+
+    build_mcpb.py stamps the exact launch arg from pyproject at build time, so
+    we validate the built manifest — the artifact users actually run — not the
+    static template (whose arg is intentionally unpinned; see
+    ``test_manifest_runtime_and_config``). This keeps the composite ``name@ver``
+    string out of the per-release version-lockstep burden (a release-please
+    json updater would clobber it to a bare version).
+    """
+    built = build_mcpb.build_manifest(__version__, [])
+    args = built["server"]["mcp_config"]["args"]
     assert args == [f"{PYPI_NAME}@{__version__}", "${user_config.allowed_directories}"]
 
 
@@ -89,12 +99,30 @@ def test_manifest_runtime_and_config(manifest: dict) -> None:
     assert server["entry_point"] == "server/main.py"
     mcp_config = server["mcp_config"]
     assert mcp_config["command"] == "uvx"
+    # The static template's launch arg is intentionally UNPINNED ("openzim-mcp",
+    # no @version). build_mcpb.py stamps the exact openzim-mcp@<version> at build
+    # time (see test_built_manifest_launch_arg_pins_package_version); keeping the
+    # template unpinned removes it from the per-release version-lockstep burden.
+    assert mcp_config["args"] == [PYPI_NAME, "${user_config.allowed_directories}"]
     # The bundle ships the advanced 8-tool surface.
     assert mcp_config["env"]["OPENZIM_MCP_TOOL_MODE"] == "advanced"
     cfg = manifest["user_config"]["allowed_directories"]
     assert cfg["type"] == "directory"
     assert cfg["required"] is True
     assert cfg["multiple"] is True
+
+
+def test_manifest_static_template_identity(manifest: dict) -> None:
+    """Guard the static-template fields build_manifest does NOT overwrite.
+
+    ``tools`` is injected at build time from the live server, so the committed
+    template must ship empty (a stale hand-edited tools array would otherwise be
+    the fallback if anyone zipped the template directly). ``name`` and
+    ``manifest_version`` pass through build_manifest unchanged.
+    """
+    assert manifest["tools"] == []
+    assert manifest["name"] == PYPI_NAME
+    assert manifest["manifest_version"] == "0.3"
 
 
 # --- server.json (MCP Registry) invariants ----------------------------------
@@ -117,6 +145,22 @@ def test_server_json_requires_positional_zim_directory(server_json: dict) -> Non
     arg = positional[0]
     assert arg["isRequired"] is True
     assert arg["format"] == "filepath"
+
+
+def test_server_json_validates_against_registry_schema(server_json: dict) -> None:
+    """server.json must validate against the exact MCP Registry schema it
+    declares, so a malformed doc (missing required field, disallowed extra key,
+    malformed packageArguments/environmentVariables entry) fails here in CI
+    rather than at ``mcp-publisher`` time after the release is already cut. The
+    schema is vendored (pinned) so the check stays offline and deterministic.
+    """
+    jsonschema = pytest.importorskip("jsonschema")
+    schema_path = REPO / "tests" / "fixtures" / "mcp_server_schema_2025-12-11.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    # The vendored copy must be the schema server.json points at; otherwise the
+    # pin has silently drifted and we'd be validating against the wrong version.
+    assert server_json["$schema"] == schema["$id"]
+    jsonschema.Draft7Validator(schema).validate(server_json)
 
 
 # --- ownership marker (PyPI description) ------------------------------------
@@ -180,3 +224,45 @@ def test_build_expected_count_matches_advanced_surface(build_mcpb, tmp_path) -> 
     registered = set(server.mcp._tool_manager._tools)
     assert len(registered) == build_mcpb.EXPECTED_TOOL_COUNT
     assert "zim_query" in registered
+
+
+def test_capture_tools_rejects_wrong_tool_count(build_mcpb, monkeypatch) -> None:
+    """A handshake regression that yields the wrong number of tools must break
+    the build (SystemExit), never ship a short/wrong manifest. Hermetic: the
+    real server spawn and the stdio handshake are stubbed out, so this covers the
+    count-mismatch guard branch without spawning a subprocess.
+    """
+
+    class _FakeProc:
+        def terminate(self) -> None: ...
+
+        def communicate(self, timeout=None):
+            return ("", "")
+
+        def kill(self) -> None: ...
+
+    monkeypatch.setattr(build_mcpb.subprocess, "Popen", lambda *a, **k: _FakeProc())
+    monkeypatch.setattr(
+        build_mcpb,
+        "_handshake_list_tools",
+        lambda proc, timeout_s: [{"name": f"t{i}"} for i in range(7)],
+    )
+    with pytest.raises(SystemExit):
+        build_mcpb.capture_tools()
+
+
+@pytest.mark.live
+def test_capture_tools_live_matches_advanced_surface(build_mcpb) -> None:
+    """End-to-end: spawn the real server over stdio and capture ``tools/list``.
+
+    Exercises the initialize/initialized/tools/list handshake that the unit
+    tests stub out — the most failure-prone path in build_mcpb.py — and would
+    catch an SDK response-shape regression. Marked ``live`` so it is deselected
+    from the default suite (run via ``make test-live``); the release pipeline
+    also exercises this path when it builds the .mcpb.
+    """
+    tools = build_mcpb.capture_tools()
+    names = {t["name"] for t in tools}
+    assert len(tools) == build_mcpb.EXPECTED_TOOL_COUNT
+    assert "zim_query" in names
+    assert all("inputSchema" in t for t in tools)

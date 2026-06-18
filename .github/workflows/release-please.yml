@@ -194,13 +194,31 @@ jobs:
           MANIFEST_VERSION=$(jq -r '."."' .release-please-manifest.json)
           echo "manifest version: $MANIFEST_VERSION"
 
-          if [ "$TAG_VERSION" = "$PYPROJECT_VERSION" ] && [ "$TAG_VERSION" = "$MANIFEST_VERSION" ]; then
+          # The distribution artifacts are auto-bumped by release-please's json
+          # updaters (release-please-config.json extra-files). Assert they moved,
+          # so a mis-pathed updater fails loudly here with a clear message rather
+          # than as an opaque pytest failure in release.yml's gating test job.
+          MCPB_VERSION=$(jq -r '.version' packaging/mcpb/manifest.json)
+          SERVERJSON_VERSION=$(jq -r '.version' server.json)
+          SERVERJSON_PKG_VERSION=$(jq -r '.packages[0].version' server.json)
+          echo "packaging/mcpb/manifest.json version: $MCPB_VERSION"
+          echo "server.json version: $SERVERJSON_VERSION"
+          echo "server.json packages[0].version: $SERVERJSON_PKG_VERSION"
+
+          if [ "$TAG_VERSION" = "$PYPROJECT_VERSION" ] && \
+             [ "$TAG_VERSION" = "$MANIFEST_VERSION" ] && \
+             [ "$TAG_VERSION" = "$MCPB_VERSION" ] && \
+             [ "$TAG_VERSION" = "$SERVERJSON_VERSION" ] && \
+             [ "$TAG_VERSION" = "$SERVERJSON_PKG_VERSION" ]; then
             echo "✅ All versions are synchronized!"
           else
             echo "❌ Version mismatch detected!"
             echo "Tag: $TAG_VERSION"
             echo "pyproject.toml: $PYPROJECT_VERSION"
-            echo "manifest: $MANIFEST_VERSION"
+            echo "release-please manifest: $MANIFEST_VERSION"
+            echo "packaging/mcpb/manifest.json: $MCPB_VERSION"
+            echo "server.json: $SERVERJSON_VERSION"
+            echo "server.json packages[0]: $SERVERJSON_PKG_VERSION"
             exit 1
           fi
 

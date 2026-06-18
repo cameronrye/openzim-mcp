@@ -39,30 +39,50 @@ keeps both artifacts in lockstep with the package version and tool surface.
 
 ---
 
-## 0. On every release (keep versions in lockstep)
+## 0. Version lockstep (automated)
 
-`tests/test_mcpb_distribution.py` fails if these drift from `pyproject.toml`:
+release-please bumps these in the release PR automatically, via the `json`
+updaters in [`release-please-config.json`](../release-please-config.json)
+`extra-files`:
 
-1. `packaging/mcpb/manifest.json` → `version` and the `openzim-mcp@<v>` launch arg.
-2. `server.json` → top-level `version` and `packages[0].version`.
+- `packaging/mcpb/manifest.json` → `version`
+- `server.json` → `version` and `packages[0].version`
 
-Bump both when the package version changes. (Optional follow-up: add them to the
-release-please `extra-files` so the bump is automatic — intentionally not wired
-yet to keep the release workflow unchanged.)
+The MCPB launch arg is deliberately **not** in that list: it is the composite
+string `openzim-mcp@<v>`, which a `json` updater would clobber to a bare version.
+The static template therefore ships an unpinned `openzim-mcp`, and
+[`scripts/build_mcpb.py`](../scripts/build_mcpb.py) stamps the exact
+`openzim-mcp@<version>` into the shipped bundle at build time.
+
+`tests/test_mcpb_distribution.py` still asserts the static `version` fields equal
+`pyproject.toml`, and the release-please `validate-release` job re-checks them at
+tag time — so a missed/mis-pathed bump fails loudly before anything publishes.
 
 ---
 
 ## 1. Build the `.mcpb` bundle
 
+The release workflow ([`.github/workflows/release.yml`](../.github/workflows/release.yml))
+builds this automatically and attaches `openzim-mcp-<version>.mcpb` (plus a
+`.sha256`) to every GitHub release, so the README's one-click download is always
+populated. The bundle is built into a separate directory — never `dist/` — so it
+is excluded from the PyPI upload and attached to the GitHub release only.
+
+To build it by hand (e.g. to publish/refresh the Smithery listing between
+releases):
+
 ```bash
-uv run python scripts/build_mcpb.py        # -> dist/openzim-mcp-<version>.mcpb
+uv run python scripts/build_mcpb.py        # -> dist/openzim-mcp-<version>.mcpb (+ .sha256)
 ```
 
 The script reads the version from `pyproject.toml`, spawns the server in
 advanced mode over stdio to capture the live tool schemas, injects them into the
-manifest, and plain-zips the bundle. It fails loudly if the advanced surface is
-not exactly the expected tool count (a tool-registration regression must break
-the build, not ship a short manifest).
+manifest, and plain-zips the bundle with pinned entry timestamps (rebuilding the
+same commit is byte-identical). It fails loudly if the advanced surface is not
+exactly the expected tool count (a tool-registration regression must break the
+build, not ship a short manifest). The build host must be macOS/Linux — the
+stdio handshake uses `select()` on a pipe — but the produced bundle is
+cross-platform.
 
 ---
 
@@ -121,7 +141,12 @@ server's tool definitions).
 
 ## Recommended sequence
 
-1. Land this change (manifest, `server.json`, build script, README marker, guard test).
-2. Build + publish/update the Smithery `.mcpb` (§1–§2) — does **not** depend on a release.
+1. Land this change (manifest, `server.json`, build script, README marker, guard
+   test, release-please auto-bump, and the `.mcpb` release-asset wiring).
+2. Publish/update the Smithery `.mcpb` (§1–§2) — does **not** depend on a release.
+   (Already published as `rye/openzim-mcp`; re-publish when the tool surface or
+   manifest metadata changes.)
 3. On the next PyPI release (README marker now live), publish `server.json` to
-   the official registry (§3); aggregators follow automatically.
+   the official registry (§3); aggregators follow automatically. From then on the
+   release workflow keeps the manifests version-locked and attaches the `.mcpb`
+   (with its `.sha256`) to each GitHub release for you.
