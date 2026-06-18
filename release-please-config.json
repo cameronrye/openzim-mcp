@@ -70,6 +70,21 @@
           "type": "generic",
           "path": "website/public/llms.txt",
           "glob": false
+        },
+        {
+          "type": "json",
+          "path": "server.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "server.json",
+          "jsonpath": "$.packages[0].version"
+        },
+        {
+          "type": "json",
+          "path": "packaging/mcpb/manifest.json",
+          "jsonpath": "$.version"
         }
       ],
       "bump-minor-pre-major": true,
