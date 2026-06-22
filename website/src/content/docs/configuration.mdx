@@ -40,7 +40,7 @@ openzim-mcp --mode advanced /path/to/zim/files
 | `simple` (default) | 1 tool: `zim_query` (NL intent router) | small/local LLMs, MCP hosts that struggle with large tool catalogs |
 | `advanced` | 8 tools: `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health` (see [API reference](/openzim-mcp/docs/api-reference/)) | hosts that handle a richer tool surface, scripting, fine-grained control |
 
-**v2.0.0 ships the 8-tool advanced surface** — collapsed from the prior 22-tool v1 surface (Phase F). Advanced-mode wire footprint dropped from ~36KB to ~23.5KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
+**The advanced surface is 8 consolidated tools** — collapsed from the prior 22-tool v1 surface. The advanced-mode wire footprint is ~23.5KB, down from ~36KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
 
 ## Transport
 
@@ -143,7 +143,7 @@ export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"search": {"requests_per_s
 
 Per-internal-operation cost defaults are defined in [defaults.RATE_LIMIT_COSTS](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/defaults.py). The v2 tools dispatch internally; each branch resolves to a specific operation key the limiter charges against.
 
-> **Note on key vocabulary.** The internal operation keys below are stable pydantic-validated identifiers — they happen to share their string form with the v1 tool names, but they are **config keys**, not v1 tool surfaces. The keys remained stable through the Phase F tool collapse so that existing `PER_OPERATION_LIMITS` overrides in production deployments did not need to be rewritten when the wire-level tool surface changed.
+> **Note on key vocabulary.** The internal operation keys below are stable pydantic-validated identifiers — they happen to share their string form with the v1 tool names, but they are **config keys**, not v1 tool surfaces. The keys remained stable through the v1 → v2 tool collapse so that existing `PER_OPERATION_LIMITS` overrides in production deployments did not need to be rewritten when the wire-level tool surface changed.
 
 | v2 tool call | Internal operation key (literal) | Cost |
 |--------------|----------------------------------|------|

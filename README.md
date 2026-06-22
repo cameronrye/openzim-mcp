@@ -30,13 +30,13 @@
 
 ---
 
-> 🆕 **8-tool advanced surface.** Phase F (v2.0.0) consolidated 22 advanced tools into 8 (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). **Recent additions:** archive-type presets that auto-tune retrieval per source (Wikipedia, Stack Exchange, …), inbound link discovery ("what links here"), and native libzim health/introspection. Now listed on [Smithery](https://smithery.ai/servers/rye/openzim-mcp) and the [official MCP Registry](https://registry.modelcontextprotocol.io). [Release notes →](CHANGELOG.md) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
+> ✨ **Highlights.** A lean **8-tool advanced surface** (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`) with a schema small enough for small-model dispatch — or one-tool **Simple mode** for natural-language queries. **Archive-type presets** auto-tune retrieval per source (Wikipedia, Stack Exchange, …), **inbound link discovery** answers "what links here," and **native libzim introspection** validates and inspects any archive. Available on [Smithery](https://smithery.ai/servers/rye/openzim-mcp) and the [official MCP Registry](https://registry.modelcontextprotocol.io). [Release notes →](CHANGELOG.md) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
 
 **OpenZIM MCP** is a modern, secure, high-performance [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI models structured, offline access to [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge archives — Wikipedia, Wiktionary, Stack Exchange, and the rest of the [Kiwix Library](https://library.kiwix.org/).
 
 Built for research assistants, knowledge chatbots, and content-analysis systems that need *intelligent* access to vast knowledge repositories — not just a raw text dump. Smart navigation by namespace (articles, metadata, media), structure-aware retrieval (sections, tables of contents, related articles), full-text search with suggestions and multi-archive search, and link-graph extraction to map content relationships. Cached, paginated operations keep things responsive across massive archives; comprehensive input validation and path-traversal protection keep things safe.
 
-Streamable HTTP transport, per-entry MCP resources with subscriptions, and dual Simple / Advanced modes ship in v2.0.0.
+Streamable HTTP transport, per-entry MCP resources with subscriptions, and dual Simple / Advanced modes are all built in.
 
 ## Install
 
