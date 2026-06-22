@@ -36,7 +36,7 @@ jobs:
       tag_name: ${{ steps.prepare.outputs.tag_name }}
       should_create_tag: ${{ steps.prepare.outputs.should_create_tag }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -113,7 +113,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
@@ -141,7 +141,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
 
@@ -226,7 +226,7 @@ jobs:
     permissions:
       contents: write # Creates GitHub release and uploads release assets
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && (needs.validate-and-prepare.outputs.tag_name || github.event.inputs.tag) || github.ref }}
