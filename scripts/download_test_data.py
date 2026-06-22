@@ -252,7 +252,7 @@ def download_files(  # NOSONAR(python:S3776)
     logger.info(f"Downloading {total_count} files ({total_size:.2f} MB total)")
 
     # Create output directory
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)  # NOSONAR pythonsecurity:S8707
 
     # Download files
     for file_path, info in files_to_download.items():

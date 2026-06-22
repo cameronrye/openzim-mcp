@@ -86,13 +86,13 @@ class TestRateLimitDefaults:
     def test_rate_limit_defaults_values(self):
         """Test rate limit default values."""
         assert RateLimitDefaults.ENABLED is True
-        assert RateLimitDefaults.REQUESTS_PER_SECOND == 10.0
+        assert RateLimitDefaults.REQUESTS_PER_SECOND == pytest.approx(10.0)
         assert RateLimitDefaults.BURST_SIZE == 20
 
     def test_rate_limit_instance(self):
         """Test RATE_LIMIT instance has correct values."""
         assert RATE_LIMIT.ENABLED is True
-        assert RATE_LIMIT.REQUESTS_PER_SECOND == 10.0
+        assert RATE_LIMIT.REQUESTS_PER_SECOND == pytest.approx(10.0)
         assert RATE_LIMIT.BURST_SIZE == 20
 
 
@@ -119,8 +119,8 @@ class TestCachePerformanceThresholds:
 
     def test_cache_performance_thresholds_values(self):
         """Test cache performance threshold values."""
-        assert CachePerformanceThresholds.LOW_HIT_RATE == 0.3
-        assert CachePerformanceThresholds.HIGH_HIT_RATE == 0.8
+        assert CachePerformanceThresholds.LOW_HIT_RATE == pytest.approx(0.3)
+        assert CachePerformanceThresholds.HIGH_HIT_RATE == pytest.approx(0.8)
 
     def test_thresholds_are_valid(self):
         """Test that thresholds are in valid range."""
@@ -149,13 +149,13 @@ class TestTimeoutDefaults:
 
     def test_timeout_defaults_values(self):
         """Test timeout default values."""
-        assert TimeoutDefaults.REGEX_SECONDS == 1.0
-        assert TimeoutDefaults.ARCHIVE_OPEN_SECONDS == 30.0
+        assert TimeoutDefaults.REGEX_SECONDS == pytest.approx(1.0)
+        assert TimeoutDefaults.ARCHIVE_OPEN_SECONDS == pytest.approx(30.0)
 
     def test_timeouts_instance(self):
         """Test TIMEOUTS instance has correct values."""
-        assert TIMEOUTS.REGEX_SECONDS == 1.0
-        assert TIMEOUTS.ARCHIVE_OPEN_SECONDS == 30.0
+        assert TIMEOUTS.REGEX_SECONDS == pytest.approx(1.0)
+        assert TIMEOUTS.ARCHIVE_OPEN_SECONDS == pytest.approx(30.0)
 
 
 class TestServerDefaults:

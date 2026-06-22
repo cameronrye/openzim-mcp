@@ -490,7 +490,7 @@ def _spawn_mcp_server(variant: str, mode: str) -> subprocess.Popen:
         "stdio",
         zim_dir,
     ]
-    return subprocess.Popen(
+    return subprocess.Popen(  # NOSONAR pythonsecurity:S8705 (trusted operator CLI args)
         cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
