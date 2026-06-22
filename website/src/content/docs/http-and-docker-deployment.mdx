@@ -264,7 +264,7 @@ spec:
     spec:
       containers:
         - name: openzim-mcp
-          image: ghcr.io/cameronrye/openzim-mcp:2.1.7
+          image: ghcr.io/cameronrye/openzim-mcp:2.5.1
           ports:
             - containerPort: 8000
           env:
@@ -344,7 +344,7 @@ This recipe puts OpenZIM MCP on a single host, reachable from the rest of your L
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:2.1.7
+    image: ghcr.io/cameronrye/openzim-mcp:2.5.1
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -372,11 +372,11 @@ volumes:
   openzim-cache:
 ```
 
-> Still running v1.x? The `ghcr.io/cameronrye/openzim-mcp:1.2.0` image stays available; v1.x is in maintenance mode (security + data-corruption + pre-v2.0.0 crash fixes accepted; no new features) until the FIRST of `{v2.5.0 ships, 2026-11-27}`. The v2.0.0 advanced tool surface is a breaking rename per [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) — migrate when convenient.
+> Still running v1.x? The `ghcr.io/cameronrye/openzim-mcp:1.2.0` image stays available, but the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18) — it receives no further fixes. The v2.0.0 advanced tool surface is a breaking rename per [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) — migrate when convenient.
 
 What's intentional here:
 
-- **Pinned tag** (`:2.1.7`, not `:latest`). Upgrades are deliberate — `docker compose pull` is a thing you do, not a thing that happens to you.
+- **Pinned tag** (`:2.5.1`, not `:latest`). Upgrades are deliberate — `docker compose pull` is a thing you do, not a thing that happens to you.
 - **Host port bound to `127.0.0.1`.** The container listens on all interfaces (`OPENZIM_MCP_HOST=0.0.0.0`, set in the environment block), but Docker's port publish restricts external exposure to loopback. The Tailscale variant below lifts this restriction by binding to a specific interface.
 - **Read-only ZIM mount** (`:ro`). The server only reads ZIM files; mounting read-only ensures a server compromise can't damage them.
 - **Token via env, not hard-coded.** Put it in a `.env` file next to the compose file (and add `.env` to `.gitignore`). The image defaults to `stdio`, so `TRANSPORT=http` and `HOST=0.0.0.0` are set explicitly in the environment block to select the HTTP service.
@@ -485,7 +485,7 @@ This is the LAN compose file with two changes: a `caddy` service is added, and t
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:2.1.7
+    image: ghcr.io/cameronrye/openzim-mcp:2.5.1
     restart: unless-stopped
     expose:
       - "8000"
@@ -571,7 +571,7 @@ docker compose pull
 docker compose up -d
 ```
 
-The image tag in `docker-compose.yml` is pinned (`:2.1.7`) — change it to the new version before pulling. Pinning is deliberate: `:latest` makes upgrades a surprise, and the release notes for each tag tell you when an upgrade involves a breaking change. The v1.x → v2.0.0 jump is a breaking rename of the advanced-mode tool surface (22 tools → 8); see the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) before bumping.
+The image tag in `docker-compose.yml` is pinned (`:2.5.1`) — change it to the new version before pulling. Pinning is deliberate: `:latest` makes upgrades a surprise, and the release notes for each tag tell you when an upgrade involves a breaking change. The v1.x → v2.0.0 jump is a breaking rename of the advanced-mode tool surface (22 tools → 8); see the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) before bumping.
 
 #### Watching logs
 

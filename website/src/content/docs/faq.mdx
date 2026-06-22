@@ -151,7 +151,7 @@ For the full mechanical mapping see the [migration table on the API reference pa
 
 ### When is v1.x EOL?
 
-v1.x exits maintenance on the FIRST of `{v2.5.0 ships, 2026-11-27}`. Until then, v1.x receives security fixes, data-corruption fixes, and crash fixes for issues that already existed before v2.0.0 shipped — no new features and no v2 backports. The `ghcr.io/cameronrye/openzim-mcp:1.2.0` image stays available throughout the maintenance window.
+v1.x reached end-of-maintenance when v2.5.0 shipped (2026-06-18) — that was the first of the two policy triggers (`{v2.5.0 ships, 2026-11-27}`). It no longer receives security, data-corruption, or crash fixes. The `ghcr.io/cameronrye/openzim-mcp:1.2.0` image stays available, but the supported path is v2: flip to Simple mode (one tool, `zim_query`) and let natural-language routing absorb the v1 → v2 differences.
 
 If you're still on v1.x and the migration looks costly, the simplest path is to flip to v2 Simple mode (one tool, `zim_query`) and let natural-language routing absorb the v1 → v2 differences for you — then opt into Advanced mode later when you want explicit control.
 

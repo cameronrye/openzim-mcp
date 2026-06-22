@@ -7,9 +7,9 @@ sidebar_order: 1
 
 **OpenZIM MCP** is a modern, secure, and high-performance MCP (Model Context Protocol) server that enables AI models to access and search [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge bases offline.
 
-> **8-tool advanced surface.** Phase F (v2.0.0) consolidated the prior 22-tool advanced surface into 8 tools — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. The advanced-mode wire footprint drops from ~36KB to ~23.5KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. Simple mode (`zim_query` only) is unchanged. **New in v2.1:** native libzim archive validation via `zim_health(zim_file_path=...)`, plus identity / index introspection in `zim_metadata`. [What's new →](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md)
+> **8-tool advanced surface.** Phase F (v2.0.0) consolidated the prior 22-tool advanced surface into 8 tools — `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`. The advanced-mode wire footprint drops from ~36KB to ~23.5KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. Simple mode (`zim_query` only) is unchanged. **Recent additions:** archive-type presets that auto-tune retrieval per source (Wikipedia, Stack Exchange, …), inbound link discovery ("what links here"), and native libzim health/introspection via `zim_health(zim_file_path=...)` + `zim_metadata`. [What's new →](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md)
 >
-> Still running v1.x? Highlights for [v1.2.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#120) and [v1.0.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#100-2026-05-01) remain documented in the changelog. v1.x is in maintenance mode (security + data-corruption + pre-v2.0.0 crash fixes accepted; no new features) until the FIRST of `{v2.5.0 ships, 2026-11-27}`.
+> Still running v1.x? Highlights for [v1.2.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#120) and [v1.0.0](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md#100-2026-05-01) remain documented in the changelog. The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is now the only supported series. The `ghcr.io/cameronrye/openzim-mcp:1.2.0` image stays available, but receives no further fixes.
 
 ## What Makes OpenZIM MCP Different
 
@@ -43,11 +43,11 @@ OpenZIM MCP provides **intelligent, structured access** that LLMs need:
 
 ## Project Status
 
-- **Version:** 2.1.7
+- **Version:** 2.5.1
 - **License:** MIT
 - **Python:** 3.12+
 - **Test Coverage:** 80%+
-- **Container:** `ghcr.io/cameronrye/openzim-mcp:2.1.7` + `:latest` (linux/amd64, linux/arm64)
+- **Container:** `ghcr.io/cameronrye/openzim-mcp:2.5.1` + `:latest` (linux/amd64, linux/arm64)
 
 ## Quick Links
 

@@ -31,10 +31,15 @@ def main():
     env = os.environ.copy()
     env[env_var] = env_value
 
-    # Run the command
+    # Run the command. This is a developer build helper: it runs the
+    # operator-specified command (from argv) with one env var set, using the
+    # list form (no shell), so Sonar's untrusted-CLI-arg finding does not
+    # apply -- the arguments are trusted developer input by construction.
     try:
         print(f"Running with {env_var}={env_value}: {' '.join(command_args)}")
-        result = subprocess.run(command_args, env=env, check=True)  # nosec B603
+        result = subprocess.run(  # NOSONAR pythonsecurity:S8705 (B603: no shell)
+            command_args, env=env, check=True
+        )
         sys.exit(result.returncode)
     except subprocess.CalledProcessError as e:
         sys.exit(e.returncode)

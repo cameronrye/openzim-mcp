@@ -21,7 +21,7 @@ class TestRateLimitConfig:
         config = RateLimitConfig()
 
         assert config.enabled is True
-        assert config.requests_per_second == 10.0
+        assert config.requests_per_second == pytest.approx(10.0)
         assert config.burst_size == 20
         assert config.per_operation_limits == {}
 
@@ -34,7 +34,7 @@ class TestRateLimitConfig:
         )
 
         assert config.enabled is False
-        assert config.requests_per_second == 5.0
+        assert config.requests_per_second == pytest.approx(5.0)
         assert config.burst_size == 10
 
     def test_invalid_requests_per_second(self):
@@ -63,9 +63,9 @@ class TestTokenBucket:
         """Test token bucket initialization."""
         bucket = TokenBucket(rate=10.0, capacity=20)
 
-        assert bucket.rate == 10.0
+        assert bucket.rate == pytest.approx(10.0)
         assert bucket.capacity == 20
-        assert bucket.tokens == 20.0  # Starts full
+        assert bucket.tokens == pytest.approx(20.0)  # Starts full
 
     def test_acquire_success(self):
         """Test successful token acquisition."""
@@ -116,7 +116,7 @@ class TestTokenBucket:
         bucket = TokenBucket(rate=10.0, capacity=20)
 
         wait_time = bucket.get_wait_time(1)
-        assert wait_time == 0.0
+        assert wait_time == pytest.approx(0.0)
 
     def test_get_wait_time_when_not_available(self):
         """Test wait time calculation when tokens are not available."""
@@ -174,7 +174,7 @@ class TestRateLimiter:
         limiter = RateLimiter()
 
         assert limiter.config.enabled is True
-        assert limiter.config.requests_per_second == 10.0
+        assert limiter.config.requests_per_second == pytest.approx(10.0)
         assert limiter.config.burst_size == 20
 
     def test_initialization_custom_config(self):
@@ -186,7 +186,7 @@ class TestRateLimiter:
         )
         limiter = RateLimiter(config)
 
-        assert limiter.config.requests_per_second == 5.0
+        assert limiter.config.requests_per_second == pytest.approx(5.0)
         assert limiter.config.burst_size == 10
 
     def test_check_rate_limit_success(self):
