@@ -30,7 +30,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <meta property="og:image:height" content="630">
     <meta property="og:locale" content="en_US">
     <meta property="article:author" content="Cameron Rye">
-    <meta property="article:modified_time" content="2026-05-28T00:00:00Z">
+    <meta property="article:modified_time" content="2026-06-22T00:00:00Z">
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
@@ -75,7 +75,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       "alternateName": "OpenZIM MCP Server",
       "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
       "url": "https://cameronrye.github.io/openzim-mcp/",
-      "softwareVersion": "2.1.7",
+      "softwareVersion": "2.5.1",
       "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
       "applicationCategory": "DeveloperApplication",
       "applicationSubCategory": "AI Tools",
@@ -124,7 +124,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       "description": "MCP server for offline ZIM-archive access. Streamable HTTP transport, batch retrieval, per-entry resources, resource subscriptions.",
       "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
       "datePublished": "2024-01-01T00:00:00Z",
-      "dateModified": "2026-05-27T00:00:00Z",
+      "dateModified": "2026-06-22T00:00:00Z",
       "publisher": {
         "@type": "Organization",
         "name": "OpenZIM MCP",
@@ -169,7 +169,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
             </button>
           </div>
           <ul class="hero__stats">
-            <li><span class="hero__stat-num">v2.1.7</span><span class="hero__stat-label">Latest release</span></li>
+            <li><span class="hero__stat-num">v2.5.1</span><span class="hero__stat-label">Latest release</span></li>
             <li><span class="hero__stat-num">1 + 8</span><span class="hero__stat-label">Simple / advanced tools</span></li>
             <li><span class="hero__stat-num">80%+</span><span class="hero__stat-label">Test coverage</span></li>
             <li><span class="hero__stat-num">MIT</span><span class="hero__stat-label">License</span></li>
@@ -326,8 +326,8 @@ tests/test_phase_f_gate_decision_consistency.py</code></pre>
 
           <li class="v2__card">
             <span class="v2__card-dot" aria-hidden="true"></span>
-            <h3>New in v2.1 · native libzim</h3>
-            <p>Per-archive validation through <code>zim_health(zim_file_path=…)</code> (<code>Archive.check()</code> + checksum), plus archive identity, full-text / title index capabilities, and an <code>M/Counter</code> mimetype breakdown surfaced in <code>zim_metadata</code>.</p>
+            <h3>Since v2.0 · presets, links &amp; health</h3>
+            <p>Archive-type presets auto-tune retrieval per source (Stack Exchange dumps render as clean Q&amp;A, not vote-score noise). Inbound link discovery answers "what links here." And <code>zim_health(zim_file_path=…)</code> validates an archive (<code>Archive.check()</code> + checksum), with identity and index introspection in <code>zim_metadata</code>.</p>
             <pre><code>{`{
   "name": "zim_health",
   "arguments": {
@@ -360,7 +360,7 @@ tests/test_phase_f_gate_decision_consistency.py</code></pre>
                 <pre><code>uv tool install openzim-mcp</code></pre>
               </div>
               <div class="tabs__panel" id="install-docker" role="tabpanel" aria-labelledby="tab-install-docker" hidden>
-                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:2.1.7</code></pre>
+                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:2.5.1</code></pre>
               </div>
               <div class="tabs__panel" id="install-source" role="tabpanel" aria-labelledby="tab-install-source" hidden>
                 <pre><code>git clone https://github.com/cameronrye/openzim-mcp.git

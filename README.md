@@ -30,7 +30,7 @@
 
 ---
 
-> 🆕 **8-tool advanced surface.** Phase F (v2.0.0) consolidated 22 advanced tools into 8 (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). **New in v2.1:** native libzim archive validation via `zim_health(zim_file_path=...)`, plus archive identity / index introspection in `zim_metadata`. [Release notes →](CHANGELOG.md) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
+> 🆕 **8-tool advanced surface.** Phase F (v2.0.0) consolidated 22 advanced tools into 8 (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). **Recent additions:** archive-type presets that auto-tune retrieval per source (Wikipedia, Stack Exchange, …), inbound link discovery ("what links here"), and native libzim health/introspection. Now listed on [Smithery](https://smithery.ai/servers/rye/openzim-mcp) and the [official MCP Registry](https://registry.modelcontextprotocol.io). [Release notes →](CHANGELOG.md) [Docs →](https://cameronrye.github.io/openzim-mcp/docs/)
 
 **OpenZIM MCP** is a modern, secure, high-performance [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI models structured, offline access to [ZIM format](https://en.wikipedia.org/wiki/ZIM_(file_format)) knowledge archives — Wikipedia, Wiktionary, Stack Exchange, and the rest of the [Kiwix Library](https://library.kiwix.org/).
 
@@ -64,7 +64,7 @@ Download ZIM files from the [Kiwix Library](https://library.kiwix.org/) into a d
 
 ### Smithery & one-click install
 
-OpenZIM MCP is listed on the [Smithery registry](https://smithery.ai/servers/rye/openzim-mcp). Add it to your MCP client with the Smithery CLI:
+OpenZIM MCP is listed on the [Smithery registry](https://smithery.ai/servers/rye/openzim-mcp) and the [official MCP Registry](https://registry.modelcontextprotocol.io) (as `io.github.cameronrye/openzim-mcp`). Add it to your MCP client with the Smithery CLI:
 
 ```bash
 npx @smithery/cli mcp add rye/openzim-mcp --client claude
@@ -118,7 +118,8 @@ For HTTP transport (long-running service with bearer auth, CORS, and health endp
 - **Streamable HTTP transport** — bearer-token auth, CORS, health endpoints, multi-arch Docker image. [HTTP & Docker deployment →](https://cameronrye.github.io/openzim-mcp/docs/http-and-docker-deployment/)
 - **Per-entry MCP resources + subscriptions** — `zim://{name}/entry/{path}` with native MIME types; clients subscribe and receive `notifications/resources/updated` when archives change. [Resources, prompts & subscriptions →](https://cameronrye.github.io/openzim-mcp/docs/resources-prompts-subscriptions/)
 - **Simple-mode `zim_query`** — one natural-language tool that dispatches to the right operation, tuned for small-model deployment targets. [Quick start →](https://cameronrye.github.io/openzim-mcp/docs/quick-start/)
-- **Native libzim introspection (v2.1)** — `zim_health(zim_file_path=...)` validates an archive's integrity (`Archive.check()` + checksum), and `zim_metadata` now reports archive identity, full-text / title index capabilities, and an `M/Counter` mimetype breakdown. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
+- **Archive-type presets** — OpenZIM MCP detects the archive type (Wikipedia, Stack Exchange, and more) and auto-tunes retrieval and summarization for it — e.g. Stack Exchange dumps render as clean Q&A instead of vote-score noise. Operators can override the bundled defaults with a TOML file (`OPENZIM_MCP_PRESETS_OVERRIDE_PATH`).
+- **Native libzim introspection** — `zim_health(zim_file_path=...)` validates an archive's integrity (`Archive.check()` + checksum), and `zim_metadata` reports archive identity, full-text / title index capabilities, and an `M/Counter` mimetype breakdown. [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
 - **Inbound link discovery ("what links here")** — `zim_links(direction="inbound")` returns pages that link to an entry, ranked by linker importance. Requires a pre-built sidecar: `openzim-mcp build link-graph <archive>.zim` (writes `<archive>.zim.linkgraph.sqlite` next to the archive). [API reference →](https://cameronrye.github.io/openzim-mcp/docs/api-reference/)
 
 ## Modes
@@ -144,7 +145,7 @@ Full documentation lives at **<https://cameronrye.github.io/openzim-mcp/docs/>**
 
 ## Project status
 
-v2.0.0 GA shipped 2026-05-27. v1.x is in maintenance mode — security fixes, data-corruption fixes, and pre-v2.0.0 crash fixes accepted through 2026-11-27 or until v2.5.0 ships, whichever comes first. Full release history: [CHANGELOG.md](CHANGELOG.md).
+**v2.5.1** is the current release (2026-06-22); v2.0.0 GA shipped 2026-05-27. Per the published support policy — v1.x fixes accepted "until v2.5.0 ships, whichever comes first" — the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); all active development is now on the 2.x line. Full release history: [CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 
