@@ -37,7 +37,7 @@ def main():
     # apply -- the arguments are trusted developer input by construction.
     try:
         print(f"Running with {env_var}={env_value}: {' '.join(command_args)}")
-        result = subprocess.run(  # nosec B603 NOSONAR pythonsecurity:S8705
+        result = subprocess.run(  # NOSONAR pythonsecurity:S8705 (B603: no shell)
             command_args, env=env, check=True
         )
         sys.exit(result.returncode)
