@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1](https://github.com/cameronrye/openzim-mcp/compare/v2.5.0...v2.5.1) (2026-06-22)
+
+
+### Fixed
+
+* **deps:** bump msgpack to 1.2.1 and pydantic-settings to 2.14.2 ([#302](https://github.com/cameronrye/openzim-mcp/issues/302)) ([c58baa9](https://github.com/cameronrye/openzim-mcp/commit/c58baa9bf0e0bece36e97ffccac11f5b17d06f1c))
+
 ## [2.5.0](https://github.com/cameronrye/openzim-mcp/compare/v2.4.5...v2.5.0) (2026-06-18)
 
 
