@@ -1,5 +1,6 @@
 """Tests for ZIM operations module."""
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -211,6 +212,97 @@ class TestZimOperations:
         assert "Path: A/Test_Article" in result
         assert "Type: text/html" in result
         assert "Test content" in result
+
+    @staticmethod
+    def _mock_long_article(path: str, title: str) -> MagicMock:
+        """A mock libzim Archive whose single entry has a >20k-char body so a
+        ``max_content_length=500`` fetch truncates."""
+        mock_entry = MagicMock()
+        mock_entry.is_redirect = False
+        mock_entry.path = path
+        mock_entry.title = title
+        mock_item = MagicMock()
+        mock_item.mimetype = "text/html"
+        body = "<html><body><h1>Long</h1><p>" + ("word " * 5000) + "</p></body></html>"
+        mock_item.content = body.encode("utf-8")
+        mock_entry.get_item.return_value = mock_item
+        inst = MagicMock()
+        inst.get_entry_by_path.return_value = mock_entry
+        inst.has_entry_by_path.return_value = True
+        return inst
+
+    @patch("openzim_mcp.zim_operations.Archive")
+    def test_more_at_offset_matches_human_hint_when_truncated(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """BUG #1: ``_meta.more_at_offset`` must equal
+        ``current_offset + max_content_length`` (the paginable slice length),
+        matching the in-body ``content_offset=N`` hint — not overshoot by the
+        appended truncation-note length, which silently dropped body text for
+        programmatic paginators."""
+        zim_file = temp_dir / "long.zim"
+        zim_file.write_text("x")
+        mock_archive.return_value = self._mock_long_article("A/Long", "Long")
+
+        result = zim_operations.get_zim_entry_data(
+            str(zim_file), "A/Long", max_content_length=500, content_offset=0
+        )
+
+        meta = result["_meta"]
+        assert meta["truncated"] is True
+        assert meta["more_at_offset"] == 500
+        m = re.search(r"content_offset\s*=\s*([\d,]+)", result["content"])
+        assert m is not None, "no content_offset hint in truncated body"
+        assert int(m.group(1).replace(",", "")) == meta["more_at_offset"]
+
+    @patch("openzim_mcp.zim_operations.Archive")
+    def test_more_at_offset_advances_on_second_page(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """BUG #1: under a non-zero ``content_offset`` the next-page offset is
+        ``content_offset + max_content_length`` and still matches the hint."""
+        zim_file = temp_dir / "long.zim"
+        zim_file.write_text("x")
+        mock_archive.return_value = self._mock_long_article("A/Long", "Long")
+
+        result = zim_operations.get_zim_entry_data(
+            str(zim_file), "A/Long", max_content_length=500, content_offset=500
+        )
+
+        meta = result["_meta"]
+        assert meta["truncated"] is True
+        assert meta["more_at_offset"] == 1000
+        m = re.search(r"content_offset\s*=\s*([\d,]+)", result["content"])
+        assert m is not None
+        assert int(m.group(1).replace(",", "")) == 1000
+
+    @patch("openzim_mcp.zim_operations.Archive")
+    def test_no_more_at_offset_when_not_truncated(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """BUG #1 regression guard: when the body fits, no continuation offset
+        is emitted."""
+        zim_file = temp_dir / "short.zim"
+        zim_file.write_text("x")
+        mock_entry = MagicMock()
+        mock_entry.is_redirect = False
+        mock_entry.path = "A/Short"
+        mock_entry.title = "Short"
+        mock_item = MagicMock()
+        mock_item.mimetype = "text/html"
+        mock_item.content = b"<html><body><h1>Short</h1><p>tiny body</p></body></html>"
+        mock_entry.get_item.return_value = mock_item
+        inst = MagicMock()
+        inst.get_entry_by_path.return_value = mock_entry
+        inst.has_entry_by_path.return_value = True
+        mock_archive.return_value = inst
+
+        result = zim_operations.get_zim_entry_data(
+            str(zim_file), "A/Short", max_content_length=100000, content_offset=0
+        )
+
+        assert result["_meta"]["truncated"] is False
+        assert "more_at_offset" not in result["_meta"]
 
     def test_search_zim_file_caching(
         self, zim_operations: ZimOperations, temp_dir: Path
@@ -1433,7 +1525,7 @@ class TestZimOperations:
         # Test browse_namespace_data cache hit. Same contract — cache
         # stores the post-attach payload. Key bumped v2b -> v2c when
         # new-scheme C browse began filtering _zim_static infra assets.
-        cache_key = f"browse_ns_data:v2d:{validated_path}:A:50:0"
+        cache_key = f"browse_ns_data:v2d:{validated_path}:A:50:0:assets=False"
         cached_browse = {"cached": "browse", "_meta": {"chars": 1}}
         zim_operations.cache.set(cache_key, cached_browse)
 

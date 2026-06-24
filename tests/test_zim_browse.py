@@ -61,7 +61,22 @@ async def test_page_mode_dispatches_to_browse_namespace(
     fn, _ = server._tools_store["zim_browse"]
     await fn(zim_file_path="/x.zim", namespace="C", limit=10)
     ops.browse_namespace_data.assert_awaited_once_with(
-        "/x.zim", namespace="C", limit=10, offset=0
+        "/x.zim", namespace="C", limit=10, offset=0, include_assets=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_page_mode_threads_include_assets(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BUG #8: include_assets=True is forwarded so asset entries can be
+    discovered (then fetched via zim_get(binary=True))."""
+    ops = _patch_async_ops(monkeypatch, browse_namespace_data={"results": []})
+    register_zim_browse(server)
+    fn, _ = server._tools_store["zim_browse"]
+    await fn(zim_file_path="/x.zim", namespace="C", limit=10, include_assets=True)
+    ops.browse_namespace_data.assert_awaited_once_with(
+        "/x.zim", namespace="C", limit=10, offset=0, include_assets=True
     )
 
 
@@ -73,7 +88,9 @@ async def test_walk_mode_dispatches_to_walk_namespace(
     register_zim_browse(server)
     fn, _ = server._tools_store["zim_browse"]
     await fn(zim_file_path="/x.zim", namespace="A", mode="walk")
-    ops.walk_namespace_data.assert_awaited_once_with("/x.zim", "A", limit=200)
+    ops.walk_namespace_data.assert_awaited_once_with(
+        "/x.zim", "A", limit=200, include_assets=False
+    )
 
 
 @pytest.mark.asyncio

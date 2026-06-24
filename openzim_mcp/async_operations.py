@@ -304,6 +304,7 @@ class AsyncZimOperations:
         offset: int = 0,
         *,
         cursor_archive_identity: Optional[str] = None,
+        include_assets: bool = False,
     ) -> "BrowseNamespaceResponse":
         """Structured variant of ``browse_namespace`` (async)."""
         return await asyncio.to_thread(
@@ -314,6 +315,7 @@ class AsyncZimOperations:
                 limit,
                 offset,
                 cursor_archive_identity=cursor_archive_identity,
+                include_assets=include_assets,
             ),
         )
 
@@ -609,14 +611,19 @@ class AsyncZimOperations:
         namespace: str,
         cursor_state: Optional[Dict[str, Any]] = None,
         limit: int = 200,
+        *,
+        include_assets: bool = False,
     ) -> "WalkNamespaceResponse":
         """Structured variant of ``walk_namespace`` (async)."""
         return await asyncio.to_thread(
-            self._ops.walk_namespace_data,
-            zim_file_path,
-            namespace,
-            cursor_state,
-            limit,
+            partial(
+                self._ops.walk_namespace_data,
+                zim_file_path,
+                namespace,
+                cursor_state,
+                limit,
+                include_assets=include_assets,
+            ),
         )
 
     async def search_all(self, query: str, limit_per_file: int = 5) -> str:

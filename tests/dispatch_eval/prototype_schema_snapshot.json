@@ -1,9 +1,26 @@
 {
   "zim_browse": {
-    "bytes": 2030,
-    "description": "Browse a ZIM archive's namespace \u2014 paginated lookup or full walk.\n\nEXTRACT whether the caller wants a paginated page or a full walk\nbefore calling. Most read-the-table-of-contents-style requests are\n`mode=\"page\"`; only full-enumeration tasks (e.g. \"list every article\nin namespace A\") need `mode=\"walk\"`.\n\nALIASES: callers may say \"browse <namespace>\", \"list <namespace>\",\n\"walk namespace <letter>\". Route through THIS tool with the matching\nmode.\n\nPARAMETERS:\n  zim_file_path     REQUIRED. The archive to browse.\n  namespace         REQUIRED. ZIM namespace letter (e.g. \"C\" for\n                    content, \"A\" for articles in legacy archives,\n                    \"I\" for images).\n  mode              \"page\" (default) \u2014 paginated browse via cursor.\n                    \"walk\" \u2014 full namespace enumeration via cursor\n                    state.\n  cursor            Phase B cursor pagination handle.\n  limit             Page size (default depends on mode).\n  offset            Page-mode pagination offset (ignored in walk).\n\nRESPONSE:\n  BrowseNamespaceResponse (mode=\"page\") or WalkNamespaceResponse\n  (mode=\"walk\"). Both carry `results`, `next_cursor`, and pagination\n  metadata in `page_info`.\n\nERRORS:\n  Invalid `mode` returns `invalid_mode`. Missing or unknown\n  namespace returns the underlying data-layer error envelope.\n",
+    "bytes": 2335,
+    "description": "Browse a ZIM archive's namespace \u2014 paginated lookup or full walk.\n\nEXTRACT whether the caller wants a paginated page or a full walk\nbefore calling. Most read-the-table-of-contents-style requests are\n`mode=\"page\"`; only full-enumeration tasks (e.g. \"list every article\nin namespace A\") need `mode=\"walk\"`.\n\nALIASES: callers may say \"browse <namespace>\", \"list <namespace>\",\n\"walk namespace <letter>\". Route through THIS tool with the matching\nmode.\n\nPARAMETERS:\n  zim_file_path     REQUIRED. The archive to browse.\n  namespace         REQUIRED. ZIM namespace letter (e.g. \"C\" for\n                    content, \"A\" for articles in legacy archives,\n                    \"I\" for images).\n  mode              \"page\" (default) \u2014 paginated browse via cursor.\n                    \"walk\" \u2014 full namespace enumeration via cursor\n                    state.\n  cursor            Phase B cursor pagination handle.\n  limit             Page size (default depends on mode).\n  offset            Page-mode pagination offset (ignored in walk).\n  include_assets    Default False; C-browse hides assets (css/js/fonts/\n                    images/media). True surfaces them \u2014 for discovering\n                    media paths to fetch via `zim_get(binary=True)`.\n\nRESPONSE:\n  BrowseNamespaceResponse (mode=\"page\") or WalkNamespaceResponse\n  (mode=\"walk\"). Both carry `results`, `next_cursor`, and pagination\n  metadata in `page_info`.\n\nERRORS:\n  Invalid `mode` returns `invalid_mode`. Missing or unknown\n  namespace returns the underlying data-layer error envelope.\n",
     "inputSchema": {
       "properties": {
+        "zim_file_path": {
+          "title": "Zim File Path",
+          "type": "string"
+        },
+        "namespace": {
+          "title": "Namespace",
+          "type": "string"
+        },
+        "mode": {
+          "default": "page",
+          "enum": [
+            "page",
+            "walk"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
         "cursor": {
           "anyOf": [
             {
@@ -28,27 +45,15 @@
           "default": null,
           "title": "Limit"
         },
-        "mode": {
-          "default": "page",
-          "enum": [
-            "page",
-            "walk"
-          ],
-          "title": "Mode",
-          "type": "string"
-        },
-        "namespace": {
-          "title": "Namespace",
-          "type": "string"
-        },
         "offset": {
           "default": 0,
           "title": "Offset",
           "type": "integer"
         },
-        "zim_file_path": {
-          "title": "Zim File Path",
-          "type": "string"
+        "include_assets": {
+          "default": false,
+          "title": "Include Assets",
+          "type": "boolean"
         }
       },
       "required": [
@@ -243,8 +248,8 @@
     }
   },
   "zim_links": {
-    "bytes": 2383,
-    "description": "Look up links from one article \u2014 outbound/inbound link buckets or\nrelated-article suggestions.\n\nEXTRACT the direction before calling. `direction=\"outbound\"` returns\nthe article's own outgoing links (internal / external / media\nbuckets). `direction=\"inbound\"` returns pages that link TO this\nentry. `direction=\"related\"` returns articles connected by\noutbound-link overlap \u2014 the canonical \"see also\" experience.\n\nALIASES: \"links in <article>\" / \"what does <article> link to\"\n(outbound); \"what links here\" / \"pages linking to <article>\"\n(inbound); \"related to <article>\" / \"articles like <article>\"\n(related). Route through THIS tool with the matching direction.\n\nDIRECTIONS:\n  `\"outbound\"` (default) \u2014 paginated.\n  `\"inbound\"`  \u2014 ranked by linker importance; paginated. Requires a\n                 built link-graph sidecar (`openzim-mcp build\n                 link-graph`); absent/stale \u2192 structured error.\n  `\"related\"`  \u2014 one ranked set (no pagination).\n\nPARAMETERS:\n  zim_file_path   REQUIRED. The archive containing the article.\n  entry_path      REQUIRED. The article whose links to inspect.\n  direction       See DIRECTIONS above.\n  cursor          Cursor handle (outbound/inbound).\n  limit           Page size.\n  offset          Pagination offset (outbound/inbound).\n\nRESPONSE:\n  LinksResponse (outbound) or RelatedArticlesResponse (inbound /\n  related). Outbound/inbound paginate; related is one ranked set.\n\nERRORS:\n  Invalid `direction` \u2192 `invalid_direction`. Missing/stale inbound\n  sidecar \u2192 `inbound_sidecar_unavailable`. Missing/unknown\n  `entry_path` \u2192 the underlying data-layer error envelope.\n",
+    "bytes": 2845,
+    "description": "Look up links from one article \u2014 outbound/inbound link buckets or\nrelated-article suggestions.\n\nEXTRACT the direction before calling. `direction=\"outbound\"` returns\nthe article's own outgoing links (internal / external / media\nbuckets). `direction=\"inbound\"` returns pages that link TO this\nentry. `direction=\"related\"` returns articles connected by\noutbound-link overlap \u2014 the canonical \"see also\" experience.\n\nALIASES: \"links in <article>\" / \"what does <article> link to\"\n(outbound); \"what links here\" / \"pages linking to <article>\"\n(inbound); \"related to <article>\" / \"articles like <article>\"\n(related). Route through THIS tool with the matching direction.\n\nDIRECTIONS:\n  `\"outbound\"` (default) \u2014 paginated.\n  `\"inbound\"`  \u2014 ranked by linker importance; paginated. Requires a\n                 built link-graph sidecar (`openzim-mcp build\n                 link-graph`); absent/stale \u2192 structured error.\n  `\"related\"`  \u2014 one ranked set (no pagination).\n\nPARAMETERS:\n  zim_file_path   REQUIRED. The archive containing the article.\n  entry_path      REQUIRED. The article whose links to inspect.\n  direction       See DIRECTIONS above.\n  kind            Outbound only \u2014 which bucket to return: \"internal\"\n                  (default) / \"external\" / \"media\". One per call;\n                  `category_totals` reports all three counts.\n  cursor          Cursor handle (outbound/inbound).\n  limit           Page size.\n  offset          Pagination offset (outbound/inbound).\n\nRESPONSE:\n  LinksResponse (outbound) or RelatedArticlesResponse (inbound /\n  related). Outbound/inbound paginate; related is one ranked set.\n  Outbound `category_totals.internal` excludes in-page `#anchor`\n  links \u2014 those are counted separately as `category_totals.anchor`.\n\nERRORS:\n  Invalid `direction` \u2192 `invalid_direction`. Missing/stale inbound\n  sidecar \u2192 `inbound_sidecar_unavailable`. Missing/unknown\n  `entry_path` \u2192 the underlying data-layer error envelope.\n",
     "inputSchema": {
       "properties": {
         "zim_file_path": {
@@ -263,6 +268,16 @@
             "related"
           ],
           "title": "Direction",
+          "type": "string"
+        },
+        "kind": {
+          "default": "internal",
+          "enum": [
+            "internal",
+            "external",
+            "media"
+          ],
+          "title": "Kind",
           "type": "string"
         },
         "cursor": {

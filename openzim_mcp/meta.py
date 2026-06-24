@@ -176,6 +176,7 @@ def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
         "bad_query",
         "no_xapian_index",
         "bad_namespace",
+        "no_content_type_match",
         "sample_only",
         "archive_unavailable",
         "search_all_budget_exceeded",
@@ -191,6 +192,13 @@ def format_footer(meta: Dict[str, Any], *, footer_enabled: bool) -> str:
             if reason == "bad_namespace":
                 return (
                     "> Unknown namespace. Try `list_namespaces` to see valid options."
+                )
+            if reason == "no_content_type_match":
+                return (
+                    "> No full-text-indexed entries match that content type. "
+                    "Binary assets (images, media) aren't in the search index — "
+                    "use `browse_namespace` (include_assets=True) to discover "
+                    "them, or drop the `content_type` filter."
                 )
             if reason == "sample_only":
                 return (

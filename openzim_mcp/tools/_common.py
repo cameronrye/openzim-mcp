@@ -6,6 +6,7 @@ import pathlib
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from ..responses import ToolErrorPayload, tool_error
+from ..security import sanitize_context_for_error
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -52,7 +53,13 @@ def tool_error_response(
     enhanced = server._create_enhanced_error_message(
         operation=operation, error=error, context=context or ""
     )
-    return tool_error(operation=operation, message=enhanced, context=context)
+    # Redact absolute paths from the standalone ``context`` field too, so the
+    # envelope's ``message`` and ``context`` are consistently sanitized — the
+    # ``message`` is already redacted via ``_create_enhanced_error_message``;
+    # without this the raw path (e.g. ``Path: /home/.../foo.zim``) leaked here.
+    # Null-safe: keep ``None`` as-is so ``tool_error`` still omits the field.
+    safe_context = sanitize_context_for_error(context) if context is not None else None
+    return tool_error(operation=operation, message=enhanced, context=safe_context)
 
 
 def enforce_rate_limit(

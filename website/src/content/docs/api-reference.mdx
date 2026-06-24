@@ -308,7 +308,7 @@ zim_health(zim_file_path: Optional[str] = None) -> Any
 }
 ```
 
-`process_id` / `server_pid` are **always** `"[REDACTED]"` — diagnostic output frequently lands in bug reports. Allowed directories are shown as `...basename` to avoid leaking the canonical layout.
+Over the **HTTP/SSE** transports `process_id` / `server_pid` are `"[REDACTED]"` and allowed directories are shown as `...basename` — diagnostic output frequently lands in bug reports. Over the local **stdio** transport these report the real PID and full paths, matching the unredacted `loaded_archives[].path` values that clients pass back to other tools.
 
 **Archive-validation response** (with `zim_file_path`, *added in v2.1*):
 
@@ -458,7 +458,7 @@ The error classes in [openzim_mcp/exceptions.py](https://github.com/cameronrye/o
 - `OpenZimMcpArchiveError`
 - `OpenZimMcpRateLimitError`
 
-Absolute filesystem paths in error messages are redacted to `...filename.zim` form. PIDs are redacted in diagnostics output. Error text in v2.0 is safe to copy into bug reports.
+Absolute filesystem paths in error messages are redacted to `...filename.zim` form on all transports. PIDs and paths in `zim_health` diagnostics are redacted over the HTTP/SSE transports and shown in full over local stdio. Error text is safe to copy into bug reports.
 
 ---
 

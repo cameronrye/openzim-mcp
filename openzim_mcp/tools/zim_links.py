@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 _DESCRIPTION = load_description("zim_links")
 
 _VALID_DIRECTIONS = {"outbound", "inbound", "related"}
+_VALID_KINDS = {"internal", "external", "media"}
 
 
 def register(server: "OpenZimMcpServer") -> None:
@@ -38,6 +39,7 @@ def register(server: "OpenZimMcpServer") -> None:
         zim_file_path: str,
         entry_path: str,
         direction: Literal["outbound", "inbound", "related"] = "outbound",
+        kind: Literal["internal", "external", "media"] = "internal",
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -56,12 +58,21 @@ def register(server: "OpenZimMcpServer") -> None:
                 )
 
             if direction == "outbound":
+                if kind not in _VALID_KINDS:
+                    return tool_error(
+                        operation="invalid_kind",
+                        message=(
+                            f"`kind` must be one of {sorted(_VALID_KINDS)} "
+                            f"(provided: {kind!r})."
+                        ),
+                    )
                 state, cursor_error = decode_cursor_state(
                     cursor, expected_tool="extract_article_links"
                 )
                 if cursor_error is not None:
                     return cursor_error
                 eff_limit = limit if limit is not None else 100
+                eff_kind: str = kind
                 if state is not None:
                     # Guard against replaying entry A's cursor against entry B,
                     # which would apply A's offset to B's link list.
@@ -70,11 +81,23 @@ def register(server: "OpenZimMcpServer") -> None:
                     )
                     if ep_error is not None:
                         return ep_error
+                    # Honour the bucket the cursor was issued for. A cursor for
+                    # the 'external' bucket must not silently resume against
+                    # 'internal'; reject an explicit non-default `kind` that
+                    # contradicts the cursor's encoded 'k', else adopt it.
+                    cursor_kind = state.get("k")
+                    if isinstance(cursor_kind, str) and cursor_kind:
+                        if kind != "internal" and kind != cursor_kind:
+                            return cursor_context_mismatch(
+                                state, field="k", expected=kind, label="kind"
+                            )
+                        eff_kind = cursor_kind
                     return await ops.extract_article_links_data(
                         zim_file_path,
                         entry_path,
                         limit=eff_limit,
                         offset=int(state.get("o", 0) or 0),
+                        kind=eff_kind,
                         cursor_archive_identity=state.get("ai"),
                     )
                 return await ops.extract_article_links_data(
@@ -82,6 +105,7 @@ def register(server: "OpenZimMcpServer") -> None:
                     entry_path,
                     limit=eff_limit,
                     offset=offset,
+                    kind=eff_kind,
                 )
 
             if direction == "inbound":

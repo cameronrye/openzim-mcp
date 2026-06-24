@@ -191,7 +191,7 @@ In simple mode, the server exposes one tool. Phrase the request in plain languag
 }
 ```
 
-**Expected response:** JSON with `status`, `cache_performance`, `health_checks`, and any warnings or recommendations. `process_id` is `[REDACTED]`.
+**Expected response:** JSON with `status`, `cache_performance`, `health_checks`, and any warnings or recommendations. `process_id` is the real PID over the local stdio transport (`[REDACTED]` over HTTP/SSE).
 
 ## Step 5: Try advanced mode (`zim_search` + friends)
 

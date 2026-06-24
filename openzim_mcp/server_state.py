@@ -17,6 +17,7 @@ emit is identical to b13.
 from __future__ import annotations
 
 import logging
+import os
 import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,6 +156,20 @@ def _redact_directory_path(path: str) -> str:
     return f"<redacted>/{basename}"
 
 
+def _redact_diagnostics(server: "OpenZimMcpServer") -> bool:
+    """Whether to mask paths/PID in the diagnostic report.
+
+    Redaction guards a trust boundary: over the HTTP/SSE transports the
+    client may be remote, so absolute host paths and the PID are masked.
+    On the local stdio transport the client already shares the filesystem
+    — and ``loaded_archives[].path`` reports the same absolute paths
+    unredacted (clients pass them back as ``zim_file_path``) — so masking
+    there only creates an inconsistency without protecting anything; show
+    the real values.
+    """
+    return getattr(server.config, "transport", "stdio") != "stdio"
+
+
 def _build_uptime_info(server: "OpenZimMcpServer") -> Dict[str, Any]:
     """Return uptime block for the health report.
 
@@ -168,8 +183,10 @@ def _build_uptime_info(server: "OpenZimMcpServer") -> Dict[str, Any]:
     if start_mono is not None:
         uptime_seconds = round(_time.monotonic() - start_mono, 3)
     return {
-        # Redact PID — diagnostic output may end up in bug reports.
-        "process_id": "[REDACTED]",
+        # PID is masked over the network transports (HTTP/SSE) where the
+        # client may be remote; shown on local stdio for consistency with
+        # the unredacted ``loaded_archives`` paths (see _redact_diagnostics).
+        "process_id": "[REDACTED]" if _redact_diagnostics(server) else os.getpid(),
         "started_at": start_iso,
         "uptime_seconds": uptime_seconds,
     }
@@ -245,12 +262,15 @@ def _build_configuration_report(
     server: "OpenZimMcpServer",
 ) -> Union[ServerConfigurationResponse, ToolErrorPayload]:
     try:
-        # Always redact paths and PID — even on stdio, diagnostic output
-        # frequently ends up in bug reports / logs / issue trackers.
+        # Mask paths and PID over the network transports (HTTP/SSE) where the
+        # client may be remote; on local stdio show the real values so this
+        # report stays consistent with the unredacted ``loaded_archives``
+        # paths the same response carries (see _redact_diagnostics).
+        redact = _redact_diagnostics(server)
         config_info = {
             "server_name": server.config.server_name,
             "allowed_directories": [
-                _redact_directory_path(str(p))
+                _redact_directory_path(str(p)) if redact else str(p)
                 for p in server.config.allowed_directories
             ],
             "allowed_directories_count": len(server.config.allowed_directories),
@@ -261,7 +281,7 @@ def _build_configuration_report(
             "content_snippet_length": server.config.content.snippet_length,
             "search_default_limit": server.config.content.default_search_limit,
             "config_hash": server.config.get_config_hash(),
-            "server_pid": "[REDACTED]",
+            "server_pid": "[REDACTED]" if redact else os.getpid(),
         }
 
         warnings_list: List[str] = []
@@ -273,7 +293,7 @@ def _build_configuration_report(
         }
 
         invalid_dirs = [
-            _redact_directory_path(str(d))
+            _redact_directory_path(str(d)) if redact else str(d)
             for d in server.config.allowed_directories
             if not Path(d).exists()
         ]

@@ -30,15 +30,20 @@ _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_budget_")
 # the spec targets; per-tool allocations match the measured rc1 footprint
 # with explicit headroom and the test enforces a *1.2 slack so a single
 # tool's drift trips before total drift does.
-TOTAL_CAP = 24_500
+#
+# v2.5.2: added the ``kind`` (zim_links) and ``include_assets`` (zim_browse)
+# params for the bucket-reachability and binary-discovery fixes. That nudges
+# the advanced surface just past 25KB, so the total cap and those two
+# allocations are raised to match the re-snapshotted footprint.
+TOTAL_CAP = 25_500
 ALLOCATION = {
     "zim_query": 6_500,
     "zim_search": 4_200,
     "zim_get": 4_250,
     "zim_get_section": 2_250,
-    "zim_browse": 2_100,
+    "zim_browse": 2_400,
     "zim_metadata": 1_250,
-    "zim_links": 2_450,
+    "zim_links": 2_900,
     "zim_health": 1_200,
 }
 

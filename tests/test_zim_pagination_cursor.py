@@ -72,7 +72,12 @@ async def test_page_mode_resumes_from_cursor(
         zim_file_path="/x.zim", namespace="C", mode="page", cursor=cursor, limit=50
     )
     ops.browse_namespace_data.assert_awaited_once_with(
-        "/x.zim", namespace="C", limit=50, offset=20, cursor_archive_identity="abc"
+        "/x.zim",
+        namespace="C",
+        limit=50,
+        offset=20,
+        cursor_archive_identity="abc",
+        include_assets=False,
     )
 
 
@@ -93,6 +98,7 @@ async def test_walk_mode_resumes_from_cursor(
         "A",
         cursor_state={"scan_at": 500, "l": 200, "ns": "A", "ai": "zz"},
         limit=200,
+        include_assets=False,
     )
 
 
@@ -161,8 +167,66 @@ async def test_outbound_resumes_from_cursor(
         limit=100,
     )
     ops.extract_article_links_data.assert_awaited_once_with(
-        "/x.zim", "A/Cat", limit=100, offset=30, cursor_archive_identity="qq"
+        "/x.zim",
+        "A/Cat",
+        limit=100,
+        offset=30,
+        kind="internal",
+        cursor_archive_identity="qq",
     )
+
+
+@pytest.mark.asyncio
+async def test_outbound_cursor_honors_kind(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cursor encoding the 'media' bucket resumes against that bucket even
+    when `kind` is left at its default (BUG #2: state['k'] is honoured)."""
+    ops = _patch_async_ops(monkeypatch, extract_article_links_data={"results": []})
+    register_zim_links(server)
+    fn, _ = server._tools_store["zim_links"]
+    cursor = Cursor.encode(
+        tool="extract_article_links",
+        state={"o": 30, "l": 100, "ep": "A/Cat", "k": "media", "ai": "qq"},
+    )
+    await fn(
+        zim_file_path="/x.zim",
+        entry_path="A/Cat",
+        direction="outbound",
+        cursor=cursor,
+        limit=100,
+    )
+    ops.extract_article_links_data.assert_awaited_once_with(
+        "/x.zim",
+        "A/Cat",
+        limit=100,
+        offset=30,
+        kind="media",
+        cursor_archive_identity="qq",
+    )
+
+
+@pytest.mark.asyncio
+async def test_outbound_cursor_kind_mismatch_rejected(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit non-default `kind` that contradicts the cursor's bucket is
+    rejected rather than silently resuming the wrong bucket."""
+    _patch_async_ops(monkeypatch, extract_article_links_data={"results": []})
+    register_zim_links(server)
+    fn, _ = server._tools_store["zim_links"]
+    cursor = Cursor.encode(
+        tool="extract_article_links",
+        state={"o": 5, "ep": "A/Cat", "k": "external"},
+    )
+    result = await fn(
+        zim_file_path="/x.zim",
+        entry_path="A/Cat",
+        direction="outbound",
+        kind="media",
+        cursor=cursor,
+    )
+    assert result["operation"] == "cursor_context_mismatch"
 
 
 @pytest.mark.asyncio
