@@ -23,6 +23,9 @@ PARAMETERS:
   zim_file_path   REQUIRED. The archive containing the article.
   entry_path      REQUIRED. The article whose links to inspect.
   direction       See DIRECTIONS above.
+  kind            Outbound only — which bucket to return: "internal"
+                  (default) / "external" / "media". One per call;
+                  `category_totals` reports all three counts.
   cursor          Cursor handle (outbound/inbound).
   limit           Page size.
   offset          Pagination offset (outbound/inbound).
@@ -30,6 +33,8 @@ PARAMETERS:
 RESPONSE:
   LinksResponse (outbound) or RelatedArticlesResponse (inbound /
   related). Outbound/inbound paginate; related is one ranked set.
+  Outbound `category_totals.internal` excludes in-page `#anchor`
+  links — those are counted separately as `category_totals.anchor`.
 
 ERRORS:
   Invalid `direction` → `invalid_direction`. Missing/stale inbound

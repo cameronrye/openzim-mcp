@@ -20,6 +20,9 @@ PARAMETERS:
   cursor            Phase B cursor pagination handle.
   limit             Page size (default depends on mode).
   offset            Page-mode pagination offset (ignored in walk).
+  include_assets    Default False; C-browse hides assets (css/js/fonts/
+                    images/media). True surfaces them — for discovering
+                    media paths to fetch via `zim_get(binary=True)`.
 
 RESPONSE:
   BrowseNamespaceResponse (mode="page") or WalkNamespaceResponse

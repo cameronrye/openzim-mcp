@@ -46,6 +46,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Mimetype families that are never navigable articles. Used by
+# ``_StructureMixin._is_non_article_target`` so query-string / extensionless
+# asset URLs (e.g. ``fonts.googleapis.com/css2?family=...`` mimetype
+# ``text/css``, ``...?css=...``) are caught even when the path-extension
+# heuristic misses. ``text/html`` and ``application/xhtml+xml`` are
+# intentionally absent — they are real articles.
+_ASSET_MIME_EXACT = frozenset(
+    {
+        "text/css",
+        "application/javascript",
+        "text/javascript",
+        "application/json",
+        "application/pdf",
+        "application/zip",
+        "application/gzip",
+        "application/x-font-ttf",
+        "application/x-font-woff",
+        "application/font-woff",
+        "application/vnd.ms-fontobject",
+    }
+)
+_ASSET_MIME_PREFIXES = ("image/", "video/", "audio/", "font/")
+
+
 def _section_preview(
     md: str, char_start: int, char_end: int, preview_chars: int
 ) -> str:
@@ -332,9 +356,28 @@ class _StructureMixin:
                     content_processor=self.content_processor,
                 )
 
-            all_links_for_kind: List[Any] = cast(
-                "List[Any]", bundle["links"][kind]  # type: ignore[literal-required]
-            )
+            # BUG #6: the bundle 'internal' bucket carries BOTH real
+            # cross-article links (type=='internal') and in-page '#anchor'
+            # fragment links (type=='anchor'). Anchors are not navigation
+            # targets and are dropped by the inbound link-graph builder, so
+            # exclude them from the 'internal' kind's results/total and the
+            # internal count, surfacing them under a separate 'anchor' count so
+            # outbound and inbound agree on cross-article link totals.
+            internal_bucket: List[Any] = cast("List[Any]", bundle["links"]["internal"])
+            cross_article_internal = [
+                lk
+                for lk in internal_bucket
+                if not (isinstance(lk, dict) and lk.get("type") == "anchor")
+            ]
+            anchor_count = len(internal_bucket) - len(cross_article_internal)
+
+            if kind == "internal":
+                all_links_for_kind: List[Any] = cross_article_internal
+            else:
+                all_links_for_kind = cast(
+                    "List[Any]",
+                    bundle["links"][kind],  # type: ignore[literal-required]
+                )
             total_for_kind = len(all_links_for_kind)
             page = all_links_for_kind[offset : offset + limit]
             returned_count = len(page)
@@ -370,9 +413,10 @@ class _StructureMixin:
                     "returned_count": returned_count,
                 },
                 "category_totals": {
-                    "internal": len(bundle["links"]["internal"]),
+                    "internal": len(cross_article_internal),
                     "external": len(bundle["links"]["external"]),
                     "media": len(bundle["links"]["media"]),
+                    "anchor": anchor_count,
                 },
             }
 
@@ -756,7 +800,7 @@ class _StructureMixin:
         )
 
     @staticmethod
-    def _is_non_article_target(path: str) -> bool:
+    def _is_non_article_target(path: str, content_type: Optional[str] = None) -> bool:
         """Report whether ``path`` is a binary asset, not a navigable article.
 
         ZIMIT / warc2zim wraps an article's lead image in an
@@ -769,6 +813,15 @@ class _StructureMixin:
 
         ``.htm`` / ``.html`` are intentionally NOT treated as assets —
         MedlinePlus article paths legitimately end in ``.html`` / ``.htm``.
+
+        When ``content_type`` is supplied (browse/walk pass the per-row
+        libzim mimetype) a known asset mimetype (``text/css``,
+        ``application/javascript``, ``font/*``, ``image/*``, ``video/*``,
+        ``audio/*`` …) marks the row as an asset even when the path has no
+        asset extension — catching query-string / extensionless asset URLs
+        like ``fonts.googleapis.com/css2?family=...`` and ``...?css=...``.
+        ``content_type`` defaults to ``None`` so the related-article / link
+        callers (which have no mimetype) keep the extension-only behaviour.
         """
         extensions = (
             ".jpg",
@@ -802,6 +855,10 @@ class _StructureMixin:
             ".mov",
             ".m4a",
         )
+        if content_type:
+            ct = content_type.split(";", 1)[0].strip().lower()
+            if ct in _ASSET_MIME_EXACT or ct.startswith(_ASSET_MIME_PREFIXES):
+                return True
         base = path.split("?", 1)[0].split("#", 1)[0].lower()
         return base.endswith(extensions)
 

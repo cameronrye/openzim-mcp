@@ -80,6 +80,19 @@ def big_links_html() -> str:
     return "\n".join(parts)
 
 
+@pytest.fixture
+def anchored_links_html() -> str:
+    """HTML with 26 cross-article internal links + 26 in-page '#anchor'
+    fragment links (which BUG #6 must keep out of the internal count)."""
+    parts = ["<html><body>"]
+    for i in range(26):
+        parts.append(f'<a href="Page_{i}">internal {i}</a>')
+    for i in range(26):
+        parts.append(f'<a href="#sec_{i}">anchor {i}</a>')
+    parts.append("</body></html>")
+    return "\n".join(parts)
+
+
 class TestExtractArticleLinksPagination:
     """Pagination contract for extract_article_links."""
 
@@ -111,6 +124,57 @@ class TestExtractArticleLinksPagination:
         assert data["category_totals"]["internal"] == 50
         assert data["category_totals"]["external"] == 30
         assert data["category_totals"]["media"] == 20
+        # BUG #6: the anchor count is always present (0 here — this fixture
+        # has no in-page anchors).
+        assert data["category_totals"]["anchor"] == 0
+
+    def test_internal_count_excludes_anchors(
+        self, ops_with_synthetic_archive, temp_dir, anchored_links_html
+    ):
+        """BUG #6: in-page '#anchor' links are reported under a separate
+        'anchor' count and excluded from the internal cross-article bucket."""
+        zim = temp_dir / "test.zim"
+        zim.touch()
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive_ctx:
+            mock_archive_ctx.return_value.__enter__.return_value = (
+                _patch_archive_with_html(anchored_links_html)
+            )
+            data = ops_with_synthetic_archive.extract_article_links_data(
+                str(zim), "Test", kind="internal"
+            )
+        assert data["category_totals"]["internal"] == 26
+        assert data["category_totals"]["anchor"] == 26
+        assert data["total"] == 26
+        assert len(data["results"]) == 26
+        assert all(link.get("type") != "anchor" for link in data["results"])
+
+    def test_pagination_paginates_only_cross_article_internal(
+        self, ops_with_synthetic_archive, temp_dir, anchored_links_html
+    ):
+        """BUG #6: paging the internal bucket walks only the 26 cross-article
+        links — anchors never appear in any page."""
+        zim = temp_dir / "test.zim"
+        zim.touch()
+        seen = 0
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive_ctx:
+            mock_archive_ctx.return_value.__enter__.return_value = (
+                _patch_archive_with_html(anchored_links_html)
+            )
+            data = ops_with_synthetic_archive.extract_article_links_data(
+                str(zim), "Test", limit=10, kind="internal"
+            )
+            assert data["total"] == 26
+            while True:
+                assert all(link.get("type") != "anchor" for link in data["results"])
+                seen += len(data["results"])
+                if data["done"]:
+                    break
+                page_info = data["page_info"]
+                offset = page_info["offset"] + page_info["returned_count"]
+                data = ops_with_synthetic_archive.extract_article_links_data(
+                    str(zim), "Test", limit=10, offset=offset, kind="internal"
+                )
+        assert seen == 26
 
     def test_limit_truncates_with_next_cursor(
         self, ops_with_synthetic_archive, temp_dir, big_links_html

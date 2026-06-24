@@ -79,12 +79,29 @@ _NAMESPACE_DESCRIPTIONS = {
 _KNOWN_NAMESPACE_LETTERS = frozenset({"C", "M", "W", "X", "A", "I", "-"})
 
 
+def _entry_mimetype(entry: "Any") -> Optional[str]:
+    """Best-effort per-row mimetype for the asset filter.
+
+    Reads the libzim item header mimetype (no content decode). Redirect
+    entries and read errors degrade to ``None`` so the asset predicate falls
+    back to the path/extension heuristic rather than failing the page.
+    """
+    try:
+        if getattr(entry, "is_redirect", False):
+            return None
+        return entry.get_item().mimetype or None
+    except Exception:
+        return None
+
+
 def _scan_fill_c_namespace(
     entry_count: int,
     get_path: "Any",
     is_asset: "Any",
     limit: int,
     offset: int,
+    *,
+    include_assets: bool = False,
 ) -> Tuple[List[str], int, bool, int]:
     """Scan new-scheme C entries by id, collecting up to ``limit`` real
     content rows starting after ``offset`` content rows.
@@ -102,6 +119,12 @@ def _scan_fill_c_namespace(
     row that ``browse`` emitted at offset 0 but ``walk`` omitted) and assets
     are skipped and do not consume the offset budget.
 
+    ``get_path(scan_id)`` returns ``(path, content_type)``; the per-row
+    mimetype lets the asset predicate catch query-string / extensionless
+    asset URLs (e.g. ``fonts.googleapis.com/css2?family=...``).
+    ``include_assets=True`` surfaces asset rows instead of skipping them
+    (``assets_skipped`` then stays 0).
+
     Returns ``(page_paths, next_row_offset, scan_exhausted, assets_skipped)``
     where ``next_row_offset = offset + len(page_paths)``.
     """
@@ -110,13 +133,13 @@ def _scan_fill_c_namespace(
     content_seen = 0
     scan_id = 0
     while scan_id < entry_count and len(page_paths) < limit:
-        path = get_path(scan_id)
+        path, content_type = get_path(scan_id)
         scan_id += 1
         if not path or not str(path).strip():
             # Read error (get_path returned None) or an unaddressable
             # empty-path entry — skip without consuming the offset budget.
             continue
-        if is_asset(path):
+        if not include_assets and is_asset(path, content_type):
             assets_skipped += 1
             continue
         if content_seen < offset:
@@ -146,7 +169,9 @@ class _NamespaceMixin:
         def _validate_zim_path(self, zim_file_path: str) -> Path:
             """Resolve via ``_ArchiveAccessMixin`` on the concrete coordinator."""
 
-        def _is_non_article_target(self, path: str) -> bool:
+        def _is_non_article_target(
+            self, path: str, content_type: "Optional[str]" = None
+        ) -> bool:
             """Resolve via ``_StructureMixin`` on the concrete coordinator."""
 
     def list_namespaces_data(self, zim_file_path: str) -> "ListNamespacesResponse":
@@ -616,6 +641,7 @@ class _NamespaceMixin:
         offset: int = 0,
         *,
         cursor_archive_identity: Optional[str] = None,
+        include_assets: bool = False,
     ) -> "BrowseNamespaceResponse":
         """Structured variant of ``browse_namespace``.
 
@@ -710,7 +736,10 @@ class _NamespaceMixin:
         # cursor ``s.o`` is therefore a row offset again; ``total`` stays the
         # authoritative ``entry_count``. The bump stops pre-fix cached pages —
         # with the old entry-id-offset cursor — from leaking through.
-        cache_key = f"browse_ns_data:v2d:{validated_path}:{namespace}:{limit}:{offset}"
+        cache_key = (
+            f"browse_ns_data:v2d:{validated_path}:{namespace}:"
+            f"{limit}:{offset}:assets={include_assets}"
+        )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespace browse dict for: {namespace}")
@@ -724,6 +753,7 @@ class _NamespaceMixin:
                     limit,
                     offset,
                     archive_path=str(validated_path),
+                    include_assets=include_assets,
                 )
 
             # ``_browse_namespace_entries`` still returns the legacy inner
@@ -861,6 +891,8 @@ class _NamespaceMixin:
         limit: int,
         offset: int,
         archive_path: Optional[str] = None,
+        *,
+        include_assets: bool = False,
     ) -> Dict[str, Any]:
         """Browse entries in a specific namespace using sampling and search.
 
@@ -885,7 +917,7 @@ class _NamespaceMixin:
         # which libzim returns in O(1).
         if has_new_scheme and namespace == "C":
             return self._browse_new_scheme_c_paginated(
-                archive, namespace, limit, offset
+                archive, namespace, limit, offset, include_assets=include_assets
             )
         # Fast path: new-scheme + W namespace. libzim doesn't surface W
         # through the iterable surface, but the well-known entries
@@ -1038,6 +1070,8 @@ class _NamespaceMixin:
         namespace: str,
         limit: int,
         offset: int,
+        *,
+        include_assets: bool = False,
     ) -> Dict[str, Any]:
         """Page through new-scheme C-namespace entries by entry-id range.
 
@@ -1060,16 +1094,22 @@ class _NamespaceMixin:
         """
         total = int(getattr(archive, "entry_count", 0) or 0)
 
-        def _get_path(scan_id: int) -> Optional[str]:
+        def _get_path(scan_id: int) -> Tuple[Optional[str], Optional[str]]:
             try:
-                return str(archive._get_entry_by_id(scan_id).path)
+                entry = archive._get_entry_by_id(scan_id)
+                return str(entry.path), _entry_mimetype(entry)
             except Exception as e:
                 logger.warning(f"Error reading entry id {scan_id}: {e}")
-                return None
+                return None, None
 
         page_paths, next_row_offset, scan_exhausted, assets_skipped = (
             _scan_fill_c_namespace(
-                total, _get_path, self._is_non_article_target, limit, offset
+                total,
+                _get_path,
+                self._is_non_article_target,
+                limit,
+                offset,
+                include_assets=include_assets,
             )
         )
         payload = self._new_scheme_browse_payload(
@@ -1531,6 +1571,8 @@ class _NamespaceMixin:
         namespace: str,
         cursor_state: Optional[Dict[str, Any]] = None,
         limit: int = 200,
+        *,
+        include_assets: bool = False,
     ) -> "WalkNamespaceResponse":
         """Structured variant of ``walk_namespace``.
 
@@ -1739,7 +1781,13 @@ class _NamespaceMixin:
                                 path, has_new_scheme=has_new_scheme
                             )
                             == namespace
-                        ) and not (filter_assets and self._is_non_article_target(path)):
+                        ) and not (
+                            filter_assets
+                            and not include_assets
+                            and self._is_non_article_target(
+                                path, _entry_mimetype(entry)
+                            )
+                        ):
                             entries.append(
                                 {
                                     "path": path,

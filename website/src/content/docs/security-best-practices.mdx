@@ -19,7 +19,7 @@ OpenZIM MCP serves offline knowledge archives to MCP clients. The relevant threa
 |--------|------------|
 | Path traversal — read files outside allowed dirs | `PathValidator` regex patterns + `Path.is_relative_to` containment + canonical resolution |
 | TOCTOU symlink swap between path validation and open | `validate_zim_file` re-resolves and re-checks containment after open |
-| Information disclosure via error messages | All paths and PIDs are redacted in error responses and in the `zim_health` health + configuration views |
+| Information disclosure via error messages | Paths/PIDs in error responses are redacted on all transports; `zim_health` diagnostics redact paths/PIDs over the HTTP/SSE transports and report them in full on the local stdio transport |
 | Unauthenticated network access | HTTP transport requires bearer token unless bound to loopback; SSE transport is loopback-only |
 | Cross-origin browser abuse | CORS allow-list; wildcard `*` rejected at startup; `OPTIONS` not exempt from auth |
 | Cache poisoning via transient libzim errors | Failed reads do not write to cache |
@@ -41,8 +41,7 @@ There are no env vars to relax this — path validation is unconditional. The se
 Every operator-visible string is run through `redact_paths_in_message` / `sanitize_path_for_error` before it leaves the server:
 
 - **MCP error responses** — rejected traversals previously leaked the canonical allowed-directory layout; now they appear as `...filename.zim`.
-- **`zim_health` health view** — `process_id` is always `[REDACTED]`. Warning strings about inaccessible directories use the redacted form.
-- **`zim_health` configuration view** — `server_pid` is always `[REDACTED]`. `allowed_directories` are reported as `[...basename]`.
+- **`zim_health` health/configuration views** — `process_id` / `server_pid` and `allowed_directories` are redacted (`[REDACTED]` / `[...basename]`) over the HTTP/SSE transports, where the client may be remote. Over the local **stdio** transport they report the real PID and full paths: the client already shares the filesystem, and `loaded_archives[].path` (a functional argument clients pass back to other tools) is unredacted there regardless — so masking only the directory list created an inconsistency without protecting anything. Warning strings about inaccessible directories always use the redacted form.
 
 The redaction regex (`_ABS_PATH_RE`) handles cross-platform separators (`/` and `\`), wrapped/quoted forms (`(/opt/foo)`, `"/opt/bar"`, `file=/opt/foo`), and URL-decoded forms (`%2Fopt%2Fzims`). Operators can still see unredacted paths in server logs — only the wire-visible diagnostics are redacted.
 

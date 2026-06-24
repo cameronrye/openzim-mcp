@@ -146,6 +146,30 @@ def test_footer_empty_results():
     assert "wikipedia_en_all" in footer
 
 
+def test_footer_no_content_type_match_renders_browse_hint():
+    """BUG #4: a content_type-filter miss must NOT reuse the namespace footer.
+
+    It points at browse/include_assets and the content-type filter, not at
+    ``list_namespaces``.
+    """
+    meta = {"tokens_est": 0, "chars": 0, "truncated": False}
+    meta["reason"] = "no_content_type_match"
+    footer = format_footer(meta, footer_enabled=True)
+    assert "content type" in footer
+    assert "browse_namespace" in footer
+    assert "Unknown namespace" not in footer
+    assert "list_namespaces" not in footer
+
+
+def test_footer_bad_namespace_unchanged():
+    """BUG #4 regression: a genuine bad namespace still gets the namespace
+    recovery footer."""
+    meta = {"tokens_est": 0, "chars": 0, "truncated": False, "reason": "bad_namespace"}
+    footer = format_footer(meta, footer_enabled=True)
+    assert "Unknown namespace" in footer
+    assert "list_namespaces" in footer
+
+
 def test_footer_disabled():
     meta = {"tokens_est": 100, "chars": 400, "truncated": False}
     assert format_footer(meta, footer_enabled=False) == ""

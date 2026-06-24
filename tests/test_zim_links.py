@@ -65,8 +65,36 @@ async def test_outbound_dispatches_to_extract_article_links(
     fn, _ = server._tools_store["zim_links"]
     await fn(zim_file_path="/x.zim", entry_path="A/Cat", limit=20)
     ops.extract_article_links_data.assert_awaited_once_with(
-        "/x.zim", "A/Cat", limit=20, offset=0
+        "/x.zim", "A/Cat", limit=20, offset=0, kind="internal"
     )
+
+
+@pytest.mark.asyncio
+async def test_outbound_threads_kind_external(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`kind='external'` is forwarded to the data layer so the external bucket
+    is actually retrievable (BUG #2)."""
+    ops = _patch_async_ops(monkeypatch, extract_article_links_data={"results": []})
+    register_zim_links(server)
+    fn, _ = server._tools_store["zim_links"]
+    await fn(zim_file_path="/x.zim", entry_path="A/Cat", kind="external", limit=20)
+    ops.extract_article_links_data.assert_awaited_once_with(
+        "/x.zim", "A/Cat", limit=20, offset=0, kind="external"
+    )
+
+
+@pytest.mark.asyncio
+async def test_outbound_invalid_kind_rejected(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown `kind` is rejected without touching the data layer."""
+    ops = _patch_async_ops(monkeypatch, extract_article_links_data={"results": []})
+    register_zim_links(server)
+    fn, _ = server._tools_store["zim_links"]
+    result = await fn(zim_file_path="/x.zim", entry_path="A/Cat", kind="bogus")
+    assert result["operation"] == "invalid_kind"
+    ops.extract_article_links_data.assert_not_awaited()
 
 
 @pytest.mark.asyncio

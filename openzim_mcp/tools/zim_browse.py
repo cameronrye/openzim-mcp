@@ -39,6 +39,7 @@ def register(server: "OpenZimMcpServer") -> None:
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        include_assets: bool = False,
     ) -> Any:
         try:
             rl = enforce_rate_limit(server, "zim_browse")
@@ -80,12 +81,14 @@ def register(server: "OpenZimMcpServer") -> None:
                         limit=eff_limit,
                         offset=int(state.get("o", 0) or 0),
                         cursor_archive_identity=state.get("ai"),
+                        include_assets=include_assets,
                     )
                 return await ops.browse_namespace_data(
                     zim_file_path,
                     namespace=namespace,
                     limit=eff_limit,
                     offset=offset,
+                    include_assets=include_assets,
                 )
 
             # mode == "walk" — v2 walk takes the decoded cursor-state dict
@@ -108,11 +111,13 @@ def register(server: "OpenZimMcpServer") -> None:
                     namespace,
                     cursor_state=cursor_state,
                     limit=eff_limit,
+                    include_assets=include_assets,
                 )
             return await ops.walk_namespace_data(
                 zim_file_path,
                 namespace,
                 limit=eff_limit,
+                include_assets=include_assets,
             )
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
             return tool_error_response(

@@ -116,6 +116,30 @@ def test_tool_error_response_log_message_format(
     assert tool_records[0].getMessage() == "Error in zim_query: oops"
 
 
+def test_tool_error_response_redacts_path_in_context() -> None:
+    """BUG #7: the standalone ``context`` field must redact absolute paths the
+    same way ``message`` does — previously the raw path leaked on the envelope."""
+    server = _FakeServer(sentinel="MSG")
+    result = tool_error_response(
+        server,
+        operation="zim_metadata",
+        error=ValueError("boom"),
+        context="Path: /Users/cameron/Developer/zim/does-not-exist.zim",
+    )
+    assert "/Users/cameron" not in result["context"]
+    assert result["context"] == "Path: ...does-not-exist.zim"
+    # message side stays whatever the formatter returned (sentinel here).
+    assert result["message"] == "MSG"
+
+
+def test_tool_error_response_context_none_omits_field() -> None:
+    """Null-safe: context=None must still omit the ``context`` key entirely."""
+    result = tool_error_response(
+        _FakeServer(), operation="zim_query", error=RuntimeError("x"), context=None
+    )
+    assert "context" not in result
+
+
 # ---------------------------------------------------------------------------
 # load_description tests
 # ---------------------------------------------------------------------------

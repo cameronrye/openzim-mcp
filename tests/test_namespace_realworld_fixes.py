@@ -43,10 +43,20 @@ def test_namespace_header_reconciliation_is_arithmetically_clear():
 from openzim_mcp.zim.namespace import _scan_fill_c_namespace  # noqa: E402
 
 
-def _asset(path: str) -> bool:
+def _asset(path: str, content_type: object = None) -> bool:
     return path.startswith(("_zim_static", "I/", "-/")) or path.endswith(
         (".js", ".png", ".css")
     )
+
+
+def _tuple_get(paths):
+    """Adapt a {id: path} map to the new ``(path, content_type)`` get_path
+    contract used by ``_scan_fill_c_namespace`` (mimetype unused here)."""
+
+    def _get(scan_id):
+        return paths.get(scan_id), None
+
+    return _get
 
 
 def test_browse_offset_advances_by_content_rows_not_entry_id():
@@ -60,7 +70,7 @@ def test_browse_offset_advances_by_content_rows_not_entry_id():
         4: "",
     }
     paths.update({i: f"a/{i}" for i in range(5, 15)})
-    get = paths.get
+    get = _tuple_get(paths)
 
     page0, next0, exhausted0, _ = _scan_fill_c_namespace(15, get, _asset, 2, 0)
     page1, _next1, _ex1, _ = _scan_fill_c_namespace(15, get, _asset, 2, 1)
@@ -78,14 +88,16 @@ def test_browse_offset_advances_by_content_rows_not_entry_id():
 
 def test_browse_skips_phantom_empty_path_entry():
     paths = {0: "", 1: "a/1", 2: "a/2"}
-    page, _next, _ex, _ = _scan_fill_c_namespace(3, paths.get, _asset, 10, 0)
+    page, _next, _ex, _ = _scan_fill_c_namespace(3, _tuple_get(paths), _asset, 10, 0)
     assert "" not in page
     assert page == ["a/1", "a/2"]
 
 
 def test_browse_scan_exhaustion_flagged():
     paths = {i: f"a/{i}" for i in range(5)}
-    page, _next, exhausted, _ = _scan_fill_c_namespace(5, paths.get, _asset, 2, 4)
+    page, _next, exhausted, _ = _scan_fill_c_namespace(
+        5, _tuple_get(paths), _asset, 2, 4
+    )
     assert page == ["a/4"]
     assert exhausted is True
 

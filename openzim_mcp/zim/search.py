@@ -1453,16 +1453,32 @@ class _SearchMixin:
             f"namespace={namespace}, type={content_type}, "
             f"results={returned_count}"
         )
-        # Classify the zero-result case: if a namespace/content_type filter
-        # was supplied AND the unfiltered search returned hits, the filter
-        # is what killed them — surface that as ``bad_namespace`` so the
-        # model can self-correct (drop or change the filter) instead of
-        # treating the whole query as a miss.
+        # Classify the zero-result case. A filter that killed every hit (the
+        # unfiltered search DID match) is what we want to surface so the model
+        # can self-correct (drop or change the filter). Distinguish the two
+        # filters precisely:
+        #   * an invalid namespace token -> ``bad_namespace`` (footer points at
+        #     ``list_namespaces``);
+        #   * a content_type filter miss -> ``no_content_type_match``: the
+        #     fulltext index does not cover that content type (binary assets
+        #     such as image/jpeg are never Xapian-indexed), so the honest
+        #     recovery hint is to browse rather than to fix a namespace.
+        # A *valid* namespace that simply has no hits for this query falls
+        # through to ``0_hits`` like any other miss.
+        from openzim_mcp.zim.namespace import _KNOWN_NAMESPACE_LETTERS
+
         if scan.filtered_count == 0:
-            if (namespace or content_type) and scan.unfiltered_total > 0:
-                reason: Optional[str] = "bad_namespace"
-            else:
-                reason = "0_hits"
+            reason: Optional[str] = "0_hits"
+            if scan.unfiltered_total > 0:
+                ns_canonical = (
+                    self._canonicalise_namespace(namespace.strip())
+                    if namespace
+                    else None
+                )
+                if ns_canonical and ns_canonical not in _KNOWN_NAMESPACE_LETTERS:
+                    reason = "bad_namespace"
+                elif content_type:
+                    reason = "no_content_type_match"
         else:
             reason = None
         with_meta = attach_meta(payload, reason=reason)

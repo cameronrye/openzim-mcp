@@ -467,7 +467,7 @@ if cache_hit_rate < 0.7:
     pass
 ```
 
-Note `health.cache_performance` (not `cache`); fields are `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. `process_id` / `server_pid` are `[REDACTED]`.
+Note `health.cache_performance` (not `cache`); fields are `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. `process_id` / `server_pid` are the real PID over local stdio (`[REDACTED]` over HTTP/SSE).
 
 ### Usage analytics
 

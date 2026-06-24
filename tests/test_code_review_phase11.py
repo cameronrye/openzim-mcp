@@ -4,6 +4,7 @@ M11 (PathValidator security branches), M13 (server_state health/config report
 builders), L2 (async _data wrapper forwarding).
 """
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -111,14 +112,41 @@ def test_m13_health_report_degrades_and_redacts_on_missing_dir(tmp_path: Path):
     assert str(missing) not in blob
 
 
-def test_m13_build_configuration_report_redacts_paths(tmp_path: Path):
-    from openzim_mcp.server_state import _build_configuration_report
+def test_m13_configuration_report_stdio_shows_real_paths(tmp_path: Path):
+    """BUG #9: on the local stdio transport the diagnostics report real
+    paths/PID — consistent with ``loaded_archives[].path`` (which must stay
+    real, since clients pass it back as ``zim_file_path``)."""
+    from openzim_mcp.server_state import (
+        _build_configuration_report,
+        _build_uptime_info,
+    )
 
-    server = _make_server(tmp_path)
+    server = _make_server(tmp_path)  # default transport == stdio
     report = _build_configuration_report(server)
     assert isinstance(report, dict)
-    # Allowed directories are redacted (basename only) in the report.
+    cfg = report["configuration"]
+    assert cfg["allowed_directories"] == [str(tmp_path)]
+    assert cfg["server_pid"] == os.getpid()
+    assert "<redacted>" not in repr(report)
+    assert "[REDACTED]" not in repr(report)
+    assert _build_uptime_info(server)["process_id"] == os.getpid()
+
+
+def test_m13_configuration_report_http_redacts_paths(tmp_path: Path):
+    """BUG #9: over the network HTTP/SSE transports paths/PID stay masked."""
+    from openzim_mcp.server_state import (
+        _build_configuration_report,
+        _build_uptime_info,
+    )
+
+    server = _make_server(tmp_path)
+    server.config.transport = "http"  # network boundary -> redact
+    report = _build_configuration_report(server)
+    cfg = report["configuration"]
     assert str(tmp_path) not in repr(report)
+    assert cfg["server_pid"] == "[REDACTED]"
+    assert all("<redacted>" in d for d in cfg["allowed_directories"])
+    assert _build_uptime_info(server)["process_id"] == "[REDACTED]"
 
 
 # ---------------------------------------------------------------------------
