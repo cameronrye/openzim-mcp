@@ -19,6 +19,7 @@ Layout:
   the class here.
 """
 
+import hashlib
 import logging
 import re
 from contextlib import contextmanager, suppress
@@ -357,6 +358,41 @@ class ZimOperations(
             )
         logger.info("ZimOperations initialized")
 
+    def _zim_dir_signature(self) -> str:
+        """Content-free fingerprint of which ``.zim`` files currently exist.
+
+        Folded into the ``list_zim_files_data`` cache key so that adding,
+        removing, or renaming a ``.zim`` file in an allowed directory at
+        runtime invalidates the cached listing instead of serving the prior
+        snapshot until the TTL expires or the server restarts (issue #307).
+
+        Mirrors the ``glob("**/*.zim")`` discovery in :meth:`_scan_zim_files`
+        but does not ``stat`` each file, so it stays cheaper than a full
+        rescan: an unchanged directory yields a stable signature and the
+        listing is still served from cache. An in-place same-name
+        replacement (identical path, new bytes) is intentionally not
+        reflected here — that archive's *content* caches invalidate via
+        their own ``archive_stat_token`` and the listing's stale size/mtime
+        is bounded by the cache TTL.
+        """
+        paths: List[str] = []
+        for directory_str in self.config.allowed_directories:
+            # Match _scan_zim_files' resilience: a directory that can't be
+            # walked is skipped (and the scan that follows skips it too), so
+            # the signature degrades consistently with the listing rather
+            # than raising.
+            try:
+                paths.extend(str(p) for p in Path(directory_str).glob("**/*.zim"))
+            except Exception as e:
+                logger.debug(
+                    "Directory signature glob failed for %s: %s", directory_str, e
+                )
+        blob = "\n".join(sorted(paths)).encode("utf-8", "surrogatepass")
+        # Not a security digest — just a stable fingerprint of the directory
+        # contents for cache invalidation; usedforsecurity=False documents
+        # that and silences the weak-hash warning (bandit B324).
+        return hashlib.sha1(blob, usedforsecurity=False).hexdigest()[:16]
+
     def _scan_zim_files(self) -> List[Dict[str, Any]]:  # NOSONAR(python:S3776)
         """Scan all allowed directories for ZIM files (uncached)."""
         logger.info(
@@ -442,7 +478,14 @@ class ZimOperations(
         # the per-file dict shape (name/path/directory/size/size_bytes/
         # modified) is unchanged; the v2b rename happens one layer up in
         # ``list_zim_files_summary_data`` (files→results, count→total).
-        cache_key = "zim_files_list_data_v2b"
+        #
+        # The directory signature is folded into the key so that adding,
+        # removing, or renaming a ``.zim`` file at runtime invalidates the
+        # listing instead of serving the prior snapshot until the TTL
+        # expires or the server restarts (issue #307). An unchanged
+        # directory yields a stable signature, so repeat calls still hit
+        # the cache rather than rescanning.
+        cache_key = f"zim_files_list_data_v2b:{self._zim_dir_signature()}"
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug("Returning cached ZIM files list data")
@@ -545,7 +588,16 @@ class ZimOperations(
         # don't collide on shared cache backends. Bumped to v2c when the
         # shape gained uuid / is_multipart / has_*_index / counter_breakdown
         # so pre-upgrade cached responses (old shape) don't leak through.
-        cache_key = f"metadata_data:v2c:{validated_path}"
+        #
+        # The stat token (mtime_ns:size) makes an in-place archive
+        # replacement at the same path a cache miss instead of stale
+        # metadata (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"metadata_data:v2c:{validated_path}:"
+            f"{archive_stat_token(validated_path)}"
+        )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached metadata dict for: {validated_path}")
@@ -957,8 +1009,14 @@ class ZimOperations(
         # Validate and resolve file path
         validated_path = self._validate_zim_path(zim_file_path)
 
-        # Check cache
-        cache_key = f"main_page:{validated_path}:compact={compact}"
+        # Check cache. The stat token (mtime_ns:size) invalidates the entry
+        # when the archive is replaced in place (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"main_page:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:compact={compact}"
+        )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached main page for: {validated_path}")
@@ -1114,7 +1172,14 @@ class ZimOperations(
 
         # Cache key distinct from the legacy text cache so old persisted
         # entries (which hold strings) don't collide with the new dict shape.
-        cache_key = f"main_page_data:{validated_path}:compact={compact}"
+        # The stat token (mtime_ns:size) invalidates the entry when the
+        # archive is replaced in place (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"main_page_data:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:compact={compact}"
+        )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached main page dict for: {validated_path}")

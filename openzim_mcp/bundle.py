@@ -54,9 +54,12 @@ def archive_stat_token(validated_path: Any) -> str:
     the invalidation guarantee for that key.
 
     ``validated_path`` is typed loosely so callers don't have to import
-    ``pathlib.Path``; any path-like with ``.stat()`` works.
+    ``pathlib.Path``; a ``Path`` or a plain ``str`` path both work (a bare
+    ``str`` has no ``.stat()``, so it is coerced to ``Path`` first).
     """
     try:
+        if isinstance(validated_path, str):
+            validated_path = Path(validated_path)
         st = validated_path.stat()
         return f"{st.st_mtime_ns}:{st.st_size}"
     except OSError:

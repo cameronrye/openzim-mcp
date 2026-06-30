@@ -158,7 +158,10 @@ def test_filtered_search_does_not_cache_zero_result_response(
 
     validated_path = zim_operations.path_validator.validate_path(str(zim_file))
     validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
-    cache_key = f"search_filtered:{validated_path}:warmup:C:None:10:0"
+    from openzim_mcp.bundle import archive_stat_token
+
+    tok = archive_stat_token(validated_path)
+    cache_key = f"search_filtered:{validated_path}:{tok}:warmup:C:None:10:0"
     assert (
         zim_operations.cache.get(cache_key) is None
     ), "filtered zero-result response should not be cached"
@@ -189,6 +192,9 @@ def test_get_search_suggestions_does_not_cache_on_error(
 
     validated_path = zim_operations.path_validator.validate_path(str(zim_file))
     validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
+    from openzim_mcp.bundle import archive_stat_token
+
+    tok = archive_stat_token(validated_path)
     # The legacy ``suggestions:`` key was retired in favour of the
     # dict-shaped ``suggestions_data:v2b:`` cache. Neither key should hold a
     # sentinel response when generation raised.
@@ -196,7 +202,9 @@ def test_get_search_suggestions_does_not_cache_on_error(
         zim_operations.cache.get(f"suggestions:{validated_path}:warmup:10") is None
     ), "legacy suggestion cache key should not hold an errored response"
     assert (
-        zim_operations.cache.get(f"suggestions_data:v2b:{validated_path}:warmup:10")
+        zim_operations.cache.get(
+            f"suggestions_data:v2b:{validated_path}:{tok}:warmup:10"
+        )
         is None
     ), "errored suggestion response should not be cached"
 

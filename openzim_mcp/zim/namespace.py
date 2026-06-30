@@ -198,7 +198,15 @@ class _NamespaceMixin:
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
         # shape: entry_count key) don't leak through after the rename to ``total``.
-        cache_key = f"namespaces_data:v2b:{validated_path}"
+        # The stat token (mtime_ns:size) invalidates the listing when the
+        # archive is replaced in place (archive_stat_token contract, which
+        # names namespace listings explicitly).
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"namespaces_data:v2b:{validated_path}:"
+            f"{archive_stat_token(validated_path)}"
+        )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached namespaces dict for: {validated_path}")
@@ -736,8 +744,13 @@ class _NamespaceMixin:
         # cursor ``s.o`` is therefore a row offset again; ``total`` stays the
         # authoritative ``entry_count``. The bump stops pre-fix cached pages —
         # with the old entry-id-offset cursor — from leaking through.
+        # The stat token (mtime_ns:size) invalidates the page when the
+        # archive is replaced in place (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
         cache_key = (
-            f"browse_ns_data:v2d:{validated_path}:{namespace}:"
+            f"browse_ns_data:v2d:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{namespace}:"
             f"{limit}:{offset}:assets={include_assets}"
         )
         cached_result = self.cache.get(cache_key)

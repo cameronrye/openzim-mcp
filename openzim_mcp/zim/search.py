@@ -470,8 +470,15 @@ class _SearchMixin:
             )
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old shape)
-        # don't leak through after the upgrade.
-        cache_key = f"search_v2b:{validated_path}:{query}:{limit}:{offset}"
+        # don't leak through after the upgrade. The stat token (mtime_ns:size)
+        # invalidates results when the archive is replaced in place
+        # (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"search_v2b:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{query}:{limit}:{offset}"
+        )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached search dict for query: {query}")
@@ -1219,8 +1226,13 @@ class _SearchMixin:
         # with the same matched query but different display forms must
         # render different text; a stale cache would echo the wrong
         # casing back to the second caller.
+        # The stat token (mtime_ns:size) invalidates results when the archive
+        # is replaced in place (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
         cache_key = (
-            f"search_filtered:{validated_path}:{query}:{namespace}:"
+            f"search_filtered:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{query}:{namespace}:"
             f"{content_type}:{limit}:{offset}:dq={display_query or ''}"
         )
         cached_result = self.cache.get(cache_key)
@@ -1353,8 +1365,13 @@ class _SearchMixin:
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (markdown
         # strings under the legacy ``search_filtered:`` prefix) don't leak
         # through after the upgrade — different prefix, different cache slot.
+        # The stat token (mtime_ns:size) invalidates results when the archive
+        # is replaced in place (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
         cache_key = (
-            f"search_filtered_v2b:{validated_path}:{query}:{namespace}:"
+            f"search_filtered_v2b:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{query}:{namespace}:"
             f"{content_type}:{limit}:{offset}"
         )
         cached_result = self.cache.get(cache_key)
@@ -1930,7 +1947,14 @@ class _SearchMixin:
 
         # Cache key bumped to v2b (Phase B) so v1.x cached responses (old
         # shape: suggestions/count keys) don't leak through after the upgrade.
-        cache_key = f"suggestions_data:v2b:{validated_path}:{partial_query}:{limit}"
+        # The stat token (mtime_ns:size) invalidates suggestions when the
+        # archive is replaced in place (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"suggestions_data:v2b:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{partial_query}:{limit}"
+        )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             logger.debug(f"Returning cached suggestions dict for: {partial_query}")
