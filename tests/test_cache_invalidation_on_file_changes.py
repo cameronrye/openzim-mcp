@@ -194,7 +194,7 @@ class TestContentCacheReplacementInvalidation:
         _CONTENT_CACHE_CASES,
         ids=[c[0] for c in _CONTENT_CACHE_CASES],
     )
-    def test_reads_stat_token_keyed_entry_not_path_only(
+    def test_stat_token_key_invalidates_on_in_place_replacement(
         self,
         zim_operations: ZimOperations,
         temp_dir: Path,
@@ -203,30 +203,52 @@ class TestContentCacheReplacementInvalidation:
         old_key,
         new_key,
     ):
-        """The method must serve the token-keyed value, ignoring the path-only one.
+        """End-to-end: a real same-path replacement must serve fresh data.
 
-        A path-only key survives an in-place archive replacement and serves
-        stale data forever (until TTL/restart); embedding the stat token makes
-        the replaced archive a cache miss. See
-        :func:`openzim_mcp.bundle.archive_stat_token`.
+        Two phases, both hermetic (cache hits short-circuit before any real
+        archive is opened):
+
+        1. **Reads the token key** — with both the path-only key and the
+           token-bearing key populated, the method must return the
+           token-keyed value. A path-only key would survive a replacement and
+           serve stale data forever (until TTL/restart).
+        2. **Invalidates on a real change** — after actually rewriting the
+           file at the same path (new size/mtime → new stat token → new key),
+           the method must route to the *new* token's entry, not the now-stale
+           v1 one. This exercises the real invalidation, not just the key
+           shape. See :func:`openzim_mcp.bundle.archive_stat_token`.
         """
         zim_file = temp_dir / "archive.zim"
         zim_file.write_bytes(b"v1 content")
         validated = zim_operations._validate_zim_path(str(zim_file))
         token = _stat(validated)
 
+        # Phase 1: with both keys populated, the method must read the
+        # token-bearing key (never opening a real archive).
         stale = f"STALE::{case_id}"
         fresh = f"FRESH::{case_id}"
-        # The pre-fix code reads the path-only key; the fixed code must read
-        # the token-bearing key. Both are populated so neither path opens a
-        # real archive — the assertion is purely about *which key* is read.
         zim_operations.cache.set(old_key(validated), stale)
         zim_operations.cache.set(new_key(validated, token), fresh)
 
         result = call(zim_operations, str(zim_file))
-
         assert result == fresh, (
             f"{case_id}: cache key must embed archive_stat_token so an "
             f"in-place archive replacement invalidates it; got the path-only "
             f"(stale-prone) entry instead."
+        )
+
+        # Phase 2: replace the archive in place. Growing the file guarantees
+        # the stat token changes regardless of mtime resolution, so the v1
+        # entry ('fresh') is now stale and the method must serve the entry
+        # keyed by the *new* token.
+        zim_file.write_bytes(b"v2 content, deliberately longer than v1")
+        token2 = _stat(validated)
+        assert token2 != token, "premise: a same-path rewrite must change the token"
+        fresh2 = f"FRESH2::{case_id}"
+        zim_operations.cache.set(new_key(validated, token2), fresh2)
+
+        result2 = call(zim_operations, str(zim_file))
+        assert result2 == fresh2, (
+            f"{case_id}: an in-place archive replacement must invalidate the "
+            f"cached entry (route to the new stat-token key), not serve v1."
         )
