@@ -1184,7 +1184,7 @@ wheels = [
 
 [[package]]
 name = "openzim-mcp"
-version = "2.5.2"
+version = "2.5.3"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
