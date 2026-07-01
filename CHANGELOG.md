@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.3](https://github.com/cameronrye/openzim-mcp/compare/v2.5.2...v2.5.3) (2026-07-01)
+
+
+### Fixed
+
+* invalidate caches when ZIM files change at runtime ([#308](https://github.com/cameronrye/openzim-mcp/issues/308)) ([0b95461](https://github.com/cameronrye/openzim-mcp/commit/0b9546177d0b0242b41a4e58c89878a4adfe9450))
+
 ## [2.5.2](https://github.com/cameronrye/openzim-mcp/compare/v2.5.1...v2.5.2) (2026-06-24)
 
 
