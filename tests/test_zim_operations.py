@@ -1502,9 +1502,14 @@ class TestZimOperations:
         # Get the validated path that would be used in cache keys
         validated_path = zim_operations.path_validator.validate_path(str(zim_file))
         validated_path = zim_operations.path_validator.validate_zim_file(validated_path)
+        # Content-derived caches embed the stat token so an in-place archive
+        # replacement is a miss rather than stale data (archive_stat_token).
+        from openzim_mcp.bundle import archive_stat_token
+
+        stat_token = archive_stat_token(validated_path)
 
         # Test get_zim_entry cache hit (lines 283-284)
-        cache_key = f"entry:{validated_path}:A/Test:1000:0:compact=False"
+        cache_key = f"entry:{validated_path}:{stat_token}:A/Test:1000:0:compact=False"
         zim_operations.cache.set(cache_key, "cached entry content")
 
         result = zim_operations.get_zim_entry(str(zim_file), "A/Test", 1000)
@@ -1514,7 +1519,7 @@ class TestZimOperations:
         # Phase B #12 fix: the cache now stores POST-ATTACH payloads
         # (with ``_meta`` already attached), and cache hits return them
         # verbatim. Seed accordingly.
-        cache_key = f"namespaces_data:v2b:{validated_path}"
+        cache_key = f"namespaces_data:v2b:{validated_path}:{stat_token}"
         cached_ns = {"cached": "namespaces", "_meta": {"chars": 1}}
         zim_operations.cache.set(cache_key, cached_ns)
 
@@ -1525,7 +1530,9 @@ class TestZimOperations:
         # Test browse_namespace_data cache hit. Same contract — cache
         # stores the post-attach payload. Key bumped v2b -> v2c when
         # new-scheme C browse began filtering _zim_static infra assets.
-        cache_key = f"browse_ns_data:v2d:{validated_path}:A:50:0:assets=False"
+        cache_key = (
+            f"browse_ns_data:v2d:{validated_path}:{stat_token}:A:50:0:assets=False"
+        )
         cached_browse = {"cached": "browse", "_meta": {"chars": 1}}
         zim_operations.cache.set(cache_key, cached_browse)
 

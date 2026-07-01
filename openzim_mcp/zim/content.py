@@ -402,10 +402,14 @@ class _ContentMixin:
         validated_path = self._validate_zim_path(zim_file_path)
 
         # Cheap response cache check: a hit avoids opening the archive
-        # entirely, which is the whole point of caching here.
+        # entirely, which is the whole point of caching here. The stat token
+        # (mtime_ns:size) invalidates the entry when the archive is replaced
+        # in place (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
         cache_key = (
-            f"entry:{validated_path}:{entry_path}:"
-            f"{max_content_length}:{content_offset}:compact={compact}"
+            f"entry:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"{entry_path}:{max_content_length}:{content_offset}:compact={compact}"
         )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
@@ -457,10 +461,14 @@ class _ContentMixin:
         # already-cached entries without re-rendering. ``get_zim_entry``
         # checks before opening the archive; this check covers the case
         # where the archive is already open (batch call) and a different
-        # entry within the same ZIM file was previously cached.
+        # entry within the same ZIM file was previously cached. Key must
+        # match get_zim_entry's exactly (same stat token) so the two checks
+        # share one cache entry (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
         cache_key = (
-            f"entry:{validated_path}:{entry_path}:"
-            f"{max_content_length}:{content_offset}:compact={compact}"
+            f"entry:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"{entry_path}:{max_content_length}:{content_offset}:compact={compact}"
         )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
@@ -524,9 +532,13 @@ class _ContentMixin:
 
         # Cache key distinct from the legacy string cache so old persisted
         # entries (text payloads) don't collide with the new dict shape.
+        # The stat token (mtime_ns:size) invalidates the entry when the
+        # archive is replaced in place (archive_stat_token contract).
+        from openzim_mcp.bundle import archive_stat_token
+
         cache_key = (
-            f"entry_data:{validated_path}:{entry_path}:"
-            f"{max_content_length}:{content_offset}:compact={compact}"
+            f"entry_data:{validated_path}:{archive_stat_token(validated_path)}:"
+            f"{entry_path}:{max_content_length}:{content_offset}:compact={compact}"
         )
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:

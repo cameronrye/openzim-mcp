@@ -232,8 +232,11 @@ class TestGetZimMetadataDataMeta:
         validated = zim_ops.path_validator.validate_path(str(zim_file))
         validated = zim_ops.path_validator.validate_zim_file(validated)
         # Key bumped to v2c when the metadata shape gained identity/index/
-        # counter fields (see get_zim_metadata_data).
-        cache_key = f"metadata_data:v2c:{validated}"
+        # counter fields (see get_zim_metadata_data); the stat token makes an
+        # in-place archive replacement a cache miss (archive_stat_token).
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = f"metadata_data:v2c:{validated}:{archive_stat_token(validated)}"
         seeded = {
             "title": "Test",
             "language": "eng",
