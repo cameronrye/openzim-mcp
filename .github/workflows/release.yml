@@ -214,7 +214,7 @@ jobs:
           path: dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
         with:
           skip-existing: true
 
@@ -366,7 +366,7 @@ jobs:
         # step used to set draft: false (single-shot create+publish), which
         # failed on the asset-upload step under immutable releases.
         if: steps.check-release.outputs.release_exists != 'true'
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           tag_name: ${{ steps.tag.outputs.tag_name }}
           name: Release v${{ steps.extract-notes.outputs.version }}
