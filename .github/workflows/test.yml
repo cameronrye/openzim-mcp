@@ -200,9 +200,17 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # ``--all-extras`` so the pip-audit gate below sees the optional extras,
+      # not just the default install. ``reranker`` pulls a large ML stack
+      # (fastembed -> pillow, tokenizers, onnxruntime) that is absent from a
+      # plain ``uv sync``, so advisories against it were invisible to this gate
+      # and reached users of ``openzim-mcp[reranker]`` unnoticed: pillow sat at
+      # 12.2.0 with 17 open advisories while every PR reported clean.
+      # ``--locked`` audits the resolved set we actually ship rather than a
+      # fresh resolution.
       - name: Install dependencies
         run: |
-          uv sync
+          uv sync --all-extras --locked
 
       - name: Run bandit security linter
         run: |
@@ -237,7 +245,9 @@ jobs:
       # dependency, and the same tool that gate uses) closes that window.
       # --skip-editable so it doesn't try to resolve the editable openzim-mcp
       # project itself on PyPI. Placed after the bandit steps so their reports
-      # still upload when a dependency advisory fails this step.
+      # still upload when a dependency advisory fails this step. Scope is the
+      # full extras set (see the sync step above), so an advisory in an
+      # optional dependency fails the gate rather than shipping silently.
       - name: Run pip-audit dependency scan (blocking)
         run: uv run pip-audit --skip-editable
 
