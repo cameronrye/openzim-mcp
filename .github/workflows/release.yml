@@ -125,9 +125,14 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # ``--locked`` asserts uv.lock is already in sync with pyproject.toml
+      # rather than silently re-resolving. A release must build from the exact
+      # dependency set that CI audited; the release-please ``sync-uv-lock`` job
+      # keeps the lockfile current, so a mismatch here means something is wrong
+      # and failing loudly is the point.
       - name: Install dependencies
         run: |
-          uv sync
+          uv sync --locked
 
       - name: Run tests
         run: |
@@ -172,7 +177,7 @@ jobs:
       # + libzim) before running, which build_mcpb.py needs to spawn the server
       # and capture live tool schemas.
       - name: Build .mcpb bundle
-        run: uv run python scripts/build_mcpb.py --output dist-mcpb
+        run: uv run --locked python scripts/build_mcpb.py --output dist-mcpb
 
       - name: Upload .mcpb bundle
         uses: actions/upload-artifact@v7
