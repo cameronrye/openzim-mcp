@@ -7,6 +7,7 @@ real stream from an archive and orchestrate the two.
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -26,6 +27,8 @@ from typing import (
 from openzim_mcp import __version__
 
 from .schema import SCHEMA_VERSION, apply_build_pragmas, create_schema
+
+logger = logging.getLogger(__name__)
 
 _BATCH = 50_000
 
@@ -125,7 +128,7 @@ def build_from_link_stream(
 
 
 def _is_content_source(path: str, *, has_new_scheme: bool) -> bool:
-    """Return whether ``path`` names a content (C-namespace) source entry.
+    """Return whether ``path`` names a content-namespace source entry.
 
     Scheme-aware, mirroring ``_extract_namespace_from_path`` in
     ``openzim_mcp/zim/namespace.py``:
@@ -134,8 +137,9 @@ def _is_content_source(path: str, *, has_new_scheme: bool) -> bool:
       entry paths carry no prefix (``Evolution``, not ``C/Evolution``), so
       every iterated entry is a content source — accept all (a non-empty path).
     * **old-scheme:** paths are namespace-prefixed; the namespace is the first
-      ``/``-delimited segment (or the first char if no ``/``). Keep only those
-      whose namespace is ``C``.
+      ``/``-delimited segment (or the first char if no ``/``). Keep the
+      article namespaces: ``A`` (the legacy content namespace real pre-2020
+      archives use) and ``C``.
     """
     if not path:
         return False
@@ -143,7 +147,7 @@ def _is_content_source(path: str, *, has_new_scheme: bool) -> bool:
         return True
     # Old-scheme: first segment before '/' (or first char) is the namespace.
     namespace = path.split("/", 1)[0] if "/" in path else path[0]
-    return namespace.upper() == "C"
+    return namespace.upper() in {"A", "C"}
 
 
 def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]]]]:
@@ -217,6 +221,18 @@ def build_link_graph(
                     progress(i, total)
                 yield pair
 
-        return build_from_link_stream(
+        stats = build_from_link_stream(
             out, archive_uuid=archive_uuid, link_stream=_stream(), force=force
         )
+        if total and not stats.node_count:
+            # A non-empty archive that yields no content sources means the
+            # sidecar will answer every inbound query with a silent zero —
+            # surface that instead of letting the empty build look successful.
+            logger.warning(
+                "link-graph build for %s produced 0 nodes despite %d archive "
+                "entries; inbound queries against this sidecar will return "
+                "empty results",
+                archive_path,
+                total,
+            )
+        return stats
