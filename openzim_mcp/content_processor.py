@@ -142,6 +142,12 @@ NON_NAVIGABLE_LINK_SCHEMES = (
     "vbscript:",
 )
 
+# Schemes that mark an extracted link as pointing outside the archive.
+# These are classified, never fetched: the server reads links out of
+# archived HTML and reports where they point, so an insecure scheme here
+# is data being described rather than a request being made.
+EXTERNAL_LINK_SCHEMES = ("http://", "https://", "//")  # NOSONAR(python:S5332)
+
 
 def _slugify_heading(text: str) -> str:
     """Generate a stable, URL-safe slug from heading text.
@@ -583,7 +589,7 @@ def _classify_anchor(link: Tag, links_data: Dict[str, Any]) -> None:
         "title": str(title_attr) if title_attr else "",
     }
 
-    if href.lower().startswith(("http://", "https://", "//")):
+    if href.lower().startswith(EXTERNAL_LINK_SCHEMES):
         link_info["domain"] = urlparse(href).netloc
         links_data["external_links"].append(link_info)
     elif href.startswith("#"):
