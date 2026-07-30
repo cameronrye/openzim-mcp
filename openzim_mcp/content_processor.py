@@ -79,26 +79,42 @@ def _join_cell_text(cell: Tag) -> str:
     ``5th in Europe; 1st in Germany`` — two distinct items, same row.
 
     A sentinel character (``\\x00``) marks the block boundary during
-    descendant traversal, then the post-collapse pass converts it to
-    ``"; "``. This preserves the existing whitespace-collapse semantics
+    traversal, then the post-collapse pass converts it to ``"; "``.
+    This preserves the existing whitespace-collapse semantics
     (so ``"New York"`` from inline spans survives) without the sentinel
     being absorbed into a whitespace run.
+
+    The sentinel is emitted at both the OPEN and CLOSE of a block-level
+    child: a flat descendants walk only sees the opening position, so
+    text following a closed block child (``<div>5th in Europe</div>1st
+    in Germany``) glued directly onto the block's last text. Adjacent /
+    leading / trailing sentinels are collapsed by the post-pass, so the
+    double emission is harmless for block-then-block shapes.
     """
     parts: List[str] = []
-    for el in cell.descendants:
-        # ``Comment`` is a ``NavigableString`` subclass; the
-        # ``isinstance(NavigableString)`` test below would catch it
-        # and leak the comment text into the rendered value. Wikipedia
-        # templates emit invisible coordinate / microformat comments
-        # inside infobox cells routinely — without this guard,
-        # ``3<!-- a-template -->,913,644`` rendered as
-        # ``3 a-template ,913,644``. Filter before the string path.
-        if isinstance(el, Comment):
-            continue
-        if isinstance(el, NavigableString):
-            parts.append(str(el))
-        elif isinstance(el, Tag) and el.name in _BLOCK_CELL_TAGS:
-            parts.append(f" {_BLOCK_CELL_SEPARATOR} ")
+
+    def _walk(node: Tag) -> None:
+        for el in node.children:
+            # ``Comment`` is a ``NavigableString`` subclass; the
+            # ``isinstance(NavigableString)`` test below would catch it
+            # and leak the comment text into the rendered value. Wikipedia
+            # templates emit invisible coordinate / microformat comments
+            # inside infobox cells routinely — without this guard,
+            # ``3<!-- a-template -->,913,644`` rendered as
+            # ``3 a-template ,913,644``. Filter before the string path.
+            if isinstance(el, Comment):
+                continue
+            if isinstance(el, NavigableString):
+                parts.append(str(el))
+            elif isinstance(el, Tag):
+                is_block = el.name in _BLOCK_CELL_TAGS
+                if is_block:
+                    parts.append(f" {_BLOCK_CELL_SEPARATOR} ")
+                _walk(el)
+                if is_block:
+                    parts.append(f" {_BLOCK_CELL_SEPARATOR} ")
+
+    _walk(cell)
     # Collapse whitespace per chunk while preserving sentinels, then
     # convert sentinels to the user-facing separator. Adjacent
     # sentinels (empty block boundaries from nested ``<ul>`` → ``<li>``)
@@ -223,6 +239,30 @@ def _truncate_before_dangling_link(text: str) -> str:
         return text
     if _DANGLING_LINK_RE.match(tail):
         return text[:open_idx].rstrip()
+    return text
+
+
+def _strip_dangling_bold(text: str) -> str:
+    """Drop an unpaired trailing ``**`` left behind by truncation.
+
+    A cut can land inside a ``**bold**`` span — whether the markers came
+    from ``_highlight_terms`` or already existed in the source markdown
+    (html2text emits ``**`` for ``<b>``/``<strong>``) — leaving an
+    unmatched opening marker (e.g. ``…**ter``) that downstream markdown
+    renderers treat as runaway bold. Detect the odd marker count and
+    resolve the dangling fragment. The ``last_open == 0`` branch covers
+    the rare case where the dangling ``**`` is at position 0 — the
+    entire text is the start of the first bold span. Slicing
+    ``text[:0]`` there would yield ``""`` and the caller would see a
+    content-free ``"..."``; instead drop the orphan ``**`` marker and
+    keep the term text so the snippet stays useful.
+    """
+    if text.count("**") % 2 == 1:
+        last_open = text.rfind("**")
+        if last_open > 0:
+            return text[:last_open].rstrip()
+        if last_open == 0:
+            return text[2:].lstrip()
     return text
 
 
@@ -543,7 +583,7 @@ def _classify_anchor(link: Tag, links_data: Dict[str, Any]) -> None:
         "title": str(title_attr) if title_attr else "",
     }
 
-    if href.startswith(("http://", "https://", "//")):
+    if href.lower().startswith(("http://", "https://", "//")):
         link_info["domain"] = urlparse(href).netloc
         links_data["external_links"].append(link_info)
     elif href.startswith("#"):
@@ -1112,7 +1152,12 @@ class ContentProcessor:
             cap = max(effective_len - 3, 0)
             # M3: repair a link the cut split before highlighting runs, so
             # _highlight_terms doesn't bold terms inside a now-dangling link.
-            snippet_text = _truncate_before_dangling_link(snippet_text[:cap].rstrip())
+            sliced = _truncate_before_dangling_link(snippet_text[:cap].rstrip())
+            # The cut can also split a ``**bold**`` span that already
+            # existed in the source markdown; repair it here since the
+            # post-highlight repair only runs when highlighting pushed
+            # the length back over the cap.
+            snippet_text = _strip_dangling_bold(sliced)
             snippet_text += "..."
 
         if query:
@@ -1127,23 +1172,10 @@ class ContentProcessor:
                 # truncation; back up before a dangling link first, then let
                 # the dangling-``**`` repair recount on the shortened slice.
                 sliced = _truncate_before_dangling_link(sliced)
-                # Truncation can land inside a ``**term**`` highlight, leaving
-                # an unmatched opening marker (e.g. ``…**ter``) that downstream
-                # markdown renderers will treat as runaway bold. Detect an
-                # unpaired trailing ``**`` and resolve the dangling fragment.
-                # The ``last_open == 0`` branch covers the rare case where the
-                # dangling ``**`` is at position 0 — the entire sliced snippet
-                # is the start of the first highlighted term. Slicing
-                # ``sliced[:0]`` there yields ``""`` and the caller sees a
-                # content-free ``"..."``; instead drop the orphan ``**``
-                # marker and keep the term text so the snippet stays useful.
-                if sliced.count("**") % 2 == 1:
-                    last_open = sliced.rfind("**")
-                    if last_open > 0:
-                        sliced = sliced[:last_open].rstrip()
-                    elif last_open == 0:
-                        sliced = sliced[2:].lstrip()
-                snippet_text = sliced + "..."
+                # Truncation can land inside a ``**term**`` highlight,
+                # leaving an unmatched opening marker; see
+                # ``_strip_dangling_bold`` for the repair semantics.
+                snippet_text = _strip_dangling_bold(sliced) + "..."
 
         return snippet_text
 

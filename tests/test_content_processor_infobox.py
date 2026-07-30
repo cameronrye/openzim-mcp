@@ -217,3 +217,28 @@ def test_d2_orphan_bullet_inherits_previous_label(processor):
     assert rows["Time zone — • Summer (DST)"] == "UTC+02:00 (CEST)"
     # A subsequent non-bullet row breaks back out to bare.
     assert rows["Area code"] == "030"
+
+
+BLOCK_THEN_TEXT_INFOBOX_HTML = """
+<table class="infobox">
+  <tr><th colspan="2">Berlin</th></tr>
+  <tr><th>Rank</th><td><div>5th in Europe</div>1st in Germany</td></tr>
+  <tr><th>Note</th><td><p>First</p>Second</td></tr>
+  <tr><th>Lead</th><td>lead<div>A</div>tail</td></tr>
+</table>
+"""
+
+
+def test_block_child_followed_by_sibling_text_gets_separator(processor):
+    """Text following a CLOSED block-level child must get a value
+    separator too. The block boundary fires at the element's start,
+    but the element's end is just as much a value boundary: Wikipedia
+    wraps the first value of a cell in a ``<div>`` (plainlist) with
+    trailing text after it, and ``<div>5th in Europe</div>1st in
+    Germany`` used to render as ``5th in Europe1st in Germany``.
+    """
+    soup = BeautifulSoup(BLOCK_THEN_TEXT_INFOBOX_HTML, "html.parser")
+    rows = {r["label"]: r["value"] for r in processor.extract_infobox(soup)}
+    assert rows["Rank"] == "5th in Europe; 1st in Germany"
+    assert rows["Note"] == "First; Second"
+    assert rows["Lead"] == "lead; A; tail"

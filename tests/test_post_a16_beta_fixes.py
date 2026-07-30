@@ -755,6 +755,33 @@ class TestD8DisambigExactPathProbe:
         # short-circuits.
         mock.search_zim_file_data.assert_not_called()
 
+    def test_disambig_fast_path_carries_single_intent_footer(self) -> None:
+        """The fast-path body must not embed its own intent comment —
+        the dispatcher appends the footer to every handler string, so an
+        embedded copy produces two conflicting ``intent=tell_me_about``
+        markers (same defect shape removed from filtered_search).
+        """
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.find_entry_by_title_data.return_value = {
+            "results": [
+                {
+                    "path": "Berlin_(disambiguation)",
+                    "title": "Berlin (disambiguation)",
+                }
+            ],
+            "total": 1,
+        }
+        mock.get_zim_entry.return_value = "<body>"
+        handler = SimpleToolsHandler(mock)
+        out = handler.handle_zim_query(
+            "tell me about Berlin (disambiguation)",
+            zim_file_path="/x.zim",
+            options={"compact": False},
+        )
+        assert out.count("<!-- intent=") == 1
+
 
 # ---------------------------------------------------------------------------
 # D9: tell_me_about underscore normalisation
@@ -988,9 +1015,16 @@ class TestP3D1FilteredSearchNamespaceContract:
         rather than the canonical ``Berlin``. Verify the full pipeline
         now survives.
         """
+        from openzim_mcp.zim.namespace import _NamespaceMixin
         from openzim_mcp.zim.search import _SearchMixin
 
         class _Stub(_SearchMixin):
+            # Production namespace-gate helper, contributed by
+            # ``_NamespaceMixin`` on the concrete class.
+            _canonicalise_namespace = staticmethod(
+                _NamespaceMixin._canonicalise_namespace
+            )
+
             def __init__(self) -> None:
                 pass
 

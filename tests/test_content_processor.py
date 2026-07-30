@@ -498,6 +498,27 @@ class TestExtractHtmlLinksFiltering:
         ]
         assert scheme_upper not in all_urls
 
+    @pytest.mark.parametrize(
+        "href",
+        ["HTTP://example.com/x", "Https://foo.org/y"],
+    )
+    def test_uppercase_http_scheme_classified_as_external(
+        self, content_processor: ContentProcessor, href: str
+    ):
+        """URI schemes are case-insensitive (RFC 3986): ``HTTP://`` hrefs
+        must land in ``external_links`` with a domain, not be mislabeled
+        as ZIM-internal paths. The original casing is preserved.
+        """
+        html = f'<html><body><a href="{href}">e</a></body></html>'
+        links = content_processor.extract_html_links(html)
+        internal_urls = [link["url"] for link in links.get("internal_links", [])]
+        assert href not in internal_urls
+        external = [
+            link for link in links.get("external_links", []) if link["url"] == href
+        ]
+        assert external, f"{href!r} missing from external_links"
+        assert external[0]["domain"]
+
 
 def test_html_to_plain_text_compact_extracts_infobox():
     proc = ContentProcessor()

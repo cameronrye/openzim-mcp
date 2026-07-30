@@ -117,6 +117,40 @@ class TestIntentParser:
             intent, _, _ = IntentParser.parse_intent(query)
             assert intent == "filtered_search", f"Failed for query: {query}"
 
+    def test_parse_filtered_search_extracts_content_type_from_filter_keyword(self):
+        """``in type`` / ``within type`` filter forms extract content_type."""
+        for query in (
+            "find biology within type text/html",
+            "search evolution in type text/html",
+        ):
+            intent, params, _ = IntentParser.parse_intent(query)
+            assert intent == "filtered_search", f"Failed for query: {query}"
+            assert (
+                params.get("content_type") == "text/html"
+            ), f"Failed for query: {query}"
+
+    def test_parse_filtered_search_ignores_bare_type_word_in_search_terms(self):
+        """A search term containing the bare word 'type' must NOT produce
+        a content_type filter — only the anchored ``in type`` /
+        ``within type`` filter form does. Pre-fix, ``search for type 2
+        diabetes in namespace A`` yielded content_type='2' and ``search
+        for blood type in namespace A`` yielded content_type='in',
+        filtering out every entry (no mimetype starts with '2'/'in')."""
+        intent, params, _ = IntentParser.parse_intent(
+            "search for type 2 diabetes in namespace A"
+        )
+        assert intent == "filtered_search"
+        assert params.get("namespace") == "A"
+        assert params.get("query") == "type 2 diabetes"
+        assert "content_type" not in params
+
+        intent, params, _ = IntentParser.parse_intent(
+            "search for blood type in namespace A"
+        )
+        assert intent == "filtered_search"
+        assert params.get("query") == "blood type"
+        assert "content_type" not in params
+
     def test_parse_get_article_intent(self):
         """Test parsing get article intents."""
         queries = [
@@ -468,6 +502,27 @@ class TestSimpleToolsHandler:
         result2 = handler.handle_zim_query("get article Biology", "/test/file.zim")
         assert "<!-- intent=get_article cert=" in result2
 
+    def test_list_files_response_carries_intent_marker(
+        self, handler, mock_zim_operations
+    ):
+        """``list_files`` returns before the ZIM-file gate but must still
+        carry the intent telemetry footer like every other markdown
+        response.
+        """
+        result = handler.handle_zim_query("list available ZIM files")
+        assert "<!-- intent=list_files cert=" in result
+
+    def test_list_files_compact_response_is_capped(self, handler, mock_zim_operations):
+        """A large multi-archive listing must not escape the compact
+        size cap the other intents go through.
+        """
+        mock_zim_operations.list_zim_files.return_value = "archive.zim\n" * 1_000
+        out = handler.handle_zim_query(
+            "list available ZIM files", options={"compact": True}
+        )
+        assert "Response truncated" in out
+        assert len(out) <= 6_200, f"compact list_files escaped the cap: {len(out)}"
+
     def test_handle_get_article(self, handler, mock_zim_operations):
         """Test handling get article queries."""
         result = handler.handle_zim_query("get article Biology", "/test/file.zim")
@@ -705,15 +760,21 @@ class TestSimpleToolsOptionsPassthrough:
         v2: walk_namespace's ``cursor`` parameter is now a decoded
         cursor-state dict (``{scan_at, l}``) rather than a raw int.
         simple_tools maps the legacy ``options['offset']`` passthrough
-        channel to ``scan_at``.
+        channel to ``scan_at``. A plain offset carries no decoded
+        cursor, so the handler synthesizes the ``ai`` field itself —
+        the data layer rejects ai-less cursor states.
         """
+        from pathlib import Path
         from unittest.mock import MagicMock
 
+        from openzim_mcp.pagination import archive_identity
         from openzim_mcp.simple_tools import SimpleToolsHandler
 
         zim_ops = MagicMock()
         zim_ops.walk_namespace.return_value = '{"results": []}'
         zim_ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        zim_ops.path_validator.validate_path.return_value = Path("/x.zim")
+        zim_ops.path_validator.validate_zim_file.return_value = Path("/x.zim")
         handler = SimpleToolsHandler(zim_ops)
 
         handler.handle_zim_query(
@@ -722,7 +783,11 @@ class TestSimpleToolsOptionsPassthrough:
         )
         _args, kwargs = zim_ops.walk_namespace.call_args
         # v2: cursor is now the decoded state dict, not a raw int.
-        assert kwargs.get("cursor") == {"scan_at": 1234, "l": 50}
+        assert kwargs.get("cursor") == {
+            "scan_at": 1234,
+            "l": 50,
+            "ai": archive_identity(Path("/x.zim")),
+        }
         assert kwargs.get("limit") == 50
 
     def test_find_by_title_forwards_options_limit(self):
@@ -1463,7 +1528,7 @@ class TestLeadSectionFetchInTellMeAbout:
         mock.search_zim_file.return_value = "fallback search response"
         # Body with a clean H2 boundary in the truncated portion.
         mock.get_zim_entry.return_value = (
-            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\nPath: Tiger\nType: text/html\n## Content\n\n"
             "# Tiger\n\nThe tiger is the largest living member of the cat "
             "family. " * 5 + "\n\n## Other animals\n\nMore content..."
         )
@@ -1518,7 +1583,7 @@ class TestLeadSectionFetchInTellMeAbout:
         hallucinated when given headings only.
         """
         mock_zim_operations.get_zim_entry.return_value = (
-            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\nPath: Tiger\nType: text/html\n## Content\n\n"
             "# Tiger\n\n## Other animals\n\nFirst real section content here.\n\n"
             "## Arts, entertainment, and media\n\nSecond section content."
         )
@@ -1538,6 +1603,48 @@ class TestLeadSectionFetchInTellMeAbout:
         # TOC still appended.
         assert "Sections in this article" in result
 
+    def test_empty_lead_detection_fires_on_production_preamble_shape(
+        self, handler, mock_zim_operations
+    ):
+        """The production renderer (zim/content.py) emits a blank line
+        between the H1 and the ``Path:`` line (``# Title\\n\\nPath: ...``).
+        Empty-lead detection must fire on that shape too, not just the
+        single-newline fixture shape."""
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\n\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\n## Other animals\n\nFirst real section content here.\n\n"
+            "## Arts, entertainment, and media\n\nSecond section content."
+        )
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        assert "First real section content here." in result
+        assert "Second section content." not in result
+        assert "Lead was empty" in result
+
+    def test_empty_lead_detection_fires_on_redirect_preamble_shape(
+        self, handler, mock_zim_operations
+    ):
+        """Redirect-resolved entries render ``Requested Path:`` /
+        ``Actual Path:`` instead of ``Path:``; empty-lead detection must
+        recognise that preamble variant as well."""
+        mock_zim_operations.get_zim_entry.return_value = (
+            "# Tiger\n\nRequested Path: tiger\nActual Path: Tiger\n"
+            "Type: text/html\n## Content\n\n"
+            "# Tiger\n\n## Other animals\n\nFirst real section content here.\n\n"
+            "## Arts, entertainment, and media\n\nSecond section content."
+        )
+        result = handler.handle_zim_query(
+            "tell me about Tiger",
+            zim_file_path="/zim/test.zim",
+            options={"compact": True, "max_content_length": 8000},
+        )
+        assert "First real section content here." in result
+        assert "Second section content." not in result
+        assert "Lead was empty" in result
+
     def test_empty_lead_with_only_one_section_skips_cut(
         self, handler, mock_zim_operations
     ):
@@ -1546,7 +1653,7 @@ class TestLeadSectionFetchInTellMeAbout:
         behavior so the single section's content is preserved.
         """
         mock_zim_operations.get_zim_entry.return_value = (
-            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\nPath: Tiger\nType: text/html\n## Content\n\n"
             "# Tiger\n\n## Only section\n\nOnly section content here."
         )
         mock_zim_operations.get_article_structure_data.return_value = {
@@ -1579,7 +1686,7 @@ class TestLeadSectionFetchInTellMeAbout:
             ],
         }
         mock_zim_operations.get_zim_entry.return_value = (
-            "# Mercury\nPath: Mercury\nType: text/html\n## Content\n\n"
+            "# Mercury\n\nPath: Mercury\nType: text/html\n## Content\n\n"
             "# Mercury\n\n**Mercury** may refer to:\n\n"
             "## Science\n\n- Mercury (element)\n- Mercury (planet)\n\n"
             "## Other\n\n- Mercury (mythology)"
@@ -1612,7 +1719,7 @@ class TestLeadSectionFetchInTellMeAbout:
         and silently substituted with the first section.
         """
         mock_zim_operations.get_zim_entry.return_value = (
-            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\nPath: Tiger\nType: text/html\n## Content\n\n"
             "# Tiger\n\nThe tiger is large.\n\n"
             "## Other animals\n\nFirst section content.\n\n"
             "## More\n\nSecond section content."
@@ -1714,7 +1821,7 @@ class TestLeadSectionFetchInTellMeAbout:
         )
         # Body now has the H2 marker visible to the in-body scan.
         mock_zim_operations.get_zim_entry.return_value = (
-            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\nPath: Tiger\nType: text/html\n## Content\n\n"
             "# Tiger\n\nLead text here.\n\n## Other animals\n\nmore"
         )
         result = handler.handle_zim_query(
@@ -1748,7 +1855,7 @@ class TestLeadSectionFetchInTellMeAbout:
         }
         # Body has two H2s so advance fires.
         mock_zim_operations.get_zim_entry.return_value = (
-            "# Tiger\nPath: Tiger\nType: text/html\n## Content\n\n"
+            "# Tiger\n\nPath: Tiger\nType: text/html\n## Content\n\n"
             "# Tiger\n\n## First\n\nPromoted body here.\n\n## Second\n\nMore."
         )
         result = handler.handle_zim_query(
@@ -3662,6 +3769,23 @@ class TestCompactBudgetProfiles:
         # overhead (~70 chars max).
         assert len(out) <= 2_100, f"wrapped output exceeded 2100 chars: {len(out)}"
         assert h.get_telemetry().get("response_truncated") == 1
+
+    def test_truncated_response_keeps_intent_marker(self):
+        """The hard cap keeps the head of the response, so a suffix
+        appended before capping is the first thing severed. The intent
+        telemetry marker must survive truncation — the documented
+        contract is that every markdown response carries it.
+        """
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.get_main_page.return_value = "# Main page\n\n" + ("paragraph. " * 700)
+        h = SimpleToolsHandler(mock)
+        out = h.handle_zim_query("show main page", options={"compact": True})
+        assert h.get_telemetry().get("response_truncated") == 1
+        assert "Response truncated" in out
+        assert "<!-- intent=main_page cert=" in out
 
 
 class TestTelemetryCounters:

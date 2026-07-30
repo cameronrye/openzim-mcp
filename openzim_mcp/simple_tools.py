@@ -28,6 +28,7 @@ from .disambiguation import _DisambiguationMixin
 from .exceptions import RegexTimeoutError
 from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
 from .meta import build_meta, format_footer
+from .pagination import archive_identity
 from .rerank import (
     _INFO_LEVEL_TELEMETRY_EVENTS,
     _RERANK_STATE_VAR,
@@ -436,7 +437,16 @@ class SimpleToolsHandler(
             if tail and re.match(
                 r"^\s*(?:search|find|look)\b", search_q, re.IGNORECASE
             ):
-                params["query"] = tail
+                # The raw tail skipped parse_intent's cleanup, so a term
+                # that legitimately starts with a verb word (``"find
+                # me"``, ``search warrant limit=5``) would resurrect the
+                # quotes / leaked params the extractor already stripped.
+                # Re-apply the same strips before the swap; fall back to
+                # ``search_q`` when the cleanup empties the tail.
+                cleaned_tail = _strip_quote_pair(
+                    IntentParser._strip_param_leaks(tail)
+                ).strip()
+                params["query"] = cleaned_tail or search_q
             else:
                 params["query"] = search_q
         return None
@@ -666,8 +676,20 @@ class SimpleToolsHandler(
                 self._track("low_confidence_note")
 
             # ``list_files`` is the only intent that doesn't need a ZIM file.
+            # It still goes through the finalize pipeline so the response
+            # carries the intent telemetry marker and respects the compact
+            # cap/footer like every other markdown response.
             if intent == "list_files":
-                return self.zim_operations.list_zim_files() + low_confidence_note
+                return self._finalize_compact_response(
+                    self.zim_operations.list_zim_files(),
+                    intent=intent,
+                    confidence=confidence,
+                    options=options,
+                    low_confidence_note=low_confidence_note,
+                    handler_reason=None,
+                    handler_suggestions=None,
+                    rerank_events_before=_RERANK_EVENTS_BEFORE,
+                )
 
             # Post-v2.0.0 D-A: ``search_all`` is semantically cross-archive
             # — ``_handle_search_all`` ignores ``zim_file_path`` and
@@ -913,8 +935,9 @@ class SimpleToolsHandler(
         # still hold — the visible note uses the prose word
         # "confidence", the invisible telemetry uses the marker
         # ``cert``.
+        telemetry_markers = ""
         if isinstance(result, str):
-            result = result + (f"\n<!-- intent={intent} cert={confidence:.2f} -->")
+            telemetry_markers = f"\n<!-- intent={intent} cert={confidence:.2f} -->"
             # Post-b1: surface reranker engagement state in-band so
             # simple-tool callers (the default mode) can confirm
             # whether D-1's cross-encoder rerank actually engaged
@@ -925,7 +948,13 @@ class SimpleToolsHandler(
             # counter untouched and the comment is suppressed.
             _rerank_state = self._compute_rerank_state(rerank_events_before)
             if _rerank_state is not None:
-                result = result + f"\n<!-- reranker={_rerank_state} -->"
+                telemetry_markers += f"\n<!-- reranker={_rerank_state} -->"
+            # In compact mode the markers are appended AFTER the size cap
+            # below — the cap keeps the head of the text, so a suffix
+            # appended beforehand is the first thing an over-budget
+            # response loses.
+            if not options.get("compact", False):
+                result = result + telemetry_markers
         if options.get("compact", False):
             # Belt-and-suspenders cap: even after every per-intent
             # trim, a backend can return more than the simple-mode
@@ -944,6 +973,10 @@ class SimpleToolsHandler(
             effective_budget = (
                 budget - self._CONTENT_FENCE_OVERHEAD if will_wrap else budget
             )
+            # Reserve room for the telemetry markers re-appended after the
+            # cap so the marker-carrying response stays within the same
+            # budget envelope.
+            effective_budget -= len(telemetry_markers)
             # Capture pre-cap size to report truncation in footer
             pre_cap_chars = len(result)
             # ``_SELF_CAPPED_INTENTS`` render their own budget-aware,
@@ -960,6 +993,8 @@ class SimpleToolsHandler(
                 )
                 # Determine if truncation occurred
                 was_truncated = len(result) < pre_cap_chars
+            if telemetry_markers and isinstance(result, str):
+                result = result + telemetry_markers
             if will_wrap and isinstance(result, str):
                 result = self._wrap_retrieved_content(result)
 
@@ -2475,7 +2510,9 @@ class SimpleToolsHandler(
         then get_article).
         """
         topic = self._resolve_tell_me_about_topic(query, zim_file_path, params)
-        namespace_redirect = self._tell_me_about_namespace_redirect(topic)
+        namespace_redirect = self._tell_me_about_namespace_redirect(
+            topic, zim_file_path
+        )
         if namespace_redirect is not None:
             return namespace_redirect
         # A16 post-a16 D9: callers often paste a ZIM path form
@@ -2623,13 +2660,15 @@ class SimpleToolsHandler(
                     params["decomposition_hint"] = _retry_hint
         return topic
 
-    def _tell_me_about_namespace_redirect(self, topic: str) -> Optional[str]:
+    def _tell_me_about_namespace_redirect(
+        self, topic: str, zim_file_path: str
+    ) -> Optional[str]:
         """Redirect a ``X/Title`` namespace-path topic to the right tool
         instead of running a fuzzy title search on it.
 
         Returns the redirect guidance when ``topic`` looks like a ZIM
-        namespace path (ascii-alpha letter + ``/`` + ≥3-char suffix), else
-        ``None``.
+        namespace path (ascii-alpha letter + ``/`` + ≥3-char suffix) and
+        the title index has no hit for it, else ``None``.
         """
         # A16 post-a16 D3: a topic like ``M/Title`` or ``c/Berlin`` is a
         # ZIM namespace path the caller pasted into ``tell me about``.
@@ -2654,6 +2693,17 @@ class SimpleToolsHandler(
             and topic[1] == "/"
             and len(topic[2:].strip()) >= 3
         ):
+            # M15 parity: the suffix floor only protects 2-char suffixes
+            # (``a/b``); multi-word slash titles (``a/b testing``, ``i/o
+            # scheduling``) pass the shape check. Consult the title index
+            # FIRST and redirect only on zero hits, so real slash titles
+            # still resolve through the normal search flow.
+            data = self.zim_operations.find_entry_by_title_data(
+                zim_file_path, topic, cross_file=False, limit=1
+            )
+            results = data.get("results") if isinstance(data, dict) else None
+            if results:
+                return None
             normalized = topic[0].upper() + topic[1:]
             return (
                 "**Namespace Path, Not a Topic**\n\n"
@@ -2700,11 +2750,11 @@ class SimpleToolsHandler(
                         options,
                     )
                     if body is not None:
+                        # No embedded intent comment here — the dispatcher
+                        # appends the footer to every handler string, so
+                        # the response carries exactly one intent footer.
                         return (
-                            f"# {topic}\n\n"
-                            f"_Source: `{resolved}`_\n\n"
-                            f"{body}\n"
-                            "<!-- intent=tell_me_about cert=0.95 -->"
+                            f"# {topic}\n\n" f"_Source: `{resolved}`_\n\n" f"{body}\n"
                         )
                 # Fall through to fuzzy search if the title-index probe
                 # missed — the disambig auto-pick downstream will still
@@ -3291,6 +3341,21 @@ class SimpleToolsHandler(
             cursor_ai = options.get("_cursor_ai")
             if isinstance(cursor_ai, str) and cursor_ai:
                 cursor_state["ai"] = cursor_ai
+            else:
+                # Plain-offset passthrough: no cursor was decoded, so
+                # there's no stashed ``ai`` — but ``walk_namespace_data``
+                # unconditionally verifies archive identity for any truthy
+                # cursor_state (H16). Synthesize the identity for the
+                # resolved path so the documented offset channel isn't
+                # rejected with a misleading "missing archive-identity
+                # field" error for a cursor the caller never passed.
+                validated = self.zim_operations.path_validator.validate_path(
+                    zim_file_path
+                )
+                validated = self.zim_operations.path_validator.validate_zim_file(
+                    validated
+                )
+                cursor_state["ai"] = archive_identity(validated)
             cursor_ns = options.get("_cursor_ns")
             if isinstance(cursor_ns, str) and cursor_ns:
                 cursor_state["ns"] = cursor_ns

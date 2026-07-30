@@ -77,3 +77,34 @@ def test_truncation_at_leading_highlight_does_not_collapse_to_ellipsis():
     # Inferred contract: the matched term ``Photo`` should appear in the
     # result. The orphan ``**`` is dropped so the visible text is "Photo...".
     assert "Photo" in snippet
+
+
+def test_truncation_without_query_balances_source_bold_markers():
+    """A ``**bold**`` span already present in the source markdown
+    (html2text emits it for ``<b>``/``<strong>``) can straddle the
+    pre-highlight cut. The truncated snippet must not end with an
+    unpaired ``**`` — downstream renderers treat the tail as runaway
+    bold.
+    """
+    processor = ContentProcessor(snippet_length=40)
+    content = (
+        "The city of **Greater Berlin Metropolis** region has many "
+        "parks and museums to visit."
+    )
+    snippet = processor.create_snippet(content)
+    assert snippet.count("**") % 2 == 0, f"unpaired ** in {snippet!r}"
+
+
+def test_truncation_with_query_but_no_highlight_in_slice_balances_bold():
+    """Same shape with a query whose terms sit AFTER the cut: the
+    post-highlight length re-check never trips (no markers were added
+    inside the slice), so the pre-highlight truncation must already
+    emit balanced ``**`` markers.
+    """
+    processor = ContentProcessor(snippet_length=40)
+    content = (
+        "The city of **Greater Berlin Metropolis** region is rich in "
+        "chlorophyll research institutes."
+    )
+    snippet = processor.create_snippet(content, query="chlorophyll")
+    assert snippet.count("**") % 2 == 0, f"unpaired ** in {snippet!r}"

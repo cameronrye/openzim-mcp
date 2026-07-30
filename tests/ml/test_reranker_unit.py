@@ -333,6 +333,38 @@ class TestRerankerWiredToHandleSearch:
         assert telemetry.get("reranker_engaged", 0) == 0
         assert result == "rendered results"
 
+    def test_maybe_rerank_compact_passthrough_preserves_full_result_page(
+        self,
+    ) -> None:
+        """When rerank returns the unscored passthrough slice (short-query
+        gate / inference failure), the payload's results must stay intact:
+        swapping in ``candidates[:top_k]`` would silently drop every hit
+        past top_k while page_info/next_cursor still describe the full
+        page, leaving those hits permanently unreachable."""
+        handler = self._make_handler()
+        results = [
+            {"path": f"P{i}", "title": f"T{i}", "snippet": "s"} for i in range(20)
+        ]
+        payload = {
+            "results": results,
+            "next_cursor": "o=20",
+            "page_info": {"offset": 0, "limit": 20, "returned_count": 20},
+        }
+        mock_reranker = MagicMock()
+        mock_reranker.rerank = MagicMock(
+            side_effect=lambda query, candidates, top_k: candidates[:top_k]
+        )
+        with patch(
+            "openzim_mcp.ml.reranker.BGEReranker.get",
+            return_value=mock_reranker,
+        ):
+            out = handler._maybe_rerank_compact(
+                payload=payload, query="berlin wall", limit=20
+            )
+        assert out["results"] == results
+        assert handler.get_telemetry().get("reranker_skipped.passthrough", 0) == 1
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 0
+
     def test_track_emits_info_log_for_reranker_events(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

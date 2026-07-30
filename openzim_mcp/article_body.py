@@ -118,8 +118,15 @@ class _ArticleBodyMixin:
     # detector. A literal single space keeps the boundary unambiguous —
     # ``[^\n]*`` is the sole repetition per field, bounded by an explicit
     # ``\n`` literal at each field separator.
+    # The production renderer (``zim/content.py``) emits a BLANK line
+    # after the H1 (``# {title}\n\n``) before the ``Path:`` line, and a
+    # redirect-resolved entry carries ``Requested Path:``/``Actual
+    # Path:`` instead of ``Path:`` — the pattern tolerates both. ``\n+``
+    # adjacent to ``[^\n]*`` stays unambiguous for S5852 (the classes
+    # are disjoint on the newline).
     _LEAD_PREAMBLE_RE = re.compile(
-        r"\A# [^\n]*\nPath:[^\n]*\nType:[^\n]*\n## Content[^\n]*\n+"
+        r"\A# [^\n]*\n+(?:Requested Path:[^\n]*\nActual Path:|Path:)[^\n]*\n"
+        r"Type:[^\n]*\n+## Content[^\n]*\n+"
     )
     # The trailing ``(?:\n+|\Z)`` lets the H1 strip succeed even when the
     # duplicated-H1 line is the last line of ``pre_h2`` (callers
@@ -167,7 +174,7 @@ class _ArticleBodyMixin:
         preamble-presence gate.
 
         The "empty-lead" pattern this helper detects is specific to the
-        ZIM-rendered body shape: ``# Title\nPath: ...\nType: ...\n##
+        ZIM-rendered body shape: ``# Title\n\nPath: ...\nType: ...\n##
         Content\n\n# Title\n\n`` followed by an immediate H2. When the
         preamble isn't present (direct-content bodies passed in unit
         tests, or any caller that bypasses the standard ZIM render),

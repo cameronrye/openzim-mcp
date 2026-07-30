@@ -209,8 +209,14 @@ def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
     if namespace_match:
         params["namespace"] = namespace_match.group(1).upper()
 
+    # Anchor on the ``in type`` / ``within type`` filter keyword (the way
+    # INTENT_PATTERN does). A bare ``type\s+...`` matched the word 'type'
+    # anywhere in the search terms — ``search for type 2 diabetes in
+    # namespace A`` produced content_type='2', ``search for blood type in
+    # namespace A`` produced content_type='in' — and no mimetype starts
+    # with those, so every entry was silently filtered out.
     type_match = safe_regex_search(
-        rf"type\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?",
+        rf"\b(?:in|within)\s+type\s+{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?",
         query,
         re.IGNORECASE,
     )
