@@ -348,18 +348,30 @@ def _walk_namespace_header(
     returned: int,
     archive_total: int,
     namespace_total: int = 0,
+    scanned: Optional[int] = None,
 ) -> str:
     """Build the header line for ``render_walk_namespace``.
 
-    Four shapes:
+    Five shapes:
       - ``returned == 0``: ``# Namespace 'X' — no entries`` (D8 fix).
         ``entries 1-0`` was the previous nonsense range.
+      - ``scanned > returned``: the walk filtered out non-matching
+        entries mid-scan (the C-namespace walk skips assets), so
+        ``offset`` is a raw scan position, not an ordinal entry index.
+        ``entries {offset+1}-{offset+returned}`` would be incoherent in
+        both spaces; report the match count plus the scan-position
+        range instead.
       - ``namespace_total > 0``: ``X of N in this namespace`` — the
         denominator that actually matches what's being walked (A11 F4).
       - ``archive_total > 0``: archive-wide scale hint as a fallback.
       - otherwise: bare range.
     """
-    range_str = f"entries {offset + 1}-{offset + returned}"
+    if isinstance(scanned, int) and scanned > returned:
+        range_str = (
+            f"{returned} entries (scan positions {offset + 1}-{offset + scanned})"
+        )
+    else:
+        range_str = f"entries {offset + 1}-{offset + returned}"
     # A11 F4 (post-a10): prefer the per-namespace denominator so the
     # walk header isn't misleading. ``walk namespace M`` with 13
     # entries used to render ``of ~27,199,904 archive-wide entries``
@@ -399,12 +411,18 @@ def render_walk_namespace(data: Mapping[str, Any]) -> str:
     # honest denominator (A11 F4).
     archive_total = data.get("archive_entry_count", 0)
     namespace_total = int(data.get("namespace_entry_count", 0) or 0)
+    scanned = data.get("scanned_count")
     entries = data.get("results") or []
     done = data.get("done", False)
 
     lines = [
         _walk_namespace_header(
-            ns, offset, returned, archive_total, namespace_total=namespace_total
+            ns,
+            offset,
+            returned,
+            archive_total,
+            namespace_total=namespace_total,
+            scanned=scanned,
         ),
         "",
     ]

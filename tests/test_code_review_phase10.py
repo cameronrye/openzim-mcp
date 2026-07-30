@@ -55,6 +55,19 @@ def test_h15_find_entry_by_title_is_cached(ops, v2_phase_a_zim):
     assert second == first
 
 
+# H15 — zero-hit responses are NOT cached: libzim's lazy title index can
+# return 0 matches transiently during warm-up, and a TTL-cached "no
+# results" would mask the index becoming ready (same policy as the other
+# cached search surfaces in zim/search.py).
+def test_h15_zero_hit_find_is_not_cached(ops, v2_phase_a_zim):
+    path = str(v2_phase_a_zim)
+    out = ops.find_entry_by_title_data(path, "Zzqqxxyyzz", cross_file=False, limit=5)
+    assert out["results"] == []
+    assert not _cache_keys(
+        ops, "find_title:v1:"
+    ), "zero-hit find_entry_by_title_data response must not be cached"
+
+
 # M32 — preset resolution caches the metadata-entries extraction per archive
 def test_m32_preset_entries_cached_on_search(ops, v2_phase_a_zim):
     path = str(v2_phase_a_zim)

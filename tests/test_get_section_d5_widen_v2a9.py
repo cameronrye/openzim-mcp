@@ -115,6 +115,56 @@ def test_narrow_widens_to_first_child_when_no_lead():
     assert "oceanic climate" not in result["content_markdown"]
 
 
+def test_narrow_does_not_widen_to_same_level_sibling():
+    """A near-empty section followed by a same-level sibling must return
+    its own (stub) narrow slice — not the sibling's heading and lead
+    prose mislabeled as a child widening.
+    """
+    md = (
+        "## Geography\n"
+        "Stub.\n"
+        "\n"
+        "## History\n"
+        "History has a long lead paragraph about the city.\n"
+    )
+    geo_start = md.index("Stub.")
+    hist_heading = md.index("## History")
+    hist_start = md.index("History has")
+    bundle = {
+        "entry_path": "Berlin",
+        "title": "Berlin",
+        "rendered_markdown": md,
+        "sections": [
+            {
+                "id": "Geography",
+                "title": "Geography",
+                "level": 2,
+                "char_start": geo_start,
+                "char_end": hist_heading,
+                "parent_id": None,
+            },
+            {
+                "id": "History",
+                "title": "History",
+                "level": 2,
+                "char_start": hist_start,
+                "char_end": len(md),
+                "parent_id": None,
+            },
+        ],
+        "links": {"internal": [], "external": [], "media": []},
+        "infobox": None,
+    }
+    result = _run_get_section_against_stub_bundle(bundle)
+
+    # The (stub) body of the requested section is returned as-is ...
+    assert "Stub." in result["content_markdown"]
+    # ... without any of the sibling's heading or lead prose.
+    assert "History" not in result["content_markdown"]
+    # And it must NOT be flagged as a child widening.
+    assert result.get("narrow_widened_to_first_child") is not True
+
+
 def test_narrow_returns_lead_when_section_has_lead_prose():
     """When the section has substantive lead prose before the first
     subheading, narrow scope returns just the lead — no widening.

@@ -21,6 +21,7 @@ those are what these tests lock down.
 from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
+from openzim_mcp.zim.namespace import _NamespaceMixin
 from openzim_mcp.zim.search import _SearchMixin
 
 # A delegation sentinel the stub's ``search_with_filters`` returns so a
@@ -38,7 +39,12 @@ class _SpliceStub(_SearchMixin):
     - ``search_with_filters_data`` returns a caller-supplied payload.
     - ``find_entry_by_title_data`` feeds ``find_title_match`` (module
       function under ``openzim_mcp.zim.search``).
+    - ``_canonicalise_namespace`` is the production staticmethod
+      (contributed by ``_NamespaceMixin`` on the concrete class), which
+      the namespace gate uses to honor long-form aliases.
     """
+
+    _canonicalise_namespace = staticmethod(_NamespaceMixin._canonicalise_namespace)
 
     def __init__(
         self,
@@ -304,3 +310,87 @@ class TestCanonicalSpliceHappyPath:
         assert "Berlin" in out
         assert "Match type: canonical title match" in out
         assert "Snippet: (canonical title match)" not in out
+
+    def test_long_form_namespace_alias_still_splices(self) -> None:
+        """``namespace="content"`` is a valid long-form alias everywhere
+        else in the filtered-search path (canonicalised to ``C``), so the
+        splice gate must not compare the raw ``.upper()`` form
+        (``CONTENT``) against the path-prefix letter and silently skip
+        the splice."""
+        stub = _SpliceStub(title_results=_berlin_title_results())
+        out = stub.search_with_filters_with_canonical_splice(
+            "/x.zim", "berlin", namespace="content", limit=10, offset=0
+        )
+        assert out != _LEGACY_SENTINEL
+        assert "Match type: canonical title match" in out
+
+    def test_full_page_splice_keeps_last_hit_and_counts_synthetic_row(self) -> None:
+        """Splicing a synthetic canonical into an already-full page must
+        not trim the limit-th original hit: pages at ``offset != 0``
+        bypass the splice, so page 2 starts AFTER that hit and a trimmed
+        row would never appear on any page. The rendered total must also
+        count the synthetic row the filtered total never included."""
+        results = [
+            {
+                "path": f"Hit_{name}",
+                "title": f"Hit {name}",
+                "snippet": "...",
+                "namespace": "C",
+                "content_type": "text/html",
+            }
+            for name in ("One", "Two", "Three")
+        ]
+        payload = {
+            "query": "berlin",
+            "namespace_filter": "C",
+            "content_type_filter": None,
+            "results": results,
+            "next_cursor": "tok",
+            "total": 7,
+            "done": False,
+            "page_info": {"offset": 0, "limit": 3, "returned_count": 3},
+        }
+        stub = _SpliceStub(data_payload=payload, title_results=_berlin_title_results())
+        out = stub.search_with_filters_with_canonical_splice(
+            "/x.zim", "berlin", namespace="C", limit=3, offset=0
+        )
+        assert out != _LEGACY_SENTINEL
+        assert "Match type: canonical title match" in out
+        # The last original hit survives the splice.
+        assert "Hit Three" in out
+        # The synthetic canonical is an extra row the filtered total never
+        # counted.
+        assert "Found 8 filtered matches" in out
+
+    def test_full_page_splice_at_exact_total_keeps_hit_reachable(self) -> None:
+        """Worst case: total == limit. Pre-fix the page claimed
+        ``(end of results)`` while the trimmed hit was permanently
+        unreachable on every page."""
+        results = [
+            {
+                "path": f"Hit_{name}",
+                "title": f"Hit {name}",
+                "snippet": "...",
+                "namespace": "C",
+                "content_type": "text/html",
+            }
+            for name in ("One", "Two")
+        ]
+        payload = {
+            "query": "berlin",
+            "namespace_filter": "C",
+            "content_type_filter": None,
+            "results": results,
+            "next_cursor": None,
+            "total": 2,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 2, "returned_count": 2},
+        }
+        stub = _SpliceStub(data_payload=payload, title_results=_berlin_title_results())
+        out = stub.search_with_filters_with_canonical_splice(
+            "/x.zim", "berlin", namespace="C", limit=2, offset=0
+        )
+        assert out != _LEGACY_SENTINEL
+        assert "Hit Two" in out
+        assert "Found 3 filtered matches" in out
+        assert "(end of results)" in out

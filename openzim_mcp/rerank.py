@@ -160,11 +160,18 @@ class _RerankMixin:
             candidates=candidates,
             top_k=effective_top_k,
         )
-        payload = {**payload, results_key: reranked}
-        if reranked and "rerank_score" in reranked[0]:
-            self._record_rerank_event(_RERANKER_ENGAGED)
-        else:
+        # BGEReranker.rerank's skip paths (the short-query gate and the
+        # inference-failure passthrough) return ``candidates[:top_k]``
+        # with NO ``rerank_score``. Swapping that truncated slice in would
+        # silently drop every hit past top_k while page_info/next_cursor
+        # still describe the full page, making those hits unreachable.
+        # Only swap when reranking actually happened (mirrors the H9
+        # guard in ``_maybe_rerank_search_all``).
+        if not (reranked and "rerank_score" in reranked[0]):
             self._record_rerank_event(_RERANKER_SKIPPED_PASSTHROUGH)
+            return payload
+        payload = {**payload, results_key: reranked}
+        self._record_rerank_event(_RERANKER_ENGAGED)
         return payload
 
     @staticmethod

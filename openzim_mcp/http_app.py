@@ -25,7 +25,8 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp
 
-from .exceptions import OpenZimMcpConfigurationError
+from .exceptions import OpenZimMcpConfigurationError, OpenZimMcpTimeoutError
+from .timeout_utils import run_with_timeout
 
 if TYPE_CHECKING:
     from .server import OpenZimMcpServer
@@ -57,17 +58,20 @@ def _is_loopback_host(host: str) -> bool:
     if host in ("127.0.0.1", "::1"):
         return True
     if host == "localhost":
-        # gethostbyname has no per-call timeout; on a flaky resolver this
-        # would block startup indefinitely. Set a short default timeout for
-        # the duration of the call so a slow DNS doesn't hang the server.
-        prev_timeout = socket.getdefaulttimeout()
+        # gethostbyname calls the libc resolver directly, so it has no
+        # per-call timeout (socket.setdefaulttimeout only affects Python
+        # socket objects, not name resolution); on a flaky resolver it
+        # would block startup indefinitely. Run it on a bounded worker
+        # thread so a slow DNS doesn't hang the server; a timeout is
+        # treated as not-loopback.
         try:
-            socket.setdefaulttimeout(1.0)
-            resolved = socket.gethostbyname(host)
-        except OSError:
+            resolved = run_with_timeout(
+                lambda: socket.gethostbyname(host),
+                1.0,
+                "localhost DNS resolution timed out",
+            )
+        except (OSError, OpenZimMcpTimeoutError):
             return False
-        finally:
-            socket.setdefaulttimeout(prev_timeout)
         return resolved == "127.0.0.1"
     return False
 
@@ -282,7 +286,13 @@ class BearerTokenAuthMiddleware(BaseHTTPMiddleware):
                 status_code=401,
                 headers={"WWW-Authenticate": _CHALLENGE},
             )
-        if not hmac.compare_digest(token, self._expected):
+        # Compare as bytes: ``compare_digest`` raises TypeError on
+        # non-ASCII str args, and Starlette decodes header bytes as
+        # latin-1 — so a raw 0xE9 byte in the header (or a non-ASCII
+        # configured token) would otherwise 500 instead of 401.
+        if not hmac.compare_digest(
+            token.encode("utf-8"), self._expected.encode("utf-8")
+        ):
             self._log_failure(request, "invalid_token")
             return JSONResponse(
                 {"error": "unauthorized"},

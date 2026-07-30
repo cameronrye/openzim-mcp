@@ -45,12 +45,25 @@ Each test pins one defect; failures here mean a regression on the
 specific bug.
 """
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Dict, Optional
 from unittest.mock import MagicMock
 
-from openzim_mcp.pagination import Cursor
+import pytest
+
+from openzim_mcp.cache import OpenZimMcpCache
+from openzim_mcp.config import (
+    CacheConfig,
+    ContentConfig,
+    LoggingConfig,
+    OpenZimMcpConfig,
+)
+from openzim_mcp.content_processor import ContentProcessor
+from openzim_mcp.pagination import Cursor, archive_identity
+from openzim_mcp.security import PathValidator
 from openzim_mcp.simple_tools import SimpleToolsHandler
 from openzim_mcp.title_promotion import iter_query_tails, iter_query_windows
+from openzim_mcp.zim_operations import ZimOperations
 
 # ---------------------------------------------------------------------------
 # P1-D1: title-spans-connector suppresses soft-connector footer
@@ -554,3 +567,86 @@ class TestP1D3WalkNamespaceCursorRoundTrip:
             options={"compact": True},
         )
         assert captured["cursor_state"] is None
+
+    def test_plain_offset_without_cursor_carries_archive_identity(self) -> None:
+        """A plain ``offset`` (no cursor anywhere) must produce a synthetic
+        cursor_state that carries the archive identity for the resolved
+        path. ``walk_namespace_data`` unconditionally verifies ``ai`` for
+        any truthy cursor_state (H16), so an ai-less synthetic state is
+        rejected with a misleading "missing archive-identity field" error
+        even though the caller never passed a cursor.
+        """
+        mock = MagicMock()
+        mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        mock.config.meta.footer_enabled = False
+        mock.path_validator.validate_path.return_value = Path("/x.zim")
+        mock.path_validator.validate_zim_file.return_value = Path("/x.zim")
+        captured: dict[str, Any] = {}
+
+        def fake(
+            zim_file_path: str,
+            namespace: str,
+            *,
+            cursor_state: Any = None,
+            limit: int = 200,
+        ) -> dict[str, Any]:
+            captured["cursor_state"] = cursor_state
+            return {
+                "namespace": namespace,
+                "results": [],
+                "next_cursor": None,
+                "total": 0,
+                "done": True,
+                "page_info": {"offset": 2, "limit": limit, "returned_count": 0},
+                "discovery_method": "full_iteration",
+                "sampling_based": False,
+                "results_may_be_incomplete": False,
+            }
+
+        mock.walk_namespace_data.side_effect = fake
+        handler = SimpleToolsHandler(mock)
+        handler.handle_zim_query(
+            "walk namespace C",
+            zim_file_path="/x.zim",
+            options={"compact": True, "offset": 2},
+        )
+        cursor_state = captured["cursor_state"]
+        assert cursor_state is not None
+        assert cursor_state.get("scan_at") == 2
+        assert cursor_state.get("ai") == archive_identity(Path("/x.zim")), (
+            "Handler must synthesize the archive identity when no decoded "
+            "cursor stashed one — the data layer rejects ai-less states."
+        )
+
+    def test_plain_offset_walk_resumes_against_real_archive(
+        self, basic_test_zim_files: Dict[str, Optional[Path]]
+    ) -> None:
+        """End-to-end: ``walk namespace C`` with an explicit ``offset``
+        and no cursor must page, not be rejected by the data layer's
+        archive-identity check, on both the compact and legacy paths.
+        """
+        zim = basic_test_zim_files.get("withns")
+        if zim is None:
+            pytest.skip("ZIM testing-suite fixture not available")
+        root = zim.parent.parent
+        cfg = OpenZimMcpConfig(
+            allowed_directories=[str(root)],
+            cache=CacheConfig(enabled=False, max_size=10, ttl_seconds=60),
+            content=ContentConfig(max_content_length=1000, snippet_length=100),
+            logging=LoggingConfig(level="ERROR"),
+        )
+        ops = ZimOperations(
+            cfg,
+            PathValidator(cfg.allowed_directories),
+            OpenZimMcpCache(cfg.cache),
+            ContentProcessor(snippet_length=100),
+        )
+        handler = SimpleToolsHandler(ops)
+        for compact in (True, False):
+            out = handler.handle_zim_query(
+                "walk namespace C",
+                zim_file_path=str(zim),
+                options={"compact": compact, "offset": 2},
+            )
+            assert "missing archive-identity" not in out
+            assert "Error Processing Query" not in out

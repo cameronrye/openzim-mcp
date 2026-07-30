@@ -86,6 +86,40 @@ def test_lowercase_unknown_namespace_rejected(server):
     assert result["_meta"]["reason"] == "bad_namespace"
 
 
+def test_legacy_spec_letters_not_rejected(server):
+    """The legacy ZIM spec also defines B (article meta data), J
+    (images-text), U (categories-text) and V (categories-article-list).
+    ``list_namespaces`` buckets old-scheme entries by raw first path
+    segment and can report those letters with authoritative counts, so
+    browse must not contradict it by rejecting them as unknown."""
+    fake_archive = MagicMock()
+    fake_archive.has_new_namespace_scheme = False
+    fake_archive.entry_count = 0
+    for letter in ("B", "J", "U", "V"):
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_open:
+            mock_open.return_value.__enter__.return_value = fake_archive
+            result = server.zim_operations.browse_namespace_data(
+                "/zim/test.zim", letter, limit=10, offset=0
+            )
+        assert result["_meta"].get("reason") != "bad_namespace", letter
+        assert result["discovery_method"] != "rejected_unknown_namespace", letter
+
+
+def test_legacy_spec_letters_not_rejected_by_walk(server):
+    """``walk_namespace_data`` shares the fast-reject set with browse, so
+    the legacy spec letters must pass through there too."""
+    fake_archive = MagicMock()
+    fake_archive.has_new_namespace_scheme = False
+    fake_archive.entry_count = 0
+    for letter in ("B", "J", "U", "V"):
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_open:
+            mock_open.return_value.__enter__.return_value = fake_archive
+            result = server.zim_operations.walk_namespace_data(
+                "/zim/test.zim", letter, limit=10
+            )
+        assert result["_meta"].get("reason") != "bad_namespace", letter
+
+
 def test_long_form_unknown_namespace_rejected(server):
     """Long-form aliases that don't map to a known letter
     (``"weird-thing"``) are rejected; the canonicaliser passes them

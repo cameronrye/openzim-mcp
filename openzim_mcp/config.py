@@ -208,15 +208,6 @@ class RerankerConfig(BaseModel):
             "OPENZIM_RERANKER_MODEL env var (e.g., jina-reranker-v3)."
         ),
     )
-    candidate_pool_size: int = Field(
-        default=50,
-        ge=1,
-        le=500,
-        description=(
-            "Xapian top-N to rerank. Larger pool = more recall, more "
-            "rerank cost. 50 is the sweet spot per FastEmbed benchmarks."
-        ),
-    )
     final_top_k: int = Field(
         default=10,
         ge=1,

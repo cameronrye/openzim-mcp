@@ -96,10 +96,11 @@ Each test pins one defect; failures here mean a regression on the
 specific bug.
 """
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-from openzim_mcp.pagination import Cursor
+from openzim_mcp.pagination import Cursor, archive_identity
 from openzim_mcp.simple_tools import SimpleToolsHandler
 
 
@@ -268,8 +269,15 @@ class TestP1D1DispatcherQMismatchSkipsNonQEmittingTools:
             "page_info": {"offset": 5, "limit": 5, "returned_count": 0},
             "_meta": {},
         }
+        # The cursor's ``ai`` must name the archive under test — the
+        # handler binds cursors to their issuing archive.
+        mock.path_validator.validate_path.return_value = Path("/x.zim")
+        mock.path_validator.validate_zim_file.return_value = Path("/x.zim")
         cursor_token = _encode_cursor(
-            "search_zim_file", o=5, q="biology evolution", ai="e048666a9e92"
+            "search_zim_file",
+            o=5,
+            q="biology evolution",
+            ai=archive_identity(Path("/x.zim")),
         )
         out = handler.handle_zim_query(
             "search for biology",

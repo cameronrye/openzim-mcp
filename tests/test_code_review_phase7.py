@@ -49,6 +49,30 @@ def test_h11_verb_prefixed_search_q_falls_back_to_tail():
     assert params["query"] == "biology"
 
 
+def test_h11_quoted_verb_initial_term_does_not_resurrect_quotes():
+    handler = _handler()
+    # The extractor already produced the quote-free "find me"; the tail
+    # fallback (fired by the verb-shaped first token) must not swap the
+    # raw quoted tail back in.
+    params = {"query": "find me"}
+    out = handler._normalize_and_validate_query_params(
+        'search for "find me"', "search", params
+    )
+    assert out is None
+    assert params["query"] == "find me"
+
+
+def test_h11_param_leak_not_resurrected_for_verb_initial_term():
+    handler = _handler()
+    # parse_intent stripped ``limit=5`` and produced "search warrant"; the
+    # tail fallback must not reintroduce the leaked param tokens.
+    params = {"query": "search warrant"}
+    handler._normalize_and_validate_query_params(
+        "search for search warrant limit=5", "search", params
+    )
+    assert params["query"] == "search warrant"
+
+
 # H12 — _splice_title_match_into_search must not mutate the cached payload
 def test_h12_splice_does_not_mutate_input_payload(monkeypatch):
     handler = _handler()
@@ -115,3 +139,48 @@ def test_m15_genuine_namespace_path_still_redirects():
         options={"compact": True},
     )
     assert "Namespace Path, Not a Title" in out
+
+
+# tell_me_about's namespace-path guard must consult the index the same way
+# M15 fixed _handle_find_by_title — a real multi-word slash title passes the
+# ≥3-char suffix floor ("b testing" is 9 chars) and must not be redirected.
+def test_tell_me_about_real_slash_title_not_redirected():
+    mock = MagicMock()
+    mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+    mock.config.meta.footer_enabled = False
+    # The title index DOES have a hit for "a/b testing" → no redirect.
+    mock.find_entry_by_title_data.return_value = {
+        "results": [{"path": "A/B_testing", "title": "A/B testing"}],
+        "total": 1,
+    }
+    mock.search_zim_file_data.return_value = {
+        "results": [{"path": "A/B_testing", "title": "A/B testing"}],
+        "total": 1,
+    }
+    mock.get_zim_entry.return_value = "stub-body"
+    handler = SimpleToolsHandler(mock)
+    out = handler.handle_zim_query(
+        "tell me about A/B testing",
+        zim_file_path="/x.zim",
+        options={"compact": False},
+    )
+    assert "Namespace Path, Not a Topic" not in out
+
+
+def test_tell_me_about_genuine_namespace_path_still_redirects():
+    mock = MagicMock()
+    mock.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+    mock.config.meta.footer_enabled = False
+    # No title-index hit → genuine misrouted namespace path → redirect,
+    # and the fuzzy search must never run.
+    mock.find_entry_by_title_data.return_value = {"results": [], "total": 0}
+    mock.search_zim_file_data.side_effect = AssertionError(
+        "search should not be called for namespace paths"
+    )
+    handler = SimpleToolsHandler(mock)
+    out = handler.handle_zim_query(
+        "tell me about m/some_entry",
+        zim_file_path="/x.zim",
+        options={"compact": False},
+    )
+    assert "Namespace Path, Not a Topic" in out

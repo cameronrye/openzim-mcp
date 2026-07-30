@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Dict, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -113,6 +114,68 @@ def test_iter_article_links_walks_content_entries() -> None:
     assert ("C/A", [("C/T", "t")]) in pairs
     assert all(src.startswith("C/") for src, _ in pairs)
     assert not any(src == "C/Redir" for src, _ in pairs)
+
+
+def test_iter_article_links_old_scheme_accepts_a_namespace() -> None:
+    """Old-scheme A-namespace articles are content sources.
+
+    Real pre-2020 ("withns") archives store articles under ``A/`` and have no
+    ``C`` namespace at all; a C-only filter builds an empty sidecar for every
+    such archive and inbound queries silently return zero.
+    """
+    entries = [
+        _FakeEntry("A/Src", '<a href="Tgt">t</a>'),
+        _FakeEntry("M/Counter", "metadata"),  # non-content: skipped
+    ]
+    archive = MagicMock()
+    archive.has_new_namespace_scheme = False
+    archive.entry_count = len(entries)
+    archive._get_entry_by_id.side_effect = lambda i: entries[i]
+    # No such entry for canonicalization -> path-normalized target survives.
+    archive.get_entry_by_path.side_effect = KeyError("no entry")
+
+    pairs = list(iter_article_links(archive))
+    assert ("A/Src", [("A/Tgt", "t")]) in pairs
+    assert not any(src == "M/Counter" for src, _ in pairs)
+
+
+def test_build_link_graph_real_old_scheme_archive_is_nonempty(
+    tmp_path: Path, real_content_zim_files: Dict[str, Optional[Path]]
+) -> None:
+    """Building against a real old-scheme (withns) archive yields nodes/edges."""
+    from openzim_mcp.linkgraph.builder import build_link_graph
+
+    archive_path = real_content_zim_files.get("wikibooks")
+    if archive_path is None:
+        pytest.skip("wikibooks withns test archive not available")
+
+    out = str(tmp_path / "wikibooks.zim.linkgraph.sqlite")
+    stats = build_link_graph(str(archive_path), out)
+    assert stats.node_count > 0
+    assert stats.edge_count > 0
+
+
+def test_build_link_graph_warns_on_empty_result_for_nonempty_archive(
+    tmp_path: Path,
+    basic_test_zim_files: Dict[str, Optional[Path]],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-empty archive that builds to zero nodes logs a warning."""
+    import logging
+
+    import openzim_mcp.linkgraph.builder as builder_module
+
+    archive_path = basic_test_zim_files.get("withns")
+    if archive_path is None:
+        pytest.skip("withns small.zim test archive not available")
+
+    monkeypatch.setattr(builder_module, "iter_article_links", lambda archive: iter([]))
+    out = str(tmp_path / "small.zim.linkgraph.sqlite")
+    with caplog.at_level(logging.WARNING, logger="openzim_mcp.linkgraph.builder"):
+        stats = builder_module.build_link_graph(str(archive_path), out)
+    assert stats.node_count == 0
+    assert any("0 nodes" in rec.message for rec in caplog.records)
 
 
 def test_iter_article_links_new_scheme_has_no_prefix() -> None:

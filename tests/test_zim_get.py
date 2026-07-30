@@ -130,7 +130,9 @@ async def test_single_entry_binary(
     register_zim_get(server)
     fn, _ = server._tools_store["zim_get"]
     await fn(zim_file_path="/x.zim", entry_path="I/cat.png", binary=True)
-    ops.get_binary_entry_data.assert_awaited_once_with("/x.zim", "I/cat.png")
+    ops.get_binary_entry_data.assert_awaited_once_with(
+        "/x.zim", "I/cat.png", max_size_bytes=None
+    )
 
 
 @pytest.mark.asyncio
@@ -148,6 +150,56 @@ async def test_batch_dispatches_to_get_entries(
         ],
         max_content_length=None,
         compact=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_with_content_offset_rejected(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_entries_data always renders each entry's first page, yet truncated
+    batch bodies advertise the `pass content_offset=N` footer — honoring the
+    combination silently loops page 1 forever, so reject it instead."""
+    ops = _patch_async_ops(monkeypatch, get_entries_data={"results": []})
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    result = await fn(
+        zim_file_path="/x.zim", entry_paths=["A/Cat", "A/Dog"], content_offset=500
+    )
+    assert result["operation"] == "invalid_path_combination"
+    assert "content_offset" in result["message"]
+    ops.get_entries_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_with_zero_content_offset_allowed(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit content_offset=0 (the default) stays a valid batch call."""
+    ops = _patch_async_ops(monkeypatch, get_entries_data={"results": []})
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    await fn(zim_file_path="/x.zim", entry_paths=["A/Cat"], content_offset=0)
+    ops.get_entries_data.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_binary_forwards_max_content_length(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Binary mode maps max_content_length onto the data layer's byte cap —
+    without it the 10MB default applies and a caller-passed cap is dropped."""
+    ops = _patch_async_ops(monkeypatch, get_binary_entry_data={"size": 76998})
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    await fn(
+        zim_file_path="/x.zim",
+        entry_path="I/cat.png",
+        binary=True,
+        max_content_length=10000,
+    )
+    ops.get_binary_entry_data.assert_awaited_once_with(
+        "/x.zim", "I/cat.png", max_size_bytes=10000
     )
 
 

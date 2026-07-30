@@ -56,6 +56,17 @@ _CRITERION_C_PATH: Literal["wired", "fallback"] = "wired"
 
 _VALID_MODES = {"fulltext", "title", "suggest"}
 
+# The title / suggest data-layer calls cap ``limit`` at 50
+# (``find_entry_by_title_data`` / ``get_search_suggestions_data``); only
+# fulltext accepts the full ``MAX_SEARCH_RESULT_LIMIT`` range. Validating
+# the tighter cap here keeps the rejection a structured ``invalid_limit``
+# envelope instead of a generic broad-except one.
+_CAPPED_LIMIT_MODES = {"title", "suggest"}
+_CAPPED_MODE_RESULT_LIMIT = 50
+
+# Page size title mode asks the data layer for when the caller omits ``limit``.
+_TITLE_DEFAULT_LIMIT = 10
+
 
 def register(server: "OpenZimMcpServer") -> None:
     """Register the `zim_search` tool with the MCP server."""
@@ -100,13 +111,25 @@ def register(server: "OpenZimMcpServer") -> None:
                         f"`limit` must be a positive integer (provided: {limit})."
                     ),
                 )
-            if limit is not None and limit > MAX_SEARCH_RESULT_LIMIT:
+            max_limit = (
+                _CAPPED_MODE_RESULT_LIMIT
+                if mode in _CAPPED_LIMIT_MODES
+                else MAX_SEARCH_RESULT_LIMIT
+            )
+            if limit is not None and limit > max_limit:
+                # Only single-archive fulltext paginates — recommending
+                # `offset` anywhere else points at the M28 rejection below.
+                hint = (
+                    "Page through larger result sets with `offset` instead."
+                    if mode == "fulltext" and not cross_file
+                    else "This mode returns one unpaginated page."
+                )
                 return tool_error(
                     operation="invalid_limit",
                     message=(
-                        f"`limit` must not exceed {MAX_SEARCH_RESULT_LIMIT} "
-                        f"(provided: {limit}). Page through larger result sets "
-                        "with `offset` instead."
+                        f"`limit` must not exceed {max_limit} for mode={mode!r}"
+                        f"{' with cross_file=True' if cross_file else ''} "
+                        f"(provided: {limit}). {hint}"
                     ),
                 )
             if offset < 0:
@@ -354,12 +377,13 @@ async def _handle_title_mode(
       - ``fallback`` ships as pass-through: explicit-string-only title
                      lookup, no preprocessing, no promotion.
     """
+    effective_limit = limit if limit is not None else _TITLE_DEFAULT_LIMIT
     if _CRITERION_C_PATH == "fallback":
         return await ops.find_entry_by_title_data(
             zim_file_path or "",
             query,
             cross_file=cross_file,
-            limit=limit if limit is not None else 10,
+            limit=effective_limit,
         )
 
     # Wired path — apply preprocessing.
@@ -373,7 +397,7 @@ async def _handle_title_mode(
             "",
             preprocessed,
             cross_file=True,
-            limit=limit if limit is not None else 10,
+            limit=effective_limit,
         )
         # Promotion is per-archive; surface the limitation so the
         # caller knows pinning a specific archive enables Z3/Z4/OPP-1.
@@ -402,7 +426,7 @@ async def _handle_title_mode(
         resolved_path,
         preprocessed,
         cross_file=False,
-        limit=limit if limit is not None else 10,
+        limit=effective_limit,
     )
 
     from ..topic_preprocessing import promote_topic_via_title_index
@@ -412,10 +436,12 @@ async def _handle_title_mode(
         zim_file_path=resolved_path,
         topic=preprocessed,
     )
-    return _merge_promotion_into_title_results(raw, promoted)
+    return _merge_promotion_into_title_results(raw, promoted, effective_limit)
 
 
-def _merge_promotion_into_title_results(raw: dict, promoted: Optional[dict]) -> dict:
+def _merge_promotion_into_title_results(
+    raw: dict, promoted: Optional[dict], limit: int = _TITLE_DEFAULT_LIMIT
+) -> dict:
     """Apply Z3/Z4/OPP-1 promotion as a post-filter on raw title-lookup
     results. The promoted entry is hoisted to the top of `results`; other
     matches keep their relative ranking. Promotion that returns None
@@ -424,6 +450,12 @@ def _merge_promotion_into_title_results(raw: dict, promoted: Optional[dict]) -> 
     ``raw`` follows the legacy FindEntryResponse shape: list of
     candidate rows under ``results`` (NOT ``matches``) — see
     tool_schemas.FindEntryResponse.
+
+    ``promote_topic_via_title_index`` returns the ``find_title_match``
+    shape, which carries no ``score`` — the hoisted row is normalised to
+    FindEntryHit before it goes on the wire, and the merged page is
+    re-trimmed to ``limit`` with its counts recomputed so
+    ``total == page_info.returned_count == len(results)`` still holds.
     """
     if promoted is None:
         return raw
@@ -438,11 +470,23 @@ def _merge_promotion_into_title_results(raw: dict, promoted: Optional[dict]) -> 
     hoisted = [
         m for m in matches if (m.get("entry_path") or m.get("path")) != promoted_path
     ]
+    promoted_row = dict(promoted)
+    # Score 1.0 keeps the emitted rank consistent with the ranking signal:
+    # promotion only accepts canonical title-index hits, and a hoisted row
+    # scored below the rows it displaced would be re-sorted back down by any
+    # caller ordering on ``score``.
+    promoted_row.setdefault("score", 1.0)
+    results = [promoted_row, *hoisted][:limit]
     # COPY-ON-WRITE: ``raw`` is the cached ``find_title:v1`` object (H15 caches
     # single-archive title lookups, returned by reference) and is shared with
     # the internal promotion probes that read the same key. Mutating it in place
     # would poison that cache (the H12 defect class), so build a new dict.
     out = dict(raw)
-    out["results"] = [promoted] + hoisted
+    out["results"] = results
+    if "total" in out:
+        out["total"] = len(results)
+    page_info = out.get("page_info")
+    if isinstance(page_info, dict):
+        out["page_info"] = {**page_info, "returned_count": len(results)}
     out["_meta"] = {**raw.get("_meta", {}), "promotion_applied": True}
     return out

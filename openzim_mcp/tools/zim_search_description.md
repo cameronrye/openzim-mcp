@@ -30,9 +30,8 @@ PARAMETERS:
   query        REQUIRED. The user's search query.
   mode         One of {"fulltext", "title", "suggest"}. Default
                "fulltext".
-  zim_file_path Optional. Omit for auto-selection of the single
-               loaded archive, or use `cross_file=True` for
-               multi-archive fan-out.
+  zim_file_path Optional. Omit to auto-select the single loaded
+               archive, or use `cross_file=True` to fan out.
   cross_file   Default False. Set True to fan out across every
                loaded archive (modes "fulltext" and "title" only;
                "suggest" rejects this with `invalid_combination`).
@@ -41,25 +40,25 @@ PARAMETERS:
                Silently ignored in other modes.
   content_type Only valid in mode="fulltext". Restricts search to
                one MIME bucket (e.g. "text/html").
-  limit        Maximum results to return (default depends on mode).
-  offset       Pagination offset (default 0). Single-archive
-               fulltext only (else rejected).
-  cursor       Unsupported (`invalid_combination`); page fulltext
-               via `offset`.
+  limit        Maximum results (cap 1000; 50 for title/suggest).
+  offset       Pagination offset (default 0); single-archive
+               fulltext only.
+  cursor       Unsupported; page fulltext via `offset`.
 
 RESPONSE:
-  Mode-dependent dict with a `results` array. fulltext/title rows
-  carry `path`, `title`, `snippet` — pass `path` as `entry_path` to
-  `zim_get`/`zim_links`. cross_file=True returns SearchAllResponse
+  Mode-dependent dict with a `results` array. fulltext rows carry
+  `path`, `title`, `snippet`; title rows carry `path`, `title`,
+  `score` (1.0 exact, <=0.95 fuzzy) — pass `path` as `entry_path`
+  to `zim_get`/`zim_links`. cross_file=True returns SearchAllResponse
   whose `results[]` are per-archive wrappers; hits nest under
   `results[].result.results`. suggest items are `{text, path, type}`.
-  Title-mode `_meta.promotion_applied` is True when Criterion-C
-  hoisted a candidate; False with a `hint` when cross-archive blocked.
+  Title-mode `_meta.promotion_applied` is True when a candidate was
+  hoisted; False with a `hint` when cross-archive blocked it.
 
 ERRORS:
   Returns a ToolErrorPayload on:
     - mode="suggest" with cross_file=True (`invalid_combination`)
-    - non-positive limit, negative offset (`invalid_limit`,
+    - limit out of range, negative offset (`invalid_limit`,
       `invalid_offset`)
     - missing archive when zim_file_path is required but cross_file
       is False and auto-selection fails

@@ -49,6 +49,16 @@ class MetaEnvelope(TypedDict, total=False):
     total_chars: int
     suggestions: list[dict[str, str]]
     reason: str
+    # Archive-type detection annotations (``meta.build_meta`` emits each
+    # only when the caller passes a non-None value). ``detected_type`` /
+    # ``detection_confidence`` ride metadata responses (values from
+    # ``archive_types.detect_archive_type``: type is e.g. ``"wikipedia"`` /
+    # ``"generic"``, confidence is ``"high"`` / ``"medium"`` / ``"none"``);
+    # ``preset_applied`` rides search/summary responses when an archive
+    # preset shaped the output.
+    detected_type: str
+    detection_confidence: str
+    preset_applied: str
 
 
 # ---------- per-item shapes ----------
@@ -126,6 +136,11 @@ class RelatedArticle(TypedDict):
     path: str
     title: str
     link_text: NotRequired[str]
+    # D9: frequency-rank signal — how many times the source article links
+    # to this target. Emitted on every outbound row today; the compact
+    # renderer treats it as optional (``N×`` suffix only when > 1), so it
+    # stays NotRequired like ``link_text``.
+    mention_count: NotRequired[int]
 
 
 class NamespaceSummary(TypedDict):
@@ -272,6 +287,11 @@ class WalkNamespaceResponse(TypedDict):
     # was already at/past the archive end so no entries were examined).
     scanned_through_id: Optional[int]
     archive_entry_count: int
+    # A11 F4: bounded per-namespace total, known ahead of time for the M
+    # and W well-known walks (and emitted as 0 on the bad-namespace
+    # reject). Omitted for the iterable C-namespace path, where the
+    # total is unknown mid-scan — hence NotRequired.
+    namespace_entry_count: NotRequired[int]
 
 
 class LinksResponse(TypedDict):

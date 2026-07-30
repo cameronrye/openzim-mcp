@@ -26,6 +26,8 @@ def _assert_golden(name: str, body: str) -> None:
 
     Both sides are normalized to ``\\n`` line endings so the test passes on
     Windows checkouts where ``core.autocrlf=true`` rewrote the golden files.
+    Trailing newlines are ignored so pre-commit's end-of-file-fixer can
+    append one to a golden without failing the byte comparison.
     """
     path = GOLDEN_DIR / name
     if REGENERATE:
@@ -41,8 +43,8 @@ def _assert_golden(name: str, body: str) -> None:
         )
     # Read in binary mode to bypass platform-specific newline translation,
     # then normalize CRLF→LF before comparing.
-    expected = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
-    body_normalized = body.replace("\r\n", "\n")
+    expected = path.read_bytes().decode("utf-8").replace("\r\n", "\n").rstrip("\n")
+    body_normalized = body.replace("\r\n", "\n").rstrip("\n")
     assert body_normalized == expected, (
         f"golden mismatch for {name}; "
         f"if intentional, regenerate with: "

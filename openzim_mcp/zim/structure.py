@@ -615,6 +615,17 @@ class _StructureMixin:
         Returns the typed response or a ToolErrorPayload on
         file-not-found / entry-not-found / section-not-found.
         """
+        # A non-positive cap reaches the body slice as a Python negative
+        # index and trims the section TAIL (``max_chars=-5`` returns all
+        # but the last 5 chars, flagged ``truncated``). Reject it the way
+        # the sibling surfaces reject ``max_content_length < 1``.
+        if max_chars is not None and max_chars < 1:
+            return tool_error(
+                operation="invalid_max_chars",
+                message=(
+                    f"`max_chars` must be a positive integer (provided: {max_chars})."
+                ),
+            )
         try:
             reject_path_traversal(entry_path)
             validated_path = self._validate_zim_path(zim_file_path)
@@ -697,7 +708,7 @@ class _StructureMixin:
                 message=(
                     f"No section with id={section_id!r} in entry {entry_path!r}. "
                     + (f"Did you mean {closest!r}? " if closest else "")
-                    + "Use get_table_of_contents to list section IDs."
+                    + "Use `zim_get(view='toc')` to list section IDs."
                 ),
                 extras=extras,
             )
@@ -735,9 +746,14 @@ class _StructureMixin:
             heading_len = (
                 len(section.get("title", "")) + len("#" * section["level"]) + 4
             )
+            # Only widen when the following section really is a child —
+            # a near-empty section followed by a same-level (or higher)
+            # sibling must keep its own narrow slice rather than return
+            # the sibling's heading and lead prose.
             if (
                 narrowed_end - section["char_start"] <= heading_len + 20
                 and first_following_idx is not None
+                and sections[first_following_idx]["level"] > section["level"]
             ):
                 first_child = sections[first_following_idx]
                 # Find the next section after this child (sibling or

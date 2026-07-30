@@ -473,9 +473,16 @@ class TestCanonicalTitleMatchBadge:
         """
         # Use the real method on a stub mixin so we exercise the
         # production splice / render path with mocked I/O hooks.
+        from openzim_mcp.zim.namespace import _NamespaceMixin
         from openzim_mcp.zim.search import _SearchMixin
 
         class _Stub(_SearchMixin):
+            # Production namespace-gate helper, contributed by
+            # ``_NamespaceMixin`` on the concrete class.
+            _canonicalise_namespace = staticmethod(
+                _NamespaceMixin._canonicalise_namespace
+            )
+
             def __init__(self):
                 pass
 

@@ -94,6 +94,43 @@ def test_valid_token_passes(app_with_auth):
     assert resp.status_code == 200
 
 
+def test_non_ascii_token_returns_401_not_500(app_with_auth):
+    """A non-ASCII byte in the presented token → 401, not a 500.
+
+    Starlette decodes header bytes as latin-1, so a raw 0xE9 byte yields
+    a non-ASCII token str. ``hmac.compare_digest`` raises TypeError on
+    non-ASCII str args, which would escape the middleware as a 500 with
+    a traceback instead of the intended 401 challenge.
+    """
+    client = TestClient(app_with_auth, raise_server_exceptions=False)
+    resp = client.get("/protected", headers={b"Authorization": b"Bearer caf\xe9"})
+    assert resp.status_code == 401
+    assert "www-authenticate" in resp.headers
+
+
+def test_non_ascii_configured_token_returns_401_not_500():
+    """A non-ASCII configured token must not brick auth with 500s.
+
+    Config validation only rejects blank tokens, so an operator can set
+    a token containing non-ASCII characters; every auth attempt (even an
+    all-ASCII presented token) must still produce a 401, not a
+    TypeError from ``hmac.compare_digest``.
+    """
+    from openzim_mcp.http_app import BearerTokenAuthMiddleware
+
+    config = MagicMock()
+    config.auth_token = SecretStr("caf\xe9-secret")
+
+    async def protected(request: Request) -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    app = Starlette(routes=[Route("/protected", protected)])
+    app.add_middleware(BearerTokenAuthMiddleware, config=config)
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/protected", headers={"Authorization": "Bearer wrong"})
+    assert resp.status_code == 401
+
+
 def test_health_endpoints_skip_auth():
     """/healthz and /readyz must NOT require auth."""
     from openzim_mcp.http_app import BearerTokenAuthMiddleware, build_starlette_app

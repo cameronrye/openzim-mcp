@@ -14,7 +14,6 @@ class TestRerankerConfig:
         cfg = RerankerConfig()
         assert cfg.enabled is True
         assert cfg.model_id == "BAAI/bge-reranker-base"
-        assert cfg.candidate_pool_size == 50
         assert cfg.final_top_k == 10
         assert cfg.max_query_length == 256
         assert cfg.max_passage_length == 512
@@ -22,13 +21,20 @@ class TestRerankerConfig:
         assert cfg.first_call_timeout_seconds == pytest.approx(15.0)
         assert cfg.cache_dir is None
 
-    def test_pool_size_bounds(self) -> None:
-        # Pydantic v2 validation: pool size must be positive
-        with pytest.raises(Exception):
-            RerankerConfig(candidate_pool_size=0)
-        # Reasonable upper bound prevents runaway memory
-        with pytest.raises(Exception):
-            RerankerConfig(candidate_pool_size=10000)
+    def test_stale_candidate_pool_size_env_var_tolerated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # ``candidate_pool_size`` was removed (it was never read; the
+        # reranker only ever sees the caller's page of results, so the
+        # documented recall benefit did not exist). Deployments that
+        # still export the old nested env var must not error at
+        # startup: RerankerConfig is a plain BaseModel with pydantic's
+        # default ``extra='ignore'``, so the stale value is dropped.
+        zim_dir = tmp_path / "zim"
+        zim_dir.mkdir()
+        monkeypatch.setenv("OPENZIM_MCP_ML__RERANKER__CANDIDATE_POOL_SIZE", "100")
+        cfg = OpenZimMcpConfig(allowed_directories=[str(zim_dir)])
+        assert not hasattr(cfg.ml.reranker, "candidate_pool_size")
 
     def test_min_query_tokens_bounds(self) -> None:
         # 0 disables the skip gate; that's allowed.

@@ -304,6 +304,42 @@ class TestZimOperations:
         assert result["_meta"]["truncated"] is False
         assert "more_at_offset" not in result["_meta"]
 
+    @patch("openzim_mcp.zim_operations.Archive")
+    def test_get_zim_entry_data_routes_metadata_path_on_new_scheme(
+        self, mock_archive, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """D7 parity: the structured entry path must route ``M/<key>`` on
+        new-scheme archives to the metadata API, matching the legacy text
+        path — libzim's ``get_entry_by_path`` silently strips the ``M/``
+        prefix and resolves the same-named C-namespace article."""
+        zim_file = temp_dir / "new_scheme.zim"
+        zim_file.write_text("x")
+
+        inst = MagicMock()
+        inst.has_new_namespace_scheme = True
+        meta_item = MagicMock()
+        meta_item.mimetype = "text/plain"
+        meta_item.content = b"Wikipedia"
+        inst.get_metadata_item.return_value = meta_item
+        wrong_entry = MagicMock()
+        wrong_entry.is_redirect = False
+        wrong_entry.path = "Title"
+        wrong_entry.title = "Title (disambiguation)"
+        wrong_item = MagicMock()
+        wrong_item.mimetype = "text/html"
+        wrong_item.content = (
+            b"<html><body><p>Disambiguation article body</p></body></html>"
+        )
+        wrong_entry.get_item.return_value = wrong_item
+        inst.get_entry_by_path.return_value = wrong_entry
+        mock_archive.return_value = inst
+
+        result = zim_operations.get_zim_entry_data(str(zim_file), "M/Title")
+
+        assert "Wikipedia" in result["content"]
+        assert "Disambiguation" not in result["content"]
+        inst.get_metadata_item.assert_called_once_with("Title")
+
     def test_search_zim_file_caching(
         self, zim_operations: ZimOperations, temp_dir: Path
     ):
@@ -520,6 +556,92 @@ class TestZimOperations:
 
             assert "Main Page" in result
             assert "Welcome" in result
+
+    @staticmethod
+    def _mock_archive_without_main_entry(fallback_paths: dict) -> MagicMock:
+        """A mock archive whose ``main_entry`` raises RuntimeError — libzim's
+        real behavior when the header has no main page (it never returns a
+        falsy value) — with ``get_entry_by_path`` resolving only the given
+        fallback paths."""
+        from unittest.mock import PropertyMock
+
+        inst = MagicMock()
+        type(inst).main_entry = PropertyMock(
+            side_effect=RuntimeError("Cannot find main entry")
+        )
+
+        def get_entry_by_path(path):
+            if path in fallback_paths:
+                return fallback_paths[path]
+            raise KeyError(path)
+
+        inst.get_entry_by_path.side_effect = get_entry_by_path
+        return inst
+
+    @staticmethod
+    def _mock_fallback_main_entry() -> MagicMock:
+        entry = MagicMock()
+        entry.is_redirect = False
+        entry.title = "Welcome"
+        entry.path = "W/mainPage"
+        item = MagicMock()
+        item.content = b"<h1>Welcome</h1><p>Fallback main page.</p>"
+        item.mimetype = "text/html"
+        entry.get_item.return_value = item
+        return entry
+
+    def test_get_main_page_falls_back_when_main_entry_raises(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """A RuntimeError from ``archive.main_entry`` must fall through to
+        the named fallback paths, not surface an error sentinel."""
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            inst = self._mock_archive_without_main_entry(
+                {"W/mainPage": self._mock_fallback_main_entry()}
+            )
+            mock_archive.return_value.__enter__.return_value = inst
+
+            result = zim_operations.get_main_page(str(zim_file))
+
+            assert "Error retrieving main page" not in result
+            assert "Fallback main page." in result
+
+    def test_get_main_page_no_main_entry_and_no_fallback(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """When ``main_entry`` raises and no fallback path resolves, the
+        cacheable "No main page found" message is returned."""
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            inst = self._mock_archive_without_main_entry({})
+            mock_archive.return_value.__enter__.return_value = inst
+
+            result = zim_operations.get_main_page(str(zim_file))
+
+            assert "No main page found" in result
+
+    def test_get_main_page_data_falls_back_when_main_entry_raises(
+        self, zim_operations: ZimOperations, temp_dir: Path
+    ):
+        """The structured mirror shares the fallback contract."""
+        zim_file = temp_dir / "test.zim"
+        zim_file.touch()
+
+        with patch("openzim_mcp.zim_operations.zim_archive") as mock_archive:
+            inst = self._mock_archive_without_main_entry(
+                {"W/mainPage": self._mock_fallback_main_entry()}
+            )
+            mock_archive.return_value.__enter__.return_value = inst
+
+            payload = zim_operations.get_main_page_data(str(zim_file))
+
+            assert payload["path"] == "W/mainPage"
+            assert "Fallback main page." in payload["content"]
 
     def test_list_namespaces(self, zim_operations: ZimOperations, temp_dir: Path):
         """Test namespace listing."""
