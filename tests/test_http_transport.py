@@ -129,6 +129,30 @@ def test_check_safe_startup_localhost_resolving_to_loopback_is_safe(monkeypatch)
     check_safe_startup(config)
 
 
+def test_is_loopback_host_bounds_slow_localhost_resolution(monkeypatch):
+    """A hung resolver must not stall startup.
+
+    ``socket.gethostbyname`` calls the libc resolver directly, so
+    ``socket.setdefaulttimeout`` never bounds it — the resolution must
+    run under a real deadline, with a timeout treated as not-loopback.
+    """
+    import socket
+    import time
+
+    from openzim_mcp.http_app import _is_loopback_host
+
+    def slow_resolve(host):
+        time.sleep(4.0)
+        return "127.0.0.1"
+
+    monkeypatch.setattr(socket, "gethostbyname", slow_resolve)
+    start = time.monotonic()
+    result = _is_loopback_host("localhost")
+    elapsed = time.monotonic() - start
+    assert result is False
+    assert elapsed < 3.0
+
+
 _LOOPBACK_HOSTS = {"127.0.0.1:*", "localhost:*", "[::1]:*"}
 _BARE_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 

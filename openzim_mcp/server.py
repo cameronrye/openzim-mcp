@@ -1,5 +1,6 @@
 """Main OpenZIM MCP server implementation."""
 
+import ipaddress
 import logging
 from typing import Any, Literal, Optional
 
@@ -133,10 +134,19 @@ def _build_transport_security(
     # Bound to a specific non-loopback interface (e.g. a fixed LAN IP). Allow
     # direct access to that host (and its ":*" port form) so the deployment
     # works without forcing the operator to duplicate the bind host into
-    # OPENZIM_MCP_ALLOWED_HOSTS.
+    # OPENZIM_MCP_ALLOWED_HOSTS. IPv6 literals are bracketed first: clients
+    # send ``Host: [fd00::1]:8000``, so the raw unbracketed literal would
+    # never match (and its embedded ``:`` would also suppress the ``:*``
+    # variant), 421-ing every MCP request.
+    try:
+        is_ipv6 = ipaddress.ip_address(host).version == 6
+    except ValueError:
+        is_ipv6 = False
+    if is_ipv6:
+        host = f"[{host}]"
     if host not in allowed_hosts:
         allowed_hosts.append(host)
-        if ":" not in host:
+        if is_ipv6 or ":" not in host:
             allowed_hosts.append(f"{host}:*")
     return (
         TransportSecuritySettings(

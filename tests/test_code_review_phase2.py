@@ -77,6 +77,30 @@ def test_specific_lan_ip_bind_allows_direct_host(tmp_path):
     assert warning is None
 
 
+def test_specific_ipv6_bind_allows_bracketed_host(tmp_path):
+    """Binding a fixed IPv6 literal adds the bracketed Host forms.
+
+    Real clients send ``Host: [fd00::1]:8000`` (bracketed, with port), so
+    the allow-list needs ``[fd00::1]`` / ``[fd00::1]:*`` — the raw
+    unbracketed literal never matches and would 421 every MCP request.
+    """
+    from openzim_mcp.server import _build_transport_security
+
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        transport="http",
+        host="fd00::1",
+        auth_token="s3cret",
+    )
+    settings, warning = _build_transport_security(cfg)
+    assert settings.enable_dns_rebinding_protection is True
+    hosts = set(settings.allowed_hosts)
+    assert {"[fd00::1]", "[fd00::1]:*"} <= hosts
+    # Loopback stays reachable.
+    assert {"127.0.0.1:*", "localhost:*"} <= hosts
+    assert warning is None
+
+
 def test_bind_all_without_allowed_hosts_disables_host_validation(tmp_path):
     """0.0.0.0 with no pinned Host disables rebinding validation + warns."""
     from openzim_mcp.server import _build_transport_security
