@@ -1086,9 +1086,17 @@ class ZimOperations(
             return resolve_redirect_chain(entry, context="in main-page lookup")
 
         try:
-            # Try to get main page from archive metadata
-            if hasattr(archive, "main_entry") and archive.main_entry:
-                main_entry = _follow_redirect(archive.main_entry)
+            # Try to get main page from archive metadata. libzim's
+            # ``main_entry`` raises RuntimeError when the header has no main
+            # page (it never returns a falsy value), so guard the access
+            # itself and fall through to the named-path fallback.
+            main_entry_raw = None
+            try:
+                main_entry_raw = archive.main_entry
+            except Exception as e:
+                logger.debug(f"main_entry resolution failed: {e}")
+            if main_entry_raw:
+                main_entry = _follow_redirect(main_entry_raw)
                 title = main_entry.title or "Main Page"
                 path = main_entry.path
 
@@ -1288,8 +1296,16 @@ class ZimOperations(
                 )
 
         try:
-            if hasattr(archive, "main_entry") and archive.main_entry:
-                main_entry = _follow_redirect(archive.main_entry)
+            # See ``_get_main_page_content``: libzim's ``main_entry`` raises
+            # RuntimeError when the header has no main page, so guard the
+            # access itself and fall through to the named-path fallback.
+            main_entry_raw = None
+            try:
+                main_entry_raw = archive.main_entry
+            except Exception as e:
+                logger.debug(f"main_entry resolution failed: {e}")
+            if main_entry_raw:
+                main_entry = _follow_redirect(main_entry_raw)
                 return _build(main_entry)
 
             # Fallback: try common main page paths. Entry-zero is NOT a

@@ -618,6 +618,22 @@ class _ContentMixin:
         """
         from openzim_mcp.bundle import archive_stat_token
 
+        # D7 (beta): mirror ``_get_entry_content`` — libzim's
+        # ``get_entry_by_path`` silently strips the ``M/`` prefix and
+        # resolves to the same-named C-namespace article, so route
+        # ``M/<key>`` paths on new-scheme archives to the metadata API.
+        if (
+            entry_path
+            and entry_path.startswith("M/")
+            and getattr(archive, "has_new_namespace_scheme", False)
+        ):
+            return self._get_metadata_entry_data(
+                archive,
+                entry_path,
+                max_content_length,
+                content_offset,
+            )
+
         requested_path = entry_path
         path_cache_key = (
             f"path_mapping:{validated_path}:"
@@ -1228,6 +1244,86 @@ class _ContentMixin:
             f"Type: {mime or 'unknown'}\n## Content\n\n{content}"
         )
         return result_text, True
+
+    def _get_metadata_entry_data(
+        self,
+        archive: Archive,
+        entry_path: str,
+        max_content_length: int,
+        content_offset: int = 0,
+    ) -> Tuple[Dict[str, Any], bool]:
+        """D7 (beta): dict-shaped variant of ``_get_metadata_entry``.
+
+        Mirrors ``_build_entry_payload``'s offset/truncation accounting so
+        the structured ``M/<key>`` route matches the regular entry
+        contract. Returns ``(payload, content_ok)`` matching
+        :meth:`_get_entry_data_from_archive`.
+        """
+        key = entry_path.split("/", 1)[1] if "/" in entry_path else entry_path
+        payload: Dict[str, Any] = {
+            "path": entry_path,
+            "title": key or entry_path,
+            "content": "",
+        }
+        if not key:
+            payload["content"] = (
+                "Empty metadata key. Use a known M/<key> path from "
+                "`metadata for <file>` or `walk namespace M`."
+            )
+            return payload, False
+        try:
+            item = archive.get_metadata_item(key)
+        except Exception as e:
+            logger.debug(f"get_metadata_item failed for {key}: {e}")
+            payload["content"] = (
+                f"Metadata key {key!r} not found in this archive. "
+                f"Use `walk namespace M` to list available keys."
+            )
+            return payload, False
+        if item is None:
+            payload["content"] = f"Metadata key {key!r} resolved to an empty item."
+            return payload, False
+        mime = item.mimetype or ""
+        try:
+            raw = bytes(item.content)
+        except Exception as e:
+            logger.warning(f"Metadata content read failed for {key}: {e}")
+            payload["content"] = f"(Error retrieving content: {e})"
+            return payload, False
+        content = self._decode_metadata_content(raw, mime)
+
+        total_length = len(content)
+        offset_applied = False
+        offset_past_end = False
+        if content_offset and content_offset > 0:
+            if content_offset >= total_length:
+                content = ""
+                offset_past_end = True
+            else:
+                content = content[content_offset:]
+            offset_applied = True
+        truncated_content = self.content_processor.truncate_content(
+            content,
+            max_content_length,
+            current_offset=content_offset,
+            original_total=total_length,
+        )
+        was_truncated = len(truncated_content) < len(content)
+        content_chars = max_content_length if was_truncated else len(content)
+
+        payload["content"] = truncated_content
+        if mime:
+            payload["content_type"] = mime
+        if offset_applied:
+            payload["content_offset"] = content_offset
+            payload["total_chars"] = total_length
+            if offset_past_end:
+                payload["content_offset_past_end"] = True
+        if was_truncated or offset_applied:
+            payload["_truncated"] = was_truncated
+            payload["_total_chars"] = total_length
+            payload["_content_chars"] = content_chars
+        return payload, True
 
     def _get_entry_content_direct(  # NOSONAR(python:S3776)
         self,

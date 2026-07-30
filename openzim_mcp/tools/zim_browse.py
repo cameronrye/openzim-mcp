@@ -96,8 +96,11 @@ def register(server: "OpenZimMcpServer") -> None:
             # to round-trip through base64 themselves.
             eff_limit = limit if limit is not None else 200
             if state is not None:
+                # Walk cursors encode the resume entry id under the wire key
+                # ``o`` (see the walkers in zim/namespace.py), which
+                # walk_namespace_data expects back as ``scan_at``.
                 cursor_state: dict[str, Any] = {
-                    "scan_at": int(state.get("scan_at", 0) or 0),
+                    "scan_at": int(state.get("o", state.get("scan_at", 0)) or 0),
                     "l": eff_limit,
                 }
                 ai = state.get("ai")

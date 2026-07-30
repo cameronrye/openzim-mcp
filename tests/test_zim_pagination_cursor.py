@@ -103,6 +103,28 @@ async def test_walk_mode_resumes_from_cursor(
 
 
 @pytest.mark.asyncio
+async def test_walk_mode_resumes_from_emitted_cursor(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cursor as the walkers actually emit it (key ``o``) resumes at its
+    scan position instead of silently restarting at entry 0."""
+    ops = _patch_async_ops(monkeypatch, walk_namespace_data={"results": []})
+    register_zim_browse(server)
+    fn, _ = server._tools_store["zim_browse"]
+    cursor = Cursor.encode(
+        tool="walk_namespace", state={"o": 200, "l": 200, "ns": "C", "ai": "zz"}
+    )
+    await fn(zim_file_path="/x.zim", namespace="C", mode="walk", cursor=cursor)
+    ops.walk_namespace_data.assert_awaited_once_with(
+        "/x.zim",
+        "C",
+        cursor_state={"scan_at": 200, "l": 200, "ns": "C", "ai": "zz"},
+        limit=200,
+        include_assets=False,
+    )
+
+
+@pytest.mark.asyncio
 async def test_page_mode_rejects_foreign_tool_cursor(
     server: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:

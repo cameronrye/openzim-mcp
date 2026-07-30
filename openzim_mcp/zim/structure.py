@@ -735,9 +735,14 @@ class _StructureMixin:
             heading_len = (
                 len(section.get("title", "")) + len("#" * section["level"]) + 4
             )
+            # Only widen when the following section really is a child —
+            # a near-empty section followed by a same-level (or higher)
+            # sibling must keep its own narrow slice rather than return
+            # the sibling's heading and lead prose.
             if (
                 narrowed_end - section["char_start"] <= heading_len + 20
                 and first_following_idx is not None
+                and sections[first_following_idx]["level"] > section["level"]
             ):
                 first_child = sections[first_following_idx]
                 # Find the next section after this child (sibling or

@@ -74,9 +74,15 @@ _NAMESPACE_DESCRIPTIONS = {
 # spec — used by ``browse_namespace_data`` to fast-reject unknown
 # tokens before the full-iteration fallback wastes cycles scanning a
 # 27 M-entry archive for letters that don't exist. New-scheme
-# archives are dominated by C; old-scheme add A and I. ``-`` is the
-# layout/templates pseudo-namespace.
-_KNOWN_NAMESPACE_LETTERS = frozenset({"C", "M", "W", "X", "A", "I", "-"})
+# archives are dominated by C; old-scheme add A and I plus the rarer
+# legacy letters B (article meta data), J (images-text), U
+# (categories-text) and V (categories-article-list), which
+# ``list_namespaces`` can report with authoritative counts and browse/
+# walk therefore must not contradict. ``-`` is the layout/templates
+# pseudo-namespace.
+_KNOWN_NAMESPACE_LETTERS = frozenset(
+    {"C", "M", "W", "X", "A", "I", "B", "J", "U", "V", "-"}
+)
 
 
 def _entry_mimetype(entry: "Any") -> Optional[str]:

@@ -1009,7 +1009,10 @@ class _SearchMixin:
         # New-scheme C has no path prefix; legacy / metadata namespaces
         # use the ``X/`` prefix convention.
         if namespace:
-            ns_letter = namespace.strip().upper()
+            # Canonicalise long-form aliases ("content" -> "C") the same
+            # way the delegated filtered search does, so equivalent
+            # namespace spellings get the same splice.
+            ns_letter = self._canonicalise_namespace(namespace.strip())
             path_prefix = (
                 canonical_path.split("/", 1)[0] if "/" in canonical_path else "C"
             )
@@ -1107,8 +1110,10 @@ class _SearchMixin:
             or (canonical_path.split("/", 1)[0] if "/" in canonical_path else "C"),
             "content_type": content_type or "text/html",
         }
+        synthetic_added = False
         if not results:
             results = [synthetic_canonical]
+            synthetic_added = True
         else:
             # M33: when the canonical IS already the BM25 top hit we used to
             # ``return self.search_with_filters(...)``, re-running the ENTIRE
@@ -1137,18 +1142,27 @@ class _SearchMixin:
                 )
                 results = [promoted_existing, *reordered][:limit]
             else:
-                results = [synthetic_canonical, *results][:limit]
+                # Prepend WITHOUT trimming to ``limit``: pages at
+                # ``offset != 0`` bypass the splice and paginate the
+                # unspliced sequence, so trimming here would silently
+                # drop the limit-th hit from every page.
+                results = [synthetic_canonical, *results]
+                synthetic_added = True
 
         # Synthesise a ``_FilteredScanState`` from the structured
         # payload so the render path stays unchanged. Honor the
         # lower-bound flag from page_info.
         page_info = payload.get("page_info") or {}
         total_lower_bound = bool(page_info.get("total_is_lower_bound"))
-        # ``filtered_count`` for the renderer: bump by 1 when we
+        # ``filtered_count`` for the renderer: bump by exactly 1 when we
         # synthesised a fresh canonical row that wasn't in the
-        # original result set.
-        original_total = int(payload.get("total") or len(results))
-        filtered_count = max(original_total, len(results))
+        # original result set — it's a row the filtered total never
+        # counted.
+        original_total = int(payload.get("total") or 0)
+        if synthetic_added:
+            filtered_count = original_total + 1
+        else:
+            filtered_count = max(original_total, len(results))
         synthetic_scan = _FilteredScanState(
             filtered_count=filtered_count,
             scanned=0,
@@ -1417,22 +1431,30 @@ class _SearchMixin:
         # page short of exhausting the unfiltered hit list, more pages may
         # exist; emit a cursor so callers can resume.
         returned_count = len(results)
-        last_index = offset + returned_count
-        # ``filtered_count`` is the number of post-filter hits the scanner
-        # tallied through ``last_index``. It can be a lower bound when the
-        # scan filled the page short of exhausting the unfiltered list.
+        # ``filtered_count`` is the number of distinct post-filter slots the
+        # scanner consumed through the end of this page (offset skip region
+        # included). It can be a lower bound when the scan stopped early.
         total_filtered: Optional[int] = scan.filtered_count
         # When the scan capped (10k) without exhausting the result list,
         # ``filtered_count`` is a lower bound — we don't know the true total.
         # Surface that via ``page_info.total_is_lower_bound`` so the contract
-        # ``total`` stays honest.
-        done = (
-            last_index >= scan.filtered_count and not scan.total_filtered_is_lower_bound
-        )
+        # ``total`` stays honest. Iteration is complete exactly when the scan
+        # ran to the end of the unfiltered hit list — offset arithmetic
+        # (``offset + returned_count``) undercounts the consumed slots when
+        # candidates inside the window failed materialisation.
+        done = not scan.total_filtered_is_lower_bound
+        if scan.scan_cap_hit and returned_count == 0:
+            # A capped scan that emitted nothing would resume at the same
+            # offset and re-run the identical scan forever — a cursor that
+            # can never advance. Terminate the iteration contract instead.
+            done = True
         next_cursor: Optional[str] = None
         if not done:
             cursor_state: Dict[str, Any] = {
-                "o": last_index,
+                # Resume after the last slot the scan consumed; this equals
+                # ``offset + returned_count`` on clean pages but stays exact
+                # when failed candidates consumed slots inside the window.
+                "o": scan.filtered_count,
                 "l": limit,
                 "q": query,
                 "ai": archive_identity(validated_path),
@@ -1706,10 +1728,13 @@ class _SearchMixin:
         filtered_count = 0
         scanned = 0
         scan_cap_hit = False
-        # Canonical paths already placed on this page, so warc2zim query-string
-        # variants (foo.htm and foo.htm?x=1) don't each consume a result slot.
-        # Scoped to the emitted page; a duplicate is skipped without filling a
-        # slot, and scanning continues so the page still fills to ``limit``.
+        # Canonical paths already counted by this scan, so warc2zim
+        # query-string variants (foo.htm and foo.htm?x=1) never consume a
+        # result slot — in the skip phase or the emit phase. Scan-scoped
+        # (not page-scoped): a page-scoped set let a variant consume a
+        # ``filtered_count`` slot the cursor never accounted for, shifting
+        # the resume window one row early per in-page duplicate and
+        # re-emitting the page tail on the next page.
         seen_canonical: set[str] = set()
         has_new_scheme = getattr(archive, "has_new_namespace_scheme", False)
         # When namespace-only filtering is active (no content_type), the
@@ -1732,30 +1757,39 @@ class _SearchMixin:
             if scanned >= _FILTERED_MAX_SCAN:
                 scan_cap_hit = True
                 break
+            batch_start = scanned
             batch_end = min(
-                scanned + _FILTERED_BATCH_SIZE, total_results, _FILTERED_MAX_SCAN
+                batch_start + _FILTERED_BATCH_SIZE, total_results, _FILTERED_MAX_SCAN
             )
-            batch = list(search.getResults(scanned, batch_end - scanned))
+            batch = list(search.getResults(batch_start, batch_end - batch_start))
             scanned = batch_end
             if not batch:
                 break
 
-            for entry_id in batch:
+            for batch_idx, entry_id in enumerate(batch):
                 if namespace and not self._matches_cheap_namespace(
                     entry_id, namespace, has_new_scheme=has_new_scheme
                 ):
                     continue
+                # A query-string variant of an entry this scan already
+                # counted — skip it without consuming a slot so scanning
+                # continues and the page still fills to ``limit``.
+                canonical = canonical_result_path(entry_id)
+                if canonical in seen_canonical:
+                    continue
                 # Cheap-skip semantics: when no content_type filter is
-                # active, ``filtered_count`` counts namespace-matching
-                # candidates (not just successfully materialised ones).
-                # When a content_type filter IS active, ``filtered_count``
-                # counts entries that passed both filters. The two
-                # semantics differ slightly — entries that fail
-                # post-redirect namespace re-check would count toward
-                # the namespace-only offset but not the combined one —
-                # but pagination is internally consistent within each
-                # path (`> offset` emit gate, monotonic counter).
+                # active, ``filtered_count`` counts distinct namespace-
+                # matching candidates (not just successfully materialised
+                # ones). When a content_type filter IS active,
+                # ``filtered_count`` counts distinct entries that passed
+                # both filters. The two semantics differ slightly —
+                # entries that fail the post-redirect namespace re-check
+                # count toward the namespace-only offset but not the
+                # combined one — but pagination is internally consistent
+                # within each path (`> offset` emit gate, monotonic
+                # counter).
                 if not need_entry_for_filter and filtered_count < offset:
+                    seen_canonical.add(canonical)
                     filtered_count += 1
                     continue
 
@@ -1767,19 +1801,24 @@ class _SearchMixin:
                     has_new_scheme=has_new_scheme,
                 )
                 if materialised is None:
+                    if not need_entry_for_filter:
+                        # The cheap-skip phase above counts candidates it
+                        # never materialises, so failures must consume a
+                        # slot here too — otherwise the next page's skip
+                        # window lands early and re-emits rows.
+                        seen_canonical.add(canonical)
+                        filtered_count += 1
                     continue
 
+                seen_canonical.add(canonical)
                 filtered_count += 1
                 if filtered_count > offset and len(page) < limit:
-                    canonical = canonical_result_path(materialised[0])
-                    if canonical in seen_canonical:
-                        # A query-string variant of an entry already on this
-                        # page — skip it and keep scanning so the dropped slot
-                        # is backfilled with the next distinct result.
-                        continue
-                    seen_canonical.add(canonical)
                     page.append(materialised)
                     if len(page) >= limit:
+                        # The batch tail past this entry was never examined;
+                        # record true consumption so the lower-bound check
+                        # below sees that the scan stopped early.
+                        scanned = batch_start + batch_idx + 1
                         break
 
         # ``total_filtered_is_lower_bound`` is True when we stopped scanning
@@ -2256,6 +2295,10 @@ class _SearchMixin:
             result_entries = list(search.getResults(0, max_results))
 
             seen_titles = set()
+            # Strip before classifying, matching Strategy 2 and the
+            # canonical probe: a trailing-whitespace query still matches
+            # in Xapian but would reject nearly every title below.
+            partial_lower = partial_query.lower().strip()
 
             for entry_id in result_entries:
                 try:
@@ -2272,7 +2315,6 @@ class _SearchMixin:
 
                     seen_titles.add(title)
                     title_lower = title.lower()
-                    partial_lower = partial_query.lower()
 
                     # Prioritize titles that start with the query
                     if title_lower.startswith(partial_lower):
@@ -3149,7 +3191,11 @@ class _SearchMixin:
             fuzzy_path_hit=fuzzy_path_hit,
             verified_variants=verified_variants,
         )
-        if find_cache_key is not None:
+        # Don't cache zero-hit responses: libzim's lazy title index can
+        # return 0 matches transiently during warm-up, and a TTL-cached
+        # "no results" would mask the index becoming ready (same policy
+        # as the other cached search surfaces in this module).
+        if find_cache_key is not None and response["results"]:
             self.cache.set(find_cache_key, response)
         return response
 
