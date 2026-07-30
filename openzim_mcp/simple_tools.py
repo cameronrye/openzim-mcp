@@ -806,19 +806,12 @@ class SimpleToolsHandler(
             # absolute filesystem paths back to the MCP client.
             safe_query = sanitize_context_for_error(query)
             safe_error = sanitize_context_for_error(str(e))
-            # M31: when the inner synthesize branch raises past its own
-            # try-except (rare but reachable on unexpected internal
-            # failures), the outer except previously swallowed the
-            # ``ToolErrorPayload`` shape and emitted a markdown string.
-            # Detect the synthesize path and return a structured error
-            # so callers can programmatically branch on
-            # ``result.error``.
-            if options.get("synthesize"):
-                return tool_error(
-                    operation="synthesize_pipeline_error",
-                    message=f"Synthesize pipeline failed: {safe_error}",
-                    context=f"Query: {safe_query}",
-                )
+            # The synthesize path cannot reach this handler: the
+            # ``options.get("synthesize")`` branch above returns before
+            # this ``try`` starts, in both its try and except arms, and
+            # nothing in between mutates ``options["synthesize"]``. Its
+            # structured ``synthesize_pipeline_error`` payload (M31) is
+            # emitted by that branch's own except arm.
             # Post-a20 PD2-4: when ``validate_zim_file`` raises (file
             # does not exist / not a file / wrong extension), the
             # generic four-step "Troubleshooting" block gives small

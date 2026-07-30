@@ -39,6 +39,26 @@ def test_meta_envelope_has_phase_a_fields() -> None:
         assert key in hints, f"MetaEnvelope missing {key}"
 
 
+def test_meta_envelope_declares_detection_fields() -> None:
+    """The archive-type detection annotations build_meta conditionally
+    emits (detected_type/detection_confidence via get_zim_metadata_data,
+    preset_applied via the search/summary preset paths) are part of the
+    declared wire contract."""
+    hints = get_type_hints(ts.MetaEnvelope)
+    for key in ("detected_type", "detection_confidence", "preset_applied"):
+        assert key in hints, f"MetaEnvelope missing {key}"
+
+
+def test_emitted_extras_declared_on_walk_and_related() -> None:
+    """Fields production emits (and compact renderers read) must be
+    declared: walk_namespace's bounded per-namespace total and
+    get_related_articles' frequency-rank signal."""
+    walk_hints = get_type_hints(ts.WalkNamespaceResponse)
+    assert "namespace_entry_count" in walk_hints
+    related_hints = get_type_hints(ts.RelatedArticle)
+    assert "mention_count" in related_hints
+
+
 def test_paginated_responses_carry_contract_keys() -> None:
     paginated = [
         ts.SearchResponse,
@@ -193,7 +213,7 @@ def test_synthesize_response_has_required_fields() -> None:
         assert key in hints, f"SynthesizeResponse missing {key}"
 
 
-def test_synthesize_response_accepts_considered_articles_and_sections():
+def test_synthesize_response_accepts_considered_articles_and_sections() -> None:
     """A14: SynthesizeResponse exposes considered_articles and
     considered_sections for multi-round refinement. Both fields are
     optional (total=False) so existing callers aren't forced to set
