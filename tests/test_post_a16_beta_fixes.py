@@ -1005,6 +1005,43 @@ class TestP3D1FilteredSearchNamespaceContract:
         assert results[0]["namespace"] == "C"
         assert results[0]["content_type"] == "text/html"
 
+    def test_error_row_preserves_known_namespace_and_mimetype(self) -> None:
+        """Error-row reconciliation: when per-row projection fails, the
+        fabricated row must preserve the scan-provided namespace and
+        mimetype when known, falling back to ``"unknown"`` only for
+        empty values. Pins the unified semantics after the markdown and
+        _data projection loops were consolidated onto
+        ``_build_filtered_results`` (the legacy markdown copy hardcoded
+        ``"unknown"`` even when the values were known).
+        """
+        from openzim_mcp.zim.search import _SearchMixin
+
+        class _ExplodingEntry:
+            @property
+            def title(self) -> str:
+                raise RuntimeError("boom")
+
+        class _Stub(_SearchMixin):
+            def __init__(self) -> None:
+                pass
+
+        stub = _Stub()
+        page = [
+            ("A/Known", _ExplodingEntry(), "A", "text/html"),
+            ("Bare", _ExplodingEntry(), "", ""),
+        ]
+        results = stub._build_filtered_results(
+            page, content_type="text/html", offset=0, query="q"
+        )
+        # Known scan values survive into the error row.
+        assert results[0]["namespace"] == "A"
+        assert results[0]["content_type"] == "text/html"
+        assert "Error getting entry details" in results[0]["snippet"]
+        # Empty scan values fall back to the "unknown" sentinel.
+        assert results[1]["namespace"] == "unknown"
+        assert results[1]["content_type"] == "unknown"
+        assert results[1]["title"] == "Entry 2"
+
     def test_splice_reorder_path_renders_without_crash(self) -> None:
         """End-to-end regression: the splice / reorder branch at
         ``search_with_filters_with_canonical_splice`` previously fell

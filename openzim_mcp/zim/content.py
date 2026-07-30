@@ -13,7 +13,17 @@ import base64
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    cast,
+)
 
 from libzim.reader import Archive  # type: ignore[import-untyped]
 
@@ -40,6 +50,11 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+# Result type produced by the surface-specific ``build`` callable in
+# ``_smart_retrieve_entry`` — ``str`` for the legacy text surface,
+# ``Dict[str, Any]`` for the structured surface.
+_EntryResultT = TypeVar("_EntryResultT")
 
 
 def _strip_markdown_links_shared(text: str) -> str:
@@ -82,6 +97,46 @@ _ANSWER_HEADING_TOKENS = ("answer",)
 _STYLE_HEADING_TOKENS: Dict[str, Tuple[str, ...]] = {
     "q_and_a": _ANSWER_HEADING_TOKENS,
 }
+
+
+def _render_entry_payload_text(payload: Dict[str, Any]) -> str:
+    """Render a ``_build_entry_payload`` dict as the legacy markdown text.
+
+    The payload builder is the single source of truth for redirect
+    resolution, compact link-stripping, and offset/truncation accounting;
+    this function only formats — it must not re-derive any content or
+    offset state. Shows both requested and actual paths when they differ
+    (``requested_path`` is present in the payload exactly in that case).
+    """
+    result_text = f"# {payload['title']}\n\n"
+    requested_path = payload.get("requested_path")
+    if requested_path is not None:
+        result_text += f"Requested Path: {requested_path}\n"
+        result_text += f"Actual Path: {payload['path']}\n"
+    else:
+        result_text += f"Path: {payload['path']}\n"
+    result_text += f"Type: {payload.get('content_type') or 'Unknown'}\n"
+    offset_past_end = bool(payload.get("content_offset_past_end"))
+    # ``content_offset`` / ``total_chars`` are present exactly when a
+    # positive offset was applied by the payload builder.
+    if "content_offset" in payload:
+        content_offset = payload["content_offset"]
+        total_length = payload["total_chars"]
+        if offset_past_end:
+            result_text += (
+                f"Content Offset: {content_offset} is past the end of the "
+                f"{total_length:,}-character body — no content at this offset.\n"
+            )
+        else:
+            result_text += (
+                f"Content Offset: {content_offset} of {total_length:,} characters\n"
+            )
+    result_text += "## Content\n\n"
+    if offset_past_end:
+        result_text += "(No content — offset beyond end of body)"
+    else:
+        result_text += payload["content"] or "(No content)"
+    return result_text
 
 
 def _heading_matches(title: str, tokens: Tuple[str, ...]) -> bool:
@@ -593,7 +648,136 @@ class _ContentMixin:
         logger.info(f"Retrieved entry data: {entry_path}")
         return cast("EntryResponse", with_meta)
 
-    def _get_entry_data_from_archive(  # NOSONAR(python:S3776)
+    def _smart_retrieve_entry(  # NOSONAR(python:S3776)
+        self,
+        archive: Archive,
+        entry_path: str,
+        validated_path: Path,
+        *,
+        build: Callable[[str], Tuple[_EntryResultT, bool, str]],
+        fetch_metadata: Callable[[], Tuple[_EntryResultT, bool]],
+    ) -> Tuple[_EntryResultT, bool]:
+        """Shared smart-retrieval ladder for the text and structured surfaces.
+
+        Implements the retrieval control flow exactly once (it used to be
+        duplicated between ``_get_entry_content`` and
+        ``_get_entry_data_from_archive``, which is how the D7 M/-routing
+        fix initially landed on only one surface):
+
+        1. Route ``M/<key>`` paths on new-scheme archives to the metadata
+           API via ``fetch_metadata`` (D7).
+        2. Try the cached path mapping, dropping it if it went stale.
+        3. Try direct entry access, caching the resolved path on success.
+        4. Fall back to search-based retrieval, caching the resolved path.
+
+        ``build`` constructs the surface-specific result for a candidate
+        path and returns ``(result, content_ok, resolved_path)``. Both
+        surfaces share the path-mapping cache (it stores the resolved
+        actual_path, not the body), so a hit on one surface also speeds
+        up the other.
+
+        Returns:
+            ``(result, content_ok)`` — ``content_ok`` is False when MIME
+            processing raised and the result body holds the
+            ``(Error retrieving content: ...)`` sentinel; the caller must
+            not cache the response in that case.
+        """
+        # D7 (beta): the path-traversal-guard error message tells callers
+        # to use namespace-prefixed paths like ``M/Title``. But libzim
+        # silently strips the ``M/`` prefix and resolves to the C-namespace
+        # article with that name — so ``get_zim_entry('M/Title')``
+        # against a Wikipedia ZIM returned the 172 KB disambiguation
+        # article "Title" instead of the ZIM metadata "Title" entry
+        # ("Wikipedia"). The proper API for M entries is
+        # ``archive.get_metadata(key)``. Route ``M/<key>`` paths to it
+        # explicitly so callers can actually reach ZIM metadata.
+        if (
+            entry_path
+            and entry_path.startswith("M/")
+            and getattr(archive, "has_new_namespace_scheme", False)
+        ):
+            return fetch_metadata()
+
+        # Path mapping cache key includes archive path + stat token so
+        # identical entry names in different ZIM files don't collide and
+        # an atomic file replacement invalidates the resolved-path cache.
+        from openzim_mcp.bundle import archive_stat_token
+
+        cache_key = (
+            f"path_mapping:{validated_path}:"
+            f"{archive_stat_token(validated_path)}:{entry_path}"
+        )
+        cached_actual_path = self.cache.get(cache_key)
+        if cached_actual_path:
+            logger.debug(
+                f"Using cached path mapping: {entry_path} -> {cached_actual_path}"
+            )
+            try:
+                result, content_ok, _resolved = build(cached_actual_path)
+                return result, content_ok
+            except Exception as e:
+                logger.warning(f"Cached path mapping failed: {e}")
+                # Clear invalid cache entry and continue with smart retrieval
+                self.cache.delete(cache_key)
+
+        # Try direct access first
+        try:
+            logger.debug(f"Attempting direct entry access: {entry_path}")
+            result, content_ok, resolved_path = build(entry_path)
+            # Cache the *resolved* path so a follow-up request for the same
+            # redirect entry skips the redirect chain entirely. Path mapping
+            # is valid even if content extraction hit a transient MIME error
+            # — the path resolved, only the body raised.
+            self.cache.set(cache_key, resolved_path)
+            return result, content_ok
+        except OpenZimMcpArchiveError:
+            # Structural failures we raised ourselves (redirect cycles,
+            # depth-limit) are not "entry not found" cases — searching for
+            # the same path again would either return the same broken
+            # redirect or a misleading match. Propagate unchanged.
+            raise
+        except Exception as direct_error:
+            logger.debug(f"Direct entry access failed for {entry_path}: {direct_error}")
+
+            # Fall back to search-based retrieval
+            try:
+                logger.info(f"Falling back to search-based retrieval for: {entry_path}")
+                actual_path = self._find_entry_by_search(archive, entry_path)
+                if actual_path:
+                    result, content_ok, resolved_path = build(actual_path)
+                    # Cache the resolved path (which may differ from
+                    # ``actual_path`` if the search hit a redirect stub).
+                    self.cache.set(cache_key, resolved_path)
+                    logger.info(
+                        f"Smart retrieval successful: {entry_path} -> {resolved_path}"
+                    )
+                    return result, content_ok
+                else:
+                    # No entry found via search
+                    raise OpenZimMcpArchiveError(
+                        f"Entry not found: '{entry_path}'. "
+                        f"The entry path may not exist in this ZIM file. "
+                        f"Try using search_zim_file() to find available entries, "
+                        f"or browse_namespace() to explore the file structure."
+                    )
+            except OpenZimMcpArchiveError:
+                # Re-raise our custom errors with guidance
+                raise
+            except Exception as search_error:
+                logger.error(
+                    f"Search-based retrieval failed for {entry_path}: "
+                    f"{search_error}"
+                )
+                # Provide comprehensive error message with guidance
+                raise OpenZimMcpArchiveError(
+                    f"Failed to retrieve entry '{entry_path}'. "
+                    f"Direct access failed: {direct_error}. "
+                    f"Search-based fallback failed: {search_error}. "
+                    f"The entry may not exist or the path format may be incorrect. "
+                    f"Try using search_zim_file() to find the correct entry path."
+                ) from search_error
+
+    def _get_entry_data_from_archive(
         self,
         archive: Archive,
         entry_path: str,
@@ -605,107 +789,34 @@ class _ContentMixin:
     ) -> Tuple[Dict[str, Any], bool]:
         """Resolve an entry against an open archive and build its dict payload.
 
-        Mirrors ``_get_entry_content`` but returns a structured dict
-        instead of formatted markdown. Reuses the same smart-retrieval
-        path-mapping cache so a hit on the legacy text path also speeds up
-        the dict path (the cache stores the resolved actual_path, not the
-        body).
+        Thin structured binding of ``_smart_retrieve_entry`` — the ladder
+        (D7 M/-routing, path-mapping cache, direct-access/search fallback)
+        lives there, shared with the legacy text surface.
 
         Returns:
             ``(payload, content_ok)`` — ``content_ok`` is False when MIME
             processing raised and ``payload["content"]`` is the error
             sentinel; the caller must not cache the response in that case.
         """
-        from openzim_mcp.bundle import archive_stat_token
-
-        # D7 (beta): mirror ``_get_entry_content`` — libzim's
-        # ``get_entry_by_path`` silently strips the ``M/`` prefix and
-        # resolves to the same-named C-namespace article, so route
-        # ``M/<key>`` paths on new-scheme archives to the metadata API.
-        if (
-            entry_path
-            and entry_path.startswith("M/")
-            and getattr(archive, "has_new_namespace_scheme", False)
-        ):
-            return self._get_metadata_entry_data(
+        return self._smart_retrieve_entry(
+            archive,
+            entry_path,
+            validated_path,
+            build=lambda actual_path: self._build_entry_payload(
                 archive,
+                actual_path,
                 entry_path,
-                max_content_length,
-                content_offset,
-            )
-
-        requested_path = entry_path
-        path_cache_key = (
-            f"path_mapping:{validated_path}:"
-            f"{archive_stat_token(validated_path)}:{entry_path}"
-        )
-        cached_actual_path = self.cache.get(path_cache_key)
-
-        # Try cached path mapping first.
-        if cached_actual_path:
-            try:
-                payload, content_ok, _resolved = self._build_entry_payload(
-                    archive,
-                    cached_actual_path,
-                    requested_path,
-                    max_content_length,
-                    content_offset,
-                    compact=compact,
-                )
-                return payload, content_ok
-            except Exception as e:
-                logger.warning(f"Cached path mapping failed: {e}")
-                self.cache.delete(path_cache_key)
-
-        # Direct access first.
-        try:
-            payload, content_ok, resolved_path = self._build_entry_payload(
-                archive,
-                entry_path,
-                requested_path,
                 max_content_length,
                 content_offset,
                 compact=compact,
-            )
-            self.cache.set(path_cache_key, resolved_path)
-            return payload, content_ok
-        except OpenZimMcpArchiveError:
-            raise
-        except Exception as direct_error:
-            logger.debug(f"Direct entry access failed for {entry_path}: {direct_error}")
-            try:
-                actual_path = self._find_entry_by_search(archive, entry_path)
-                if actual_path:
-                    payload, content_ok, resolved_path = self._build_entry_payload(
-                        archive,
-                        actual_path,
-                        requested_path,
-                        max_content_length,
-                        content_offset,
-                        compact=compact,
-                    )
-                    self.cache.set(path_cache_key, resolved_path)
-                    return payload, content_ok
-                raise OpenZimMcpArchiveError(
-                    f"Entry not found: '{entry_path}'. "
-                    f"The entry path may not exist in this ZIM file. "
-                    f"Try using search_zim_file() to find available entries, "
-                    f"or browse_namespace() to explore the file structure."
-                )
-            except OpenZimMcpArchiveError:
-                raise
-            except Exception as search_error:
-                logger.error(
-                    f"Search-based retrieval failed for {entry_path}: "
-                    f"{search_error}"
-                )
-                raise OpenZimMcpArchiveError(
-                    f"Failed to retrieve entry '{entry_path}'. "
-                    f"Direct access failed: {direct_error}. "
-                    f"Search-based fallback failed: {search_error}. "
-                    f"The entry may not exist or the path format may be incorrect. "
-                    f"Try using search_zim_file() to find the correct entry path."
-                ) from search_error
+            ),
+            fetch_metadata=lambda: self._get_metadata_entry_data(
+                archive,
+                entry_path,
+                max_content_length,
+                content_offset,
+            ),
+        )
 
     def _build_entry_payload(  # NOSONAR(python:S3776)
         self,
@@ -719,13 +830,24 @@ class _ContentMixin:
     ) -> Tuple[Dict[str, Any], bool, str]:
         """Construct the dict payload for a resolved entry.
 
-        Mirrors ``_get_entry_content_direct`` but emits a structured dict
-        rather than formatted markdown. Resolves redirects with the same
-        cycle/depth checks.
+        Single source of truth for redirect resolution (cycle/depth
+        checks), content extraction, compact link-stripping, and
+        offset/truncation accounting. The legacy text surface
+        (``_get_entry_content_direct``) renders this payload via
+        ``_render_entry_payload_text``.
         """
         entry = archive.get_entry_by_path(actual_path)
 
+        # Resolve redirects to the target entry so the response reflects
+        # the resolved page (path, title, content) rather than the redirect
+        # stub. The shared resolver detects cycles and runaway chains
+        # explicitly — libzim's ``Entry.get_item()`` silently follows the
+        # chain and would hang on a cycle.
         entry = resolve_redirect_chain(entry, context=f"starting at {actual_path}")
+
+        # From here on, ``entry`` is the resolved target. Update
+        # ``actual_path`` so the response and the path-mapping cache
+        # reflect the target — subsequent lookups skip the chain entirely.
         actual_path = entry.path
         title = entry.title or "Untitled"
 
@@ -735,6 +857,10 @@ class _ContentMixin:
         try:
             item = entry.get_item()
             content_type = item.mimetype or ""
+            # Process content based on MIME type. ``scope_main_content``
+            # strips ZIMIT/warc2zim site chrome from the primary
+            # entry-content fetch so get_zim_entry / get_entries match the
+            # cleaned bundle tools.
             content = self.content_processor.process_mime_content(
                 bytes(item.content),
                 content_type,
@@ -746,9 +872,13 @@ class _ContentMixin:
             content = f"(Error retrieving content: {e})"
             content_ok = False
 
-        # See ``_get_entry_content_direct``: strip links in the content layer
-        # (compact) before measuring/slicing so total_chars / content_offset
-        # match the served text rather than the link-laden intermediate.
+        # Strip markdown link soup IN the content layer when compact, BEFORE
+        # measuring/slicing, so ``total_chars`` and ``content_offset`` are
+        # computed against the same text the caller receives. Otherwise the
+        # body was measured/sliced with link markup (~146k chars) but served
+        # link-stripped (~83k) by the downstream compact post-processing, and
+        # content_offset addressed positions that didn't exist in the served
+        # text. (The downstream strip is now idempotent on this content.)
         if compact:
             content = _strip_markdown_links_shared(content)
 
@@ -1021,10 +1151,9 @@ class _ContentMixin:
     ) -> Tuple[str, bool]:
         """Get the actual entry content with smart retrieval.
 
-        Implements smart retrieval logic:
-        1. Try direct entry access first
-        2. If direct access fails, fall back to search-based retrieval
-        3. Cache successful path mappings for future use
+        Thin text binding of ``_smart_retrieve_entry`` — the ladder (D7
+        M/-routing, path-mapping cache, direct-access/search fallback)
+        lives there, shared with the structured surface.
 
         Returns:
             (result_text, content_ok) — ``content_ok`` is False when
@@ -1032,126 +1161,25 @@ class _ContentMixin:
             ``(Error retrieving content: ...)`` sentinel; the caller must
             not cache the response in that case.
         """
-        # D7 (beta): the path-traversal-guard error message tells callers
-        # to use namespace-prefixed paths like ``M/Title``. But libzim
-        # silently strips the ``M/`` prefix and resolves to the C-namespace
-        # article with that name — so ``get_zim_entry('M/Title')``
-        # against a Wikipedia ZIM returned the 172 KB disambiguation
-        # article "Title" instead of the ZIM metadata "Title" entry
-        # ("Wikipedia"). The proper API for M entries is
-        # ``archive.get_metadata(key)``. Route ``M/<key>`` paths to it
-        # explicitly so callers can actually reach ZIM metadata.
-        if (
-            entry_path
-            and entry_path.startswith("M/")
-            and getattr(archive, "has_new_namespace_scheme", False)
-        ):
-            return self._get_metadata_entry(
+        return self._smart_retrieve_entry(
+            archive,
+            entry_path,
+            validated_path,
+            build=lambda actual_path: self._get_entry_content_direct(
                 archive,
-                entry_path,
-                max_content_length,
-                content_offset,
-            )
-
-        # Path mapping cache key includes archive path + stat token so
-        # identical entry names in different ZIM files don't collide and
-        # an atomic file replacement invalidates the resolved-path cache.
-        from openzim_mcp.bundle import archive_stat_token
-
-        cache_key = (
-            f"path_mapping:{validated_path}:"
-            f"{archive_stat_token(validated_path)}:{entry_path}"
-        )
-        cached_actual_path = self.cache.get(cache_key)
-        if cached_actual_path:
-            logger.debug(
-                f"Using cached path mapping: {entry_path} -> {cached_actual_path}"
-            )
-            try:
-                result, content_ok, _resolved = self._get_entry_content_direct(
-                    archive,
-                    cached_actual_path,
-                    entry_path,
-                    max_content_length,
-                    content_offset,
-                    compact=compact,
-                )
-                return result, content_ok
-            except Exception as e:
-                logger.warning(f"Cached path mapping failed: {e}")
-                # Clear invalid cache entry and continue with smart retrieval
-                self.cache.delete(cache_key)
-
-        # Try direct access first
-        try:
-            logger.debug(f"Attempting direct entry access: {entry_path}")
-            result, content_ok, resolved_path = self._get_entry_content_direct(
-                archive,
-                entry_path,
+                actual_path,
                 entry_path,
                 max_content_length,
                 content_offset,
                 compact=compact,
-            )
-            # Cache the *resolved* path so a follow-up request for the same
-            # redirect entry skips the redirect chain entirely. Path mapping
-            # is valid even if content extraction hit a transient MIME error
-            # — the path resolved, only the body raised.
-            self.cache.set(cache_key, resolved_path)
-            return result, content_ok
-        except OpenZimMcpArchiveError:
-            # Structural failures we raised ourselves (redirect cycles,
-            # depth-limit) are not "entry not found" cases — searching for
-            # the same path again would either return the same broken
-            # redirect or a misleading match. Propagate unchanged.
-            raise
-        except Exception as direct_error:
-            logger.debug(f"Direct entry access failed for {entry_path}: {direct_error}")
-
-            # Fall back to search-based retrieval
-            try:
-                logger.info(f"Falling back to search-based retrieval for: {entry_path}")
-                actual_path = self._find_entry_by_search(archive, entry_path)
-                if actual_path:
-                    result, content_ok, resolved_path = self._get_entry_content_direct(
-                        archive,
-                        actual_path,
-                        entry_path,
-                        max_content_length,
-                        content_offset,
-                        compact=compact,
-                    )
-                    # Cache the resolved path (which may differ from
-                    # ``actual_path`` if the search hit a redirect stub).
-                    self.cache.set(cache_key, resolved_path)
-                    logger.info(
-                        f"Smart retrieval successful: {entry_path} -> {resolved_path}"
-                    )
-                    return result, content_ok
-                else:
-                    # No entry found via search
-                    raise OpenZimMcpArchiveError(
-                        f"Entry not found: '{entry_path}'. "
-                        f"The entry path may not exist in this ZIM file. "
-                        f"Try using search_zim_file() to find available entries, "
-                        f"or browse_namespace() to explore the file structure."
-                    )
-            except OpenZimMcpArchiveError:
-                # Re-raise our custom errors with guidance
-                raise
-            except Exception as search_error:
-                logger.error(
-                    f"Search-based retrieval failed for {entry_path}: "
-                    f"{search_error}"
-                )
-                # Provide comprehensive error message with guidance
-                raise OpenZimMcpArchiveError(
-                    f"Failed to retrieve entry '{entry_path}'. "
-                    f"Direct access failed: {direct_error}. "
-                    f"Search-based fallback failed: {search_error}. "
-                    f"The entry may not exist or the path format may be incorrect. "
-                    f"Try using search_zim_file() to find the correct entry path."
-                ) from search_error
+            ),
+            fetch_metadata=lambda: self._get_metadata_entry(
+                archive,
+                entry_path,
+                max_content_length,
+                content_offset,
+            ),
+        )
 
     @staticmethod
     def _decode_metadata_content(raw: bytes, mime: str) -> str:
@@ -1188,62 +1216,28 @@ class _ContentMixin:
         archive metadata, so route the request to the metadata API
         and return whatever text/bytes the ZIM stored.
 
+        Thin text presenter over ``_get_metadata_entry_data`` — the dict
+        builder is the single source of truth for key resolution and
+        offset/truncation accounting.
+
         Returns ``(result_text, content_ok)`` matching the contract of
         :meth:`_get_entry_content`. ``content_ok`` is False only when
         the metadata read itself raised (e.g. missing key); a present
         non-text payload is still ``True`` — it's just rendered with
         a ``(bytes content)`` marker.
         """
-        key = entry_path.split("/", 1)[1] if "/" in entry_path else entry_path
-        if not key:
-            return (
-                f"# {entry_path}\n\n"
-                "Empty metadata key. Use a known M/<key> path from "
-                "`metadata for <file>` or `walk namespace M`.",
-                False,
-            )
-        try:
-            item = archive.get_metadata_item(key)
-        except Exception as e:
-            logger.debug(f"get_metadata_item failed for {key}: {e}")
-            return (
-                f"# {entry_path}\n\n"
-                f"Metadata key {key!r} not found in this archive. "
-                f"Use `walk namespace M` to list available keys.",
-                False,
-            )
-        if item is None:
-            return (
-                f"# {entry_path}\n\n"
-                f"Metadata key {key!r} resolved to an empty item.",
-                False,
-            )
-        mime = item.mimetype or ""
-        try:
-            raw = bytes(item.content)
-        except Exception as e:
-            logger.warning(f"Metadata content read failed for {key}: {e}")
-            return (
-                f"# {entry_path}\n\n(Error retrieving content: {e})",
-                False,
-            )
-        content = self._decode_metadata_content(raw, mime)
-        # Honour content_offset / max_content_length to match the regular
-        # entry path's contract.
-        full_meta_length = len(content)
-        if content_offset > 0:
-            content = content[content_offset:] if content_offset < len(content) else ""
-        content = self.content_processor.truncate_content(
-            content,
-            max_content_length,
-            current_offset=content_offset,
-            original_total=full_meta_length,
+        payload, content_ok = self._get_metadata_entry_data(
+            archive, entry_path, max_content_length, content_offset
         )
-        result_text = (
-            f"# {key}\n\nRequested Path: {entry_path}\n"
-            f"Type: {mime or 'unknown'}\n## Content\n\n{content}"
-        )
-        return result_text, True
+        if not content_ok:
+            # Error payloads carry the requested path in ``path`` and the
+            # diagnostic message in ``content``.
+            return f"# {payload['path']}\n\n{payload['content']}", False
+        return (
+            f"# {payload['title']}\n\nRequested Path: {payload['path']}\n"
+            f"Type: {payload.get('content_type') or 'unknown'}\n"
+            f"## Content\n\n{payload['content']}"
+        ), True
 
     def _get_metadata_entry_data(
         self,
@@ -1252,11 +1246,13 @@ class _ContentMixin:
         max_content_length: int,
         content_offset: int = 0,
     ) -> Tuple[Dict[str, Any], bool]:
-        """D7 (beta): dict-shaped variant of ``_get_metadata_entry``.
+        """D7 (beta): dict-shaped ``M/<key>`` metadata fetch.
 
-        Mirrors ``_build_entry_payload``'s offset/truncation accounting so
-        the structured ``M/<key>`` route matches the regular entry
-        contract. Returns ``(payload, content_ok)`` matching
+        Single source of truth for metadata-key resolution and the
+        offset/truncation accounting (matching ``_build_entry_payload``'s
+        so the ``M/<key>`` route honours the regular entry contract). The
+        legacy text surface (``_get_metadata_entry``) renders this
+        payload. Returns ``(payload, content_ok)`` matching
         :meth:`_get_entry_data_from_archive`.
         """
         key = entry_path.split("/", 1)[1] if "/" in entry_path else entry_path
@@ -1325,7 +1321,7 @@ class _ContentMixin:
             payload["_content_chars"] = content_chars
         return payload, True
 
-    def _get_entry_content_direct(  # NOSONAR(python:S3776)
+    def _get_entry_content_direct(
         self,
         archive: Archive,
         actual_path: str,
@@ -1336,6 +1332,12 @@ class _ContentMixin:
         compact: bool = False,
     ) -> Tuple[str, bool, str]:
         """Get entry content using the actual path from the ZIM file.
+
+        Thin text presenter over ``_build_entry_payload`` — the payload
+        builder is the single source of truth for redirect resolution,
+        compact link-stripping, and offset/truncation accounting, so the
+        text and structured surfaces cannot drift (the D7 M/-routing bug
+        happened exactly because a fix landed in only one copy).
 
         Args:
             archive: ZIM archive instance
@@ -1352,102 +1354,15 @@ class _ContentMixin:
             following any redirect chain (equal to ``actual_path`` when
             ``actual_path`` itself was not a redirect).
         """
-        entry = archive.get_entry_by_path(actual_path)
-
-        # Resolve redirects to the target entry so the response reflects
-        # the resolved page (path, title, content) rather than the redirect
-        # stub. The shared resolver detects cycles and runaway chains
-        # explicitly — libzim's ``Entry.get_item()`` silently follows the
-        # chain and would hang on a cycle.
-        entry = resolve_redirect_chain(entry, context=f"starting at {actual_path}")
-
-        # From here on, ``entry`` is the resolved target. Update
-        # ``actual_path`` so the response and the path-mapping cache
-        # reflect the target — subsequent lookups skip the chain entirely.
-        actual_path = entry.path
-        title = entry.title or "Untitled"
-
-        # Get content
-        content = ""
-        content_type = ""
-        content_ok = True
-
-        try:
-            item = entry.get_item()
-            mime_type = item.mimetype or ""
-            content_type = mime_type
-
-            # Process content based on MIME type. ``scope_main_content`` strips
-            # ZIMIT/warc2zim site chrome from the primary entry-content fetch
-            # so get_zim_entry / get_entries match the cleaned bundle tools.
-            content = self.content_processor.process_mime_content(
-                bytes(item.content),
-                mime_type,
-                compact=compact,
-                scope_main_content=True,
-            )
-
-        except Exception as e:
-            logger.warning(f"Error getting entry content: {e}")
-            content = f"(Error retrieving content: {e})"
-            content_ok = False
-
-        # Strip markdown link soup IN the content layer when compact, BEFORE
-        # measuring/slicing, so ``total_length`` and ``content_offset`` are
-        # computed against the same text the caller receives. Otherwise the
-        # body was measured/sliced with link markup (~146k chars) but served
-        # link-stripped (~83k) by the downstream compact post-processing, and
-        # content_offset addressed positions that didn't exist in the served
-        # text. (The downstream strip is now idempotent on this content.)
-        if compact:
-            content = _strip_markdown_links_shared(content)
-
-        total_length = len(content)
-        offset_applied = False
-        offset_past_end = False
-        if content_offset and content_offset > 0:
-            if content_offset >= total_length:
-                content = ""
-                offset_past_end = True
-            else:
-                content = content[content_offset:]
-            offset_applied = True
-
-        # Truncate if necessary. ``current_offset`` lets the hint
-        # compute the correct next-page offset for paginated reads
-        # (A11 F2/Opp4); ``original_total`` keeps the footer's "of N"
-        # denominator stable across paginated reads (A11 post-a11 M4).
-        content = self.content_processor.truncate_content(
-            content,
+        payload, content_ok, resolved_path = self._build_entry_payload(
+            archive,
+            actual_path,
+            requested_path,
             max_content_length,
-            current_offset=content_offset,
-            original_total=total_length,
+            content_offset,
+            compact=compact,
         )
-
-        # Build return content - show both requested and actual paths if different
-        result_text = f"# {title}\n\n"
-        if actual_path != requested_path:
-            result_text += f"Requested Path: {requested_path}\n"
-            result_text += f"Actual Path: {actual_path}\n"
-        else:
-            result_text += f"Path: {actual_path}\n"
-        result_text += f"Type: {content_type or 'Unknown'}\n"
-        if offset_past_end:
-            result_text += (
-                f"Content Offset: {content_offset} is past the end of the "
-                f"{total_length:,}-character body — no content at this offset.\n"
-            )
-        elif offset_applied:
-            result_text += (
-                f"Content Offset: {content_offset} of {total_length:,} characters\n"
-            )
-        result_text += "## Content\n\n"
-        if offset_past_end:
-            result_text += "(No content — offset beyond end of body)"
-        else:
-            result_text += content or "(No content)"
-
-        return result_text, content_ok, actual_path
+        return _render_entry_payload_text(payload), content_ok, resolved_path
 
     def get_binary_entry_data(  # NOSONAR(python:S3776)
         self,

@@ -1591,54 +1591,20 @@ class _SearchMixin:
         if offset >= scan.filtered_count:
             return [], scan
 
-        # Project (entry_id, entry, namespace, content_mime) tuples onto
-        # SearchHit-shaped dicts. P3-D1 (live-MCP sweep): per-hit
-        # ``namespace`` / ``content_type`` MUST be populated. The legacy
-        # ``_build_filtered_results`` always did so; this _data sibling
-        # previously dropped them with the rationale that filters were
-        # echoed once at the top level. But the renderer
+        # Project via the shared ``_build_filtered_results`` helper so the
+        # hit shape exists exactly once. P3-D1 (live-MCP sweep): per-hit
+        # ``namespace`` / ``content_type`` MUST be populated. A previous
+        # inline copy here dropped them with the rationale that filters
+        # were echoed once at the top level. But the renderer
         # ``_format_filtered_response`` does direct-key access on each
         # row, and the canonical-IS-top short-circuit at
         # ``search_with_filters_with_canonical_splice`` falls through to
         # that renderer with these rows — causing
         # ``KeyError: 'namespace'`` on every ``search Berlin in namespace
         # C`` / ``search Tokyo in namespace C`` / ``search Paris in
-        # namespace C`` query. Restore the contract so both callers
-        # (renderer + structured consumers) see the same shape.
-        results: List[Dict[str, Any]] = []
-        for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
-            try:
-                title = entry.title or "Untitled"
-                snippet = self._get_entry_snippet(entry, query=query)
-                if not content_type:
-                    try:
-                        content_mime = entry.get_item().mimetype or content_mime
-                    except Exception as e:
-                        logger.debug(
-                            f"Could not get mimetype for entry {entry_id}: {e}"
-                        )
-                results.append(
-                    {
-                        "path": entry_id,
-                        "title": title,
-                        "snippet": snippet,
-                        "namespace": entry_namespace,
-                        "content_type": content_mime,
-                    }
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Error processing filtered search result {entry_id}: {e}"
-                )
-                results.append(
-                    {
-                        "path": entry_id,
-                        "title": f"Entry {offset + i + 1}",
-                        "snippet": f"(Error getting entry details: {e})",
-                        "namespace": entry_namespace or "unknown",
-                        "content_type": content_mime or "unknown",
-                    }
-                )
+        # namespace C`` query. Sharing the projection keeps both callers
+        # (renderer + structured consumers) on the same shape.
+        results = self._build_filtered_results(page, content_type, offset, query=query)
         return results, scan
 
     def _perform_filtered_search(
@@ -1912,15 +1878,30 @@ class _SearchMixin:
         offset: int,
         query: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Format each materialised entry into the response result dict."""
+        """Project materialised entries onto SearchHit-shaped result dicts.
+
+        Shared projection helper for both filtered-search surfaces —
+        the markdown path (``_perform_filtered_search``) and the
+        structured path (``_perform_filtered_search_data``). The two
+        previously carried near-verbatim inline copies of this loop and
+        drifted twice (see the P3-D1 note at the _data call site);
+        keeping the projection here means the hit shape exists exactly
+        once.
+
+        Error rows preserve the scan-provided ``entry_namespace`` /
+        ``content_mime`` when known, falling back to ``"unknown"`` only
+        when the scan produced an empty value.
+        """
         results: List[Dict[str, Any]] = []
         for i, (entry_id, entry, entry_namespace, content_mime) in enumerate(page):
             try:
                 title = entry.title or "Untitled"
                 snippet = self._get_entry_snippet(entry, query=query)
                 if not content_type:
+                    # No content_type filter means the scan never fetched
+                    # the mimetype (tuple carries ""), so backfill it here.
                     try:
-                        content_mime = entry.get_item().mimetype or ""
+                        content_mime = entry.get_item().mimetype or content_mime
                     except Exception as e:
                         logger.debug(
                             f"Could not get mimetype for entry {entry_id}: {e}"
@@ -1943,8 +1924,8 @@ class _SearchMixin:
                         "path": entry_id,
                         "title": f"Entry {offset + i + 1}",
                         "snippet": f"(Error getting entry details: {e})",
-                        "namespace": "unknown",
-                        "content_type": "unknown",
+                        "namespace": entry_namespace or "unknown",
+                        "content_type": content_mime or "unknown",
                     }
                 )
         return results
