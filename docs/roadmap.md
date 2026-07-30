@@ -1,10 +1,10 @@
 # openzim-mcp Roadmap
 
-**Status:** Latest release **v2.4.3** (2026-06-15) — PyPI `2.4.3` and `ghcr.io/cameronrye/openzim-mcp:2.4.3` / `:latest`, GitHub Release with assets. v2.0.0 GA shipped 2026-05-27 (as `:2.0.0`); the v2.0.x/v2.1.x line was kept current via beta-sweep fixes plus the v2.1.0 native-libzim reader features. **v2.2.0 shipped the first v2.5 roadmap item — `#17` archive-type presets (the v2.5.0a1 milestone)** — validated against the live superuser (sotoki v3.0.2) archive in the v2.2.0 reprobe; v2.2.1 was a Docker stdio-default fix. **v2.3.0 shipped `#16` — the inbound link-graph sidecar (the v2.5.0a2 milestone).** **v2.4.0 (2026-06-09) shipped the v2.5.0a3 items** (`#199` dispatch-eval scoping, `#18` `zim_get_section` raw-text) and the `#16` sidecar-v2 follow-ups (`builder_version` meta + per-edge `anchor_text`, finer `build` CLI errors) — PRs #277/#279/#280/#281.
+**Status: ✅ COMPLETE (closed out 2026-07-29).** Every in-scope v2.5 item has shipped or formally closed; no open work remains on this roadmap. Latest release **v2.5.3** (2026-07-01). The shipping history: `#17` archive-type presets a1 in **v2.2.0** (reprobe-validated against the live superuser sotoki v3.0.2 archive); `#16` inbound link-graph sidecar in **v2.3.0**; `#199` dispatch-eval scoping, `#18` `zim_get_section` raw-text, and the `#16` sidecar-v2 follow-ups in **v2.4.0** (PRs #277/#279/#280/#281); the `#17` a2 SE score-prefix trim in **v2.4.4**. The conditional Phase D sub-items (sub-D-3, sub-D-4) **closed by default on 2026-07-19** — no live-evidence trigger fired (see their status entries below). The `zim_get` `compact` default revisit is **explicitly deferred** with no deadline (see below). v2.0.0 GA shipped 2026-05-27; the v2.0.x/v2.1.x line was kept current via beta-sweep fixes plus the v2.1.0 native-libzim reader features.
 
-This document tracks open work past v2.0.0. Everything here is **additive**: opt-in extras, optional sidecars, or dispatch tuning. None of it changes the v2 tool surface or response contract.
+This document tracked open work past v2.0.0. Everything here was **additive**: opt-in extras, optional sidecars, or dispatch tuning. None of it changed the v2 tool surface or response contract. It is retained as the record of what shipped, what closed, and why.
 
-v3 is reserved for a future breaking change (libzim major bump or a deeper surface restructure). **Release cadence note:** the additive v2.5 items are shipping incrementally on the normal **v2.2.x+** minor/patch line (e.g. `#17` landed in v2.2.0), not as standalone `v2.5.0aN` pre-releases. The `v2.5.0` tag is retained below as the rollup marker for when the in-scope set lands; the per-milestone `v2.5.0aN` labels are bookkeeping, not literal release tags.
+v3 is reserved for a future breaking change (libzim major bump or a deeper surface restructure). **Release cadence note:** the additive v2.5 items shipped incrementally on the normal **v2.2.x+** minor/patch line (e.g. `#17` landed in v2.2.0), not as standalone `v2.5.0aN` pre-releases. The `v2.5.0aN` milestone labels below are bookkeeping, not literal release tags. The literal **`v2.5.0` tag** was cut by ordinary release cadence on **2026-06-18** (the Smithery + MCP Registry distribution feature, #298) rather than as the roadmap rollup marker originally sketched here; the rollup is instead recorded by this document's closure — all in-scope items shipped or formally closed as of 2026-07-29.
 
 ---
 
@@ -18,13 +18,13 @@ v3 is reserved for a future breaking change (libzim major bump or a deeper surfa
 
 ---
 
-## Open items
+## Items (all shipped or closed)
 
-### Phase D follow-ons (triggered work, behind extras)
+### Phase D follow-ons (triggered work, behind extras) — ❌ closed by default 2026-07-19
 
-Phase D shipped `#6` cross-encoder reranker and `#8` Tier 1 rules-based query rewriting at v2.0.0b1, then deliberately deferred three items pending live evidence. Each has a **measurable trigger** that justifies cutting a follow-up design spec.
+Phase D shipped `#6` cross-encoder reranker and `#8` Tier 1 rules-based query rewriting at v2.0.0b1, then deliberately deferred three items pending live evidence. Each had a **measurable trigger** that would have justified cutting a follow-up design spec. Neither remaining trigger fired.
 
-#### sub-D-3 — Hybrid intent parser + Tier 2 decomposition (`#8` Tier 2 + `#12`)
+#### sub-D-3 — Hybrid intent parser + Tier 2 decomposition (`#8` Tier 2 + `#12`) — ❌ **CLOSED 2026-07-19 (by default)**
 
 **Current state.** [`openzim_mcp/intent_parser.py`](../openzim_mcp/intent_parser.py) is regex-based with 26 weighted patterns. Confidence < 0.7 routes to a low-confidence path; confidence < 0.55 marks "low confidence" with a footer.
 
@@ -35,11 +35,11 @@ Phase D shipped `#6` cross-encoder reranker and `#8` Tier 1 rules-based query re
 - ≥5% of `parse_intent` calls land in the existing low-confidence path (regex confidence < 0.7), OR
 - Small-model transcript review surfaces multi-hop queries that the regex path fails on at ≥1 per 100 queries.
 
-**Status (updated 2026-06-08; decision due 2026-07-19).** Beta sweep cycles (b2 → b13) drove the regex path to roughly 99% accuracy on labeled queries, and no live evidence has met either trigger. **The trigger is not an auto-computed in-process rate** and was never promised as one: the per-call `<!-- intent=… cert=… -->` marker appended to every response exposes each `parse_intent` confidence, so an operator recovers the low-confidence rate (the fraction with `cert < 0.7`) by grepping their own transcript/log retention across the window; the second leg (multi-hop failures) is a qualitative transcript review. As of 2026-06-08 no such operator evidence and no transcript-review report has surfaced. **Default outcome:** absent an operator report before 2026-07-19, sub-D-3 formally closes as "not justified by live evidence" (recorded in CHANGELOG) and reopens only if the trigger later fires in the field.
+**Status — ❌ CLOSED 2026-07-19 as "not justified by live evidence" (close-by-default executed; recorded 2026-07-29).** Beta sweep cycles (b2 → b13) drove the regex path to roughly 99% accuracy on labeled queries, and no live evidence ever met either trigger. **The trigger was not an auto-computed in-process rate** and was never promised as one: the per-call `<!-- intent=… cert=… -->` marker appended to every response exposes each `parse_intent` confidence, so an operator recovers the low-confidence rate (the fraction with `cert < 0.7`) by grepping their own transcript/log retention across the window; the second leg (multi-hop failures) is a qualitative transcript review. No operator evidence and no transcript-review report surfaced by the 2026-07-19 deadline, so the standing close-by-default decision took effect. **Reopens only if the trigger later fires in the field** (an operator report showing ≥5% low-confidence parse rate or ≥1/100 multi-hop regex misses).
 
-**Reference design.** Previous draft of the fastText classifier path preserved at commit [`a92d04e`](https://github.com/cameronrye/openzim-mcp/commit/a92d04e).
+**Reference design.** Previous draft of the fastText classifier path preserved at commit [`a92d04e791a7`](https://github.com/cameronrye/openzim-mcp/commit/a92d04e791a7) — a pre-squash commit from the PR #163 branch, reachable on GitHub by hash but not from any local ref (a plain clone's `git show a92d04e` will fail).
 
-#### sub-D-4 — Embeddings sidecar + hybrid retrieval (`#15`)
+#### sub-D-4 — Embeddings sidecar + hybrid retrieval (`#15`) — ❌ **CLOSED 2026-07-19 (by default)**
 
 **Current state.** No semantic search. Pure Xapian BM25 is the only relevance signal beyond the cross-encoder reranker (which reranks Xapian's top-50). Semantic-divergent queries ("the chemical that makes leaves green") have no path to canonical matches that don't share lexical tokens.
 
@@ -50,9 +50,9 @@ Phase D shipped `#6` cross-encoder reranker and `#8` Tier 1 rules-based query re
 - Reranker hit rate is meaningful (≥15% of search-tool calls past the skip-on-short-query gate), AND
 - Operators or end-users report that semantic-divergent queries consistently miss in Xapian-only search even with the reranker active.
 
-**Status (updated 2026-06-08; closes with sub-D-3 on 2026-07-19).** Telemetry is still not collected at the required granularity and there are no operator reports. As with sub-D-3, both legs are operator-observable rather than server-aggregated: the reranker emits a per-call INFO line and the four `reranker_*` counters in the `zim_health` server-health report give the hit-rate denominator (see [extras-reranker.md](extras-reranker.md)), while the semantic-miss leg is inherently qualitative (operator / end-user reports). As of 2026-06-08 neither leg has produced evidence. **Default outcome:** absent both legs before 2026-07-19, sub-D-4 formally closes alongside sub-D-3 as "not justified by live evidence" (recorded in CHANGELOG) and reopens only if the triggers later fire.
+**Status — ❌ CLOSED 2026-07-19 as "not justified by live evidence" (close-by-default executed alongside sub-D-3; recorded 2026-07-29).** Telemetry was never collected at the required granularity and no operator reports arrived. As with sub-D-3, both legs are operator-observable rather than server-aggregated: the reranker emits a per-call INFO line and the four `reranker_*` counters in the `zim_health` server-health report give the hit-rate denominator (see [extras-reranker.md](extras-reranker.md)), while the semantic-miss leg is inherently qualitative (operator / end-user reports). Neither leg produced evidence by the 2026-07-19 deadline, so the standing close-by-default decision took effect. **Reopens only if both triggers later fire** (reranker hit rate ≥15% of gated search calls AND consistent operator/end-user semantic-miss reports).
 
-**Reference design.** Previous draft preserved at commit [`a92d04e`](https://github.com/cameronrye/openzim-mcp/commit/a92d04e).
+**Reference design.** Previous draft (sidecar format, build CLI, RRF fusion) preserved at commit [`a92d04e791a7`](https://github.com/cameronrye/openzim-mcp/commit/a92d04e791a7) — same pre-squash PR #163 branch commit as sub-D-3's reference; reachable on GitHub by hash only.
 
 ### Phase E — Offline build artifacts
 
@@ -66,7 +66,7 @@ Independent of runtime code; both items add operator-build commands that produce
 
 #### `#17` — Archive-type presets — ✅ **SHIPPED (a1) in v2.2.0**
 
-**Target (met for a1).** Detect archive type via the `M`-namespace metadata + heuristics on `Creator` / `Name` / `Title`. Each detected type has a preset that adjusts snippet shape and summary style. Presets are data, not code — bundled [`openzim_mcp/data/presets.toml`](../openzim_mcp/data/presets.toml), with `OPENZIM_MCP_PRESETS_OVERRIDE_PATH` deep-merge and per-archive pins. See [the design spec](specs/2026-06-04-v2.5-archive-type-presets-design.md).
+**Target (met for a1).** Detect archive type via the `M`-namespace metadata + heuristics on `Creator` / `Name` / `Title`. Each detected type has a preset that adjusts snippet shape and summary style. Presets are data, not code — bundled [`openzim_mcp/data/presets.toml`](../openzim_mcp/data/presets.toml), with `OPENZIM_MCP_PRESETS_OVERRIDE_PATH` deep-merge and per-archive pins. (Design spec removed post-ship, with the a2 deferral outcomes folded into this document.)
 
 **Shipped a1 scope.** Deterministic classifier ([`archive_types.py`](../openzim_mcp/archive_types.py)) detects all four types + `generic` and surfaces `_meta.detected_type` / `_meta.detection_confidence`. Behavior presets attach to `wikipedia` (explicit baseline) and `stackexchange` (`q_and_a` summary + wider snippet) only; `_meta.preset_applied` flags shaped responses. No tool-surface or response-contract change.
 
@@ -78,9 +78,9 @@ Independent of runtime code; both items add operator-build commands that produce
 - **`wiktionary` (`gloss`) and `ted` (transcript) presets — deferred (not data-only after all).** The live probe found ted2zim `ted_mul_all` pages are heading-less multilingual stubs whose transcripts live in `text/vtt` subtitle files, not the HTML body — a heading-token slice can never match, so the preset would be inert. No `mwoffliner` wiktionary archive was available to pin a gloss token. Both stay detected-and-reported with no behavior preset; re-open when a real archive can validate the selector (`gloss` may need a non-heading selector; `transcript` needs VTT extraction, likely out of v2.5 scope).
 - The default-namespace seam and intent-parser priors remain out of scope per the spec's Non-goals.
 
-### v2.0 surface refinements pending v2.5
+### v2.0 surface refinements (resolved)
 
-Open commitments referenced from production code (`openzim_mcp/tools/`) and tests. None breaks v2.0 callers.
+Commitments referenced from production code (`openzim_mcp/tools/`) and tests. None broke v2.0 callers; all are now shipped or explicitly deferred.
 
 #### `#199` — `zim_query` natural-language dispatch for three `zim_get` sub-modes
 
@@ -98,11 +98,13 @@ Open commitments referenced from production code (`openzim_mcp/tools/`) and test
 
 **Status — ✅ SHIPPED in v2.4.0 (PR #277).** `compact` is threaded through the bundle pipeline with a render-mode-keyed cache; `compact=False` returns full tables instead of `[Table N: …]` placeholders. Default `True` preserves all existing behaviour; no `*_description.md` change. (Design spec removed post-ship.)
 
-#### `zim_get` `compact` default revisit
+#### `zim_get` `compact` default revisit — ⏸️ **explicitly deferred (no change; recorded 2026-07-29)**
 
-**Current state.** [`openzim_mcp/tools/zim_get.py`](../openzim_mcp/tools/zim_get.py) defaults `compact=False` at v2.0 to preserve v1.x payload sizing. Small-model callers must opt in to compaction.
+**Current state (unchanged).** [`openzim_mcp/tools/zim_get.py`](../openzim_mcp/tools/zim_get.py) defaults `compact=False` to preserve v1.x payload sizing. Small-model callers must opt in to compaction.
 
-**Target.** Revisit the default after adoption telemetry shows whether small-model callers consistently pass `compact=True`. If usage skews heavily one way, flip the default in v2.5. Schema-compatible either direction; the change is documentation + a constructor default.
+**Original target.** Revisit the default after adoption telemetry shows whether small-model callers consistently pass `compact=True`. Schema-compatible either direction; the change is documentation + a constructor default.
+
+**Decision (2026-07-29).** No adoption telemetry has surfaced through the v2.5 line (this was always operator-observable, never server-aggregated — same as the sub-D triggers). Absent evidence, the default stays `compact=False`: it is the conservative, legacy-compatible choice, and flipping it on a hunch would silently change payload shape for every existing caller. Closed as **no change, deferred indefinitely** — reopens if adoption data ever shows small-model callers consistently passing `compact=True`, and can land in any minor release since it is schema-compatible.
 
 #### `zim_links` `"inbound"` direction enum promotion — ✅ **IMPLEMENTED with `#16`**
 
@@ -110,18 +112,18 @@ Open commitments referenced from production code (`openzim_mcp/tools/`) and test
 
 ---
 
-## v2.5 milestones (proposed)
+## v2.5 milestones (final)
 
 | Milestone | Items | Status / Tag |
 | --- | --- | --- |
-| **v2.5.0a1** | `#17` archive-type presets ([spec](specs/2026-06-04-v2.5-archive-type-presets-design.md) — snippet + summary seams, detect all 4 types, behavior for Wikipedia/Stack Exchange) | ✅ **Shipped in v2.2.0** (reprobe-validated). a2 follow-ons: SE answer score-prefix trim ✅ shipped; `wiktionary` `gloss` + `ted` `transcript` **deferred** (2026-06-16 probe — see above) |
+| **v2.5.0a1** | `#17` archive-type presets (snippet + summary seams, detect all 4 types, behavior for Wikipedia/Stack Exchange; design spec removed post-ship) | ✅ **Shipped in v2.2.0** (reprobe-validated). a2 follow-ons: SE answer score-prefix trim ✅ **shipped in v2.4.4** (PR #294); `wiktionary` `gloss` + `ted` `transcript` **deferred** (2026-06-16 probe — see above) |
 | **v2.5.0a2** | `#16` link-graph sidecar + `build` CLI + `zim_links` `"inbound"` enum promotion | ✅ **Shipped in v2.3.0** (PR #274); sidecar **v2** follow-ups — `builder_version` + per-edge `anchor_text` (PR #280) + finer `build` CLI errors (PR #279) — **shipped in v2.4.0** |
 | **v2.5.0a3** | `#199` dispatch-eval `either_acceptable` scoping + `#18` `zim_get_section` raw-text path | ✅ **Shipped in v2.4.0** (PRs #277, #281) |
-| **v2.5.0a4** | sub-D-3 if triggered + `zim_get` `compact` default revisit (telemetry-driven) | sub-D-3 → **close-by-default 2026-07-19** unless a field trigger fires (see status above); compact revisit _TBD_ |
-| **v2.5.0a5** | sub-D-4 if triggered | **close-by-default 2026-07-19** unless triggers fire (see status above) |
-| **v2.5.0** | Final after all triggered items ship (closed sub-Ds annotated in CHANGELOG) | _TBD_ |
+| **v2.5.0a4** | sub-D-3 if triggered + `zim_get` `compact` default revisit (telemetry-driven) | ❌ sub-D-3 **closed by default 2026-07-19** — no field trigger fired (see status above); compact revisit ⏸️ **explicitly deferred, no change** (see status above) |
+| **v2.5.0a5** | sub-D-4 if triggered | ❌ **closed by default 2026-07-19** — triggers never fired (see status above) |
+| **v2.5.0** | Rollup: all in-scope items shipped or formally closed | ✅ **Complete 2026-07-29.** v2.5 shipped with `#16` + `#17` + `#199` + `#18`; sub-D-3 / sub-D-4 closed for lack of live evidence (this closure is the CHANGELOG-recorded annotation). The literal `v2.5.0` tag was cut 2026-06-18 by ordinary release cadence (Smithery + MCP Registry, #298) — see the release cadence note at the top |
 
-The deferred Phase D sub-Ds are conditional — if their triggers never fire, v2.5 ships with `#16` + `#17` + `#199` only, and sub-D-3 / sub-D-4 formally close with a CHANGELOG entry citing the lack of live evidence. As of 2026-06-08 no field evidence has been collected and both triggers are operator-observable only (not server-aggregated; see each sub-D's status), so the standing decision is **close-by-default on 2026-07-19** unless an operator report arrives first.
+The deferred Phase D sub-Ds were conditional — their triggers never fired, so v2.5 shipped with `#16` + `#17` + `#199` + `#18` only, and sub-D-3 / sub-D-4 formally closed on 2026-07-19 citing the lack of live evidence. Both triggers were operator-observable only (not server-aggregated; see each sub-D's status); no operator report arrived before the deadline.
 
 ---
 
@@ -136,21 +138,21 @@ The deferred Phase D sub-Ds are conditional — if their triggers never fire, v2
 
 ---
 
-## Per-item spec process
+## Per-item spec process (as executed)
 
-For each item, when work begins:
+For each item, when work began:
 
 1. Verify the trigger (for sub-D-3 / sub-D-4) or confirm scope (for `#16` / `#17` / `#199`).
 2. Brainstorm against this roadmap to refine scope and approaches.
-3. Write a design spec in `docs/specs/YYYY-MM-DD-v2.5-<item>-design.md` (create the directory on first use).
+3. Write a design spec in `docs/specs/YYYY-MM-DD-v2.5-<item>-design.md`.
 4. Update the milestones table above with the spec link and status.
 5. Generate an implementation plan via the writing-plans skill.
-6. Execute, review, ship as `v2.5.0aN` / `v2.5.0bN` pre-release.
+6. Execute, review, ship on the incremental release line.
 
-When all in-scope items ship (or formally close), tag `v2.5.0`.
+Design specs were removed post-ship; this document absorbed their outcomes. All in-scope items have now shipped or formally closed (2026-07-29), completing the process.
 
 ## Tracking
 
-- All v2.5 PRs use the label `v2.5`.
+- All v2.5 PRs used the label `v2.5`.
 - Per-item labels: `v2.5-sub-d-3`, `v2.5-sub-d-4`, `v2.5-link-graph`, `v2.5-presets`, `v2.5-dispatch`.
-- This document is the source of truth for "where are we." Update as decisions land.
+- This document was the source of truth for "where are we" and is now the closed record. A reopened item (a sub-D trigger firing in the field, or `compact` adoption data) gets a fresh design spec and a new roadmap entry rather than reanimating this one.
