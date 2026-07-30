@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openzim_mcp.constants import MAX_SEARCH_RESULT_LIMIT
+from openzim_mcp.exceptions import OpenZimMcpValidationError
 from openzim_mcp.tools.zim_search import register as register_zim_search
 
 
@@ -86,6 +87,20 @@ def test_zim_search_description_attached(
     _fn, description = server._tools_store["zim_search"]
     assert "three modes" in description.lower()
     assert "suggest" in description.lower()
+
+
+def test_description_documents_title_rows_with_score_not_snippet(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Title-mode rows are FindEntryHit {path, title, score} — the description
+    must not claim they carry `snippet`, and must document `score` (the
+    ranking signal callers gate on)."""
+    _patch_async_ops(monkeypatch)
+    register_zim_search(server)
+    _fn, description = server._tools_store["zim_search"]
+    assert "fulltext/title rows carry" not in description
+    assert "title rows carry" in description
+    assert "`score`" in description
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +168,77 @@ async def test_zim_search_allows_limit_at_ceiling(
     ops.search_all_data.assert_awaited_once_with(
         "x", limit_per_file=MAX_SEARCH_RESULT_LIMIT
     )
+
+
+@pytest.mark.asyncio
+async def test_title_limit_above_data_layer_cap_rejected(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """find_entry_by_title_data rejects limit > 50 — the surface must return
+    the structured invalid_limit envelope instead of letting the data-layer
+    exception surface through the generic broad-except envelope."""
+    ops = _patch_async_ops(monkeypatch)
+    ops.find_entry_by_title_data = AsyncMock(
+        side_effect=OpenZimMcpValidationError(
+            "limit must be between 1 and 50 (provided: 51)"
+        )
+    )
+    with patch(
+        "openzim_mcp.topic_preprocessing.auto_select_zim_file",
+        return_value="/data/wiki.zim",
+    ):
+        register_zim_search(server)
+        fn, _ = server._tools_store["zim_search"]
+        result = await fn(query="x", mode="title", limit=51)
+    assert result["operation"] == "invalid_limit"
+    assert "50" in result["message"]
+    ops.find_entry_by_title_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_suggest_limit_above_data_layer_cap_rejected(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ops = _patch_async_ops(monkeypatch)
+    ops.get_search_suggestions_data = AsyncMock(
+        side_effect=OpenZimMcpValidationError("Limit must be between 1 and 50")
+    )
+    with patch(
+        "openzim_mcp.topic_preprocessing.auto_select_zim_file",
+        return_value="/data/wiki.zim",
+    ):
+        register_zim_search(server)
+        fn, _ = server._tools_store["zim_search"]
+        result = await fn(query="Det", mode="suggest", limit=51)
+    assert result["operation"] == "invalid_limit"
+    assert "50" in result["message"]
+    ops.get_search_suggestions_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_limit_ceiling_hint_is_mode_aware(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The over-ceiling hint may only recommend `offset` where offset paging
+    exists (single-archive fulltext) — the M28 guard rejects it elsewhere."""
+    _patch_async_ops(monkeypatch)
+    register_zim_search(server)
+    fn, _ = server._tools_store["zim_search"]
+    over = MAX_SEARCH_RESULT_LIMIT + 1
+
+    single = await fn(query="x", mode="fulltext", limit=over)
+    assert single["operation"] == "invalid_limit"
+    assert "offset" in single["message"]
+
+    cross = await fn(query="x", mode="fulltext", cross_file=True, limit=over)
+    assert cross["operation"] == "invalid_limit"
+    assert "offset" not in cross["message"]
+
+    # Title/suggest get the tighter 50 cap even for absurd limits.
+    title = await fn(query="x", mode="title", limit=over)
+    assert title["operation"] == "invalid_limit"
+    assert "50" in title["message"]
+    assert "offset" not in title["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +382,58 @@ async def test_title_single_archive_applies_promotion(
 
     # Promotion hoisted Nikola_Tesla to the top, displacing Wireless_Electricity.
     assert result["results"][0]["entry_path"] == "Nikola_Tesla"
+    assert result["_meta"]["promotion_applied"] is True
+    ops.find_entry_by_title_data.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_title_promotion_row_normalised_and_counts_recomputed(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hoisted promotion row must satisfy the FindEntryHit contract
+    (`score` present) and the merged page must preserve the
+    total == returned_count == len(results) <= limit invariant that
+    _assemble_find_response guarantees."""
+    ops = _patch_async_ops(
+        monkeypatch,
+        find_entry_by_title_data={
+            "results": [
+                {"path": "A/Effects", "title": "Effects", "score": 0.95},
+                {"path": "A/Other", "title": "Other", "score": 0.9},
+            ],
+            "next_cursor": None,
+            "total": 2,
+            "done": True,
+            "page_info": {"offset": 0, "limit": 2, "returned_count": 2},
+            "_meta": {},
+        },
+    )
+    with (
+        patch(
+            "openzim_mcp.topic_preprocessing.auto_select_zim_file",
+            return_value="/data/wiki.zim",
+        ),
+        patch(
+            "openzim_mcp.topic_preprocessing.promote_topic_via_title_index",
+            return_value={
+                "path": "A/Agriculture",
+                "title": "Agriculture",
+                "zim_file": "/data/wiki.zim",
+                "match_type": "redirect",
+            },
+        ),
+    ):
+        register_zim_search(server)
+        fn, _ = server._tools_store["zim_search"]
+        result = await fn(query="agriculture effects", mode="title", limit=2)
+
+    rows = result["results"]
+    assert rows[0]["path"] == "A/Agriculture"
+    assert rows[0]["score"] == 1.0
+    assert rows[0]["match_type"] == "redirect"
+    assert len(rows) == 2  # merged page re-trimmed to the caller's limit
+    assert result["total"] == 2
+    assert result["page_info"]["returned_count"] == 2
     assert result["_meta"]["promotion_applied"] is True
     ops.find_entry_by_title_data.assert_awaited_once()
 

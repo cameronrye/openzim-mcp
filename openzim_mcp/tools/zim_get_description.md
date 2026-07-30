@@ -11,8 +11,8 @@ mutually-exclusive branches:
     raw bytes (image, video, PDF, etc.). `view` is locked to "full"
     in this branch.
 - Batch: pass `entry_paths` (list of strings). Returns full bodies
-    per entry; `view` is locked to "full" (a non-full `view` returns
-    `invalid_path_combination`).
+    per entry; `view`="full" and `content_offset` unsupported
+    (either returns `invalid_path_combination`).
 - Main page: pass `main_page=True` (no entry_path). Returns the
     archive's main page. `view`, `entry_path`, `entry_paths`,
     `binary` are all forbidden in this branch.
@@ -36,10 +36,12 @@ PARAMETERS:
                        (single entry only).
   main_page            Default False. Set True for the archive's
                        main page (zero-path fetch).
-  max_content_length   Body cap in chars for view="full".
+  max_content_length   Body cap in chars for view="full"; with
+                       `binary=True` caps fetched bytes (default 10MB,
+                       oversize returns metadata + `truncated: true`).
   content_offset       Char offset into the body for view="full"
                        (default 0). Used with the truncation footer's
-                       `pass content_offset=N` hint.
+                       `pass content_offset=N` hint. Single-entry only.
   compact              Default **False** (v2.0). Set True for
                        small-LLM compaction. v2.5 revisits the default.
   compact_budget       Inert in zim_get at v2.x (honored by `zim_query`,

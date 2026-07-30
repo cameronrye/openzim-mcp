@@ -28,6 +28,7 @@ _VALID_MODES = {"page", "walk"}
 def register(server: "OpenZimMcpServer") -> None:
     """Register the `zim_browse` tool with the MCP server."""
     from ..async_operations import AsyncZimOperations
+    from ..zim.namespace import _NamespaceMixin
 
     ops = AsyncZimOperations(server.zim_operations)
 
@@ -65,12 +66,41 @@ def register(server: "OpenZimMcpServer") -> None:
             )
             if cursor_error is not None:
                 return cursor_error
+            eff_assets = include_assets
             if state is not None:
+                # The cursor's ``ns`` is canonical (the data layer maps
+                # "c"/"content" → "C" before encoding), so canonicalise the
+                # caller's namespace the same way before comparing —
+                # otherwise a lowercase or long-form namespace that
+                # succeeded on page 1 falsely rejects its own cursor.
+                canonical_ns = _NamespaceMixin._canonicalise_namespace(
+                    namespace.strip()
+                )
                 ns_error = cursor_context_mismatch(
-                    state, field="ns", expected=namespace, label="namespace"
+                    state, field="ns", expected=canonical_ns, label="namespace"
                 )
                 if ns_error is not None:
                     return ns_error
+                # Honour the asset visibility the cursor was issued under:
+                # a browse offset is counted against the filtered row
+                # stream, so resuming with the flag flipped skips or
+                # repeats rows. Reject an explicit include_assets=True that
+                # contradicts the cursor, else adopt the pinned flag (the
+                # same shape zim_links uses for its 'k' bucket).
+                cursor_assets = state.get("as")
+                if isinstance(cursor_assets, bool):
+                    if include_assets and not cursor_assets:
+                        return tool_error(
+                            operation="cursor_context_mismatch",
+                            message=(
+                                "Cursor was issued with include_assets=False; "
+                                "this call passed include_assets=True. Drop "
+                                "the `cursor` and start over to change asset "
+                                "visibility."
+                            ),
+                            context=f"as={cursor_assets!r}",
+                        )
+                    eff_assets = cursor_assets
 
             if mode == "page":
                 eff_limit = limit if limit is not None else 50
@@ -81,14 +111,14 @@ def register(server: "OpenZimMcpServer") -> None:
                         limit=eff_limit,
                         offset=int(state.get("o", 0) or 0),
                         cursor_archive_identity=state.get("ai"),
-                        include_assets=include_assets,
+                        include_assets=eff_assets,
                     )
                 return await ops.browse_namespace_data(
                     zim_file_path,
                     namespace=namespace,
                     limit=eff_limit,
                     offset=offset,
-                    include_assets=include_assets,
+                    include_assets=eff_assets,
                 )
 
             # mode == "walk" — v2 walk takes the decoded cursor-state dict
@@ -114,13 +144,13 @@ def register(server: "OpenZimMcpServer") -> None:
                     namespace,
                     cursor_state=cursor_state,
                     limit=eff_limit,
-                    include_assets=include_assets,
+                    include_assets=eff_assets,
                 )
             return await ops.walk_namespace_data(
                 zim_file_path,
                 namespace,
                 limit=eff_limit,
-                include_assets=include_assets,
+                include_assets=eff_assets,
             )
         except Exception as e:  # noqa: BLE001 — broad catch matches b13 envelope
             return tool_error_response(

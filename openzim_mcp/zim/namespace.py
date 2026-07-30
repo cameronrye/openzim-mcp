@@ -666,7 +666,7 @@ class _NamespaceMixin:
         ``total`` / ``done`` / ``page_info`` plus the ``namespace`` /
         ``discovery_method`` / ``sampling_based`` /
         ``results_may_be_incomplete`` extras. ``next_cursor`` is encoded
-        with ``tool="browse_namespace"`` and state ``{o, l, ns, ai}``.
+        with ``tool="browse_namespace"`` and state ``{o, l, ns, as, ai}``.
 
         ``cursor_archive_identity`` is the ``s.ai`` value decoded from a
         resumed cursor; mismatched archives are rejected so a cursor
@@ -828,14 +828,24 @@ class _NamespaceMixin:
             if not done:
                 from openzim_mcp.pagination import archive_identity
 
+                # ``as`` pins the asset visibility the resume offset was
+                # counted under: on new-scheme C ``o`` is a content-row
+                # offset against the include_assets-filtered row stream, so
+                # replaying the cursor with the flag flipped skips (or
+                # repeats) every row the other setting counted. The tool
+                # layer adopts / rejects it the way it does ``ns``.
                 next_cursor = Cursor.encode(
                     tool="browse_namespace",
-                    state={
-                        "o": resume_index,
-                        "l": limit,
-                        "ns": namespace,
-                        "ai": archive_identity(validated_path),
-                    },
+                    state=cast(
+                        "Any",
+                        {
+                            "o": resume_index,
+                            "l": limit,
+                            "ns": namespace,
+                            "as": include_assets,
+                            "ai": archive_identity(validated_path),
+                        },
+                    ),
                 )
 
             page_info: Dict[str, Any] = {
@@ -1833,14 +1843,22 @@ class _NamespaceMixin:
                     # simple_tools.py maps offset back into the
                     # ``scan_at`` key on cursor_state before calling
                     # walk_namespace_data.
+                    # ``as`` pins asset visibility so an exhaustive walk
+                    # resumed from its own cursor keeps surfacing the same
+                    # row stream instead of silently switching filters
+                    # mid-scan (same contract as the browse cursor).
                     next_cursor = Cursor.encode(
                         tool="walk_namespace",
-                        state={
-                            "o": entry_id,
-                            "l": limit,
-                            "ns": namespace,
-                            "ai": archive_identity(validated),
-                        },
+                        state=cast(
+                            "Any",
+                            {
+                                "o": entry_id,
+                                "l": limit,
+                                "ns": namespace,
+                                "as": include_assets,
+                                "ai": archive_identity(validated),
+                            },
+                        ),
                     )
 
                 # A11 post-a11 M3: surface a per-namespace denominator

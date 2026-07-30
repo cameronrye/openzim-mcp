@@ -10,12 +10,14 @@ get_article_structure) into one 4-branch entry point.
     `max_content_length`, `content_offset`, `compact`, `compact_budget`.
     Forbidden: `entry_paths`, `binary=True`, `main_page=True`.
   - Single binary: requires `entry_path` + `binary=True`. `view`
-    locked to ``"full"``. Forbidden: `entry_paths`,
+    locked to ``"full"``. Optional `max_content_length` (caps the
+    fetched BYTES — oversize entries return metadata with
+    ``truncated: true``). Forbidden: `entry_paths`,
     `view∈{summary,toc,structure}`, `main_page=True`.
   - Batch: requires `entry_paths`. Full-body only — `view` is locked to
     "full" (a non-full `view` returns `invalid_path_combination`).
     Optional `max_content_length`, `compact`. Forbidden: `entry_path`,
-    `binary=True`, `main_page=True`.
+    `binary=True`, `main_page=True`, non-zero `content_offset`.
   - Main page: requires `main_page=True`. `view` ignored (defaults to
     full-shaped response). Forbidden: `entry_path`, `entry_paths`,
     `binary=True`, `view∈{summary,toc,structure}`.
@@ -102,6 +104,7 @@ def register(server: "OpenZimMcpServer") -> None:
                 view=view,
                 binary=binary,
                 main_page=main_page,
+                content_offset=content_offset,
             )
             if err is not None:
                 return err
@@ -110,7 +113,14 @@ def register(server: "OpenZimMcpServer") -> None:
                 return await ops.get_main_page_data(zim_file_path)
             if binary:
                 assert entry_path is not None  # validator guarantees this
-                return await ops.get_binary_entry_data(zim_file_path, entry_path)
+                # ``max_content_length`` caps the fetched BYTES here — it maps
+                # onto the data layer's ``max_size_bytes`` (default 10MB when
+                # None); oversize entries come back metadata-only with
+                # ``truncated: true``, the recovery the resource layer's
+                # oversize-binary error directs callers to.
+                return await ops.get_binary_entry_data(
+                    zim_file_path, entry_path, max_size_bytes=max_content_length
+                )
             if entry_paths:
                 # Legacy get_entries_data expects a list of dicts so it can
                 # honor cross-archive batches; rc1 keeps batch single-archive
@@ -160,6 +170,7 @@ def _validate_branch_combination(
     view: str,
     binary: bool,
     main_page: bool,
+    content_offset: int = 0,
 ) -> Any:
     """Return a structured `invalid_path_combination` envelope if the
     requested branch is impossible, or None if the call is valid.
@@ -187,6 +198,21 @@ def _validate_branch_combination(
                 "Batch mode (`entry_paths`) returns full article bodies only; "
                 f"`view={view!r}` is not supported. Fetch a summary / toc / "
                 "structure with a single-entry `entry_path` call instead."
+            ),
+        )
+    if entry_paths and content_offset:
+        # Like the H13 view guard: get_entries_data always renders each
+        # entry's first page (it has no offset parameter), yet truncated
+        # batch bodies still advertise the `pass content_offset=N` footer.
+        # Silently dropping the offset would loop the caller on page 1
+        # forever, so reject the combination with the working recovery.
+        return tool_error(
+            operation="invalid_path_combination",
+            message=(
+                "Batch mode (`entry_paths`) does not support "
+                "`content_offset` — batch entries always return their first "
+                "page. Page a long entry with a single-entry `entry_path` "
+                "call instead."
             ),
         )
     if binary:
