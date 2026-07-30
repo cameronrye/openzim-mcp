@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.4](https://github.com/cameronrye/openzim-mcp/compare/v2.5.3...v2.5.4) (2026-07-30)
+
+
+### Fixed
+
+* **deps:** bump mcp and soupsieve to clear blocking pip-audit advisories ([#320](https://github.com/cameronrye/openzim-mcp/issues/320)) ([90d125f](https://github.com/cameronrye/openzim-mcp/commit/90d125fb923321f321b4fefbcb4a2aea9518c7ce))
+* resolve 41 audited defects and consolidate duplicated retrieval pipelines ([#325](https://github.com/cameronrye/openzim-mcp/issues/325)) ([628fb32](https://github.com/cameronrye/openzim-mcp/commit/628fb322e610890f40b8560766998d072c2e1451))
+
 ## [2.5.3](https://github.com/cameronrye/openzim-mcp/compare/v2.5.2...v2.5.3) (2026-07-01)
 
 
