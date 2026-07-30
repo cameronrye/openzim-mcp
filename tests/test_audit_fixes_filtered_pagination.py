@@ -22,6 +22,7 @@ Covers four interacting defects in the ``_scan_filtered_search`` /
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import List, Optional
 from unittest.mock import MagicMock, patch
@@ -253,3 +254,231 @@ def test_scan_cap_with_no_new_rows_terminates_pagination(tmp_path, monkeypatch) 
         "chain, not re-issue the same offset"
     )
     assert page2["next_cursor"] is None
+
+
+# --------------------------------------------------------------------------
+# Rendered offset hints must match the consumed-slot resume offset the
+# JSON cursor encodes (markdown and compact siblings of the cursor fix)
+# --------------------------------------------------------------------------
+
+
+def _filtered_text(ops, zim_file, archive, entry_ids, **kwargs):
+    """Run ``search_with_filters`` (markdown) against mocked libzim hooks."""
+    with (
+        patch("openzim_mcp.zim_operations.zim_archive") as mock_zim_archive,
+        patch("openzim_mcp.zim_operations.Searcher") as mock_searcher,
+    ):
+        mock_zim_archive.return_value.__enter__.return_value = archive
+        mock_searcher.return_value.search.return_value = _search_stub(entry_ids)
+        return ops.search_with_filters(str(zim_file), "term", **kwargs)
+
+
+def _offset_hint(text: str) -> Optional[int]:
+    match = re.search(r"pass `offset=(\d+)`", text)
+    return int(match.group(1)) if match else None
+
+
+def _get_with_failure(failing: set):
+    def _get(eid: str) -> MagicMock:
+        if eid in failing:
+            raise RuntimeError("corrupt entry")
+        return _entry_for(eid)
+
+    return _get
+
+
+def test_markdown_offset_hint_matches_cursor_resume_offset(tmp_path) -> None:
+    """When a candidate inside the emit window fails materialisation, the
+    markdown footer's ``pass offset=N`` hint must advance in consumed-slot
+    units (like the JSON cursor), not ``offset + limit`` — otherwise the
+    advertised next page re-emits the page-1 tail."""
+    from openzim_mcp.pagination import Cursor
+
+    ops = _ops(tmp_path)
+    zim_file = tmp_path / "test.zim"
+    zim_file.write_bytes(b"zim")
+
+    entry_ids = [f"A/p{i}.htm" for i in range(10)]
+    get_entry = _get_with_failure({"A/p2.htm"})
+
+    page1_text = _filtered_text(
+        ops,
+        zim_file,
+        _archive_stub(get_entry=get_entry),
+        entry_ids,
+        namespace="A",
+        limit=4,
+        offset=0,
+    )
+    hint = _offset_hint(page1_text)
+    assert hint is not None
+
+    page1 = _filtered_data(
+        ops,
+        zim_file,
+        _archive_stub(get_entry=get_entry),
+        entry_ids,
+        namespace="A",
+        limit=4,
+        offset=0,
+    )
+    resume = Cursor.decode(page1["next_cursor"], expected_tool="search_with_filters")
+    assert hint == int(
+        resume["s"]["o"]
+    ), "markdown hint and JSON cursor must resume at the same slot"
+
+    page2 = _filtered_data(
+        ops,
+        zim_file,
+        _archive_stub(get_entry=get_entry),
+        entry_ids,
+        namespace="A",
+        limit=4,
+        offset=hint,
+    )
+    paths1 = [r["path"] for r in page1["results"]]
+    paths2 = [r["path"] for r in page2["results"]]
+    assert not set(paths1) & set(paths2), f"pages overlap: {paths1} / {paths2}"
+
+
+def test_markdown_no_phantom_next_page_when_scan_exhausted(tmp_path) -> None:
+    """An exhausted scan whose page underfilled (failures consumed slots)
+    must render ``(end of results)`` — not advertise a next page that only
+    re-serves rows already shown."""
+    ops = _ops(tmp_path)
+    zim_file = tmp_path / "test.zim"
+    zim_file.write_bytes(b"zim")
+
+    entry_ids = [f"A/q{i}.htm" for i in range(5)]
+    get_entry = _get_with_failure({"A/q1.htm", "A/q2.htm"})
+
+    page1_text = _filtered_text(
+        ops,
+        zim_file,
+        _archive_stub(get_entry=get_entry),
+        entry_ids,
+        namespace="A",
+        limit=4,
+        offset=0,
+    )
+    page1 = _filtered_data(
+        ops,
+        zim_file,
+        _archive_stub(get_entry=get_entry),
+        entry_ids,
+        namespace="A",
+        limit=4,
+        offset=0,
+    )
+    assert page1["done"] is True
+    assert page1["next_cursor"] is None
+    assert "(end of results)" in page1_text
+    assert _offset_hint(page1_text) is None, (
+        "markdown must not advertise a next page the JSON contract "
+        "says does not exist"
+    )
+
+
+def test_compact_filtered_offset_hint_matches_cursor_resume_offset(tmp_path) -> None:
+    """The compact renderer's footer must advance in consumed-slot units
+    for filtered payloads (``total`` is the consumed-slot count), matching
+    the payload's own ``next_cursor``."""
+    from openzim_mcp.pagination import Cursor
+    from openzim_mcp.zim.search import _format_filter_text
+
+    ops = _ops(tmp_path)
+    zim_file = tmp_path / "test.zim"
+    zim_file.write_bytes(b"zim")
+
+    entry_ids = [f"A/p{i}.htm" for i in range(10)]
+    get_entry = _get_with_failure({"A/p2.htm"})
+
+    page1 = _filtered_data(
+        ops,
+        zim_file,
+        _archive_stub(get_entry=get_entry),
+        entry_ids,
+        namespace="A",
+        limit=4,
+        offset=0,
+    )
+    resume = Cursor.decode(page1["next_cursor"], expected_tool="search_with_filters")
+
+    compact_text = ops._format_search_text(
+        page1,
+        display_query="term",
+        filter_text=_format_filter_text("A", None) or "",
+    )
+    assert _offset_hint(compact_text) == int(
+        resume["s"]["o"]
+    ), "compact hint and JSON cursor must resume at the same slot"
+
+
+def test_compact_filtered_lower_bound_total_rendered_with_plus(tmp_path) -> None:
+    """When ``page_info.total_is_lower_bound`` is set, the compact renderer
+    must mark the total as a lower bound (``N+``, matching the non-compact
+    ``_format_filtered_response``) instead of presenting it as exact."""
+    from openzim_mcp.zim.search import _format_filter_text
+
+    ops = _ops(tmp_path)
+    zim_file = tmp_path / "test.zim"
+    zim_file.write_bytes(b"zim")
+
+    entry_ids = [f"C/Article_{i}.htm" for i in range(50)]
+    page1 = _filtered_data(
+        ops, zim_file, _archive_stub(), entry_ids, namespace="C", limit=10, offset=0
+    )
+    assert page1["page_info"].get("total_is_lower_bound") is True
+
+    compact_text = ops._format_search_text(
+        page1,
+        display_query="term",
+        filter_text=_format_filter_text("C", None) or "",
+    )
+    assert 'Found 10+ filtered matches for "term"' in compact_text
+    assert "of 10+" in compact_text
+
+
+def test_canonical_splice_offset_hint_skips_no_slot() -> None:
+    """The splice prepends a synthetic row that consumed no scan slot, so
+    its inflated ``filtered_count`` must not become the next-page offset —
+    resuming there would skip a real row the scan never emitted."""
+    from tests.test_canonical_splice_characterization import _SpliceStub
+
+    payload = {
+        "query": "berlin",
+        "namespace_filter": "C",
+        "content_type_filter": None,
+        "results": [
+            {
+                "path": f"C/Hit_{i}.htm",
+                "title": f"Hit {i}",
+                "snippet": "body text",
+                "namespace": "C",
+                "content_type": "text/html",
+            }
+            for i in range(3)
+        ],
+        "next_cursor": "opaque",
+        "total": 5,
+        "done": False,
+        "page_info": {
+            "offset": 0,
+            "limit": 3,
+            "returned_count": 3,
+            "total_is_lower_bound": True,
+        },
+    }
+    stub = _SpliceStub(
+        data_payload=payload,
+        title_results=[{"path": "C/Berlin", "title": "Berlin", "score": 1.0}],
+    )
+
+    text = stub.search_with_filters_with_canonical_splice(
+        "/x.zim", "berlin", namespace="C", limit=3, offset=0
+    )
+    assert "Berlin" in text
+    assert _offset_hint(text) == payload["total"], (
+        "the spliced row must not shift the resume offset past a slot the "
+        "scan consumed"
+    )

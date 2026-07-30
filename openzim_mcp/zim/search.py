@@ -197,6 +197,7 @@ def _format_filtered_response(
     limit: int,
     *,
     display_query: Optional[str] = None,
+    resume_offset: Optional[int] = None,
 ) -> str:
     """Render the human-readable response body, header, and pagination footer.
 
@@ -204,6 +205,12 @@ def _format_filtered_response(
     facing echo string. ``query`` is the matched form (lowercased by
     Sub-D-2 Rule 1); ``display_query`` is the original-case form so
     the caller sees the casing they typed.
+
+    ``resume_offset`` overrides the next-page offset hint for callers
+    whose ``scan`` is synthesised (the canonical-splice path, where the
+    synthetic ``filtered_count`` also counts the spliced row); when
+    ``None`` the hint is ``scan.filtered_count`` — the consumed-slot
+    resume point the JSON cursor encodes.
     """
     capped_note = (
         f" (filtered from first {scan.scanned} of " f"~{total_results} unfiltered hits)"
@@ -256,8 +263,14 @@ def _format_filtered_response(
             parts.append(f"Snippet: {snippet}\n\n")
 
     parts.append("---\n")
-    has_more = scan.total_filtered_is_lower_bound or (
-        offset + len(results) < scan.filtered_count
+    # More pages exist exactly when the scan stopped early — the same
+    # ``done`` semantics ``search_with_filters_data`` encodes, including
+    # the capped-scan-with-no-rows terminator. Display-space arithmetic
+    # (``offset + len(results) < filtered_count``) miscounts when failed
+    # candidates consumed slots inside the window: it advertised phantom
+    # next pages on exhausted scans.
+    has_more = scan.total_filtered_is_lower_bound and not (
+        scan.scan_cap_hit and not results
     )
     # Compact one-liner footer (v1.2.0+). The previous 3-4 line block (with a
     # base64 cursor blob spelled out alongside the offset hint) added ~50
@@ -267,10 +280,16 @@ def _format_filtered_response(
     # an LLM keeping the conversation context can pass ``offset`` and re-
     # supply the original query without losing any information.
     if has_more:
+        # Resume after the last slot the scan consumed (mirrors the ``o``
+        # the JSON cursor encodes); ``offset + limit`` lands inside the
+        # previous page's window when failed candidates consumed slots.
+        next_offset = (
+            resume_offset if resume_offset is not None else scan.filtered_count
+        )
         parts.append(
             f"Showing {offset + 1}-{offset + len(results)} "
             f"of {total_filtered_text} — "
-            f"pass `offset={offset + limit}` for the next page\n"
+            f"pass `offset={next_offset}` for the next page\n"
         )
         # A14: when the result set is much larger than a small model can
         # productively page through, nudge toward refining the query
@@ -865,9 +884,20 @@ class _SearchMixin:
         else:
             display_total = total_results
             count_approx = "~" if total_results > shown_through else ""
+        # ``page_info.total_is_lower_bound`` (filtered path) marks ``total``
+        # as a floor the scan stopped at, not a count. Render it with the
+        # same ``N+`` suffix ``_format_filtered_response`` uses instead of
+        # presenting the floor as exact — on a clean page the floor equals
+        # ``shown_through``, so the plain form read "of 10" while the
+        # footer advertised a next page.
+        total_text = (
+            f"{display_total}+"
+            if page_info.get("total_is_lower_bound") and not done
+            else f"{count_approx}{display_total}"
+        )
 
         result_text = (
-            f"Found {count_approx}{display_total}{match_qualifier} matches for "
+            f"Found {total_text}{match_qualifier} matches for "
             f'"{echo_query}"{filter_suffix}, '
             f"showing {offset + 1}-{offset + len(results)}:\n\n"
         )
@@ -909,14 +939,22 @@ class _SearchMixin:
         # search renderer above for rationale.
         result_text += "---\n"
         if not done:
-            next_offset = offset + limit
-            if next_cursor is None:
-                # Filtered/limited path that doesn't know the next-page
-                # boundary precisely; advance by what we actually returned.
-                next_offset = offset + len(results)
+            if is_filtered:
+                # ``total`` on a filtered payload is the number of slots the
+                # scan consumed through this page — the resume point the JSON
+                # cursor encodes. ``offset + limit`` lands inside the page
+                # just shown when candidates failed materialisation inside
+                # the window.
+                next_offset = total_results
+            else:
+                next_offset = offset + limit
+                if next_cursor is None:
+                    # Limited path that doesn't know the next-page boundary
+                    # precisely; advance by what we actually returned.
+                    next_offset = offset + len(results)
             result_text += (
                 f"Showing {offset + 1}-{offset + len(results)} "
-                f"of {count_approx}{display_total} — "
+                f"of {total_text} — "
                 f"pass `offset={next_offset}` for the next page\n"
             )
             # A14: see ``_format_filtered_response`` for the rationale —
@@ -1179,6 +1217,10 @@ class _SearchMixin:
             offset=offset,
             limit=limit,
             display_query=display_query,
+            # The spliced row never consumed a scan slot, so the next page
+            # resumes at the underlying scan's consumed-slot count — the
+            # same ``o`` the payload's own cursor encodes.
+            resume_offset=original_total,
         )
 
     def search_with_filters(

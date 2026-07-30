@@ -1368,6 +1368,44 @@ class SimpleToolsHandler(
             "<!-- intent=cursor_decode cert=1.00 -->"
         )
 
+    def _cursor_archive_mismatch(
+        self, options: Dict[str, Any], zim_file_path: str
+    ) -> Optional[str]:
+        """Return a structured error when the decoded cursor's ``s.ai``
+        was minted against a different archive than this call's.
+
+        ``_handle_walk_namespace`` threads ``s.ai`` into the cursor state
+        it hands ``walk_namespace_data``, which verifies it; browse /
+        search / filtered search route through backend surfaces that
+        never receive a ``cursor_archive_identity``, so their guard has
+        to live at the handler edge. Without it, a cursor issued for
+        archive A silently paged archive B from A's offset — exactly
+        what ``Cursor.verify_archive_identity`` exists to prevent.
+
+        Returns ``None`` when no cursor was passed, when it carried no
+        ``ai``, when the archive can't be resolved (the backend call
+        surfaces that failure with its own diagnosis), or on a match.
+        """
+        cursor_ai = options.get("_cursor_ai")
+        if not isinstance(cursor_ai, str) or not cursor_ai:
+            return None
+        try:
+            validated = self.zim_operations.path_validator.validate_path(zim_file_path)
+            validated = self.zim_operations.path_validator.validate_zim_file(validated)
+            expected = archive_identity(Path(validated))
+        except Exception:
+            return None
+        if cursor_ai == expected:
+            return None
+        return (
+            "**Cursor / Archive Mismatch**\n\n"
+            "**Issue**: the cursor was issued against a different "
+            f"archive than `{Path(zim_file_path).name}`. Drop the cursor "
+            "and call again without it (or resume the paginated call "
+            "against the archive that issued it).\n\n"
+            "<!-- intent=cursor_decode cert=1.00 -->"
+        )
+
     # ---------------------------------------------------------------- handlers
 
     def _handle_metadata(
@@ -1440,6 +1478,12 @@ class SimpleToolsHandler(
         mismatch = self._cursor_ns_mismatch(options, namespace)
         if mismatch is not None:
             return mismatch
+        # The legacy ``browse_namespace`` string surface takes no
+        # ``cursor_archive_identity``, so the data layer's archive guard
+        # can never fire here — check at the handler edge instead.
+        archive_mismatch = self._cursor_archive_mismatch(options, zim_file_path)
+        if archive_mismatch is not None:
+            return archive_mismatch
         return self.zim_operations.browse_namespace(
             zim_file_path,
             namespace,
@@ -1999,6 +2043,12 @@ class SimpleToolsHandler(
         tool_mismatch = self._cursor_tool_mismatch(options, "search_with_filters")
         if tool_mismatch is not None:
             return tool_mismatch
+        # Neither the compact nor the canonical-splice route forwards
+        # ``cursor_archive_identity``, so bind the cursor to its issuing
+        # archive here — see ``_cursor_archive_mismatch``.
+        archive_mismatch = self._cursor_archive_mismatch(options, zim_file_path)
+        if archive_mismatch is not None:
+            return archive_mismatch
         search_query = params.get("query", query)
         limit = options.get("limit")
         offset = options.get("offset", 0)
@@ -2179,6 +2229,12 @@ class SimpleToolsHandler(
         tool_mismatch = self._cursor_tool_mismatch(options, "search_zim_file")
         if tool_mismatch is not None:
             return tool_mismatch
+        # Neither the compact ``search_zim_file_data`` route nor the
+        # legacy string route forwards ``cursor_archive_identity``, so
+        # bind the cursor to its issuing archive here.
+        archive_mismatch = self._cursor_archive_mismatch(options, zim_file_path)
+        if archive_mismatch is not None:
+            return archive_mismatch
         search_query = params.get("query", query)
         limit = options.get("limit")
         offset = options.get("offset", 0)

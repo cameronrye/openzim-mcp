@@ -1301,6 +1301,45 @@ class IntentParser:
         return params
 
     @classmethod
+    def _restore_nonascii_case(
+        cls,
+        params: Dict[str, Any],
+        original_query: str,
+    ) -> Dict[str, Any]:
+        """Re-case non-ASCII string params from the pre-Rule-1 query.
+
+        Tier 1 Rule 1 lowercases the query before param extraction.
+        ASCII values recover downstream (Xapian title probes plus the
+        ``_find_entry_fast_path`` case-variant ladder), but non-Latin
+        scripts have no such ladder: on an archive without a title
+        index, ``індыйская кухня`` never round-trips back to the
+        stored title ``Індыйская кухня`` and the lookup degrades to
+        "Article not found" even though ``zim_search`` resolves the
+        same string. Restore the caller's typed casing by
+        case-insensitive substring lookup in the pre-rewrite query —
+        the recovery ``SimpleToolsHandler._recase_from_original``
+        already applies to guidance text. Values reshaped by rules
+        2-4 miss the lookup and pass through unchanged; ASCII values
+        keep Rule 1's lowercase contract. Mutates ``params`` in place
+        and returns it for chaining."""
+        lowered = original_query.lower()
+        # Rare code points lowercase to a different length (``İ`` ->
+        # ``i̇``), which shifts every index past them; skip rather than
+        # slice the original at a misaligned offset.
+        if not original_query or len(lowered) != len(original_query):
+            return params
+        for key, value in params.items():
+            if not isinstance(value, str) or not value or value.isascii():
+                continue
+            idx = lowered.find(value)
+            if idx < 0:
+                continue
+            restored = original_query[idx : idx + len(value)]
+            if restored != value and restored.lower() == value:
+                params[key] = restored
+        return params
+
+    @classmethod
     def parse_intent(
         cls,
         query: str,
@@ -1348,6 +1387,10 @@ class IntentParser:
         # ``offset=5`` confusing its leading word-boundary anchor.
         query = cls._strip_param_leaks(query)
         query = cls._strip_trailing_politeness(query)
+        # Kept for _restore_nonascii_case: both strips above preserve
+        # casing, so this is the last form still carrying what the
+        # caller typed before Rule 1 lowercases everything.
+        pre_rewrite = query
 
         # Sub-D-2 Tier 1 rewrites. Master kill switch honored inside
         # _apply_tier1_rewrites.
@@ -1400,10 +1443,12 @@ class IntentParser:
                     {"topic": _normalize_url_topic(query.strip())},
                     decomposition_hint,
                 )
+                cls._restore_nonascii_case(params, pre_rewrite)
                 return "tell_me_about", params, 0.7
             params = cls._attach_decomposition_hint(
                 {"query": query}, decomposition_hint
             )
+            cls._restore_nonascii_case(params, pre_rewrite)
             return "search", params, 0.5
 
         # Select best match using weighted scoring
@@ -1415,6 +1460,7 @@ class IntentParser:
             best_match[2],
         )
         cls._attach_decomposition_hint(params, decomposition_hint)
+        cls._restore_nonascii_case(params, pre_rewrite)
         return intent_type, params, confidence
 
     # Words that signal an explicit verb-shaped intent. If a query contains
