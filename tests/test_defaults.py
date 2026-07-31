@@ -86,14 +86,14 @@ class TestRateLimitDefaults:
     def test_rate_limit_defaults_values(self):
         """Test rate limit default values."""
         assert RateLimitDefaults.ENABLED is True
-        assert RateLimitDefaults.REQUESTS_PER_SECOND == pytest.approx(10.0)
-        assert RateLimitDefaults.BURST_SIZE == 20
+        assert RateLimitDefaults.REQUESTS_PER_SECOND == pytest.approx(20.0)
+        assert RateLimitDefaults.BURST_SIZE == 40
 
     def test_rate_limit_instance(self):
         """Test RATE_LIMIT instance has correct values."""
         assert RATE_LIMIT.ENABLED is True
-        assert RATE_LIMIT.REQUESTS_PER_SECOND == pytest.approx(10.0)
-        assert RATE_LIMIT.BURST_SIZE == 20
+        assert RATE_LIMIT.REQUESTS_PER_SECOND == pytest.approx(20.0)
+        assert RATE_LIMIT.BURST_SIZE == 40
 
 
 class TestInputLimitDefaults:

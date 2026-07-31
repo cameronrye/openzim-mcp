@@ -389,5 +389,5 @@ async def test_max_size_batch_is_expensive_but_never_impossible(
     resp = await fn(zim_file_path="/x.zim", entry_paths=[f"A/{i}" for i in range(50)])
 
     assert resp.get("operation") != "rate_limited"
-    assert capacity == 20.0
+    assert capacity == 40.0
     assert _global_tokens(live_limiter_server) < 0.5

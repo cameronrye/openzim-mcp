@@ -60,9 +60,12 @@ These rarely need tuning; reach for them only when profiling points at decompres
 Token-bucket limiter (atomic global + per-operation acquire). Tune for your client load:
 
 ```bash
-export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=20    # default 10
-export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=40             # default 20, max 1000
+export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=40    # default 20 (work units/s)
+export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=80             # default 40, max 1000
 ```
+
+The budget counts **work units, not requests** — the defaults above are sized
+so a client can sustain roughly 20 cheap reads or 10 searches per second.
 
 Per-operation costs (defaults from `RATE_LIMIT_COSTS`):
 

@@ -205,11 +205,20 @@ def _make_readyz(
             probe = _get_executor("readyz").submit(_any_readable_dir)
             _readyz_inflight = probe
         try:
-            # `wait_for` cancels only this wrapper on timeout, never the
-            # underlying thread, so a slow probe shared by several waiters
-            # times each of them out independently and stays single-flight.
+            # `shield` is load-bearing, not defensive. `wrap_future` chains via
+            # `asyncio.futures._chain_future`, whose `_call_check_cancel` calls
+            # `source.cancel()` on the *concurrent* future when the asyncio
+            # wrapper is cancelled. `concurrent.futures.Future.cancel()` fails
+            # while the work is RUNNING but SUCCEEDS while it is still queued —
+            # so without the shield, the first waiter to time out discards the
+            # shared work item and every co-waiter is cancelled too. That
+            # raises `CancelledError`, which is a `BaseException` and so slips
+            # past the `except asyncio.TimeoutError` below and out of the
+            # handler, killing the request instead of answering 503.
+            # Shielding cancels only the outer future, so each waiter times out
+            # independently and the probe really does stay single-flight.
             ready = await asyncio.wait_for(
-                asyncio.wrap_future(probe),
+                asyncio.shield(asyncio.wrap_future(probe)),
                 timeout=READYZ_PROBE_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:

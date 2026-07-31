@@ -133,10 +133,12 @@ Only `level` and `format` are configurable — there is no separate JSON-mode to
 
 Token-bucket limiter; global + per-operation acquire is atomic (one pass, no transient over-consumption).
 
+The budget is denominated in **work units, not requests**. Most operations cost 1, searches cost 2, and a binary fetch costs 3 — so `requests_per_second` is really "work units per second". Size any override against the cost of the operation you are limiting, or it will admit fewer calls than the number suggests.
+
 ```bash
 export OPENZIM_MCP_RATE_LIMIT__ENABLED=true                # default true
-export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=10.0    # default 10.0
-export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=20               # default 20, max 1000
+export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=20.0    # default 20.0 (work units/s)
+export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=40               # default 40, max 1000
 # Per-operation limits (nested dict, JSON):
 export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"search": {"requests_per_second": 4, "burst_size": 8}}'
 ```
@@ -167,7 +169,8 @@ Per-internal-operation cost defaults are defined in [defaults.RATE_LIMIT_COSTS](
 Per-operation overrides use the literal key strings shown in the right column. To throttle binary fetches:
 
 ```bash
-export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"get_binary_entry": {"requests_per_second": 1, "burst_size": 2}}'
+# `get_binary_entry` costs 3 units, so burst_size 6 admits two fetches:
+export OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS='{"get_binary_entry": {"requests_per_second": 3, "burst_size": 6}}'
 ```
 
 ## Server identity
@@ -210,10 +213,10 @@ Sorted alphabetically by field name within each grouping.
 | `logging.format` | `OPENZIM_MCP_LOGGING__FORMAT` | structured | format string |
 | `logging.level` | `OPENZIM_MCP_LOGGING__LEVEL` | `INFO` | DEBUG/INFO/WARNING/ERROR/CRITICAL |
 | `port` | `OPENZIM_MCP_PORT` | `8000` | 1-65535 |
-| `rate_limit.burst_size` | `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE` | `20` | 1-1000 |
+| `rate_limit.burst_size` | `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE` | `40` | 1-1000 (work units) |
 | `rate_limit.enabled` | `OPENZIM_MCP_RATE_LIMIT__ENABLED` | `true` | bool |
 | `rate_limit.per_operation_limits` | `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` | `{}` | nested JSON dict |
-| `rate_limit.requests_per_second` | `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` | `10.0` | positive float |
+| `rate_limit.requests_per_second` | `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` | `20.0` | positive float (work units/s) |
 | `server_name` | `OPENZIM_MCP_SERVER_NAME` | `openzim-mcp` | reported in serverInfo |
 | `subscriptions_enabled` | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | watcher master switch |
 | `tool_mode` | `OPENZIM_MCP_TOOL_MODE` | `simple` | `simple` or `advanced` |
@@ -253,8 +256,8 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com"]'
 export OPENZIM_MCP_LOGGING__LEVEL=INFO
 export OPENZIM_MCP_CACHE__MAX_SIZE=500
 export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
-export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=20
-export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=40
+export OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND=40
+export OPENZIM_MCP_RATE_LIMIT__BURST_SIZE=80
 openzim-mcp --transport http /srv/zim
 ```
 

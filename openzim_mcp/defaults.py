@@ -61,11 +61,25 @@ class ContentDefaults:
 
 @dataclass(frozen=True)
 class RateLimitDefaults:
-    """Default values for rate limiting."""
+    """Default values for rate limiting.
+
+    The budget is denominated in WORK UNITS, not requests. Until the cost
+    table below was actually reachable, every operation resolved to the
+    ``default`` cost of 1, so ``10/s`` meant ten *operations* per second.
+    Now a search costs 2 and a binary fetch 3, so the same nominal budget
+    would have silently halved search throughput and cut binary fetches by
+    two thirds. These values are scaled by the modal cost of the common
+    expensive operations (2) to hold the previous rate: a client can still
+    sustain ~10 searches/s, while cheap single-entry reads — which were
+    never the load concern — get proportionally more headroom.
+
+    Net effect versus the old flat pricing: expensive calls are throttled
+    harder relative to cheap ones, at an unchanged practical ceiling.
+    """
 
     ENABLED: bool = True
-    REQUESTS_PER_SECOND: float = 10.0
-    BURST_SIZE: int = 20
+    REQUESTS_PER_SECOND: float = 20.0
+    BURST_SIZE: int = 40
 
 
 @dataclass(frozen=True)

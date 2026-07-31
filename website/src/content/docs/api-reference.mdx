@@ -413,7 +413,7 @@ See [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-sub
 
 ## Rate limiting
 
-All tools are subject to a global token-bucket limiter (default 10 req/s, burst 20). Costs are charged per **internal operation**, not per tool call — a v2 tool that dispatches over multiple modes resolves to a specific underlying operation key:
+All tools are subject to a global token-bucket limiter (default 20 work units/s, burst 40 — most operations cost 1 unit, searches 2, binary fetches 3). Costs are charged per **internal operation**, not per tool call — a v2 tool that dispatches over multiple modes resolves to a specific underlying operation key:
 
 | Tool call | Internal operation | Cost |
 |-----------|--------------------|------|

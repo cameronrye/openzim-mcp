@@ -437,3 +437,68 @@ def test_readyz_concurrent_probes_on_healthy_server_all_succeed():
     )
     # Single-flight preserved: one shared probe, not five submissions.
     assert len(calls) == 1, f"expected one shared probe, got {len(calls)}"
+
+
+def test_readyz_queued_probe_timeout_does_not_cancel_co_waiters():
+    """A waiter timing out must not discard a still-QUEUED shared probe.
+
+    All waiters share one ``concurrent.futures.Future``. ``wrap_future``
+    chains cancellation back to it, and ``Future.cancel()`` returns False
+    while the work is RUNNING but SUCCEEDS while it is still queued. So the
+    first waiter to expire discards the shared work item and cancels every
+    peer. ``CancelledError`` is a ``BaseException``, so it slips past
+    ``except asyncio.TimeoutError`` and escapes the handler entirely — a
+    dropped request instead of a 503.
+
+    Reproducing it needs THREE conditions, and getting any one wrong hides
+    the defect:
+      * the probe must be QUEUED, not running — so the single-worker pool is
+        occupied first; ``cancel()`` returns False on a RUNNING future;
+      * both waiters must be in flight at once, so the stagger has to be
+        SMALLER than the timeout — otherwise the first waiter finishes and
+        the second is handed a freshly submitted probe;
+      * the stagger must still be non-zero and comfortably above timer
+        granularity (~15.6 ms on some platforms), or both deadlines land in
+        one loop iteration and each waiter converts its own cancellation
+        into a clean TimeoutError.
+    """
+    import asyncio as _asyncio
+
+    from openzim_mcp import http_app as _http_app
+    from openzim_mcp.timeout_utils import _get_executor
+
+    _allowed = tempfile.mkdtemp(prefix="openzim_mcp_readyz_queued_")
+
+    class _Cfg:
+        allowed_directories = [_allowed]
+
+    class _Server:
+        config = _Cfg()
+
+    release = threading.Event()
+    readyz = _http_app._make_readyz(_Server())
+
+    # Occupy the dedicated single-worker pool so the probe below can only be
+    # QUEUED, never RUNNING — the state in which cancel() succeeds.
+    blocker = _get_executor("readyz").submit(release.wait, 30)
+
+    async def _drive():
+        with patch.object(_http_app, "READYZ_PROBE_TIMEOUT_SECONDS", 0.5):
+            first = _asyncio.create_task(readyz(None))
+            # Inside the 0.5s timeout so both share one probe, but well above
+            # timer granularity so their deadlines are distinct.
+            await _asyncio.sleep(0.1)
+            second = _asyncio.create_task(readyz(None))
+            return await _asyncio.gather(first, second, return_exceptions=True)
+
+    try:
+        results = _asyncio.run(_drive())
+    finally:
+        release.set()
+        blocker.result(timeout=30)
+
+    for r in results:
+        assert not isinstance(
+            r, BaseException
+        ), f"a waiter escaped the handler instead of answering 503: {r!r}"
+    assert [r.status_code for r in results] == [503, 503]

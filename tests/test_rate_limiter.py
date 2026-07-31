@@ -21,8 +21,8 @@ class TestRateLimitConfig:
         config = RateLimitConfig()
 
         assert config.enabled is True
-        assert config.requests_per_second == pytest.approx(10.0)
-        assert config.burst_size == 20
+        assert config.requests_per_second == pytest.approx(20.0)
+        assert config.burst_size == 40
         assert config.per_operation_limits == {}
 
     def test_custom_config(self):
@@ -174,8 +174,8 @@ class TestRateLimiter:
         limiter = RateLimiter()
 
         assert limiter.config.enabled is True
-        assert limiter.config.requests_per_second == pytest.approx(10.0)
-        assert limiter.config.burst_size == 20
+        assert limiter.config.requests_per_second == pytest.approx(20.0)
+        assert limiter.config.burst_size == 40
 
     def test_initialization_custom_config(self):
         """Test rate limiter initialization with custom config."""
@@ -539,3 +539,47 @@ class TestCostExceedingBurstCapacity:
         with pytest.raises(OpenZimMcpRateLimitError):
             limiter.check_rate_limit(operation="search")
         assert global_bucket.tokens == pytest.approx(before, abs=0.05)
+
+
+class TestDefaultBudgetTracksTheCostTable:
+    """The default budget and the cost table must stay in step.
+
+    The budget is denominated in work units, so raising a cost silently
+    lowers the throughput of that operation. Nothing paired a realistic
+    burst with a greater-than-1 cost before, which is how the table went
+    live with a budget still sized for flat pricing.
+    """
+
+    def test_burst_size_leaves_headroom_above_the_priciest_operation(self):
+        """A single call must never be able to drain the default bucket."""
+        from openzim_mcp.defaults import RATE_LIMIT, RATE_LIMIT_COSTS
+
+        priciest = max(RATE_LIMIT_COSTS.values())
+        assert RATE_LIMIT.BURST_SIZE >= 2 * priciest, (
+            f"burst_size {RATE_LIMIT.BURST_SIZE} leaves no headroom above the "
+            f"priciest operation (cost {priciest}); raise the default budget "
+            "when you raise a cost"
+        )
+
+    def test_every_operation_admits_a_usable_burst_by_default(self):
+        """Every priced operation stays usable on a default install.
+
+        Ten consecutive calls is the practical floor: below that, an agent
+        doing ordinary multi-step retrieval trips the limiter on a server
+        nobody has configured.
+        """
+        from openzim_mcp.defaults import RATE_LIMIT_COSTS
+
+        for operation in RATE_LIMIT_COSTS:
+            limiter = RateLimiter(RateLimitConfig())
+            admitted = 0
+            while True:
+                try:
+                    limiter.check_rate_limit(operation=operation)
+                except OpenZimMcpRateLimitError:
+                    break
+                admitted += 1
+            assert admitted >= 10, (
+                f"{operation!r} (cost {RATE_LIMIT_COSTS[operation]}) admits only "
+                f"{admitted} consecutive calls on a default bucket"
+            )
