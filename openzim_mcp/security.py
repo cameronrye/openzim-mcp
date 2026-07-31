@@ -3,12 +3,17 @@
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import List
 from urllib.parse import unquote
 
 from .constants import ZIM_FILE_EXTENSION
-from .exceptions import OpenZimMcpSecurityError, OpenZimMcpValidationError
+from .exceptions import (
+    OpenZimMcpArchivePathError,
+    OpenZimMcpSecurityError,
+    OpenZimMcpValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,11 @@ class PathValidator:
                 )
 
             self.allowed_directories.append(resolved_path)
+
+        # Give the message redactor the exact strings it cannot infer: a
+        # configured root containing spaces would otherwise leak every
+        # component after the first space (see ``_ALLOWED_DIRECTORY_HINTS``).
+        register_redaction_directories([str(p) for p in self.allowed_directories])
 
         logger.info(
             f"Initialized PathValidator with {len(self.allowed_directories)} "
@@ -142,8 +152,15 @@ class PathValidator:
         )
 
         if not is_allowed:
+            # Defence in depth: the client already knows what it asked for, but
+            # ``resolved_path`` is the *server-side* canonicalisation — for a
+            # symlinked or ``~``-expanded input it names host directories the
+            # client never supplied and cannot otherwise observe. Keep the full
+            # path in the debug log only.
+            logger.debug(f"Path outside allowed directories: {resolved_path}")
             raise OpenZimMcpSecurityError(
-                f"Access denied - Path is outside allowed directories: {resolved_path}"
+                f"Access denied - Path is outside allowed directories: "
+                f"{sanitize_path_for_error(str(resolved_path))}"
             )
 
         logger.debug(f"Path validation successful: {resolved_path}")
@@ -174,19 +191,22 @@ class PathValidator:
             Validated Path object
 
         Raises:
-            OpenZimMcpValidationError: If file is not valid
+            OpenZimMcpArchivePathError: If the archive is missing or unusable.
+                A subclass of ``OpenZimMcpValidationError``, so broad handlers
+                still catch it, but callers rendering argument-level recovery
+                advice can tell "no such archive" from "bad argument".
             OpenZimMcpSecurityError: If the path resolves outside allowed
                 directories (e.g., a symlink was swapped between
                 ``validate_path`` and this call)
         """
         if not file_path.exists():
-            raise OpenZimMcpValidationError(f"File does not exist: {file_path}")
+            raise OpenZimMcpArchivePathError(f"File does not exist: {file_path}")
 
         if not file_path.is_file():
-            raise OpenZimMcpValidationError(f"Path is not a file: {file_path}")
+            raise OpenZimMcpArchivePathError(f"Path is not a file: {file_path}")
 
         if file_path.suffix.lower() != ZIM_FILE_EXTENSION:
-            raise OpenZimMcpValidationError(f"File is not a ZIM file: {file_path}")
+            raise OpenZimMcpArchivePathError(f"File is not a ZIM file: {file_path}")
 
         # Re-resolve and re-check containment to close the TOCTOU window
         # between validate_path()'s resolve and the caller eventually opening
@@ -195,7 +215,7 @@ class PathValidator:
         try:
             current_resolved = file_path.resolve(strict=True)
         except (OSError, ValueError) as e:
-            raise OpenZimMcpValidationError(
+            raise OpenZimMcpArchivePathError(
                 f"Failed to resolve file path: {file_path}"
             ) from e
 
@@ -203,9 +223,14 @@ class PathValidator:
             self._is_path_within_directory(current_resolved, allowed_dir)
             for allowed_dir in self.allowed_directories
         ):
+            # See ``validate_path``: the resolved path is a server-side fact
+            # (symlink target) the client never supplied. Log it, don't ship it.
+            logger.debug(
+                f"Path resolves outside allowed directories: " f"{current_resolved}"
+            )
             raise OpenZimMcpSecurityError(
                 f"Access denied - Path resolves outside allowed directories: "
-                f"{current_resolved}"
+                f"{sanitize_path_for_error(str(current_resolved))}"
             )
 
         logger.debug(f"ZIM file validation successful: {file_path}")
@@ -261,18 +286,88 @@ def sanitize_input(
 # ``/A/B`` suffix mistaken for an absolute path -- yet a path wrapped by
 # punctuation (``(/opt/foo)``, ``"/opt/foo"``, ``file=/opt/foo``) still
 # matches because ``(``, ``"``, ``=`` are not path-continuation chars.
-# The body stops at whitespace **and** common wrapper delimiters (``'``,
-# ``"``, ``)``, ``]``, ``<``, ``>``) so wrapped paths collapse cleanly
-# without absorbing the surrounding wrapper characters. Trailing prose punctuation
+# The body stops at whitespace **and** at common wrapper delimiters (``'``,
+# ``"``, ``)``, ``]``, ``<``, ``>``) so wrapped paths collapse cleanly without
+# absorbing the surrounding wrapper characters. Trailing prose punctuation
 # (``.``, ``,``, ``;``, ``:``) is stripped by ``_strip_trailing_punct``
 # before being routed through :func:`sanitize_path_for_error`. Used by
 # both :func:`sanitize_context_for_error` here and the redactor in
 # ``server.py`` so we have a single source of truth.
+#
+# The body deliberately does NOT try to infer that a space is path-internal.
+# A regex cannot tell ``/Users/John Smith/x.zim`` (space inside a directory
+# name) from ``/data/wiki.zim: I/O error`` (space, then prose that happens to
+# contain a slash): any relaxation keyed on "a separator appears later" merges
+# adjacent paths and slash-bearing prose into one token, which destroys the
+# filename this redactor is contracted to keep. Directories that really do
+# contain spaces are handled with real information instead — see
+# ``_ALLOWED_DIRECTORY_HINTS`` and :func:`register_redaction_directories`.
+_PATH_BODY = r"[^\s'\")\]<>]+"
 _ABS_PATH_RE = re.compile(
     r"(?<![A-Za-z0-9._\-/\\])"  # not preceded by a path-continuation char
-    r"(?:[A-Za-z]:[\\/][^\s'\")\]<>]+"  # Windows drive path
-    r"|/[^\s'\")\]<>]+)"  # POSIX absolute path
+    r"(?:[A-Za-z]:[\\/]"
+    + _PATH_BODY  # Windows drive path
+    + r"|/"
+    + _PATH_BODY
+    + r")"  # POSIX absolute path
 )
+
+# Directories the server has been configured to serve. They are known exact
+# strings at runtime, so a path rooted at one of them can be redacted by
+# LITERAL prefix match — no guessing required, which is what makes
+# space-bearing roots (``/Users/John Smith/Library/Application Support/Claude``)
+# tractable at all. Populated by :meth:`PathValidator.__init__`.
+_MAX_ALLOWED_DIRECTORY_HINTS = 64
+_ALLOWED_DIRECTORY_HINTS: List[str] = []
+_ALLOWED_DIRECTORY_HINTS_LOCK = threading.Lock()
+_ALLOWED_DIRECTORY_RE: "re.Pattern[str] | None" = None
+
+
+def register_redaction_directories(directories: List[str]) -> None:
+    """Record configured directories so the redactor can match them literally.
+
+    Only directories whose string form contains a space are worth recording:
+    every other absolute path is already matched by ``_ABS_PATH_RE``, whose
+    body is whitespace-terminated. Restricting the registry this way keeps it
+    tiny and keeps redaction behaviour identical to the plain-regex path for
+    the overwhelmingly common case.
+
+    Args:
+        directories: Absolute directory paths (already resolved).
+    """
+    global _ALLOWED_DIRECTORY_RE
+
+    with _ALLOWED_DIRECTORY_HINTS_LOCK:
+        changed = False
+        for directory in directories:
+            text = str(directory)
+            if " " not in text or text in _ALLOWED_DIRECTORY_HINTS:
+                continue
+            if len(_ALLOWED_DIRECTORY_HINTS) >= _MAX_ALLOWED_DIRECTORY_HINTS:
+                # Bounded: a long-lived process that keeps building validators
+                # must not grow this list without limit. Oldest hint retires.
+                _ALLOWED_DIRECTORY_HINTS.pop(0)
+            _ALLOWED_DIRECTORY_HINTS.append(text)
+            changed = True
+
+        if not changed:
+            return
+
+        # Longest first so a nested root wins over its parent.
+        alternation = "|".join(
+            re.escape(d)
+            for d in sorted(_ALLOWED_DIRECTORY_HINTS, key=len, reverse=True)
+        )
+        _ALLOWED_DIRECTORY_RE = re.compile(
+            r"(?<![A-Za-z0-9._\-/\\])(?:"
+            + alternation
+            + r")"
+            # The tail (``/wikipedia.zim``) is ordinary path text, so it stops
+            # at whitespace exactly like ``_PATH_BODY``. Only the *root* needed
+            # the literal treatment.
+            + r"[^\s'\")\]<>]*"
+        )
+
 
 # Both ``/`` and ``\`` may appear as a separator in a leaked path.
 # :class:`pathlib.Path` does not split on ``\`` on POSIX hosts, so we
@@ -369,7 +464,15 @@ def redact_paths_in_message(raw_message: str) -> str:
         core, trailing = _strip_trailing_punct(token)
         return sanitize_path_for_error(core) + trailing
 
-    return _ABS_PATH_RE.sub(_replace, raw_message)
+    # First collapse anything rooted at a configured directory. Those roots are
+    # known verbatim, so this is the one place a space-bearing directory can be
+    # redacted without guessing. ``_ABS_PATH_RE`` then handles everything else.
+    known_dirs_re = _ALLOWED_DIRECTORY_RE
+    message = raw_message
+    if known_dirs_re is not None:
+        message = known_dirs_re.sub(_replace, message)
+
+    return _ABS_PATH_RE.sub(_replace, message)
 
 
 _CONTEXT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")

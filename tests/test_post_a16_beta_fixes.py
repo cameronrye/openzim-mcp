@@ -437,14 +437,15 @@ class TestD3TellMeAboutNamespacePathRedirect:
             options={"compact": False},
         )
         assert "Namespace Path, Not a Topic" in out
-        # Sub-D-2 Rule 1 lowercases the query, so the extracted topic
-        # is lowercase. The redirect normalises only the first char to
-        # uppercase. Compute expectations from the lowercased topic.
-        lowered = topic.lower()
-        normalized = lowered[0].upper() + lowered[1:]
+        # Sub-D-2 Rule 1 lowercases the query, but a namespace-prefixed
+        # path is exempt (libzim's path lookup is case-sensitive), so the
+        # extracted topic keeps the caller's casing and the recovery
+        # command round-trips verbatim. The redirect additionally upper-
+        # cases the namespace letter.
+        normalized = topic[0].upper() + topic[1:]
         assert f"get article {normalized}" in out
-        # Also suggests bare-name title search (lowercase suffix).
-        assert f"tell me about {lowered[2:].strip()}" in out
+        # Also suggests bare-name title search.
+        assert f"tell me about {topic[2:].strip()}" in out
 
     def test_real_topic_unaffected(self) -> None:
         mock = MagicMock()
@@ -689,11 +690,10 @@ class TestD7FindByTitleLowercaseNamespaceRedirect:
             options={"compact": True},
         )
         assert "Namespace Path, Not a Title" in out
-        # Sub-D-2 Rule 1 lowercases the query; the redirect normalises
-        # only the first char to uppercase. Compute expectation from
-        # the lowercased title.
-        lowered = title.lower()
-        normalized = lowered[0].upper() + lowered[1:]
+        # Sub-D-2 Rule 1 lowercases the query, but a namespace-prefixed
+        # path is exempt, so the caller's casing survives; the redirect
+        # normalises only the namespace letter to uppercase.
+        normalized = title[0].upper() + title[1:]
         assert f"get article {normalized}" in out
 
     def test_real_lowercase_title_returned_when_index_hits(self) -> None:

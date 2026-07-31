@@ -157,6 +157,8 @@ Per-internal-operation cost defaults are defined in [defaults.RATE_LIMIT_COSTS](
 | `zim_get(view="structure")` / `view="toc"` / `view="summary")` | `"get_structure"` | 1 |
 | `zim_browse(...)` | `"browse_namespace"` | 1 |
 | `zim_metadata(...)` | `"get_metadata"` | 1 |
+| `zim_links(direction="outbound")` | `"extract_article_links"` | 2 |
+| `zim_links(direction="inbound")` | `"get_inbound_links"` | 1 |
 | `zim_links(direction="related")` | `"get_related_articles"` | 2 |
 | `zim_health`, `zim_get_section`, `zim_query` per-intent | `"default"` | 1 |
 

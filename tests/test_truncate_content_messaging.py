@@ -34,3 +34,24 @@ def test_short_body_returned_unmodified():
     body = "short body"
     out = cp.truncate_content(body, max_length=1000)
     assert out == body
+
+
+def test_content_offset_hint_is_a_valid_int_literal():
+    """The ``content_offset`` hint is copied straight back into a typed
+    parameter, so it must NOT carry a thousands separator: ``100,000`` is
+    rejected by pydantic (``TypeAdapter(int).validate_python("100,000")``
+    raises) and the same response already reports the raw int in ``_meta``.
+
+    The human-readable counts in the same sentence keep their separators.
+    """
+    import re
+
+    cp = ContentProcessor(snippet_length=100)
+    body = "x" * 300_000
+    out = cp.truncate_content(body, max_length=100_000, current_offset=0)
+
+    match = re.search(r"content_offset=([^`]+)`", out)
+    assert match is not None, out
+    assert int(match.group(1)) == 100_000
+    # The prose counts are still grouped for readability.
+    assert "total of 300,000 characters" in out

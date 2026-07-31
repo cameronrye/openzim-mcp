@@ -171,14 +171,15 @@ class TestD6FindByTitleNamespacePathRedirect:
             options={"compact": False},
         )
         assert "Namespace Path, Not a Title" in out
-        # Sub-D-2 Rule 1 lowercases the query, so the extracted title
-        # is lowercase. The redirect normalises only the first char to
-        # uppercase (libzim namespace letters are case-insensitive).
-        lowered = title.lower()
-        normalized = lowered[0].upper() + lowered[1:]
+        # Sub-D-2 Rule 1 lowercases the query, but a namespace-prefixed
+        # path is exempt (libzim's path lookup is case-sensitive), so the
+        # extracted title keeps the caller's casing and the recovery
+        # command round-trips verbatim. The redirect additionally upper-
+        # cases the namespace letter.
+        normalized = title[0].upper() + title[1:]
         assert f"get article {normalized}" in out
-        # Suggests the title-only fallback too (bare suffix, lowercased).
-        assert f"find article titled {lowered[2:]}" in out
+        # Suggests the title-only fallback too (bare suffix).
+        assert f"find article titled {title[2:]}" in out
 
     def test_real_title_unaffected(self) -> None:
         # ``find article titled Photosynthesis`` (no namespace prefix)

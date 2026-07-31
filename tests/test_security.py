@@ -363,6 +363,102 @@ def test_redact_handles_bol_path():
     assert "baz.zim" in out, out
 
 
+def test_redact_handles_directories_containing_spaces(tmp_path):
+    """Directory components with spaces must not survive redaction.
+
+    The match body terminates at the first space, so a macOS-shaped path used
+    to leak the account name and every directory below it — server-side state
+    a client that sent only a bare filename never supplied. Configured roots
+    are therefore matched LITERALLY; ``PathValidator`` registers them.
+    """
+    from openzim_mcp.security import PathValidator, redact_paths_in_message
+
+    root = tmp_path / "John Smith" / "Application Support" / "Claude"
+    root.mkdir(parents=True)
+    PathValidator([str(root)])  # registers the root with the redactor
+
+    out = redact_paths_in_message(f"File does not exist: {root}/wikipedia.zim")
+    for leaked in ("John Smith", "Application Support", "Claude"):
+        assert leaked not in out, out
+    assert "wikipedia.zim" in out, out
+
+
+def test_redact_space_bearing_root_keeps_trailing_prose(tmp_path):
+    """A space-bearing root collapses without eating the sentence after it."""
+    from openzim_mcp.security import PathValidator, redact_paths_in_message
+
+    root = tmp_path / "zim archives"
+    root.mkdir()
+    PathValidator([str(root)])
+
+    out = redact_paths_in_message(f"{root}/wikipedia.zim could not be opened")
+    assert out == "...wikipedia.zim could not be opened", out
+
+
+def test_redact_does_not_swallow_trailing_prose():
+    """``/opt/data/baz.zim is missing`` must stop at the filename."""
+    from openzim_mcp.security import redact_paths_in_message
+
+    out = redact_paths_in_message("/opt/data/baz.zim is missing")
+    assert out.endswith("is missing"), out
+    assert "/opt/data" not in out, out
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        # Slash-bearing prose after a path must not be absorbed into it: the
+        # filename is the one thing this redactor is contracted to keep.
+        (
+            "Failed to open /data/wiki.zim: I/O error",
+            "Failed to open ...wiki.zim: I/O error",
+        ),
+        ("check /opt/x.zim w/ flags", "check ...x.zim w/ flags"),
+        (
+            "Cannot read /opt/foo.zim and/or /opt/bar.zim",
+            "Cannot read ...foo.zim and/or ...bar.zim",
+        ),
+        # Two adjacent absolute paths must stay two separate tokens; merging
+        # them deletes every entry but the last.
+        (
+            "Allowed directories: /opt/zims, /srv/data",
+            "Allowed directories: ...zims, ...data",
+        ),
+        ("Two paths /a/b.zim /c/d.zim listed", "Two paths ...b.zim ...d.zim listed"),
+    ],
+)
+def test_redact_keeps_each_filename_in_multi_path_and_slashy_prose(message, expected):
+    """Each path keeps its own basename; prose containing ``/`` is left alone."""
+    from openzim_mcp.security import redact_paths_in_message
+
+    assert redact_paths_in_message(message) == expected
+
+
+def test_validate_path_error_does_not_embed_resolved_path(tmp_path):
+    """Defence in depth: the raised message carries only the basename.
+
+    ``resolved_path`` is the SERVER's canonicalisation (``~`` expansion,
+    symlink target), so it can name directories the caller never supplied.
+    """
+    import pytest as _pytest
+
+    from openzim_mcp.exceptions import OpenZimMcpSecurityError
+    from openzim_mcp.security import PathValidator
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "secret dir" / "hidden.zim"
+    outside.parent.mkdir()
+    outside.write_text("x")
+
+    validator = PathValidator([str(allowed)])
+    with _pytest.raises(OpenZimMcpSecurityError) as exc:
+        validator.validate_path(str(outside))
+    message = str(exc.value)
+    assert "secret dir" not in message, message
+    assert "hidden.zim" in message, message
+
+
 def test_redact_does_not_match_relative_path_after_basename():
     """``test.zim/A/Article`` must not have its ``/A/Article`` suffix redacted.
 

@@ -41,8 +41,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
+from ..constants import MAX_BATCH_SIZE
+from ..defaults import RATE_LIMIT_COSTS
 from ..responses import tool_error
-from ._common import enforce_rate_limit, load_description, tool_error_response
+from ._common import (
+    _clamp_cost_to_capacity,
+    enforce_rate_limit,
+    load_description,
+    tool_error_response,
+)
 
 if TYPE_CHECKING:
     from ..server import OpenZimMcpServer
@@ -72,7 +79,46 @@ def register(server: "OpenZimMcpServer") -> None:
         compact_budget: Optional[Union[str, int]] = None,
     ) -> Any:
         try:
-            rl = enforce_rate_limit(server, "zim_get")
+            # Price/limit on the INTERNAL operation this call will dispatch
+            # to. ``zim_get`` is a multiplexer and is absent from
+            # ``RATE_LIMIT_COSTS``, so keying the bucket on the wire name
+            # priced a 10MB binary fetch and a 50-article batch identically
+            # with a single-article read, and made the documented
+            # ``per_operation_limits`` overrides inert. Deliberately NOT
+            # flat-mapped to one cost: the text path really is cheap.
+            _rl_cost: Optional[int] = None
+            if binary:
+                _rl_op = "get_binary_entry"
+            elif entry_paths:
+                _rl_op = "get_zim_entries"
+                # One token per requested entry — a batch is N reads. Price
+                # the batch the server could actually serve, not the raw
+                # caller-supplied length: the data layer rejects anything
+                # above ``MAX_BATCH_SIZE``, so a 500-path list must not be
+                # billed as 500 reads. The capacity clamp then keeps a legal
+                # max-size batch at "drains the bucket" rather than "can
+                # never succeed" (``acquire`` denies unconditionally above
+                # ``burst_size``), and — because the total is clamped here —
+                # the two debits below sum to at most one bucket.
+                _rl_cost = _clamp_cost_to_capacity(
+                    server,
+                    _rl_op,
+                    min(len(entry_paths), MAX_BATCH_SIZE)
+                    * RATE_LIMIT_COSTS["get_zim_entries"],
+                )
+            elif view in ("summary", "toc", "structure"):
+                _rl_op = "get_structure"
+            else:
+                _rl_op = "get_entry"
+            # Split debit. The flat table cost is charged BEFORE validation so
+            # a malformed call is never free — garbage must not bypass the
+            # throttle. The batch-sized remainder is charged only once the
+            # request is known to be dispatchable (below), because a request
+            # that performs zero work must not cost full bucket capacity: an
+            # `entry_path` + `entry_paths` combination used to debit the whole
+            # bucket and then return `invalid_path_combination`, denying the
+            # caller's next legitimate call.
+            rl = enforce_rate_limit(server, _rl_op)
             if rl is not None:
                 return rl
             # Post-v2.0.0 D-F (sibling fix from pass-4): mirror the
@@ -109,8 +155,18 @@ def register(server: "OpenZimMcpServer") -> None:
             if err is not None:
                 return err
 
+            # Dispatchable batch: charge the rest of the per-entry cost. The
+            # flat table cost was already debited above, so the two together
+            # come to the clamped batch price computed there.
+            if _rl_cost is not None:
+                _rl_remainder = _rl_cost - RATE_LIMIT_COSTS["get_zim_entries"]
+                if _rl_remainder > 0:
+                    rl = enforce_rate_limit(server, _rl_op, cost=_rl_remainder)
+                    if rl is not None:
+                        return rl
+
             if main_page:
-                return await ops.get_main_page_data(zim_file_path)
+                return await ops.get_main_page_data(zim_file_path, compact=compact)
             if binary:
                 assert entry_path is not None  # validator guarantees this
                 # ``max_content_length`` caps the fetched BYTES here — it maps

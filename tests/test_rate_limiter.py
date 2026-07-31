@@ -457,3 +457,85 @@ class TestDefaultCosts:
                 assert (
                     cost <= binary_cost
                 ), f"{op} should not cost more than get_binary_entry"
+
+
+class TestCostExceedingBurstCapacity:
+    """A cost above a bucket's capacity must drain it, never deny forever.
+
+    ``TokenBucket.acquire`` denies unconditionally when ``cost > capacity``
+    and ``_refill`` caps at ``capacity``, so an unclamped cost above
+    ``burst_size`` is unsatisfiable *forever* rather than merely expensive.
+    ``burst_size`` is a documented 1..1000 knob while table costs run to 3
+    and batch costs to 50, so the two legitimately cross.
+    """
+
+    @pytest.mark.parametrize("burst_size", [1, 2, 3])
+    def test_table_cost_above_burst_still_admits(self, burst_size: int):
+        """``get_binary_entry`` (cost 3) must work at any valid burst_size."""
+        limiter = RateLimiter(
+            RateLimitConfig(
+                enabled=True, requests_per_second=10.0, burst_size=burst_size
+            )
+        )
+        # First call must be admitted from a full bucket.
+        limiter.check_rate_limit(operation="get_binary_entry")
+
+        # And it must recover after a refill rather than being wedged.
+        time.sleep(0.45)
+        limiter.check_rate_limit(operation="get_binary_entry")
+
+    def test_per_operation_burst_below_cost_still_admits(self):
+        """A documented ``per_operation_limits`` entry must not brick the op."""
+        limiter = RateLimiter(
+            RateLimitConfig(
+                enabled=True,
+                requests_per_second=10.0,
+                burst_size=20,
+                per_operation_limits={
+                    # Straight from the configuration docs; `search` costs 2.
+                    "search": RateLimitConfig(
+                        enabled=True, requests_per_second=10.0, burst_size=1
+                    )
+                },
+            )
+        )
+        limiter.check_rate_limit(operation="search")
+
+    def test_explicit_cost_above_burst_still_admits(self):
+        """A batch cost (``len(entry_paths)``, up to 50) exceeds burst 20."""
+        limiter = RateLimiter(
+            RateLimitConfig(enabled=True, requests_per_second=10.0, burst_size=20)
+        )
+        limiter.check_rate_limit(operation="get_zim_entries", cost=50)
+
+    def test_clamped_call_still_drains_the_bucket(self):
+        """Clamping must not make an over-cost call free."""
+        limiter = RateLimiter(
+            RateLimitConfig(enabled=True, requests_per_second=0.01, burst_size=2)
+        )
+        limiter.check_rate_limit(operation="get_binary_entry")  # cost 3 -> 2
+        with pytest.raises(OpenZimMcpRateLimitError):
+            limiter.check_rate_limit(operation="get_binary_entry")
+
+    def test_global_refund_matches_amount_debited(self):
+        """A per-op rejection must refund exactly what it debited globally."""
+        limiter = RateLimiter(
+            RateLimitConfig(
+                enabled=True,
+                requests_per_second=0.01,
+                burst_size=10,
+                per_operation_limits={
+                    "search": RateLimitConfig(
+                        enabled=True, requests_per_second=0.01, burst_size=1
+                    )
+                },
+            )
+        )
+        # search costs 2: global debits 2, per-op clamps to 1 and admits.
+        limiter.check_rate_limit(operation="search")
+        global_bucket = limiter._get_global_bucket("default")
+        before = global_bucket.tokens
+        # Per-op bucket is now empty, so this rejects and must refund.
+        with pytest.raises(OpenZimMcpRateLimitError):
+            limiter.check_rate_limit(operation="search")
+        assert global_bucket.tokens == pytest.approx(before, abs=0.05)

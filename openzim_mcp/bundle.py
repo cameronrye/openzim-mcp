@@ -110,8 +110,10 @@ def _loose_escaped_text(text: str) -> str:
     return "".join(r"\\?" + re.escape(ch) for ch in text)
 
 
-def _resolve_entry_html(archive: "Archive", entry_path: str) -> tuple[str, str, str]:
-    """Fetch the entry's HTML, returning (title, mimetype, html).
+def _resolve_entry_html(
+    archive: "Archive", entry_path: str
+) -> tuple[str, str, str, str]:
+    """Fetch the entry's HTML, returning (title, mimetype, html, resolved_path).
 
     Raises whatever the libzim layer raises; callers wrap.
     """
@@ -120,14 +122,34 @@ def _resolve_entry_html(archive: "Archive", entry_path: str) -> tuple[str, str, 
     title = entry.title or "Untitled"
     mime = item.mimetype or ""
     html = bytes(item.content).decode("utf-8", errors="replace")
-    return title, mime, html
+    # get_item() transparently follows redirects; item.path is the path of
+    # the entry actually SERVED, and is what the relative hrefs in `html`
+    # are relative to. For non-redirects it equals entry_path. The
+    # ``isinstance(served, str)`` guard is load-bearing: the mock archives
+    # used throughout the test suite are ``MagicMock``s whose ``item.path``
+    # is itself a ``MagicMock`` (as is ``entry.is_redirect``, which is why
+    # this must not branch on it).
+    served = getattr(item, "path", None)
+    resolved_path = served if isinstance(served, str) and served else entry_path
+    return title, mime, html, resolved_path
 
 
 def _extract_infobox(
     soup: Any, content_processor: "ContentProcessor"
 ) -> Optional[InfoboxData]:
-    """Extract the first infobox as InfoboxData, or None if absent."""
-    rows = content_processor.extract_infobox(soup)
+    """Extract the first infobox as InfoboxData, or None if absent.
+
+    Degrades to ``None`` on any extraction failure: every other step in
+    ``extract_entry_bundle`` already survives malformed markup, and an
+    infobox is supplementary. Without this, a pathological cell (e.g. one
+    deeply nested enough to blow the recursion limit) propagated out of
+    ``get_or_build_bundle`` and took summary/toc/structure/section with it.
+    """
+    try:
+        rows = content_processor.extract_infobox(soup)
+    except Exception as exc:
+        logger.warning("Infobox extraction failed; continuing without: %s", exc)
+        return None
     if not rows:
         return None
     fields: list[InfoboxField] = [
@@ -306,7 +328,12 @@ def extract_entry_bundle(
 
     from openzim_mcp.content_processor import _build_headings, select_main_content
 
-    title, mime, html = _resolve_entry_html(archive, entry_path)
+    # ``entry_path`` is rebound to the POST-redirect path: the relative hrefs
+    # in the returned HTML resolve against the served entry's directory, so a
+    # bundle keyed on the caller's pre-redirect path handed downstream
+    # consumers (``extract_article_links_data`` -> ``payload["path"]``,
+    # ``get_related_articles_data``) a base path that yields dangling links.
+    title, mime, html, entry_path = _resolve_entry_html(archive, entry_path)
 
     if not mime.startswith("text/html"):
         empty: EntryBundle = cast(

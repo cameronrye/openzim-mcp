@@ -332,9 +332,22 @@ class RateLimiter:
                     else None
                 )
 
+            # Clamp the cost to each bucket's own capacity. ``acquire``
+            # denies unconditionally when cost > capacity, and ``_refill``
+            # caps at capacity — so an unclamped cost above ``burst_size``
+            # is unsatisfiable *forever*, not merely expensive. Costs come
+            # from DEFAULT_COSTS (up to 3) and from caller input (batch
+            # ``len(entry_paths)``, up to 50), while ``burst_size`` is a
+            # documented 1..1000 knob, so the two legitimately cross.
+            # Clamping degrades such a call to "drains the bucket".
+            global_cost = max(1, min(cost, global_bucket.capacity))
+            op_cost = (
+                max(1, min(cost, op_bucket.capacity)) if op_bucket is not None else cost
+            )
+
             # Check global limit first
-            if not global_bucket.acquire(cost):
-                wait_time = global_bucket.get_wait_time(cost)
+            if not global_bucket.acquire(global_cost):
+                wait_time = global_bucket.get_wait_time(global_cost)
                 raise OpenZimMcpRateLimitError(
                     f"Rate limit exceeded for operation '{operation}'. "
                     f"Please wait {wait_time:.2f} seconds before retrying.",
@@ -345,10 +358,11 @@ class RateLimiter:
                 )
 
             # Check operation-specific limit if configured
-            if op_bucket is not None and not op_bucket.acquire(cost):
-                wait_time = op_bucket.get_wait_time(cost)
-                # Refund global tokens since we're rejecting
-                global_bucket.refund(cost)
+            if op_bucket is not None and not op_bucket.acquire(op_cost):
+                wait_time = op_bucket.get_wait_time(op_cost)
+                # Refund the amount actually debited, or the global bucket
+                # leaks tokens whenever the two clamps differ.
+                global_bucket.refund(global_cost)
                 raise OpenZimMcpRateLimitError(
                     f"Per-operation rate limit exceeded for "
                     f"'{operation}'. Please wait {wait_time:.2f} "

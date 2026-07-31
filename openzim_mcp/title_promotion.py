@@ -96,6 +96,8 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
 # if the topic has two ``+`` and the candidate has zero, it's a smear,
 # not a match.
 _LOAD_BEARING_PUNCTUATION = ("+", "#", "*", "&", "?", "!")
+# ``A/Foo``-style namespace prefix on a candidate entry path.
+_NAMESPACE_PREFIX_RE = re.compile(r"^[^\W_]/", re.UNICODE)
 
 
 def _punctuation_smear_detected(topic: str, candidate_path: str) -> bool:
@@ -112,6 +114,47 @@ def _punctuation_smear_detected(topic: str, candidate_path: str) -> bool:
         if topic.count(ch) > candidate_path.count(ch):
             return True
     return False
+
+
+def _smear_detected_in_matched_tokens(topic: str, candidate_path: str) -> bool:
+    """``_punctuation_smear_detected`` restricted to the whitespace tokens
+    of ``topic`` that actually overlap ``candidate_path``.
+
+    ``find_title_match`` receives the probe string, so its whole-string
+    check is correctly scoped there. The shared accept gates
+    (``passes_z4`` / ``accept_tail_promotion``) instead hold the ORIGINAL
+    multi-token topic, and comparing all of it would let a load-bearing
+    character belonging to some *other* phrase veto an unrelated
+    promotion: ``carbon capture & storage technology`` →
+    ``A/Carbon_capture`` is legitimate (the ``&`` is nowhere near the
+    tokens that resolved), and every natural-language question ending in
+    ``?`` would lose tail promotion outright, since no canonical path
+    ever contains one.
+
+    Scoping to the overlapping tokens keeps the P5 intent intact — for
+    ``c++`` → ``C`` the only token IS the smeared one — while letting
+    unrelated punctuation through.
+    """
+    # Drop a leading single-character namespace segment (``A/Foo``) so a
+    # one-letter topic token can't spuriously match the namespace letter.
+    bare = (
+        candidate_path.split("/", 1)[1]
+        if _NAMESPACE_PREFIX_RE.match(candidate_path)
+        else candidate_path
+    )
+    path_words = set(_UNICODE_TOKEN_RE.findall(bare.lower()))
+    matched = " ".join(
+        tok
+        for tok in topic.split()
+        if set(_UNICODE_TOKEN_RE.findall(tok.lower())) & path_words
+    )
+    if not matched:
+        # No topic token survives in the candidate at all, so the title
+        # index resolved this purely by normalisation — the smear case
+        # itself (``c++`` → ``A/Air_conditioning``). Scoping would make the
+        # check vacuous here, so fall back to the whole topic.
+        return _punctuation_smear_detected(topic, candidate_path)
+    return _punctuation_smear_detected(matched, candidate_path)
 
 
 def find_title_match(
@@ -1043,6 +1086,19 @@ def passes_z4(
     Possessive topics bypass Z4 — their own accept gate
     (``accept_possessive_promotion``) handles them.
     """
+    # Punctuation-smear guard, re-checked here against the ORIGINAL topic.
+    # ``find_title_match`` only sees the probe string, and the tail/window
+    # probes are built by ``iter_query_tails`` from ``_TAIL_TOKEN_RE``
+    # (``[^\W_]+``), which DELETES every load-bearing punctuation char —
+    # ``iter_query_tails("c++") == ["c"]``, so the guard there can never
+    # fire and ``C``-the-letter got promoted for ``C++``. This gate is the
+    # only place that still holds the unmangled topic — which is also why
+    # the check must be SCOPED to the topic tokens the candidate actually
+    # covers (``_smear_detected_in_matched_tokens``): an unscoped
+    # whole-topic comparison lets one ``&``/``?`` anywhere in a
+    # multi-token topic veto every promotion.
+    if _smear_detected_in_matched_tokens(topic, str(promoted.get("path", ""))):
+        return False
     if has_apostrophe_possessive(topic):
         return True
     if not is_tangential_multi_token_shape(promoted, topic):
@@ -1081,6 +1137,13 @@ def accept_tail_promotion(
     of detroit`` -> ``Detroit`` stays accepted). Otherwise the Z4
     multi-token tangential layer applies.
     """
+    # See ``passes_z4`` — the tail probes strip load-bearing punctuation
+    # before ``find_title_match`` ever sees them, so the smear check has to
+    # be repeated here against the original topic, scoped to the topic
+    # tokens the candidate actually covers. Must precede the possessive
+    # early-return, which would otherwise short-circuit it.
+    if _smear_detected_in_matched_tokens(topic, str(promoted.get("path", ""))):
+        return False
     if has_apostrophe_possessive(topic):
         return accept_possessive_promotion(promoted, topic)
     if not accept_possessive_promotion(promoted, topic):

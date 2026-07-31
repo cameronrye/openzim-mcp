@@ -273,7 +273,14 @@ FURNITURE_HEADING_PREFIXES: frozenset = frozenset(
     }
 )
 
-# Rate limiter operation costs
+# Rate limiter operation costs.
+#
+# Keys are INTERNAL operation names, not the wire-level v2 tool names. The
+# Phase F tool wrappers resolve the internal name for the branch they are
+# about to dispatch (see ``tools/_common.enforce_rate_limit`` call sites) so
+# these costs — and any ``per_operation_limits`` override an operator writes
+# against the same names — actually apply.
+# ``tests/test_rate_limit_operation_keys.py`` pins the resolved key per branch.
 RATE_LIMIT_COSTS: Dict[str, int] = {
     "search": 2,
     "search_with_filters": 2,
@@ -284,7 +291,13 @@ RATE_LIMIT_COSTS: Dict[str, int] = {
     "browse_namespace": 1,
     "get_metadata": 1,
     "get_structure": 1,
+    "extract_article_links": 2,
+    "get_inbound_links": 1,
     "get_related_articles": 2,
     "suggestions": 1,
+    # ``zim_health`` / ``zim_get_section`` / ``zim_query`` deliberately have
+    # no entry: they are v2-only surfaces with no internal equivalent and are
+    # documented as charging the ``default`` cost. Their buckets are keyed on
+    # the tool name, so ``per_operation_limits`` overrides still reach them.
     "default": 1,
 }

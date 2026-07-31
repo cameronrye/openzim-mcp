@@ -56,6 +56,46 @@ class _ChainMixin:
         r"\s*->\s*",
     )
 
+    # Multi-letter honorifics / abbreviations that carry no internal dot and
+    # so are unreachable by shape in ``_ends_with_initial_or_abbrev``.
+    _MULTI_CHAR_ABBREVS = frozenset(
+        {
+            "mr",
+            "mrs",
+            "ms",
+            "dr",
+            "prof",
+            "rev",
+            "hon",
+            "gen",
+            "sen",
+            "rep",
+            "col",
+            "sgt",
+            "lt",
+            "capt",
+            "gov",
+            "pres",
+            "st",
+            "mt",
+            "ave",
+            "blvd",
+            "rd",
+            "jr",
+            "sr",
+            "inc",
+            "ltd",
+            "co",
+            "corp",
+            "dept",
+            "fig",
+            "no",
+            "vs",
+            "etc",
+            "approx",
+        }
+    )
+
     # A11 B1: verb-shaped leads we recognise on the right-hand side of
     # a chain. These are deliberately a subset of the intent vocab —
     # ``and`` and ``then`` already get split out; we want to confirm
@@ -886,18 +926,32 @@ class _ChainMixin:
 
     @classmethod
     def _ends_with_initial_or_abbrev(cls, text: str) -> bool:
-        """True when ``text``'s last whitespace token is a 1-2 char initial /
-        abbreviation (``D``, ``F``, ``St``, ``Mt``, ``Jr``, ``Dr``).
+        """True when ``text``'s last whitespace token is an initial /
+        abbreviation (``D``, ``F``, ``St``, ``Mt``, ``Jr``, ``Dr``, ``U.S.``,
+        ``Rev.``, ``D.C.``).
 
         H2: a period immediately following such a token is a name's middle
         initial or an abbreviation, so the period-connector chain split must be
         suppressed (``Franklin D. Roosevelt`` is one topic, not two).
+
+        Keyed on SHAPE rather than a widened length window: widening to 3-4
+        chars would silently suppress genuine chains like ``tell me about DNA.
+        Tell me about RNA``.
         """
         tokens = text.split()
         if not tokens:
             return False
         last = tokens[-1].rstrip(".")
-        return 1 <= len(last) <= 2
+        if 1 <= len(last) <= 2:
+            return True
+        # Dotted acronyms keep their INTERNAL dots through rstrip("."):
+        # the split consumed only the trailing dot, so "U.S." arrives as
+        # "U.S" (len 3). Any surviving dot marks an abbreviation.
+        if "." in last:
+            return True
+        # Multi-letter honorifics carry no internal dot and are
+        # unreachable by shape — enumerate them.
+        return last.lower() in cls._MULTI_CHAR_ABBREVS
 
     @classmethod
     def _is_substantive_topic(cls, text: str) -> bool:

@@ -204,10 +204,12 @@ def test_enforce_rate_limit_returns_error_payload_when_exhausted():
         RateLimitConfig(enabled=True, requests_per_second=1.0, burst_size=2)
     )
 
-    # Burst of 2 allowed, then the limiter trips.
-    assert enforce_rate_limit(server, "zim_query") is None
-    assert enforce_rate_limit(server, "zim_query") is None
-    blocked = enforce_rate_limit(server, "zim_query")
+    # Burst of 2 allowed, then the limiter trips. ``cost=1`` is explicit so
+    # this pins the ENFORCEMENT seam rather than whatever RATE_LIMIT_COSTS
+    # happens to price ``zim_query`` at.
+    assert enforce_rate_limit(server, "zim_query", cost=1) is None
+    assert enforce_rate_limit(server, "zim_query", cost=1) is None
+    blocked = enforce_rate_limit(server, "zim_query", cost=1)
     assert blocked is not None
     assert blocked["error"] is True
     assert blocked["operation"] == "rate_limited"

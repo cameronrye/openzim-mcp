@@ -19,6 +19,7 @@ import tempfile
 import pytest
 
 from openzim_mcp.config import OpenZimMcpConfig
+from openzim_mcp.rate_limiter import RateLimitConfig
 from openzim_mcp.server import OpenZimMcpServer
 
 _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_bypass_")
@@ -26,7 +27,17 @@ _ALLOWED_DIR = tempfile.mkdtemp(prefix="openzim_mcp_schema_bypass_")
 
 @pytest.fixture(scope="module")
 def phase_f_server() -> OpenZimMcpServer:
-    cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode="advanced")
+    # Rate limiting off: this module fires the whole probe matrix at one
+    # module-scoped server, and the limiter runs BEFORE branch validation by
+    # design (garbage must not bypass the throttle). Now that each branch is
+    # priced on its real internal operation (``get_binary_entry`` = 3, batch =
+    # one token per entry) the matrix drains the default 20-token burst, which
+    # would mask the envelope assertions these probes exist to make.
+    cfg = OpenZimMcpConfig(
+        allowed_directories=[_ALLOWED_DIR],
+        tool_mode="advanced",
+        rate_limit=RateLimitConfig(enabled=False),
+    )
     return OpenZimMcpServer(cfg)
 
 

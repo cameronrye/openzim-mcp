@@ -28,6 +28,14 @@ def handler():
         "John F. Kennedy",
         "Mount St. Helens",
         "the St. Louis Cardinals",
+        # Dotted acronyms keep an INTERNAL dot through ``rstrip(".")``, so
+        # they are longer than the 1-2 char initial window and were rejected
+        # outright — the caller got the chain warning as the entire response.
+        "tell me about the U.S. Constitution",
+        "tell me about Washington D.C. Metro",
+        # Multi-letter honorifics carry no internal dot and are unreachable
+        # by shape, so they are enumerated.
+        "tell me about the Rev. Martin Luther King",
     ],
 )
 def test_h2_middle_initial_names_not_chain_rejected(handler, query):
@@ -39,6 +47,11 @@ def test_h2_middle_initial_names_not_chain_rejected(handler, query):
     [
         "tell me about Berlin. Tell me about Paris",
         "Biology; Chemistry",
+        # Pins the acronym-vs-abbreviation boundary: ``DNA`` is 3 chars with
+        # no internal dot and is not an enumerated abbreviation, so widening
+        # the length window (rather than keying on shape) would have
+        # silently suppressed this genuine chain.
+        "tell me about DNA. Tell me about RNA",
     ],
 )
 def test_h2_real_chains_still_detected(handler, query):

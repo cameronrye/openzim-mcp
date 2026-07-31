@@ -907,7 +907,14 @@ class _ContentMixin:
             current_offset=content_offset,
             original_total=total_length,
         )
-        was_truncated = len(truncated_content) < len(content)
+        # Compare against the cap, NOT the rendered lengths: ``truncate_content``
+        # appends a ~150-char truncation note, so ``len(truncated) < len(content)``
+        # is False whenever the overflow is smaller than that note — the body
+        # visibly said "truncated" while the metadata said otherwise. ``content``
+        # is already the post-offset slice handed to ``truncate_content``, so
+        # this predicate agrees with it exactly (empty content: 0 > cap is False,
+        # matching ``truncate_content``'s short-circuit).
+        was_truncated = len(content) > max_content_length
         # The paginable slice length is the pre-note body length —
         # ``truncate_content`` slices ``content[:max_content_length]`` and only
         # then appends the ``... [Content truncated ...] ...`` note. The human
@@ -1304,7 +1311,9 @@ class _ContentMixin:
             current_offset=content_offset,
             original_total=total_length,
         )
-        was_truncated = len(truncated_content) < len(content)
+        # See the note at the sibling site above: the appended truncation note
+        # makes a length comparison unreliable, so key on the cap instead.
+        was_truncated = len(content) > max_content_length
         content_chars = max_content_length if was_truncated else len(content)
 
         payload["content"] = truncated_content

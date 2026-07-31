@@ -27,7 +27,9 @@ def register(server: "OpenZimMcpServer") -> None:
     @server.mcp.tool(description=_DESCRIPTION)
     async def zim_metadata(zim_file_path: str) -> Any:
         try:
-            rl = enforce_rate_limit(server, "zim_metadata")
+            # Internal operation name, not the wire name — see
+            # ``RATE_LIMIT_COSTS`` in ``defaults.py``.
+            rl = enforce_rate_limit(server, "get_metadata")
             if rl is not None:
                 return rl
             return await ops.get_archive_metadata_data(zim_file_path)

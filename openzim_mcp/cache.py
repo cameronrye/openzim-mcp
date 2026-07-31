@@ -8,15 +8,19 @@ for cache warmup between restarts.
 
 import atexit
 import functools
+import hashlib
 import heapq
 import json
 import logging
+import os
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import CacheConfig
+from .defaults import CACHE
 from .exceptions import OpenZimMcpValidationError
 
 logger = logging.getLogger(__name__)
@@ -26,6 +30,29 @@ DEFAULT_CLEANUP_INTERVAL = 60
 
 # File extension for persistence files
 CACHE_FILE_EXTENSION = ".json"
+
+
+# The package-wide default persistence path (``~/.cache/openzim-mcp``).
+# Every server that does not override ``persistence_path`` gets this exact
+# string, which is why it needs the per-config scoping applied in
+# ``OpenZimMcpCache.__init__``.
+_DEFAULT_PERSISTENCE_PATH = str(Path(CACHE.PERSISTENCE_PATH).expanduser())
+
+
+def _cache_config_fingerprint(config: CacheConfig) -> str:
+    """Short stable digest of the cache-shaping settings in ``config``.
+
+    Used to scope the *default* persistence path so two servers running
+    under different cache configurations do not write to (and clobber) the
+    same file. Only fields that change what may legitimately live in the
+    snapshot are included, so a cosmetic config change does not throw away
+    an otherwise-valid warm cache.
+    """
+    payload = "|".join(
+        str(getattr(config, name, None))
+        for name in ("max_size", "max_bytes", "ttl_seconds")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def _silence_logging_errors(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -166,6 +193,24 @@ class OpenZimMcpCache:
         configured_path = getattr(config, "persistence_path", None)
         if configured_path:
             self._persistence_path = Path(configured_path).expanduser()
+            if str(self._persistence_path) == _DEFAULT_PERSISTENCE_PATH:
+                # The package default is a single per-user path, so every
+                # server process on the host writes the same file. stdio
+                # servers are spawned one per client and each saves from
+                # ``atexit``, which meant concurrent savers clobbered one
+                # another (and the empty-cache ``unlink()`` below could delete
+                # a peer's warm cache). Scope the DEFAULT by a fingerprint of
+                # the cache settings so differently-configured servers no
+                # longer share a file. Identically-configured peers still
+                # share one — for those the atomic ``os.replace`` in
+                # ``_save_to_disk`` bounds the damage to last-writer-wins
+                # rather than a truncated, unparseable file. An operator who
+                # needs strict per-instance isolation sets an explicit
+                # ``persistence_path``.
+                self._persistence_path = self._persistence_path.with_name(
+                    f"{self._persistence_path.name}-"
+                    f"{_cache_config_fingerprint(config)}"
+                )
         else:
             # M27: default to an XDG-style cache directory rather than CWD.
             # The previous default (``.openzim_mcp_cache`` relative to CWD)
@@ -175,9 +220,7 @@ class OpenZimMcpCache:
             # without obvious feedback. ``XDG_CACHE_HOME`` is the
             # well-known location and is writable in every standard
             # Linux/macOS deployment.
-            import os as _os
-
-            xdg = _os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+            xdg = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
             self._persistence_path = Path(xdg) / "openzim-mcp" / "cache.json"
             # Ensure parent dir exists; the actual file is written
             # later by ``_save_to_disk``.
@@ -545,7 +588,11 @@ class OpenZimMcpCache:
                 now_monotonic = time.monotonic()
                 now_wall = time.time()
                 for key, entry in self._cache.items():
-                    age = now_monotonic - entry.created_at
+                    # Clamp on the save side too: an already-poisoned in-memory
+                    # entry (created_at in the future) would otherwise be
+                    # written back with a future wall-clock timestamp and
+                    # re-poison itself on every restart.
+                    age = max(0.0, now_monotonic - entry.created_at)
                     if age <= entry.ttl_seconds:
                         entries_to_save[key] = {
                             "value": entry.value,
@@ -557,33 +604,59 @@ class OpenZimMcpCache:
 
                 if not entries_to_save:
                     if persistence_file.exists():
-                        persistence_file.unlink()
+                        # ``missing_ok``: a peer process saving the same file
+                        # may have removed it between the check and the call.
+                        persistence_file.unlink(missing_ok=True)
                         logger.debug("Removed empty cache persistence file")
                     return
 
                 persistence_file.parent.mkdir(parents=True, exist_ok=True)
 
-                # Write to temp file first, then rename for atomicity.
+                # Write to a UNIQUE temp file first, then rename for
+                # atomicity. The temp name must not be derived from
+                # ``persistence_file`` — a fixed ``.tmp`` sibling is shared by
+                # every process pointed at the same persistence path (stdio
+                # servers are spawned one per client and each saves from
+                # ``atexit``), so two savers interleaved their writes into one
+                # file and the survivor renamed a truncated, unparseable
+                # snapshot into place. ``mkstemp`` gives each writer its own
+                # file in the same directory, so ``os.replace`` — atomic
+                # within a filesystem — degrades the race to last-writer-wins.
+                #
                 # We deliberately omit ``default=str``: ``cache.set`` already
                 # validates JSON-serializability when persistence is enabled
                 # (see :meth:`set`), so any non-JSON value reaching this
                 # point is a bug we want to surface rather than silently
                 # coerce to a ``str()`` repr that loses type information on
                 # reload.
-                temp_file = persistence_file.with_suffix(".tmp")
-                with open(temp_file, "w", encoding="utf-8") as f:
-                    json.dump(
-                        {
-                            "version": 1,
-                            "saved_at": now_wall,
-                            "entries": entries_to_save,
-                        },
-                        f,
-                        indent=2,
-                    )
-
-                # Atomic rename
-                temp_file.replace(persistence_file)
+                fd, temp_name = tempfile.mkstemp(
+                    dir=str(persistence_file.parent),
+                    prefix=f".{persistence_file.name}.",
+                    suffix=".tmp",
+                )
+                try:
+                    with open(fd, "w", encoding="utf-8") as f:
+                        json.dump(
+                            {
+                                "version": 1,
+                                "saved_at": now_wall,
+                                "entries": entries_to_save,
+                            },
+                            f,
+                            indent=2,
+                        )
+                        # Flush + fsync before the rename so a crash between
+                        # the two cannot publish a zero-length file.
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(temp_name, str(persistence_file))
+                except BaseException:
+                    # Never leave the unique temp behind on failure.
+                    try:
+                        os.unlink(temp_name)
+                    except OSError:
+                        pass
+                    raise
                 logger.debug(f"Saved {len(entries_to_save)} cache entries to disk")
 
         except Exception as e:
@@ -606,8 +679,13 @@ class OpenZimMcpCache:
         created_at = entry_data.get("created_at", 0)
         ttl_seconds = entry_data.get("ttl_seconds", self.config.ttl_seconds)
 
-        # Skip expired entries (compare wall-clock-to-wall-clock)
-        age = now_wall - created_at
+        # Skip expired entries (compare wall-clock-to-wall-clock).
+        # Clamp: a persisted timestamp ahead of our wall clock (NTP step-back,
+        # snapshot restore, file copied from a fast-clock host) must not grant
+        # bonus TTL by producing a monotonic created_at in the future.
+        if not isinstance(created_at, (int, float)) or isinstance(created_at, bool):
+            raise ValueError("entry 'created_at' is not numeric")
+        age = max(0.0, now_wall - created_at)
         if age > ttl_seconds:
             return False
 

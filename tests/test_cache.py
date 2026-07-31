@@ -1049,3 +1049,146 @@ class TestCacheJsonSerializableValidation:
         assert cache.get("d") == {"a": 1, "b": [1, 2, 3]}
         assert cache.get("l") == [1, 2, 3]
         assert cache.get("n") == 42
+
+
+class TestCacheClockSkewAndAtomicPersistence:
+    """A persisted ``created_at`` is wall-clock, so it can be AHEAD of the
+    loading process's clock (NTP step-back, snapshot restore, file copied
+    from a fast-clock host). The module deliberately uses ``time.monotonic``
+    for expiry so wall-clock adjustments cannot break it; the persistence
+    round-trip is the one place that reintroduces the dependency.
+    """
+
+    def _config(self, tmp_path, **overrides):
+        from openzim_mcp.config import CacheConfig
+
+        params = dict(
+            enabled=True,
+            max_size=10,
+            ttl_seconds=60,
+            persistence_enabled=True,
+            persistence_path=str(tmp_path / "skew.json"),
+        )
+        params.update(overrides)
+        return CacheConfig(**params)
+
+    def test_future_timestamp_does_not_inflate_remaining_ttl(self, tmp_path):
+        """A ``created_at`` one day in the future must not buy a day of TTL."""
+        import json as _json
+
+        cache_path = tmp_path / "skew.json"
+        payload = {
+            "version": 1,
+            "saved_at": time.time(),
+            "entries": {
+                "future": {
+                    "value": "stale",
+                    "created_at": time.time() + 86_400,
+                    "ttl_seconds": 60,
+                }
+            },
+        }
+        cache_path.write_text(_json.dumps(payload))
+
+        cache = OpenZimMcpCache(self._config(tmp_path), enable_background_cleanup=False)
+        entry = cache._cache["future"]
+        # Age is clamped to 0, so created_at is "now" at the latest — never
+        # in the future, which is what granted 86,460s of life on a 60s TTL.
+        assert entry.created_at <= time.monotonic() + 0.5
+        remaining = entry.ttl_seconds - (time.monotonic() - entry.created_at)
+        assert remaining <= entry.ttl_seconds + 0.5
+
+    def test_non_numeric_timestamp_is_skipped_not_raised(self, tmp_path):
+        """A bad ``created_at`` routes through the per-entry skip path."""
+        import json as _json
+
+        cache_path = tmp_path / "skew.json"
+        payload = {
+            "version": 1,
+            "saved_at": time.time(),
+            "entries": {
+                "bad": {"value": "v", "created_at": "yesterday", "ttl_seconds": 60},
+                "good": {"value": "ok", "created_at": time.time(), "ttl_seconds": 60},
+            },
+        }
+        cache_path.write_text(_json.dumps(payload))
+
+        cache = OpenZimMcpCache(self._config(tmp_path), enable_background_cleanup=False)
+        assert cache.get("bad") is None
+        assert cache.get("good") == "ok"
+
+    def test_save_clamps_a_poisoned_in_memory_timestamp(self, tmp_path):
+        """An entry already stamped in the future must not be written back
+        with a future wall-clock time, which would re-poison every restart.
+        """
+        import json as _json
+
+        cache = OpenZimMcpCache(self._config(tmp_path), enable_background_cleanup=False)
+        cache.set("k", "v")
+        cache._cache["k"].created_at = time.monotonic() + 86_400
+        cache._save_to_disk()
+
+        saved = _json.loads((tmp_path / "skew.json").read_text())
+        assert saved["entries"]["k"]["created_at"] <= time.time() + 0.5
+
+    def test_save_uses_a_unique_temp_name(self, tmp_path):
+        """A fixed ``<file>.tmp`` sibling is shared by every process pointed
+        at the same persistence path (stdio servers are spawned one per
+        client and each saves from ``atexit``), so their writes interleaved
+        into one file and the survivor renamed a truncated snapshot into
+        place. Each writer must get its own temp file, and the temp must be
+        cleaned up on failure.
+        """
+        from unittest.mock import patch
+
+        import openzim_mcp.cache as cache_mod
+
+        cache = OpenZimMcpCache(self._config(tmp_path), enable_background_cleanup=False)
+        cache.set("k", "v")
+
+        seen: list = []
+        real_mkstemp = cache_mod.tempfile.mkstemp
+
+        def _spy(*args, **kwargs):
+            fd, name = real_mkstemp(*args, **kwargs)
+            seen.append(name)
+            return fd, name
+
+        with patch.object(cache_mod.tempfile, "mkstemp", side_effect=_spy):
+            cache._save_to_disk()
+            cache._save_to_disk()
+
+        assert len(seen) == 2 and seen[0] != seen[1], seen
+        # The legacy fixed name is never used, and no temp is left behind.
+        assert not (tmp_path / "skew.tmp").exists()
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["skew.json"]
+
+    def test_failed_save_leaves_no_temp_file_behind(self, tmp_path):
+        from unittest.mock import patch
+
+        import openzim_mcp.cache as cache_mod
+
+        cache = OpenZimMcpCache(self._config(tmp_path), enable_background_cleanup=False)
+        cache.set("k", "v")
+        with patch.object(cache_mod.json, "dump", side_effect=OSError("disk full")):
+            cache._save_to_disk()  # broad except logs and swallows
+        assert list(tmp_path.iterdir()) == []
+
+    def test_default_persistence_path_is_scoped_per_config(self):
+        """Every server that does not set ``persistence_path`` used to get
+        one shared per-user file. Scope the DEFAULT by a cache-config
+        fingerprint so differently-configured servers stop clobbering each
+        other; an explicit path is still honoured verbatim.
+        """
+        from openzim_mcp.cache import _DEFAULT_PERSISTENCE_PATH
+        from openzim_mcp.config import CacheConfig
+
+        a = OpenZimMcpCache(
+            CacheConfig(enabled=True, ttl_seconds=60), enable_background_cleanup=False
+        )
+        b = OpenZimMcpCache(
+            CacheConfig(enabled=True, ttl_seconds=120), enable_background_cleanup=False
+        )
+        assert a._persistence_path != b._persistence_path
+        assert str(a._persistence_path) != _DEFAULT_PERSISTENCE_PATH
+        assert str(a._persistence_path).startswith(_DEFAULT_PERSISTENCE_PATH)

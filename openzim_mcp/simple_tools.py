@@ -25,7 +25,11 @@ from .chain_detection import _ChainMixin
 from .compact_format import _CompactFormatMixin
 from .cursor_decode import decode_offset_cursor
 from .disambiguation import _DisambiguationMixin
-from .exceptions import RegexTimeoutError
+from .exceptions import (
+    OpenZimMcpArchivePathError,
+    OpenZimMcpValidationError,
+    RegexTimeoutError,
+)
 from .intent_parser import IntentParser, _strip_quote_pair, safe_regex_sub
 from .meta import build_meta, format_footer
 from .pagination import archive_identity
@@ -184,10 +188,23 @@ class SimpleToolsHandler(
         path keeps the diacritics and casing they originally typed."""
         if not original_query or not token:
             return token
-        idx = original_query.lower().find(token.lower())
+        # U+0130 'İ' is the ONLY code point whose .lower() changes length
+        # (-> 'i' + U+0307), which shifts every index past it and made the
+        # slice below return 'erlin' for 'Berlin'. Fold it to a single 'i'
+        # so `hay` stays index-aligned with `original_query` while the
+        # parser's decomposed token still matches.
+        _fold = {0x130: "i"}
+        hay = original_query.translate(_fold).lower()
+        if len(hay) != len(original_query):  # belt-and-braces
+            return token
+        needle = token.translate(_fold).replace("\u0307", "").lower()
+        idx = hay.find(needle)
         if idx < 0:
             return token
-        return original_query[idx : idx + len(token)]
+        # The slice length must be ``len(needle)``, not ``len(token)``:
+        # stripping U+0307 shortens the needle, and reusing ``len(token)``
+        # reintroduces an off-by-one in the other direction.
+        return original_query[idx : idx + len(needle)]
 
     def _probe_archive_path(self, zim_file_path: Optional[str]) -> Optional[str]:
         """Post-b1 P1-D1: resolve the archive the query-rewrite title
@@ -409,7 +426,19 @@ class SimpleToolsHandler(
             # word. The strip is idempotent — when the tail
             # carries real content the politeness substring is
             # never trailing.
-            tail = self._search_query_tail(query)
+            #
+            # Normalize with the SAME strips parse_intent applies, in the same
+            # order, BEFORE splitting the tail — otherwise an emptiness
+            # introduced by the param-leak strip (``search for query=biology``
+            # -> ``search for``) is invisible here and ``_extract_search``
+            # captures the verb-connector "for" as the search term. Do NOT
+            # call ``_strip_param_leaks`` on the already-split tail: the
+            # pattern leads with ``\s+`` and is a no-op when the leak IS the
+            # whole tail.
+            _normalized = IntentParser._strip_trailing_politeness(
+                IntentParser._strip_param_leaks(query)
+            )
+            tail = self._search_query_tail(_normalized)
             if tail is not None:
                 tail = IntentParser._strip_trailing_politeness(tail).strip()
             if tail is not None and not tail:
@@ -516,7 +545,7 @@ class SimpleToolsHandler(
             # the payload directly (bypassing that check) so any tool's
             # cursor can be replayed for offset extraction. It returns a
             # ``CursorDecodeResult`` (offset + optional ns/ai/tool to
-            # project into ``options``) or one of the structured
+            # project into ``options``, plus ``ep``) or one of the structured
             # ``cursor_decode`` ``ToolErrorPayload`` errors. See
             # ``openzim_mcp.cursor_decode`` for the full rationale.
             cursor_result = decode_offset_cursor(
@@ -528,15 +557,18 @@ class SimpleToolsHandler(
                 # ToolErrorPayload — surface it unchanged.
                 return cursor_result
             options["offset"] = cursor_result.offset
-            # Only project ns/ai/tool when truthy (same condition as the
-            # former inline block); downstream handlers read these to
-            # reject namespace / archive-identity / cross-tool mismatches.
+            # Only project ns/ai/tool/ep when truthy (same condition as the
+            # former inline block); downstream handlers read these to reject
+            # namespace / archive-identity / cross-tool / cross-entry
+            # mismatches.
             if cursor_result.ns:
                 options["_cursor_ns"] = cursor_result.ns
             if cursor_result.ai:
                 options["_cursor_ai"] = cursor_result.ai
             if cursor_result.tool:
                 options["_cursor_t"] = cursor_result.tool
+            if cursor_result.ep:
+                options["_cursor_ep"] = cursor_result.ep
         # Normalize hallucinated ``zim_file_path`` BEFORE branching to the
         # synthesize pipeline. Small models pass bare filenames
         # (``"wikipedia.zim"``) or article titles (``"Big Rapids,
@@ -1205,21 +1237,27 @@ class SimpleToolsHandler(
         }
     )
 
-    # Subset of ``_TEXT_HEAVY_INTENTS`` whose responses contain raw
-    # third-party prose (article body, lead-section, named section).
-    # These get wrapped in a content-fence + "treat as data" annotation
-    # so an LLM consuming the tool output is signaled that the prose
-    # came from an external archive and any instruction-shaped text
-    # inside is data, not directives. Search-shaped intents are
-    # included too: their snippets / suggestion titles are raw,
+    # Intents whose responses contain raw third-party prose (article body,
+    # lead-section, named section). These get wrapped in a content-fence +
+    # "treat as data" annotation so an LLM consuming the tool output is
+    # signaled that the prose came from an external archive and any
+    # instruction-shaped text inside is data, not directives. Search-shaped
+    # intents are included too: their snippets / suggestion titles are raw,
     # untrusted corpus text (the live archive demonstrably contains
     # literal "ignore all previous instructions" payloads), and the
     # ``## N. <title>`` scaffolding does NOT neutralise an injection
     # directive sitting in a snippet — so they get the same guard.
+    #
+    # ``get_zim_entries`` is NOT in ``_TEXT_HEAVY_INTENTS`` (its link strip
+    # already happens at ``zim/content.py``), but it returns N FULL article
+    # bodies in one response — strictly more untrusted prose than the
+    # single-article surfaces — so it must be fenced. This set is therefore
+    # not a subset of ``_TEXT_HEAVY_INTENTS``.
     _PROMPT_INJECTION_FENCE_INTENTS = frozenset(
         {
             "main_page",
             "get_article",
+            "get_zim_entries",
             "tell_me_about",
             "summary",
             "get_section",
@@ -1406,6 +1444,52 @@ class SimpleToolsHandler(
             "<!-- intent=cursor_decode cert=1.00 -->"
         )
 
+    @staticmethod
+    def _canonicalize_entry_path(value: str) -> str:
+        """Fold an entry path to a comparison key: lowercase, with ``_`` and
+        whitespace treated as equivalent.
+
+        Simple mode rewrites the caller's phrasing on the way to the backend
+        (``links in Berlin`` reaches it as ``berlin``), so an exact ``!=``
+        against a cursor's raw ``ep`` would false-reject legitimate resumes.
+        The advanced ``zim_links`` surface can afford a plain ``!=`` because
+        it never rewrites ``entry_path``.
+        """
+        return " ".join(value.replace("_", " ").split()).lower()
+
+    @classmethod
+    def _cursor_entry_mismatch(
+        cls, options: Dict[str, Any], request_entry_path: str
+    ) -> Optional[str]:
+        """P26: return a structured error when the decoded cursor's ``s.ep``
+        names a different article than this call's.
+
+        ``_handle_links``' only cursor guard used to be the tool-name check,
+        which passes for *any* links cursor — while the offset is applied. A
+        cursor minted on article A therefore paginated article B from A's
+        offset, silently skipping B's first page. ``zim_links`` rejects the
+        same cursor via ``cursor_context_mismatch(state, field="ep", ...)``.
+
+        Returns ``None`` when no cursor was passed, when it carried no ``ep``,
+        or when both canonicalise to the same key.
+        """
+        cursor_ep = options.get("_cursor_ep")
+        if not isinstance(cursor_ep, str) or not cursor_ep:
+            return None
+        if cls._canonicalize_entry_path(cursor_ep) == cls._canonicalize_entry_path(
+            request_entry_path or ""
+        ):
+            return None
+        return (
+            "**Cursor / Article Mismatch**\n\n"
+            "**Issue**: the cursor was issued for article "
+            f"`{cursor_ep}` but this call asked for "
+            f"`{request_entry_path}`. Drop the cursor and call again "
+            "without it (or resume the paginated call against the article "
+            "that issued it).\n\n"
+            "<!-- intent=cursor_decode cert=1.00 -->"
+        )
+
     # ---------------------------------------------------------------- handlers
 
     def _handle_metadata(
@@ -1547,6 +1631,91 @@ class SimpleToolsHandler(
             "lookup with RAG fallback when no exact title matches\n"
         )
 
+    def _render_invalid_request(
+        self,
+        entry_path: str,
+        exc: "OpenZimMcpValidationError",
+        op_label: str,
+        limit_capable: bool = False,
+    ) -> str:
+        """Render a structured "invalid request" response for a backend
+        ``OpenZimMcpValidationError``.
+
+        ``zim_query`` accepts ``limit`` 1..1000, but the intent backends cap
+        it lower (500 for ``extract_article_links_data``, 100 for
+        ``get_related_articles_data``), and other constraints (e.g. an
+        unknown link ``kind``) are enforced the same way. Every one of those
+        rejections used to be swallowed by the sibling ``except Exception``
+        and rendered as ``**Article not found**`` with four recovery
+        commands that could never work — the article existed, the *argument*
+        didn't. Split on the exception TYPE (never by string-matching the
+        message) so the caller sees the real constraint and a retry that
+        actually fixes it. The trailing broad ``except Exception``
+        deliberately stays broad: plain ``Exception``/``OpenZimMcpArchiveError``
+        genuinely do mean "not found" here.
+
+        ``OpenZimMcpArchivePathError`` — the archive-level subclass raised by
+        ``PathValidator.validate_zim_file`` — is caught and re-raised *before*
+        this renderer at every call site: "no such archive" is not an
+        out-of-range argument, and telling a caller to retry "with no extra
+        options" against a nonexistent file loops forever.
+
+        Args:
+            entry_path: The article path the caller asked for.
+            exc: The rejection raised by the backend.
+            op_label: Natural-language label for the operation.
+            limit_capable: Whether this operation accepts a ``limit`` at all.
+                Only ``links in`` and ``articles related to`` do; the other
+                four must not be told to "retry with a smaller ``limit``".
+        """
+        err = sanitize_context_for_error(str(exc))
+        err = self._BACKEND_API_LEAK_RE.sub("", err).strip()
+        if limit_capable:
+            first_bullet = (
+                "- Retry with a smaller `limit` — this operation caps lower "
+                "than `zim_query`'s documented 1..1000 range\n"
+            )
+        else:
+            first_bullet = (
+                f"- Re-issue `{op_label} {entry_path}` without the rejected "
+                "option — this operation takes no `limit`, so the constraint "
+                "named above is on some other argument\n"
+            )
+        return (
+            f"**Invalid Request**\n\n"
+            f"`{op_label} {entry_path}` was rejected: {err}\n\n"
+            "**Try one of these to recover:**\n"
+            + first_bullet
+            + "- Drop the offending option entirely to use the default\n"
+            + f"- `{op_label} {entry_path}` with no extra options — the "
+            "constraint named above is on an argument, not on the archive\n"
+        )
+
+    @staticmethod
+    def _clamp_intent_limit(requested: Any, cap: int, default: int) -> tuple[int, str]:
+        """P12 fix (b): reconcile ``zim_query``'s documented ``limit`` range
+        (1..1000) with the tighter per-intent caps the backends enforce
+        (``extract_article_links_data`` 500, ``get_related_articles_data``
+        100).
+
+        Returns ``(limit, note)``. The note is appended to the rendered body
+        so the clamp is visible rather than silent — a caller who asked for
+        1000 links must not believe they received 1000. Values at or below
+        the cap pass through with an empty note; sub-range values (``0``,
+        negatives) are left alone so the backend's own validation still
+        fires and routes through ``_render_invalid_request``.
+        """
+        try:
+            value = int(requested) if requested is not None else default
+        except (TypeError, ValueError):
+            return default, ""
+        if value <= cap:
+            return value, ""
+        return cap, (
+            f"\n\n_Note: `limit={value}` exceeds this operation's maximum of "
+            f"{cap}; returned at most {cap} results._"
+        )
+
     def _resolve_natural_language_path(
         self, zim_file_path: str, entry_path: str
     ) -> str:
@@ -1634,6 +1803,14 @@ class SimpleToolsHandler(
                     payload, budget=max(budget - 200, 500)
                 )
             return self.zim_operations.get_article_structure(zim_file_path, entry_path)
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure (missing file, not a ZIM, unresolvable):
+            # nothing about the *arguments* is wrong. Let it reach
+            # ``handle_zim_query``'s catch-all, which already owns the right
+            # envelope — it lists the archives that really are loaded.
+            raise
+        except OpenZimMcpValidationError as e:
+            return self._render_invalid_request(entry_path, e, "show structure of")
         except Exception as e:
             return self._render_not_found_recovery(entry_path, e, "show structure of")
 
@@ -1661,6 +1838,14 @@ class SimpleToolsHandler(
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
         try:
             return self.zim_operations.get_table_of_contents(zim_file_path, entry_path)
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure (missing file, not a ZIM, unresolvable):
+            # nothing about the *arguments* is wrong. Let it reach
+            # ``handle_zim_query``'s catch-all, which already owns the right
+            # envelope — it lists the archives that really are loaded.
+            raise
+        except OpenZimMcpValidationError as e:
+            return self._render_invalid_request(entry_path, e, "table of contents for")
         except Exception as e:
             # Post-v2.0.5 D-Q: ``_handle_toc`` was the one structure/content
             # handler that never routed through ``_render_not_found_recovery``
@@ -1697,6 +1882,14 @@ class SimpleToolsHandler(
                 options.get("max_words", 200),
                 compact=options.get("compact", False),
             )
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure (missing file, not a ZIM, unresolvable):
+            # nothing about the *arguments* is wrong. Let it reach
+            # ``handle_zim_query``'s catch-all, which already owns the right
+            # envelope — it lists the archives that really are loaded.
+            raise
+        except OpenZimMcpValidationError as e:
+            return self._render_invalid_request(entry_path, e, "summary of")
         except Exception as e:
             return self._render_not_found_recovery(entry_path, e, "summary of")
 
@@ -1756,8 +1949,14 @@ class SimpleToolsHandler(
         # Accepts a bare digit string from the parser (we don't pre-cast
         # because the regex captures everything as text).
         target = None
-        if section_name.isdigit():
-            idx = int(section_name) - 1
+        # ``isdecimal()`` (not ``isdigit()``) — superscripts/subscripts and
+        # Ethiopic numerals are isdigit-true but ``int()``-unparsable, and the
+        # ValueError escaped the handler into the generic error template.
+        if section_name.isdecimal():
+            try:
+                idx = int(section_name) - 1
+            except ValueError:  # pragma: no cover - defensive
+                idx = -1
             if 0 <= idx < len(headings):
                 target = headings[idx]
         else:
@@ -1891,17 +2090,29 @@ class SimpleToolsHandler(
                 "'links from \"C/Evolution\"'"
             )
         # Post-a19 P1-D2 (widened cross-tool guard): reject cursors
-        # issued by a different cursor-emitting tool. The current
-        # handler hardcodes offset=0 internally, but defending the
-        # boundary keeps the guard consistent with the sibling
-        # cursor-consuming handlers (``_handle_browse`` /
+        # issued by a different cursor-emitting tool. This handler DOES
+        # apply the cursor's offset (see ``offset`` below — the pagination
+        # fix wired it through), so the guard is load-bearing, not merely
+        # boundary hygiene, and it keeps this handler consistent with the
+        # sibling cursor-consuming handlers (``_handle_browse`` /
         # ``_handle_walk_namespace`` / ``_handle_search`` /
-        # ``_handle_filtered_search``) so a future offset-reading
-        # change can't silently regress into a cross-tool walk.
+        # ``_handle_filtered_search``).
         tool_mismatch = self._cursor_tool_mismatch(options, "extract_article_links")
         if tool_mismatch is not None:
             return tool_mismatch
+        # P35: every sibling cursor-consuming handler checks archive identity;
+        # this one didn't, so a cursor minted on archive A was accepted verbatim
+        # against archive B and returned B's links from A's offset.
+        archive_mismatch = self._cursor_archive_mismatch(options, zim_file_path)
+        if archive_mismatch is not None:
+            return archive_mismatch
         entry_path = self._resolve_natural_language_path(zim_file_path, entry_path)
+        # P26: must run AFTER path resolution — the cursor's ``ep`` is the raw
+        # path ``zim_links`` was called with, while the simple-mode path has
+        # been through intent parsing and this resolver.
+        entry_mismatch = self._cursor_entry_mismatch(options, entry_path)
+        if entry_mismatch is not None:
+            return entry_mismatch
         try:
             if options.get("compact", False):
                 # Wikipedia-scale articles like "Photosynthesis" produce
@@ -1920,7 +2131,9 @@ class SimpleToolsHandler(
                 # narrowing path; the bump documents the simple-mode
                 # default and keeps it well clear of the previous 20-link
                 # convention).
-                limit = options.get("limit") or 25
+                limit, limit_note = self._clamp_intent_limit(
+                    options.get("limit") or 25, cap=500, default=25
+                )
                 # Honour the caller's result-list offset so the documented
                 # pagination works: the renderer's footer instructs "pass
                 # offset=N for the next page", but the handler previously
@@ -1944,8 +2157,18 @@ class SimpleToolsHandler(
                     offset=offset,
                     kind="external",
                 )
-                return compact_renderers.render_links(internal, external)
+                return compact_renderers.render_links(internal, external) + limit_note
             return self.zim_operations.extract_article_links(zim_file_path, entry_path)
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure (missing file, not a ZIM, unresolvable):
+            # nothing about the *arguments* is wrong. Let it reach
+            # ``handle_zim_query``'s catch-all, which already owns the right
+            # envelope — it lists the archives that really are loaded.
+            raise
+        except OpenZimMcpValidationError as e:
+            return self._render_invalid_request(
+                entry_path, e, "links in", limit_capable=True
+            )
         except Exception as e:
             return self._render_not_found_recovery(entry_path, e, "links in")
 
@@ -2187,6 +2410,14 @@ class SimpleToolsHandler(
                 options.get("content_offset", 0),
                 compact=options.get("compact", False),
             )
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure (missing file, not a ZIM, unresolvable):
+            # nothing about the *arguments* is wrong. Let it reach
+            # ``handle_zim_query``'s catch-all, which already owns the right
+            # envelope — it lists the archives that really are loaded.
+            raise
+        except OpenZimMcpValidationError as e:
+            return self._render_invalid_request(entry_path, e, "get article")
         except Exception as e:
             return self._render_not_found_recovery(entry_path, e, "get article")
 
@@ -3548,18 +3779,34 @@ class SimpleToolsHandler(
         )
         if promoted is not None and promoted.get("path"):
             entry_path = promoted["path"]
+        limit, limit_note = self._clamp_intent_limit(
+            options.get("limit", 10), cap=100, default=10
+        )
         try:
             if options.get("compact", False):
                 data = self.zim_operations.get_related_articles_data(
                     zim_file_path,
                     entry_path,
-                    limit=options.get("limit", 10),
+                    limit=limit,
                 )
-                return compact_renderers.render_related(data, entry_path)
+                return compact_renderers.render_related(data, entry_path) + limit_note
+            # Non-compact returns a JSON string; appending the prose note
+            # would make it unparseable, so the clamp is surfaced only on
+            # the markdown (compact) rendering.
             return self.zim_operations.get_related_articles(
                 zim_file_path,
                 entry_path,
-                limit=options.get("limit", 10),
+                limit=limit,
+            )
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure (missing file, not a ZIM, unresolvable):
+            # nothing about the *arguments* is wrong. Let it reach
+            # ``handle_zim_query``'s catch-all, which already owns the right
+            # envelope — it lists the archives that really are loaded.
+            raise
+        except OpenZimMcpValidationError as e:
+            return self._render_invalid_request(
+                entry_path, e, "articles related to", limit_capable=True
             )
         except Exception as e:
             # A11 F3 (post-a10): when the entry path doesn't exist
@@ -3839,7 +4086,16 @@ class SimpleToolsHandler(
             # ``.strip()`` reduces to "search for", non-empty. Use
             # ``_search_query_tail`` which peels the verb prefix and
             # returns "" when no terms follow.
-            _search_tail = self._search_query_tail(query)
+            #
+            # Normalize with the SAME strips parse_intent applies, in the same
+            # order, BEFORE splitting the tail — otherwise an emptiness
+            # introduced by the param-leak strip (``search for query=biology``
+            # -> ``search for``) is invisible here and ``_extract_search``
+            # captures the verb-connector "for" as the search term.
+            _normalized = IntentParser._strip_trailing_politeness(
+                IntentParser._strip_param_leaks(query)
+            )
+            _search_tail = self._search_query_tail(_normalized)
             if _search_tail is not None:
                 _search_tail = IntentParser._strip_trailing_politeness(
                     _search_tail
@@ -4030,6 +4286,12 @@ class SimpleToolsHandler(
               matches a real file's basename in a different directory
               (handles bare-filename hallucinations like
               ``"wikipedia.zim"`` by normalizing to the actual path).
+            * Failing that, a case-insensitive basename match. Intent
+              extraction lowercases its params (Rule 1), so
+              ``metadata for Wikipedia_EN.zim`` arrives here as
+              ``wikipedia_en.zim`` and an exact ``==`` never matched a
+              mixed-case archive on disk. Name filtering elsewhere is
+              already case-insensitive; this makes the resolver agree.
             * ``None`` if no match is found, or if the backend fails.
 
         Defensive against backend failures: any exception while
@@ -4041,26 +4303,37 @@ class SimpleToolsHandler(
         if not cand:
             return None
         cand_basename = Path(cand).name
+        cand_basename_ci = cand_basename.lower()
         try:
             files = self.zim_operations.list_zim_files_data()
             basename_match: Optional[str] = None
+            ci_basename_match: Optional[str] = None
             for entry in files:
                 real_path = str(entry.get("path", ""))
                 if not real_path:
                     continue
                 if cand == real_path:
                     return real_path
+                real_name = Path(real_path).name
                 if (
                     basename_match is None
                     and cand_basename
-                    and Path(real_path).name == cand_basename
+                    and real_name == cand_basename
                 ):
                     # Defer returning until we've checked the rest of
                     # the list for an exact-path match. Otherwise an
                     # earlier basename-match would mask a later
                     # exact-path match in the same listing.
                     basename_match = real_path
-            return basename_match
+                elif (
+                    ci_basename_match is None
+                    and cand_basename_ci
+                    and real_name.lower() == cand_basename_ci
+                ):
+                    # Lowest tier: consulted only when neither an exact path
+                    # nor an exact basename matched anywhere in the listing.
+                    ci_basename_match = real_path
+            return basename_match or ci_basename_match
         except Exception:
             return None
 

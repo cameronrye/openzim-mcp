@@ -249,3 +249,98 @@ class TestCursorArchiveGuardEdges:
         assert isinstance(out, str)
         assert MISMATCH_TITLE in out
         assert not ops.browse_namespace.called
+
+
+ENTRY_MISMATCH_TITLE = "Cursor / Article Mismatch"
+
+
+class TestLinksCursorEntryBinding:
+    """P26 / P35: ``_handle_links`` must reject a links cursor minted on a
+    different article (or a different archive) instead of applying its offset.
+
+    Pre-fix the only guard was the tool-name check, which passes for *any*
+    links cursor, while the offset WAS forwarded — so a cursor for article A
+    returned article B's links starting mid-list, silently skipping page 1.
+
+    These tests must run with ``compact=True``: the non-compact path ignores
+    ``offset`` entirely and would pass vacuously.
+    """
+
+    @staticmethod
+    def _ops() -> MagicMock:
+        ops = MagicMock()
+        ops.list_zim_files_data.return_value = [{"path": "/x.zim"}]
+        ops.config.meta.footer_enabled = False
+        ops.path_validator.validate_path.return_value = Path("/x.zim")
+        ops.path_validator.validate_zim_file.return_value = Path("/x.zim")
+        ops.extract_article_links_data.return_value = {
+            "title": "Berlin",
+            "path": "A/Berlin",
+            "results": [],
+            "category_totals": {"internal": 0, "external": 0},
+        }
+        return ops
+
+    @staticmethod
+    def _cursor(entry_path: str, archive: str = "/x.zim") -> str:
+        return Cursor.encode(
+            tool="extract_article_links",
+            state={  # type: ignore[typeddict-item]
+                "o": 25,
+                "l": 25,
+                "ep": entry_path,
+                "k": "internal",
+                "ai": archive_identity(Path(archive)),
+            },
+        )
+
+    def test_links_cursor_for_other_article_is_rejected(self) -> None:
+        ops = self._ops()
+        handler = SimpleToolsHandler(ops)
+        out = handler.handle_zim_query(
+            "links in Berlin",
+            "/x.zim",
+            options={
+                "cursor": self._cursor("A/Photosynthesis"),
+                "compact": True,
+            },
+        )
+        assert isinstance(out, str)
+        assert ENTRY_MISMATCH_TITLE in out, out[:400]
+        assert not ops.extract_article_links_data.called
+
+    def test_links_cursor_round_trips_across_case_and_underscores(self) -> None:
+        """The simple-mode path has been through intent parsing, so the cursor's
+        raw ``ep`` differs only in case / ``_`` form — that must be accepted."""
+        ops = self._ops()
+        handler = SimpleToolsHandler(ops)
+        out = handler.handle_zim_query(
+            "links in climate change",
+            "/x.zim",
+            options={
+                "cursor": self._cursor("Climate_Change"),
+                "compact": True,
+            },
+        )
+        assert isinstance(out, str)
+        assert ENTRY_MISMATCH_TITLE not in out, out[:400]
+        assert ops.extract_article_links_data.called
+        _, kwargs = ops.extract_article_links_data.call_args
+        assert kwargs["offset"] == 25
+
+    def test_links_cursor_from_other_archive_is_rejected(self) -> None:
+        """P35: ``_handle_links`` was the only cursor-consuming simple-mode
+        handler with no archive-identity guard."""
+        ops = self._ops()
+        handler = SimpleToolsHandler(ops)
+        out = handler.handle_zim_query(
+            "links in Berlin",
+            "/x.zim",
+            options={
+                "cursor": self._cursor("Berlin", archive="/other.zim"),
+                "compact": True,
+            },
+        )
+        assert isinstance(out, str)
+        assert MISMATCH_TITLE in out, out[:400]
+        assert not ops.extract_article_links_data.called

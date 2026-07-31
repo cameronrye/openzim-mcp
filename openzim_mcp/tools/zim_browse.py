@@ -43,7 +43,10 @@ def register(server: "OpenZimMcpServer") -> None:
         include_assets: bool = False,
     ) -> Any:
         try:
-            rl = enforce_rate_limit(server, "zim_browse")
+            # Internal operation name, not the wire name — see
+            # ``RATE_LIMIT_COSTS`` in ``defaults.py``. Both ``page`` and
+            # ``walk`` modes are namespace enumeration.
+            rl = enforce_rate_limit(server, "browse_namespace")
             if rl is not None:
                 return rl
             if mode not in _VALID_MODES:
