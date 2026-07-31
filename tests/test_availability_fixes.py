@@ -401,8 +401,13 @@ def test_readyz_concurrent_probes_on_healthy_server_all_succeed():
     released = _threading.Event()
     calls: list[int] = []
 
+    # A real directory, not a hard-coded "/tmp": on Windows that path does
+    # not exist, so `_any_readable_dir()` correctly reported "not ready" and
+    # the 503 under test was indistinguishable from the bug it pins.
+    _allowed = tempfile.mkdtemp(prefix="openzim_mcp_readyz_")
+
     class _Cfg:
-        allowed_directories = ["/tmp"]
+        allowed_directories = [_allowed]
 
     class _Server:
         config = _Cfg()
