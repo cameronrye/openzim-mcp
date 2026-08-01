@@ -14,6 +14,7 @@ receives, so a future branch that forgets to resolve its key fails here.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any, Dict, List, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
@@ -67,6 +68,18 @@ def _patch_async_ops(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         lambda _zim_ops: mock_ops,
     )
     return mock_ops
+
+
+async def _debit_only(fn: Any, **kwargs: Any) -> None:
+    """Drive a tool wrapper purely for its rate-limiter side effect.
+
+    The dispatch target behind these wrappers is a bare ``MagicMock``, so the
+    call reliably fails once it gets past the limiter. The limiter debit happens
+    first and is the only thing under test, so that downstream failure is
+    expected and discarded — the assertions read ``_rl_calls``, not the result.
+    """
+    with contextlib.suppress(Exception):
+        await fn(**kwargs)
 
 
 # Each entry: (register fn import path, tool name, kwargs, expected operation).
@@ -139,12 +152,7 @@ async def test_branch_passes_a_priced_operation_key(
     module.register(spy_server)
     fn = spy_server._tools_store[module_name]
 
-    try:
-        await fn(**kwargs)
-    except Exception:
-        # The dispatch target is a bare MagicMock; only the limiter call
-        # (which happens first) is under test here.
-        pass
+    await _debit_only(fn, **kwargs)
 
     assert spy_server._rl_calls, f"{module_name} never called the rate limiter"
     operation, _cost = spy_server._rl_calls[0]
@@ -170,10 +178,7 @@ async def test_v2_only_surfaces_charge_the_default_cost(
     module = importlib.import_module(f"openzim_mcp.tools.{module_name}")
     module.register(spy_server)
     fn = spy_server._tools_store[module_name]
-    try:
-        await fn(**kwargs)
-    except Exception:
-        pass
+    await _debit_only(fn, **kwargs)
 
     operation, cost = spy_server._rl_calls[0]
     assert operation == module_name
@@ -213,10 +218,9 @@ async def test_batch_get_debits_one_token_per_entry(
     _patch_async_ops(monkeypatch)
     register_zim_get(spy_server)
     fn = spy_server._tools_store["zim_get"]
-    try:
-        await fn(zim_file_path="/x.zim", entry_paths=[f"A/{i}" for i in range(5)])
-    except Exception:
-        pass
+    await _debit_only(
+        fn, zim_file_path="/x.zim", entry_paths=[f"A/{i}" for i in range(5)]
+    )
 
     operation, _cost = spy_server._rl_calls[0]
     assert operation == "get_zim_entries"
@@ -237,10 +241,9 @@ async def test_batch_cost_is_clamped_to_the_bucket_capacity(
     _patch_async_ops(monkeypatch)
     register_zim_get(spy_server)
     fn = spy_server._tools_store["zim_get"]
-    try:
-        await fn(zim_file_path="/x.zim", entry_paths=[f"A/{i}" for i in range(50)])
-    except Exception:
-        pass
+    await _debit_only(
+        fn, zim_file_path="/x.zim", entry_paths=[f"A/{i}" for i in range(50)]
+    )
 
     # Exactly one bucket's worth in total — never more, or the second debit
     # could never be satisfied and the legal max batch would be impossible.
@@ -260,10 +263,9 @@ async def test_oversize_batch_is_priced_at_the_batch_limit_not_caller_input(
     spy_server.rate_limiter.config.burst_size = 10_000
     register_zim_get(spy_server)
     fn = spy_server._tools_store["zim_get"]
-    try:
-        await fn(zim_file_path="/x.zim", entry_paths=[f"A/{i}" for i in range(5000)])
-    except Exception:
-        pass
+    await _debit_only(
+        fn, zim_file_path="/x.zim", entry_paths=[f"A/{i}" for i in range(5000)]
+    )
 
     assert (
         _total_debited(spy_server)

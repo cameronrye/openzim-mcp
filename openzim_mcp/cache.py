@@ -7,6 +7,7 @@ for cache warmup between restarts.
 """
 
 import atexit
+import contextlib
 import functools
 import hashlib
 import heapq
@@ -634,6 +635,7 @@ class OpenZimMcpCache:
                     prefix=f".{persistence_file.name}.",
                     suffix=".tmp",
                 )
+                replaced = False
                 try:
                     with open(fd, "w", encoding="utf-8") as f:
                         json.dump(
@@ -650,13 +652,21 @@ class OpenZimMcpCache:
                         f.flush()
                         os.fsync(f.fileno())
                     os.replace(temp_name, str(persistence_file))
-                except BaseException:
-                    # Never leave the unique temp behind on failure.
-                    try:
-                        os.unlink(temp_name)
-                    except OSError:
-                        pass
-                    raise
+                    replaced = True
+                finally:
+                    # Never leave the unique temp behind on failure. ``finally``
+                    # rather than ``except BaseException``: this must also clean
+                    # up when the interpreter is tearing down (KeyboardInterrupt
+                    # landing in the ``atexit`` save), but nothing here should
+                    # intercept such an exit — ``finally`` runs the cleanup and
+                    # lets it propagate untouched.
+                    #
+                    # Guarded on ``replaced`` because a successful ``os.replace``
+                    # consumed the temp name, and a concurrent saver's ``mkstemp``
+                    # may already have reused it.
+                    if not replaced:
+                        with contextlib.suppress(OSError):
+                            os.unlink(temp_name)
                 logger.debug(f"Saved {len(entries_to_save)} cache entries to disk")
 
         except Exception as e:
