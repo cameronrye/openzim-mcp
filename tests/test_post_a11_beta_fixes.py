@@ -62,8 +62,9 @@ class TestEntryPathExtractor:
     def test_at_suffix_preserved_for_metadata_path(self, parser):
         intent, params, _ = parser.parse_intent("get article M/Illustration_48x48@1")
         assert intent == "get_article"
-        # Sub-D-2 Rule 1 lowercases the query before param extraction.
-        assert params["entry_path"] == "m/illustration_48x48@1"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction, but
+        # a ZIM namespace prefix is exempt (case-sensitive path lookup).
+        assert params["entry_path"] == "M/Illustration_48x48@1"
 
     def test_apostrophe_preserved(self, parser):
         intent, params, _ = parser.parse_intent("get article Newton's_laws")
@@ -82,8 +83,9 @@ class TestEntryPathExtractor:
     def test_quoted_path_still_overrides_keyword_capture(self, parser):
         intent, params, _ = parser.parse_intent('get article "C/Foo bar"')
         assert intent == "get_article"
-        # Sub-D-2 Rule 1 lowercases the query before param extraction.
-        assert params["entry_path"] == "c/foo bar"
+        # Sub-D-2 Rule 1 lowercases the query before param extraction, but
+        # a ZIM namespace prefix is exempt (case-sensitive path lookup).
+        assert params["entry_path"] == "C/Foo bar"
 
     def test_trailing_question_mark_stripped(self, parser):
         intent, params, _ = parser.parse_intent("get article United States?")
@@ -372,6 +374,79 @@ class TestPunctuationSmearGuard:
         result = find_title_match(mock, "/x.zim", "Berlin")
         assert result is not None
         assert result["path"] == "Berlin"
+
+
+class TestPunctuationSmearGuardSurvivesTailProbes:
+    """The a11 guard above only plugged Pass 0 of
+    ``promote_topic_via_title_index``. Passes 1/2/3 probe strings built
+    by ``iter_query_tails``, whose ``_TAIL_TOKEN_RE`` (``[^\\W_]+``)
+    DELETES every load-bearing punctuation char — ``iter_query_tails
+    ("c++") == ["c"]`` — so ``find_title_match`` never sees a ``+`` to
+    compare and the letter-``C`` article was promoted at cert 0.85.
+
+    The check now also lives in the two shared accept gates
+    (``passes_z4`` / ``accept_tail_promotion``), which are the only
+    places downstream of Pass 0 that still hold the ORIGINAL topic.
+    """
+
+    @staticmethod
+    def _always_matching_index(path: str) -> MagicMock:
+        """Title index that resolves EVERY probe to ``path`` at score 1.0.
+
+        Models the real failure: libzim normalises ``+``/``#`` away, so
+        the mangled tail (``c``) and the original topic (``c++``) both
+        hit the same row.
+        """
+        mock = MagicMock()
+        mock.find_entry_by_title_data.return_value = {
+            "results": [
+                {
+                    "path": path,
+                    "title": path,
+                    "score": 1.0,
+                    "match_type": "direct",
+                }
+            ]
+        }
+        return mock
+
+    @pytest.mark.parametrize(
+        "topic,smeared_path",
+        [
+            ("c++", "C"),
+            ("f#", "F"),
+            ("a* search", "A"),
+        ],
+    )
+    def test_tail_passes_reject_punctuation_smear(self, topic, smeared_path):
+        from openzim_mcp.topic_preprocessing import promote_topic_via_title_index
+
+        mock = self._always_matching_index(smeared_path)
+        assert promote_topic_via_title_index(mock, "/x.zim", topic) is None
+
+    def test_clean_topic_still_promotes_through_tail_passes(self):
+        """The gates must not reject punctuation-free topics."""
+        from openzim_mcp.topic_preprocessing import promote_topic_via_title_index
+
+        mock = self._always_matching_index("Berlin")
+        promoted = promote_topic_via_title_index(mock, "/x.zim", "berlin")
+        assert promoted is not None
+        assert promoted["path"] == "Berlin"
+
+    @pytest.mark.parametrize(
+        "gate",
+        ["passes_z4", "accept_tail_promotion"],
+    )
+    def test_shared_gates_reject_smear_before_possessive_early_return(self, gate):
+        """The smear check must precede the possessive early-returns —
+        both of those ``return`` before any other guard runs, so a
+        possessive topic carrying load-bearing punctuation (``c++'s
+        syntax``) would otherwise bypass the check entirely."""
+        import openzim_mcp.title_promotion as tp
+
+        fn = getattr(tp, gate)
+        promoted = {"path": "C", "title": "C", "score": 1.0}
+        assert fn(promoted, "c++'s syntax", lambda _t: None) is False
 
 
 # ---------------------------------------------------------------------------

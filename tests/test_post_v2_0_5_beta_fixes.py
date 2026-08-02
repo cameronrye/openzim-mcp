@@ -207,10 +207,12 @@ class TestGetArticleSingleTokenRoutesThroughTitleIndexProbe:
             lambda *_a, **_kw: None,
         )
 
-        # Backend succeeds for the namespace-prefixed path (parser
-        # lowercases everything, slash and all — Rule 1 is global).
+        # Backend succeeds for the namespace-prefixed path. Rule 1's
+        # lowercasing is exempted for a ZIM namespace prefix, so the
+        # caller's ``A/Biology`` reaches libzim's case-sensitive path
+        # lookup verbatim.
         def get_entry(_path: str, entry_path: str, *_a, **_kw) -> str:
-            if entry_path == "a/biology":
+            if entry_path == "A/Biology":
                 return "Article content"
             raise ValueError(f"Entry not found: '{entry_path}'")
 
@@ -224,7 +226,7 @@ class TestGetArticleSingleTokenRoutesThroughTitleIndexProbe:
         called_entry_paths = [
             call.args[1] for call in mock_zim_operations.get_zim_entry.call_args_list
         ]
-        assert "a/biology" in called_entry_paths
+        assert "A/Biology" in called_entry_paths
 
     def test_multi_word_natural_language_path_still_resolves(
         self,

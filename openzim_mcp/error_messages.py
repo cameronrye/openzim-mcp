@@ -10,6 +10,7 @@ from typing import Dict, List, Type
 
 from .exceptions import (
     OpenZimMcpArchiveError,
+    OpenZimMcpArchivePathError,
     OpenZimMcpError,
     OpenZimMcpFileNotFoundError,
     OpenZimMcpRateLimitError,
@@ -58,6 +59,21 @@ ERROR_CONFIGS: Dict[Type[OpenZimMcpError], ErrorConfig] = {
             "Check for path traversal attempts (../ sequences)",
             "Verify the file path doesn't contain suspicious characters",
             "Use `zim_health()` to see server state and allowed directories",
+        ],
+    ),
+    # ``OpenZimMcpArchivePathError`` subclasses ``OpenZimMcpValidationError``,
+    # but this lookup is by EXACT type, so it needs its own entry — otherwise
+    # "Path is not a file" / "File is not a ZIM file" / "Failed to resolve file
+    # path" resolve to no template at all. It also deserves better guidance
+    # than the input-validation steps: nothing is wrong with the arguments.
+    OpenZimMcpArchivePathError: ErrorConfig(
+        title="Archive Not Available",
+        issue="The ZIM archive itself could not be opened.",
+        steps=[
+            'Use `zim_query("list available ZIM files")` to see the real paths',
+            "Pass one of those paths verbatim as `zim_file_path`",
+            "Omit `zim_file_path` entirely to auto-select the only archive",
+            "Confirm the file is a readable `.zim` file, not a directory",
         ],
     ),
     OpenZimMcpValidationError: ErrorConfig(

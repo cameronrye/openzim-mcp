@@ -62,8 +62,37 @@ def tool_error_response(
     return tool_error(operation=operation, message=enhanced, context=safe_context)
 
 
+def _clamp_cost_to_capacity(
+    server: "OpenZimMcpServer", operation: str, cost: int
+) -> int:
+    """Clamp a variable ``cost`` to the smallest relevant bucket capacity.
+
+    ``TokenBucket.acquire`` denies unconditionally when ``cost`` exceeds the
+    bucket's capacity — no amount of waiting refills past ``burst_size``. A
+    batch cost derived from caller input (``len(entry_paths)``, up to
+    ``MAX_BATCH_SIZE`` = 50) therefore exceeds the default ``burst_size`` of
+    20 and would make a documented, supported batch size permanently
+    impossible rather than merely expensive. Clamping keeps the batch
+    "drains the bucket" instead of "can never succeed".
+    """
+    try:
+        limiter_config = server.rate_limiter.config
+        capacity = int(limiter_config.burst_size)
+        op_config = limiter_config.per_operation_limits.get(operation)
+        if op_config is not None:
+            capacity = min(capacity, int(op_config.burst_size))
+    except Exception:  # pragma: no cover - defensive (mocked limiters in tests)
+        return cost
+    if capacity <= 0:
+        return cost
+    return max(1, min(cost, capacity))
+
+
 def enforce_rate_limit(
-    server: "OpenZimMcpServer", operation: str
+    server: "OpenZimMcpServer",
+    operation: str,
+    *,
+    cost: Optional[int] = None,
 ) -> Optional[ToolErrorPayload]:
     """Apply the configured rate limit for ``operation`` to the current client.
 
@@ -74,14 +103,28 @@ def enforce_rate_limit(
     so concurrent HTTP callers are isolated while stdio shares the ``"default"``
     bucket. A no-op when ``rate_limit.enabled`` is False.
 
+    ``operation`` must be an INTERNAL operation name (``search``,
+    ``get_binary_entry``, ...), not the wire-level v2 tool name. The v2 tools
+    are multiplexers, so each wrapper resolves the name for the branch it is
+    about to dispatch: passing ``"zim_get"`` matched nothing in
+    ``RATE_LIMIT_COSTS`` and silently priced every call at the ``default``
+    cost of 1, and made every documented ``per_operation_limits`` override
+    inert because the bucket was keyed on a name no operator writes.
+
+    ``cost`` overrides the table lookup for calls whose weight is not fixed —
+    a batch ``zim_get(entry_paths=[...])`` debits one token per requested
+    entry rather than one for the whole batch.
+
     This is the enforcement seam the limiter was missing — it was constructed in
     ``OpenZimMcpServer.__init__`` but never called, so configured
     ``OPENZIM_MCP_RATE_LIMIT__*`` limits were silently inert.
     """
     from ..exceptions import OpenZimMcpRateLimitError
 
+    if cost is not None:
+        cost = _clamp_cost_to_capacity(server, operation, cost)
     try:
-        server.rate_limiter.check_rate_limit(operation=operation)
+        server.rate_limiter.check_rate_limit(operation=operation, cost=cost)
     except OpenZimMcpRateLimitError as exc:
         return tool_error(
             operation="rate_limited",

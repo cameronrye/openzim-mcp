@@ -124,6 +124,9 @@ class _CompactFormatMixin:
           * a profile name (``"tiny"`` / ``"small"`` / ``"medium"`` /
             ``"large"``)
           * a positive integer (clamped to ``[500, 64_000]``)
+          * the same integer serialised as a string (``"2000"``), which is
+            what pydantic's smart union yields for the declared
+            ``Optional[Union[str, int]]`` wire type
 
         Falls back to the medium profile on anything else (unknown
         string, negative, non-int) so a malformed caller value can't
@@ -133,7 +136,19 @@ class _CompactFormatMixin:
         if raw is None:
             return default
         if isinstance(raw, str):
-            return cls._COMPACT_BUDGET_PROFILES.get(raw.lower(), default)
+            s = raw.strip()
+            profile = cls._COMPACT_BUDGET_PROFILES.get(s.lower())
+            if profile is not None:
+                return profile
+            # A JSON-serialised integer ("2000") is a well-formed budget that
+            # merely arrived as text — the documented fallback is for unknown
+            # PROFILE NAMES. Route it through the same clamp as the int branch
+            # so "1000000" cannot bypass the [500, 64_000] bounds.
+            try:
+                parsed = int(s)
+            except ValueError:
+                return default
+            return max(cls._COMPACT_BUDGET_MIN, min(parsed, cls._COMPACT_BUDGET_MAX))
         if isinstance(raw, bool):
             # ``bool`` is an ``int`` subclass; reject before the int
             # branch so ``compact_budget=True`` doesn't silently mean

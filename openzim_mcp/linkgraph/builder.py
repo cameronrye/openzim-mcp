@@ -182,9 +182,16 @@ def iter_article_links(archive: Any) -> Iterator[Tuple[str, List[Tuple[str, str]
             html = bytes(entry.get_item().content).decode("utf-8", "replace")
         except Exception:  # nosec B112 - skip entry whose content won't read
             continue
-        edges = _StructureMixin._parse_internal_link_edges(
-            html, source_path=path, archive=archive
-        )
+        try:
+            edges = _StructureMixin._parse_internal_link_edges(
+                html, source_path=path, archive=archive
+            )
+        except Exception as exc:  # nosec B112 - one bad entry must not abort
+            # ``_classify_anchor`` can still raise on pathological markup
+            # (e.g. ``urlparse`` on an unbalanced '[' in the authority).
+            # A multi-hour link-graph build must not die on one article.
+            logger.warning("Skipping link extraction for %s: %s", path, exc)
+            continue
         yield (path, edges)
 
 

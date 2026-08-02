@@ -70,7 +70,10 @@ class TestD1HighlightEmptyLinks:
         )
         out = _highlight_terms(text, "plato", max_hits=10)
         # Find every markdown link target and assert no bold markers inside.
-        for m in re.finditer(r"\]\(([^)]*)\)", out):
+        # ``(?:\\.|[^)\\])*`` (not ``[^)]*``) so a backslash-escaped paren —
+        # html2text's rendering of ``Mercury_(planet)`` — does not terminate
+        # the target early and hide bold that leaked past it.
+        for m in re.finditer(r"\]\(((?:\\.|[^)\\])*)\)", out):
             assert "**" not in m.group(1), f"bold leaked into link URL: {m.group(1)}"
 
 

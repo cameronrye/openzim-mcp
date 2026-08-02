@@ -112,3 +112,104 @@ class TestZimQueryResolvesNonAsciiTitleOnUnindexedArchive:
         assert isinstance(result, str)
         assert "Article not found" not in result, result[:500]
         assert "Індыйская" in result
+
+
+class TestParseIntentPreservesNamespacePrefixCase:
+    """A ZIM namespace prefix (``A/``, ``C/``, ``I/``) is exempt from
+    Rule 1's lowercasing.
+
+    libzim's path lookup is case-sensitive, so ``A/Climate_change`` ->
+    ``a/climate_change`` 404'd on paths this tool emits itself (browse
+    listings, search hits, ``links in X``, and the not-found recovery
+    hints all print ``A/...``). The exemption is scoped to the strict
+    single-letter-plus-slash namespace shape so a slash-bearing natural
+    topic keeps Rule 1's contract.
+    """
+
+    def test_get_article_namespace_path_keeps_typed_case(self) -> None:
+        intent, params, _ = IntentParser.parse_intent(
+            "get article A/Climate_change", title_probe=None
+        )
+        assert intent == "get_article"
+        assert params["entry_path"] == "A/Climate_change"
+
+    def test_links_namespace_path_keeps_typed_case(self) -> None:
+        intent, params, _ = IntentParser.parse_intent(
+            "links in A/Berlin", title_probe=None
+        )
+        assert intent == "links"
+        assert params["entry_path"] == "A/Berlin"
+
+    def test_quoted_namespace_path_keeps_typed_case(self) -> None:
+        intent, params, _ = IntentParser.parse_intent(
+            'structure of "C/Photosynthesis"', title_probe=None
+        )
+        assert intent == "structure"
+        assert params["entry_path"] == "C/Photosynthesis"
+
+    def test_slash_bearing_topic_keeps_rule1_lowercase(self) -> None:
+        # ``TCP/IP`` is a natural-language topic that happens to contain a
+        # slash — NOT a namespace prefix. Rule 1 still applies.
+        intent, params, _ = IntentParser.parse_intent(
+            "tell me about TCP/IP", title_probe=None
+        )
+        assert intent == "tell_me_about"
+        assert params["topic"] == "tcp/ip"
+
+    def test_ascii_topic_unaffected(self) -> None:
+        intent, params, _ = IntentParser.parse_intent(
+            "tell me about Biology", title_probe=None
+        )
+        assert intent == "tell_me_about"
+        assert params["topic"] == "biology"
+
+
+class TestZimQueryResolvesNamespacePrefixedPath:
+    """End-to-end: a namespace-prefixed path the tool emits itself must
+    round-trip back through ``zim_query`` and return body content.
+
+    The pre-existing coverage was mock-based and keyed on the lowercased
+    path, which is exactly what let the 404 ship.
+    """
+
+    @pytest.fixture
+    def climate_zim(self, real_content_zim_files: Dict[str, Optional[Path]]) -> Path:
+        zim = real_content_zim_files.get("wikipedia_climate")
+        if zim is None:
+            pytest.skip("wikipedia_climate ZIM fixture not available")
+        return zim
+
+    @pytest.fixture
+    def handler(self, climate_zim: Path) -> SimpleToolsHandler:
+        cfg = OpenZimMcpConfig(
+            allowed_directories=[str(climate_zim.parent.parent)],
+            cache=CacheConfig(enabled=False, max_size=10, ttl_seconds=60),
+            content=ContentConfig(max_content_length=2000, snippet_length=100),
+            logging=LoggingConfig(level="ERROR"),
+        )
+        ops = ZimOperations(
+            cfg,
+            PathValidator(cfg.allowed_directories),
+            OpenZimMcpCache(cfg.cache),
+            ContentProcessor(snippet_length=100),
+        )
+        return SimpleToolsHandler(ops)
+
+    def test_get_article_namespace_path_returns_body(
+        self, handler: SimpleToolsHandler, climate_zim: Path
+    ) -> None:
+        result = handler.handle_zim_query(
+            "get article A/Climate_change", str(climate_zim)
+        )
+        assert isinstance(result, str)
+        assert "Article not found" not in result, result[:500]
+        assert "A/Climate_change" in result
+        assert "climate change" in result.lower()
+
+    def test_links_namespace_path_returns_links(
+        self, handler: SimpleToolsHandler, climate_zim: Path
+    ) -> None:
+        result = handler.handle_zim_query("links in A/Climate_change", str(climate_zim))
+        assert isinstance(result, str)
+        assert "Article not found" not in result, result[:500]
+        assert "A/Climate_change" in result

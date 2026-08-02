@@ -15,10 +15,20 @@ spuriously raised ``RegexTimeoutError`` after 1s of QUEUE wait without the
 regex ever running — degrading intent classification for requests against
 perfectly healthy archives.
 
+* ``"readyz"`` — the single-flight ``/readyz`` allowed-directory stat probe.
+
 Worker threads are daemon threads (M21) so a worker stuck inside an
 uninterruptible libzim call can never block interpreter exit. Timed-out
 futures are cancelled (M22) so still-queued work is discarded rather than run
 to completion after the caller has already given up.
+
+**The timeout bounds how long the CALLER waits, not how long the work runs.**
+CPython exposes no way to cancel a running thread, and a pure-``re`` call
+holds the GIL for the entire match, so a timed-out regex keeps running to
+completion and keeps occupying its worker slot. Callers that must bound the
+actual work (rather than just their own wait) have to constrain the input —
+see ``tools.zim_query.MAX_QUERY_LENGTH`` and the linear-pattern requirement
+documented on ``IntentParser._PARAM_LEAK_RE``.
 """
 
 import contextlib
@@ -125,7 +135,18 @@ def _env_int(name: str, default: int) -> int:
 # 4-8 vCPU server; override via the env vars below.
 _IO_MAX_WORKERS = _env_int("OPENZIM_MCP_TIMEOUT_MAX_WORKERS", 16)
 _REGEX_MAX_WORKERS = _env_int("OPENZIM_MCP_REGEX_MAX_WORKERS", 8)
-_POOL_SIZES: Dict[str, int] = {"io": _IO_MAX_WORKERS, "regex": _REGEX_MAX_WORKERS}
+# ``/readyz`` gets a dedicated single-slot pool. The probe is single-flight
+# (see ``http_app._make_readyz``), and it must NEVER run on the loop's default
+# executor: ``asyncio.wait_for`` cannot cancel work already running in
+# ``asyncio.to_thread``, so every timed-out probe against a wedged mount
+# permanently burned one worker of the same pool that serves every MCP tool
+# call — N unauthenticated ``/readyz`` hits wedged the entire server.
+_READYZ_MAX_WORKERS = 1
+_POOL_SIZES: Dict[str, int] = {
+    "io": _IO_MAX_WORKERS,
+    "regex": _REGEX_MAX_WORKERS,
+    "readyz": _READYZ_MAX_WORKERS,
+}
 
 _EXECUTORS: Dict[str, ThreadPoolExecutor] = {}
 _EXECUTOR_LOCK = threading.Lock()
@@ -145,7 +166,7 @@ def _make_executor(max_workers: int, name: str) -> ThreadPoolExecutor:
 
 
 def _get_executor(pool: str) -> ThreadPoolExecutor:
-    """Return the executor for ``pool`` ("io" / "regex"), creating it lazily.
+    """Return the executor for ``pool`` ("io" / "regex" / "readyz"), lazily.
 
     Lazy so ``import openzim_mcp.timeout_utils`` doesn't start threads in
     environments that never call ``run_with_timeout``.
@@ -176,7 +197,10 @@ def run_with_timeout(
     Best-effort interrupt: Python can't truly cancel a RUNNING worker thread,
     so on timeout a still-queued future is cancelled and a running one is
     abandoned (it continues until libzim returns, but on a daemon thread can no
-    longer block process exit).
+    longer block process exit). ``timeout_seconds`` therefore bounds the
+    CALLER's wait, not the work: a pure-CPU worker (notably ``re``, which holds
+    the GIL for the whole match) runs to completion regardless and keeps its
+    slot until it does.
 
     Args:
         func: The function to execute

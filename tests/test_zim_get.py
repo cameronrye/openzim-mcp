@@ -209,7 +209,21 @@ async def test_main_page(server: MagicMock, monkeypatch: pytest.MonkeyPatch) -> 
     register_zim_get(server)
     fn, _ = server._tools_store["zim_get"]
     await fn(zim_file_path="/x.zim", main_page=True)
-    ops.get_main_page_data.assert_awaited_once_with("/x.zim")
+    ops.get_main_page_data.assert_awaited_once_with("/x.zim", compact=False)
+
+
+@pytest.mark.asyncio
+async def test_main_page_forwards_compact(
+    server: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``compact`` is documented unscoped and permitted alongside ``main_page``
+    by the branch validator, so it must reach the data layer rather than being
+    silently dropped by the async wrapper's signature."""
+    ops = _patch_async_ops(monkeypatch, get_main_page_data={"content": "Welcome"})
+    register_zim_get(server)
+    fn, _ = server._tools_store["zim_get"]
+    await fn(zim_file_path="/x.zim", main_page=True, compact=True)
+    ops.get_main_page_data.assert_awaited_once_with("/x.zim", compact=True)
 
 
 @pytest.mark.asyncio

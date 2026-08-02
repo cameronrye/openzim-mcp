@@ -93,7 +93,20 @@ def register(server: "OpenZimMcpServer") -> None:
         # The TypedDict union doesn't help small MCP clients here, and
         # narrowing per-branch hurts readability without runtime payoff.
         try:
-            rl = enforce_rate_limit(server, "zim_search")
+            # Price/limit on the INTERNAL operation this call will dispatch to
+            # — ``zim_search`` is a multiplexer and is absent from
+            # ``RATE_LIMIT_COSTS``, so keying the bucket on the wire name made
+            # every mode cost 1 and made ``per_operation_limits`` overrides
+            # (documented against these internal names) silently inert.
+            if mode == "suggest":
+                _rl_op = "suggestions"
+            elif mode == "title":
+                _rl_op = "find_entry_by_title"
+            elif namespace or content_type:
+                _rl_op = "search_with_filters"
+            else:
+                _rl_op = "search"
+            rl = enforce_rate_limit(server, _rl_op)
             if rl is not None:
                 return rl
             if mode not in _VALID_MODES:

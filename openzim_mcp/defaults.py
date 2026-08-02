@@ -61,11 +61,25 @@ class ContentDefaults:
 
 @dataclass(frozen=True)
 class RateLimitDefaults:
-    """Default values for rate limiting."""
+    """Default values for rate limiting.
+
+    The budget is denominated in WORK UNITS, not requests. Until the cost
+    table below was actually reachable, every operation resolved to the
+    ``default`` cost of 1, so ``10/s`` meant ten *operations* per second.
+    Now a search costs 2 and a binary fetch 3, so the same nominal budget
+    would have silently halved search throughput and cut binary fetches by
+    two thirds. These values are scaled by the modal cost of the common
+    expensive operations (2) to hold the previous rate: a client can still
+    sustain ~10 searches/s, while cheap single-entry reads — which were
+    never the load concern — get proportionally more headroom.
+
+    Net effect versus the old flat pricing: expensive calls are throttled
+    harder relative to cheap ones, at an unchanged practical ceiling.
+    """
 
     ENABLED: bool = True
-    REQUESTS_PER_SECOND: float = 10.0
-    BURST_SIZE: int = 20
+    REQUESTS_PER_SECOND: float = 20.0
+    BURST_SIZE: int = 40
 
 
 @dataclass(frozen=True)
@@ -273,7 +287,14 @@ FURNITURE_HEADING_PREFIXES: frozenset = frozenset(
     }
 )
 
-# Rate limiter operation costs
+# Rate limiter operation costs.
+#
+# Keys are INTERNAL operation names, not the wire-level v2 tool names. The
+# Phase F tool wrappers resolve the internal name for the branch they are
+# about to dispatch (see ``tools/_common.enforce_rate_limit`` call sites) so
+# these costs — and any ``per_operation_limits`` override an operator writes
+# against the same names — actually apply.
+# ``tests/test_rate_limit_operation_keys.py`` pins the resolved key per branch.
 RATE_LIMIT_COSTS: Dict[str, int] = {
     "search": 2,
     "search_with_filters": 2,
@@ -284,7 +305,13 @@ RATE_LIMIT_COSTS: Dict[str, int] = {
     "browse_namespace": 1,
     "get_metadata": 1,
     "get_structure": 1,
+    "extract_article_links": 2,
+    "get_inbound_links": 1,
     "get_related_articles": 2,
     "suggestions": 1,
+    # ``zim_health`` / ``zim_get_section`` / ``zim_query`` deliberately have
+    # no entry: they are v2-only surfaces with no internal equivalent and are
+    # documented as charging the ``default`` cost. Their buckets are keyed on
+    # the tool name, so ``per_operation_limits`` overrides still reach them.
     "default": 1,
 }

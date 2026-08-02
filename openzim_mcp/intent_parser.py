@@ -39,6 +39,14 @@ def safe_regex_search(
     on any thread (asyncio executors, worker threads, etc.). Signal-based
     timeouts are not safe outside the main thread.
 
+    IMPORTANT — this is NOT a wall-clock bound on the match. ``re`` holds the
+    GIL for the whole operation and CPython cannot cancel a running thread, so
+    a catastrophically-backtracking pattern runs to completion; the timeout
+    only bounds how long *this* caller blocks, and it can't even fire until
+    the worker releases the GIL. Patterns reachable from untrusted input must
+    therefore be linear by construction (no greedy repeat followed by a
+    failing alternation), and the input itself must be length-capped.
+
     Args:
         pattern: Regular expression pattern
         text: Text to search
@@ -73,6 +81,11 @@ _QUOTE_NOT = f"[^{_QUOTE_CHARS}]"
 # _QUOTE_CHARS (M8). The lazy quantifier plus the surrounding optional
 # _QUOTE_OPEN still peels an explicitly single-quoted value cleanly.
 _QUOTE_NOT_APOS = '[^"“”]'
+
+# A ZIM namespace-prefixed path: exactly one letter, then ``/`` (``A/Berlin``,
+# ``C/Photosynthesis``, ``I/logo.png``). Used by ``_restore_nonascii_case`` to
+# exempt case-sensitive paths from Tier-1 Rule 1's lowercasing.
+_NAMESPACE_PREFIXED_RE = re.compile(r"^[A-Za-z]/")
 
 
 def _strip_quote_pair(value: str) -> str:
@@ -131,9 +144,11 @@ def safe_regex_sub(
     pattern's own flags). Same threading-based timeout as
     :func:`safe_regex_search`.
 
-    Used by the compact-rendering layer to defang catastrophic-backtracking
-    risk on adversarial article bodies (long unclosed markdown links,
-    pathological snippet headers, etc.).
+    Used by the compact-rendering layer to bound how long a caller waits on
+    adversarial article bodies (long unclosed markdown links, pathological
+    snippet headers, etc.). It does NOT defang catastrophic backtracking: see
+    the warning on :func:`safe_regex_search` — the match still runs to
+    completion on its worker thread. Keep the patterns linear.
     """
     if isinstance(pattern, re.Pattern):
         return run_with_timeout(
@@ -182,15 +197,21 @@ def _extract_filtered_search(query: str, params: Dict[str, Any]) -> None:
     # stopped at the FIRST whitespace-preceded ``in``-prefixed word (internet,
     # insulin, India…), silently truncating the query — e.g. ``search for
     # history of the internet in namespace A`` captured only ``history of the``.
+    #
+    # ``_QUOTE_NOT_APOS`` (not ``_QUOTE_NOT``) so a possessive apostrophe is
+    # not read as a value delimiter: ``search for Murphy's law in namespace
+    # C`` previously matched nothing at all and the handler fell back to
+    # sending the ENTIRE command sentence to the backend. The H5 lookahead is
+    # what keeps the now-permissive lazy capture from over-running — keep it.
     search_match = safe_regex_search(
         rf"(?:search|find|look)\s+(?:for\s+)?{_QUOTE_OPEN}?"
-        rf"({_QUOTE_NOT}+?){_QUOTE_OPEN}?\s+(?:in|within)\b"
+        rf"({_QUOTE_NOT_APOS}+?){_QUOTE_OPEN}?\s+(?:in|within)\b"
         rf"(?=\s+(?:namespace|type)\b)",
         query,
         re.IGNORECASE,
     )
     if search_match:
-        params["query"] = search_match.group(1).strip()
+        params["query"] = _strip_quote_pair(search_match.group(1).strip())
 
     # A16 post-a16 D6: tighten the namespace regex to a single letter
     # with a word boundary so ``search foo in namespace AB`` / ``... 1``
@@ -296,8 +317,23 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     # closer). Otherwise possessive apostrophes were read as quote delimiters,
     # so ``links in Murphy's law and Sod's law`` matched the span between the
     # two apostrophes and captured ``s law and Sod``.
+    #
+    # The opener is additionally required to sit in a VALUE SLOT: either at
+    # the very start of the query or immediately after an anchor keyword
+    # (``article``/``entry``/``page``/``of``/``for``/``in``/``from``/``to``).
+    # A title-internal elision's opening apostrophe is always preceded by a
+    # title word (``get article Rock 'n' Roll`` → entry_path ``n``), never by
+    # an anchor, so it can no longer be read as a value delimiter — while an
+    # explicitly quoted value keeps working WHEREVER it appears, including
+    # when a modifier clause follows it (``structure of "Photosynthesis" in
+    # compact mode``, ``links in "Berlin" and "Paris"``). Anchoring on
+    # end-of-query instead would drop those, silently falling through to the
+    # last-preposition branch and resolving a confidently WRONG article.
+    # ``re`` disallows variable-width lookbehind, so the anchor is consumed
+    # in a non-capturing group; only group(1) is ever read.
     quoted_match = safe_regex_search(
-        rf"(?:^|(?<=\s)){_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}"
+        rf"(?:^|\b(?:article|entry|page|of|for|in|from|to)\s+)"
+        rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}"
         rf"(?=\s|$|[?.,;:!])",
         query,
     )
@@ -428,9 +464,32 @@ def _extract_suggestions(query: str, params: Dict[str, Any]) -> None:
 
 
 def _extract_search(query: str, params: Dict[str, Any]) -> None:
+    # An explicitly delimited term wins wherever it appears, so ``find "World
+    # War II" articles`` yields the quoted term alone and the quote chars
+    # never reach the backend. ``_QUOTE_NOT`` inside the pair is safe here
+    # because BOTH delimiters are mandatory — a possessive apostrophe has no
+    # partner immediately after the verb, so this branch simply misses.
+    quoted = safe_regex_search(
+        rf"(?:search|find|look)\s+(?:for\s+)?{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}",
+        query,
+        re.IGNORECASE,
+    )
+    if quoted:
+        params["query"] = quoted.group(1).strip()
+        return
+    # Unquoted: the capture must NOT exclude quote chars, because
+    # ``_QUOTE_NOT`` treats a possessive apostrophe as a value delimiter and
+    # ``search for Murphy's law`` then captured only ``Murphy`` (``search for
+    # O'Brien`` only ``o``). Take everything after the verb (+ optional
+    # ``for``). ``(\S[\s\S]*)`` requires a non-space first char, so the
+    # degenerate ``search for `` backtracks the optional ``(?:for\s+)?`` off
+    # and captures ``for`` — keeping the A11-B4 "search terms required" guard
+    # reachable. Do NOT ``_strip_quote_pair`` this tail: it is not a delimited
+    # token, and peeling its first and last chars mangles any query that
+    # merely begins and ends with a quote char (``search for "Berlin" or
+    # "Paris"`` -> ``berlin" or "paris``).
     search_match = safe_regex_search(
-        rf"(?:search|find|look)\s+(?:for\s+)?"
-        rf"{_QUOTE_OPEN}?({_QUOTE_NOT}+){_QUOTE_OPEN}?",
+        r"(?:search|find|look)\s+(?:for\s+)?(\S[\s\S]*)",
         query,
         re.IGNORECASE,
     )
@@ -1217,9 +1276,13 @@ class IntentParser:
     # (returns year ``"N"`` article), ``offset=N`` (returns ``"N"``)
     # on ``tell me about <topic> <param>=<value>``. Strip these BEFORE
     # the politeness loop / pattern matching so every downstream
-    # extractor sees the cleaned query. Token list mirrors the public
-    # ``zim_query`` argument set; covers the param names live a23
-    # sweep observed plus their obvious neighbours.
+    # extractor sees the cleaned query. Token list mostly mirrors the
+    # public ``zim_query`` argument set; covers the param names live a23
+    # sweep observed plus their obvious neighbours. NOTE the set is NOT
+    # exactly the public argument set — ``namespace``, ``entry_path``,
+    # ``partial_query`` and ``max_words`` are not ``zim_query`` kwargs at
+    # all, so for those the query string is the only channel. See
+    # ``_strip_param_leaks`` for the ``namespace`` operand carve-out.
     #
     # Word-boundary anchored at the front so we don't eat the leading
     # part of a multi-word topic (``offsetting`` / ``compactor`` /
@@ -1237,7 +1300,15 @@ class IntentParser:
     # Adding ``query`` closes the loop — every public ``zim_query``
     # parameter name now strips when a model leaks it as a query suffix.
     _PARAM_LEAK_RE = (
-        r"\s+"
+        # A SINGLE leading whitespace atom, deliberately not ``\s+``. A greedy
+        # repeat whose tail is a failing alternation backtracks O(n^2) over a
+        # long whitespace run, and ``safe_regex_sub`` cannot bound that cost:
+        # CPython's ``re`` holds the GIL for the whole match, so the worker
+        # thread timeout in ``run_with_timeout`` can't fire until it completes.
+        # ``\s`` makes the leading atom fixed-width, so no backtracking is
+        # possible. Behaviour is unchanged: ``_strip_param_leaks`` already
+        # ``.strip()``s after every pass and loops until stable.
+        r"\s"
         r"(?:limit|offset|content_offset|max_content_length|"
         r"max_words|compact_budget|compact|synthesize|cursor|"
         r"zim_file_path|entry_path|namespace|partial_query|"
@@ -1252,6 +1323,30 @@ class IntentParser:
         (``Photosynthesis limit=10 compact_budget=200``) strips in one
         call.
         """
+        # ``namespace`` is the OPERAND of browse / walk / "in namespace"
+        # queries, not a redundant duplicate of a typed kwarg — ``zim_query``
+        # has no ``namespace`` parameter, so the query string is the only
+        # channel for it. Rewrite ``namespace=A`` -> ``namespace A`` so the
+        # operand survives the strip below.
+        #
+        # The browse-family verb must INTRODUCE the operand (optionally
+        # bridged by a determiner/connector), not merely appear somewhere in
+        # the query: gating on "any browse verb anywhere" turned a genuine
+        # leak in ordinary topical prose (``explore the history of Berlin
+        # namespace=A``, ``walk me through X namespace=C``) into prose that
+        # ``_PARAM_LEAK_RE`` can no longer see — the exact post-a23 P1-D3
+        # pollution the strip exists to prevent. Queries with no such
+        # introducer (``tell me about X namespace=C``) still strip, preserving
+        # post-a23 P1-D3 / post-a24. The bridge is a bounded repeat over a
+        # fixed alternation, so the pattern stays linear.
+        query = safe_regex_sub(
+            r"\b((?:browse|explore|walk|iterate|dump|enumerate|in|within)"
+            r"(?:\s+(?:the|all|entries|of|in|within))*\s+namespace)"
+            r"\s*=\s*['\"]?([A-Za-z])\b['\"]?",
+            r"\1 \2",
+            query,
+            flags=re.IGNORECASE,
+        )
         for _ in range(4):
             before = query
             query = safe_regex_sub(
@@ -1328,15 +1423,45 @@ class IntentParser:
         # slice the original at a misaligned offset.
         if not original_query or len(lowered) != len(original_query):
             return params
-        for key, value in params.items():
-            if not isinstance(value, str) or not value or value.isascii():
-                continue
+
+        def _one(value: Any) -> Any:
+            # A ZIM namespace prefix (a single letter followed by ``/``) is
+            # never a natural-language token, so Rule 1's "ASCII values
+            # recover downstream" contract does not hold for it: libzim's
+            # path lookup is case-sensitive and ``A/Climate_change`` ->
+            # ``a/climate_change`` 404s — on paths this tool emits itself
+            # (browse listings, search hits, ``links in X``, and the
+            # not-found recovery hints all print ``A/...``). Re-case those
+            # too. The prefix is matched with the same strict single-letter
+            # shape the namespace extractors use, so a slash-bearing natural
+            # topic (``TCP/IP``, ``AC/DC``) keeps Rule 1's lowercasing.
+            if (
+                not isinstance(value, str)
+                or not value
+                or (value.isascii() and not _NAMESPACE_PREFIXED_RE.match(value))
+            ):
+                return value
             idx = lowered.find(value)
             if idx < 0:
-                continue
+                return value
             restored = original_query[idx : idx + len(value)]
-            if restored != value and restored.lower() == value:
-                params[key] = restored
+            return restored if restored.lower() == value else value
+
+        for key, value in params.items():
+            # ``get_zim_entries`` stores its paths as a LIST
+            # (``params["entries"] == ["a/foo", "a/bar"]``), so a scalar-only
+            # loop skipped the highest-volume consumer of self-emitted
+            # ``A/...`` paths entirely and batch fetches kept 404ing. Map the
+            # per-value logic over list elements the same way the sibling
+            # politeness strip in ``simple_tools`` does.
+            if isinstance(value, list):
+                new_list = [_one(item) for item in value]
+                if new_list != value:
+                    params[key] = new_list
+            else:
+                restored = _one(value)
+                if restored != value:
+                    params[key] = restored
         return params
 
     @classmethod
@@ -1385,8 +1510,25 @@ class IntentParser:
         # Param-leak strip runs before politeness (post-a23 P1-D3): the
         # politeness regex then sees the clean topic without ``limit=10`` /
         # ``offset=5`` confusing its leading word-boundary anchor.
-        query = cls._strip_param_leaks(query)
-        query = cls._strip_trailing_politeness(query)
+        #
+        # Collapse whitespace runs BEFORE either strip. ``_PARAM_LEAK_RE`` and
+        # ``_TRAILING_POLITENESS_RE`` both lead with a repeat whose tail is a
+        # failing alternation, which backtracks O(n^2) over a long whitespace
+        # run (8 000 trailing spaces measured at 2.4s wall). This sub is linear
+        # — no failing tail — and caps every run at one character.
+        # ``safe_regex_sub`` cannot bound the cost itself: CPython's ``re``
+        # holds the GIL, so the worker-thread timeout in ``run_with_timeout``
+        # can't fire until the match completes, making the nominal 1s cap
+        # advisory only.
+        query = re.sub(r"\s+", " ", query).strip()
+        try:
+            query = cls._strip_param_leaks(query)
+            query = cls._strip_trailing_politeness(query)
+        except RegexTimeoutError:
+            # Degrade like every other regex site in this function rather than
+            # converting a parse into a top-level error envelope: the query is
+            # simply left un-stripped and classification continues.
+            logger.warning("Regex timeout during query pre-strip; using raw query")
         # Kept for _restore_nonascii_case: both strips above preserve
         # casing, so this is the last form still carrying what the
         # caller typed before Rule 1 lowercases everything.

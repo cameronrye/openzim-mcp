@@ -33,6 +33,14 @@ if TYPE_CHECKING:
 # verifies the wheel ships this file.
 _DESCRIPTION = load_description("zim_query")
 
+# Upper bound on the caller-supplied natural-language ``query`` string. The
+# intent parser runs dozens of regexes over it, and CPython's ``re`` holds the
+# GIL for the whole match — so ``safe_regex_*``'s nominal per-pattern timeout
+# cannot interrupt a pathological input, and a length cap at the front door is
+# the only real bound on that work. No legitimate natural-language query comes
+# close (the longest in the test corpus is ~200 characters).
+MAX_QUERY_LENGTH = 4096
+
 
 def register(server: "OpenZimMcpServer") -> None:
     """Register the ``zim_query`` tool with the MCP server.
@@ -60,6 +68,22 @@ def register(server: "OpenZimMcpServer") -> None:
             rl = enforce_rate_limit(server, "zim_query")
             if rl is not None:
                 return rl
+            # Front-door cap on the natural-language query. The intent
+            # parser runs dozens of regexes over this string and CPython's
+            # ``re`` holds the GIL for the whole match, so the nominal
+            # per-regex timeout cannot interrupt a pathological input — an
+            # oversized query is a process-wide availability risk, not just a
+            # slow request. No legitimate natural-language query approaches
+            # this length (the longest in the test corpus is ~200 chars).
+            if len(query) > MAX_QUERY_LENGTH:
+                return tool_error(
+                    operation="invalid_query",
+                    message=(
+                        f"`query` must not exceed {MAX_QUERY_LENGTH} characters "
+                        f"(provided: {len(query)}). Pass a natural-language "
+                        "request, not a document."
+                    ),
+                )
             if content_offset < 0:
                 return tool_error(
                     operation="invalid_content_offset",

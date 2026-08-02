@@ -460,6 +460,21 @@ def _section_titles_for(
     return titles
 
 
+def _apply_affinity_boost(score: float, boost: float) -> float:
+    """Move ``score`` up the descending sort by ``boost``, sign-safely.
+
+    M17: a section-affinity match must always PROMOTE the passage. When
+    the [reranker] extra is engaged, score is overwritten with the raw
+    cross-encoder logit, which is routinely NEGATIVE for moderately
+    relevant passages. ``score * boost`` (boost >= 1) makes a negative
+    score MORE negative, demoting the matching passage below
+    non-matching ones — the opposite of the intent. Divide when negative
+    so the score moves toward zero (up in the descending sort)
+    regardless of sign; the magnitude of promotion stays symmetric.
+    """
+    return score * boost if score >= 0 else score / boost
+
+
 def _maybe_boost_passage(
     passage: SynthesizePassage,
     *,
@@ -468,44 +483,41 @@ def _maybe_boost_passage(
     cache: dict[tuple[str, str], dict[str, str]],
     threshold: float,
     boost: float,
-) -> SynthesizePassage:
-    """Return a fresh copy of ``passage`` with its score possibly boosted.
+) -> tuple[SynthesizePassage, bool]:
+    """Return ``(fresh copy of passage, was_boosted)``.
 
-    No-op cases (returned with original score):
+    No-op cases (returned with original score and ``False``):
       * cite_id has no ``#section_id`` suffix
       * cite_id doesn't parse as ``archive/entry_path#section_id``
       * section isn't found in the bundle (or bundle lookup failed)
       * heading shares fewer than ``threshold`` of its tokens with the query
+
+    The boolean is reported explicitly rather than inferred by the caller
+    from ``new score != old score``: that inference mis-classifies a
+    passage whose score is exactly ``0.0`` (``0.0 * boost == 0.0``) as
+    unboosted.
 
     Always returns a freshly-allocated dict so the caller may mutate it.
     """
     new_p = cast("SynthesizePassage", dict(passage))
     cite_id = passage["cite_id"]
     if "#" not in cite_id:
-        return new_p
+        return new_p, False
     base, _, section_id = cite_id.partition("#")
     archive_name, _, entry_path = base.partition("/")
     if not archive_name or not entry_path or not section_id:
-        return new_p
+        return new_p, False
     titles = _section_titles_for(
         archive_name, entry_path, bundle_lookup=bundle_lookup, cache=cache
     )
     heading_tokens = _affinity_tokens(titles.get(section_id, ""))
     if not heading_tokens:
-        return new_p
+        return new_p, False
     affinity = len(heading_tokens & query_tokens) / len(heading_tokens)
     if affinity >= threshold:
-        # M17: a section-affinity match must always PROMOTE the passage. When
-        # the [reranker] extra is engaged, score is overwritten with the raw
-        # cross-encoder logit, which is routinely NEGATIVE for moderately
-        # relevant passages. ``score * boost`` (boost >= 1) makes a negative
-        # score MORE negative, demoting the matching passage below
-        # non-matching ones — the opposite of the intent. Divide when negative
-        # so the score moves toward zero (up in the descending sort)
-        # regardless of sign; the magnitude of promotion stays symmetric.
-        score = float(passage["score"])
-        new_p["score"] = score * boost if score >= 0 else score / boost
-    return new_p
+        new_p["score"] = _apply_affinity_boost(float(passage["score"]), boost)
+        return new_p, True
+    return new_p, False
 
 
 def _boost_by_section_affinity(
@@ -521,8 +533,9 @@ def _boost_by_section_affinity(
     look up the section's heading in the bundle and compute
     ``|query_tokens ∩ heading_tokens| / |heading_tokens|``. When that
     affinity is ≥ ``config.section_affinity_threshold``, multiply the
-    passage's score by ``config.section_affinity_boost``. Re-sort the
-    list by score descending and re-number ranks.
+    passage's score by ``config.section_affinity_boost``. Passages are
+    then re-ordered by a *position-corrected* score (see below) and
+    ranks are re-numbered.
 
     Article-level citations, passages whose section isn't in the
     bundle, and bundle-lookup failures are all no-ops: the passage is
@@ -538,7 +551,7 @@ def _boost_by_section_affinity(
     # Copy-on-append (each helper call returns a fresh dict) keeps the
     # mutation model uniform: the rank-renumbering loop below can mutate
     # any item in ``boosted`` without leaking back to the caller's list.
-    boosted = [
+    results = [
         _maybe_boost_passage(
             p,
             query_tokens=query_tokens,
@@ -549,7 +562,43 @@ def _boost_by_section_affinity(
         )
         for p in passages
     ]
-    boosted.sort(key=lambda p: float(p.get("score", 0.0)), reverse=True)
+    boosted = [b for b, _ in results]
+    # P7: rank on a POSITION-CORRECTED score, not on the raw score.
+    #
+    # ``_promote_title_match`` and ``_demote_list_articles`` express their
+    # decision as list POSITION and never rewrite ``score`` (which stays
+    # 1/rank from Xapian), so an unconditional score sort here restored the
+    # exact BM25 order and silently discarded both stages. Partitioning on
+    # "was this boosted?" instead made the boost an ABSOLUTE precedence —
+    # any affinity match outranked every non-match however large the score
+    # gap — which contradicts ``section_affinity_boost``'s documented
+    # "conservative multiplier" contract.
+    #
+    # The fix keeps the incoming ORDER authoritative while leaving the boost
+    # magnitude-sensitive: clamp each passage's pre-boost score to the
+    # running minimum of everything ahead of it, so the baseline key
+    # sequence is non-increasing and a stable sort reproduces the incoming
+    # order exactly when nothing is boosted. A boosted passage then climbs
+    # only as far as ``boost`` actually carries it past its (clamped)
+    # neighbours. When the incoming order is already score-descending — the
+    # reranker's output, or plain BM25 with no positional stage firing — the
+    # clamp is the identity and this is the original score sort.
+    base_keys: list[float] = []
+    running: float | None = None
+    for p in passages:
+        raw = float(p.get("score", 0.0))
+        running = raw if running is None else min(running, raw)
+        base_keys.append(running)
+    keys = [
+        (
+            _apply_affinity_boost(base, config.section_affinity_boost)
+            if matched
+            else base
+        )
+        for base, (_, matched) in zip(base_keys, results)
+    ]
+    order = sorted(range(len(boosted)), key=lambda i: (-keys[i], i))
+    boosted = [boosted[i] for i in order]
     # A14: rank reflects the post-boost ordering. Without this, downstream
     # consumers of passages[].rank get stale BM25 positions even though the
     # score-sorted order has changed.
@@ -1961,8 +2010,6 @@ def synthesize_query(
         reranker_config=reranker_config,
     )
 
-    if strip_links:
-        all_passages = [_strip_links_in_passage(p) for p in all_passages]
     bundle_lookup = _make_bundle_lookup(
         top_hits,
         archive_by_name,
@@ -1982,6 +2029,16 @@ def synthesize_query(
         bundle_lookup=bundle_lookup,
         config=config,
     )
+    if strip_links:
+        # Must run AFTER ``_attribute_sections`` / ``_boost_by_section_affinity``
+        # (they match ``text_markdown`` against the bundle's rendered_markdown,
+        # which still contains ``[text](href)`` — stripping first made
+        # ``_locate_passage`` return -1, so every citation collapsed to entry
+        # level and the affinity boost, whose gate needs a ``#`` in the cite_id,
+        # became a no-op) but BEFORE ``_enforce_budget`` (the cap must be
+        # measured on the text the caller receives, and a mid-string cut must
+        # not land inside a link construct).
+        attributed = [_strip_links_in_passage(p) for p in attributed]
     pre_cap_chars = sum(len(p["text_markdown"]) for p in attributed)
     capped = _enforce_budget(attributed, char_budget=config.output_char_budget)
     truncated = sum(len(p["text_markdown"]) for p in capped) < pre_cap_chars

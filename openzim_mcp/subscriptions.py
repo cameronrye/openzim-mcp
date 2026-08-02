@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import re
 import weakref
 from pathlib import Path
 from typing import (
@@ -38,11 +39,51 @@ from typing import (
 )
 
 from .defaults import TIMEOUTS
+from .exceptions import OpenZimMcpValidationError
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
+
+
+# The only resource URI shapes this server actually serves (see
+# ``tools/resource_tools.py``): ``zim://files``, ``zim://{name}`` and
+# ``zim://{name}/entry/{path}``. The MCP SDK forwards ``req.params.uri``
+# verbatim with no check that it names a registered resource, and
+# ``resources/subscribe`` bypasses the rate limiter entirely, so without a
+# check here any client could mint unbounded distinct registry keys.
+# The optional bare ``/`` tail tolerates a client (or URL normaliser) that
+# appends one to the authority-only forms.
+_URI_RE = re.compile(r"^zim://[^/\s]+(?:/(?:entry/[^\s]+)?)?$")
+
+# Hard bound on the length of an accepted URI, so a single accepted key can't
+# retain an unbounded string.
+MAX_URI_LENGTH = 2048
+
+# Caps on DISTINCT URIs, the registry's only unbounded dimension. The sweep in
+# ``prune`` reclaims empty containers once per watcher tick; these caps bound
+# what an attacker can burst BETWEEN ticks.
+MAX_URIS_TOTAL = 4096
+MAX_URIS_PER_SESSION = 256
+
+
+def validate_subscription_uri(uri: str) -> str:
+    """Return ``uri`` if it names a resource shape this server serves.
+
+    Raises:
+        OpenZimMcpValidationError: for any other string.
+    """
+    if len(uri) > MAX_URI_LENGTH:
+        raise OpenZimMcpValidationError(
+            f"Subscription URI exceeds {MAX_URI_LENGTH} characters."
+        )
+    if not _URI_RE.match(uri):
+        raise OpenZimMcpValidationError(
+            f"Unsupported subscription URI: {uri!r}. Subscribable resources are "
+            "'zim://files', 'zim://{name}' and 'zim://{name}/entry/{path}'."
+        )
+    return uri
 
 
 class SubscriberRegistry:
@@ -75,9 +116,54 @@ class SubscriberRegistry:
         self._strong_by_uri: dict[str, set[Hashable]] = {}
         self._lock = asyncio.Lock()
 
+    def _is_known_uri(self, uri: str) -> bool:
+        return uri in self._weak_by_uri or uri in self._strong_by_uri
+
+    def _distinct_uri_count(self) -> int:
+        return len(set(self._weak_by_uri) | set(self._strong_by_uri))
+
+    def _uri_count_for_session(self, session: Hashable) -> int:
+        """Count the distinct URIs ``session`` is already subscribed to.
+
+        Scans the URI keys (bounded by ``MAX_URIS_TOTAL``) and does an O(1)
+        membership test in each container, so this stays cheap even with many
+        thousands of sessions on a single URI.
+        """
+        count = 0
+        for store in (self._weak_by_uri, self._strong_by_uri):
+            for sessions in store.values():
+                # ``in`` on a WeakSet weak-refs its arg; a non-weak-
+                # referenceable session (never in the weak set) raises
+                # TypeError — it simply isn't a member.
+                with contextlib.suppress(TypeError):
+                    if session in sessions:
+                        count += 1
+        return count
+
     async def subscribe(self, uri: str, session: Hashable) -> None:
-        """Register interest. Idempotent for the same (uri, session) pair."""
+        """Register interest. Idempotent for the same (uri, session) pair.
+
+        Raises:
+            OpenZimMcpValidationError: when accepting ``uri`` would push this
+                session — or the registry as a whole — past its distinct-URI
+                cap. ``resources/subscribe`` is not rate limited and URIs are
+                fully client-controlled, so an unbounded registry is a remote
+                memory-exhaustion vector; the caps bound what a client can
+                burst between watcher sweeps.
+        """
         async with self._lock:
+            if not self._is_known_uri(uri):
+                if self._distinct_uri_count() >= MAX_URIS_TOTAL:
+                    raise OpenZimMcpValidationError(
+                        "Subscription registry is at its "
+                        f"{MAX_URIS_TOTAL}-URI capacity; "
+                        "unsubscribe from unused resources first."
+                    )
+                if self._uri_count_for_session(session) >= MAX_URIS_PER_SESSION:
+                    raise OpenZimMcpValidationError(
+                        "This session is already subscribed to the maximum of "
+                        f"{MAX_URIS_PER_SESSION} distinct resource URIs."
+                    )
             try:
                 self._weak_by_uri.setdefault(uri, weakref.WeakSet()).add(session)
             except TypeError:
@@ -127,6 +213,30 @@ class SubscriberRegistry:
                 for uri in empty_uris:
                     store.pop(uri, None)
 
+    async def prune(self) -> int:
+        """Drop every now-empty per-URI container. Returns the number dropped.
+
+        The ``WeakSet`` empties itself when a session is garbage-collected, but
+        the DICT ENTRY is only popped by ``unsubscribe`` / ``clear_session`` —
+        neither of which runs on a bare client disconnect, and
+        ``broadcast_resource_updated`` returns early on an empty
+        ``sessions_for``, so a URI that never gets broadcast is never revisited.
+        The keys are client-controlled, so the residue grows without bound.
+
+        Call this from a background sweep only — NOT from ``sessions_for`` or
+        ``clear_session``. Those already hold ``self._lock``, which is a
+        non-reentrant ``asyncio.Lock``: re-acquiring it here would deadlock.
+        """
+        async with self._lock:
+            dropped = 0
+            for store in (self._weak_by_uri, self._strong_by_uri):
+                for uri in [u for u, s in store.items() if not s]:
+                    store.pop(uri, None)
+                    dropped += 1
+            if dropped:
+                logger.debug("pruned %d empty subscription container(s)", dropped)
+            return dropped
+
 
 OnChange = Callable[[str, str], Awaitable[None]]
 
@@ -146,6 +256,11 @@ class MtimeWatcher:
         dirs: list of allowed directories to watch.
         interval: polling interval in seconds.
         on_change: async callback ``(uri, change_type) -> None``.
+        registry: optional ``SubscriberRegistry`` to sweep once per tick. The
+            watcher loop is the only periodic task in the process, so it is
+            also the only place the registry's empty-container reclamation can
+            be driven from (``sessions_for`` / ``clear_session`` already hold
+            the registry lock and would deadlock).
     """
 
     def __init__(
@@ -153,11 +268,13 @@ class MtimeWatcher:
         dirs: Iterable[str],
         interval: float,
         on_change: OnChange,
+        registry: Optional["SubscriberRegistry"] = None,
     ) -> None:
-        """Capture the watch list, interval, and dispatch callback."""
+        """Capture the watch list, interval, dispatch callback, and registry."""
         self._dirs = [str(d) for d in dirs]
         self._interval = interval
         self._on_change = on_change
+        self._registry = registry
         # Snapshot maps path → (mtime, size). Both fields are compared on
         # each tick so that same-size replacements (different mtime) and
         # in-place rewrites (different size) are both detected. See the
@@ -246,6 +363,16 @@ class MtimeWatcher:
             name = Path(path).stem
             await self._on_change(f"zim://{name}", "replaced")
         self._snapshot = new_snap
+        # Sweep the registry's dead per-URI containers. This is the ONLY place
+        # the sweep can run: pruning inside ``sessions_for`` would never see a
+        # URI that is subscribed but never broadcast (the exact leak), and both
+        # ``sessions_for`` and ``clear_session`` hold the registry's
+        # non-reentrant lock. A sweep failure must not kill the watcher loop.
+        if self._registry is not None:
+            try:
+                await self._registry.prune()
+            except Exception as e:  # noqa: BLE001 - sweep is best-effort
+                logger.warning("subscription registry prune failed: %s", e)
 
     async def _loop(self) -> None:
         """Run the polling loop: diff against snapshot, dispatch, repeat.
@@ -356,16 +483,23 @@ def register_subscription_handlers(
     Subscribe handlers run inside an active request context, so we use
     ``mcp._mcp_server.request_context.session`` to capture the calling
     ``ServerSession`` and store it in the registry, keyed by URI.
+
+    The subscribe seam is where the URI is validated: the SDK passes
+    ``req.params.uri`` through untouched, and ``resources/subscribe`` is not
+    rate limited, so this is the only gate between a client and an unbounded
+    number of registry keys.
     """
     low = mcp._mcp_server
 
     @low.subscribe_resource()
     async def _on_subscribe(uri: Any) -> None:  # type: ignore[misc]
         session = low.request_context.session
-        await registry.subscribe(str(uri), session)
+        await registry.subscribe(validate_subscription_uri(str(uri)), session)
 
     @low.unsubscribe_resource()
     async def _on_unsubscribe(uri: Any) -> None:  # type: ignore[misc]
+        # NOT validated: unsubscribe only ever REMOVES state, and rejecting a
+        # malformed URI here would strand any entry a laxer past version let in.
         session = low.request_context.session
         await registry.unsubscribe(str(uri), session)
 

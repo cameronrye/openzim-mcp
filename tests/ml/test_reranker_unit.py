@@ -365,6 +365,64 @@ class TestRerankerWiredToHandleSearch:
         assert handler.get_telemetry().get("reranker_skipped.passthrough", 0) == 1
         assert handler.get_telemetry().get("reranker_engaged", 0) == 0
 
+    def test_maybe_rerank_compact_scored_does_not_truncate_below_caller_limit(
+        self,
+    ) -> None:
+        """The SCORED path has the same hazard the unscored guard above
+        documents, and used to hit it: ``effective_top_k = min(limit,
+        final_top_k)`` capped the swapped-in slice at ``final_top_k`` (10)
+        even when the caller asked for 25, while ``page_info`` and
+        ``next_cursor`` still described the full 25-row page. The rendered
+        footer then advertised ``offset=25``, so rows 10..24 were skipped
+        on the next page and became permanently unreachable.
+
+        Rerank REORDERS the caller's page; it is not a second cap.
+        """
+        from openzim_mcp.zim.search import _SearchMixin
+
+        handler = self._make_handler()
+        results = [
+            {"path": f"P{i}", "title": f"T{i}", "snippet": "s"} for i in range(25)
+        ]
+        payload = {
+            "query": "history of the berlin wall",
+            "results": results,
+            "next_cursor": "o=25",
+            "total": 500,
+            "done": False,
+            "page_info": {"offset": 0, "limit": 25, "returned_count": 25},
+        }
+        # Scoring stub: reverses the page AND attaches rerank_score, so the
+        # engaged (swap-in) branch is taken rather than the passthrough guard.
+        mock_reranker = MagicMock()
+        mock_reranker.rerank = MagicMock(
+            side_effect=lambda query, candidates, top_k: [
+                {**c, "rerank_score": float(i)}
+                for i, c in enumerate(reversed(candidates))
+            ][:top_k]
+        )
+        with patch(
+            "openzim_mcp.ml.reranker.BGEReranker.get",
+            return_value=mock_reranker,
+        ):
+            out = handler._maybe_rerank_compact(
+                payload=payload,
+                query="history of the berlin wall",
+                limit=25,
+            )
+
+        assert handler.get_telemetry().get("reranker_engaged", 0) == 1
+        # final_top_k defaults to 10 — none of the 25 rows may be dropped.
+        assert len(out["results"]) == 25
+        assert {r["path"] for r in out["results"]} == {f"P{i}" for i in range(25)}
+        # ...and the reorder actually happened.
+        assert out["results"][0]["path"] == "P24"
+        # The footer's advertised next offset must land past the LAST row
+        # actually rendered, not past a phantom full page.
+        rendered = _SearchMixin._format_search_text(None, out)  # type: ignore[arg-type]
+        offset = out["page_info"]["offset"]
+        assert f"offset={offset + len(out['results'])}" in rendered
+
     def test_track_emits_info_log_for_reranker_events(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

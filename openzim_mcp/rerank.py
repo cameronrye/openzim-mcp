@@ -151,7 +151,12 @@ class _RerankMixin:
             return payload
 
         if limit is not None and limit > 0:
-            effective_top_k = min(limit, reranker_cfg.final_top_k)
+            # The caller's page size wins; rerank only REORDERS it. Applying
+            # ``final_top_k`` as a second cap here truncated ``results`` while
+            # ``page_info``/``next_cursor`` still described the full page, so
+            # the rendered footer advanced past the cut rows and they became
+            # permanently unreachable.
+            effective_top_k = limit
         else:
             effective_top_k = reranker_cfg.final_top_k
 

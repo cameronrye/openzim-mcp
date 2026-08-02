@@ -45,7 +45,15 @@ def register(server: "OpenZimMcpServer") -> None:
         offset: int = 0,
     ) -> Any:
         try:
-            rl = enforce_rate_limit(server, "zim_links")
+            # Price/limit on the INTERNAL operation name — ``zim_links`` is
+            # absent from ``RATE_LIMIT_COSTS`` (see ``defaults.py``), so the
+            # wire name resolved to the default cost of 1 and any
+            # ``per_operation_limits`` override was silently inert.
+            _rl_op = {
+                "related": "get_related_articles",
+                "inbound": "get_inbound_links",
+            }.get(direction, "extract_article_links")
+            rl = enforce_rate_limit(server, _rl_op)
             if rl is not None:
                 return rl
             if direction not in _VALID_DIRECTIONS:

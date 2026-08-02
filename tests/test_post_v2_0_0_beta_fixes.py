@@ -317,6 +317,28 @@ class TestMetadataHintDispatcherResolution:
         called_with_path = mock_ops.get_zim_metadata.call_args[0][0]
         assert called_with_path == "/data/superuser.com_en_all_2026-02.zim"
 
+    def test_metadata_hint_resolves_mixed_case_filename(self) -> None:
+        """P19: intent extraction lowercases its params (Rule 1), so
+        ``metadata for Nginx_Tutorial.zim`` reaches the resolver as
+        ``nginx_tutorial.zim``. Pre-fix the resolver compared basenames with
+        an exact ``==`` and the caller got ``**No ZIM File Specified**`` even
+        though the query named the archive verbatim."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        mock_ops = MagicMock()
+        mock_ops.list_zim_files_data.return_value = [
+            {"path": "/data/Nginx_Tutorial.zim", "name": "Nginx_Tutorial.zim"},
+            {"path": "/data/other.zim", "name": "other.zim"},
+        ]
+        mock_ops.list_zim_files.return_value = "Found 2 ZIM files."
+        mock_ops.get_zim_metadata.return_value = '{"_meta": {}, "title": "nginx"}'
+        handler = SimpleToolsHandler(mock_ops)
+
+        result = handler.handle_zim_query(query="metadata for Nginx_Tutorial.zim")
+        assert "no_zim_file_specified" not in result, result
+        mock_ops.get_zim_metadata.assert_called_once()
+        assert mock_ops.get_zim_metadata.call_args[0][0] == "/data/Nginx_Tutorial.zim"
+
     def test_metadata_unknown_filename_falls_to_gate(self) -> None:
         """``metadata for nonexistent.zim`` doesn't match a loaded
         archive — fall through to the existing no-zim-file gate so the
@@ -566,11 +588,10 @@ class TestBareVerbPrefixEntryPathExtraction:
             'structure of "C/Photosynthesis"'
         )
         assert intent == "structure"
-        # Quoted form preserves case (the quoted-match branch runs before
-        # any lowercasing-affected logic touches the captured value).
-        # But Sub-D-2 Rule 1 still lowercases the QUERY before quoted_match
-        # runs, so the captured value will be lowercased too.
-        assert params.get("entry_path") == "c/photosynthesis"
+        # Sub-D-2 Rule 1 lowercases the QUERY before quoted_match runs, but
+        # a ZIM namespace prefix is exempt from that lowercasing: libzim's
+        # path lookup is case-sensitive, so ``C/Photosynthesis`` survives.
+        assert params.get("entry_path") == "C/Photosynthesis"
 
     def test_multi_word_entity_bare_form(self) -> None:
         """``structure United States`` — multi-token entity follows the

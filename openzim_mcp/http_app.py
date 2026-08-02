@@ -14,8 +14,17 @@ import logging
 import os
 import socket
 import warnings
+from concurrent.futures import Future
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Mapping
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Mapping,
+    Optional,
+)
 
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -26,7 +35,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp
 
 from .exceptions import OpenZimMcpConfigurationError, OpenZimMcpTimeoutError
-from .timeout_utils import run_with_timeout
+from .timeout_utils import _get_executor, run_with_timeout
 
 if TYPE_CHECKING:
     from .server import OpenZimMcpServer
@@ -160,6 +169,13 @@ def _make_readyz(
             for d in server.config.allowed_directories
         )
 
+    # The `concurrent.futures.Future` of the probe currently on the worker,
+    # or None. Deliberately the CONCURRENT future and not the asyncio wrapper:
+    # `wait_for` cancels the wrapper on timeout, so the wrapper is immediately
+    # `.done()` (CANCELLED) while the real work is still running — the
+    # single-flight check below would silently no-op against it.
+    _readyz_inflight: Optional["Future[bool]"] = None
+
     async def readyz(request: Request) -> JSONResponse:
         """Readiness — at least one allowed directory is readable."""
         # os.path.isdir / os.access are blocking stat-family syscalls. On a
@@ -168,9 +184,41 @@ def _make_readyz(
         # the condition a readiness probe is meant to detect. Offload to a
         # thread and bound it so a wedged mount returns a fast 503 instead of
         # stalling the server (mirrors MtimeWatcher._scan's to_thread offload).
+        #
+        # The offload uses a DEDICATED single-slot pool, not `asyncio.to_thread`
+        # (which runs on the loop's default executor — the same pool every
+        # `AsyncZimOperations` call and `zim_query`'s own `to_thread` dispatch
+        # uses). `wait_for` cannot cancel work already running in a thread, so
+        # each timed-out probe permanently burned one default-executor worker;
+        # `/readyz` is auth-exempt and unmetered by the rate limiter, so N
+        # unauthenticated requests wedged every MCP tool call. The pool's
+        # daemon workers also let the process exit while a probe is stuck.
+        nonlocal _readyz_inflight
+        # Single-flight by SHARING the in-flight probe, not by short-circuiting
+        # to 503. Only one work item is ever outstanding, so a wedged stat can
+        # never burn more than one worker — but concurrent probes against a
+        # HEALTHY server still get the real answer. Reporting "probe timed out"
+        # merely because another request was in flight would fail a readiness
+        # check on a perfectly good instance and pull it from rotation.
+        probe = _readyz_inflight
+        if probe is None or probe.done():
+            probe = _get_executor("readyz").submit(_any_readable_dir)
+            _readyz_inflight = probe
         try:
+            # `shield` is load-bearing, not defensive. `wrap_future` chains via
+            # `asyncio.futures._chain_future`, whose `_call_check_cancel` calls
+            # `source.cancel()` on the *concurrent* future when the asyncio
+            # wrapper is cancelled. `concurrent.futures.Future.cancel()` fails
+            # while the work is RUNNING but SUCCEEDS while it is still queued —
+            # so without the shield, the first waiter to time out discards the
+            # shared work item and every co-waiter is cancelled too. That
+            # raises `CancelledError`, which is a `BaseException` and so slips
+            # past the `except asyncio.TimeoutError` below and out of the
+            # handler, killing the request instead of answering 503.
+            # Shielding cancels only the outer future, so each waiter times out
+            # independently and the probe really does stay single-flight.
             ready = await asyncio.wait_for(
-                asyncio.to_thread(_any_readable_dir),
+                asyncio.shield(asyncio.wrap_future(probe)),
                 timeout=READYZ_PROBE_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
@@ -426,6 +474,10 @@ def serve_streamable_http(
             server.config.allowed_directories,
             server.config.watch_interval_seconds,
             on_change=_on_change,
+            # The watcher tick doubles as the registry's sweep: per-URI
+            # containers left behind by disconnected sessions are otherwise
+            # never reclaimed (see SubscriberRegistry.prune).
+            registry=registry,
         )
 
         inner_lifespan = app.router.lifespan_context

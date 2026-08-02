@@ -28,6 +28,64 @@ def test_h5_filtered_search_keeps_full_query():
     assert params2.get("query") == "protein insulin"
 
 
+def test_filtered_search_keeps_possessive_query():
+    """A possessive apostrophe must not be read as a value delimiter.
+
+    Pre-fix the capture excluded every quote char, so the regex matched
+    nothing at all and no ``query`` key was set — the handler then sent the
+    ENTIRE command sentence (verb + ``in namespace C`` clause) to Xapian and
+    echoed it back in the result header.
+    """
+    for query, expected in [
+        ("search for Murphy's law in namespace C", "murphy's law"),
+        ("search for Earth's atmosphere in namespace A", "earth's atmosphere"),
+        ("search for O'Brien in namespace C", "o'brien"),
+        # Curly apostrophe (copy-pasted / LLM-generated text). The value is
+        # non-ASCII, so ``_restore_nonascii_case`` also puts the caller's
+        # typed casing back.
+        ("search for Murphy’s law in namespace C", "Murphy’s law"),
+    ]:
+        intent, params, _ = IntentParser.parse_intent(query)
+        assert intent == "filtered_search", query
+        assert params.get("query") == expected, query
+        assert params.get("namespace") in {"A", "C"}, query
+
+
+def test_filtered_search_explicitly_quoted_value_still_peels():
+    _, params, _ = IntentParser.parse_intent(
+        'search for "quantum mechanics" in namespace A'
+    )
+    assert params.get("query") == "quantum mechanics"
+
+
+def test_search_keeps_possessive_query():
+    """Sibling of the filtered-search fix: bare ``search for`` truncated at
+    the first apostrophe (``Murphy's law`` -> ``Murphy``, ``O'Brien`` ->
+    ``o``)."""
+    for query, expected in [
+        ("search for Murphy's law", "murphy's law"),
+        ("search for O'Brien", "o'brien"),
+        ("search for Rock 'n' Roll", "rock 'n' roll"),
+    ]:
+        intent, params, _ = IntentParser.parse_intent(query)
+        assert intent == "search", query
+        assert params.get("query") == expected, query
+
+
+def test_search_quoted_value_still_peels():
+    _, params, _ = IntentParser.parse_intent("search for 'World War II'")
+    assert params.get("query") == "world war ii"
+    _, params2, _ = IntentParser.parse_intent('search for "quantum mechanics"')
+    assert params2.get("query") == "quantum mechanics"
+
+
+def test_search_with_no_terms_still_captures_verb_connector():
+    """The degenerate ``search for `` case must keep yielding ``for`` so the
+    A11-B4 "Search Terms Required" guard in the handler stays reachable."""
+    _, params, _ = IntentParser.parse_intent("search for ")
+    assert params.get("query") == "for"
+
+
 # H6 — last-keyword anchor truncated titles containing of/for/in/from/to
 def test_h6_object_keyword_preserves_title_internal_prepositions():
     d = {}

@@ -351,3 +351,277 @@ def test_boost_bundle_lookup_called_once_per_unique_article():
         config=cfg,
     )
     assert call_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# The affinity stage must not undo the positional stages that precede it
+# ---------------------------------------------------------------------------
+
+
+def _synthesize(bm25_hits, query, *, title_match=None):
+    """Drive ``synthesize_query`` end-to-end over one mocked archive.
+
+    Bundles resolve to ``None`` so section attribution is a no-op and the
+    cite_ids stay article-level — the affinity stage's ORDERING behaviour
+    is what's under test, not its boost arithmetic.
+    """
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.synthesize import synthesize_query
+
+    search_handler = MagicMock()
+    search_handler.search_top_k.return_value = bm25_hits
+    search_handler.title_match_hit.return_value = title_match
+
+    content_processor = MagicMock()
+    content_processor.html_to_plain_text.side_effect = lambda html: html
+
+    import openzim_mcp.bundle as bundle_mod
+
+    real_get = bundle_mod.get_or_build_bundle
+    bundle_mod.get_or_build_bundle = lambda archive, path, **kw: None
+    try:
+        return synthesize_query(
+            query,
+            archives=[(MagicMock(), Path("/fake/wiki.zim"))],
+            search_handler=search_handler,
+            cache=MagicMock(),
+            content_processor=content_processor,
+            config=SynthesizeConfig(),
+        )
+    finally:
+        bundle_mod.get_or_build_bundle = real_get
+
+
+def test_affinity_stage_preserves_list_article_demotion():
+    """``_demote_list_articles`` moved ``List_of_cats`` below ``Cat``, and
+    the affinity stage must not put it back.
+
+    The positional stages express their decision as list POSITION and
+    never rewrite ``score`` (which stays the Xapian value), so the
+    unconditional score-sort that used to close ``_boost_by_section_
+    affinity`` restored the exact BM25 order and silently discarded both
+    ``_demote_list_articles`` and ``_promote_title_match`` — the original
+    ``List_of_songs_about_Berlin`` regression those stages exist to fix.
+
+    Must be asserted at ``synthesize_query`` level: helper-level tests
+    never see the two stages, which is why this shipped.
+    """
+    response = _synthesize(
+        [
+            {"path": "List_of_cats", "snippet": "A list of cats.", "score": 1.0},
+            {"path": "Cat", "snippet": "The cat is a domestic species.", "score": 0.5},
+        ],
+        query="cat",
+    )
+    assert response["passages"][0]["cite_id"].endswith("/Cat")
+    assert response["citations"][0]["entry_path"] == "Cat"
+
+
+def test_affinity_stage_preserves_title_match_reorder():
+    """Same guarantee for ``_promote_title_match``'s already-present
+    branch: the canonical is reordered to the front of ``top_hits``
+    without its score being touched, so a score-sort would undo it.
+
+    ``Timeline_of_Berlin`` is deliberately not a list article, so
+    ``_demote_list_articles`` is a no-op here and the reorder under test
+    is unambiguously the title-match promotion's."""
+    response = _synthesize(
+        [
+            {"path": "Timeline_of_Berlin", "snippet": "1237: founded.", "score": 1.0},
+            {"path": "Berlin", "snippet": "Berlin is the capital.", "score": 0.6},
+        ],
+        query="berlin",
+        title_match={
+            "path": "Berlin",
+            "snippet": "Berlin is the capital.",
+            "score": 1.0,
+        },
+    )
+    assert response["passages"][0]["cite_id"].endswith("/Berlin")
+    assert response["citations"][0]["entry_path"] == "Berlin"
+
+
+# ---------------------------------------------------------------------------
+# ...and the affinity boost must stay a CONSERVATIVE multiplier, not an
+# absolute precedence over every unboosted passage.
+# ---------------------------------------------------------------------------
+
+
+_AFFINITY_ORDER_PASSAGES = [
+    # Top hit by a wide margin; its section heading shares nothing with the
+    # query.
+    ("wiki/A/Berlin#Culture", 1.0),
+    # Weakest hit; its one-word heading "History" is fully covered by the
+    # query, so affinity == 1.0 and the gate trips.
+    ("wiki/A/Checkpoint_Charlie#History", 0.2),
+]
+
+_AFFINITY_ORDER_BUNDLES = {
+    "A/Berlin": [
+        {"id": "Culture", "title": "Culture", "char_start": 0, "char_end": 100},
+    ],
+    "A/Checkpoint_Charlie": [
+        {"id": "History", "title": "History", "char_start": 0, "char_end": 100},
+    ],
+}
+
+
+def _order_for(boost: float) -> List[str]:
+    cfg = SynthesizeConfig(section_affinity_boost=boost)
+    out = _boost_by_section_affinity(
+        [
+            _passage(cite_id, score=score, rank=i)
+            for i, (cite_id, score) in enumerate(_AFFINITY_ORDER_PASSAGES, start=1)
+        ],
+        query="history of berlin",
+        bundle_lookup=_bundle_lookup_for(_AFFINITY_ORDER_BUNDLES),
+        config=cfg,
+    )
+    return [p["cite_id"] for p in out]
+
+
+def test_weak_affinity_match_does_not_leapfrog_a_far_stronger_hit():
+    """A boosted passage must not outrank an unboosted one whose score is
+    5x higher.
+
+    Regression: partitioning on "was this boosted?" and concatenating
+    ``matched + rest`` made the affinity boost an ABSOLUTE precedence —
+    ``section_affinity_boost`` stopped affecting the ordering at all and
+    a single incidental heading-token overlap ("History" against
+    "history of berlin") inverted the whole ranking. The boost is
+    documented in ``config.py`` as conservative: "won't dominate strong
+    BM25 hits".
+    """
+    assert _order_for(1.5)[0] == "wiki/A/Berlin#Culture"
+
+
+def test_affinity_boost_magnitude_still_controls_ordering():
+    """``section_affinity_boost`` must remain a real magnitude knob.
+
+    Under the partition, boosts of 1.0001, 1.5 and 10.0 all produced the
+    identical order. Here 1.5 (conservative) leaves the strong hit on
+    top while 10.0 (0.2 * 10 = 2.0 > 1.0) is enough to overtake it.
+    """
+    assert _order_for(1.5)[0] == "wiki/A/Berlin#Culture"
+    assert _order_for(10.0)[0] == "wiki/A/Checkpoint_Charlie#History"
+
+
+def test_maybe_boost_passage_reports_the_boost_for_a_zero_score():
+    """The boost decision is RETURNED, never inferred from a score
+    comparison: ``0.0 * boost == 0.0``, so a zero-score passage whose
+    heading matches the query would otherwise be mis-classified as
+    unboosted."""
+    from openzim_mcp.synthesize import _maybe_boost_passage
+
+    out, matched = _maybe_boost_passage(
+        _passage("wiki/Foo#Notable_people", score=0.0, rank=1),
+        query_tokens={"people"},
+        bundle_lookup=_bundle_lookup_for(
+            {
+                "Foo": [
+                    {
+                        "id": "Notable_people",
+                        "title": "Notable people",
+                        "char_start": 0,
+                        "char_end": 100,
+                    }
+                ]
+            }
+        ),
+        cache={},
+        threshold=0.25,
+        boost=1.5,
+    )
+    assert matched is True
+    assert out["score"] == pytest.approx(0.0)
+
+
+def _synthesize_with_bundles(bm25_hits, query, bundles):
+    """``_synthesize``, but with real section-bearing bundles so the
+    affinity stage actually boosts."""
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.synthesize import synthesize_query
+
+    search_handler = MagicMock()
+    search_handler.search_top_k.return_value = bm25_hits
+    search_handler.title_match_hit.return_value = None
+
+    content_processor = MagicMock()
+    content_processor.html_to_plain_text.side_effect = lambda html: html
+
+    import openzim_mcp.bundle as bundle_mod
+
+    real_get = bundle_mod.get_or_build_bundle
+    bundle_mod.get_or_build_bundle = lambda archive, path, **kw: bundles.get(path)
+    try:
+        return synthesize_query(
+            query,
+            archives=[(MagicMock(), Path("/fake/wiki.zim"))],
+            search_handler=search_handler,
+            cache=MagicMock(),
+            content_processor=content_processor,
+            config=SynthesizeConfig(),
+        )
+    finally:
+        bundle_mod.get_or_build_bundle = real_get
+
+
+def test_strong_top_hit_keeps_the_lead_end_to_end():
+    """Same guarantee asserted through ``synthesize_query``, where the
+    answer text and citations are actually built — helper-level coverage
+    is exactly what let the absolute-precedence bug ship."""
+    berlin_md = "# Berlin\n\nBerlin is the capital of Germany.\n\n## Culture\n\nMuseums abound.\n"
+    charlie_md = (
+        "# Checkpoint Charlie\n\n## History\n\nA crossing point opened in 1961.\n"
+    )
+    bundles = {
+        "A/Berlin": {
+            "title": "Berlin",
+            "rendered_markdown": berlin_md,
+            "sections": [
+                {"id": "Berlin", "title": "Berlin", "char_start": 0, "char_end": 38},
+                {
+                    "id": "Culture",
+                    "title": "Culture",
+                    "char_start": 38,
+                    "char_end": len(berlin_md),
+                },
+            ],
+        },
+        "A/Checkpoint_Charlie": {
+            "title": "Checkpoint Charlie",
+            "rendered_markdown": charlie_md,
+            "sections": [
+                {
+                    "id": "Checkpoint_Charlie",
+                    "title": "Checkpoint Charlie",
+                    "char_start": 0,
+                    "char_end": 22,
+                },
+                {
+                    "id": "History",
+                    "title": "History",
+                    "char_start": 22,
+                    "char_end": len(charlie_md),
+                },
+            ],
+        },
+    }
+    response = _synthesize_with_bundles(
+        [
+            {"path": "A/Berlin", "snippet": "Museums abound.", "score": 1.0},
+            {
+                "path": "A/Checkpoint_Charlie",
+                "snippet": "A crossing point opened in 1961.",
+                "score": 0.2,
+            },
+        ],
+        "history of berlin",
+        bundles,
+    )
+    assert response["passages"][0]["cite_id"] == "wiki/A/Berlin#Culture"
+    assert response["citations"][0]["cite_id"] == "wiki/A/Berlin#Culture"

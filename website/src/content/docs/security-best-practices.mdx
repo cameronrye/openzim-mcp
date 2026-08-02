@@ -126,7 +126,7 @@ There is no built-in TLS — terminate TLS at a reverse proxy (Caddy, nginx, tra
 
 Token-bucket limiter (`rate_limiter.py`):
 
-- Global rate: `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` (default 10) and `__BURST_SIZE` (default 20, max 1000).
+- Global rate: `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` (default 20) and `__BURST_SIZE` (default 40, max 1000). Both count **work units**, not requests — a search costs 2 units and a binary fetch 3, so size overrides against the operation's cost.
 - Per-operation overrides via `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` (nested JSON).
 - Global + per-operation acquire is **atomic** — single pass over both buckets, no transient over-consumption.
 - Per-client buckets with LRU eviction (10k cap) — client identity scopes the limit so one noisy client can't drain the global bucket.

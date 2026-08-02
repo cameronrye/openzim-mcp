@@ -1247,7 +1247,10 @@ class ZimOperations(
                 truncated_content = self.content_processor.truncate_content(
                     content, DEFAULT_MAIN_PAGE_TRUNCATION, paginatable=False
                 )
-                was_truncated = len(truncated_content) < total_length
+                # Key on the cap, not the rendered lengths: ``truncate_content``
+                # appends a ~150-char note, so a length comparison reports
+                # "not truncated" whenever the overflow is smaller than the note.
+                was_truncated = total_length > DEFAULT_MAIN_PAGE_TRUNCATION
                 payload: Dict[str, Any] = {
                     "path": path,
                     "title": title,

@@ -521,6 +521,32 @@ class TestP1D2RecaseHelper:
         assert SimpleToolsHandler._recase_from_original("", "anything") == ""
         assert SimpleToolsHandler._recase_from_original("token", "") == "token"
 
+    def test_dotted_capital_i_does_not_shift_later_tokens(self) -> None:
+        """U+0130 'İ' is the only code point whose ``.lower()`` changes length
+        (-> 'i' + U+0307). The index was computed on the lowered string but the
+        slice taken from the original, so every entity after an 'İ' came back
+        truncated: ``_recase_from_original('berlin', ...)`` returned 'erlin',
+        and each copy-paste recovery command in the guidance text was corrupt.
+        """
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        original = "tell me about İzmir and Berlin"
+        assert SimpleToolsHandler._recase_from_original("berlin", original) == "Berlin"
+        # The 'İ' token itself round-trips rather than degrading to the
+        # decomposed 'i̇zmir' form.
+        assert SimpleToolsHandler._recase_from_original("izmir", original) == "İzmir"
+        assert SimpleToolsHandler._recase_from_original("i̇zmir", original) == "İzmir"
+
+    def test_dotted_capital_i_in_multi_entity_guidance(self) -> None:
+        """End-to-end shape: the guidance text a caller copy-pastes must carry
+        the full entity name, not a slice shifted by the preceding 'İ'."""
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        original = "tell me about İzmir and Berlin"
+        for token in ("izmir", "berlin"):
+            recased = SimpleToolsHandler._recase_from_original(token, original)
+            assert recased.lower().replace("̇", "") == token
+
 
 # ===========================================================================
 # Reranker telemetry: in-band response-envelope comment

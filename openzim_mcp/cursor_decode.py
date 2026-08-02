@@ -33,15 +33,16 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CursorDecodeResult:
     """Successful decode: the offset to project into ``options['offset']``
-    plus the optional ``ns`` / ``ai`` / ``tool`` fields the dispatcher
+    plus the optional ``ns`` / ``ai`` / ``tool`` / ``ep`` fields the dispatcher
     stashes into ``options['_cursor_ns']`` / ``['_cursor_ai']`` /
-    ``['_cursor_t']`` when truthy.
+    ``['_cursor_t']`` / ``['_cursor_ep']`` when truthy.
     """
 
     offset: int
     ns: Optional[str] = None
     ai: Optional[str] = None
     tool: Optional[str] = None
+    ep: Optional[str] = None
 
 
 def decode_offset_cursor(
@@ -155,6 +156,16 @@ def decode_offset_cursor(
         cursor_t = decoded_payload.get("t")
         if isinstance(cursor_t, str) and cursor_t:
             result.tool = cursor_t
+        # P26: stash the cursor's ``s.ep`` (the entry path the cursor was
+        # issued for) so ``_handle_links`` can reject a links cursor minted
+        # on a different article. Without it the tool-name check passes for
+        # ANY links cursor while the offset IS applied, so a cursor for
+        # article A silently paginated article B from A's offset. The
+        # advanced ``zim_links`` surface already rejects this via
+        # ``cursor_context_mismatch(state, field="ep", ...)``.
+        cursor_ep = state.get("ep")
+        if isinstance(cursor_ep, str) and cursor_ep:
+            result.ep = cursor_ep
         # D9 (beta): the original implementation treated the
         # cursor's ``s.q`` field as decorative — only ``s.o``
         # was read. That meant a caller who reused a cursor

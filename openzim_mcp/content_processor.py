@@ -56,6 +56,12 @@ _BLOCK_CELL_TAGS = frozenset(
 
 _BLOCK_CELL_SEPARATOR = "\x00"  # internal sentinel; replaced post-collapse
 
+# Stack marker for "the children of a block-level tag have all been
+# emitted; write its CLOSING separator now". A bare ``object()`` (never a
+# ``str``) so the identity test below can never collide with a
+# ``NavigableString`` that happens to compare equal to a marker value.
+_CELL_CLOSE = object()
+
 
 def _join_cell_text(cell: Tag) -> str:
     """Extract a table-cell's text, separating block-level children
@@ -90,31 +96,44 @@ def _join_cell_text(cell: Tag) -> str:
     in Germany``) glued directly onto the block's last text. Adjacent /
     leading / trailing sentinels are collapsed by the post-pass, so the
     double emission is harmless for block-then-block shapes.
+
+    The traversal uses an EXPLICIT stack rather than recursion: ``html.parser``
+    does not auto-close inline tags, so an infobox cell containing N unclosed
+    ``<i>``/``<span>`` tags produces an N-deep tree and a recursive walk hit
+    ``RecursionError`` at roughly 900 levels — aborting the whole article
+    render (``compact=True``) and propagating out of ``_extract_infobox``.
+    A ``_CELL_CLOSE`` marker pushed under a block tag's children reproduces
+    the recursive version's closing-separator emission exactly.
     """
     parts: List[str] = []
+    sep = f" {_BLOCK_CELL_SEPARATOR} "
+    stack: List[Any] = list(cell.children)[::-1]
+    while stack:
+        el = stack.pop()
+        # Identity check first: the marker is a bare ``object()``, so it can
+        # never be confused with document content.
+        if el is _CELL_CLOSE:
+            parts.append(sep)
+            continue
+        # ``Comment`` is a ``NavigableString`` subclass; the
+        # ``isinstance(NavigableString)`` test below would catch it
+        # and leak the comment text into the rendered value. Wikipedia
+        # templates emit invisible coordinate / microformat comments
+        # inside infobox cells routinely — without this guard,
+        # ``3<!-- a-template -->,913,644`` rendered as
+        # ``3 a-template ,913,644``. Filter before the string path.
+        if isinstance(el, Comment):
+            continue
+        if isinstance(el, NavigableString):
+            parts.append(str(el))
+        elif isinstance(el, Tag):
+            is_block = el.name in _BLOCK_CELL_TAGS
+            if is_block:
+                parts.append(sep)
+                # Popped only after every child below has been emitted.
+                stack.append(_CELL_CLOSE)
+            stack.extend(list(el.children)[::-1])
 
-    def _walk(node: Tag) -> None:
-        for el in node.children:
-            # ``Comment`` is a ``NavigableString`` subclass; the
-            # ``isinstance(NavigableString)`` test below would catch it
-            # and leak the comment text into the rendered value. Wikipedia
-            # templates emit invisible coordinate / microformat comments
-            # inside infobox cells routinely — without this guard,
-            # ``3<!-- a-template -->,913,644`` rendered as
-            # ``3 a-template ,913,644``. Filter before the string path.
-            if isinstance(el, Comment):
-                continue
-            if isinstance(el, NavigableString):
-                parts.append(str(el))
-            elif isinstance(el, Tag):
-                is_block = el.name in _BLOCK_CELL_TAGS
-                if is_block:
-                    parts.append(f" {_BLOCK_CELL_SEPARATOR} ")
-                _walk(el)
-                if is_block:
-                    parts.append(f" {_BLOCK_CELL_SEPARATOR} ")
-
-    _walk(cell)
     # Collapse whitespace per chunk while preserving sentinels, then
     # convert sentinels to the user-facing separator. Adjacent
     # sentinels (empty block boundaries from nested ``<ul>`` → ``<li>``)
@@ -174,6 +193,30 @@ def _fold(text: str) -> str:
     return "".join(c for c in nf if not unicodedata.combining(c)).lower()
 
 
+def _fold_with_index_map(text: str) -> Tuple[str, List[int]]:
+    """Fold ``text`` and return ``(folded, index_map)``.
+
+    ``index_map[i]`` is the index in the ORIGINAL ``text`` of the character
+    that produced ``folded[i]``.
+
+    ``_fold`` is not length-preserving — ``_fold("ﬁ") == "fi"``, ``_fold("½")
+    == "1⁄2"``, and a lone combining mark folds away to ``""`` — so folding
+    the whole string in one call and reusing its offsets against the original
+    misaligns. Folding one character at a time and recording the source index
+    for every emitted character keeps the mapping exact regardless of how
+    many characters each input expands or collapses to.
+    """
+    out: List[str] = []
+    index_map: List[int] = []
+    for i, ch in enumerate(text):
+        folded_ch = _fold(ch)
+        if not folded_ch:
+            continue
+        out.append(folded_ch)
+        index_map.extend([i] * len(folded_ch))
+    return "".join(out), index_map
+
+
 def _split_query_terms(query: str) -> list:
     """Split a query string into individual terms; drop punctuation."""
     return [t for t in re.split(r"\W+", _fold(query)) if t]
@@ -184,25 +227,36 @@ def _word_in(folded_paragraph: str, term: str) -> bool:
     return bool(re.search(rf"\b{re.escape(term)}\b", folded_paragraph))
 
 
+# A complete ``[text](href "title")`` markdown link, matched as ONE unit.
+# Shared by all three link regexes below so a fix here can't be applied to
+# only one of them.
+#
+# ``*`` (not ``+``) on the link text so EMPTY-text links ``[](url)`` — the
+# shape ZIMIT/warc2zim emits for inline images with no alt text — are
+# recognised too; otherwise a query term inside the image URL, e.g.
+# ``[](../media/plato.jpg)`` for query "plato", got bolded into
+# ``[](../media/**plato**.jpg)`` and broke the path.
+#
+# ``(?:\\.|[^\n)\\])*`` consumes backslash-escaped parens atomically so only
+# an UNESCAPED ``)`` closes the link: html2text emits ``Mercury_\(planet\)``
+# for parenthetically-disambiguated titles, and the previous ``[^\n)]*``
+# stopped at the first ESCAPED paren — leaving the trailing ``"title")``
+# unprotected and defeating the dangling-link repair below.
+_LINK_RE_SRC = r"\[[^\]\n]*\]\((?:\\.|[^\n)\\])*\)"
+
 # Regions inside which a query-term match must NOT be wrapped in a second
 # layer of emphasis: it produces malformed markdown (e.g. ``**Artificial
 # **photosynthesis****`` from a bold heading, ``_****Berlin****_`` from
 # italic disambig links, ``[**Photosynthesis**](**Photosynthesis** "…")``
 # where bolding inside the link target breaks the URL).
 #
-# - ``\[[^\]\n]*\]\([^\n)]*\)`` — full ``[text](href "title")`` link,
-#   matched as ONE unit so the URL/tooltip parenthetical only counts
-#   (``*`` not ``+`` on the link text so EMPTY-text links ``[](url)`` —
-#   the shape ZIMIT/warc2zim emits for inline images with no alt text —
-#   are protected too; otherwise a query term inside the image URL,
-#   e.g. ``[](../media/plato.jpg)`` for query "plato", got bolded into
-#   ``[](../media/**plato**.jpg)`` and broke the path).
-#   when it's attached to a link. An earlier shape matched any ``(...)``
-#   parenthetical — that protected ordinary prose parentheticals like
-#   ``(also called assimilation)`` from highlighting too, silently
-#   dropping query-term visibility for any term that landed inside
-#   them. (Wikipedia scientific articles are loaded with parenthetical
-#   gloss; over-protecting them cost more highlights than it saved.)
+# - ``_LINK_RE_SRC`` — a full link, so the URL/tooltip parenthetical only
+#   counts when it's attached to a link. An earlier shape matched any
+#   ``(...)`` parenthetical — that protected ordinary prose parentheticals
+#   like ``(also called assimilation)`` from highlighting too, silently
+#   dropping query-term visibility for any term that landed inside them.
+#   (Wikipedia scientific articles are loaded with parenthetical gloss;
+#   over-protecting them cost more highlights than it saved.)
 # - ``\*\*[^*\n]+\*\*`` — existing bold runs (paired markers, single line).
 #   ``[^*\n]+`` rules out adjacent ``**`` runs and multi-paragraph spans.
 # - ``(?<!\w)_[^_\n]+_(?!\w)`` — italic runs; the lookarounds skip
@@ -211,17 +265,16 @@ def _word_in(folded_paragraph: str, term: str) -> bool:
 #   Wikipedia, but cheap to skip and prevents bold-inside-code from
 #   breaking code-formatted text).
 _HIGHLIGHT_SKIP_RE = re.compile(
-    r"\[[^\]\n]*\]\([^\n)]*\)"
-    r"|\*\*[^*\n]+\*\*"
-    r"|(?<!\w)_[^_\n]+_(?!\w)"
-    r"|`[^`\n]+`",
+    _LINK_RE_SRC + r"|\*\*[^*\n]+\*\*" r"|(?<!\w)_[^_\n]+_(?!\w)" r"|`[^`\n]+`",
 )
 
 # A complete markdown link starting at a given ``[``.
-_COMPLETE_LINK_RE = re.compile(r"\[[^\]\n]*\]\([^\n)]*\)")
+_COMPLETE_LINK_RE = re.compile(_LINK_RE_SRC)
 # A markdown link whose syntax started (``[`` with no closing ``]``, or
 # ``[text](`` with no closing ``)``) but was cut off at end-of-string.
-_DANGLING_LINK_RE = re.compile(r"\[[^\]\n]*$|\[[^\]\n]*\]\([^\n)]*$")
+# The trailing ``\\?$`` handles a cut landing exactly on a lone backslash,
+# which the escape-pair group cannot consume.
+_DANGLING_LINK_RE = re.compile(r"\[[^\]\n]*$|\[[^\]\n]*\]\((?:\\.|[^\n)\\])*\\?$")
 
 
 def _truncate_before_dangling_link(text: str) -> str:
@@ -274,7 +327,14 @@ def _strip_dangling_bold(text: str) -> str:
 def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     """Wrap the first `max_hits` occurrences of any query term in **bold**.
 
-    Case-insensitive, preserves original casing of the matched substring.
+    Case- and diacritic-insensitive, preserving the original casing and
+    accents of the matched substring. ``_split_query_terms`` folds the query
+    (NFKD + strip combining + lower), so the pattern must be applied to an
+    equally-folded haystack: matching folded terms against the raw text meant
+    ``query="café"`` never highlighted anything, and ``query="cafe"`` never
+    matched ``Café``. Paragraph selection already folds both sides — only
+    highlighting was comparing across the fold.
+
     Skips matches that fall inside existing markdown emphasis (``**bold**``,
     ``_italic_``) or markdown link constructs (``[text](url "title")``):
     layering ``**…**`` on top of those produces malformed markdown that
@@ -283,14 +343,15 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
     terms = [t for t in _split_query_terms(query) if len(t) >= 3]
     if not terms:
         return text
-    pattern = re.compile(
-        r"\b(" + "|".join(re.escape(t) for t in terms) + r")\b",
-        flags=re.IGNORECASE,
-    )
+    # No ``re.IGNORECASE``: both sides are already lowercased by the fold.
+    pattern = re.compile(r"\b(" + "|".join(re.escape(t) for t in terms) + r")\b")
+    folded, index_map = _fold_with_index_map(text)
+
     # Pre-compute spans where we must not wrap. Overlapping markdown
     # constructs (a link inside a bold span, etc.) are collapsed into a
     # single forbidden-position bitmap so the term-replacement pass can
-    # do a single membership check per match.
+    # do a single membership check per match. These are ORIGINAL-text
+    # offsets, so match positions are mapped back before being tested.
     forbidden_starts: List[int] = []
     forbidden_ends: List[int] = []
     for m in _HIGHLIGHT_SKIP_RE.finditer(text):
@@ -303,15 +364,32 @@ def _highlight_terms(text: str, query: str, *, max_hits: int) -> str:
                 return True
         return False
 
-    hits = [0]
+    # Collect the spans to bold, left to right, so ``max_hits`` selects the
+    # same occurrences the old ``pattern.sub`` pass did.
+    spans: List[Tuple[int, int]] = []
+    for m in pattern.finditer(folded):
+        if len(spans) >= max_hits:
+            break
+        # Map the folded span back onto the original. The end is derived from
+        # the LAST matched folded character rather than from ``index_map[fe]``
+        # so a match covering only part of a one-to-many expansion (``ﬁ`` ->
+        # ``fi``) still spans the whole source character instead of collapsing
+        # to a zero-width slice.
+        start = index_map[m.start()]
+        end = index_map[m.end() - 1] + 1
+        if _is_forbidden(start):
+            continue
+        spans.append((start, end))
 
-    def repl(m: re.Match[str]) -> str:
-        if hits[0] >= max_hits or _is_forbidden(m.start()):
-            return str(m.group(0))
-        hits[0] += 1
-        return f"**{m.group(0)}**"
-
-    return pattern.sub(repl, text)
+    # Splice in REVERSE so earlier offsets stay valid as markers are inserted.
+    out = text
+    next_start = len(text)
+    for start, end in reversed(spans):
+        if end > next_start:
+            continue  # defensive: overlapping map-backs are never doubled
+        out = f"{out[:start]}**{out[start:end]}**{out[end:]}"
+        next_start = start
+    return out
 
 
 def resolve_heading_id(heading: Tag) -> Tuple[str, str]:
@@ -590,9 +668,20 @@ def _classify_anchor(link: Tag, links_data: Dict[str, Any]) -> None:
 
     # Protocol-relative hrefs ("//host/path") carry no scheme but are still
     # external, so they are matched on the leading slashes instead.
-    parsed = urlparse(href)
-    if parsed.scheme.lower() in EXTERNAL_LINK_SCHEMES or href.startswith("//"):
-        link_info["domain"] = parsed.netloc
+    try:
+        parsed = urlparse(href)
+        scheme, netloc = parsed.scheme, parsed.netloc
+    except ValueError:
+        # urlparse raises ValueError("Invalid IPv6 URL") on an unbalanced
+        # '[' in the authority ("http://[YOUR-DOMAIN]/x", "//[email
+        # protected]"). Fall back to a string-only scheme split so one bad
+        # anchor can't truncate extraction or abort a link-graph build.
+        scheme, _, _ = href.partition(":")
+        if any(c in scheme for c in "/?#"):
+            scheme = ""
+        netloc = ""
+    if scheme.lower() in EXTERNAL_LINK_SCHEMES or href.startswith("//"):
+        link_info["domain"] = netloc
         links_data["external_links"].append(link_info)
     elif href.startswith("#"):
         link_info["type"] = "anchor"
@@ -1286,7 +1375,11 @@ class ContentProcessor:
         next_offset = current_offset + max_length
 
         if paginatable:
-            tail = f" Pass `content_offset={next_offset:,}` to read the " "next page."
+            # NO thousands separator here: unlike the human-readable counts
+            # below, this value is copied back verbatim into the typed
+            # ``content_offset`` parameter, and "100,000" is not a valid int
+            # (``TypeAdapter(int).validate_python("100,000")`` raises).
+            tail = f" Pass `content_offset={next_offset}` to read the next page."
         else:
             # Main-page rendering: ``_handle_main_page`` re-resolves
             # from ``archive.main_entry`` on every call and never
@@ -1474,7 +1567,11 @@ class ContentProcessor:
             for link in soup.find_all("a", href=True):
                 if not isinstance(link, Tag):
                     continue
-                _classify_anchor(link, links_data)
+                try:
+                    _classify_anchor(link, links_data)
+                except Exception as e:  # one bad anchor must not truncate
+                    logger.warning(f"Skipping unparsable anchor: {e}")
+                    links_data["error"] = str(e)
 
             for tag, attr, media_type in _MEDIA_SELECTORS:
                 for element in soup.find_all(tag):

@@ -52,10 +52,11 @@ def compact_structure_payload(
     # an O(n²) inner loop. Sections and headings share the same
     # document-order layout, but joining by title is more robust
     # to future shape changes than joining by index.
+    raw_sections = [s for s in (payload.get("sections") or []) if isinstance(s, dict)]
+    raw_headings = [h for h in (payload.get("headings") or []) if isinstance(h, dict)]
+
     section_summary_by_title: Dict[str, str] = {}
-    for s in payload.get("sections") or []:
-        if not isinstance(s, dict):
-            continue
+    for s in raw_sections:
         st = s.get("title")
         sp = s.get("content_preview") or ""
         if (
@@ -69,16 +70,28 @@ def compact_structure_payload(
             # etc. are themselves uninformative without context).
             section_summary_by_title[st] = sp.strip()[:80]
 
+    # ``headings`` and ``sections`` are built from the same ``bundle["sections"]``
+    # in the same document order, so an INDEX join is exact where the title-keyed
+    # map is not: a first-occurrence-wins map gives every repeat of a duplicate
+    # heading (e.g. two "See also" sections) the first one's body. Trust the
+    # positional pair only when the two lists line up and the titles agree,
+    # otherwise fall back to the title map.
+    aligned = len(raw_sections) == len(raw_headings)
+
     compact_headings = []
-    for h in payload.get("headings") or []:
-        if not isinstance(h, dict):
-            continue
+    for i, h in enumerate(raw_headings):
         entry: Dict[str, Any] = {
             "level": h.get("level"),
             "text": h.get("text"),
             "id": h.get("id"),
         }
-        summary = section_summary_by_title.get(h.get("text") or "")
+        summary: Optional[str] = None
+        if aligned and raw_sections[i].get("title") == h.get("text"):
+            preview = raw_sections[i].get("content_preview") or ""
+            if isinstance(preview, str):
+                summary = preview.strip()[:80]
+        if summary is None:
+            summary = section_summary_by_title.get(h.get("text") or "")
         if summary:
             entry["summary"] = summary
         compact_headings.append(entry)
@@ -514,7 +527,12 @@ def render_search_all(data: Mapping[str, Any], query: str) -> str:
         if total is not None:
             header += f" (of {total})"
         lines.append(header)
-        for r in results[:5]:
+        # Render every hit the backend returned. The old ``results[:5]`` slice
+        # was a literal unrelated to the caller's ``limit``, so the header
+        # claimed N hits and the body listed 5 with no truncation marker and
+        # no cursor — the remaining rows were unreachable. The backend already
+        # bounds ``limit_per_file`` to 1..50, so the body stays bounded.
+        for r in results:
             if not isinstance(r, dict):
                 continue
             t = r.get("title", "(untitled)")

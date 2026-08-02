@@ -213,8 +213,11 @@ class RerankerConfig(BaseModel):
         ge=1,
         le=100,
         description=(
-            "Default response cap after rerank. Caller-supplied `limit` "
-            "overrides this when smaller."
+            "Default response cap after rerank, applied only when the "
+            "caller supplies no `limit`. A caller-supplied `limit` always "
+            "wins — rerank reorders the caller's page, it is not a second "
+            "cap, and truncating below `limit` would desynchronise "
+            "`page_info`/`next_cursor` from the rows actually returned."
         ),
     )
     max_query_length: int = Field(default=256, ge=1, le=4096)

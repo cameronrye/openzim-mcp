@@ -909,3 +909,103 @@ def test_drop_cross_archive_leakage_noop_for_untokenizable_query() -> None:
         min_overlap=1,
     )
     assert [hit["path"] for _, hit in kept] == ["A/UK", "A/Xyz"]
+
+
+# ---------------------------------------------------------------------------
+# strip_links must not run before section attribution
+# ---------------------------------------------------------------------------
+
+
+def _synthesize_with_bundle(monkeypatch, *, strip_links: bool) -> Any:
+    """Run ``synthesize_query`` over one mocked archive whose bundle has a
+    single section, returning the response.
+
+    The snippet's lead sentence carries a markdown link, which is the
+    whole point: the bundle's ``rendered_markdown`` keeps the link
+    (``ignore_links=False`` on both the bundle and snippet paths), so a
+    passage stripped BEFORE ``_attribute_sections`` no longer matches the
+    haystack and silently loses its section.
+    """
+    from unittest.mock import MagicMock
+
+    from openzim_mcp.synthesize import synthesize_query
+
+    linked_text = "Berlin is the capital of [Germany](../A/Germany) and its "
+    linked_text += "largest city by population."
+
+    search_handler = MagicMock()
+    search_handler.search_top_k.return_value = [
+        {"path": "A/Berlin", "snippet": linked_text, "score": 1.0}
+    ]
+    search_handler.title_match_hit.return_value = None
+
+    bundle = {
+        "entry_path": "A/Berlin",
+        "title": "Berlin",
+        "content_type": "text/html",
+        "word_count": 20,
+        "char_count": len(linked_text),
+        "rendered_markdown": linked_text + "\n",
+        "sections": [
+            {
+                "id": "berlin",
+                "title": "Berlin",
+                "level": 1,
+                "char_start": 0,
+                "char_end": len(linked_text) + 1,
+                "parent_id": None,
+            }
+        ],
+        "links": {"internal": [], "external": [], "media": []},
+        "infobox": None,
+    }
+    monkeypatch.setattr(
+        "openzim_mcp.bundle.get_or_build_bundle",
+        lambda archive, path, **kwargs: bundle,
+    )
+
+    content_processor = MagicMock()
+    content_processor.html_to_plain_text.side_effect = lambda html: html
+
+    return synthesize_query(
+        "berlin capital germany",
+        archives=[(MagicMock(), Path("/fake/wiki.zim"))],
+        search_handler=search_handler,
+        cache=MagicMock(),
+        content_processor=content_processor,
+        config=SynthesizeConfig(),
+        strip_links=strip_links,
+    )
+
+
+def test_strip_links_preserves_section_citations(monkeypatch) -> None:
+    """``strip_links=True`` must yield the SAME cite_id / section_id as
+    ``strip_links=False``.
+
+    The strip used to run on ``all_passages`` before
+    ``_attribute_sections``, so ``_locate_passage`` compared a
+    link-free needle against a link-bearing haystack, returned -1, and
+    every affected passage collapsed to entry level: no ``#section_id``
+    on the cite_id, ``citations[].section_id`` null, and
+    ``_boost_by_section_affinity`` (whose gate needs a ``#`` in the
+    cite_id) reduced to a no-op. ``compact`` defaults True and passes
+    ``strip_links=compact``, so this was the DEFAULT behaviour.
+    """
+    kept = _synthesize_with_bundle(monkeypatch, strip_links=False)
+    stripped = _synthesize_with_bundle(monkeypatch, strip_links=True)
+
+    assert kept["passages"][0]["cite_id"] == "wiki/A/Berlin#berlin"
+    assert stripped["passages"][0]["cite_id"] == kept["passages"][0]["cite_id"]
+    assert kept["citations"][0]["section_id"] == "berlin"
+    assert stripped["citations"][0]["section_id"] == kept["citations"][0]["section_id"]
+
+
+def test_strip_links_still_strips_the_passage_text(monkeypatch) -> None:
+    """Moving the strip later must not weaken it: the caller-visible
+    passage text and rendered answer are still link-free."""
+    stripped = _synthesize_with_bundle(monkeypatch, strip_links=True)
+
+    body = stripped["passages"][0]["text_markdown"]
+    assert "](" not in body
+    assert "Germany" in body
+    assert "](" not in stripped["answer_markdown"]

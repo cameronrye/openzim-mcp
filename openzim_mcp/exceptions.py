@@ -53,6 +53,19 @@ class OpenZimMcpValidationError(OpenZimMcpError):
     error_code: str = "OPENZIM_VALIDATION_ERROR"
 
 
+class OpenZimMcpArchivePathError(OpenZimMcpValidationError):
+    """Raised when the ZIM archive itself is missing or unusable.
+
+    A subclass of :class:`OpenZimMcpValidationError` so every existing
+    ``except OpenZimMcpValidationError`` keeps catching it, while callers that
+    render argument-level advice (e.g. "retry with a smaller ``limit``") can
+    single this out first: the failure is the archive, not an argument, and
+    the recovery is to pick a different archive.
+    """
+
+    error_code: str = "OPENZIM_ARCHIVE_PATH_ERROR"
+
+
 class OpenZimMcpFileNotFoundError(OpenZimMcpError):
     """Raised when a ZIM file is not found."""
 

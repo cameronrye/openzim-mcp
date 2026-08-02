@@ -21,8 +21,8 @@ class TestRateLimitConfig:
         config = RateLimitConfig()
 
         assert config.enabled is True
-        assert config.requests_per_second == pytest.approx(10.0)
-        assert config.burst_size == 20
+        assert config.requests_per_second == pytest.approx(20.0)
+        assert config.burst_size == 40
         assert config.per_operation_limits == {}
 
     def test_custom_config(self):
@@ -174,8 +174,8 @@ class TestRateLimiter:
         limiter = RateLimiter()
 
         assert limiter.config.enabled is True
-        assert limiter.config.requests_per_second == pytest.approx(10.0)
-        assert limiter.config.burst_size == 20
+        assert limiter.config.requests_per_second == pytest.approx(20.0)
+        assert limiter.config.burst_size == 40
 
     def test_initialization_custom_config(self):
         """Test rate limiter initialization with custom config."""
@@ -457,3 +457,129 @@ class TestDefaultCosts:
                 assert (
                     cost <= binary_cost
                 ), f"{op} should not cost more than get_binary_entry"
+
+
+class TestCostExceedingBurstCapacity:
+    """A cost above a bucket's capacity must drain it, never deny forever.
+
+    ``TokenBucket.acquire`` denies unconditionally when ``cost > capacity``
+    and ``_refill`` caps at ``capacity``, so an unclamped cost above
+    ``burst_size`` is unsatisfiable *forever* rather than merely expensive.
+    ``burst_size`` is a documented 1..1000 knob while table costs run to 3
+    and batch costs to 50, so the two legitimately cross.
+    """
+
+    @pytest.mark.parametrize("burst_size", [1, 2, 3])
+    def test_table_cost_above_burst_still_admits(self, burst_size: int):
+        """``get_binary_entry`` (cost 3) must work at any valid burst_size."""
+        limiter = RateLimiter(
+            RateLimitConfig(
+                enabled=True, requests_per_second=10.0, burst_size=burst_size
+            )
+        )
+        # First call must be admitted from a full bucket.
+        limiter.check_rate_limit(operation="get_binary_entry")
+
+        # And it must recover after a refill rather than being wedged.
+        time.sleep(0.45)
+        limiter.check_rate_limit(operation="get_binary_entry")
+
+    def test_per_operation_burst_below_cost_still_admits(self):
+        """A documented ``per_operation_limits`` entry must not brick the op."""
+        limiter = RateLimiter(
+            RateLimitConfig(
+                enabled=True,
+                requests_per_second=10.0,
+                burst_size=20,
+                per_operation_limits={
+                    # Straight from the configuration docs; `search` costs 2.
+                    "search": RateLimitConfig(
+                        enabled=True, requests_per_second=10.0, burst_size=1
+                    )
+                },
+            )
+        )
+        limiter.check_rate_limit(operation="search")
+
+    def test_explicit_cost_above_burst_still_admits(self):
+        """A batch cost (``len(entry_paths)``, up to 50) exceeds burst 20."""
+        limiter = RateLimiter(
+            RateLimitConfig(enabled=True, requests_per_second=10.0, burst_size=20)
+        )
+        limiter.check_rate_limit(operation="get_zim_entries", cost=50)
+
+    def test_clamped_call_still_drains_the_bucket(self):
+        """Clamping must not make an over-cost call free."""
+        limiter = RateLimiter(
+            RateLimitConfig(enabled=True, requests_per_second=0.01, burst_size=2)
+        )
+        limiter.check_rate_limit(operation="get_binary_entry")  # cost 3 -> 2
+        with pytest.raises(OpenZimMcpRateLimitError):
+            limiter.check_rate_limit(operation="get_binary_entry")
+
+    def test_global_refund_matches_amount_debited(self):
+        """A per-op rejection must refund exactly what it debited globally."""
+        limiter = RateLimiter(
+            RateLimitConfig(
+                enabled=True,
+                requests_per_second=0.01,
+                burst_size=10,
+                per_operation_limits={
+                    "search": RateLimitConfig(
+                        enabled=True, requests_per_second=0.01, burst_size=1
+                    )
+                },
+            )
+        )
+        # search costs 2: global debits 2, per-op clamps to 1 and admits.
+        limiter.check_rate_limit(operation="search")
+        global_bucket = limiter._get_global_bucket("default")
+        before = global_bucket.tokens
+        # Per-op bucket is now empty, so this rejects and must refund.
+        with pytest.raises(OpenZimMcpRateLimitError):
+            limiter.check_rate_limit(operation="search")
+        assert global_bucket.tokens == pytest.approx(before, abs=0.05)
+
+
+class TestDefaultBudgetTracksTheCostTable:
+    """The default budget and the cost table must stay in step.
+
+    The budget is denominated in work units, so raising a cost silently
+    lowers the throughput of that operation. Nothing paired a realistic
+    burst with a greater-than-1 cost before, which is how the table went
+    live with a budget still sized for flat pricing.
+    """
+
+    def test_burst_size_leaves_headroom_above_the_priciest_operation(self):
+        """A single call must never be able to drain the default bucket."""
+        from openzim_mcp.defaults import RATE_LIMIT, RATE_LIMIT_COSTS
+
+        priciest = max(RATE_LIMIT_COSTS.values())
+        assert RATE_LIMIT.BURST_SIZE >= 2 * priciest, (
+            f"burst_size {RATE_LIMIT.BURST_SIZE} leaves no headroom above the "
+            f"priciest operation (cost {priciest}); raise the default budget "
+            "when you raise a cost"
+        )
+
+    def test_every_operation_admits_a_usable_burst_by_default(self):
+        """Every priced operation stays usable on a default install.
+
+        Ten consecutive calls is the practical floor: below that, an agent
+        doing ordinary multi-step retrieval trips the limiter on a server
+        nobody has configured.
+        """
+        from openzim_mcp.defaults import RATE_LIMIT_COSTS
+
+        for operation in RATE_LIMIT_COSTS:
+            limiter = RateLimiter(RateLimitConfig())
+            admitted = 0
+            while True:
+                try:
+                    limiter.check_rate_limit(operation=operation)
+                except OpenZimMcpRateLimitError:
+                    break
+                admitted += 1
+            assert admitted >= 10, (
+                f"{operation!r} (cost {RATE_LIMIT_COSTS[operation]}) admits only "
+                f"{admitted} consecutive calls on a default bucket"
+            )
