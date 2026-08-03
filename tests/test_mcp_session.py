@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+import pydantic_core
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import TextContent
@@ -31,8 +32,8 @@ MCP_TAX_BAND_FLOOR_BYTES = 25 * 1024
 
 
 @asynccontextmanager
-async def advanced_session(tmp_path: Path) -> AsyncIterator[Any]:
-    """A connected client session against the 8-tool advanced surface.
+async def session_for(tmp_path: Path, tool_mode: str) -> AsyncIterator[Any]:
+    """A connected client session against the given tool surface.
 
     Deliberately a context manager rather than a pytest fixture: the session's
     anyio task group has to be entered and exited from the same task, and an
@@ -40,13 +41,18 @@ async def advanced_session(tmp_path: Path) -> AsyncIterator[Any]:
     """
     config = OpenZimMcpConfig(
         allowed_directories=[str(tmp_path)],
-        tool_mode="advanced",
+        tool_mode=tool_mode,
     )
     server = OpenZimMcpServer(config)
     async with create_connected_server_and_client_session(
         server.mcp._mcp_server
     ) as session:
         yield session
+
+
+def advanced_session(tmp_path: Path) -> Any:
+    """The 8-tool advanced surface."""
+    return session_for(tmp_path, "advanced")
 
 
 def _text(result: Any) -> str:
@@ -99,26 +105,43 @@ async def test_tool_originated_errors_set_is_error(
 
 
 @pytest.mark.asyncio
-async def test_error_body_keeps_the_structured_envelope(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("x", id="ascii"),
+        # Non-ASCII rides into the envelope through the ``context`` field
+        # ("Query: ..."), which is where the two candidate serializers diverge.
+        pytest.param("фотосинтез 光合作用 café", id="non-ascii"),
+    ],
+)
+async def test_error_body_keeps_the_structured_envelope(
+    tmp_path: Path, query: str
+) -> None:
     """Setting ``isError`` must not reshape the body.
 
     The JSON error envelope is a documented contract (``error`` / ``operation``
     / ``message``, optional ``context``). Flipping the flag is a protocol fix;
     it must not become a payload change that breaks parsing clients.
+
+    The serializer is asserted against ``pydantic_core.to_json`` — the exact
+    call FastMCP's dict-return path used — rather than ``json.dumps``. The two
+    agree only on ASCII: ``json.dumps`` defaults to ``ensure_ascii=True`` and
+    would escape a Cyrillic or CJK query to ``\\uXXXX``, silently changing the
+    bytes for every non-English caller. Asserting against ``json.dumps`` here
+    would pass on the ASCII case and pin the wrong contract.
     """
     async with advanced_session(tmp_path) as session:
         result = await session.call_tool(
-            "zim_search", {"query": "x", "zim_file_path": "/etc/passwd"}
+            "zim_search", {"query": query, "zim_file_path": "/etc/passwd"}
         )
 
     text = _text(result)
     payload = json.loads(text)
     assert set(payload) >= {"error", "operation", "message"}
     assert isinstance(payload["message"], str) and payload["message"]
-    # pydantic_core.to_json(..., indent=2) is what the dict-return path
-    # produced; keep the serialization identical so byte-level consumers and
-    # golden transcripts don't shift.
-    assert text == json.dumps(payload, indent=2)
+    assert text == pydantic_core.to_json(payload, fallback=str, indent=2).decode()
+    # Raw UTF-8 on the wire, as before the fix — not \\uXXXX escapes.
+    assert query in text
 
 
 @pytest.mark.asyncio
@@ -178,20 +201,44 @@ async def test_no_tool_advertises_an_output_schema_it_does_not_honor(
 
 @pytest.mark.asyncio
 async def test_server_advertises_routing_instructions(tmp_path: Path) -> None:
-    """``instructions`` rides in ``initialize`` and is currently unset.
+    """``instructions`` rides in ``initialize`` and was previously unset.
 
     It is the one place to put cross-tool routing guidance without paying for
     it in every tool description, and the dispatch eval shows exactly which
     confusions need it.
     """
-    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
-    server = OpenZimMcpServer(config)
-
-    async with create_connected_server_and_client_session(
-        server.mcp._mcp_server
-    ) as session:
+    async with session_for(tmp_path, "advanced") as session:
         result = await session.initialize()
 
     assert result.instructions, "server advertises no instructions"
     for tool in ("zim_query", "zim_search", "zim_get"):
         assert tool in result.instructions
+
+
+@pytest.mark.asyncio
+async def test_simple_mode_advertises_only_what_it_registers(tmp_path: Path) -> None:
+    """Simple mode is the default surface and needs its own session coverage.
+
+    Every other test here drives advanced mode, so nothing would notice if the
+    server handed simple-mode clients the 8-tool routing guide — describing
+    seven tools they cannot call, in the mode most callers actually get.
+    """
+    async with session_for(tmp_path, "simple") as session:
+        result = await session.initialize()
+        tools = (await session.list_tools()).tools
+
+    assert [t.name for t in tools] == ["zim_query"]
+    assert result.instructions
+    assert "zim_query" in result.instructions
+    for unregistered in ("zim_search", "zim_get", "zim_browse", "zim_links"):
+        assert unregistered not in result.instructions
+
+
+@pytest.mark.asyncio
+async def test_simple_mode_flags_rejected_arguments(tmp_path: Path) -> None:
+    """The envelope fix has to hold on the default surface too."""
+    async with session_for(tmp_path, "simple") as session:
+        result = await session.call_tool("zim_query", {"query": "x", "limit": 10_000})
+
+    assert result.isError is True
+    assert json.loads(_text(result))["operation"] == "invalid_limit"

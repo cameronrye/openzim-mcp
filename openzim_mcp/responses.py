@@ -20,7 +20,7 @@ from typing import Any, Dict, NotRequired, Optional, TypedDict
 
 
 class ToolErrorPayload(TypedDict):
-    """Envelope for tool errors returned via structuredContent.
+    """Envelope for tool errors, delivered as JSON text in ``content``.
 
     ``error`` is always ``True`` so a client can branch on a single key
     without inspecting the operation name. ``message`` carries the

@@ -23,6 +23,14 @@ prose request is a working outcome, not a defect (see docs/roadmap.md, #199).
 The lines here aim at the pairs where the wrong tool yields a worse answer:
 the ``zim_get``/``zim_metadata`` main-page split, ``zim_browse`` vs
 ``zim_metadata``, and ``zim_links`` needing an entry path rather than a query.
+
+The closing ``isError`` sentence is deliberately scoped to *rejected
+arguments*. ``zim_query``'s handler-side failures (access denied, no archive
+specified) return markdown guidance rather than a ``tool_error`` envelope, so
+they are still delivered with ``isError=False`` — claiming otherwise here would
+describe a contract the default surface does not honor. Routing those templates
+through :func:`openzim_mcp.responses.tool_error` is a payload change to the
+small-model surface and belongs in its own commit.
 """
 
 ADVANCED_INSTRUCTIONS = """\
@@ -44,9 +52,9 @@ zim_metadata.
 article. It takes an entry_path, not a query; it is not a search tool.
 - zim_health — server state, or validation of a single archive.
 
-Entry paths are archive-relative (e.g. "A/Aspirin"), never URLs. On failure a \
-call is flagged isError and the body is JSON with "error", "operation" and a \
-"message" describing how to correct the call.
+Entry paths are archive-relative (e.g. "A/Aspirin"), never URLs. A rejected \
+argument is flagged isError with a JSON body carrying "error", "operation" and \
+a "message" describing how to correct the call.
 """
 
 SIMPLE_INSTRUCTIONS = """\
@@ -55,8 +63,9 @@ only — this tool never reaches the network.
 
 zim_query takes a natural-language question and handles search, entry \
 selection and rendering in one call. Ask it the question directly rather than \
-composing search terms. On failure a call is flagged isError and the body is \
-JSON with "error", "operation" and a "message" describing how to correct it.
+composing search terms. A rejected argument is flagged isError with a JSON body \
+carrying "error", "operation" and a "message" describing how to correct it; \
+other problems come back as markdown that names what to do next.
 """
 
 
