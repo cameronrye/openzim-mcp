@@ -21,8 +21,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from ..constants import MAX_SEARCH_RESULT_LIMIT
-from ..responses import ToolErrorPayload, tool_error
-from ..synthesize import SynthesizeResponse
+from ..responses import tool_error
 from ._common import enforce_rate_limit, load_description, tool_error_response
 
 if TYPE_CHECKING:
@@ -63,7 +62,15 @@ def register(server: "OpenZimMcpServer") -> None:
         compact: bool = True,
         compact_budget: Optional[Union[str, int]] = None,
         synthesize: bool = False,
-    ) -> Union[str, SynthesizeResponse, ToolErrorPayload]:
+    ) -> Any:
+        # Annotated ``Any`` — matching the other 7 tools — so FastMCP derives
+        # no ``outputSchema``. The previous ``Union[str, SynthesizeResponse,
+        # ToolErrorPayload]`` annotation generated a 4.7KB schema (16% of the
+        # whole advanced surface) that described a ``{"result": "<markdown>"}``
+        # wrapper: FastMCP wraps non-dict returns, and this tool's ordinary
+        # return is a markdown string. Clients got a schema promising nothing
+        # they couldn't already read from the text block, and the surface paid
+        # for it in every request. The runtime return shapes are unchanged.
         try:
             rl = enforce_rate_limit(server, "zim_query")
             if rl is not None:
