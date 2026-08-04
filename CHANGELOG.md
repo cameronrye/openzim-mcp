@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.6.0](https://github.com/cameronrye/openzim-mcp/compare/v2.5.5...v2.6.0) (2026-08-04)
 
 
+### Migration
+
+* `zim_query` no longer emits `structuredContent`. Its `outputSchema` was the
+  only one on the surface and has been removed, so parse the JSON text block in
+  `content` — as the other seven tools have always required. The body bytes are
+  unchanged, so this is a one-line change at the parse site.
+* Failed tool calls now arrive with `isError: true` on the `CallToolResult`.
+  Clients that inferred success from the absence of a raise should branch on the
+  flag, or on `result["error"] is True` in the parsed payload. Partial failures
+  inside batch, cross-archive and `zim_health` responses are unaffected and still
+  report `isError: false`.
+
+
 ### Added
 
 * flag failed tool calls with isError and drop the inert output schema ([#333](https://github.com/cameronrye/openzim-mcp/issues/333)) ([218f68e](https://github.com/cameronrye/openzim-mcp/commit/218f68ea64a04c39075386eaf61edf57eb09e157))
