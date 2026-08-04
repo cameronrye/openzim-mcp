@@ -118,7 +118,7 @@ export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=1000         # default 1000, min 100
 export OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT=10     # default 10, range 1-100
 ```
 
-`zim_get(entry_path=...)` requires `max_content_length >= 100` (lower values are rejected with a `ToolErrorPayload`).
+The **config** field `content.max_content_length` must be `>= 100`; a lower value fails pydantic validation and aborts startup as an `OpenZimMcpConfigurationError`, never as a tool response. The separate **per-call** `max_content_length` argument — accepted only by `zim_get` and `zim_query` — is validated independently and only has to be `>= 1`; below that the call returns a `ToolErrorPayload`, `{"error": true, "operation": "invalid_max_content_length", "message": "..."}`, which the server delivers as JSON text with `isError: true`.
 
 ## Logging
 
