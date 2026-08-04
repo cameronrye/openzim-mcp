@@ -6,7 +6,7 @@
 
 OpenZIM MCP is a Model Context Protocol (MCP) server that enables AI models to access and search ZIM format knowledge bases offline. It provides intelligent, structured access patterns that LLMs need to effectively navigate vast knowledge repositories like Wikipedia, Wiktionary, and other offline content archives.
 
-**Version**: 2.5.5 <!-- x-release-please-version -->
+**Version**: 2.6.0 <!-- x-release-please-version -->
 **License**: MIT
 **Python**: 3.12+
 **Repository**: https://github.com/cameronrye/openzim-mcp
@@ -157,6 +157,14 @@ zim_browse(zim_file_path="wikipedia_en.zim", namespace="C", mode="walk", limit=2
 - Caching enabled by default (configurable)
 - Pagination recommended for large result sets
 - Use specific tools in advanced mode for best performance
+
+### Error Handling
+- Failures are RETURNED, not raised: every tool responds with `{"error": true, "operation": "<op>", "message": "<text>"}`
+- `context` is present only when the tool supplies one; some failures merge extra self-correction keys (e.g. `zim_get_section` adds `available_section_ids` and `closest_match`)
+- There is no `status` key and no `hint` key — branch on `result["error"] is True`
+- Since v2.6.0 the `CallToolResult` also carries `isError: true` for these envelopes
+- No tool advertises an `outputSchema`, so nothing arrives in `structuredContent` — parse the JSON text block in `content`
+- Partial failures do not flag the call: a `zim_get(entry_paths=[...])` batch or `zim_search(cross_file=True)` where some rows fail still returns `isError: false` — only the TOP-LEVEL dict is inspected. Per-row outcome is nested and differs per tool: batch rows carry `success` (bool) plus `error` (message string); cross-archive rows carry `error` (bool) plus `error_message` / `error_operation`
 
 ## Configuration
 

@@ -103,6 +103,8 @@ Some failures are *not* candidates for search-based retrieval — searching woul
 
 If you see a redirect-cycle error, the ZIM file's data is broken; smart retrieval cannot fix it.
 
+*Propagate unchanged* describes the retrieval layer, not the wire. For the two redirect failures above, the ladder in [openzim_mcp/zim/content.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/zim/content.py) re-raises the `OpenZimMcpArchiveError` instead of retrying the search fallback or writing a path mapping — but the exception never reaches your client as a raise. The tool wrapper's catch-all (`except Exception` → `tool_error_response` in [openzim_mcp/tools/_common.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/_common.py)) converts it into the standard error envelope — `{"error": true, "operation": "zim_get", "message": ..., "context": ...}`, delivered with `isError: true` — with the original text (`Redirect cycle detected at ...`) preserved under **Technical Details** inside `message`.
+
 ## Tuning
 
 There are no smart-retrieval-specific knobs. The global cache config governs:

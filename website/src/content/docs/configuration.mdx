@@ -40,7 +40,7 @@ openzim-mcp --mode advanced /path/to/zim/files
 | `simple` (default) | 1 tool: `zim_query` (NL intent router) | small/local LLMs, MCP hosts that struggle with large tool catalogs |
 | `advanced` | 8 tools: `zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health` (see [API reference](/openzim-mcp/docs/api-reference/)) | hosts that handle a richer tool surface, scripting, fine-grained control |
 
-**The advanced surface is 8 consolidated tools** — collapsed from the prior 22-tool v1 surface. The advanced-mode wire footprint is ~23.5KB, down from ~36KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
+**The advanced surface is 8 consolidated tools** — collapsed from the prior 22-tool v1 surface. The advanced-mode wire footprint is ~24.3KB, down from ~36KB, clearing the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (25–50KB schema) for small-model dispatch. See the [v1 → v2 migration table](/openzim-mcp/docs/api-reference/#v1--v2-migration) if you're upgrading.
 
 ## Transport
 
@@ -118,7 +118,7 @@ export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=1000         # default 1000, min 100
 export OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT=10     # default 10, range 1-100
 ```
 
-`zim_get(entry_path=...)` requires `max_content_length >= 100` (lower values are rejected with a `ToolErrorPayload`).
+The **config** field `content.max_content_length` must be `>= 100`; a lower value fails pydantic validation and aborts startup as an `OpenZimMcpConfigurationError`, never as a tool response. The separate **per-call** `max_content_length` argument — accepted only by `zim_get` and `zim_query` — is validated independently and only has to be `>= 1`; below that the call returns a `ToolErrorPayload`, `{"error": true, "operation": "invalid_max_content_length", "message": "..."}`, which the server delivers as JSON text with `isError: true`.
 
 ## Logging
 

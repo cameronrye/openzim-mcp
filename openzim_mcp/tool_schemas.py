@@ -4,16 +4,19 @@ Every dict-returning tool's ``_data`` method returns one of these
 TypedDicts (or ``ToolErrorPayload`` from openzim_mcp.responses on
 failure).
 
-L5 — wire contract caveat: these TypedDicts describe the JSON SHAPE, not
-the MCP envelope. The 7 advanced tools are annotated ``-> Any``, so the
-pinned mcp 1.27.0 ``func_metadata`` produces ``output_schema=None`` and
-serializes the dict as JSON TEXT inside a ``TextContent`` block — there
-is NO ``structuredContent`` for them. ``zim_query``'s typed
-``Union[...]`` annotation, by contrast, makes FastMCP wrap its payload
-under ``structuredContent`` (with a ``{"result": ...}`` envelope for the
-non-dict members of the union). Integrators should parse the tool's text
-content as JSON rather than relying on ``structuredContent`` arriving
-uniformly.
+Wire contract caveat: these TypedDicts describe the JSON SHAPE, not the
+MCP envelope. All 8 tools are annotated ``-> Any``, so FastMCP's
+``func_metadata`` produces ``output_schema=None`` and serializes the
+payload as JSON TEXT inside a ``TextContent`` block. **No tool emits
+``structuredContent``** — parse the text content as JSON.
+
+``zim_query`` was the exception until v2.6.0: its typed ``Union[...]``
+return annotation generated a 4.7KB ``outputSchema`` describing a
+``{"result": "<markdown string>"}`` wrapper (FastMCP wraps non-dict
+returns), which told clients nothing the text block didn't and cost 16%
+of the advanced surface budget. Dropping the annotation aligned it with
+the other seven. Restoring an output schema anywhere means describing
+the real payload — see ``tests/test_mcp_session.py``.
 
 Every list-returning tool's TypedDict carries the five contract keys
 (``results``, ``next_cursor``, ``total``, ``done``, ``page_info``)

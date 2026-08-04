@@ -21,6 +21,15 @@ updates:
       prefix: "deps"
       prefix-development: "deps-dev"
       include: "scope"
+    ignore:
+      # mcp 2.0.0 deleted the mcp.server.fastmcp package tree (renamed to
+      # mcp.server.mcpserver, FastMCP -> MCPServer). server.py, mcp_envelope.py
+      # and tools/resource_tools.py import the old path at runtime, so widening
+      # the bound past <2.0 publishes a wheel that fails at `import openzim_mcp`
+      # — and CI can't catch it, because the lockfile keeps resolving 1.x.
+      # Drop this once the rename port lands with an mcp-version CI axis.
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
     # Group related updates together
     groups:
       # Group all patch updates together
