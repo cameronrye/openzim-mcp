@@ -11,26 +11,39 @@ Common issues, error messages, and solutions for OpenZIM MCP.
 
 ## Error response shape
 
-Before diving into specific failure modes — v2 changed how errors come back from tools. Every tool catches exceptions and returns a structured `ToolErrorPayload` instead of raising:
+Before diving into specific failure modes — v2 changed how errors come back from tools. Every tool catches exceptions and returns a structured `ToolErrorPayload` instead of raising — except `zim_query`, whose handler-side failures (no archive specified, `zim_file_path` not found, an empty query/topic/search term, and any other exception raised while handling the query) return markdown guidance and still carry `isError: false`:
 
 ```json
 {
-  "status": "error",
+  "error": true,
   "operation": "invalid_path_combination",
-  "message": "Set exactly one of: entry_path, entry_paths, binary, main_page",
-  "hint": "Use entry_paths=[...] for batch fetch"
+  "message": "Provide one of `entry_path`, `entry_paths`, or `main_page=True`."
 }
 ```
 
-Check for it with `isinstance(result, dict) and result.get("status") == "error"`. Common v2 error `operation` values you'll see in this guide:
+Check for it with `isinstance(result, dict) and result.get("error") is True`. Since v2.6 the server also sets the MCP `isError` flag on these — `EnvelopeAwareFastMCP.call_tool` recognises the envelope on the way out and returns a `CallToolResult` with `isError=True` — so a client that branches on `isError` works too. No tool advertises an `outputSchema`, so nothing arrives in `structuredContent`; the envelope is JSON in the response's text `content` block. Common error `operation` values you'll see in this guide:
 
-- `invalid_path_combination` — `zim_get` got conflicting branch selectors (e.g. `entry_path` + `main_page`)
-- `invalid_mode` — `zim_browse`, `zim_search`, or `zim_links` got an unsupported mode/direction
+- `invalid_path_combination` — `zim_get` got an impossible branch: `entry_path` + `entry_paths`, `entry_paths` + a non-`full` `view`, `entry_paths` + `content_offset`, `binary` + `entry_paths`/`main_page`/a non-`full` `view`, `binary` without `entry_path`, `main_page` + a path or a non-`full` `view`, or no selector at all
+- `invalid_view` — `zim_get` got a `view` outside `{full, summary, toc, structure}`
+- `invalid_mode` — `zim_browse` got a `mode` outside `{page, walk}`, or `zim_search` a `mode` outside `{fulltext, title, suggest}`
+- `invalid_direction` / `invalid_kind` — `zim_links` got a `direction` outside `{outbound, inbound, related}`, or (on `direction="outbound"`) a `kind` outside `{internal, external, media}`. `zim_links` never emits `invalid_mode`.
 - `invalid_section` — `zim_get_section` got an empty/missing `section_id`
 - `invalid_content_offset` — `zim_get` / `zim_query` got a negative `content_offset`
-- specific operation names (`get_entry`, `search`, etc.) for underlying-operation failures (smart retrieval miss, archive read error, rate-limit exhausted)
+- `invalid_limit` — `zim_search` / `zim_query` got a `limit` below 1, or above the cap (50 for `mode="title"` / `mode="suggest"`, 1000 otherwise)
+- `invalid_offset` — `zim_search` / `zim_query` got a negative `offset` (`offset=0` is the valid default)
+- `invalid_max_content_length` — `zim_get` / `zim_query` got a `max_content_length` below 1 (`zim_search` has no such parameter)
+- `invalid_combination` — `zim_search` got mutually exclusive arguments (any `cursor`, a non-zero `offset` outside single-archive fulltext, `cross_file` + `zim_file_path`, `mode="suggest"` + `cross_file`, or `namespace`/`content_type` filters + `cross_file`)
+- `missing_archive` — `zim_search` could not resolve an archive for `mode="suggest"`, `mode="title"`, or single-archive fulltext
+- `invalid_query` — `zim_query` got a query over the 4096-character cap
+- `rate_limited` — the token bucket for the internal operation was exhausted
+- `cursor_decode` / `cursor_mismatch` / `cursor_context_mismatch` / `cursor_unsupported` — a malformed, wrong-tool, wrong-context, or unsupported `cursor`
+- `file_not_found` / `entry_not_found` / `section_not_found` / `invalid_max_chars` — data-layer failures surfaced by `zim_get_section`. `section_not_found` is the one envelope that carries extra keys: `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match` when a near match exists.
+- `inbound_sidecar_unavailable` — `zim_links(direction="inbound")` against an archive with no link-graph sidecar
+- the tool's own wire name — `zim_get`, `zim_search`, `zim_query`, `zim_browse`, `zim_links`, `zim_metadata`, `zim_health`, `zim_get_section` — when an unexpected exception escapes the tool body (archive read error, smart-retrieval miss). There is no `get_entry` or `search` operation value: those are internal rate-limiter bucket names, never envelope operations.
+- `get server health` / `get server configuration` — the only two `operation` values that are not snake_case, and the only two that never appear at the top level of a response. The no-argument `zim_health()` builds `.health`, `.configuration` and `.loaded_archives` independently, and each of the first two catches its own exceptions — so a failure inside one replaces that block alone with an envelope while the rest of the response still comes back. The top-level dict stays an ordinary success payload, so `isError` is `false`: test `.health` and `.configuration` for an `error` key rather than assuming the whole call succeeded. This partial case is the only unflagged one — a failure in the `loaded_archives` scan, or anywhere in the `zim_health(zim_file_path=...)` validation branch, surfaces as a normal top-level `operation="zim_health"` envelope with `isError: true`.
+- `zim_query`'s `synthesize=True` path adds `synthesize_pipeline_error`, `synthesize_not_applicable`, `no_archives_available`, `meta_only_guidance`, `chained_intent_rejected`, `topic_required`, `search_terms_required`, `multi_entity_chain_rejected`, and `invalid_path`. These are the only `zim_query` handler failures that produce an envelope at all — on the default path the same conditions come back as markdown guidance with `isError: false`.
 
-The underlying exception hierarchy in [openzim_mcp/exceptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/exceptions.py) is the canonical source.
+The envelope itself is defined in [openzim_mcp/responses.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/responses.py) — the `ToolErrorPayload` TypedDict and the `tool_error()` builder every failure path must go through — and the `isError` mapping in [openzim_mcp/mcp_envelope.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/mcp_envelope.py). The underlying exception hierarchy in [openzim_mcp/exceptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/exceptions.py) is what the broad-`except` paths wrap; it shapes the `message` text but not the envelope's keys — `error_code` is never emitted.
 
 ## Quick diagnostics
 
@@ -427,7 +440,7 @@ When reporting issues, include:
 
 - **Operating system** and version
 - **Python version**: `python --version`
-- **OpenZIM MCP version**: `python -c "import openzim_mcp; print(openzim_mcp.__version__)"` or check `zim_health` → `.configuration.config_hash` and the MCP `serverInfo.version` (reads from `importlib.metadata`; reports openzim-mcp's actual version, not the FastMCP SDK default)
+- **OpenZIM MCP version**: `python -c "import openzim_mcp; print(openzim_mcp.__version__)"` or check `zim_health` → `.configuration.configuration.config_hash` (the outer key is the block, the inner one the report) and the MCP `serverInfo.version` (reads from `importlib.metadata`; reports openzim-mcp's actual version, not the FastMCP SDK default)
 - **ZIM file details**: Size, source, name
 - **Error messages**: Full error text
 - **Configuration**: MCP client config (remove sensitive paths)

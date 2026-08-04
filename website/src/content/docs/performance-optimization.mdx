@@ -37,7 +37,7 @@ export OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true    # cache survives restarts
 | Memory-constrained (RPi, small VPS) | `MAX_SIZE=25-50`, `TTL_SECONDS=900-1800` |
 | Volatile content (frequent ZIM swaps) | shorter TTL or rely on subscriptions to invalidate downstream |
 
-Cache stats surface in `zim_health().cache_performance` (`enabled`, `size`, `max_size`, `ttl_seconds`, `hits`, `misses`, `hit_rate`). There are no `warm_cache` / `cache_stats` / `cache_clear` tools — restart to flush.
+Cache stats surface in `zim_health().health.cache_performance` (`enabled`, `size`, `max_size`, `ttl_seconds`, `hits`, `misses`, `hit_rate`). There are no `warm_cache` / `cache_stats` / `cache_clear` tools — restart to flush.
 
 **Persistence path:** defaults to `~/.cache/openzim-mcp` (resolved to absolute). For containerized deployments, mount a volume there or override `OPENZIM_MCP_CACHE__PERSISTENCE_PATH`.
 
@@ -158,7 +158,7 @@ Both endpoints are auth-exempt and CORS-friendly; safe to wire into Kubernetes p
 
 ### Health detail
 
-`zim_health()` returns the full status. Real response shape:
+`zim_health()` returns `{health, configuration, loaded_archives, _meta}`. The `.health` block (abbreviated):
 
 ```json
 {
@@ -211,7 +211,7 @@ For platform-level monitoring prefer `/healthz` (no auth, no JSON body, 200/503)
 
 ### External monitoring
 
-Wire `/healthz` and `/readyz` into your platform's uptime monitor. For Prometheus-style metrics OpenZIM MCP doesn't ship a metrics endpoint — scrape `/healthz` for liveness or compose `zim_health().cache_performance` into your own exporter.
+Wire `/healthz` and `/readyz` into your platform's uptime monitor. For Prometheus-style metrics OpenZIM MCP doesn't ship a metrics endpoint — scrape `/healthz` for liveness or compose `zim_health().health.cache_performance` into your own exporter.
 
 ## Resource patterns
 

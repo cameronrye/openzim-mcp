@@ -23,18 +23,25 @@ Response (truncated):
 
 ```json
 {
-  "status": "healthy",
-  "server_name": "openzim-mcp",
+  "health": {
+    "status": "healthy",
+    "server_name": "openzim-mcp",
+    "cache_performance": { "enabled": true, "size": 0, "max_size": 100, "hit_rate": 0.0 },
+    "configuration": { "allowed_directories": 1, "cache_enabled": true, "config_hash": "a1b2c3d4..." }
+  },
+  "configuration": {
+    "configuration": { "server_name": "openzim-mcp", "allowed_directories": ["...zim-files"], "allowed_directories_count": 1, "cache_enabled": true },
+    "diagnostics": { "validation_status": "ok", "warnings": [], "recommendations": [] }
+  },
   "loaded_archives": [
     {
       "name": "wikipedia_en_100_2025-08.zim",
       "path": "...wikipedia_en_100_2025-08.zim",
       "size": "310.77 MB",
+      "size_bytes": 325866721,
       "modified": "2025-09-11T10:20:50"
     }
-  ],
-  "cache_performance": { "enabled": true, "size": 0, "max_size": 100, "hit_rate": 0.0 },
-  "configuration": { "allowed_directories": 1, "cache_enabled": true }
+  ]
 }
 ```
 
