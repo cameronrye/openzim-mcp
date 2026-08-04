@@ -122,7 +122,9 @@ openzim_mcp/
 ├── error_messages.py        # markdown error templates
 ├── exceptions.py            # OpenZimMcp* exception hierarchy
 ├── constants.py             # cross-module constants (input limits, thresholds)
-├── types.py                 # shared TypedDicts / Protocols
+├── tool_schemas.py          # per-tool response TypedDicts (tools annotate -> Any, no outputSchema)
+├── responses.py             # tool_error() + ToolErrorPayload: {error, operation, message, context?} + extras
+├── mcp_envelope.py          # EnvelopeAwareFastMCP — returned error envelope -> isError=True
 ├── zim_operations.py        # back-compat shim — re-exports from zim/
 ├── zim/                     # ZIM operations package
 │   ├── __init__.py
@@ -285,7 +287,7 @@ MCP client         FastMCP                Server core         async_zim_operatio
     │◀── result ───────│                        │                          │                       │                  │
 ```
 
-Errors anywhere in the chain are caught by the tool wrapper and returned as a structured `ToolErrorPayload` (`{operation, message, hint?}`) rather than raised. Absolute paths inside error messages are redacted to `...filename.zim` form before the payload is returned.
+Errors anywhere in the chain are returned rather than raised, as a structured `ToolErrorPayload` — `{error: true, operation, message}`, plus `context` when the call site supplies one, plus any self-correction extras merged in (e.g. `zim_get_section` attaches `available_section_ids` and `closest_match` on `operation="section_not_found"`). There is no `status` key and no `hint` key. Both failure paths go through `responses.tool_error`: the tool wrapper's catch-all (`tools/_common.py`) wraps unexpected exceptions, and validation failures build the same envelope in-band at the call site. Because the envelope is *returned*, `EnvelopeAwareFastMCP` (`mcp_envelope.py`) recognises it at `call_tool` and sets `isError` on the `CallToolResult`, with the serialized body byte-identical to the plain dict return. No tool advertises an `outputSchema` — all eight are annotated `-> Any` — so nothing arrives in `structuredContent`; clients parse the JSON text block. Absolute paths inside error messages are redacted to `...filename.zim` form before the payload is returned.
 
 ## Data flow — HTTP transport
 

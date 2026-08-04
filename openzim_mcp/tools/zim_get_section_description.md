@@ -28,5 +28,6 @@ RESPONSE:
   any nested subsections.
 
 ERRORS:
-  Returns a ToolErrorPayload on missing/unknown section_id with a
-  hint listing the available section ids from the article's TOC.
+  Returns a ToolErrorPayload on missing/unknown section_id with an
+  `available_section_ids` key — not a `hint` — listing the available
+  section ids from the article's TOC, plus `closest_match`.

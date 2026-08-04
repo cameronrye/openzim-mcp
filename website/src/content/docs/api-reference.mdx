@@ -23,9 +23,9 @@ v2.0.0 collapsed the prior 22-tool advanced surface into 8 consolidated tools. T
 
 Tools return one of:
 
-- **Structured response objects** (most tools) — typed payloads (`SearchResponse`, `EntryBundle`, `MetadataResponse`, etc.) that the MCP transport serializes. Clients should parse the JSON envelope.
+- **JSON payload responses** (most tools) — typed payloads (`SearchResponse`, `ArchiveMetadataResponse`, `ServerHealthResponse`, etc.) serialized as JSON **text** inside a `TextContent` block. All 8 tools are annotated `-> Any`, so FastMCP derives no `outputSchema` and **nothing arrives in `structuredContent`** — parse the text block as JSON.
 - **Markdown-string responses** — `zim_get` (single-entry mode) returns a rendered string with `Title:`, `Path:`, `Type:` lines, then a `## Content` block.
-- **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{operation, message, hint?}`) rather than raising. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
+- **Tool errors** — every tool catches exceptions and returns a structured `ToolErrorPayload` (`{error: true, operation, message, context?}`) rather than raising. There is no `status` key and no `hint` key. Only `error`, `operation`, and `message` are guaranteed; individual failures may merge extra self-correction keys into the same envelope (a `section_not_found` error, for example, also carries `available_section_ids`, `available_section_ids_truncated`, `available_section_ids_total`, and `closest_match`). The envelope arrives as JSON text in the response's `content` — no tool advertises an `outputSchema`, so nothing lands in `structuredContent` — and `openzim_mcp/mcp_envelope.py` recognises it on the way out and sets `isError: true` on the `CallToolResult`. Path entries inside errors are redacted to `...filename.zim` form so the canonical allowed-directory layout is never leaked.
 
 ---
 
@@ -49,7 +49,7 @@ zim_query(
     compact: bool = True,
     compact_budget: Optional[Union[str, int]] = None,
     synthesize: bool = False,
-) -> Union[str, SynthesizeResponse, ToolErrorPayload]
+) -> Any
 ```
 
 | Parameter | Type | Default | Notes |
@@ -433,20 +433,19 @@ All tools are subject to a global token-bucket limiter (default 20 work units/s,
 
 Tune via `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND`, `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE`, and `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS`. See [Configuration](/openzim-mcp/docs/configuration/#rate-limiting).
 
-When the limit is exceeded, the tool returns a `ToolErrorPayload` with a `retry_after` hint; it does not raise.
+When the limit is exceeded the tool returns a `ToolErrorPayload` with `operation: "rate_limited"` instead of raising — and since 2.6.0 that envelope reaches the client as a `CallToolResult` with `isError: true` (see `openzim_mcp/mcp_envelope.py`). There is no `retry_after` field. The wait is stated in prose in `message` (`"Rate limit exceeded for operation 'search'. Please wait 1.23 seconds before retrying."`) and repeated in machine-readable form in `context`, which is always present on this error and formatted `operation=<internal op>, cost=<N>, wait_time=<S>s`.
 
 ---
 
 ## Error responses
 
-Every tool wraps exceptions and returns a structured `ToolErrorPayload`:
+Every tool wraps exceptions and returns a structured `ToolErrorPayload`, delivered as JSON text in the response's `content` — never in `structuredContent`, since no tool advertises an `outputSchema` — with `isError: true` set on the `CallToolResult`. `error` (always `true`), `operation`, and `message` are always present; `context` is added only when the tool supplies one. One path merges operation-specific self-correction keys: the `section_not_found` envelope returned by `zim_get_section` also carries `available_section_ids` (capped at 50), `available_section_ids_truncated`, and `available_section_ids_total`, plus `closest_match` when a near-miss section ID is found:
 
 ```json
 {
-  "status": "error",
+  "error": true,
   "operation": "invalid_path_combination",
-  "message": "Set exactly one of: entry_path, entry_paths, binary, main_page",
-  "hint": "Use entry_paths=[...] for batch fetch"
+  "message": "`entry_path` and `entry_paths` are mutually exclusive."
 }
 ```
 

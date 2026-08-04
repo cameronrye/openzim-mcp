@@ -56,7 +56,7 @@ RESPONSE:
 
 ERRORS:
   Invalid branch combinations return structured
-  `invalid_path_combination` with a hint naming the conflict.
+  `invalid_path_combination`; `message` names the conflict.
   Defense-in-depth: even if a small model flattens the wire-schema
   oneOf and sends an impossible payload, the handler rejects it
   cleanly.
