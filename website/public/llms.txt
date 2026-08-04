@@ -158,6 +158,14 @@ zim_browse(zim_file_path="wikipedia_en.zim", namespace="C", mode="walk", limit=2
 - Pagination recommended for large result sets
 - Use specific tools in advanced mode for best performance
 
+### Error Handling
+- Failures are RETURNED, not raised: every tool responds with `{"error": true, "operation": "<op>", "message": "<text>"}`
+- `context` is present only when the tool supplies one; some failures merge extra self-correction keys (e.g. `zim_get_section` adds `available_section_ids` and `closest_match`)
+- There is no `status` key and no `hint` key — branch on `result["error"] is True`
+- Since v2.6.0 the `CallToolResult` also carries `isError: true` for these envelopes
+- No tool advertises an `outputSchema`, so nothing arrives in `structuredContent` — parse the JSON text block in `content`
+- Partial failures do not flag the call: a `zim_get(entry_paths=[...])` batch or `zim_search(cross_file=True)` where some rows fail still returns `isError: false` — only the TOP-LEVEL dict is inspected. Per-row outcome is nested and differs per tool: batch rows carry `success` (bool) plus `error` (message string); cross-archive rows carry `error` (bool) plus `error_message` / `error_operation`
+
 ## Configuration
 
 Configuration is via environment variables with the `OPENZIM_MCP_` prefix:

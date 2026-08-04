@@ -119,15 +119,18 @@ openzim-mcp/
 │   │   ├── namespace.py        # Namespace listing, browse, walk
 │   │   ├── search.py           # Full-text + suggestion search; cursor pagination
 │   │   └── structure.py        # Article structure, links, related articles
-│   └── tools/                  # MCP tool registrations
-│       ├── __init__.py
-│       ├── file_tools.py       # list_zim_files
-│       ├── content_tools.py    # get_zim_entry, get_zim_entries
-│       ├── search_tools.py     # search_zim_file, search_all, find_entry_by_title
-│       ├── navigation_tools.py # browse_namespace, walk_namespace, search_with_filters, get_search_suggestions
-│       ├── structure_tools.py  # get_article_structure, extract_article_links, get_entry_summary, get_table_of_contents, get_binary_entry
-│       ├── metadata_tools.py   # get_zim_metadata, get_main_page, list_namespaces
-│       ├── server_tools.py     # get_server_health, get_server_configuration
+│   └── tools/                  # MCP tool registrations — one module per v2 tool
+│       ├── __init__.py         # register_phase_f_tools(); simple mode stops after zim_query
+│       ├── _common.py          # description loader, rate limit, cursor decode, error envelope
+│       ├── zim_query.py        # zim_query — NL entry point (registered in both tool modes)
+│       ├── zim_search.py       # zim_search — fulltext/title/suggest, cross_file fan-out
+│       ├── zim_get.py          # zim_get — single/batch/binary/main_page; view=full|summary|toc|structure
+│       ├── zim_get_section.py  # zim_get_section — one named section of an article
+│       ├── zim_browse.py       # zim_browse — namespace enumeration, mode=page|walk
+│       ├── zim_metadata.py     # zim_metadata — M-namespace fields + namespace inventory
+│       ├── zim_links.py        # zim_links — direction=outbound|inbound|related
+│       ├── zim_health.py       # zim_health — health+config+archives, or archive validation
+│       ├── *_description.md    # LLM-facing tool descriptions, loaded at import
 │       ├── resource_tools.py   # MCP resources (zim://files, zim://{name}/...)
 │       └── prompts.py          # MCP prompts (/research, /summarize, /explore)
 ├── tests/                      # Test suite (pytest)
