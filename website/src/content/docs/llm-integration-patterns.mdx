@@ -436,7 +436,7 @@ If your MCP client surfaces the flag, branch on it first: it is one boolean and 
 Two edges worth knowing:
 
 - **`structuredContent` is deliberately unset** on error results. No tool advertises an `outputSchema`, and per the MCP spec `structuredContent` is the counterpart to one, so the envelope always lives in the `content` text block.
-- **Partial failures are not call failures.** A cross-archive `zim_search(cross_file=True)` where one archive is unreadable, or a `zim_get(entry_paths=[...])` batch where some entries fail, still returns `isError: false`. The per-row status is nested and shaped differently per tool, and the server's discriminator only inspects the top-level dict — so nested rows never flag the whole call.
+- **Partial failures are not call failures.** A cross-archive `zim_search(cross_file=True)` where one archive is unreadable, a `zim_get(entry_paths=[...])` batch where some entries fail, and a no-argument `zim_health()` whose `health` or `configuration` block could not be built all still return `isError: false`. The per-row or per-block status is nested and shaped differently per tool, and the server's discriminator only inspects the top-level dict — so nested failures never flag the whole call. For `zim_health` that is deliberate: the two sub-report builders catch their own exceptions and return an envelope in place of their block, so a failed cache-stats read still leaves you the `configuration` and `loaded_archives` blocks that did build. Total failure is still flagged — if the `loaded_archives` scan raises, it reaches the tool boundary and you get an ordinary top-level `operation: "zim_health"` envelope with `isError: true`. The nested envelopes carry `operation: "get server health"` and `operation: "get server configuration"`, the only two non-snake_case `operation` values on the wire.
 
 ### Progressive content loading
 
@@ -478,7 +478,7 @@ if cache_hit_rate < 0.7:
     pass
 ```
 
-Note `health.cache_performance` (not `cache`); fields are `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. `process_id` / `server_pid` are the real PID over local stdio (`[REDACTED]` over HTTP/SSE).
+Note `.health.cache_performance` (not `cache`); fields are `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. `process_id` / `server_pid` are the real PID over local stdio (`[REDACTED]` over HTTP/SSE).
 
 ### Usage analytics
 

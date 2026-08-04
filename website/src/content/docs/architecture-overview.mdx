@@ -30,8 +30,8 @@ Module map, transports, and the `zim/` package layout.
                       │
 ┌─────────────────────▼────────────────────────────────────────────┐
 │              Tool Surface (advanced=8, simple=1)                 │
-│  tools/{file,content,search,navigation,structure,                │
-│          metadata,server,resource,prompts}_tools.py              │
+│  tools/zim_{query,search,get,get_section,browse,                 │
+│             metadata,links,health}.py, resource_tools, prompts   │
 └─────────────────────┬────────────────────────────────────────────┘
                       │
 ┌─────────────────────▼────────────────────────────────────────────┐
@@ -72,22 +72,22 @@ v2.0.0 collapsed the 22-tool v1 advanced surface into 8 tools. Each consolidated
   │  • mode="fulltext"  (default)│  │  • entry_path=...            │
   │  • mode="title"              │  │  • entry_paths=[...]  batch  │
   │  • mode="suggest"            │  │  • binary=True   binary blob │
-  │  • mode="cross_file"         │  │  • main_page=True            │
-  │  • mode="filtered"           │  │  • view="summary"            │
+  │  • cross_file=True  fan-out  │  │  • main_page=True            │
+  │  • namespace= / content_type=│  │  • view="summary"            │
   │                              │  │  • view="toc"                │
   │                              │  │  • view="structure"          │
   └──────────────────────────────┘  └──────────────────────────────┘
 
   ┌──────────────────────────────┐  ┌──────────────────────────────┐
   │  zim_get_section             │  │  zim_browse                  │
-  │  • section_id=...            │  │  • mode="list"    (default)  │
+  │  • section_id=...            │  │  • mode="page"    (default)  │
   │  • from a TOC node           │  │  • mode="walk"    deep tree  │
   └──────────────────────────────┘  └──────────────────────────────┘
 
   ┌──────────────────────────────┐  ┌──────────────────────────────┐
   │  zim_links                   │  │  zim_metadata                │
-  │  • direction="outgoing"      │  │  • metadata + namespace      │
-  │  • direction="related"       │  │    counts in one payload     │
+  │  • direction="outbound"      │  │  • metadata + namespace      │
+  │  • "inbound" / "related"     │  │    counts in one payload     │
   └──────────────────────────────┘  └──────────────────────────────┘
 
   ┌──────────────────────────────┐
@@ -133,20 +133,22 @@ openzim_mcp/
 │   ├── content.py           # _ContentMixin
 │   ├── structure.py         # _StructureMixin
 │   └── namespace.py         # _NamespaceMixin
-└── tools/                   # MCP tool registration — one file per v2 tool category
-    ├── __init__.py
-    ├── file_tools.py        # underlying file-listing helpers (rolled into zim_health)
-    ├── content_tools.py     # zim_get (single + batch + binary + main_page + views)
-    ├── navigation_tools.py  # zim_browse (list + walk), zim_search filtered/suggest modes
-    ├── search_tools.py      # zim_search (fulltext + title + cross_file modes)
-    ├── metadata_tools.py    # zim_metadata (combined metadata + namespace counts)
-    ├── structure_tools.py   # zim_get views (structure, toc, summary), zim_links, zim_get_section
-    ├── server_tools.py      # zim_health (consolidated health + config + archives)
-    ├── resource_tools.py    # zim:// resources + per-entry template
-    └── prompts.py           # /research, /summarize, /explore
+└── tools/                   # MCP tool registration — one module per v2 tool
+    ├── __init__.py          # register_phase_f_tools() — tool_mode gate; simple stops after zim_query
+    ├── _common.py           # shared wrapper helpers: description loader, rate limit, cursors, errors
+    ├── zim_query.py         # zim_query — NL entry point via SimpleToolsHandler (both tool modes)
+    ├── zim_search.py        # zim_search — mode="fulltext"|"title"|"suggest", plus cross_file fan-out
+    ├── zim_get.py           # zim_get — single/batch/binary/main_page fetch; view=full|summary|toc|structure
+    ├── zim_get_section.py   # zim_get_section — one named section (section_id) of an article
+    ├── zim_browse.py        # zim_browse — namespace enumeration, mode="page"|"walk"
+    ├── zim_metadata.py      # zim_metadata — M-namespace fields + namespace inventory in one payload
+    ├── zim_links.py         # zim_links — direction="outbound"|"inbound"|"related", kind filter
+    ├── zim_health.py        # zim_health — no arg → health+config+archives; path → archive validation
+    ├── resource_tools.py    # zim:// resources + MIME-aware per-entry template (advanced only)
+    └── prompts.py           # /research, /summarize, /explore prompts (advanced only)
 ```
 
-The `tools/` filenames pre-date the v2 consolidation; the *category* organization still holds (search, navigation, content, structure, metadata, server, resources, prompts) but each file now registers one v2 tool that may dispatch to multiple underlying mixin operations based on `mode` / `view`.
+Each `zim_*.py` module exports a single `register(server)` function that declares one v2 tool via `@server.mcp.tool(description=...)`, loads its LLM-facing description from the sibling `_description.md` file at import time, and forwards to `AsyncZimOperations` so blocking ZIM I/O runs under `asyncio.to_thread` — the exception is `zim_query`, which dispatches `SimpleToolsHandler.handle_zim_query` on a worker thread instead. `register_phase_f_tools(server)` registers `zim_query` unconditionally, then returns early when `config.tool_mode == "simple"`; the other seven tools, the `zim://` resources, and the prompts are advanced-mode only.
 
 ## Core components
 
@@ -166,7 +168,7 @@ subscriber_reg    → SubscriberRegistry()  (only when subscriptions_enabled)
 simple_tools_h    → SimpleToolsHandler(zim_operations, async_zim_operations)
 ```
 
-Tool registration is dispatched from `tools/__init__.py:register_all_tools(server)`. In Simple mode, only `zim_query` is registered as a *new* tool — the underlying advanced tools are still wired for routing but aren't surfaced to the MCP client unless `tool_mode='advanced'`.
+Tool registration is dispatched from `tools/__init__.py:register_phase_f_tools(server)`. In Simple mode, only `zim_query` is registered as a *new* tool — the underlying advanced tools are still wired for routing but aren't surfaced to the MCP client unless `tool_mode='advanced'`.
 
 ### HTTP / SSE transport (`http_app.py`)
 
@@ -200,7 +202,7 @@ Polling-based mtime watcher:
 
 Single LRU+TTL cache shared across all tools and the smart-retrieval path-mapping store. Backed by an in-memory `OrderedDict`; optional disk persistence at `~/.cache/openzim-mcp` (off by default).
 
-Cache stats: `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. Surfaced inside `zim_health.cache_performance` — there are no separate management tools; restart the server to flush.
+Cache stats: `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. Surfaced inside `zim_health` under `.health.cache_performance` — there are no separate management tools; restart the server to flush.
 
 ### Rate limiter (`rate_limiter.py`)
 
@@ -232,7 +234,7 @@ Each mixin uses the same shared services injected into the parent: `config`, `pa
 
 ### Tools package (`tools/`)
 
-One file per category. Every file exports a `register_*_tools(server)` function called from `tools/__init__.py:register_all_tools`. Tools are decorated with `@server.mcp.tool()` (FastMCP) and forward to either `server.async_zim_operations` (for blocking ZIM I/O dispatched via `asyncio.to_thread`) or `server.zim_operations` (for cheap synchronous helpers).
+One module per tool. Every `zim_*.py` exports a `register(server)` function called from `tools/__init__.py:register_phase_f_tools`. Tools are decorated with `@server.mcp.tool()` (FastMCP) and forward to either `server.async_zim_operations` (for blocking ZIM I/O dispatched via `asyncio.to_thread`) or `server.zim_operations` (for cheap synchronous helpers).
 
 ### Smart retrieval fallback
 
