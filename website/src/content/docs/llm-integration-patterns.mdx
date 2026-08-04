@@ -553,7 +553,7 @@ Subscribe to `zim://files` or `zim://{name}` for `notifications/resources/update
 
 In simple mode (the default) only `zim_query` is exposed — pass a natural-language request and the server's intent parser routes to the right underlying operation. If your host LLM is small or struggles with large tool catalogues, prefer simple mode and let the parser do the routing. For LLMs that handle the full 8-tool surface, switch to advanced mode (`OPENZIM_MCP_TOOL_MODE=advanced`) for fine-grained control.
 
-**The 8-tool advanced surface fits comfortably below the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (~23.5KB vs the 25–50KB band)** — most 7-8B class open-weights models dispatch reliably against it. The 22-tool v1 surface (~36KB) sat squarely inside the band; if you saw dispatch confusion on v1 with a small model, v2 should be substantially better.
+**The 8-tool advanced surface fits comfortably below the [MCP Tax](https://www.mmntm.net/articles/mcp-context-tax) pain band (~24.3KB vs the 25–50KB band)** — most 7-8B class open-weights models dispatch reliably against it. The 22-tool v1 surface (~36KB) sat squarely inside the band; if you saw dispatch confusion on v1 with a small model, v2 should be substantially better.
 
 ### Contextual content assembly
 

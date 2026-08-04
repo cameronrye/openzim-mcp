@@ -4,8 +4,6 @@ import ipaddress
 import logging
 from typing import Any, Literal, Optional
 
-from mcp.server.fastmcp import FastMCP
-
 from . import __version__
 from .async_operations import AsyncZimOperations
 from .cache import OpenZimMcpCache
@@ -18,6 +16,8 @@ from .error_messages import (
     get_error_config,
 )
 from .exceptions import OpenZimMcpConfigurationError
+from .instructions import instructions_for
+from .mcp_envelope import EnvelopeAwareFastMCP
 from .rate_limiter import RateLimiter
 from .security import (
     PathValidator,
@@ -228,13 +228,16 @@ class OpenZimMcpServer:
         # SDK's ``allowed_origins`` because they encode the same trust
         # decision: an origin we let into CORS is one we let past the
         # rebinding check.
-        fastmcp_kwargs: dict = {}
+        # ``instructions`` rides in the initialize response — once per session,
+        # not once per tools/list — so cross-tool routing guidance lives there
+        # instead of being duplicated across the tool descriptions.
+        fastmcp_kwargs: dict = {"instructions": instructions_for(config.tool_mode)}
         if config.transport == "http":
             transport_security, host_warning = _build_transport_security(config)
             fastmcp_kwargs["transport_security"] = transport_security
             if host_warning:
                 logger.warning(host_warning)
-        self.mcp = FastMCP(config.server_name, **fastmcp_kwargs)
+        self.mcp = EnvelopeAwareFastMCP(config.server_name, **fastmcp_kwargs)
         self.mcp._mcp_server.version = __version__
         self._register_tools()
 
