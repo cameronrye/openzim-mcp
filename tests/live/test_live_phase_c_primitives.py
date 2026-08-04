@@ -24,6 +24,7 @@ becoming a maintenance burden.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -43,9 +44,34 @@ def _first_wikipedia_zim(zim_dir: Path) -> Optional[Path]:
 
 
 def _structured(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Phase B wrapper-tolerant unwrap (see Phase B spec note)."""
-    inner = result.get("structuredContent") or {}
-    return inner.get("result", inner) if isinstance(inner, dict) else {}
+    """Unwrap a tool payload from either envelope slot.
+
+    No tool advertises an ``outputSchema`` any more, so nothing arrives in
+    ``structuredContent`` and every payload is JSON in a text block (see
+    ``openzim_mcp.tool_schemas``). ``zim_query`` was the last holdout — its
+    typed return annotation put ``SynthesizeResponse`` under
+    ``structuredContent["result"]`` until v2.6.0.
+
+    Reading only ``structuredContent`` silently yielded ``{}`` for the seven
+    schema-less tools, which turned every downstream assertion into a
+    comparison against an empty dict rather than a failure anyone could read.
+    Falling back to the text block keeps this helper agnostic to whether a
+    tool advertises a schema.
+    """
+    inner = result.get("structuredContent")
+    if isinstance(inner, dict) and inner:
+        return inner.get("result", inner)
+    for block in result.get("content") or []:
+        text = block.get("text") if isinstance(block, dict) else None
+        if not isinstance(text, str):
+            continue
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed.get("result", parsed)
+    return {}
 
 
 # ---------------------------------------------------------------------------

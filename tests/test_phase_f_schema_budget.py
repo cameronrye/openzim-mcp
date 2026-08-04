@@ -49,20 +49,28 @@ ALLOCATION = {
 
 
 def _measure_tools(mode: str) -> dict[str, int]:
+    """Per-tool wire bytes, counting every field that ships in ``tools/list``.
+
+    ``outputSchema`` used to be omitted here. That blind spot is what let the
+    documented footprint go stale: ``zim_query``'s typed return annotation
+    generated a 4.7KB output schema, so the real advanced payload was 28.9KB —
+    inside the pain band this cap exists to keep it out of — while this
+    function measured 24.8KB and the budget stayed green. Anything the client
+    receives has to be counted, or the cap is measuring a number nobody pays.
+    """
     cfg = OpenZimMcpConfig(allowed_directories=[_ALLOWED_DIR], tool_mode=mode)
     srv = OpenZimMcpServer(cfg)
-    return {
-        name: len(
-            json.dumps(
-                {
-                    "name": name,
-                    "description": tool.description,
-                    "inputSchema": tool.parameters,
-                }
-            ).encode()
-        )
-        for name, tool in srv.mcp._tool_manager._tools.items()
-    }
+    measured = {}
+    for name, tool in srv.mcp._tool_manager._tools.items():
+        payload = {
+            "name": name,
+            "description": tool.description,
+            "inputSchema": tool.parameters,
+        }
+        if tool.output_schema is not None:
+            payload["outputSchema"] = tool.output_schema
+        measured[name] = len(json.dumps(payload).encode())
+    return measured
 
 
 def test_advanced_total_under_cap():
