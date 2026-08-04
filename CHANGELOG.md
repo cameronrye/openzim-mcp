@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0](https://github.com/cameronrye/openzim-mcp/compare/v2.5.5...v2.6.0) (2026-08-04)
+
+
+### Added
+
+* flag failed tool calls with isError and drop the inert output schema ([#333](https://github.com/cameronrye/openzim-mcp/issues/333)) ([218f68e](https://github.com/cameronrye/openzim-mcp/commit/218f68ea64a04c39075386eaf61edf57eb09e157))
+
+
+### Fixed
+
+* **deps:** raise the cryptography floor to clear CVE-2026-69247 ([#334](https://github.com/cameronrye/openzim-mcp/issues/334)) ([767c628](https://github.com/cameronrye/openzim-mcp/commit/767c62816a6d63c08cbb1d5f5e1f8057b6472e73))
+
+
+### Documentation
+
+* close the remaining drift the envelope audit surfaced ([#340](https://github.com/cameronrye/openzim-mcp/issues/340)) ([3c56ccd](https://github.com/cameronrye/openzim-mcp/commit/3c56ccd447a6b0027d292de5679077f3c895e9a5))
+* correct the error envelope shape across the docs ([#339](https://github.com/cameronrye/openzim-mcp/issues/339)) ([a95b9a2](https://github.com/cameronrye/openzim-mcp/commit/a95b9a253a964613f12a24473ec2a056d66359ac))
+
 ## [2.5.5](https://github.com/cameronrye/openzim-mcp/compare/v2.5.4...v2.5.5) (2026-08-02)
 
 
