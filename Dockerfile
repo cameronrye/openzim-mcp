@@ -19,6 +19,14 @@ COPY openzim_mcp ./openzim_mcp
 COPY README.md ./
 RUN uv sync --frozen --no-dev
 
+# Strip write bits here rather than via `COPY --chmod` in the final stage.
+# --chmod is a BuildKit-only flag, and registry builders that use the classic
+# builder (or Kaniko) fail the build outright on it. Doing it in the builder
+# means the plain COPY below carries these modes through, which every builder
+# supports. `a-w` also beats a flat 555: it clears write without granting
+# execute to files that never had it.
+RUN chmod -R a-w /app/.venv /app/openzim_mcp
+
 # ---- final stage ----
 FROM python:3.13-slim
 
@@ -30,12 +38,20 @@ RUN groupadd --gid 10001 appuser \
 
 WORKDIR /app
 
-# Copy the virtualenv and source from builder as read-only (--chmod=555:
-# r-x for owner/group/other, no write bits). uv pre-compiles .pyc during
-# install, so the runtime never needs to write into /app; making the tree
-# read-only at rest keeps the runtime user from mutating its own code.
-COPY --from=builder --chown=appuser:appuser --chmod=555 /app/.venv /app/.venv
-COPY --from=builder --chown=appuser:appuser --chmod=555 /app/openzim_mcp /app/openzim_mcp
+# Copy the virtualenv and source from builder. The write bits were already
+# stripped in the builder stage and COPY preserves source modes, so the tree
+# lands read-only. uv pre-compiles .pyc during install, so the runtime never
+# needs to write into /app; read-only at rest keeps the runtime user from
+# mutating its own code.
+COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+COPY --from=builder --chown=appuser:appuser /app/openzim_mcp /app/openzim_mcp
+
+# COPY re-creates the destination directory itself at the default 0755 owned
+# by appuser, so the builder-stage chmod covers the contents but not these two
+# inodes — without this the runtime user could still add new files alongside
+# the code. Non-recursive on purpose: two inodes, so the layer stays tiny
+# instead of duplicating the whole virtualenv.
+RUN chmod 555 /app/.venv /app/openzim_mcp
 
 ENV PATH="/app/.venv/bin:$PATH"
 
