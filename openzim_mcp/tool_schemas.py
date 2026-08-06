@@ -511,6 +511,13 @@ class SectionMeta(TypedDict):
     level: int
     char_start: int
     char_end: int
+    # Start of the heading line itself (char_start is the BODY start,
+    # past the heading line). Narrow-slice boundaries use this so a
+    # child's heading line doesn't leak into the parent's
+    # include_subsections=False slice. NotRequired: bundles cached
+    # before the field existed lack it (consumers fall back to
+    # char_start).
+    heading_start: NotRequired[int]
     parent_id: NotRequired[Optional[str]]
     id_source: NotRequired[
         Literal["id", "descendant_anchor", "preceding_anchor", "slug"]
