@@ -674,3 +674,39 @@ class TestTransportAllowedHostsIPv6:
         assert "mcp.example.com:*" in hosts
         assert "mcp.example.com:443:*" not in hosts
         assert "pinned.example.com:*:*" not in hosts
+
+
+# --------------------------------------------------------------------------
+# Intent parser: the binary extractor must not capture a determiner as the
+# entry path, and the accepted "query" search verb must be stripped from
+# the search terms like its siblings.
+# --------------------------------------------------------------------------
+
+
+class TestIntentParserExtractors:
+    def test_binary_path_preferred_over_determiner(self) -> None:
+        from openzim_mcp.intent_parser import _extract_binary
+
+        cases = {
+            "get binary content from the file I/logo.png": "I/logo.png",
+            "extract image of the painting I/mona.jpg": "I/mona.jpg",
+            "get binary content from I/image.png": "I/image.png",
+        }
+        for query, expected in cases.items():
+            params: dict = {}
+            _extract_binary(query, params)
+            assert params.get("entry_path") == expected, query
+
+    def test_binary_determiner_skipped_for_plain_names(self) -> None:
+        from openzim_mcp.intent_parser import _extract_binary
+
+        params: dict = {}
+        _extract_binary("get binary content from the logo", params)
+        assert params.get("entry_path") == "logo"
+
+    def test_query_verb_stripped_from_search_terms(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        intent, params, _cert = IntentParser().parse_intent("query solar eclipse")
+        assert intent == "search"
+        assert params.get("query") == "solar eclipse"
