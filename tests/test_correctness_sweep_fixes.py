@@ -495,3 +495,37 @@ class TestListingDedupesOverlappingDirectories:
             ContentProcessor(snippet_length=200),
         )
         assert auto_select_zim_file(ops) == str(zim)
+
+
+# --------------------------------------------------------------------------
+# Path-traversal guard: real article titles beginning with dots
+# ("...And Justice for All") must not be rejected as traversal attempts.
+# --------------------------------------------------------------------------
+
+
+class TestTraversalGuardAllowsDotTitledArticles:
+    def test_dot_titled_articles_pass(self) -> None:
+        from openzim_mcp.zim.content import _looks_like_path_traversal
+
+        for legit in (
+            "...And_Justice_for_All",
+            "A/...And_Justice_for_All",
+            "C/...Baby_One_More_Time",
+            "..._And_Ladies_of_the_Club",
+            "C/Article..name",
+        ):
+            assert _looks_like_path_traversal(legit) is False, legit
+
+    def test_traversal_shapes_still_rejected(self) -> None:
+        from openzim_mcp.zim.content import _looks_like_path_traversal
+
+        for evil in (
+            "..",
+            "../etc/passwd",
+            "C/../etc",
+            "..\\windows",
+            "..%2Fetc",
+            "%2e%2e/secret",
+            "/etc/passwd",
+        ):
+            assert _looks_like_path_traversal(evil) is True, evil
