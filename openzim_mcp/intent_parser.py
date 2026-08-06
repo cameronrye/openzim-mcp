@@ -362,15 +362,38 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     # are preserved — ``get article History of France`` → ``History of France``,
     # ``get article Lord of the Rings`` → ``Lord of the Rings`` (previously the
     # last-preposition anchor truncated these to ``France`` / ``the Rings``).
-    # Only when no object keyword is present do we fall back to the last
-    # preposition anchor, which keeps ``table of contents for Biology`` →
-    # ``Biology`` (picking ``for`` over the title-internal ``of``).
+    #
+    # Sweep follow-up: without an object keyword, anchor on the FIRST
+    # preposition after the intent verb, not the last one in the query.
+    # The last-preposition anchor truncated title-internal prepositions
+    # the same way the pre-H6 object branch did — ``toc of Battle of
+    # Britain`` → ``Britain``, ``links in Lord of the Rings`` → ``the
+    # Rings``. ``table of contents`` is matched as one verb phrase so its
+    # internal ``of`` can't act as the anchor (``list the table of
+    # contents for Marie Curie`` still anchors on ``for``), and the scan
+    # starts at the verb phrase's end so a preposition inside a leading
+    # scoping clause can't win either. When no verb is found the scan
+    # starts at the beginning of the query.
     object_re = re.compile(r"\b(?:article|entry|page)\s+", re.IGNORECASE)
     keyword_re = re.compile(
         r"\b(?:of|for|in|from|to)\s+",
         re.IGNORECASE,
     )
-    matches = list(object_re.finditer(query)) or list(keyword_re.finditer(query))
+    verb_re = re.compile(
+        r"\b(?:"
+        r"table\s+of\s+contents|"
+        r"structure|outline|sections?|headings?|"
+        r"summary|summarize|summarise|overview|brief|"
+        r"toc|contents|links?"
+        r")\b",
+        re.IGNORECASE,
+    )
+    matches = list(object_re.finditer(query))
+    if not matches:
+        verb_match = verb_re.search(query)
+        scan_from = verb_match.end() if verb_match else 0
+        first_prep = keyword_re.search(query, scan_from)
+        matches = [first_prep] if first_prep else []
     if matches:
         tail = query[matches[-1].end() :].strip().rstrip("?.,;:!").strip()
         # Post-v2.0.0 D-C: ``table of contents X`` anchors on ``of`` →
