@@ -641,3 +641,36 @@ class TestGetSectionDigitNamesAndArchiveErrors:
                     {"section_name": "Overview", "entry_path": "C/History"},
                     {},
                 )
+
+
+# --------------------------------------------------------------------------
+# Transport allow-list: bracketed IPv6 hosts contain ':' but carry no
+# port, so they still need the ':*' wildcard-port variant.
+# --------------------------------------------------------------------------
+
+
+class TestTransportAllowedHostsIPv6:
+    def test_bracketed_ipv6_gets_wildcard_variant(self) -> None:
+        from openzim_mcp.server import _build_transport_allowed_hosts
+
+        hosts = _build_transport_allowed_hosts(["[2001:db8::1]"])
+        assert "[2001:db8::1]" in hosts
+        assert "[2001:db8::1]:*" in hosts
+
+    def test_bracketed_ipv6_with_port_left_alone(self) -> None:
+        from openzim_mcp.server import _build_transport_allowed_hosts
+
+        hosts = _build_transport_allowed_hosts(["[2001:db8::1]:8080"])
+        assert "[2001:db8::1]:8080" in hosts
+        assert "[2001:db8::1]:8080:*" not in hosts
+        assert "[2001:db8::1]:*" not in hosts
+
+    def test_hostname_behaviour_unchanged(self) -> None:
+        from openzim_mcp.server import _build_transport_allowed_hosts
+
+        hosts = _build_transport_allowed_hosts(
+            ["mcp.example.com", "mcp.example.com:443", "pinned.example.com:*"]
+        )
+        assert "mcp.example.com:*" in hosts
+        assert "mcp.example.com:443:*" not in hosts
+        assert "pinned.example.com:*:*" not in hosts
