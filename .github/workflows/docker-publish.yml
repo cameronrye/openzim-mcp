@@ -17,6 +17,29 @@ on:
         type: string
 
 jobs:
+  # Build once with the classic (non-BuildKit) builder. The publish job below
+  # goes through buildx, which is always BuildKit — so BuildKit-only Dockerfile
+  # syntax passes CI here while failing on registry builders that don't use it.
+  # That blind spot shipped a broken image to Glama once already: `COPY --chmod`
+  # is BuildKit-only and died with "the --chmod option requires BuildKit" (#343).
+  # This job is the regression guard, and it is the whole point of not reusing
+  # buildx for it.
+  classic-builder:
+    name: Build without BuildKit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # No setup-buildx-action on purpose: DOCKER_BUILDKIT=0 selects the
+      # classic builder, which rejects BuildKit-only flags the way a
+      # registry builder such as Kaniko or plain `docker build` would.
+      - name: Build with the classic builder
+        env:
+          DOCKER_BUILDKIT: "0"
+        run: docker build -t openzim-mcp:classic-builder-check .
+
   publish:
     runs-on: ubuntu-latest
     permissions:
