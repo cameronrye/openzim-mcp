@@ -746,7 +746,12 @@ class _SearchMixin:
 
         returned_count = len(results)
         last_index = offset + returned_count
-        done = last_index >= total_results
+        # ``total_results`` is Xapian's ESTIMATE and can exceed the real hit
+        # count. When ``getResults`` hands back fewer entries than requested,
+        # the real stream is exhausted — treating the estimate as authoritative
+        # here re-minted the same cursor forever (empty page, done=False,
+        # offset unchanged: a livelock for contract-following clients).
+        done = last_index >= total_results or returned_count < result_count
         next_cursor: Optional[str] = None
         if not done:
             # Post-a20 P1-D1 / post-a21 P1-D5 contract: any tool whose
