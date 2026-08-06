@@ -86,6 +86,36 @@ def is_strong_title_match(topic: str, path: str, title: str) -> bool:
     return False
 
 
+# Sweep follow-up: ``Foo_(disambiguation)`` / URL-encoded twin suffix on a
+# candidate path or title. Space-form covers titles, underscore-form paths.
+_DISAMBIG_TWIN_SUFFIX_RE = re.compile(
+    r"[_ ](?:\(disambiguation\)|%28disambiguation%29)\s*$", re.IGNORECASE
+)
+
+
+def is_strong_canonical_title_match(topic: str, path: str, title: str) -> bool:
+    """``is_strong_title_match`` for rank-1 short-circuit decisions.
+
+    A ``Foo (disambiguation)`` twin strong-matches the bare topic ``Foo``
+    via the candidate-extends-topic direction, so a twin at rank 1 made
+    the promotion short-circuits conclude "already canonical" and the
+    real ``Foo`` article was never probed — the disambiguation page led
+    the response. Here the twin is never accepted as canonical unless
+    the topic itself asks for the disambiguation page.
+
+    Deliberately separate from :func:`is_strong_title_match`: the
+    tell-me-about ambiguity machinery counts the twin as a strong match
+    on purpose (its canonical-vs-twin auto-pick needs both in the set),
+    so only the skip-promotion call sites use this stricter form.
+    """
+    if "disambiguation" not in topic.lower() and (
+        _DISAMBIG_TWIN_SUFFIX_RE.search(path or "")
+        or _DISAMBIG_TWIN_SUFFIX_RE.search(title or "")
+    ):
+        return False
+    return is_strong_title_match(topic, path, title)
+
+
 # A11 post-a11 H1: punctuation characters whose presence in the topic
 # encodes load-bearing meaning the title resolver may smear away.
 # ``C++`` (the language) was getting silently mapped to ``C/C++`` (a

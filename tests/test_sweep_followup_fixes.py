@@ -6,9 +6,14 @@ the first sweep PR; the docstrings name the failure the fix closes.
 
 from __future__ import annotations
 
+from pathlib import Path
+from unittest.mock import MagicMock
+
 import pytest
 
 from openzim_mcp.intent_parser import IntentParser, _extract_entry_path_keyworded
+from openzim_mcp.simple_tools import SimpleToolsHandler
+from openzim_mcp.synthesize import _promote_title_match
 
 
 class TestEntryPathFirstPrepositionAnchor:
@@ -86,3 +91,91 @@ class TestEntryPathFirstPrepositionAnchor:
         intent, params, _ = IntentParser.parse_intent("links in Lord of the Rings")
         assert intent == "links"
         assert params["entry_path"].lower() == "lord of the rings"
+
+
+class TestDisambigTwinDoesNotBlockPromotion:
+    """``Berlin_(disambiguation)`` at rank 1 strong-matched ``berlin``
+    (candidate-extends-topic), so the promotion short-circuits in
+    synthesize and the search splice never probed for the canonical
+    ``Berlin`` — the disambiguation page led the response. A twin is now
+    never "already canonical" unless the query itself asks for the
+    disambiguation page. The tell-me-about ambiguity machinery keeps
+    counting the twin as a strong match (it auto-picks the canonical
+    downstream), so ``is_strong_title_match`` itself is unchanged.
+    """
+
+    def test_synthesize_promotes_canonical_past_twin_at_rank_1(self) -> None:
+        hits = [
+            (
+                "wiki",
+                {"path": "Berlin_(disambiguation)", "snippet": "...", "score": 0.6},
+            )
+        ]
+        search_handler = MagicMock()
+        search_handler.title_match_hit.return_value = {
+            "path": "Berlin",
+            "snippet": "Berlin is the capital...",
+            "score": 1.0,
+        }
+        promoted = _promote_title_match(
+            hits,
+            query="berlin",
+            archives=[(MagicMock(), Path("/fake/wiki.zim"))],
+            archives_searched=["wiki"],
+            search_handler=search_handler,
+        )
+        paths = [h["path"] for _, h in promoted]
+        assert paths[0] == "Berlin"
+        # The twin is preserved at a lower rank, not dropped.
+        assert "Berlin_(disambiguation)" in paths
+
+    def test_explicit_disambiguation_query_keeps_twin_at_rank_1(self) -> None:
+        hits = [
+            (
+                "wiki",
+                {"path": "Berlin_(disambiguation)", "snippet": "...", "score": 0.6},
+            )
+        ]
+        search_handler = MagicMock()
+        promoted = _promote_title_match(
+            hits,
+            query="berlin disambiguation",
+            archives=[(MagicMock(), Path("/fake/wiki.zim"))],
+            archives_searched=["wiki"],
+            search_handler=search_handler,
+        )
+        assert promoted == hits
+        assert search_handler.title_match_hit.call_count == 0
+
+    def test_search_splice_promotes_canonical_past_twin_at_rank_1(self) -> None:
+        handler = SimpleToolsHandler.__new__(SimpleToolsHandler)
+        handler.zim_operations = MagicMock()
+        handler.zim_operations.find_entry_by_title_data.return_value = {
+            "results": [
+                {
+                    "path": "Berlin",
+                    "title": "Berlin",
+                    "score": 1.0,
+                    "zim_file": "/fake/wiki.zim",
+                }
+            ]
+        }
+        payload = {
+            "query": "berlin",
+            "results": [
+                {
+                    "path": "Berlin_(disambiguation)",
+                    "title": "Berlin (disambiguation)",
+                    "snippet": "...",
+                }
+            ],
+            "total": 1,
+            "page_info": {"offset": 0, "limit": 5, "returned_count": 1},
+            "_meta": {},
+        }
+        spliced = handler._splice_title_match_into_search(
+            payload, "/fake/wiki.zim", "berlin"
+        )
+        paths = [r["path"] for r in spliced["results"]]
+        assert paths[0] == "Berlin"
+        assert "Berlin_(disambiguation)" in paths
