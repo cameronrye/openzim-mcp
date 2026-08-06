@@ -529,3 +529,37 @@ class TestTraversalGuardAllowsDotTitledArticles:
             "/etc/passwd",
         ):
             assert _looks_like_path_traversal(evil) is True, evil
+
+
+# --------------------------------------------------------------------------
+# synthesize: one failing archive (e.g. no fulltext index) must not take
+# the whole multi-archive fan-out down with it.
+# --------------------------------------------------------------------------
+
+
+class TestSynthesizeFanOutIsolatesArchiveFailures:
+    def test_failing_archive_degrades_to_empty_hits(self) -> None:
+        from openzim_mcp.synthesize import _do_per_archive_search
+
+        good_archive = MagicMock()
+        bad_archive = MagicMock()
+        handler = MagicMock()
+
+        def search_top_k(archive, query, *, k, validated_path=None):
+            if archive is bad_archive:
+                raise RuntimeError("no fulltext index")
+            return [{"path": "C/Hit", "snippet": "s", "score": 1.0}]
+
+        handler.search_top_k.side_effect = search_top_k
+        hits, names, by_name = _do_per_archive_search(
+            [
+                (bad_archive, Path("/tmp/bad.zim")),
+                (good_archive, Path("/tmp/good.zim")),
+            ],
+            search_handler=handler,
+            query="q",
+            k=3,
+        )
+        assert names == ["bad", "good"]
+        assert hits[0] == []
+        assert [h["path"] for h in hits[1]] == ["C/Hit"]
