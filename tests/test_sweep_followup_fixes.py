@@ -179,3 +179,93 @@ class TestDisambigTwinDoesNotBlockPromotion:
         paths = [r["path"] for r in spliced["results"]]
         assert paths[0] == "Berlin"
         assert "Berlin_(disambiguation)" in paths
+
+
+class TestNarrowSectionExcludesChildHeading:
+    """``include_subsections=False`` narrowed the slice to the first
+    following section's ``char_start`` — but in production bundles that
+    offset is the child's BODY start (past its heading line), so the
+    child's ``### Heading`` line leaked into the "no subsections" slice.
+    ``SectionMeta`` now records ``heading_start`` and the narrowing
+    boundaries use it (falling back to ``char_start`` for bundles built
+    before the field existed).
+    """
+
+    #                          0         1         2
+    #                          0123456789012345678901234...
+    _MD = (
+        "## Geography\n"  # heading_start 0, body 13
+        "Berlin lies in northeastern Germany.\n"  # 13..50
+        "### Topography\n"  # heading_start 50, body 65
+        "Flat plain.\n"  # 65..77
+    )
+
+    def _bundle(self) -> dict:
+        return {
+            "entry_path": "Berlin",
+            "title": "Berlin",
+            "content_type": "text/html",
+            "rendered_markdown": self._MD,
+            "sections": [
+                {
+                    "id": "Geography",
+                    "title": "Geography",
+                    "level": 2,
+                    "heading_start": 0,
+                    "char_start": 13,
+                    "char_end": len(self._MD),
+                    "parent_id": None,
+                },
+                {
+                    "id": "Topography",
+                    "title": "Topography",
+                    "level": 3,
+                    "heading_start": 50,
+                    "char_start": 65,
+                    "char_end": len(self._MD),
+                    "parent_id": "Geography",
+                },
+            ],
+            "links": {"internal": [], "external": [], "media": []},
+            "infobox": None,
+        }
+
+    def test_narrow_slice_stops_before_child_heading_line(self) -> None:
+        import openzim_mcp.bundle as _bundle_mod
+        from tests.test_get_section_d5_widen_v2a9 import _stub_structure_mixin
+
+        mixin = _stub_structure_mixin()
+        original = _bundle_mod.get_or_build_bundle
+        _bundle_mod.get_or_build_bundle = (  # type: ignore[assignment]
+            lambda *a, **kw: self._bundle()
+        )
+        try:
+            out = mixin._get_section_data(
+                archive=MagicMock(),
+                validated_path=Path("/fake.zim"),
+                entry_path="Berlin",
+                section_id="Geography",
+                max_chars=None,
+                include_subsections=False,
+            )
+        finally:
+            _bundle_mod.get_or_build_bundle = original  # type: ignore[assignment]
+
+        assert out["content_markdown"] == "Berlin lies in northeastern Germany.\n"
+        assert "Topography" not in out["content_markdown"]
+
+    def test_bundle_builder_records_heading_start(self) -> None:
+        from openzim_mcp.bundle import _compute_section_offsets
+
+        sections = _compute_section_offsets(
+            self._MD,
+            [
+                {"level": 2, "text": "Geography", "id": "Geography"},
+                {"level": 3, "text": "Topography", "id": "Topography"},
+            ],
+        )
+        by_id = {s["id"]: s for s in sections}
+        assert by_id["Geography"]["heading_start"] == 0
+        assert by_id["Geography"]["char_start"] == 13
+        assert by_id["Topography"]["heading_start"] == 50
+        assert by_id["Topography"]["char_start"] == 65
