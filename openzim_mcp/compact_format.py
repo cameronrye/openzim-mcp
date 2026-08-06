@@ -98,8 +98,16 @@ class _CompactFormatMixin:
     # rendered search response always includes a ``\n---\n`` footer —
     # but the explicit ``\Z`` keeps the regex correct on malformed or
     # synthetic input).
+    #
+    # Sweep follow-up: the boundary lookahead anchors on the NUMBERED
+    # result heading (``## 3. Title``) and the blank-line-preceded
+    # footer, not any ``\n\n## `` / ``\n---\n``. A markdown H2 or
+    # horizontal rule EMBEDDED in the snippet text used to terminate
+    # the capture early, so everything after it escaped the cap. The
+    # numbered form can't collide with article headings — html2text
+    # backslash-escapes rendered numbered headings (``## 1\. Topic``).
     _SEARCH_SNIPPETS_RE = re.compile(
-        r"(Snippet: )(.+?)(?=\n\n## |\n---\n|\Z)",
+        r"(Snippet: )(.+?)(?=\n\n## \d+\. |\n\n---\n|\Z)",
         re.DOTALL,
     )
 

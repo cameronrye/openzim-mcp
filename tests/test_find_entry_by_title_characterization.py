@@ -191,8 +191,9 @@ def test_suggestion_search_rank_decayed_scores(
     )
 
     scores = [r["score"] for r in out["results"]]
-    # n=3 -> 0.95*(1-0/3), 0.95*(1-1/3), 0.95*(1-2/3) rounded to 4dp.
-    assert scores == [0.95, 0.6333, 0.3167]
+    # Fixed decay window (10): 0.95*(1-idx/10) — limit-independent, so
+    # the same suggestion scores the same whatever the caller requested.
+    assert scores == [0.95, 0.855, 0.76]
     # Rank-monotonic, non-increasing, all distinct from the legacy 0.8.
     assert all(a >= b for a, b in zip(scores, scores[1:]))
     assert all(s != pytest.approx(0.8) for s in scores)
