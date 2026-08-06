@@ -1336,19 +1336,57 @@ class ZimOperations(
             # these named paths resolve, the archive simply has no main
             # page, which the presenters handle via ``"no_main_page"``.
             main_page_paths = ["W/mainPage", "A/Main_Page", "A/index"]
+            # Sweep follow-up: distinguish "probe path absent" from "probe
+            # path FOUND but unreadable". The old single try/except sent
+            # both to the next candidate, so a transient read failure on
+            # an existing main-page entry fell through to the
+            # ``no_main_page`` arm — which is content_ok=True and cached,
+            # turning a transient into a durable "archive has no main
+            # page" claim.
+            probe_failed_after_found = False
             for path in main_page_paths:
                 try:
                     entry = archive.get_entry_by_path(path)
-                    if entry:
-                        entry = _follow_redirect(entry)
-                        payload, ok = _build(entry)
-                        if ok:
-                            return "entry", payload, True, path
-                        # Content extraction failed for this probe path —
-                        # drop the sentinel and try the next candidate.
                 except Exception:  # nosec B112 - intentional fallback
                     # Path doesn't exist, try next
                     continue
+                if not entry:
+                    continue
+                try:
+                    entry = _follow_redirect(entry)
+                except Exception as e:
+                    logger.warning(
+                        f"Main-page probe {path} resolved but its redirect "
+                        f"chain failed: {e}"
+                    )
+                    probe_failed_after_found = True
+                    continue
+                payload, ok = _build(entry)
+                if ok:
+                    return "entry", payload, True, path
+                # Content extraction failed for this probe path — drop the
+                # sentinel and try the next candidate, but remember that a
+                # main-page entry does exist.
+                probe_failed_after_found = True
+
+            if probe_failed_after_found:
+                # A main-page entry exists but couldn't be served —
+                # content_ok=False keeps this out of the cache so the next
+                # request retries instead of inheriting a wrong
+                # "no main page" answer.
+                return (
+                    "content_error",
+                    {
+                        "path": "",
+                        "title": "Main Page",
+                        "content": (
+                            "(Error retrieving content: a main-page entry "
+                            "exists but its content could not be read)"
+                        ),
+                    },
+                    False,
+                    None,
+                )
 
             # No main page found — this is a structural property of the
             # archive, so it's safe to cache.

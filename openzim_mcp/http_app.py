@@ -175,6 +175,13 @@ def _make_readyz(
     # `.done()` (CANCELLED) while the real work is still running — the
     # single-flight check below would silently no-op against it.
     _readyz_inflight: Optional["Future[bool]"] = None
+    # The shared asyncio wrapper for `_readyz_inflight`. Sweep follow-up:
+    # `wrap_future` chains a done-callback onto the concurrent future and
+    # nothing unchains it when a waiter times out, so a fresh per-request
+    # wrapper grew the wedged probe's callback list without bound
+    # (`/readyz` is auth-exempt and unmetered). One wrapper per probe;
+    # `shield` already removes its own per-waiter callback on timeout.
+    _readyz_inflight_wrapped: Optional["asyncio.Future[bool]"] = None
 
     async def readyz(request: Request) -> JSONResponse:
         """Readiness — at least one allowed directory is readable."""
@@ -193,7 +200,7 @@ def _make_readyz(
         # `/readyz` is auth-exempt and unmetered by the rate limiter, so N
         # unauthenticated requests wedged every MCP tool call. The pool's
         # daemon workers also let the process exit while a probe is stuck.
-        nonlocal _readyz_inflight
+        nonlocal _readyz_inflight, _readyz_inflight_wrapped
         # Single-flight by SHARING the in-flight probe, not by short-circuiting
         # to 503. Only one work item is ever outstanding, so a wedged stat can
         # never burn more than one worker — but concurrent probes against a
@@ -201,9 +208,19 @@ def _make_readyz(
         # merely because another request was in flight would fail a readiness
         # check on a perfectly good instance and pull it from rotation.
         probe = _readyz_inflight
+        wrapped = _readyz_inflight_wrapped
         if probe is None or probe.done():
             probe = _get_executor("readyz").submit(_any_readable_dir)
             _readyz_inflight = probe
+            wrapped = asyncio.wrap_future(probe)
+            _readyz_inflight_wrapped = wrapped
+        elif wrapped is None or wrapped.get_loop() is not asyncio.get_running_loop():
+            # A wrapper is loop-bound; recreate it if the loop changed
+            # under a still-running probe (test harnesses; a uvicorn
+            # loop restart). Production keeps one loop, so the shared
+            # wrapper stays one-per-probe.
+            wrapped = asyncio.wrap_future(probe)
+            _readyz_inflight_wrapped = wrapped
         try:
             # `shield` is load-bearing, not defensive. `wrap_future` chains via
             # `asyncio.futures._chain_future`, whose `_call_check_cancel` calls
@@ -218,7 +235,7 @@ def _make_readyz(
             # Shielding cancels only the outer future, so each waiter times out
             # independently and the probe really does stay single-flight.
             ready = await asyncio.wait_for(
-                asyncio.shield(asyncio.wrap_future(probe)),
+                asyncio.shield(wrapped),
                 timeout=READYZ_PROBE_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:

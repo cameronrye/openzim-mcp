@@ -269,3 +269,285 @@ class TestNarrowSectionExcludesChildHeading:
         assert by_id["Geography"]["char_start"] == 13
         assert by_id["Topography"]["heading_start"] == 50
         assert by_id["Topography"]["char_start"] == 65
+
+
+class _Session:  # weak-referenceable ServerSession stand-in
+    pass
+
+
+class TestPerSessionUriCapCoversKnownUris:
+    """The per-session distinct-URI cap was checked only inside the
+    ``not _is_known_uri(uri)`` branch, so a session at its cap could
+    keep subscribing to any URI some other session had already
+    registered — the cap only bound first-registrant subscriptions.
+    The cap now applies to every subscription that would add a NEW
+    distinct URI for the session; idempotent re-subscribes stay exempt.
+    """
+
+    @pytest.mark.asyncio
+    async def test_known_uri_still_counts_against_session_cap(
+        self, monkeypatch
+    ) -> None:
+        from openzim_mcp import subscriptions
+        from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+        monkeypatch.setattr(subscriptions, "MAX_URIS_PER_SESSION", 2)
+        registry = subscriptions.SubscriberRegistry()
+        other = _Session()
+        await registry.subscribe("zim://shared", other)
+
+        greedy = _Session()
+        await registry.subscribe("zim://a", greedy)
+        await registry.subscribe("zim://b", greedy)
+        # 'zim://shared' is already known (registered by ``other``), but
+        # it is still a NEW distinct URI for ``greedy`` — the cap must
+        # apply.
+        with pytest.raises(OpenZimMcpValidationError):
+            await registry.subscribe("zim://shared", greedy)
+
+    @pytest.mark.asyncio
+    async def test_resubscribe_at_cap_stays_idempotent(self, monkeypatch) -> None:
+        from openzim_mcp import subscriptions
+
+        monkeypatch.setattr(subscriptions, "MAX_URIS_PER_SESSION", 2)
+        registry = subscriptions.SubscriberRegistry()
+        session = _Session()
+        await registry.subscribe("zim://a", session)
+        await registry.subscribe("zim://b", session)
+        # Re-subscribing to an already-held URI at the cap must not raise.
+        await registry.subscribe("zim://a", session)
+
+
+class TestReadyzWedgedProbeDoesNotAccumulateCallbacks:
+    """Each ``/readyz`` request created a fresh ``asyncio.wrap_future``
+    wrapper around the shared in-flight probe. ``wrap_future`` chains a
+    done-callback onto the concurrent future and nothing unchains it when
+    the waiter times out — so while a stat was wedged on a dead mount,
+    every probe request (unauthenticated, unmetered) grew the future's
+    callback list without bound. The wrapper is now created once per
+    probe and shared by all waiters (``shield`` already cleans up its own
+    per-waiter callback on timeout).
+    """
+
+    def test_timed_out_waiters_do_not_grow_probe_callbacks(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        import asyncio as _asyncio
+        import threading as _threading
+        from unittest.mock import patch as _patch
+
+        from openzim_mcp import http_app as _http_app
+        from openzim_mcp.http_app import _make_readyz
+
+        monkeypatch.setattr(_http_app, "READYZ_PROBE_TIMEOUT_SECONDS", 0.05)
+
+        released = _threading.Event()
+        real_isdir = __import__("os").path.isdir
+
+        def _wedged_isdir(p):
+            released.wait(timeout=10)
+            return real_isdir(p)
+
+        class _Cfg:
+            allowed_directories = [str(tmp_path)]
+
+        class _Server:
+            config = _Cfg()
+
+        readyz = _make_readyz(_Server())
+
+        captured: list = []
+        real_get_executor = _http_app._get_executor
+
+        def _capturing_get_executor(name):
+            pool = real_get_executor(name)
+
+            class _Capture:
+                def submit(self, fn, *a, **kw):
+                    fut = pool.submit(fn, *a, **kw)
+                    captured.append(fut)
+                    return fut
+
+            return _Capture()
+
+        async def _drive():
+            with (
+                _patch("openzim_mcp.http_app.os.path.isdir", _wedged_isdir),
+                _patch("openzim_mcp.http_app._get_executor", _capturing_get_executor),
+            ):
+                responses = []
+                for _ in range(5):
+                    responses.append(await readyz(None))
+                return responses
+
+        try:
+            responses = _asyncio.run(_drive())
+        finally:
+            released.set()
+
+        # All five requests timed out against the single wedged probe.
+        assert [r.status_code for r in responses] == [503] * 5
+        assert len(captured) == 1, "single-flight broken: multiple submissions"
+        # The shared probe must not have accumulated one chained callback
+        # per request — one shared wrapper, not five.
+        assert len(captured[0]._done_callbacks) <= 1, (
+            f"callback accumulation: {len(captured[0]._done_callbacks)} "
+            "callbacks chained onto the wedged probe"
+        )
+
+
+class TestSnippetCapSurvivesEmbeddedHeadings:
+    """The snippet-cap regex terminated a ``Snippet:`` capture at ANY
+    ``\\n\\n## `` — including a markdown H2 embedded in the snippet text
+    itself — so everything after the embedded heading escaped the
+    per-snippet cap. Result headings are always numbered (``## 3. ``)
+    and html2text backslash-escapes numbered article headings
+    (``## 1\\. Topic``), so anchoring on the numbered form is
+    unambiguous. Same for an embedded ``\\n---\\n`` horizontal rule:
+    the real footer always follows a blank line.
+    """
+
+    def test_embedded_h2_does_not_bypass_the_cap(self) -> None:
+        from openzim_mcp.compact_format import _CompactFormatMixin
+
+        tail = "tail-text " * 60
+        text = (
+            'Found 2 matches for "x", showing 1-2:\n\n'
+            "## 1. Article One\n"
+            "Path: A/One\n"
+            "Snippet: lead sentence.\n\n## Embedded Section\n" + tail + "\n\n"
+            "## 2. Article Two\n"
+            "Path: A/Two\n"
+            "Snippet: short.\n\n"
+            "---\n"
+        )
+        out = _CompactFormatMixin._truncate_search_snippets(text, max_chars=250)
+        assert tail.rstrip() not in out, "embedded H2 bypassed the snippet cap"
+        assert "..." in out
+        # The real numbered result boundary and footer survive.
+        assert "## 2. Article Two" in out
+        assert "Snippet: short." in out
+
+    def test_embedded_hrule_does_not_bypass_the_cap(self) -> None:
+        from openzim_mcp.compact_format import _CompactFormatMixin
+
+        tail = "tail-text " * 60
+        text = (
+            'Found 1 matches for "x", showing 1-1:\n\n'
+            "## 1. Article One\n"
+            "Path: A/One\n"
+            "Snippet: lead sentence.\n---\n" + tail + "\n\n"
+            "---\n"
+        )
+        out = _CompactFormatMixin._truncate_search_snippets(text, max_chars=250)
+        assert tail.rstrip() not in out, "embedded hrule bypassed the snippet cap"
+
+
+class TestSuggestionScoreIndependentOfCallerLimit:
+    """Suggestion rank-scores divided by ``len(paths)`` — the number of
+    rows the CALLER asked for — so the same suggestion at the same rank
+    scored 0.6333 at ``limit=10`` but 0.475 at ``limit=2``. Scores now
+    decay against a fixed window, so a row's score depends only on its
+    rank. Rank 0 keeps scoring 0.95, so the 0.95/0.8 promotion gates
+    (which only read the top row) are unchanged.
+    """
+
+    def _run(self, test_config, monkeypatch, limit: int):
+        from unittest.mock import MagicMock as _MM
+
+        from tests.test_find_entry_by_title_characterization import (
+            _entry,
+            _make_server,
+            _patch_archive,
+        )
+
+        server = _make_server(test_config)
+        entries = {
+            "Climate": _entry("Climate", "Climate"),
+            "Climatology": _entry("Climatology", "Climatology"),
+            "Climate_model": _entry("Climate_model", "Climate model"),
+        }
+        archive = _MM()
+        archive.has_entry_by_title.return_value = False
+        archive.has_entry_by_path.return_value = False
+        archive.get_entry_by_path.side_effect = entries.__getitem__
+
+        paths = ["Climate", "Climatology", "Climate_model"]
+        sugg = _MM()
+        sugg.getEstimatedMatches.return_value = len(paths)
+        # Honor the caller's window, as libzim does.
+        sugg.getResults.side_effect = lambda start, n: paths[start : start + n]
+        searcher = _MM()
+        searcher.suggest.return_value = sugg
+        _patch_archive(monkeypatch, archive, searcher)
+
+        return server.zim_operations.find_entry_by_title_data(
+            "/zim/test.zim", "climat", cross_file=False, limit=limit
+        )
+
+    def test_rank_scores_stable_across_limits(self, test_config, monkeypatch):
+        wide = self._run(test_config, monkeypatch, limit=10)
+        narrow = self._run(test_config, monkeypatch, limit=2)
+
+        wide_by_path = {r["path"]: r["score"] for r in wide["results"]}
+        narrow_by_path = {r["path"]: r["score"] for r in narrow["results"]}
+        assert narrow_by_path["Climatology"] == wide_by_path["Climatology"], (
+            "rank-1 score varies with the caller's limit: "
+            f"{narrow_by_path['Climatology']} vs {wide_by_path['Climatology']}"
+        )
+        # The top row keeps its promotion-gate score.
+        assert wide_by_path["Climate"] == pytest.approx(0.95)
+        # Scores stay rank-monotonic.
+        scores = [r["score"] for r in wide["results"]]
+        assert all(a >= b for a, b in zip(scores, scores[1:]))
+
+
+class TestMainPageProbeFailureNotCachedAsAbsence:
+    """A fallback probe path that RESOLVED to an entry but failed content
+    extraction fell through the probe ladder into the ``no_main_page``
+    arm — which is flagged ``content_ok=True`` ("structural property of
+    the archive — safe to cache"). A transient read failure was thereby
+    cached as a durable "this archive has no main page" claim. A
+    found-but-unbuildable probe now yields ``content_error`` with
+    ``content_ok=False``, so nothing is cached and the next request
+    retries.
+    """
+
+    @staticmethod
+    def _archive_with_broken_fallback_entry() -> MagicMock:
+        from unittest.mock import PropertyMock
+
+        inst = MagicMock()
+        type(inst).main_entry = PropertyMock(
+            side_effect=RuntimeError("Cannot find main entry")
+        )
+        broken = MagicMock()
+        broken.is_redirect = False
+        broken.title = "Welcome"
+        broken.path = "W/mainPage"
+        broken.get_item.side_effect = RuntimeError("transient read failure")
+
+        def get_entry_by_path(path):
+            if path == "W/mainPage":
+                return broken
+            raise KeyError(path)
+
+        inst.get_entry_by_path.side_effect = get_entry_by_path
+        return inst
+
+    def test_found_but_unreadable_probe_is_content_error_not_absence(
+        self,
+    ) -> None:
+        from openzim_mcp.zim_operations import ZimOperations
+
+        ops = ZimOperations.__new__(ZimOperations)
+        ops.content_processor = MagicMock()
+
+        kind, payload, content_ok, found_at = ops._get_main_page_result(
+            self._archive_with_broken_fallback_entry()
+        )
+        assert kind != "no_main_page", (
+            "a resolvable-but-unreadable main-page entry must not be "
+            "reported (and cached) as the archive having no main page"
+        )
+        assert content_ok is False, "error sentinel must not be cacheable"
