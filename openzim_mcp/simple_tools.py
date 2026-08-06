@@ -1930,6 +1930,12 @@ class SimpleToolsHandler(
             structure = self.zim_operations.get_article_structure_data(
                 zim_file_path, entry_path
             )
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure (missing file, not a ZIM, unresolvable):
+            # nothing about the *article* is wrong. Let it reach
+            # ``handle_zim_query``'s catch-all, which owns the right envelope
+            # — same routing as ``_handle_links``.
+            raise
         except Exception as e:
             return (
                 f"**Could not load article `{entry_path}` for section lookup**\n\n"
@@ -1961,7 +1967,10 @@ class SimpleToolsHandler(
                 idx = -1
             if 0 <= idx < len(headings):
                 target = headings[idx]
-        else:
+        # Name matching also runs when a digit reference fell out of range:
+        # articles carry headings literally titled "1945" / "2001", and the
+        # positional interpretation alone made those unreachable by name.
+        if target is None:
             wanted = section_name.lower()
             for h in headings:
                 if h.get("text", "").strip().lower() == wanted:

@@ -563,3 +563,81 @@ class TestSynthesizeFanOutIsolatesArchiveFailures:
         assert names == ["bad", "good"]
         assert hits[0] == []
         assert [h["path"] for h in hits[1]] == ["C/Hit"]
+
+
+# --------------------------------------------------------------------------
+# get_section: an all-digit section NAME (a heading literally titled
+# "1945") must fall back to name matching when it isn't a valid position
+# index; archive-level failures must not be misreported as article errors.
+# --------------------------------------------------------------------------
+
+
+class TestGetSectionDigitNamesAndArchiveErrors:
+    @staticmethod
+    def _handler_with_structure(headings):
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        ops = MagicMock()
+        handler = SimpleToolsHandler(ops)
+        ops.get_article_structure_data.return_value = {"headings": headings}
+        ops.get_section_data.return_value = {"content_markdown": "year body"}
+        return handler, ops
+
+    def test_digit_named_heading_found_by_name(self, tmp_path) -> None:
+        headings = [
+            {"text": "Overview", "id": "overview", "level": 2},
+            {"text": "1945", "id": "y1945", "level": 2},
+        ]
+        handler, ops = self._handler_with_structure(headings)
+        with patch.object(
+            handler, "_resolve_natural_language_path", side_effect=lambda _z, p: p
+        ):
+            out = handler._handle_get_section(
+                "section 1945 of History",
+                str(tmp_path / "t.zim"),
+                {"section_name": "1945", "entry_path": "C/History"},
+                {},
+            )
+        assert "year body" in out
+        _args, kwargs = ops.get_section_data.call_args
+        assert _args[2] == "y1945" or kwargs.get("section_id") == "y1945"
+
+    def test_in_range_digit_still_positional(self, tmp_path) -> None:
+        headings = [
+            {"text": "Overview", "id": "overview", "level": 2},
+            {"text": "Details", "id": "details", "level": 2},
+        ]
+        handler, ops = self._handler_with_structure(headings)
+        with patch.object(
+            handler, "_resolve_natural_language_path", side_effect=lambda _z, p: p
+        ):
+            handler._handle_get_section(
+                "section 2 of History",
+                str(tmp_path / "t.zim"),
+                {"section_name": "2", "entry_path": "C/History"},
+                {},
+            )
+        _args, _kwargs = ops.get_section_data.call_args
+        assert _args[2] == "details"
+
+    def test_archive_level_failure_propagates(self, tmp_path) -> None:
+        import pytest
+
+        from openzim_mcp.exceptions import OpenZimMcpArchivePathError
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        ops = MagicMock()
+        handler = SimpleToolsHandler(ops)
+        ops.get_article_structure_data.side_effect = OpenZimMcpArchivePathError(
+            "no such archive"
+        )
+        with patch.object(
+            handler, "_resolve_natural_language_path", side_effect=lambda _z, p: p
+        ):
+            with pytest.raises(OpenZimMcpArchivePathError):
+                handler._handle_get_section(
+                    "section Overview of History",
+                    str(tmp_path / "missing.zim"),
+                    {"section_name": "Overview", "entry_path": "C/History"},
+                    {},
+                )
