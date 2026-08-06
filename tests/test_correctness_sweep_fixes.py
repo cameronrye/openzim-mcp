@@ -710,3 +710,69 @@ class TestIntentParserExtractors:
         intent, params, _cert = IntentParser().parse_intent("query solar eclipse")
         assert intent == "search"
         assert params.get("query") == "solar eclipse"
+
+
+# --------------------------------------------------------------------------
+# Backend limit rejections (browse 200 / walk 500 / filtered 100 vs the
+# front door's documented 1000) must render as targeted invalid-request
+# messages, not fall through to the generic error envelope.
+# --------------------------------------------------------------------------
+
+
+class TestBackendLimitRejectionsAreTargeted:
+    @staticmethod
+    def _handler(**op_kwargs):
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        ops = MagicMock()
+        for name, value in op_kwargs.items():
+            getattr(ops, name).side_effect = value
+        return SimpleToolsHandler(ops), ops
+
+    def test_browse_limit_rejection_names_the_range(self, tmp_path) -> None:
+        from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+        handler, _ops = self._handler(
+            browse_namespace=OpenZimMcpValidationError(
+                "Limit must be between 1 and 200"
+            )
+        )
+        out = handler._handle_browse(
+            "browse namespace C",
+            str(tmp_path / "t.zim"),
+            {"namespace": "C"},
+            {"limit": 500},
+        )
+        assert "Limit must be between 1 and 200" in out
+
+    def test_walk_limit_rejection_names_the_range(self, tmp_path) -> None:
+        from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+        handler, _ops = self._handler(
+            walk_namespace=OpenZimMcpValidationError(
+                "limit must be between 1 and 500 (provided: 900)"
+            )
+        )
+        out = handler._handle_walk_namespace(
+            "walk namespace C",
+            str(tmp_path / "t.zim"),
+            {"namespace": "C"},
+            {"limit": 900},
+        )
+        assert "limit must be between 1 and 500" in out
+
+    def test_filtered_limit_rejection_names_the_range(self, tmp_path) -> None:
+        from openzim_mcp.exceptions import OpenZimMcpValidationError
+
+        handler, _ops = self._handler(
+            search_with_filters_with_canonical_splice=OpenZimMcpValidationError(
+                "Limit must be between 1 and 100"
+            )
+        )
+        out = handler._handle_filtered_search(
+            "search for berlin in namespace C",
+            str(tmp_path / "t.zim"),
+            {"query": "berlin", "namespace": "C"},
+            {"limit": 400},
+        )
+        assert "Limit must be between 1 and 100" in out

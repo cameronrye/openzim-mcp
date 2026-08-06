@@ -1570,12 +1570,22 @@ class SimpleToolsHandler(
         archive_mismatch = self._cursor_archive_mismatch(options, zim_file_path)
         if archive_mismatch is not None:
             return archive_mismatch
-        return self.zim_operations.browse_namespace(
-            zim_file_path,
-            namespace,
-            options.get("limit", 50),
-            options.get("offset", 0),
-        )
+        try:
+            return self.zim_operations.browse_namespace(
+                zim_file_path,
+                namespace,
+                options.get("limit", 50),
+                options.get("offset", 0),
+            )
+        except OpenZimMcpArchivePathError:
+            raise
+        except OpenZimMcpValidationError as e:
+            # zim_query's front door accepts limit 1..1000 but the backend
+            # caps browse at 200; without this the rejection fell through to
+            # the generic error envelope instead of naming the constraint.
+            return self._render_invalid_request(
+                namespace, e, "browse namespace", limit_capable=True
+            )
 
     # a13 D8: backend "entry not found" messages occasionally leak
     # Python helper names (``search_zim_file()`` / ``browse_namespace()``)
@@ -2312,8 +2322,6 @@ class SimpleToolsHandler(
         if archive_mismatch is not None:
             return archive_mismatch
         search_query = params.get("query", query)
-        limit = options.get("limit")
-        offset = options.get("offset", 0)
         # Post-b1 P3-D1: build the original-case display form so the
         # backend's ``Found N filtered matches for "X"`` /
         # ``No filtered matches for "X"`` echoes show the caller's
@@ -2326,6 +2334,29 @@ class SimpleToolsHandler(
             if isinstance(pre_rewrite, str) and pre_rewrite
             else search_query
         )
+        try:
+            return self._dispatch_filtered_search(
+                zim_file_path, search_query, display_query, params, options
+            )
+        except OpenZimMcpArchivePathError:
+            raise
+        except OpenZimMcpValidationError as e:
+            # Same routing as _handle_browse: the filtered backend caps
+            # limit at 100 while the front door documents 1..1000.
+            return self._render_invalid_request(
+                search_query, e, "filtered search for", limit_capable=True
+            )
+
+    def _dispatch_filtered_search(
+        self,
+        zim_file_path: str,
+        search_query: str,
+        display_query: str,
+        params: Dict[str, Any],
+        options: Dict[str, Any],
+    ) -> str:
+        limit = options.get("limit")
+        offset = options.get("offset", 0)
         if options.get("compact", False):
             # Phase D sub-D-1: compact path gives us a structured payload
             # to rerank before rendering. The canonical-title-match splice
@@ -3680,20 +3711,29 @@ class SimpleToolsHandler(
                 cursor_state["ns"] = cursor_ns
         else:
             cursor_state = None
-        if options.get("compact", False):
-            data = self.zim_operations.walk_namespace_data(
+        try:
+            if options.get("compact", False):
+                data = self.zim_operations.walk_namespace_data(
+                    zim_file_path,
+                    namespace,
+                    cursor_state=cursor_state,
+                    limit=limit,
+                )
+                return compact_renderers.render_walk_namespace(data)
+            return self.zim_operations.walk_namespace(
                 zim_file_path,
                 namespace,
-                cursor_state=cursor_state,
+                cursor=cursor_state,
                 limit=limit,
             )
-            return compact_renderers.render_walk_namespace(data)
-        return self.zim_operations.walk_namespace(
-            zim_file_path,
-            namespace,
-            cursor=cursor_state,
-            limit=limit,
-        )
+        except OpenZimMcpArchivePathError:
+            raise
+        except OpenZimMcpValidationError as e:
+            # Same routing as _handle_browse: the walk backend caps limit at
+            # 500 while the front door documents 1..1000.
+            return self._render_invalid_request(
+                namespace, e, "walk namespace", limit_capable=True
+            )
 
     def _handle_find_by_title(
         self,
