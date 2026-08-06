@@ -336,3 +336,68 @@ class TestLinksPaginationHonoursCursor:
         }
         assert offsets.get("external") == 25
         assert offsets.get("internal") == 25
+
+
+# --------------------------------------------------------------------------
+# Bundle sections: headings whose soup text disagrees with the rendered
+# markdown (stripped [edit]/reference spans, inline links) must still be
+# located — previously they were silently dropped and the preceding
+# section's slice absorbed them.
+# --------------------------------------------------------------------------
+
+
+class TestBundleHeadingsSurviveRenderDivergence:
+    @staticmethod
+    def _sections(html: str):
+        from bs4 import BeautifulSoup
+
+        from openzim_mcp.bundle import _compute_section_offsets
+        from openzim_mcp.content_processor import (
+            _build_headings,
+            select_main_content,
+        )
+
+        cp = ContentProcessor()
+        soup = BeautifulSoup(html, "html.parser")
+        root = select_main_content(soup)
+        headings = _build_headings(root)
+        rendered = cp._render_soup_to_text(root, compact=True)
+        return headings, rendered, _compute_section_offsets(rendered, headings)
+
+    def test_sup_reference_heading_is_located(self) -> None:
+        html = (
+            "<html><body><h1>T</h1><p>intro</p>"
+            '<h2>Etymology<sup class="reference">[1]</sup></h2><p>ety body</p>'
+            "<h2>Plain</h2><p>plain body</p></body></html>"
+        )
+        headings, _rendered, sections = self._sections(html)
+        assert [h["text"] for h in headings] == ["T", "Etymology", "Plain"]
+        assert [s["title"] for s in sections] == ["T", "Etymology", "Plain"]
+
+    def test_editsection_span_heading_is_located(self) -> None:
+        html = (
+            "<html><body><h1>T</h1><p>intro</p>"
+            '<h2>History<span class="mw-editsection">[edit]</span></h2>'
+            "<p>history body</p><h2>Plain</h2><p>plain body</p></body></html>"
+        )
+        headings, _rendered, sections = self._sections(html)
+        assert [h["text"] for h in headings] == ["T", "History", "Plain"]
+        assert [s["title"] for s in sections] == ["T", "History", "Plain"]
+
+    def test_inline_link_heading_is_located(self) -> None:
+        html = (
+            "<html><body><h1>T</h1><p>intro</p>"
+            '<h2><a href="X">Linked</a> part</h2><p>linked body</p>'
+            "<h2>Plain</h2><p>plain body</p></body></html>"
+        )
+        _headings, rendered, sections = self._sections(html)
+        assert "## [Linked](X) part" in rendered
+        titles = [s["title"] for s in sections]
+        assert "Linked part" in titles
+        # The located section must slice its own body and stop at its
+        # sibling's heading line.
+        linked_section = next(s for s in sections if s["title"] == "Linked part")
+        body = rendered[linked_section["char_start"] : linked_section["char_end"]]
+        assert "linked body" in body
+        assert "plain body" not in body
+        assert linked_section["char_end"] <= rendered.index("## Plain")
