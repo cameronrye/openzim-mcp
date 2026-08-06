@@ -8,6 +8,8 @@ with the package:
   - ``server.json`` — the official MCP Registry manifest (PyPI package).
   - ``scripts/build_mcpb.py`` — the bundle build pipeline.
   - the ``mcp-name:`` ownership marker in ``README.md`` (the PyPI description).
+  - the ``x-release-please-version`` annotated version strings in ``README.md``
+    and the website copy (stamped by release-please's generic updater).
 
 A tool added to or removed from the advanced surface, or a version bump that
 forgets one of these files, must fail here rather than ship a stale/wrong
@@ -88,6 +90,54 @@ def test_built_manifest_launch_arg_pins_package_version(build_mcpb) -> None:
 def test_server_json_versions_match_package(server_json: dict) -> None:
     assert server_json["version"] == __version__
     assert server_json["packages"][0]["version"] == __version__
+
+
+# Docs whose hardcoded version strings are stamped by release-please's generic
+# updater via ``x-release-please-version`` line annotations, mapped to the
+# number of annotated lines each file carries. The README and website copy
+# drifted through four releases (v2.5.1 survived into the v2.6.x era) before
+# these annotations existed; this pins both halves of the contract — the
+# annotation is present AND it carried the current version.
+_VERSION_ANNOTATED_DOCS = {
+    "README.md": 1,
+    "website/public/llms.txt": 1,
+    "website/src/content/docs/index.mdx": 2,
+    "website/src/content/docs/http-and-docker-deployment.mdx": 5,
+    "website/src/pages/index.astro": 2,  # + 1 date-only annotation, not counted
+}
+
+
+def test_doc_version_annotations_are_current() -> None:
+    for rel_path, expected_count in _VERSION_ANNOTATED_DOCS.items():
+        lines = (REPO / rel_path).read_text(encoding="utf-8").splitlines()
+        annotated = [ln for ln in lines if "x-release-please-version" in ln]
+        assert len(annotated) == expected_count, (
+            f"{rel_path}: expected {expected_count} x-release-please-version "
+            f"annotations, found {len(annotated)} — update _VERSION_ANNOTATED_DOCS "
+            "if you added/removed a stamped version string."
+        )
+        stale = [ln.strip() for ln in annotated if __version__ not in ln]
+        assert not stale, (
+            f"{rel_path}: annotated lines missing current version {__version__} "
+            f"(release-please generic updater failed to stamp them?): {stale}"
+        )
+
+
+def test_annotated_docs_registered_with_release_please() -> None:
+    """An annotation only works if the file is listed in extra-files."""
+    config = json.loads(
+        (REPO / "release-please-config.json").read_text(encoding="utf-8")
+    )
+    generic_paths = {
+        entry["path"]
+        for entry in config["packages"]["."]["extra-files"]
+        if entry.get("type") == "generic"
+    }
+    missing = set(_VERSION_ANNOTATED_DOCS) - generic_paths
+    assert not missing, (
+        f"files carry x-release-please annotations but are not registered as "
+        f"generic extra-files in release-please-config.json: {sorted(missing)}"
+    )
 
 
 # --- MCPB manifest structural invariants ------------------------------------
