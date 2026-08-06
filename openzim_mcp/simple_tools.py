@@ -51,6 +51,7 @@ from .title_promotion import (
     _TAIL_TOKEN_RE,
     find_title_match,
     has_apostrophe_possessive,
+    is_strong_canonical_title_match,
     is_strong_title_match,
 )
 from .tool_schemas import (
@@ -2733,7 +2734,10 @@ class SimpleToolsHandler(
             return payload
         top_path = str(top.get("path", ""))
         top_title = str(top.get("title", top_path.replace("_", " ")))
-        if is_strong_title_match(search_query, top_path, top_title):
+        # Sweep follow-up: the canonical variant refuses a
+        # ``Foo_(disambiguation)`` twin at rank 1, so the splice still
+        # probes for (and promotes) the canonical ``Foo``.
+        if is_strong_canonical_title_match(search_query, top_path, top_title):
             return payload
         promoted = find_title_match(self.zim_operations, zim_file_path, search_query)
         if promoted is None:
