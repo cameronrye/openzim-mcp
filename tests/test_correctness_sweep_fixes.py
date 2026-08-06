@@ -776,3 +776,67 @@ class TestBackendLimitRejectionsAreTargeted:
             {"limit": 400},
         )
         assert "Limit must be between 1 and 100" in out
+
+
+# --------------------------------------------------------------------------
+# Reranker: a load timeout must not leave a non-daemon worker joined at
+# interpreter exit, and the compact rerank must never truncate the page
+# below what page_info/next_cursor describe.
+# --------------------------------------------------------------------------
+
+
+class TestRerankerLifecycleAndPageIntegrity:
+    def test_load_timeout_worker_is_daemon(self) -> None:
+        import threading
+
+        import pytest
+
+        from openzim_mcp.ml.reranker import BGEReranker, RerankerConfig
+
+        release = threading.Event()
+
+        def slow_load(_model_id, _cache_dir):
+            release.wait(timeout=30)
+            return MagicMock()
+
+        cfg = RerankerConfig(first_call_timeout_seconds=0.1)
+        try:
+            with patch("openzim_mcp.ml.reranker._load_model", side_effect=slow_load):
+                with pytest.raises(TimeoutError):
+                    BGEReranker._load_with_timeout(cfg)
+                workers = [
+                    t
+                    for t in threading.enumerate()
+                    if t.name.startswith("openzim-reranker-load")
+                ]
+                assert workers, "expected the leaked load worker to be findable"
+                assert all(t.daemon for t in workers), (
+                    "load worker must be a daemon so a hung model download "
+                    "cannot block interpreter exit"
+                )
+        finally:
+            release.set()
+
+    def test_compact_rerank_without_limit_keeps_full_page(self) -> None:
+        from openzim_mcp.simple_tools import SimpleToolsHandler
+
+        ops = MagicMock()
+        ops.config.ml.reranker.final_top_k = 3
+        handler = SimpleToolsHandler(ops)
+        candidates = [{"path": f"C/A_{i}", "title": f"A{i}"} for i in range(8)]
+        payload = {
+            "results": candidates,
+            "page_info": {"offset": 0, "limit": 8, "returned_count": 8},
+            "next_cursor": "tok",
+            "done": False,
+        }
+
+        reranker = MagicMock()
+        reranker.rerank.side_effect = lambda *, query, candidates, top_k: [
+            {**c, "rerank_score": 1.0} for c in candidates[:top_k]
+        ]
+        with patch("openzim_mcp.ml.reranker.BGEReranker.get", return_value=reranker):
+            out = handler._maybe_rerank_compact(
+                payload=payload, query="berlin wall history", limit=None
+            )
+        assert len(out["results"]) == 8
