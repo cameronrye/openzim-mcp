@@ -401,3 +401,97 @@ class TestBundleHeadingsSurviveRenderDivergence:
         assert "linked body" in body
         assert "plain body" not in body
         assert linked_section["char_end"] <= rendered.index("## Plain")
+
+
+# --------------------------------------------------------------------------
+# counter_breakdown must be parsed from the raw M/Counter value, not the
+# 800-char display preview — buckets past the cap were silently lost.
+# --------------------------------------------------------------------------
+
+
+class TestCounterBreakdownParsesRawValue:
+    def test_buckets_past_preview_cap_survive(self, tmp_path) -> None:
+        ops = _ops(tmp_path)
+        # ~40 buckets of ~30 chars: well past the 800-char preview cap.
+        pairs = [f"application/x-type-{i:03d}=({i + 1})" for i in range(40)]
+        counter_value = ";".join(
+            f"application/x-type-{i:03d}={i + 1}" for i in range(40)
+        )
+        assert len(counter_value) > 800, len(pairs)
+
+        def metadata_item(key: str):
+            item = MagicMock()
+            if key == "Counter":
+                item.content = counter_value.encode()
+            elif key == "Title":
+                item.content = b"Test Archive"
+            else:
+                return None
+            return item
+
+        archive = MagicMock()
+        archive.entry_count = 10
+        archive.all_entry_count = 10
+        archive.article_count = 5
+        archive.media_count = 2
+        archive.uuid = "u"
+        archive.is_multipart = False
+        archive.has_fulltext_index = True
+        archive.has_title_index = True
+        archive.has_new_namespace_scheme = True
+        archive.metadata_keys = ["Title", "Counter"]
+        archive.get_metadata_item.side_effect = metadata_item
+
+        metadata = ops._extract_zim_metadata(archive)
+        breakdown = metadata.get("counter_breakdown") or {}
+        # The last bucket sits far past the preview cap.
+        assert breakdown.get("application/x-type-039") == 40
+        assert len(breakdown) == 40
+        # The display value stays capped.
+        assert "[truncated" in metadata["metadata_entries"]["Counter"]
+
+
+# --------------------------------------------------------------------------
+# Overlapping allowed_directories must not list the same archive twice
+# (which also broke exactly-one auto-select).
+# --------------------------------------------------------------------------
+
+
+class TestListingDedupesOverlappingDirectories:
+    def test_nested_allowed_directory_lists_archive_once(self, tmp_path) -> None:
+        sub = tmp_path / "wiki"
+        sub.mkdir()
+        zim = sub / "wikipedia.zim"
+        zim.write_bytes(b"zim")
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path), str(sub)],
+            cache=CacheConfig(enabled=False, max_size=10, ttl_seconds=60),
+        )
+        ops = ZimOperations(
+            config,
+            PathValidator(config.allowed_directories),
+            OpenZimMcpCache(config.cache),
+            ContentProcessor(snippet_length=200),
+        )
+        files = ops.list_zim_files_data()
+        assert len(files) == 1
+        assert files[0]["name"] == "wikipedia.zim"
+
+    def test_auto_select_survives_nested_directories(self, tmp_path) -> None:
+        from openzim_mcp.topic_preprocessing import auto_select_zim_file
+
+        sub = tmp_path / "wiki"
+        sub.mkdir()
+        zim = sub / "wikipedia.zim"
+        zim.write_bytes(b"zim")
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path), str(sub)],
+            cache=CacheConfig(enabled=False, max_size=10, ttl_seconds=60),
+        )
+        ops = ZimOperations(
+            config,
+            PathValidator(config.allowed_directories),
+            OpenZimMcpCache(config.cache),
+            ContentProcessor(snippet_length=200),
+        )
+        assert auto_select_zim_file(ops) == str(zim)
