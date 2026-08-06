@@ -107,3 +107,106 @@ class TestSearchCursorTerminatesOnEstimateOvershoot:
         assert len(payload["results"]) == 10
         assert payload["done"] is False
         assert payload["next_cursor"] is not None
+
+
+# --------------------------------------------------------------------------
+# browse_namespace: the resume offset must count scanned candidate rows,
+# not surviving materialised rows — otherwise dropped rows cause duplicate
+# pages, and a fully-failing window never advances (livelock).
+# --------------------------------------------------------------------------
+
+
+def _decode_cursor(token: str) -> dict:
+    import base64
+    import json
+
+    padded = token + "=" * (-len(token) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+
+
+class TestBrowseNamespaceResumeCountsScannedRows:
+    def _browse(self, tmp_path, listing, dropped, limit, offset):
+        ops = _ops(tmp_path)
+        zim_file = tmp_path / "test.zim"
+        zim_file.write_bytes(b"zim")
+        archive = _archive_stub()
+        archive.has_new_namespace_scheme = False
+
+        def materialise(_archive, entry_path, _scheme):
+            if entry_path in dropped:
+                return None
+            return {"path": entry_path, "title": entry_path.rsplit("/", 1)[-1]}
+
+        with (
+            patch("openzim_mcp.zim_operations.zim_archive") as mock_zim_archive,
+            patch.object(
+                ops, "_find_entries_in_namespace", return_value=(listing, True)
+            ),
+            patch.object(ops, "_materialise_browse_entry", side_effect=materialise),
+        ):
+            mock_zim_archive.return_value.__enter__.return_value = archive
+            return ops.browse_namespace_data(
+                str(zim_file), "A", limit=limit, offset=offset
+            )
+
+    def test_dropped_row_does_not_rewind_cursor(self, tmp_path) -> None:
+        """One drop inside the window: the cursor must resume at the end of
+        the scanned window (5), not at survivors-count (4), which would
+        duplicate the last surviving row on the next page."""
+        listing = [f"A/e{i}" for i in range(10)]
+        data = self._browse(tmp_path, listing, dropped={"A/e2"}, limit=5, offset=0)
+        assert [r["path"] for r in data["results"]] == ["A/e0", "A/e1", "A/e3", "A/e4"]
+        assert data["done"] is False
+        cursor = _decode_cursor(data["next_cursor"])
+        assert cursor["s"]["o"] == 5
+
+    def test_fully_failing_window_still_advances(self, tmp_path) -> None:
+        """A window whose rows all fail to materialise must still advance the
+        cursor instead of re-minting the same offset forever."""
+        listing = [f"A/e{i}" for i in range(10)]
+        data = self._browse(
+            tmp_path, listing, dropped={f"A/e{i}" for i in range(5)}, limit=5, offset=0
+        )
+        assert data["results"] == []
+        assert data["done"] is False
+        cursor = _decode_cursor(data["next_cursor"])
+        assert cursor["s"]["o"] == 5
+
+    def test_final_window_is_done(self, tmp_path) -> None:
+        listing = [f"A/e{i}" for i in range(10)]
+        data = self._browse(tmp_path, listing, dropped=set(), limit=5, offset=5)
+        assert data["done"] is True
+        assert data["next_cursor"] is None
+
+
+# --------------------------------------------------------------------------
+# walk_namespace M/W: a resume offset past the end must clamp scanned_count
+# to zero, not report a negative count.
+# --------------------------------------------------------------------------
+
+
+class TestWalkNamespaceScannedCountClamped:
+    def test_metadata_walk_past_end_reports_zero_scanned(self) -> None:
+        from openzim_mcp.zim.namespace import _NamespaceMixin
+
+        archive = MagicMock()
+        archive.metadata_keys = ["Title", "Description"]
+        result = _NamespaceMixin._walk_new_scheme_metadata(
+            archive, scan_at=50, limit=10, archive_entry_count=100
+        )
+        assert result["scanned_count"] == 0
+        assert result["results"] == []
+        assert result["done"] is True
+
+    def test_well_known_walk_past_end_reports_zero_scanned(self) -> None:
+        from openzim_mcp.zim.namespace import _NamespaceMixin
+
+        archive = MagicMock()
+        archive.has_main_entry = True
+        archive.has_illustration.return_value = True
+        result = _NamespaceMixin._walk_new_scheme_well_known(
+            archive, scan_at=50, limit=10, archive_entry_count=100
+        )
+        assert result["scanned_count"] == 0
+        assert result["results"] == []
+        assert result["done"] is True
