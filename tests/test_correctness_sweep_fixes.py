@@ -210,3 +210,129 @@ class TestWalkNamespaceScannedCountClamped:
         assert result["scanned_count"] == 0
         assert result["results"] == []
         assert result["done"] is True
+
+
+# --------------------------------------------------------------------------
+# Simple-mode links pagination: the non-compact path must honour the
+# decoded cursor offset/limit/kind instead of returning page 1 forever,
+# and the cursor's kind bucket must scope which category the offset
+# applies to in compact mode.
+# --------------------------------------------------------------------------
+
+
+def _links_handler():
+    from openzim_mcp.simple_tools import SimpleToolsHandler
+
+    ops = MagicMock()
+    handler = SimpleToolsHandler(ops)
+    return handler, ops
+
+
+class TestLinksPaginationHonoursCursor:
+    def test_cursor_kind_is_projected_from_cursor(self) -> None:
+        import base64
+        import json
+
+        from openzim_mcp.cursor_decode import decode_offset_cursor
+
+        token = (
+            base64.urlsafe_b64encode(
+                json.dumps(
+                    {
+                        "t": "extract_article_links",
+                        "s": {"o": 100, "l": 25, "ep": "C/Berlin", "k": "external"},
+                    }
+                ).encode()
+            )
+            .decode()
+            .rstrip("=")
+        )
+        result = decode_offset_cursor(
+            token, query="links in Berlin", q_emitting_tools=frozenset()
+        )
+        assert not isinstance(result, dict)
+        assert result.offset == 100
+        assert result.k == "external"
+
+    def test_non_compact_path_passes_offset_limit_and_kind(self, tmp_path) -> None:
+        handler, ops = _links_handler()
+        ops.extract_article_links.return_value = "{}"
+        with patch.object(
+            handler, "_resolve_natural_language_path", side_effect=lambda _z, p: p
+        ):
+            handler._handle_links(
+                "links in C/Berlin",
+                str(tmp_path / "t.zim"),
+                {"entry_path": "C/Berlin"},
+                {
+                    "compact": False,
+                    "offset": 100,
+                    "limit": 50,
+                    "_cursor_t": "extract_article_links",
+                    "_cursor_ep": "C/Berlin",
+                    "_cursor_k": "internal",
+                },
+            )
+        assert ops.extract_article_links.call_count == 1
+        _args, kwargs = ops.extract_article_links.call_args
+        assert kwargs.get("offset") == 100
+        assert kwargs.get("limit") == 50
+        assert kwargs.get("kind") == "internal"
+
+    def test_compact_path_scopes_cursor_offset_to_its_bucket(self, tmp_path) -> None:
+        """A cursor minted for the external bucket must not skip rows in the
+        internal bucket too."""
+        handler, ops = _links_handler()
+        ops.extract_article_links_data.return_value = {
+            "results": [],
+            "done": True,
+            "page_info": {"offset": 0, "limit": 25},
+            "category_totals": {},
+        }
+        with patch.object(
+            handler, "_resolve_natural_language_path", side_effect=lambda _z, p: p
+        ):
+            handler._handle_links(
+                "links in C/Berlin",
+                str(tmp_path / "t.zim"),
+                {"entry_path": "C/Berlin"},
+                {
+                    "compact": True,
+                    "offset": 100,
+                    "_cursor_t": "extract_article_links",
+                    "_cursor_ep": "C/Berlin",
+                    "_cursor_k": "external",
+                },
+            )
+        offsets = {
+            kwargs.get("kind"): kwargs.get("offset")
+            for _args, kwargs in ops.extract_article_links_data.call_args_list
+        }
+        assert offsets.get("external") == 100
+        assert offsets.get("internal") == 0
+
+    def test_compact_plain_offset_still_applies_to_both(self, tmp_path) -> None:
+        """Documented offset= pagination (no cursor kind) keeps advancing
+        both buckets together."""
+        handler, ops = _links_handler()
+        ops.extract_article_links_data.return_value = {
+            "results": [],
+            "done": True,
+            "page_info": {"offset": 25, "limit": 25},
+            "category_totals": {},
+        }
+        with patch.object(
+            handler, "_resolve_natural_language_path", side_effect=lambda _z, p: p
+        ):
+            handler._handle_links(
+                "links in C/Berlin",
+                str(tmp_path / "t.zim"),
+                {"entry_path": "C/Berlin"},
+                {"compact": True, "offset": 25},
+            )
+        offsets = {
+            kwargs.get("kind"): kwargs.get("offset")
+            for _args, kwargs in ops.extract_article_links_data.call_args_list
+        }
+        assert offsets.get("external") == 25
+        assert offsets.get("internal") == 25

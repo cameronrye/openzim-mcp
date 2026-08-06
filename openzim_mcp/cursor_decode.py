@@ -43,6 +43,7 @@ class CursorDecodeResult:
     ai: Optional[str] = None
     tool: Optional[str] = None
     ep: Optional[str] = None
+    k: Optional[str] = None
 
 
 def decode_offset_cursor(
@@ -166,6 +167,13 @@ def decode_offset_cursor(
         cursor_ep = state.get("ep")
         if isinstance(cursor_ep, str) and cursor_ep:
             result.ep = cursor_ep
+        # Links cursors carry ``s.k`` (which category the offset counts:
+        # internal / external / media). Project it so ``_handle_links`` can
+        # scope the resume offset to the right bucket instead of applying
+        # one bucket's offset to every category.
+        cursor_k = state.get("k")
+        if isinstance(cursor_k, str) and cursor_k:
+            result.k = cursor_k
         # D9 (beta): the original implementation treated the
         # cursor's ``s.q`` field as decorative — only ``s.o``
         # was read. That meant a caller who reused a cursor

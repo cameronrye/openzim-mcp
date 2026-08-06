@@ -569,6 +569,8 @@ class SimpleToolsHandler(
                 options["_cursor_t"] = cursor_result.tool
             if cursor_result.ep:
                 options["_cursor_ep"] = cursor_result.ep
+            if cursor_result.k:
+                options["_cursor_k"] = cursor_result.k
         # Normalize hallucinated ``zim_file_path`` BEFORE branching to the
         # synthesize pipeline. Small models pass bare filenames
         # (``"wikipedia.zim"``) or article titles (``"Big Rapids,
@@ -2140,6 +2142,21 @@ class SimpleToolsHandler(
                 # hardcoded offset=0, so every page returned links 1..limit
                 # and the tail was unreachable.
                 offset = int(options.get("offset", 0) or 0)
+                # A links CURSOR carries ``s.k`` — which category its offset
+                # counts. Scope the resume offset to that bucket only; the
+                # plain documented ``offset=N`` pagination (no cursor) keeps
+                # advancing both buckets together.
+                cursor_kind = options.get("_cursor_k")
+                internal_offset = external_offset = offset
+                if cursor_kind == "internal":
+                    external_offset = 0
+                elif cursor_kind in ("external", "media"):
+                    internal_offset = 0
+                    if cursor_kind == "media":
+                        # The compact view doesn't render the media bucket;
+                        # a media cursor's offset applies to neither shown
+                        # category.
+                        external_offset = 0
                 # v2 Phase B: extract_article_links_data returns one category
                 # per call. The compact view shows internal + external; fetch
                 # both and pass merged data to the renderer.
@@ -2147,18 +2164,31 @@ class SimpleToolsHandler(
                     zim_file_path,
                     entry_path,
                     limit=limit,
-                    offset=offset,
+                    offset=internal_offset,
                     kind="internal",
                 )
                 external = self.zim_operations.extract_article_links_data(
                     zim_file_path,
                     entry_path,
                     limit=limit,
-                    offset=offset,
+                    offset=external_offset,
                     kind="external",
                 )
                 return compact_renderers.render_links(internal, external) + limit_note
-            return self.zim_operations.extract_article_links(zim_file_path, entry_path)
+            # Non-compact: thread the decoded cursor/args through. This path
+            # previously dropped limit/offset entirely, so replaying the
+            # ``next_cursor`` the JSON payload itself advertises returned
+            # page 1 forever.
+            legacy_limit, _ = self._clamp_intent_limit(
+                options.get("limit") or 100, cap=500, default=100
+            )
+            return self.zim_operations.extract_article_links(
+                zim_file_path,
+                entry_path,
+                limit=legacy_limit,
+                offset=int(options.get("offset", 0) or 0),
+                kind=str(options.get("_cursor_k") or "internal"),
+            )
         except OpenZimMcpArchivePathError:
             # Archive-level failure (missing file, not a ZIM, unresolvable):
             # nothing about the *arguments* is wrong. Let it reach
