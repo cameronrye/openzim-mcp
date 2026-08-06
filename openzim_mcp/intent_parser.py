@@ -413,12 +413,26 @@ def _extract_binary(query: str, params: Dict[str, Any]) -> None:
         # yielded entry_path ``from``. The connector is now optional but, when
         # present, is consumed before the capture so a bare connector can never
         # be returned as the path.
-        binary_pattern = (
+        # Prefer a path-shaped token (contains ``/`` or ``.``) anywhere
+        # after the connector, tolerating filler words: ``get binary
+        # content from the file I/logo.png`` must capture ``I/logo.png``,
+        # not the determiner ``the`` (the first token after the connector).
+        binary_pattern_pathish = (
             r"(?:content|data|entry|pdf|image|video|audio|media)"
             r"\s+(?:from|of|for)\s+"
-            rf"{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?"
+            r"(?:[A-Za-z0-9_-]+\s+)*?"
+            rf"{_QUOTE_OPEN}?([A-Za-z0-9_/.-]*[/.][A-Za-z0-9_/.-]*)"
+            rf"{_QUOTE_OPEN}?"
         )
-        path_match = safe_regex_search(binary_pattern, query, re.IGNORECASE)
+        path_match = safe_regex_search(binary_pattern_pathish, query, re.IGNORECASE)
+        if not path_match:
+            binary_pattern = (
+                r"(?:content|data|entry|pdf|image|video|audio|media)"
+                r"\s+(?:from|of|for)\s+"
+                r"(?:(?:the|a|an)\s+)*"
+                rf"{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?"
+            )
+            path_match = safe_regex_search(binary_pattern, query, re.IGNORECASE)
         if not path_match:
             # No connector form: ``extract pdf I/document.pdf``,
             # ``retrieve image logo.png`` — anchor directly on the media word.
@@ -469,8 +483,12 @@ def _extract_search(query: str, params: Dict[str, Any]) -> None:
     # never reach the backend. ``_QUOTE_NOT`` inside the pair is safe here
     # because BOTH delimiters are mandatory — a possessive apostrophe has no
     # partner immediately after the verb, so this branch simply misses.
+    # ``query`` is in the search INTENT_PATTERN's verb set, so it must be
+    # stripped here like its siblings — otherwise ``query solar eclipse``
+    # searched for the literal terms ``query solar eclipse``.
     quoted = safe_regex_search(
-        rf"(?:search|find|look)\s+(?:for\s+)?{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}",
+        rf"(?:search|find|look|query)\s+(?:for\s+)?"
+        rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}",
         query,
         re.IGNORECASE,
     )
@@ -489,7 +507,7 @@ def _extract_search(query: str, params: Dict[str, Any]) -> None:
     # merely begins and ends with a quote char (``search for "Berlin" or
     # "Paris"`` -> ``berlin" or "paris``).
     search_match = safe_regex_search(
-        r"(?:search|find|look)\s+(?:for\s+)?(\S[\s\S]*)",
+        r"(?:search|find|look|query)\s+(?:for\s+)?(\S[\s\S]*)",
         query,
         re.IGNORECASE,
     )

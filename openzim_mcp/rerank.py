@@ -158,7 +158,11 @@ class _RerankMixin:
             # permanently unreachable.
             effective_top_k = limit
         else:
-            effective_top_k = reranker_cfg.final_top_k
+            # No caller limit: the page the backend already sized wins for
+            # the same reason — capping at ``final_top_k`` here reintroduced
+            # the exact desync the branch above fixed (results truncated
+            # below what page_info/next_cursor describe).
+            effective_top_k = len(candidates)
 
         reranked = reranker.rerank(
             query=query,

@@ -569,6 +569,8 @@ class SimpleToolsHandler(
                 options["_cursor_t"] = cursor_result.tool
             if cursor_result.ep:
                 options["_cursor_ep"] = cursor_result.ep
+            if cursor_result.k:
+                options["_cursor_k"] = cursor_result.k
         # Normalize hallucinated ``zim_file_path`` BEFORE branching to the
         # synthesize pipeline. Small models pass bare filenames
         # (``"wikipedia.zim"``) or article titles (``"Big Rapids,
@@ -1568,12 +1570,22 @@ class SimpleToolsHandler(
         archive_mismatch = self._cursor_archive_mismatch(options, zim_file_path)
         if archive_mismatch is not None:
             return archive_mismatch
-        return self.zim_operations.browse_namespace(
-            zim_file_path,
-            namespace,
-            options.get("limit", 50),
-            options.get("offset", 0),
-        )
+        try:
+            return self.zim_operations.browse_namespace(
+                zim_file_path,
+                namespace,
+                options.get("limit", 50),
+                options.get("offset", 0),
+            )
+        except OpenZimMcpArchivePathError:
+            raise
+        except OpenZimMcpValidationError as e:
+            # zim_query's front door accepts limit 1..1000 but the backend
+            # caps browse at 200; without this the rejection fell through to
+            # the generic error envelope instead of naming the constraint.
+            return self._render_invalid_request(
+                namespace, e, "browse namespace", limit_capable=True
+            )
 
     # a13 D8: backend "entry not found" messages occasionally leak
     # Python helper names (``search_zim_file()`` / ``browse_namespace()``)
@@ -1928,6 +1940,12 @@ class SimpleToolsHandler(
             structure = self.zim_operations.get_article_structure_data(
                 zim_file_path, entry_path
             )
+        except OpenZimMcpArchivePathError:
+            # Archive-level failure (missing file, not a ZIM, unresolvable):
+            # nothing about the *article* is wrong. Let it reach
+            # ``handle_zim_query``'s catch-all, which owns the right envelope
+            # — same routing as ``_handle_links``.
+            raise
         except Exception as e:
             return (
                 f"**Could not load article `{entry_path}` for section lookup**\n\n"
@@ -1959,7 +1977,10 @@ class SimpleToolsHandler(
                 idx = -1
             if 0 <= idx < len(headings):
                 target = headings[idx]
-        else:
+        # Name matching also runs when a digit reference fell out of range:
+        # articles carry headings literally titled "1945" / "2001", and the
+        # positional interpretation alone made those unreachable by name.
+        if target is None:
             wanted = section_name.lower()
             for h in headings:
                 if h.get("text", "").strip().lower() == wanted:
@@ -2140,6 +2161,21 @@ class SimpleToolsHandler(
                 # hardcoded offset=0, so every page returned links 1..limit
                 # and the tail was unreachable.
                 offset = int(options.get("offset", 0) or 0)
+                # A links CURSOR carries ``s.k`` — which category its offset
+                # counts. Scope the resume offset to that bucket only; the
+                # plain documented ``offset=N`` pagination (no cursor) keeps
+                # advancing both buckets together.
+                cursor_kind = options.get("_cursor_k")
+                internal_offset = external_offset = offset
+                if cursor_kind == "internal":
+                    external_offset = 0
+                elif cursor_kind in ("external", "media"):
+                    internal_offset = 0
+                    if cursor_kind == "media":
+                        # The compact view doesn't render the media bucket;
+                        # a media cursor's offset applies to neither shown
+                        # category.
+                        external_offset = 0
                 # v2 Phase B: extract_article_links_data returns one category
                 # per call. The compact view shows internal + external; fetch
                 # both and pass merged data to the renderer.
@@ -2147,18 +2183,31 @@ class SimpleToolsHandler(
                     zim_file_path,
                     entry_path,
                     limit=limit,
-                    offset=offset,
+                    offset=internal_offset,
                     kind="internal",
                 )
                 external = self.zim_operations.extract_article_links_data(
                     zim_file_path,
                     entry_path,
                     limit=limit,
-                    offset=offset,
+                    offset=external_offset,
                     kind="external",
                 )
                 return compact_renderers.render_links(internal, external) + limit_note
-            return self.zim_operations.extract_article_links(zim_file_path, entry_path)
+            # Non-compact: thread the decoded cursor/args through. This path
+            # previously dropped limit/offset entirely, so replaying the
+            # ``next_cursor`` the JSON payload itself advertises returned
+            # page 1 forever.
+            legacy_limit, _ = self._clamp_intent_limit(
+                options.get("limit") or 100, cap=500, default=100
+            )
+            return self.zim_operations.extract_article_links(
+                zim_file_path,
+                entry_path,
+                limit=legacy_limit,
+                offset=int(options.get("offset", 0) or 0),
+                kind=str(options.get("_cursor_k") or "internal"),
+            )
         except OpenZimMcpArchivePathError:
             # Archive-level failure (missing file, not a ZIM, unresolvable):
             # nothing about the *arguments* is wrong. Let it reach
@@ -2273,8 +2322,6 @@ class SimpleToolsHandler(
         if archive_mismatch is not None:
             return archive_mismatch
         search_query = params.get("query", query)
-        limit = options.get("limit")
-        offset = options.get("offset", 0)
         # Post-b1 P3-D1: build the original-case display form so the
         # backend's ``Found N filtered matches for "X"`` /
         # ``No filtered matches for "X"`` echoes show the caller's
@@ -2287,6 +2334,29 @@ class SimpleToolsHandler(
             if isinstance(pre_rewrite, str) and pre_rewrite
             else search_query
         )
+        try:
+            return self._dispatch_filtered_search(
+                zim_file_path, search_query, display_query, params, options
+            )
+        except OpenZimMcpArchivePathError:
+            raise
+        except OpenZimMcpValidationError as e:
+            # Same routing as _handle_browse: the filtered backend caps
+            # limit at 100 while the front door documents 1..1000.
+            return self._render_invalid_request(
+                search_query, e, "filtered search for", limit_capable=True
+            )
+
+    def _dispatch_filtered_search(
+        self,
+        zim_file_path: str,
+        search_query: str,
+        display_query: str,
+        params: Dict[str, Any],
+        options: Dict[str, Any],
+    ) -> str:
+        limit = options.get("limit")
+        offset = options.get("offset", 0)
         if options.get("compact", False):
             # Phase D sub-D-1: compact path gives us a structured payload
             # to rerank before rendering. The canonical-title-match splice
@@ -3641,20 +3711,29 @@ class SimpleToolsHandler(
                 cursor_state["ns"] = cursor_ns
         else:
             cursor_state = None
-        if options.get("compact", False):
-            data = self.zim_operations.walk_namespace_data(
+        try:
+            if options.get("compact", False):
+                data = self.zim_operations.walk_namespace_data(
+                    zim_file_path,
+                    namespace,
+                    cursor_state=cursor_state,
+                    limit=limit,
+                )
+                return compact_renderers.render_walk_namespace(data)
+            return self.zim_operations.walk_namespace(
                 zim_file_path,
                 namespace,
-                cursor_state=cursor_state,
+                cursor=cursor_state,
                 limit=limit,
             )
-            return compact_renderers.render_walk_namespace(data)
-        return self.zim_operations.walk_namespace(
-            zim_file_path,
-            namespace,
-            cursor=cursor_state,
-            limit=limit,
-        )
+        except OpenZimMcpArchivePathError:
+            raise
+        except OpenZimMcpValidationError as e:
+            # Same routing as _handle_browse: the walk backend caps limit at
+            # 500 while the front door documents 1..1000.
+            return self._render_invalid_request(
+                namespace, e, "walk namespace", limit_capable=True
+            )
 
     def _handle_find_by_title(
         self,

@@ -805,7 +805,14 @@ class _NamespaceMixin:
                 done = bool(raw.get("scan_exhausted", True))
                 sample_exhausted = False
             else:
-                last_index = offset + returned_count
+                # Resume by CANDIDATE rows consumed, not by surviving rows:
+                # ``_materialise_browse_entry`` can drop rows inside the
+                # window (read errors, non-materialisable entries), and a
+                # survivors-count resume re-examined the tail of the window
+                # (duplicate rows) — or, when every row in a window dropped,
+                # never advanced at all (same empty page forever).
+                scanned_count = int(raw.get("scanned_count", returned_count))
+                last_index = offset + scanned_count
                 # When the discovery method is sampling-based,
                 # ``total_in_namespace`` is the size of the sample (capped at
                 # ``NAMESPACE_MAX_ENTRIES``), not the true namespace size.
@@ -819,7 +826,7 @@ class _NamespaceMixin:
                 # ``_meta.reason="sample_only"`` give the caller enough signal.
                 sample_exhausted = (
                     sampling_based
-                    and returned_count >= limit
+                    and scanned_count >= limit
                     and last_index >= total_in_namespace
                 )
                 done = (last_index >= total_in_namespace) and not sample_exhausted
@@ -1024,6 +1031,10 @@ class _NamespaceMixin:
             "offset": offset,
             "limit": limit,
             "returned_count": len(entries),
+            # Candidate rows consumed from the listing window — the resume
+            # offset in ``browse_namespace_data`` counts these, not the
+            # (possibly smaller) number of rows that survived materialisation.
+            "scanned_count": len(paginated_entries),
             "entries": entries,
             "sampling_based": not full_iteration,
             "discovery_method": "full_iteration" if full_iteration else "sampling",
@@ -1978,7 +1989,9 @@ class _NamespaceMixin:
             keys = []
         total = len(keys)
         start = scan_at
-        end = min(start + limit, total)
+        # Clamp: a stale cursor can resume past the end of the key list, and
+        # an unclamped ``end - start`` went negative in ``scanned_count``.
+        end = max(start, min(start + limit, total))
         entries = [{"path": f"M/{k}", "title": k} for k in keys[start:end]]
         done = end >= total
         next_cursor: Optional[str] = None
@@ -2045,7 +2058,9 @@ class _NamespaceMixin:
 
         total = len(probes)
         start = scan_at
-        end = min(start + limit, total)
+        # Clamp: same stale-cursor guard as the metadata walker — an
+        # unclamped ``end - start`` went negative in ``scanned_count``.
+        end = max(start, min(start + limit, total))
         entries = [{"path": p, "title": t} for p, t in probes[start:end]]
         done = end >= total
         next_cursor: Optional[str] = None
