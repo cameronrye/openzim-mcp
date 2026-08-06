@@ -840,3 +840,43 @@ class TestRerankerLifecycleAndPageIntegrity:
                 payload=payload, query="berlin wall history", limit=None
             )
         assert len(out["results"]) == 8
+
+
+# --------------------------------------------------------------------------
+# Typo-variant generation must be length-bounded (52 variants per char,
+# each a full string copy — unbounded input ballooned to hundreds of MB).
+# --------------------------------------------------------------------------
+
+
+class TestTypoVariantsLengthGated:
+    def test_oversized_title_generates_nothing(self) -> None:
+        from openzim_mcp.zim.search import _SearchMixin
+
+        assert _SearchMixin._typo_variants("x" * 4096) == []
+
+    def test_normal_title_still_generates(self) -> None:
+        from openzim_mcp.zim.search import _SearchMixin
+
+        variants = _SearchMixin._typo_variants("Einstien")
+        assert "Einstein" in variants
+
+
+# --------------------------------------------------------------------------
+# Root-absolute hrefs resolve from the archive root, not the source
+# entry's directory.
+# --------------------------------------------------------------------------
+
+
+class TestRootAbsoluteHrefResolution:
+    def test_root_absolute_ignores_base_directory(self) -> None:
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolve = _StructureMixin._resolve_link_to_entry_path
+        assert resolve("/A/Berlin", "C/foo/bar") == "A/Berlin"
+
+    def test_relative_still_resolves_against_base(self) -> None:
+        from openzim_mcp.zim.structure import _StructureMixin
+
+        resolve = _StructureMixin._resolve_link_to_entry_path
+        assert resolve("sibling", "C/foo/bar") == "C/foo/sibling"
+        assert resolve("../up", "C/foo/bar") == "C/up"

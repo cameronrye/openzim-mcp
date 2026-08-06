@@ -2633,6 +2633,11 @@ class _SearchMixin:
     # variant count by ~50× without proportional recall improvement.
     _TYPO_ALPHABET = tuple("abcdefghijklmnopqrstuvwxyz")
 
+    # Longest title the typo prober will expand. Generous for real article
+    # titles (Wikipedia's longest are ~120 chars) while bounding the ~52
+    # variants-per-char blowup on arbitrary front-door input.
+    _TYPO_MAX_TITLE_LENGTH = 128
+
     @staticmethod
     def _typo_variants(title: str) -> List[str]:
         """Yield single-edit variants of ``title`` for typo-tolerant lookup.
@@ -2655,6 +2660,14 @@ class _SearchMixin:
         strictly than deletion because they each multiply the search
         space by 26.
         """
+        # Upper length gate: variant generation is ~52 strings per input
+        # char, each a full copy of the title — an unbounded caller-supplied
+        # title (the front door allows 4096 chars) ballooned to hundreds of
+        # MB of variants and tens of thousands of index probes. No real
+        # article title a typo probe can rescue is anywhere near this long.
+        if len(title) > _SearchMixin._TYPO_MAX_TITLE_LENGTH:
+            return []
+
         seen: set = {title}
         variants: List[str] = []
 
