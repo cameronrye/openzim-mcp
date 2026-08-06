@@ -72,6 +72,26 @@
           "glob": false
         },
         {
+          "type": "generic",
+          "path": "README.md",
+          "glob": false
+        },
+        {
+          "type": "generic",
+          "path": "website/src/content/docs/index.mdx",
+          "glob": false
+        },
+        {
+          "type": "generic",
+          "path": "website/src/content/docs/http-and-docker-deployment.mdx",
+          "glob": false
+        },
+        {
+          "type": "generic",
+          "path": "website/src/pages/index.astro",
+          "glob": false
+        },
+        {
           "type": "json",
           "path": "server.json",
           "jsonpath": "$.version"
