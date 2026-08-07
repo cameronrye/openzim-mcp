@@ -112,9 +112,10 @@ README for an ownership marker — `<!-- mcp-name: io.github.cameronrye/openzim-
 in `README.md` (which becomes the PyPI description via `readme = "README.md"`).
 That marker must be present **in a published PyPI version** before you publish to
 the registry, and `server.json`'s `packages[0].version` must equal that version.
-The marker was added in this change, so the **first registry publish must target
-the first release that ships it** (i.e. the next release, not a version already
-on PyPI without the marker).
+The marker has shipped in every release since v2.5.0, and the first registry
+publish (v2.5.1) is done — so the constraint is now satisfied automatically:
+`server.json` is auto-bumped by release-please, and a registry re-publish just
+needs the matching version to already be live on PyPI.
 
 ```bash
 # Install the publisher CLI
@@ -141,12 +142,13 @@ server's tool definitions).
 
 ## Recommended sequence
 
-1. Land this change (manifest, `server.json`, build script, README marker, guard
-   test, release-please auto-bump, and the `.mcpb` release-asset wiring).
-2. Publish/update the Smithery `.mcpb` (§1–§2) — does **not** depend on a release.
-   (Already published as `rye/openzim-mcp`; re-publish when the tool surface or
-   manifest metadata changes.)
-3. On the next PyPI release (README marker now live), publish `server.json` to
-   the official registry (§3); aggregators follow automatically. From then on the
-   release workflow keeps the manifests version-locked and attaches the `.mcpb`
-   (with its `.sha256`) to each GitHub release for you.
+All of this is done and in steady state: the manifest, `server.json`, build
+script, README marker, guard test, release-please auto-bump, and `.mcpb`
+release-asset wiring have shipped, Smithery is published as `rye/openzim-mcp`,
+and the first registry publish went out with v2.5.1. Ongoing maintenance:
+
+1. Re-publish the Smithery `.mcpb` (§1–§2) when the tool surface or manifest
+   metadata changes — it does **not** depend on a release.
+2. Re-run `mcp-publisher publish` (§3) after a release when the registry entry
+   should advance; the release workflow keeps the manifests version-locked and
+   attaches the `.mcpb` (with its `.sha256`) to each GitHub release for you.

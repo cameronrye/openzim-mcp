@@ -9,7 +9,7 @@ Module map, transports, and the `zim/` package layout.
 
 > **Notation:** examples on this page use Python pseudo-call syntax for tool calls. The MCP wire format is JSON-RPC; your client handles the framing. Tool names match the 8-tool advanced surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
 
-> **Source of truth:** [openzim_mcp/](https://github.com/cameronrye/openzim-mcp/tree/main/openzim_mcp). The README's [Project Structure section](https://github.com/cameronrye/openzim-mcp#project-structure) mirrors the on-disk layout — this page explains *why* it's organized that way.
+> **Source of truth:** [openzim_mcp/](https://github.com/cameronrye/openzim-mcp/tree/main/openzim_mcp). [CONTRIBUTING.md's Project Structure section](https://github.com/cameronrye/openzim-mcp/blob/main/CONTRIBUTING.md#project-structure) sketches the on-disk layout — this page explains *why* it's organized that way.
 
 ## High-level layers
 
@@ -102,10 +102,13 @@ Each call-out under a consolidated tool corresponds to a v1 operation that was f
 
 ## Module structure
 
+Abridged — retrieval-pipeline helpers (`bundle.py`, `compact_format.py`, `synthesize.py`, `rerank.py`, …) and the `cli/`, `linkgraph/`, `ml/`, and `data/` subpackages are omitted:
+
 ```
 openzim_mcp/
 ├── __init__.py
-├── __main__.py              # CLI entry — reads --mode/--transport/--host/--port
+├── __main__.py              # `python -m openzim_mcp` — delegates to main.py
+├── main.py                  # CLI entry — reads --mode/--transport/--host/--port
 ├── server.py                # OpenZimMcpServer + DI wiring + tool registration
 ├── http_app.py              # Streamable-HTTP / SSE Starlette app, auth, CORS, /healthz, /readyz
 ├── subscriptions.py         # MtimeWatcher + SubscriberRegistry (resource subscriptions)
@@ -128,11 +131,13 @@ openzim_mcp/
 ├── zim_operations.py        # back-compat shim — re-exports from zim/
 ├── zim/                     # ZIM operations package
 │   ├── __init__.py
+│   ├── _ops_base.py         # Shared mixin helpers (path validation, JSON serializer)
 │   ├── archive.py           # ZimOperations(_SearchMixin, _ContentMixin, _StructureMixin, _NamespaceMixin)
 │   ├── search.py            # _SearchMixin
 │   ├── content.py           # _ContentMixin
 │   ├── structure.py         # _StructureMixin
-│   └── namespace.py         # _NamespaceMixin
+│   ├── namespace.py         # _NamespaceMixin
+│   └── redirects.py         # Strict redirect-chain resolver (raises on cycles)
 └── tools/                   # MCP tool registration — one module per v2 tool
     ├── __init__.py          # register_phase_f_tools() — tool_mode gate; simple stops after zim_query
     ├── _common.py           # shared wrapper helpers: description loader, rate limit, cursors, errors
@@ -162,7 +167,7 @@ path_validator    → PathValidator(allowed_directories)
 cache             → OpenZimMcpCache(config.cache)
 content_processor → ContentProcessor(config.content)
 zim_operations    → ZimOperations(config, path_validator, cache, content_processor)
-async_zim_ops     → AsyncOperations(zim_operations)
+async_zim_ops     → AsyncZimOperations(zim_operations)
 rate_limiter      → RateLimiter(config.rate_limit)
 subscriber_reg    → SubscriberRegistry()  (only when subscriptions_enabled)
 simple_tools_h    → SimpleToolsHandler(zim_operations, async_zim_operations)
@@ -186,10 +191,11 @@ See [HTTP and Docker deployment](/openzim-mcp/docs/http-and-docker-deployment/) 
 
 Polling-based mtime watcher:
 
-- **`MtimeWatcher`** — periodically scans every allowed directory; emits change events on file add/remove and on `.zim` mtime change (catches same-size archive replacement).
+- **`MtimeWatcher`** — periodically scans every allowed directory; emits change events on file add/remove and on `.zim` mtime **or size** change (catches same-size replacement via mtime, and same-mtime rewrites via size).
 - **`SubscriberRegistry`** — maps subscribed URI → set of subscriber callbacks. Fan-out is concurrent (`asyncio.gather`); per-subscriber send is bounded by `TIMEOUTS.SUBSCRIPTION_SEND_SECONDS` so one hung subscriber doesn't block others.
 - Tunable via `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1-60); disable with `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false`.
-- Implementation note: handler registration uses a private FastMCP attribute (`_mcp_server`); see `docs/superpowers/notes/2026-05-01-subscription-api-spike.md` in the repo for the SDK-behaviour analysis.
+- Subscription support is HTTP-only: the watcher runs under the HTTP lifespan, and the subscribe/unsubscribe handlers are registered only for that transport.
+- Implementation note: handler registration uses a private FastMCP attribute (`_mcp_server`) — FastMCP exposes no public subscribe-handler API.
 
 ### Security layer (`security.py`)
 
@@ -200,7 +206,7 @@ Polling-based mtime watcher:
 
 ### Cache (`cache.py`)
 
-Single LRU+TTL cache shared across all tools and the smart-retrieval path-mapping store. Backed by an in-memory `OrderedDict`; optional disk persistence at `~/.cache/openzim-mcp` (off by default).
+Single LRU+TTL cache shared across all tools and the smart-retrieval path-mapping store. Backed by an in-memory `OrderedDict`; optional disk persistence (off by default) at `~/.cache/openzim-mcp-<config-fingerprint>.json`, or an explicit `OPENZIM_MCP_CACHE__PERSISTENCE_PATH`.
 
 Cache stats: `enabled, size, max_size, ttl_seconds, hits, misses, hit_rate`. Surfaced inside `zim_health` under `.health.cache_performance` — there are no separate management tools; restart the server to flush.
 
@@ -238,21 +244,20 @@ One module per tool. Every `zim_*.py` exports a `register(server)` function call
 
 ### Smart retrieval fallback
 
-Entry lookup in `_ContentMixin` runs a fallback ladder when the literal path misses:
+Entry lookup in `_ContentMixin` runs a fallback sequence when the literal path misses:
 
-1. Exact path match
-2. URL-decoded path
-3. Re-encoded path (`%20` ↔ `_` and similar swaps)
-4. Namespace-stripped lookup
-5. Title-index lookup via `_SearchMixin`
+1. Path-mapping cache check (previously resolved guesses)
+2. Direct access, following redirect chains (bounded at depth 10)
+3. Search-derived candidate terms (namespace-stripped, underscore ↔ space, URL-decoded variants) queried against libzim's Searcher via `_SearchMixin`
+4. Cache the resolved path on success
 
-Successful resolutions are memoized in the shared cache so repeat lookups bypass the ladder. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the full ladder and the diagnostics that surface which step matched.
+Successful resolutions are memoized in the shared cache so repeat lookups bypass the sequence. See [Smart retrieval](/openzim-mcp/docs/smart-retrieval/) for the full algorithm and the diagnostics that surface which step matched.
 
 ## Configuration
 
 ```python
 class OpenZimMcpConfig(BaseSettings):
-    # Top-level
+    # Top-level (abridged)
     allowed_directories: List[str]
     server_name: str = "openzim-mcp"
     tool_mode: Literal["advanced", "simple"] = "simple"
@@ -260,15 +265,23 @@ class OpenZimMcpConfig(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     auth_token: Optional[SecretStr] = None
+    insecure_disable_auth: bool = False
     cors_origins: List[str] = []
+    allowed_hosts: List[str] = []
     watch_interval_seconds: int = 5
     subscriptions_enabled: bool = True
+    presets_override_path: Optional[Path] = None
 
     # Component sub-configs
     cache: CacheConfig
     content: ContentConfig
     logging: LoggingConfig
     rate_limit: RateLimitConfig
+    search: SearchConfig
+    query_rewrite: QueryRewriteConfig
+    synthesize: SynthesizeConfig
+    meta: MetaConfig
+    ml: MLConfig
 ```
 
 There is no `SecurityConfig` and no `InstanceConfig` — security policy is hard-coded in `security.py` and instance tracking was removed in v1.0. See [Configuration](/openzim-mcp/docs/configuration/) for every supported field.
@@ -328,4 +341,4 @@ For deployment specifics see [HTTP and Docker deployment](/openzim-mcp/docs/http
 
 **Tuning?** [Performance optimization](/openzim-mcp/docs/performance-optimization/). **Security model?** [Security best practices](/openzim-mcp/docs/security-best-practices/).
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

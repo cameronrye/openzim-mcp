@@ -70,7 +70,7 @@ uv run pytest tests/test_security.py -v
 # Run tests with ZIM test data (comprehensive testing)
 make test-with-zim-data
 
-# Run integration tests only
+# Run the integration-test file only
 make test-integration
 
 # Run linting
@@ -90,7 +90,7 @@ make check
 
 ```text
 openzim-mcp/
-├── openzim_mcp/                # Main package
+├── openzim_mcp/                # Main package (abridged — see the source tree for the full listing)
 │   ├── __init__.py             # Package init, exports __version__ via importlib.metadata
 │   ├── __main__.py             # Module entry point (`python -m openzim_mcp`)
 │   ├── main.py                 # CLI entry point and arg parsing
@@ -109,9 +109,13 @@ openzim-mcp/
 │   ├── subscriptions.py        # MtimeWatcher and SubscriberRegistry
 │   ├── simple_tools.py         # Simple-mode `zim_query` tool
 │   ├── intent_parser.py        # Natural-language intent parsing
-│   ├── types.py                # Shared TypedDicts
+│   ├── tool_schemas.py         # Per-tool response TypedDicts
 │   ├── constants.py            # Shared constants
 │   ├── zim_operations.py       # Backward-compat shim re-exporting from zim/ package
+│   ├── cli/                    # `openzim-mcp build` subcommands (link-graph sidecar)
+│   ├── linkgraph/              # Inbound link-graph sidecar build + runtime read
+│   ├── ml/                     # Optional reranker extra + model-download CLI
+│   ├── data/                   # Packaged data files (presets.toml, …)
 │   ├── zim/                    # ZIM access (split from monolithic zim_operations.py)
 │   │   ├── __init__.py         # ZimOperations facade composed of mixins
 │   │   ├── archive.py          # Archive open/close, file listing, name resolution
@@ -294,11 +298,11 @@ Test files are automatically organized by category and priority level. Set `ZIM_
 
 ### Test Markers
 
-Use pytest markers to categorize tests:
+The project registers two custom markers (see `tests/conftest.py`):
 
 ```python
-@pytest.mark.integration  # Integration test
-@pytest.mark.slow         # Long-running test
+@pytest.mark.live    # Spawns a real server subprocess (deselected by default via addopts)
+@pytest.mark.docker  # Additionally requires a running Docker daemon
 ```
 
 ### Running Specific Tests
@@ -307,8 +311,8 @@ Use pytest markers to categorize tests:
 # Run specific test file
 uv run pytest tests/test_security.py -v
 
-# Run tests with specific marker
-uv run pytest -m "not slow"
+# Run tests with specific marker (the default addopts already deselect live tests)
+uv run pytest -m "not live"
 
 # Run tests with coverage and open HTML report
 make test-cov
@@ -499,20 +503,21 @@ Commit message prefixes map to semver bumps and `CHANGELOG.md` sections:
 | `deps:` | Dependencies | none |
 | `docs:` | Documentation | none |
 | `refactor:` | Refactored | none |
-| `chore:` / `ci:` / `build:` / `test:` / `style:` | Maintenance (hidden) | none |
+| `revert:` | Reverted | none |
+| `chore:` / `ci:` / `build:` / `test:` / `style:` | hidden (per-type sections) | none |
 
 Breaking changes: append `!` to the type (`feat!:`) or include a `BREAKING CHANGE:` footer. Either form triggers a major bump.
 
 ### Automatic release flow
 
 1. Land conventional commits on `main` via squash-merge.
-2. `release-please.yml` opens a release PR (updates `CHANGELOG.md`, `pyproject.toml`, `openzim_mcp/__init__.py`, `.release-please-manifest.json`, `website/llm.txt`).
+2. `release-please.yml` opens a release PR (updates `CHANGELOG.md`, `pyproject.toml`, `.release-please-manifest.json`, `website/public/llms.txt`, `server.json`, `packaging/mcpb/manifest.json`, and the `x-release-please-version`-annotated docs; a follow-up `sync-uv-lock` job keeps `uv.lock` in step). `openzim_mcp/__init__.py` needs no stamp — it derives `__version__` via `importlib.metadata`.
 3. Review and merge the release PR.
-4. `release-please` pushes the `v<X.Y.Z>` tag.
-5. `release.yml` triggers on the tag: version-sync check → integration tests → wheel + sdist build → PyPI upload (Trusted Publishing, no token) → GitHub Release creation with notes pulled from `CHANGELOG.md` and wheel + sdist attached.
+4. `release-please` pushes the `v<X.Y.Z>` tag and creates the GitHub Release as a draft.
+5. `release.yml` triggers on the tag: full `make check` gate → wheel + sdist + `.mcpb` bundle build → PyPI upload (Trusted Publishing, no token) → assets uploaded to the draft release (notes come from `CHANGELOG.md`), which is published only after PyPI succeeds.
 6. `docker-publish.yml` triggers on the same tag: multi-arch build → push to `ghcr.io/cameronrye/openzim-mcp:<X.Y.Z>` and `:latest`.
 
-`release-please-config.json` sets `skip-github-release: true`, so the GitHub Release is created by `release.yml` *after* PyPI succeeds (avoids orphaned releases if PyPI fails).
+`release-please-config.json` sets `skip-github-release: false`, so release-please creates the GitHub Release as a draft; `release.yml` attaches the build artifacts and flips it to published only after PyPI succeeds (avoids asset-less releases if PyPI fails).
 
 ### Manual / emergency release
 
@@ -523,12 +528,12 @@ git tag v<X.Y.Z>
 git push origin v<X.Y.Z>
 ```
 
-`tag-release.yml` fires on the tag push and runs the same pipeline as `release.yml`.
+`release.yml` and `docker-publish.yml` fire directly on the tag push and run the normal release pipeline.
 
 ### Troubleshooting
 
 - **No release PR after merging commits**: check commit messages are conventional. Non-`feat`/`fix`/`perf`/`deps` commits don't bump versions on their own.
-- **Version sync failure**: `pyproject.toml`, `openzim_mcp/__init__.py`, and `.release-please-manifest.json` must agree on the version. If they drift (rare; usually a manual edit), align them in a follow-up PR.
+- **Version sync failure**: `pyproject.toml`, `.release-please-manifest.json`, `server.json` (both version fields), and `packaging/mcpb/manifest.json` must agree on the version (`openzim_mcp/__init__.py` is intentionally excluded — it reads its version via `importlib.metadata`). If they drift (rare; usually a manual edit), align them in a follow-up PR.
 - **PyPI upload failure with "already exists"**: harmless; the workflow uses `skip-existing: true`. A true conflict (same version, different artifact) requires bumping the version.
 
 ### Source files
@@ -537,7 +542,6 @@ git push origin v<X.Y.Z>
 - [`.github/workflows/release-please.yml`](.github/workflows/release-please.yml)
 - [`.github/workflows/release.yml`](.github/workflows/release.yml)
 - [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)
-- [`.github/workflows/tag-release.yml`](.github/workflows/tag-release.yml)
 
 ---
 

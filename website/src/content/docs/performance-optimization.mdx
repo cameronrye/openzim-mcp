@@ -102,16 +102,14 @@ Per-entry success/failure means an LLM can request many candidates without all-o
 
 ## Search pagination
 
-`zim_search` accepts an opaque `cursor` parameter. Pass `next_cursor` from the prior result to resume:
+`zim_search` paginates with `offset` — it rejects a non-empty `cursor` with an `invalid_combination` error and nulls `next_cursor` in its responses:
 
 ```python
 # Page 1
 result1 = zim_search(zim_file_path=zfp, query="biology", limit=10)
-# Page 2 — no need to restate query
-result2 = zim_search(zim_file_path=zfp, cursor=result1.next_cursor)
+# Page 2 — restate the query, advance the offset
+result2 = zim_search(zim_file_path=zfp, query="biology", limit=10, offset=10)
 ```
-
-Cursor pagination is O(returned), not O(offset) — important for very deep pages.
 
 `zim_browse(mode="walk", ...)` uses entry-ID cursor pagination for exhaustive iteration:
 
@@ -125,7 +123,7 @@ while True:
         cursor=cursor,
         limit=200,
     )
-    process(page.entries)
+    process(page.results)
     if page.done:
         break
     cursor = page.next_cursor
@@ -193,21 +191,35 @@ Both endpoints are auth-exempt and CORS-friendly; safe to wire into Kubernetes p
 }
 ```
 
-`process_id` is always `[REDACTED]`. Path entries inside warnings are also redacted. There are no `instance_tracking`, `request_metrics`, or `smart_retrieval` blocks — those were either removed (instance tracking) or never collected.
+`process_id` is `[REDACTED]` over the HTTP/SSE transports; on local stdio the real PID is shown. Path entries inside warnings are always redacted. There are no `instance_tracking`, `request_metrics`, or `smart_retrieval` blocks — those were either removed (instance tracking) or never collected.
 
 ### Calling `zim_health` from outside an MCP client
 
-You can hit the JSON-RPC endpoint directly. Replace `$TOKEN` with `OPENZIM_MCP_AUTH_TOKEN`:
+You can hit the JSON-RPC endpoint directly, but the streamable-HTTP transport is stateful: session ids are issued by the server in the `initialize` response header, not chosen by the client — a made-up `Mcp-Session-Id` gets `404 Session not found`. The full handshake (replace `$TOKEN` with `OPENZIM_MCP_AUTH_TOKEN`):
 
 ```bash
-curl -sS -X POST http://localhost:8000/mcp \
+# 1. Initialize; capture the server-issued session id from the response headers
+SID=$(curl -sS -D - -o /dev/null -X POST http://localhost:8000/mcp \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
-    -H "Mcp-Session-Id: my-monitoring-session" \
-    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"zim_health","arguments":{}}}'
+    -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}' \
+  | awk 'tolower($1)=="mcp-session-id:" {print $2}' | tr -d '\r')
+
+# 2. Complete the handshake
+curl -sS -X POST http://localhost:8000/mcp \
+    -H "Authorization: Bearer $TOKEN" -H "Mcp-Session-Id: $SID" \
+    -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+# 3. Call the tool
+curl -sS -X POST http://localhost:8000/mcp \
+    -H "Authorization: Bearer $TOKEN" -H "Mcp-Session-Id: $SID" \
+    -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"zim_health","arguments":{}}}'
 ```
 
-For platform-level monitoring prefer `/healthz` (no auth, no JSON body, 200/503).
+For platform-level monitoring prefer `/healthz` (no auth, no JSON body, no session, 200/503).
 
 ### External monitoring
 
@@ -233,12 +245,12 @@ zim_get(zim_file_path="/srv/zim/wikipedia.zim", entry_paths=common)
 
 ### Multi-archive perf
 
-`zim_search(cross_file=True, ...)` queries every ZIM file in the allowed directories. Files that can't be searched (corrupt, no full-text index) are skipped without aborting the rest. The merge happens server-side, so the response size scales with `limit_per_file × number_of_archives`.
+`zim_search(cross_file=True, ...)` queries every ZIM file in the allowed directories. Files that can't be searched (corrupt, no full-text index) are skipped without aborting the rest. The merge happens server-side, so the response size scales with `limit × number_of_archives`.
 
 For very large allowed-dir sets, consider:
 
 - Splitting archives across multiple OpenZIM MCP instances behind a reverse proxy.
-- Reducing `limit_per_file` (default 5).
+- Reducing `limit` (in cross-file mode it acts as the per-archive cap; defaults to 5 per archive when omitted).
 
 ## Profiles
 
@@ -311,4 +323,4 @@ Cold libzim opens of large archives (multi-GB Wikipedia) can be slow on first us
 
 **Configuration reference?** [Configuration](/openzim-mcp/docs/configuration/). **Smart retrieval details?** [Smart retrieval](/openzim-mcp/docs/smart-retrieval/). **Architecture?** [Architecture overview](/openzim-mcp/docs/architecture-overview/).
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

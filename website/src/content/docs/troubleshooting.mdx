@@ -41,7 +41,7 @@ Check for it with `isinstance(result, dict) and result.get("error") is True`. Si
 - `inbound_sidecar_unavailable` — `zim_links(direction="inbound")` against an archive with no link-graph sidecar
 - the tool's own wire name — `zim_get`, `zim_search`, `zim_query`, `zim_browse`, `zim_links`, `zim_metadata`, `zim_health`, `zim_get_section` — when an unexpected exception escapes the tool body (archive read error, smart-retrieval miss). There is no `get_entry` or `search` operation value: those are internal rate-limiter bucket names, never envelope operations.
 - `get server health` / `get server configuration` — the only two `operation` values that are not snake_case, and the only two that never appear at the top level of a response. The no-argument `zim_health()` builds `.health`, `.configuration` and `.loaded_archives` independently, and each of the first two catches its own exceptions — so a failure inside one replaces that block alone with an envelope while the rest of the response still comes back. The top-level dict stays an ordinary success payload, so `isError` is `false`: test `.health` and `.configuration` for an `error` key rather than assuming the whole call succeeded. This partial case is the only unflagged one — a failure in the `loaded_archives` scan, or anywhere in the `zim_health(zim_file_path=...)` validation branch, surfaces as a normal top-level `operation="zim_health"` envelope with `isError: true`.
-- `zim_query`'s `synthesize=True` path adds `synthesize_pipeline_error`, `synthesize_not_applicable`, `no_archives_available`, `meta_only_guidance`, `chained_intent_rejected`, `topic_required`, `search_terms_required`, `multi_entity_chain_rejected`, and `invalid_path`. These are the only `zim_query` handler failures that produce an envelope at all — on the default path the same conditions come back as markdown guidance with `isError: false`.
+- `zim_query`'s `synthesize=True` path adds `synthesize_pipeline_error`, `synthesize_not_applicable`, `no_archives_available`, `meta_only_guidance`, `chained_intent_rejected`, `topic_required`, `search_terms_required`, `multi_entity_chain_rejected`, and `invalid_path`. These — plus the `cursor_decode` envelope a malformed or mismatched `cursor` produces — are the only `zim_query` handler failures that produce an envelope at all; on the default path the other conditions come back as markdown guidance with `isError: false`.
 
 The envelope itself is defined in [openzim_mcp/responses.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/responses.py) — the `ToolErrorPayload` TypedDict and the `tool_error()` builder every failure path must go through — and the `isError` mapping in [openzim_mcp/mcp_envelope.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/mcp_envelope.py). The underlying exception hierarchy in [openzim_mcp/exceptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/exceptions.py) is what the broad-`except` paths wrap; it shapes the `message` text but not the envelope's keys — `error_code` is never emitted.
 
@@ -339,7 +339,7 @@ The SSE transport has no auth middleware in this server, so it must bind 127.0.0
 
 ### 401 unauthorized on `/mcp`
 
-Bearer token missing or wrong. Note `OPTIONS /mcp` is **not** exempt from auth (closed preflight-bypass attack surface) — your client must send `Authorization: Bearer ...` even on preflight if your CORS configuration triggers preflight before the actual request.
+Bearer token missing or wrong. Note `OPTIONS /mcp` is **not** exempt from auth (closed preflight-bypass attack surface) — a bare `OPTIONS /mcp` probe without a token gets 401. Browser CORS preflights are unaffected: when `OPENZIM_MCP_CORS_ORIGINS` is configured, the CORS middleware sits outside auth and answers the preflight itself (browsers never attach `Authorization` to a preflight).
 
 `/healthz` and `/readyz` are exempt from auth and useful for unauthenticated probing.
 
@@ -450,4 +450,4 @@ When reporting issues, include:
 
 **Still having issues?** [Open an issue](https://github.com/cameronrye/openzim-mcp/issues) with detailed information about your problem.
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

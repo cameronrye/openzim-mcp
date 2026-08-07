@@ -32,7 +32,7 @@ test-with-zim-data:  ## Run tests with ZIM test data
 	@uv run python scripts/run_with_env.py ZIM_TEST_DATA_DIR=test_data/zim-testing-suite uv run pytest
 
 test-integration:  ## Run integration tests only
-	uv run pytest -m "integration"
+	uv run pytest tests/test_integration.py -v
 
 test-live:  ## Run live-server tests (spawn real subprocesses; binds loopback ports)
 	uv run pytest -m live tests/live/ --no-cov

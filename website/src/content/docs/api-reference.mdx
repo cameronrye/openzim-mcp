@@ -10,8 +10,8 @@ OpenZIM MCP exposes three kinds of MCP surfaces:
 | Surface | Count (advanced mode) | Default mode |
 |---------|------------------------|---------------|
 | **Tools** (callable functions) | 8 | only `zim_query` exposed in Simple mode |
-| **Prompts** (slash-command workflows) | 3 | always available |
-| **Resources** (URI-addressable data) | 3 templates + subscriptions | always available |
+| **Prompts** (slash-command workflows) | 3 | Advanced mode only |
+| **Resources** (URI-addressable data) | 3 templates + subscriptions | Advanced mode only (subscriptions additionally require the HTTP transport) |
 
 In **Simple mode** (the default) only the `zim_query` natural-language tool is exposed. Pass `--mode advanced` (or set `OPENZIM_MCP_TOOL_MODE=advanced`) to expose all 8 specialized tools below.
 
@@ -109,12 +109,12 @@ zim_search(
 | `query` | Required search term, title, or partial-query prefix (depending on `mode`) |
 | `mode` | `"fulltext"` (default; libzim full-text index), `"title"` (title-indexed lookup with fast `C/<Title>` path), or `"suggest"` (auto-complete prefix) |
 | `zim_file_path` | Optional when `cross_file=True`; otherwise required (unless only one ZIM in allowed dirs) |
-| `cross_file` | When `True`, queries every allowed ZIM file. Multi-archive merges into `per_file_results` |
+| `cross_file` | When `True`, queries every allowed ZIM file. The `SearchAllResponse` carries one row per file in `results`; each row's `result` is that file's `SearchResponse` |
 | `namespace`, `content_type` | Optional filters (only meaningful for `mode="fulltext"`) |
-| `limit` | 1–100 for `fulltext`/`title`, 1–50 for `suggest` |
-| `cursor` | Opaque cursor from a prior result; resumes the search where it left off |
+| `limit` | 1–1000 for `fulltext`; 1–50 for `title`/`suggest` |
+| `cursor` | Accepted for surface uniformity but **rejected** when non-empty (`invalid_combination` envelope) — paginate single-archive fulltext with `offset` instead |
 
-**Returns:** mode-shaped response — `SearchResponse` / `SearchAllResponse` / `SearchWithFiltersResponse` / `FindEntryResponse` / `SearchSuggestionsResponse` — or `ToolErrorPayload` on validation failure. Subsequent pages include `next_cursor` until exhausted.
+**Returns:** mode-shaped response — `SearchResponse` / `SearchAllResponse` / `SearchWithFiltersResponse` / `FindEntryResponse` / `SearchSuggestionsResponse` — or `ToolErrorPayload` on validation failure. Every `next_cursor` in these responses is nulled; page with `offset`.
 
 ---
 
@@ -155,7 +155,7 @@ The four branches are **mutually exclusive**. Setting more than one (e.g. `entry
 | `binary` | When `True`, returns raw bytes (base64) with native MIME type. Default per-entry cap 10 MiB |
 | `max_content_length` | Per-entry char cap, min 100 |
 | `content_offset` | Page through long articles without re-fetching the prefix |
-| `compact` | Compact-mode prose (default `False` at v2.0 — preserves legacy byte-identical behavior). v2.5 will revisit the default with telemetry |
+| `compact` | Compact-mode prose (default `False` — preserves legacy byte-identical behavior; a default flip was considered and explicitly deferred for lack of adoption telemetry) |
 | `compact_budget` | Optional budget override for compact mode |
 
 **Smart retrieval:** if direct path access fails, single-entry mode falls back to search-derived candidate terms; resolved paths are cached. When fallback resolves to a different path, the response shows both `Requested Path:` and `Actual Path:`.
@@ -164,7 +164,7 @@ The four branches are **mutually exclusive**. Setting more than one (e.g. `entry
 
 ### `zim_get_section`
 
-Section-level fetch by section ID. Renamed from the v1 `get_section` tool; the new `compact=True` default is the only behavioral change.
+Section-level fetch by section ID. Renamed from the v1 `get_section` tool; the `compact=True` default is the notable behavioral change.
 
 ```python
 zim_get_section(
@@ -181,7 +181,7 @@ zim_get_section(
 |-----------|-------|
 | `section_id` | Required; the heading ID or anchor from a prior `zim_get(view="toc")` or `zim_get(view="structure")` response |
 | `max_chars` | Per-section char cap |
-| `compact` | Default `True`. v2.0 surface-uniformity parameter — a no-op at the data layer because the bundle is always compact-rendered. v2.5 #18 will wire the real raw-text path |
+| `compact` | Default `True` (compact rendering — `[Table N: …]` placeholders instead of full tables). Since v2.4.0, `compact=False` returns the true raw section body with full tables |
 | `compact_budget` | Optional budget override |
 
 **Returns:** structured response with section body, heading metadata, and adjacent-section hints.
@@ -214,7 +214,7 @@ zim_browse(
 | `limit` | 1–500 | Default 50 (`page`) / 200 (`walk`) |
 | `cursor`, `offset` | | `cursor` only valid with `mode="walk"`; `offset` only valid with `mode="page"` |
 
-**Returns:** `{entries, next_cursor, done}` for `walk`, or a sampled JSON list for `page`.
+**Returns:** a paginated envelope for both modes — `{results, next_cursor, total, done, page_info, namespace, …}` — with `next_cursor` driving `walk` iteration until `done: true`.
 
 ---
 
@@ -245,6 +245,7 @@ zim_links(
     zim_file_path: str,
     entry_path: str,
     direction: Literal["outbound", "inbound", "related"] = "outbound",
+    kind: Literal["internal", "external", "media"] = "internal",
     cursor: Optional[str] = None,
     limit: Optional[int] = None,
     offset: int = 0,
@@ -253,7 +254,7 @@ zim_links(
 
 | Direction | Behavior |
 |-----------|----------|
-| `"outbound"` (default) | All internal + external links extracted from the article body. Drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`) |
+| `"outbound"` (default) | Links extracted from the article body — **one `kind` per call** (`"internal"` default; pass `kind="external"` or `kind="media"` for the other buckets; `category_totals` in the response counts all three). Drops non-navigable schemes (`javascript:`, `mailto:`, `tel:`, `data:`, `blob:`, `vbscript:`) |
 | `"inbound"` | Pages that link TO this entry, ranked by linker importance. Requires a pre-built link-graph sidecar (see below) |
 | `"related"` | Outbound link-graph neighbors with deduplication |
 
@@ -263,7 +264,7 @@ zim_links(
 
 Relative hrefs are resolved against the source entry's directory; redirects are followed to resolved paths; the content namespace is identified correctly on domain-scheme archives; self-referential refs are rejected.
 
-**Returns:** `{outbound_links: [...], internal_count, external_count, media_count}` (outbound), or a paginated `{results, next_cursor, total, done, page_info}` envelope where each `results` entry is `{path, title, inbound_degree}` (inbound) / a related-article row (related).
+**Returns:** a paginated `{results, next_cursor, total, done, page_info, …}` envelope for every direction. Outbound entries carry `url`/`text`/`title` (plus `domain` for external, `alt` for media) with `kind` and `category_totals` alongside; inbound entries are `{path, title, inbound_degree}`; related entries are `{path, title, …}` rows.
 
 ---
 
@@ -402,10 +403,12 @@ A literal slash will fail to route. See the [Resources, prompts & subscriptions 
 
 ## Resource subscriptions
 
-Clients can subscribe to `zim://files` or `zim://{name}` and receive `notifications/resources/updated` whenever:
+Under the HTTP transport (`--transport http`), clients can subscribe to `zim://files` or `zim://{name}` and receive `notifications/resources/updated` whenever:
 
 - A `.zim` file is added to or removed from an allowed directory (`zim://files`)
-- A specific `.zim` file's mtime changes (`zim://{name}`)
+- A specific `.zim` file's mtime or size changes (`zim://{name}`)
+
+On stdio and SSE the subscribe handlers are not registered and the capability is not advertised.
 
 Configuration:
 
@@ -436,7 +439,7 @@ All tools are subject to a global token-bucket limiter (default 20 work units/s,
 | `zim_links(direction="related")` | `get_related_articles` | 2 |
 | `zim_links(direction="outbound")` | `extract_article_links` | 2 |
 | `zim_links(direction="inbound")` | `get_inbound_links` | 1 |
-| `zim_health`, `zim_get_section`, `zim_query` (per-intent) | default | 1 |
+| `zim_health`, `zim_get_section`, `zim_query` | charged under their own tool names (`zim_query` once per call) | 1 |
 
 Tune via `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND`, `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE`, and `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS`. See [Configuration](/openzim-mcp/docs/configuration/#rate-limiting).
 
@@ -481,7 +484,7 @@ The full mechanical mapping. Every v1 tool name in this table is intentional —
 | `list_namespaces(path)` | `zim_metadata(path)` → `.namespaces` | now includes namespace breakdown too |
 | `get_main_page(path)` | `zim_get(path, main_page=True)` | one of four mutually-exclusive branches |
 | `search_zim_file(path, q)` | `zim_search(q, zim_file_path=path)` | default `mode="fulltext"` |
-| `search_all(q)` | `zim_search(q, cross_file=True)` | multi-archive merge in `per_file_results` |
+| `search_all(q)` | `zim_search(q, cross_file=True)` | one row per file in `results`, each with a nested `result` |
 | `search_with_filters(path, q, ns=, ct=)` | `zim_search(q, zim_file_path=path, namespace=ns, content_type=ct)` | filters only meaningful for fulltext |
 | `find_entry_by_title(path, title)` | `zim_search(title, zim_file_path=path, mode="title")` | fast title-indexed `C/<Title>` path |
 | `get_search_suggestions(path, prefix)` | `zim_search(prefix, zim_file_path=path, mode="suggest")` | autocomplete-style prefix |
@@ -503,4 +506,4 @@ There are no on-the-wire aliases at v2.0 — old tool names disappear cleanly pe
 
 **Need configuration help?** See [Configuration](/openzim-mcp/docs/configuration/). **Deploying over HTTP?** See [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/). **Using resources / subscriptions?** See [Resources, prompts & subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/).
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
