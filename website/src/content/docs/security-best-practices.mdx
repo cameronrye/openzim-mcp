@@ -26,6 +26,7 @@ OpenZIM MCP serves offline knowledge archives to MCP clients. The relevant threa
 | Prompt injection via user args | Control characters stripped, backticks stripped (template delimiter), length capped before interpolation |
 | Resource exhaustion | Token-bucket rate limiter with per-operation costs, atomic acquire, per-client buckets with LRU eviction |
 | Self-referential redirects causing infinite loops | Bounded redirect-chain follow (`MAX_REDIRECT_DEPTH = 10`), self-referential refs rejected |
+| DNS rebinding against a local HTTP server | `Host`-header validation — only loopback hosts accepted by default; extend via `OPENZIM_MCP_ALLOWED_HOSTS` behind a Host-preserving reverse proxy |
 
 ## Path validation
 
@@ -103,6 +104,8 @@ export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
 | `sse` | non-loopback | (any) | **REFUSE** (no auth middleware in SSE path) |
 
 If the operator sets `host=localhost` and `/etc/hosts` maps `localhost` away from `127.0.0.1`, the server emits a `UserWarning` and treats it as a public host (which then triggers the safe-default refusal).
+
+The one escape hatch: `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1` lets `http` bind a non-loopback host without a token, logging a WARNING that names the bound host. It exists for closed networks (Docker bridge, Tailscale-only, isolated LAN) — never use it on a reachable interface. The SSE refusal has no override.
 
 ### CORS
 
@@ -183,7 +186,7 @@ Real defaults (verify against [openzim_mcp/defaults.py](https://github.com/camer
 | Limit | Default | Where set |
 |-------|---------|-----------|
 | Max content length per entry | 100,000 chars | `ContentDefaults.MAX_CONTENT_LENGTH` |
-| Max binary entry size | 10 MiB (default), 100 MiB (cap) | `ContentDefaults.MAX_BINARY_SIZE`, `zim_get(binary=True, ...)` cap |
+| Max binary entry size | 10 MB (default) | `ContentDefaults.MAX_BINARY_SIZE` |
 | Max batch size (`zim_get(entry_paths=[...])`) | 50 entries | `BatchDefaults.MAX_SIZE` |
 | Max redirect chain depth | 10 | `ContentDefaults.MAX_REDIRECT_DEPTH` |
 | Max namespace sample size | 1000 entries | `NamespaceSamplingDefaults.MAX_SAMPLE_SIZE` |
@@ -232,4 +235,4 @@ For the full review log see the [CHANGELOG](https://github.com/cameronrye/openzi
 
 **Deploying over HTTP?** [HTTP and Docker deployment](/openzim-mcp/docs/http-and-docker-deployment/). **Tuning rate limits?** [Configuration](/openzim-mcp/docs/configuration/). **Architecture?** [Architecture overview](/openzim-mcp/docs/architecture-overview/).
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

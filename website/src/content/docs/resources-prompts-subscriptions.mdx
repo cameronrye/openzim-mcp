@@ -9,7 +9,7 @@ OpenZIM MCP exposes three MCP "resources" (URI-addressable data), three slash-co
 
 > **Source of truth:** [openzim_mcp/tools/resource_tools.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/resource_tools.py), [openzim_mcp/tools/prompts.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/prompts.py), [openzim_mcp/subscriptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/subscriptions.py).
 
-Resources, prompts, and subscriptions are **always available** regardless of tool mode (Simple or Advanced).
+Resources and prompts are registered only in **Advanced mode** (`--mode advanced` / `OPENZIM_MCP_TOOL_MODE=advanced`) — Simple mode exposes just the `zim_query` tool. Subscriptions additionally require the **HTTP transport** (`--transport http`); on stdio and SSE the subscribe handlers are not registered.
 
 > **Notation:** code samples on this page use MCP JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`). Your MCP client handles the wire framing; you supply the tool name and argument shape.
 
@@ -89,7 +89,7 @@ Charset parameters (`text/html; charset=utf-8`) are stripped before reporting; o
 | Direct browser/MCP-client rendering (HTML, image, PDF) | preferred | not designed for this |
 | Native MIME type | yes | wraps article body in markdown envelope |
 | Smart-retrieval fallback | no — direct path only, must know exact path | yes — search-derived term fallback |
-| Truncation / `max_content_length` | no | yes |
+| Truncation / `max_content_length` | fixed 256 KiB cap — text truncated with a notice pointing at `zim_get(content_offset=...)`; binaries over the cap are rejected (use `zim_get(binary=True)`) | yes — configurable |
 | Binary content with metadata wrapping | bare bytes only | use `zim_get(binary=True)` for the `{path, title, mime_type, size, encoding, data}` envelope |
 
 For LLM workflows that need processed text + smart fallback, prefer the tool. For "render this entry" workflows, prefer the resource.
@@ -197,7 +197,7 @@ Signature: `explore(zim_file_path: str)`.
 
 High-level briefing of one ZIM file. Workflow:
 
-1. `zim_metadata` — title, language, creator, flavour, plus the deterministic namespace breakdown (surfaces minority namespaces — M, W, X, I).
+1. `zim_metadata` — title, language, creator, flavour, plus the deterministic namespace breakdown (surfaces minority namespaces — M, W, X).
 2. `zim_get` with `main_page=True` — the entry point.
 3. `zim_browse` with `mode="walk"`, `namespace="C"`, `limit=5` — sample article content.
 
@@ -248,18 +248,18 @@ If your client supports MCP prompts, prefer them — they save the LLM from havi
 
 ## Subscriptions
 
-OpenZIM MCP supports the MCP `resources/subscribe` and `resources/unsubscribe` requests on `zim://files` and `zim://{name}`. The server emits `notifications/resources/updated` whenever:
+Under the HTTP transport (`--transport http`), OpenZIM MCP supports the MCP `resources/subscribe` and `resources/unsubscribe` requests on `zim://files` and `zim://{name}` — on stdio and SSE the handlers are not registered and the `resources.subscribe` capability is not advertised. The server emits `notifications/resources/updated` whenever:
 
 - A `.zim` file is added to or removed from an allowed directory (subscription target: `zim://files`)
 - A specific `.zim` file's mtime changes (subscription target: `zim://{name}`)
 
-Detection is **mtime-based** — same-size archive replacement (which is common when re-downloading from Kiwix) is detected via the mtime change.
+Detection compares both **mtime and size** — same-size archive replacement (common when re-downloading from Kiwix) is caught by the mtime change, and same-mtime rewrites by the size change.
 
 ### Configuration
 
 | Env var | Default | Range | Notes |
 |---------|---------|-------|-------|
-| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | bool | master switch — `false` skips the watcher entirely; subscribe calls succeed but never fire updates |
+| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | bool | master switch — `false` skips the watcher and the subscribe/unsubscribe handler registration entirely; `resources/subscribe` then fails with method-not-found and the capability is not advertised |
 | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1-60 | polling interval; the watcher rescans allowed directories on this cadence |
 
 For production HTTP services with low-priority watching, increase to `15-30s` to reduce I/O churn. For interactive desktop use, the default is fine.
@@ -307,4 +307,4 @@ Resource handler registration uses a private FastMCP attribute (`_mcp_server`); 
 
 **API reference for tools:** [API reference](/openzim-mcp/docs/api-reference/). **HTTP transport details:** [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/). **Configuration knobs:** [Configuration](/openzim-mcp/docs/configuration/).
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
