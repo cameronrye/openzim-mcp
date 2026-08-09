@@ -405,8 +405,10 @@ class OpenZimMcpConfig(BaseSettings):
         default=True,
         description=(
             "Master switch for resource subscriptions. When False, the "
-            "polling task is not started and subscribe calls succeed but "
-            "never fire updates."
+            "polling task is not started and the subscribe/unsubscribe "
+            "handlers are not registered, so `resources/subscribe` "
+            "requests fail with method-not-found and the capability is "
+            "not advertised."
         ),
     )
     presets_override_path: Path | None = Field(

@@ -13,7 +13,7 @@ Every supported environment variable, CLI flag, and configuration field for Open
 
 OpenZIM MCP is a [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) `BaseSettings` model. Every field can be set three ways, in priority order:
 
-1. CLI flag (where one is wired through `__main__.py` — currently `--mode`, `--transport`, `--host`, `--port`)
+1. CLI flag (where one is wired through `main.py` — currently `--mode`, `--transport`, `--host`, `--port`)
 2. Environment variable, prefixed with `OPENZIM_MCP_`
 3. Default value baked into [defaults.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/defaults.py)
 
@@ -50,7 +50,7 @@ openzim-mcp --mode advanced /path/to/zim/files
 export OPENZIM_MCP_TRANSPORT=http
 export OPENZIM_MCP_HOST=127.0.0.1            # default 127.0.0.1
 export OPENZIM_MCP_PORT=8000                 # default 8000
-export OPENZIM_MCP_AUTH_TOKEN='openssl rand -hex 32'  # required for non-localhost
+export OPENZIM_MCP_AUTH_TOKEN="$(openssl rand -hex 32)"  # required for non-localhost
 export OPENZIM_MCP_CORS_ORIGINS='["https://app.example"]'  # JSON list; "*" rejected
 ```
 
@@ -66,6 +66,8 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example"]'  # JSON list; "*" reje
 
 - `transport=http` + non-loopback host + no `auth_token` → `OpenZimMcpConfigurationError: HTTP transport bound to {host} requires authentication.`
 - `transport=sse` + non-loopback host → `OpenZimMcpConfigurationError: SSE transport bound to {host} is not allowed.`
+
+Exception: setting `OPENZIM_MCP_INSECURE_DISABLE_AUTH=1` lets `http` bind a non-loopback host without a token — intended for closed networks (Docker bridge, Tailscale-only, isolated LAN). The server logs a WARNING naming the bound host; the SSE refusal has no escape hatch. Behind a Host-preserving reverse proxy, also set `OPENZIM_MCP_ALLOWED_HOSTS` to the public hostname(s) — only loopback Host values are accepted by default (DNS-rebinding protection).
 
 For full HTTP deployment guidance see [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
 
@@ -114,7 +116,7 @@ Cache stats surface inside `zim_health` under `.health.cache_performance` — th
 
 ```bash
 export OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH=100000   # default 100000, min 100
-export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=1000         # default 1000, min 100
+export OPENZIM_MCP_CONTENT__SNIPPET_LENGTH=3000         # default 3000, min 100
 export OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT=10     # default 10, range 1-100
 ```
 
@@ -162,7 +164,7 @@ Per-internal-operation cost defaults are defined in [defaults.RATE_LIMIT_COSTS](
 | `zim_links(direction="outbound")` | `"extract_article_links"` | 2 |
 | `zim_links(direction="inbound")` | `"get_inbound_links"` | 1 |
 | `zim_links(direction="related")` | `"get_related_articles"` | 2 |
-| `zim_health`, `zim_get_section`, `zim_query` per-intent | `"default"` | 1 |
+| `zim_health` / `zim_get_section` / `zim_query` | `"zim_health"` / `"zim_get_section"` / `"zim_query"` (bucket keyed on the tool name; the cost falls back to the `default` cost) | 1 |
 
 `zim_get(entry_paths=[...])` charges per-entry cost so a batch of 50 doesn't trivially bypass per-second limits.
 
@@ -197,8 +199,10 @@ Sorted alphabetically by field name within each grouping.
 
 | Field | Env var | Default | Notes |
 |-------|---------|---------|-------|
+| `allowed_hosts` | `OPENZIM_MCP_ALLOWED_HOSTS` | `[]` | JSON list of extra accepted `Host` header values (HTTP); only loopback accepted by default — set behind Host-preserving reverse proxies |
 | `auth_token` | `OPENZIM_MCP_AUTH_TOKEN` | unset | `SecretStr`, never logged, env-only |
 | `cache.enabled` | `OPENZIM_MCP_CACHE__ENABLED` | `true` | bool |
+| `cache.max_bytes` | `OPENZIM_MCP_CACHE__MAX_BYTES` | 64 MiB | approximate byte cap on cached values; `0` disables |
 | `cache.libzim_cluster_cache_max_size_bytes` | `OPENZIM_MCP_CACHE__LIBZIM_CLUSTER_CACHE_MAX_SIZE_BYTES` | unset (libzim 16 MiB) | 0 – 4 GiB, bytes, process-global |
 | `cache.libzim_dirent_cache_max_count` | `OPENZIM_MCP_CACHE__LIBZIM_DIRENT_CACHE_MAX_COUNT` | unset (libzim 512) | 0 – 10,000,000, count, per-archive |
 | `cache.max_size` | `OPENZIM_MCP_CACHE__MAX_SIZE` | `100` | 1-10000 |
@@ -207,12 +211,14 @@ Sorted alphabetically by field name within each grouping.
 | `cache.ttl_seconds` | `OPENZIM_MCP_CACHE__TTL_SECONDS` | `3600` | 60-86400 |
 | `content.default_search_limit` | `OPENZIM_MCP_CONTENT__DEFAULT_SEARCH_LIMIT` | `10` | 1-100 |
 | `content.max_content_length` | `OPENZIM_MCP_CONTENT__MAX_CONTENT_LENGTH` | `100000` | min 100 |
-| `content.snippet_length` | `OPENZIM_MCP_CONTENT__SNIPPET_LENGTH` | `1000` | min 100 |
+| `content.snippet_length` | `OPENZIM_MCP_CONTENT__SNIPPET_LENGTH` | `3000` | min 100 |
 | `cors_origins` | `OPENZIM_MCP_CORS_ORIGINS` | `[]` | JSON list; `*` rejected |
 | `host` | `OPENZIM_MCP_HOST` | `127.0.0.1` | non-loopback requires auth (http) or refuses (sse) |
+| `insecure_disable_auth` | `OPENZIM_MCP_INSECURE_DISABLE_AUTH` | `false` | escape hatch: allows token-less non-loopback HTTP with a WARNING (closed networks only) |
 | `logging.format` | `OPENZIM_MCP_LOGGING__FORMAT` | structured | format string |
 | `logging.level` | `OPENZIM_MCP_LOGGING__LEVEL` | `INFO` | DEBUG/INFO/WARNING/ERROR/CRITICAL |
 | `port` | `OPENZIM_MCP_PORT` | `8000` | 1-65535 |
+| `presets_override_path` | `OPENZIM_MCP_PRESETS_OVERRIDE_PATH` | unset | TOML file deep-merged over the bundled archive-type presets |
 | `rate_limit.burst_size` | `OPENZIM_MCP_RATE_LIMIT__BURST_SIZE` | `40` | 1-1000 (work units) |
 | `rate_limit.enabled` | `OPENZIM_MCP_RATE_LIMIT__ENABLED` | `true` | bool |
 | `rate_limit.per_operation_limits` | `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` | `{}` | nested JSON dict |
@@ -222,6 +228,8 @@ Sorted alphabetically by field name within each grouping.
 | `tool_mode` | `OPENZIM_MCP_TOOL_MODE` | `simple` | `simple` or `advanced` |
 | `transport` | `OPENZIM_MCP_TRANSPORT` | `stdio` | `stdio`/`http`/`sse` |
 | `watch_interval_seconds` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1-60 |
+
+Further nested groups exist for specialized tuning — `search.*` (e.g. `OPENZIM_MCP_SEARCH__SEARCH_ALL_TOTAL_TIMEOUT_SECONDS`), `query_rewrite.*`, `synthesize.*`, `meta.*`, and `ml.reranker.*` (documented in [docs/extras-reranker.md](https://github.com/cameronrye/openzim-mcp/blob/main/docs/extras-reranker.md)). Their fields and defaults live in [`openzim_mcp/config.py`](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/config.py).
 
 ## Profiles
 
@@ -288,7 +296,7 @@ There is no offline `--validate` flag. Two options:
 The response includes (abbreviated):
 
 - `.health` — server status, uptime, cache performance, health checks, warnings, recommendations
-- `.configuration` — resolved values (no secrets; `server_pid` redacted)
+- `.configuration` — resolved values (no secrets; `server_pid` and directory paths redacted over HTTP/SSE, shown on local stdio)
 - `.loaded_archives` — list of every ZIM file in the allowed directories
 
 ## Setting environment variables
@@ -335,4 +343,4 @@ The following env-var namespaces appeared in pre-1.0 / early-v2 documentation an
 
 **Tuning?** See [Performance Optimization](/openzim-mcp/docs/performance-optimization/). **Deploying over HTTP?** See [HTTP and Docker Deployment](/openzim-mcp/docs/http-and-docker-deployment/).
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

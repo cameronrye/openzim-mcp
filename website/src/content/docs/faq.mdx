@@ -99,7 +99,7 @@ See the [Performance optimization guide](/openzim-mcp/docs/performance-optimizat
 
 **Advanced mode** (`--mode advanced` or `OPENZIM_MCP_TOOL_MODE=advanced`) exposes the 8 specialized tools (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`). Pick this when your host is a frontier model that handles a richer tool catalog well, or for scripted workflows that need explicit control over which operation runs.
 
-Prompts (`/research`, `/summarize`, `/explore`) and resources (`zim://files`, `zim://{name}`, `zim://{name}/entry/{path}`) are always available regardless of mode.
+Prompts (`/research`, `/summarize`, `/explore`) and resources (`zim://files`, `zim://{name}`, `zim://{name}/entry/{path}`) are registered only in Advanced mode — Simple mode exposes just the `zim_query` tool, with no prompts or resources.
 
 ### What is the MCP Tax and why does the 8-tool surface help?
 
@@ -151,7 +151,7 @@ For the full mechanical mapping see the [migration table on the API reference pa
 
 ### When is v1.x EOL?
 
-v1.x reached end-of-maintenance when v2.5.0 shipped (2026-06-18) — that was the first of the two policy triggers (`{v2.5.0 ships, 2026-11-27}`). It no longer receives security, data-corruption, or crash fixes. The `ghcr.io/cameronrye/openzim-mcp:1.2.0` image stays available, but the supported path is v2: flip to Simple mode (one tool, `zim_query`) and let natural-language routing absorb the v1 → v2 differences.
+v1.x reached end-of-maintenance when v2.5.0 shipped (2026-06-18) — that was the first of the two policy triggers (`{v2.5.0 ships, 2026-11-27}`). It no longer receives security, data-corruption, or crash fixes. The `ghcr.io/cameronrye/openzim-mcp:1.3.0` image (the final v1.x release) stays available, but the supported path is v2: flip to Simple mode (one tool, `zim_query`) and let natural-language routing absorb the v1 → v2 differences.
 
 If you're still on v1.x and the migration looks costly, the simplest path is to flip to v2 Simple mode (one tool, `zim_query`) and let natural-language routing absorb the v1 → v2 differences for you — then opt into Advanced mode later when you want explicit control.
 
@@ -372,4 +372,4 @@ Learn more about ZIM files:
 
 **Still have questions?** Check the other docs pages or [ask in GitHub Discussions](https://github.com/cameronrye/openzim-mcp/discussions).
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

@@ -440,17 +440,21 @@ Calvin cycle (light-independent reactions).</code></pre>
                 </div>
                 <div>
                   <h4>Response</h4>
-                  <pre><code>Found 42 matches, showing 1-5:
-
-## 1. Artificial Intelligence
-Path: C/Artificial_intelligence
-Snippet: Artificial intelligence (AI) is
-intelligence demonstrated by machines...
-
-## 2. Machine Learning
-Path: C/Machine_learning
-Snippet: Machine learning is a subset of
-artificial intelligence...</code></pre>
+                  <pre><code>{`{
+  "results": [
+    { "path": "C/Artificial_intelligence",
+      "title": "Artificial Intelligence",
+      "snippet": "Artificial intelligence (AI)
+       is intelligence demonstrated
+       by machines..." },
+    { "path": "C/Machine_learning",
+      "title": "Machine Learning",
+      "snippet": "Machine learning is a subset
+       of artificial intelligence..." }
+  ],
+  "total": 42,
+  "done": false
+}`}</code></pre>
                 </div>
               </div>
             </div>
@@ -472,15 +476,15 @@ artificial intelligence...</code></pre>
                   <h4>Response</h4>
                   <pre><code>{`{
   "namespace": "C",
-  "total_in_namespace": 80000,
-  "returned_count": 10,
-  "has_more": true,
-  "entries": [
+  "results": [
     { "path": "C/Biology",
       "title": "Biology",
       "preview": "Biology is the scientific
                   study of life..." }
-  ]
+  ],
+  "total": 80000,
+  "next_cursor": null,
+  "done": false
 }`}</code></pre>
                 </div>
               </div>

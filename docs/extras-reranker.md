@@ -1,9 +1,10 @@
 # [reranker] Extra — Cross-Encoder Search Reranking
 
 The `[reranker]` extra adds cross-encoder relevance reranking on top of
-Xapian's BM25 results. When installed, search-shaped tools and
+Xapian's BM25 results. When installed, `zim_query` search intents and
 `synthesize` mode silently produce more relevant top-K results on
-content-fragment queries. Caller surface is unchanged.
+content-fragment queries. The advanced `zim_search` tool returns raw
+Xapian ranking and is not reranked. Caller surface is unchanged.
 
 ## Install
 
@@ -14,15 +15,21 @@ pip install openzim-mcp[reranker]
 Install footprint: roughly 200 MB of Python packages (FastEmbed +
 onnxruntime + tokenizers + huggingface_hub). The cross-encoder model
 itself is downloaded lazily on first use (~1.1 GB for the default
-`BAAI/bge-reranker-base`) and cached in your HuggingFace home.
+`BAAI/bge-reranker-base`) and cached in FastEmbed's model cache
+(`$FASTEMBED_CACHE_PATH`, defaulting to `<tempdir>/fastembed_cache`);
+set `OPENZIM_MCP_ML__RERANKER__CACHE_DIR` to pin a persistent location
+for offline deployments.
 
 ## Supported platforms
 
-The `[reranker]` extra is tested on:
+The `[reranker]` extra is supported on (wheel availability):
 
 - Linux glibc x86_64 and ARM64
 - macOS x86_64 and ARM64
 - Windows x86_64
+
+CI exercises the extra on Linux x86_64 (Python 3.12/3.13) only — the
+`test-reranker` job in `test.yml`.
 
 Edge platforms (Alpine, FreeBSD, ARM32) are not part of the supported
 matrix; FastEmbed wheels may not be available there. The base install
@@ -86,8 +93,10 @@ export OPENZIM_MCP_ML__RERANKER__FIRST_CALL_TIMEOUT_SECONDS=15.0
 
 ## Telemetry
 
-Reranker activity flows through the existing `_track()` path with these
-event names (all use dot-separator):
+Reranker activity in `zim_query` search paths flows through the existing
+`_track()` counter path; `synthesize`-mode rerank emits the same
+`telemetry: <event>` INFO log lines but does not increment the counters.
+Event names (all use dot-separator):
 
 - `reranker_engaged` — fires when the cross-encoder actually scored
   results (i.e., the returned candidates have `rerank_score` set).
@@ -103,13 +112,15 @@ event names (all use dot-separator):
 
 Each reranker event also emits a single INFO-level log line per call
 of the form `telemetry: <event>`. This makes engagement observable to
-operators running in simple tool mode, who don't have access to
-`get_server_health` to read the counter directly. Set the logger to
-WARNING or higher to suppress them.
+operators running in simple tool mode, who don't have access to the
+advanced-mode `zim_health` tool to read the counter directly. Set the
+logger to WARNING or higher to suppress them.
 
 A model-load failure (timeout, network error) logs a one-line WARNING
-to the configured logger and trips a process-wide kill switch via
-`ml_fallback` — subsequent search calls emit
+to the configured logger and trips a process-wide kill switch
+(`BGEReranker`'s load-failure latch; mid-inference failures are
+separately kill-switched by the `ml_fallback` decorator) — subsequent
+search calls emit
 `reranker_skipped.not_installed` (because `BGEReranker.get()` returns
 None) until the process restarts.
 
