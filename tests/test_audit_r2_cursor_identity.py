@@ -325,8 +325,14 @@ class TestLinksCursorEntryBinding:
         assert isinstance(out, str)
         assert ENTRY_MISMATCH_TITLE not in out, out[:400]
         assert ops.extract_article_links_data.called
-        _, kwargs = ops.extract_article_links_data.call_args
-        assert kwargs["offset"] == 25
+        # The cursor's ``k`` scopes its offset to that bucket: the internal
+        # fetch resumes at 25 while the external fetch starts fresh.
+        offsets = {
+            kwargs.get("kind"): kwargs.get("offset")
+            for _, kwargs in ops.extract_article_links_data.call_args_list
+        }
+        assert offsets.get("internal") == 25
+        assert offsets.get("external") == 0
 
     def test_links_cursor_from_other_archive_is_rejected(self) -> None:
         """P35: ``_handle_links`` was the only cursor-consuming simple-mode
