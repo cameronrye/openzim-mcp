@@ -36,7 +36,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_BUNDLE_KEY_PREFIX = "bundle:v2c"
+# v2d: SectionMeta grew ``heading_start`` — cached v2c bundles lack the
+# field, so the narrow-slice fix would silently keep serving the child
+# heading until TTL expiry without the key bump.
+_BUNDLE_KEY_PREFIX = "bundle:v2d"
 
 
 def archive_stat_token(validated_path: Any) -> str:
@@ -305,7 +308,7 @@ def _compute_section_offsets(
     for i, (
         level,
         text,
-        _heading_start,
+        heading_start,
         char_start,
         section_id,
         id_source,
@@ -340,6 +343,7 @@ def _compute_section_offsets(
                     "id": section_id,
                     "title": text,
                     "level": level,
+                    "heading_start": heading_start,
                     "char_start": char_start,
                     "char_end": char_end,
                     "parent_id": parent_id,

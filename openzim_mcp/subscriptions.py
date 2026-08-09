@@ -122,6 +122,20 @@ class SubscriberRegistry:
     def _distinct_uri_count(self) -> int:
         return len(set(self._weak_by_uri) | set(self._strong_by_uri))
 
+    def _session_holds_uri(self, uri: str, session: Hashable) -> bool:
+        """True iff ``session`` is already subscribed to ``uri``."""
+        for store in (self._weak_by_uri, self._strong_by_uri):
+            sessions = store.get(uri)
+            if sessions is None:
+                continue
+            # ``in`` on a WeakSet weak-refs its arg; a non-weak-
+            # referenceable session (never in the weak set) raises
+            # TypeError — it simply isn't a member.
+            with contextlib.suppress(TypeError):
+                if session in sessions:
+                    return True
+        return False
+
     def _uri_count_for_session(self, session: Hashable) -> int:
         """Count the distinct URIs ``session`` is already subscribed to.
 
@@ -159,11 +173,19 @@ class SubscriberRegistry:
                         f"{MAX_URIS_TOTAL}-URI capacity; "
                         "unsubscribe from unused resources first."
                     )
-                if self._uri_count_for_session(session) >= MAX_URIS_PER_SESSION:
-                    raise OpenZimMcpValidationError(
-                        "This session is already subscribed to the maximum of "
-                        f"{MAX_URIS_PER_SESSION} distinct resource URIs."
-                    )
+            # Sweep follow-up: the per-session cap must cover KNOWN URIs
+            # too — it used to sit inside the not-known branch, so a
+            # session at its cap could keep adding any URI some other
+            # session had already registered. Idempotent re-subscribes
+            # (URI already held by this session) stay exempt.
+            if (
+                not self._session_holds_uri(uri, session)
+                and self._uri_count_for_session(session) >= MAX_URIS_PER_SESSION
+            ):
+                raise OpenZimMcpValidationError(
+                    "This session is already subscribed to the maximum of "
+                    f"{MAX_URIS_PER_SESSION} distinct resource URIs."
+                )
             try:
                 self._weak_by_uri.setdefault(uri, weakref.WeakSet()).add(session)
             except TypeError:

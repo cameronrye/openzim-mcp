@@ -36,7 +36,7 @@ from openzim_mcp.title_promotion import (
     find_title_match,
     has_apostrophe_possessive,
     is_single_token_tail_match,
-    is_strong_title_match,
+    is_strong_canonical_title_match,
     iter_query_tails,
     passes_z4,
 )
@@ -1122,7 +1122,11 @@ def _promote_title_match(
         # Use the path as the title proxy — Wikipedia exports preserve the
         # title in the path (``Berlin`` ↔ ``Berlin``) so the token-match
         # comparison works without a second archive read.
-        if is_strong_title_match(query, top_path, top_path.replace("_", " ")):
+        # Sweep follow-up: the canonical variant refuses a
+        # ``Foo_(disambiguation)`` twin at rank 1 — it strong-matches the
+        # bare topic, so the plain check skipped promotion and the
+        # disambiguation page led the synthesized answer.
+        if is_strong_canonical_title_match(query, top_path, top_path.replace("_", " ")):
             return top_hits
 
     # Post-b4 D3: mirror the ``_promote_topic_via_title_index`` pass-0
