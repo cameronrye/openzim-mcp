@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.3](https://github.com/cameronrye/openzim-mcp/compare/v2.6.2...v2.6.3) (2026-08-09)
+
+
+### Fixed
+
+* close the correctness sweep's deferred findings ([#349](https://github.com/cameronrye/openzim-mcp/issues/349)) ([361dd23](https://github.com/cameronrye/openzim-mcp/commit/361dd2313dd6b5f811a75c8dc79cffd571f3b0cc))
+* correctness sweep — pagination livelocks, dropped sections, false rejections ([#348](https://github.com/cameronrye/openzim-mcp/issues/348)) ([37e0f74](https://github.com/cameronrye/openzim-mcp/commit/37e0f747d7b7f5ab7d45f816e7029a338e2d63bd))
+
+
+### Dependencies
+
+* bump libzim to 3.12 and refresh the lockfile ([#347](https://github.com/cameronrye/openzim-mcp/issues/347)) ([695cb79](https://github.com/cameronrye/openzim-mcp/commit/695cb79e5931e702b084b94e2bfa600416ebe747))
+
+
+### Documentation
+
+* correct the accuracy drift across the docs, website, and dev guide ([#350](https://github.com/cameronrye/openzim-mcp/issues/350)) ([dbcd3f7](https://github.com/cameronrye/openzim-mcp/commit/dbcd3f74b08961b030416de6a39801779faee595))
+* put README and website version strings in release-please lockstep ([#346](https://github.com/cameronrye/openzim-mcp/issues/346)) ([2e56e2e](https://github.com/cameronrye/openzim-mcp/commit/2e56e2e62c72227841f3bafe37d1c1aea94320a1))
+
 ## [2.6.2](https://github.com/cameronrye/openzim-mcp/compare/v2.6.1...v2.6.2) (2026-08-06)
 
 
