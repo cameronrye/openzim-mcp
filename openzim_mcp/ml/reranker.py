@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
 from pathlib import Path
 from typing import (
     Any,
@@ -206,23 +205,33 @@ class BGEReranker:
     @classmethod
     def _load_with_timeout(cls, cfg: RerankerConfig) -> "BGEReranker":
         timeout = cfg.first_call_timeout_seconds
-        pool = ThreadPoolExecutor(max_workers=1)
-        try:
-            future = pool.submit(_load_model, cfg.model_id, cfg.cache_dir)
+        # A DAEMON thread, not a ThreadPoolExecutor: since Python 3.9 the
+        # executor's (non-daemon) workers are joined at interpreter exit, so
+        # a timed-out load that was still downloading the model blocked
+        # process shutdown until the download finished. The daemon worker
+        # still leaks past the timeout (bounding the caller's wait is the
+        # point) but can no longer hold the interpreter hostage.
+        result_q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+        def _worker() -> None:
             try:
-                model = future.result(timeout=timeout)
-            except FuturesTimeout:
-                # Don't wait for the worker — the whole point of the timeout
-                # is to bound the caller's wall-clock wait. The worker thread
-                # leaks (it'll finish eventually); pool.shutdown(wait=False)
-                # doesn't block.
-                future.cancel()
-                raise TimeoutError(
-                    f"reranker model load exceeded {timeout}s timeout. "
-                    f"Run `openzim-mcp download-models` to pre-stage."
-                )
-        finally:
-            pool.shutdown(wait=False)
+                result_q.put(("ok", _load_model(cfg.model_id, cfg.cache_dir)))
+            except BaseException as exc:  # noqa: BLE001 — relayed to caller
+                result_q.put(("err", exc))
+
+        threading.Thread(
+            target=_worker, name="openzim-reranker-load", daemon=True
+        ).start()
+        try:
+            status, payload = result_q.get(timeout=timeout)
+        except queue.Empty:
+            raise TimeoutError(
+                f"reranker model load exceeded {timeout}s timeout. "
+                f"Run `openzim-mcp download-models` to pre-stage."
+            ) from None
+        if status == "err":
+            raise payload
+        model = payload
         # First-load audit log: model id + library version.
         try:
             import fastembed  # type: ignore[import-not-found]
