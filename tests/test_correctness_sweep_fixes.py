@@ -7,59 +7,24 @@ the docstrings name the failure the fix closes.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
 from unittest.mock import MagicMock, patch
 
 from openzim_mcp.cache import OpenZimMcpCache
-from openzim_mcp.config import CacheConfig, ContentConfig, OpenZimMcpConfig
+from openzim_mcp.config import CacheConfig, OpenZimMcpConfig
 from openzim_mcp.content_processor import ContentProcessor
 from openzim_mcp.security import PathValidator
 from openzim_mcp.zim_operations import ZimOperations
-
-
-def _ops(tmp_path: Path) -> ZimOperations:
-    config = OpenZimMcpConfig(
-        allowed_directories=[str(tmp_path)],
-        cache=CacheConfig(enabled=False, max_size=10, ttl_seconds=60),
-        content=ContentConfig(max_content_length=10000, snippet_length=200),
-    )
-    return ZimOperations(
-        config,
-        PathValidator(config.allowed_directories),
-        OpenZimMcpCache(config.cache),
-        ContentProcessor(snippet_length=200),
-    )
+from tests.zim_stubs import make_archive_stub, make_entry
+from tests.zim_stubs import make_ops as _ops
+from tests.zim_stubs import make_search_stub as _search_stub
 
 
 def _entry_for(eid: str) -> MagicMock:
-    e = MagicMock()
-    e.path = eid
-    e.title = eid.rsplit("/", 1)[-1]
-    e.is_redirect = False
-    item = MagicMock()
-    item.mimetype = "text/html"
-    item.content = b"<p>body text</p>"
-    e.get_item.return_value = item
-    return e
-
-
-def _search_stub(entry_ids: List[str], estimated: Optional[int] = None) -> MagicMock:
-    search = MagicMock()
-    search.getEstimatedMatches.return_value = (
-        len(entry_ids) if estimated is None else estimated
-    )
-    search.getResults.side_effect = lambda start, count: entry_ids[
-        start : start + count
-    ]
-    return search
+    return make_entry(eid, is_redirect=False)
 
 
 def _archive_stub(get_entry=_entry_for) -> MagicMock:
-    archive = MagicMock()
-    archive.has_new_namespace_scheme = False
-    archive.has_fulltext_index = True
-    archive.get_entry_by_path.side_effect = get_entry
-    return archive
+    return make_archive_stub(get_entry)
 
 
 # --------------------------------------------------------------------------

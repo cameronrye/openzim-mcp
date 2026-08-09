@@ -11,35 +11,14 @@ lower-quality fuzzy path.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from openzim_mcp.cache import OpenZimMcpCache
-from openzim_mcp.config import CacheConfig, ContentConfig, OpenZimMcpConfig
-from openzim_mcp.content_processor import ContentProcessor
-from openzim_mcp.security import PathValidator
-from openzim_mcp.zim_operations import ZimOperations
-
-
-def _ops(tmp_path: Path) -> ZimOperations:
-    config = OpenZimMcpConfig(
-        allowed_directories=[str(tmp_path)],
-        cache=CacheConfig(enabled=False, max_size=10, ttl_seconds=60),
-        content=ContentConfig(max_content_length=10000, snippet_length=200),
-    )
-    return ZimOperations(
-        config,
-        PathValidator(config.allowed_directories),
-        OpenZimMcpCache(config.cache),
-        ContentProcessor(snippet_length=200),
-    )
+from tests.zim_stubs import make_entry
+from tests.zim_stubs import make_ops as _ops
 
 
 def _entry(eid: str) -> MagicMock:
-    e = MagicMock()
-    e.path = eid
-    e.title = eid.rsplit("/", 1)[-1]
-    return e
+    return make_entry(eid, with_item=False)
 
 
 def test_strategy1_classification_strips_query_whitespace(tmp_path) -> None:
