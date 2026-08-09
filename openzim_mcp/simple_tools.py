@@ -1986,9 +1986,14 @@ class SimpleToolsHandler(
                 if h.get("text", "").strip().lower() == wanted:
                     target = h
                     break
-            if target is None:
+            if target is None and not section_name.isdecimal():
                 # Substring fallback — useful when the LLM truncates the
-                # heading title from the TOC.
+                # heading title from the TOC. Never for a numeric reference:
+                # a bare digit string is a substring of any heading that
+                # merely CONTAINS that digit, so ``section 5`` of a
+                # three-section article resolved to "The 1950s" instead of
+                # the section-not-found list. An out-of-range index is a
+                # miss, and the "did you mean?" list is the right answer.
                 for h in headings:
                     if wanted in h.get("text", "").strip().lower():
                         target = h

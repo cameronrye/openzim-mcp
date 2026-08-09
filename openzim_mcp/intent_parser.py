@@ -82,6 +82,13 @@ _QUOTE_NOT = f"[^{_QUOTE_CHARS}]"
 # _QUOTE_OPEN still peels an explicitly single-quoted value cleanly.
 _QUOTE_NOT_APOS = '[^"“”]'
 
+# Search verbs stripped off the front of a query to recover the bare terms.
+# ``search``/``find``/``look`` read as verbs wherever they appear, but
+# ``query`` is overwhelmingly a NOUN mid-sentence ("SQL query optimization",
+# "database query languages"), so only a LEADING ``query`` counts as the
+# verb — otherwise the strip silently discarded every term before it.
+_SEARCH_VERB = r"(?:^\s*query|search|find|look)"
+
 # A ZIM namespace-prefixed path: exactly one letter, then ``/`` (``A/Berlin``,
 # ``C/Photosynthesis``, ``I/logo.png``). Used by ``_restore_nonascii_case`` to
 # exempt case-sensitive paths from Tier-1 Rule 1's lowercasing.
@@ -485,10 +492,12 @@ def _extract_search(query: str, params: Dict[str, Any]) -> None:
     # partner immediately after the verb, so this branch simply misses.
     # ``query`` is in the search INTENT_PATTERN's verb set, so it must be
     # stripped here like its siblings — otherwise ``query solar eclipse``
-    # searched for the literal terms ``query solar eclipse``.
+    # searched for the literal terms ``query solar eclipse``. Unlike them it
+    # is anchored to the front (``_SEARCH_VERB``): ``query`` is overwhelmingly
+    # a NOUN mid-sentence, and an unanchored strip silently discarded the
+    # terms before it (``SQL query optimization`` -> ``optimization``).
     quoted = safe_regex_search(
-        rf"(?:search|find|look|query)\s+(?:for\s+)?"
-        rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}",
+        rf"{_SEARCH_VERB}\s+(?:for\s+)?" rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}",
         query,
         re.IGNORECASE,
     )
@@ -507,7 +516,7 @@ def _extract_search(query: str, params: Dict[str, Any]) -> None:
     # merely begins and ends with a quote char (``search for "Berlin" or
     # "Paris"`` -> ``berlin" or "paris``).
     search_match = safe_regex_search(
-        r"(?:search|find|look|query)\s+(?:for\s+)?(\S[\s\S]*)",
+        rf"{_SEARCH_VERB}\s+(?:for\s+)?(\S[\s\S]*)",
         query,
         re.IGNORECASE,
     )

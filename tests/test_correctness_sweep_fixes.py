@@ -585,6 +585,50 @@ class TestGetSectionDigitNamesAndArchiveErrors:
         _args, _kwargs = ops.get_section_data.call_args
         assert _args[2] == "details"
 
+    def test_out_of_range_index_does_not_substring_match_a_digit(
+        self, tmp_path
+    ) -> None:
+        """An out-of-range position must report section-not-found, not fall
+        into the substring fallback — a bare digit is a substring of any
+        heading containing it, so ``section 5`` matched "The 1950s"."""
+        headings = [
+            {"text": "Introduction", "id": "intro", "level": 2},
+            {"text": "The 1950s", "id": "fifties", "level": 2},
+            {"text": "Legacy", "id": "legacy", "level": 2},
+        ]
+        handler, ops = self._handler_with_structure(headings)
+        with patch.object(
+            handler, "_resolve_natural_language_path", side_effect=lambda _z, p: p
+        ):
+            out = handler._handle_get_section(
+                "section 5 of History",
+                str(tmp_path / "t.zim"),
+                {"section_name": "5", "entry_path": "C/History"},
+                {},
+            )
+        ops.get_section_data.assert_not_called()
+        assert "The 1950s" in out  # listed as an available section...
+        assert "year body" not in out  # ...but not returned as the answer
+
+    def test_non_numeric_name_still_substring_matches(self, tmp_path) -> None:
+        """The substring fallback stays available for real name fragments."""
+        headings = [
+            {"text": "Introduction", "id": "intro", "level": 2},
+            {"text": "Early history", "id": "early", "level": 2},
+        ]
+        handler, ops = self._handler_with_structure(headings)
+        with patch.object(
+            handler, "_resolve_natural_language_path", side_effect=lambda _z, p: p
+        ):
+            handler._handle_get_section(
+                "section history of X",
+                str(tmp_path / "t.zim"),
+                {"section_name": "history", "entry_path": "C/X"},
+                {},
+            )
+        _args, _kwargs = ops.get_section_data.call_args
+        assert _args[2] == "early"
+
     def test_archive_level_failure_propagates(self, tmp_path) -> None:
         import pytest
 
@@ -675,6 +719,27 @@ class TestIntentParserExtractors:
         intent, params, _cert = IntentParser().parse_intent("query solar eclipse")
         assert intent == "search"
         assert params.get("query") == "solar eclipse"
+
+    def test_leading_query_verb_stripped_with_connector(self) -> None:
+        from openzim_mcp.intent_parser import IntentParser
+
+        _intent, params, _cert = IntentParser().parse_intent("query for solar eclipse")
+        assert params.get("query") == "solar eclipse"
+
+    def test_noun_query_mid_string_keeps_the_leading_terms(self) -> None:
+        """``query`` is a NOUN far more often than a verb. Stripping it
+        wherever it appeared discarded everything before it — ``SQL query
+        optimization`` searched for the single term ``optimization``."""
+        from openzim_mcp.intent_parser import IntentParser
+
+        parser = IntentParser()
+        for text in (
+            "SQL query optimization",
+            "database query languages",
+            "how to write a SQL query for joins",
+        ):
+            _intent, params, _cert = parser.parse_intent(text)
+            assert params.get("query") == text.lower(), text
 
 
 # --------------------------------------------------------------------------
