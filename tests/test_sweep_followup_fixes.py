@@ -60,6 +60,18 @@ class TestEntryPathFirstPrepositionAnchor:
             ("links going out of Roman Empire", "Roman Empire"),
             ("what links out of Tokyo", "Tokyo"),
             ("outbound links from Quantum mechanics", "Quantum mechanics"),
+            # ``references``/``related`` are links-intent verbs too. Omitting
+            # them from the verb list left scan_from at 0, so a preposition
+            # in a LEADING noun phrase won the anchor and the verb itself
+            # leaked into the entry ("references in photosynthesis").
+            ("list of references in Photosynthesis", "Photosynthesis"),
+            (
+                "the list of references in the Battle of Britain",
+                "the Battle of Britain",
+            ),
+            ("see also references in Battle of Britain", "Battle of Britain"),
+            ("the reference in Lord of the Rings", "Lord of the Rings"),
+            ("related pages in Isle of Man", "Isle of Man"),
         ],
     )
     def test_extractor_preserves_title_internal_prepositions(

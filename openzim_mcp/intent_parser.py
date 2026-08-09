@@ -379,12 +379,17 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
         r"\b(?:of|for|in|from|to)\s+",
         re.IGNORECASE,
     )
+    # Must cover every word the intent regexes accept as the verb, or the
+    # scan starts at 0 and a preposition in a LEADING noun phrase wins the
+    # anchor: ``list of references in Photosynthesis`` anchored on the
+    # ``of`` in ``list of``, yielding ``references in photosynthesis``.
+    # ``references``/``related`` mirror the links pattern at line 1021.
     verb_re = re.compile(
         r"\b(?:"
         r"table\s+of\s+contents|"
         r"structure|outline|sections?|headings?|"
         r"summary|summarize|summarise|overview|brief|"
-        r"toc|contents|links?"
+        r"toc|contents|links?|references?|related"
         r")\b",
         re.IGNORECASE,
     )
