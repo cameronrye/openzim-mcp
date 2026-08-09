@@ -145,7 +145,7 @@ Full documentation lives at **<https://cameronrye.github.io/openzim-mcp/docs/>**
 
 ## Project status
 
-**v2.6.2** is the current release (2026-08-06). <!-- x-release-please-version-date -->
+**v2.6.3** is the current release (2026-08-09). <!-- x-release-please-version-date -->
 v2.0.0 GA shipped 2026-05-27. Per the published support policy — v1.x fixes accepted "until v2.5.0 ships, whichever comes first" — the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); all active development is now on the 2.x line. Full release history: [CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
