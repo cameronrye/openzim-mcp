@@ -4,11 +4,11 @@
 
 We actively support the following versions of OpenZIM MCP with security updates:
 
-| Version | Supported                                          |
-| ------- | -------------------------------------------------- |
-| 2.0.x   | Yes                                                |
-| 1.1.x   | Yes (through 2026-11-27 or until v2.5.0 ships)     |
-| < 1.1   | No                                                 |
+| Version       | Supported                                                   |
+| ------------- | ----------------------------------------------------------- |
+| 2.6.x         | Yes                                                         |
+| 2.0.x – 2.5.x | No (upgrade to the latest 2.6.x release)                    |
+| < 2.0         | No (the v1.x window closed when v2.5.0 shipped, 2026-06-18) |
 
 ## Reporting a Vulnerability
 

@@ -48,7 +48,7 @@ cd ~/zim-files
 # From your openzim-mcp directory (if installed from source)
 make download-test-data
 
-# This downloads small test ZIM files to tests/data/
+# This downloads small test ZIM files to test_data/zim-testing-suite/
 ```
 
 ## Step 2: Start the server (simple mode)
@@ -147,7 +147,7 @@ In simple mode, the server exposes one tool. Phrase the request in plain languag
 {
   "name": "zim_query",
   "arguments": {
-    "request": "summarize Photosynthesis"
+    "query": "summarize Photosynthesis"
   }
 }
 ```
@@ -160,7 +160,7 @@ In simple mode, the server exposes one tool. Phrase the request in plain languag
 {
   "name": "zim_query",
   "arguments": {
-    "request": "list available ZIM files"
+    "query": "list available ZIM files"
   }
 }
 ```
@@ -173,25 +173,25 @@ In simple mode, the server exposes one tool. Phrase the request in plain languag
 {
   "name": "zim_query",
   "arguments": {
-    "request": "search for biology"
+    "query": "search for biology"
   }
 }
 ```
 
 **Expected response:** ranked search results with snippets and entry paths.
 
-### Server health
+### Fetch an article
 
 ```json
 {
   "name": "zim_query",
   "arguments": {
-    "request": "what's the server health and cache performance?"
+    "query": "get article Evolution"
   }
 }
 ```
 
-**Expected response:** JSON with `status`, `cache_performance`, `health_checks`, and any warnings or recommendations. `process_id` is the real PID over the local stdio transport (`[REDACTED]` over HTTP/SSE).
+**Expected response:** the rendered article body. (Server health and cache stats are an advanced-mode feature — the `zim_health` tool; the simple-mode intent parser has no health operation.)
 
 ## Step 5: Try advanced mode (`zim_search` + friends)
 
@@ -219,20 +219,31 @@ openzim-mcp --mode advanced ~/zim-files
 
 ## Step 6: Verify everything works
 
-### Performance smoke test
+### Smoke test
 
-In simple mode:
+In simple mode, run a search and then a retrieval as two calls — the dispatcher handles one operation per call and answers a chained request ("search X, then fetch Y") with guidance to split it:
 
 ```json
 {
   "name": "zim_query",
   "arguments": {
-    "request": "search for computer, then fetch the top result"
+    "query": "search for computer"
   }
 }
 ```
 
-This exercises both search and content retrieval in a single dispatch.
+then
+
+```json
+{
+  "name": "zim_query",
+  "arguments": {
+    "query": "get article Computer"
+  }
+}
+```
+
+This exercises both search and content retrieval.
 
 ## Success! What's next?
 
@@ -284,7 +295,7 @@ You now have OpenZIM MCP running successfully. Here's what to explore next:
 ## Pro tips
 
 1. **Start small:** use smaller ZIM files (100–500MB) for initial testing.
-2. **Monitor performance:** use `zim_query` ("server health") in simple mode or `zim_health` directly in advanced mode to monitor cache performance.
+2. **Monitor performance:** use the `zim_health` tool in advanced mode to monitor cache performance (simple mode has no health operation).
 3. **Experiment:** try different search terms and content types to understand capabilities.
 4. **Read the logs:** server logs provide valuable debugging information.
 
@@ -292,4 +303,4 @@ You now have OpenZIM MCP running successfully. Here's what to explore next:
 
 **Great job!** You're now ready to harness the full power of OpenZIM MCP for your AI applications. Happy exploring.
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

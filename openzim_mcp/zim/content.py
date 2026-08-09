@@ -91,7 +91,7 @@ _TEXT_MIME_PREFIX = "text/"
 # the HTML body), so a heading-token slice can never match; and no mwoffliner
 # wiktionary archive was available to pin a gloss token. Re-add their entries
 # here (and to SummaryStyle + data/presets.toml) once a real archive validates
-# the selector. See docs/superpowers/plans/2026-06-15-v2.5-remaining-work.md.
+# the selector. See the deferred items in docs/roadmap.md.
 _ANSWER_HEADING_TOKENS = ("answer",)
 
 _STYLE_HEADING_TOKENS: Dict[str, Tuple[str, ...]] = {
@@ -195,43 +195,40 @@ def _select_summary_section_md(
     return rendered_md
 
 
-# D12 (v2.0.0a9): regex captures the path-traversal shapes that
-# don't make sense for a ZIM entry path. ZIM paths are
-# ``<namespace>/<name>`` (e.g. ``C/Berlin``) — they never start with
-# ``/``, contain ``..``, or use URL-encoded equivalents. Reject these
-# at the API boundary so log-based abuse detection has a clean
-# signal and the response carries a security-flavoured message
-# instead of the generic "entry not found" remediation advice.
-_PATH_TRAVERSAL_MARKERS = (
-    "../",
-    "..\\",
-    "/..",
-    "\\..",
-    "%2e%2e",
-    "%2E%2E",
-)
+# D12 (v2.0.0a9): detect the path-traversal shapes that don't make sense
+# for a ZIM entry path. ZIM paths are ``<namespace>/<name>`` (e.g.
+# ``C/Berlin``) — they never start with ``/``, contain a ``..`` SEGMENT,
+# or use URL-encoded equivalents. Reject these at the API boundary so
+# log-based abuse detection has a clean signal and the response carries a
+# security-flavoured message instead of the generic "entry not found"
+# remediation advice.
 
 
 def _looks_like_path_traversal(entry_path: str) -> bool:
     r"""Return True iff ``entry_path`` carries a path-traversal shape.
 
-    Conservative — only well-known injection markers trigger. Catches
-    ``../etc/passwd``, ``..\\\\windows``, URL-encoded variants, leading
-    ``/`` (absolute path), and bare ``..`` segments. A ZIM entry path
-    is namespace-prefixed (``C/X``); none of these shapes can address
-    a legitimate entry, so a false positive on real data is
-    structurally impossible.
+    Segment-based: only a whole ``..`` path segment (or its URL-encoded
+    form, or an absolute-path prefix) triggers. Substring checks like
+    ``startswith("..")`` / ``"/.." in path`` rejected real article titles
+    beginning with dots — Wikipedia's ``...And Justice for All`` lives at
+    ``A/...And_Justice_for_All``, which contains ``/..`` without any
+    parent-directory reference.
     """
     if not entry_path:
         return False
     if entry_path.startswith("/") or entry_path.startswith("\\"):
         return True
-    # Any leading ``..`` segment is suspect — no legitimate ZIM entry
-    # path begins with parent-directory references. Covers ``..``,
-    # ``../foo``, ``..\\foo``, ``..%2Ffoo``, etc.
-    if entry_path.startswith(".."):
+    if "%2e%2e" in entry_path.lower():
         return True
-    return any(marker in entry_path for marker in _PATH_TRAVERSAL_MARKERS)
+    # Decode encoded separators so ``..%2Ffoo`` is seen as ``../foo``,
+    # then test whole segments across both separator styles.
+    decoded = (
+        entry_path.replace("%2f", "/")
+        .replace("%2F", "/")
+        .replace("%5c", "\\")
+        .replace("%5C", "\\")
+    )
+    return any(seg == ".." for seg in decoded.replace("\\", "/").split("/"))
 
 
 def reject_path_traversal(entry_path: str) -> None:

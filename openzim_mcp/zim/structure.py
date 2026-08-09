@@ -726,10 +726,17 @@ class _StructureMixin:
             narrowed_end = char_end
             # The first section in document order strictly after the
             # requested one is the first child (or the next sibling).
+            # Sweep follow-up: the boundary is the following section's
+            # ``heading_start`` — ``char_start`` is its BODY start, so
+            # narrowing there left the child's heading line dangling at
+            # the end of the "no subsections" slice. Fall back to
+            # ``char_start`` for bundles cached before the field existed.
             first_following_idx: Optional[int] = None
             for j, sib in enumerate(sections[section_idx + 1 :], start=section_idx + 1):
                 if sib["char_start"] > section["char_start"]:
-                    narrowed_end = min(narrowed_end, sib["char_start"])
+                    narrowed_end = min(
+                        narrowed_end, sib.get("heading_start", sib["char_start"])
+                    )
                     first_following_idx = j
                     break
             # D5 (v2.0.0a9): when the narrow slice has essentially no
@@ -762,7 +769,9 @@ class _StructureMixin:
                 widened_end = first_child["char_end"]
                 for sib in sections[first_following_idx + 1 :]:
                     if sib["char_start"] > first_child["char_start"]:
-                        widened_end = min(widened_end, sib["char_start"])
+                        widened_end = min(
+                            widened_end, sib.get("heading_start", sib["char_start"])
+                        )
                         break
                 char_end = widened_end
                 narrow_widened = True
@@ -1208,11 +1217,14 @@ class _StructureMixin:
         # (e.g. ``iep.utm.edu/a/``). normpath strips trailing slashes, so
         # remember the URL's slash-ness and restore it after normalization.
         had_trailing_slash = url.endswith("/")
-        base_dir = dirname(source_entry_path)
-        if base_dir:
-            joined = f"{base_dir}/{url}"
-        else:
+        if url.startswith("/"):
+            # Root-absolute href: posix semantics say it ignores the base.
+            # Joining it onto the source's directory produced non-existent
+            # targets like ``C/foo/A/Berlin`` for ``/A/Berlin``.
             joined = url
+        else:
+            base_dir = dirname(source_entry_path)
+            joined = f"{base_dir}/{url}" if base_dir else url
         # normpath collapses "..", "./", and double slashes.
         resolved = normpath(joined).lstrip("/")
         # Drop any leading "./" or empty segments.

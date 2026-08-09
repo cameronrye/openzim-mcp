@@ -424,6 +424,11 @@ class ZimOperations(
             logger.info(f"  - {dir_path}")
 
         all_zim_files: List[Dict[str, Any]] = []
+        # Overlapping / nested allowed_directories (e.g. ``/data`` and
+        # ``/data/wiki``) surface the same archive once per directory walk.
+        # Duplicate rows also broke exactly-one auto-select. Dedupe by
+        # resolved path; first (outermost-configured) sighting wins.
+        seen_resolved: set = set()
         for directory, zim_files_in_dir in grouped:
             logger.debug(f"Scanning directory: {directory}")
             try:
@@ -454,6 +459,9 @@ class ZimOperations(
                             f"{resolved} is outside allowed root {allowed_root}"
                         )
                         continue
+                    if str(resolved) in seen_resolved:
+                        continue
+                    seen_resolved.add(str(resolved))
                     try:
                         stats = file_path.stat()
                         all_zim_files.append(
@@ -750,6 +758,10 @@ class ZimOperations(
 
         # Try to get metadata from M namespace
         metadata_entries = {}
+        # Raw (uncapped) ``M/Counter`` value: the display entries below are
+        # capped at ``_METADATA_PREVIEW_CAP``, and parsing the breakdown from
+        # the capped preview silently dropped every bucket past the cap.
+        counter_raw_full: Optional[str] = None
         try:
             # DD1 (beta, second pass): new-scheme ZIM archives serve
             # ``M/<key>`` via ``archive.get_metadata_item`` — the
@@ -766,13 +778,20 @@ class ZimOperations(
             common_metadata = self._discover_metadata_keys(archive, has_new_scheme)
             for meta_key in common_metadata:
                 try:
-                    value = (
-                        self._read_new_scheme_metadata_value(archive, meta_key)
+                    raw = (
+                        self._read_new_scheme_metadata_raw(archive, meta_key)
                         if has_new_scheme
-                        else self._read_old_scheme_metadata_value(archive, meta_key)
+                        else self._read_old_scheme_metadata_raw(archive, meta_key)
                     )
-                    if value is not None:
-                        metadata_entries[meta_key] = value
+                    if raw is None:
+                        continue
+                    if meta_key == "Counter":
+                        counter_raw_full = raw
+                    metadata_entries[meta_key] = (
+                        self._cap_metadata_preview(raw)
+                        if has_new_scheme
+                        else self._format_metadata_html_value(raw)
+                    )
                 except Exception as e:
                     # Entry doesn't exist or can't be read - expected for optional
                     logger.debug(f"Metadata 'M/{meta_key}' not available: {e}")
@@ -784,8 +803,10 @@ class ZimOperations(
             metadata["metadata_entries"] = metadata_entries
             # Parse the ``M/Counter`` field (``mimetype=count;...``) into a
             # structured breakdown so callers can answer "how many
-            # images/articles" without walking the archive.
-            counter_raw = metadata_entries.get("Counter")
+            # images/articles" without walking the archive. Parse the RAW
+            # value — the display entry is preview-capped, and a long
+            # Counter's tail buckets vanished from the breakdown.
+            counter_raw = counter_raw_full or metadata_entries.get("Counter")
             if counter_raw:
                 breakdown = _parse_counter_metadata(counter_raw)
                 if breakdown:
@@ -915,14 +936,26 @@ class ZimOperations(
             common_metadata = common_metadata + extras
         return common_metadata
 
-    def _read_new_scheme_metadata_value(
+    @staticmethod
+    def _cap_metadata_preview(content: str) -> str:
+        """Cap a plain-text metadata value at ``_METADATA_PREVIEW_CAP``."""
+        if len(content) > _METADATA_PREVIEW_CAP:
+            return (
+                f"{content[:_METADATA_PREVIEW_CAP].rstrip()}… "
+                f"[truncated, {len(content):,} chars total]"
+            )
+        return content
+
+    def _read_new_scheme_metadata_raw(
         self, archive: Archive, meta_key: str
     ) -> Optional[str]:
-        """Read a single new-scheme ``M/<meta_key>`` value.
+        """Read a single new-scheme ``M/<meta_key>`` value, uncapped.
 
         New-scheme archives serve metadata via ``get_metadata_item`` as
-        plain text (no HTML wrapper). Returns the (possibly capped) value,
-        or ``None`` to skip the key (missing item / empty content).
+        plain text (no HTML wrapper). Returns the raw value, or ``None``
+        to skip the key (missing item / empty content). Display callers
+        cap via :meth:`_cap_metadata_preview`; structured consumers
+        (``counter_breakdown``) parse this raw form.
         """
         try:
             item = archive.get_metadata_item(meta_key)
@@ -932,27 +965,27 @@ class ZimOperations(
         if item is None:
             return None
         content = bytes(item.content).decode("utf-8", errors="replace").strip()
-        if not content:
-            return None
-        # New-scheme metadata is plain text — Title is
-        # ``"Wikipedia"``, Date is ``"2026-02-15"``.
-        # Skip the HTML-extraction step entirely.
-        if len(content) > _METADATA_PREVIEW_CAP:
-            return (
-                f"{content[:_METADATA_PREVIEW_CAP].rstrip()}… "
-                f"[truncated, {len(content):,} chars total]"
-            )
-        return content
+        return content or None
 
-    def _read_old_scheme_metadata_value(
+    def _read_new_scheme_metadata_value(
         self, archive: Archive, meta_key: str
     ) -> Optional[str]:
-        """Read a single old-scheme ``M/<meta_key>`` value.
+        """Capped display form of :meth:`_read_new_scheme_metadata_raw`."""
+        content = self._read_new_scheme_metadata_raw(archive, meta_key)
+        if content is None:
+            return None
+        return self._cap_metadata_preview(content)
+
+    def _read_old_scheme_metadata_raw(
+        self, archive: Archive, meta_key: str
+    ) -> Optional[str]:
+        """Read a single old-scheme ``M/<meta_key>`` value, undistilled.
 
         Old-scheme archives expose the M namespace on the entry surface
         (``get_entry_by_path``). Resolves redirects (bounded best-effort
-        walk), distils any HTML wrapper to readable text, and caps /
-        annotates the result. Returns the value, or ``None`` to skip.
+        walk) and returns the decoded content, or ``None`` to skip.
+        Display callers distil/cap via :meth:`_format_metadata_html_value`;
+        structured consumers (``counter_breakdown``) parse this raw form.
         """
         entry = archive.get_entry_by_path(f"M/{meta_key}")
         if not entry:
@@ -978,7 +1011,15 @@ class ZimOperations(
             return None
         item = entry.get_item()
         content = bytes(item.content).decode("utf-8", errors="replace").strip()
-        if not content:
+        return content or None
+
+    def _read_old_scheme_metadata_value(
+        self, archive: Archive, meta_key: str
+    ) -> Optional[str]:
+        """Distilled + capped display form of
+        :meth:`_read_old_scheme_metadata_raw`."""
+        content = self._read_old_scheme_metadata_raw(archive, meta_key)
+        if content is None:
             return None
         return self._format_metadata_html_value(content)
 
@@ -1295,19 +1336,57 @@ class ZimOperations(
             # these named paths resolve, the archive simply has no main
             # page, which the presenters handle via ``"no_main_page"``.
             main_page_paths = ["W/mainPage", "A/Main_Page", "A/index"]
+            # Sweep follow-up: distinguish "probe path absent" from "probe
+            # path FOUND but unreadable". The old single try/except sent
+            # both to the next candidate, so a transient read failure on
+            # an existing main-page entry fell through to the
+            # ``no_main_page`` arm — which is content_ok=True and cached,
+            # turning a transient into a durable "archive has no main
+            # page" claim.
+            probe_failed_after_found = False
             for path in main_page_paths:
                 try:
                     entry = archive.get_entry_by_path(path)
-                    if entry:
-                        entry = _follow_redirect(entry)
-                        payload, ok = _build(entry)
-                        if ok:
-                            return "entry", payload, True, path
-                        # Content extraction failed for this probe path —
-                        # drop the sentinel and try the next candidate.
                 except Exception:  # nosec B112 - intentional fallback
                     # Path doesn't exist, try next
                     continue
+                if not entry:
+                    continue
+                try:
+                    entry = _follow_redirect(entry)
+                except Exception as e:
+                    logger.warning(
+                        f"Main-page probe {path} resolved but its redirect "
+                        f"chain failed: {e}"
+                    )
+                    probe_failed_after_found = True
+                    continue
+                payload, ok = _build(entry)
+                if ok:
+                    return "entry", payload, True, path
+                # Content extraction failed for this probe path — drop the
+                # sentinel and try the next candidate, but remember that a
+                # main-page entry does exist.
+                probe_failed_after_found = True
+
+            if probe_failed_after_found:
+                # A main-page entry exists but couldn't be served —
+                # content_ok=False keeps this out of the cache so the next
+                # request retries instead of inheriting a wrong
+                # "no main page" answer.
+                return (
+                    "content_error",
+                    {
+                        "path": "",
+                        "title": "Main Page",
+                        "content": (
+                            "(Error retrieving content: a main-page entry "
+                            "exists but its content could not be read)"
+                        ),
+                    },
+                    False,
+                    None,
+                )
 
             # No main page found — this is a structural property of the
             # archive, so it's safe to cache.

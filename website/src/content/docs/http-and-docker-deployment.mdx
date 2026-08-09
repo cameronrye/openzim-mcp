@@ -95,7 +95,7 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com","https://other.examp
 - Wildcard `"*"` is **rejected at startup** — including whitespace-padded variants like `" * "`. There is no opt-out. Wildcard CORS combined with bearer-token auth is the canonical recipe for token theft via a malicious site.
 - `Mcp-Session-Id` is in `allow_headers` and `expose_headers` so streamable-HTTP clients can resume sessions across CORS preflight.
 - CORS is the *outer* middleware layer (LIFO add order) so a 401 from auth still carries `Access-Control-Allow-Origin` headers — browsers see "401 unauthorized" instead of an opaque CORS error.
-- Allowed methods: `GET`, `POST`, `OPTIONS`.
+- Allowed methods: `GET`, `POST`, `OPTIONS`, `DELETE` (`DELETE` is the streamable-HTTP session-termination method).
 
 If no browser client connects (you're hitting the endpoint from another server, a CLI client, or a desktop MCP client), leave this unset.
 
@@ -226,6 +226,7 @@ Environment=OPENZIM_MCP_TRANSPORT=http
 Environment=OPENZIM_MCP_HOST=127.0.0.1
 Environment=OPENZIM_MCP_PORT=8000
 Environment=OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED=true
+Environment=OPENZIM_MCP_CACHE__PERSISTENCE_PATH=/var/cache/openzim-mcp/cache.json
 EnvironmentFile=/etc/openzim-mcp/secrets.env   # OPENZIM_MCP_AUTH_TOKEN, etc.
 ExecStart=/usr/local/bin/openzim-mcp /srv/zim
 Restart=on-failure
@@ -241,6 +242,7 @@ ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 ReadOnlyPaths=/srv/zim
+CacheDirectory=openzim-mcp
 ReadWritePaths=/var/cache/openzim-mcp
 
 [Install]
@@ -264,10 +266,12 @@ spec:
     spec:
       containers:
         - name: openzim-mcp
-          image: ghcr.io/cameronrye/openzim-mcp:2.5.1
+          image: ghcr.io/cameronrye/openzim-mcp:2.6.2 # x-release-please-version
           ports:
             - containerPort: 8000
           env:
+            - name: OPENZIM_MCP_TRANSPORT
+              value: "http"          # the image defaults to stdio
             - name: OPENZIM_MCP_HOST
               value: "0.0.0.0"
             - name: OPENZIM_MCP_AUTH_TOKEN
@@ -297,6 +301,8 @@ spec:
 ```
 
 Each replica has its own in-memory cache. Persistent cache on shared storage is *not* recommended unless you handle concurrent-writer issues at the storage layer (the on-disk cache uses simple file rewrites).
+
+Clients reaching the pods through a Service/Ingress hostname need that hostname in `OPENZIM_MCP_ALLOWED_HOSTS` — only loopback `Host` values are accepted by default. And with `replicas: 2`, session affinity is required — see [Scaling considerations](#scaling-considerations).
 
 ## Hardening checklist
 
@@ -344,7 +350,7 @@ This recipe puts OpenZIM MCP on a single host, reachable from the rest of your L
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:2.5.1
+    image: ghcr.io/cameronrye/openzim-mcp:2.6.2 # x-release-please-version
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -356,6 +362,9 @@ services:
       OPENZIM_MCP_HOST: "0.0.0.0"
       OPENZIM_MCP_AUTH_TOKEN: "${OPENZIM_MCP_AUTH_TOKEN}"
       OPENZIM_MCP_CACHE__PERSISTENCE_ENABLED: "true"
+      # Explicit path so the cache file lands inside the mounted volume
+      # (the default path gets a config-fingerprint suffix *next to* it).
+      OPENZIM_MCP_CACHE__PERSISTENCE_PATH: "/home/appuser/.cache/openzim-mcp/cache.json"
     healthcheck:
       # The image ships no curl; probe /readyz with the bundled Python.
       test:
@@ -372,11 +381,11 @@ volumes:
   openzim-cache:
 ```
 
-> Still running v1.x? The `ghcr.io/cameronrye/openzim-mcp:1.2.0` image stays available, but the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18) — it receives no further fixes. The v2.0.0 advanced tool surface is a breaking rename per [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) — migrate when convenient.
+> Still running v1.x? The `ghcr.io/cameronrye/openzim-mcp:1.3.0` image (the final v1.x release) stays available, but the v1.x maintenance window closed when v2.5.0 shipped (2026-06-18) — it receives no further fixes. The v2.0.0 advanced tool surface is a breaking rename per [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) — migrate when convenient.
 
 What's intentional here:
 
-- **Pinned tag** (`:2.5.1`, not `:latest`). Upgrades are deliberate — `docker compose pull` is a thing you do, not a thing that happens to you.
+- **Pinned tag** (`:2.6.2`, not `:latest`). Upgrades are deliberate — `docker compose pull` is a thing you do, not a thing that happens to you. {/* x-release-please-version */}
 - **Host port bound to `127.0.0.1`.** The container listens on all interfaces (`OPENZIM_MCP_HOST=0.0.0.0`, set in the environment block), but Docker's port publish restricts external exposure to loopback. The Tailscale variant below lifts this restriction by binding to a specific interface.
 - **Read-only ZIM mount** (`:ro`). The server only reads ZIM files; mounting read-only ensures a server compromise can't damage them.
 - **Token via env, not hard-coded.** Put it in a `.env` file next to the compose file (and add `.env` to `.gitignore`). The image defaults to `stdio`, so `TRANSPORT=http` and `HOST=0.0.0.0` are set explicitly in the environment block to select the HTTP service.
@@ -480,18 +489,20 @@ This recipe puts OpenZIM MCP on a public VPS, fronted by Caddy for automatic Let
 
 #### `docker-compose.yml`
 
-This is the LAN compose file with two changes: a `caddy` service is added, and the openzim-mcp service no longer publishes a host port (it's reachable only on the internal Docker network).
+This is the LAN compose file with three changes: a `caddy` service is added, the openzim-mcp service no longer publishes a host port (it's reachable only on the internal Docker network), and `OPENZIM_MCP_ALLOWED_HOSTS` admits the public hostname Caddy forwards.
 
 ```yaml
 services:
   openzim-mcp:
-    image: ghcr.io/cameronrye/openzim-mcp:2.5.1
+    image: ghcr.io/cameronrye/openzim-mcp:2.6.2 # x-release-please-version
     restart: unless-stopped
     expose:
       - "8000"
     volumes:
       - /srv/zim:/data:ro
     environment:
+      OPENZIM_MCP_TRANSPORT: "http"
+      OPENZIM_MCP_HOST: "0.0.0.0"
       OPENZIM_MCP_AUTH_TOKEN: "${OPENZIM_MCP_AUTH_TOKEN}"
       OPENZIM_MCP_ALLOWED_HOSTS: '["zim.example.com"]'
 
@@ -571,7 +582,8 @@ docker compose pull
 docker compose up -d
 ```
 
-The image tag in `docker-compose.yml` is pinned (`:2.5.1`) — change it to the new version before pulling. Pinning is deliberate: `:latest` makes upgrades a surprise, and the release notes for each tag tell you when an upgrade involves a breaking change. The v1.x → v2.0.0 jump is a breaking rename of the advanced-mode tool surface (22 tools → 8); see the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) before bumping.
+The image tag in `docker-compose.yml` is pinned (`:2.6.2`) — change it to the new version before pulling. {/* x-release-please-version */}
+Pinning is deliberate: `:latest` makes upgrades a surprise, and the release notes for each tag tell you when an upgrade involves a breaking change. The v1.x → v2.0.0 jump is a breaking rename of the advanced-mode tool surface (22 tools → 8); see the [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) before bumping.
 
 #### Watching logs
 
@@ -579,14 +591,14 @@ The image tag in `docker-compose.yml` is pinned (`:2.5.1`) — change it to the 
 docker compose logs -f openzim-mcp
 ```
 
-A clean startup logs the bind host/port and the configured allowed directory. An auth failure logs the route, status, and client IP — *not* the attempted token. A subscription update logs the watched path and the change type (created / replaced / removed).
+A clean startup logs the bind host/port and the configured allowed directory. An auth failure logs the route, status, and client IP — *not* the attempted token. Subscription updates are delivered silently; a subscriber that fails to receive a notification is logged as a warning when its session is evicted.
 
 #### Scaling considerations
 
-Each replica has its own in-memory cache; persistent cache on shared storage isn't recommended (see the Kubernetes section above). Horizontal scaling is straightforward — add replicas, front them with any L7 load balancer that supports HTTP/1.1 keep-alive and forwards `Authorization` + `Mcp-Session-Id` unchanged. Session-stickiness isn't required: every MCP request carries the session id explicitly and the server is otherwise stateless across requests.
+Each replica has its own in-memory cache; persistent cache on shared storage isn't recommended (see the Kubernetes section above). Horizontal scaling works — add replicas, front them with any L7 load balancer that supports HTTP/1.1 keep-alive and forwards `Authorization` + `Mcp-Session-Id` unchanged — but session-stickiness **is** required: streamable-HTTP session state lives in the process that created the session, and a replica that doesn't recognize the presented `Mcp-Session-Id` returns `404 Session not found`. Use cookie- or header-based affinity (e.g. hash on `Mcp-Session-Id`), or run one replica.
 
 ---
 
 **Configuration reference:** [Configuration](/openzim-mcp/docs/configuration/). **Security model:** [Security best practices](/openzim-mcp/docs/security-best-practices/). **Performance tuning:** [Performance optimization](/openzim-mcp/docs/performance-optimization/).
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

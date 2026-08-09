@@ -82,6 +82,13 @@ _QUOTE_NOT = f"[^{_QUOTE_CHARS}]"
 # _QUOTE_OPEN still peels an explicitly single-quoted value cleanly.
 _QUOTE_NOT_APOS = '[^"“”]'
 
+# Search verbs stripped off the front of a query to recover the bare terms.
+# ``search``/``find``/``look`` read as verbs wherever they appear, but
+# ``query`` is overwhelmingly a NOUN mid-sentence ("SQL query optimization",
+# "database query languages"), so only a LEADING ``query`` counts as the
+# verb — otherwise the strip silently discarded every term before it.
+_SEARCH_VERB = r"(?:^\s*query|search|find|look)"
+
 # A ZIM namespace-prefixed path: exactly one letter, then ``/`` (``A/Berlin``,
 # ``C/Photosynthesis``, ``I/logo.png``). Used by ``_restore_nonascii_case`` to
 # exempt case-sensitive paths from Tier-1 Rule 1's lowercasing.
@@ -355,15 +362,43 @@ def _extract_entry_path_keyworded(query: str, params: Dict[str, Any]) -> None:
     # are preserved — ``get article History of France`` → ``History of France``,
     # ``get article Lord of the Rings`` → ``Lord of the Rings`` (previously the
     # last-preposition anchor truncated these to ``France`` / ``the Rings``).
-    # Only when no object keyword is present do we fall back to the last
-    # preposition anchor, which keeps ``table of contents for Biology`` →
-    # ``Biology`` (picking ``for`` over the title-internal ``of``).
+    #
+    # Sweep follow-up: without an object keyword, anchor on the FIRST
+    # preposition after the intent verb, not the last one in the query.
+    # The last-preposition anchor truncated title-internal prepositions
+    # the same way the pre-H6 object branch did — ``toc of Battle of
+    # Britain`` → ``Britain``, ``links in Lord of the Rings`` → ``the
+    # Rings``. ``table of contents`` is matched as one verb phrase so its
+    # internal ``of`` can't act as the anchor (``list the table of
+    # contents for Marie Curie`` still anchors on ``for``), and the scan
+    # starts at the verb phrase's end so a preposition inside a leading
+    # scoping clause can't win either. When no verb is found the scan
+    # starts at the beginning of the query.
     object_re = re.compile(r"\b(?:article|entry|page)\s+", re.IGNORECASE)
     keyword_re = re.compile(
         r"\b(?:of|for|in|from|to)\s+",
         re.IGNORECASE,
     )
-    matches = list(object_re.finditer(query)) or list(keyword_re.finditer(query))
+    # Must cover every word the intent regexes accept as the verb, or the
+    # scan starts at 0 and a preposition in a LEADING noun phrase wins the
+    # anchor: ``list of references in Photosynthesis`` anchored on the
+    # ``of`` in ``list of``, yielding ``references in photosynthesis``.
+    # ``references``/``related`` mirror the links pattern at line 1021.
+    verb_re = re.compile(
+        r"\b(?:"
+        r"table\s+of\s+contents|"
+        r"structure|outline|sections?|headings?|"
+        r"summary|summarize|summarise|overview|brief|"
+        r"toc|contents|links?|references?|related"
+        r")\b",
+        re.IGNORECASE,
+    )
+    matches = list(object_re.finditer(query))
+    if not matches:
+        verb_match = verb_re.search(query)
+        scan_from = verb_match.end() if verb_match else 0
+        first_prep = keyword_re.search(query, scan_from)
+        matches = [first_prep] if first_prep else []
     if matches:
         tail = query[matches[-1].end() :].strip().rstrip("?.,;:!").strip()
         # Post-v2.0.0 D-C: ``table of contents X`` anchors on ``of`` →
@@ -413,12 +448,26 @@ def _extract_binary(query: str, params: Dict[str, Any]) -> None:
         # yielded entry_path ``from``. The connector is now optional but, when
         # present, is consumed before the capture so a bare connector can never
         # be returned as the path.
-        binary_pattern = (
+        # Prefer a path-shaped token (contains ``/`` or ``.``) anywhere
+        # after the connector, tolerating filler words: ``get binary
+        # content from the file I/logo.png`` must capture ``I/logo.png``,
+        # not the determiner ``the`` (the first token after the connector).
+        binary_pattern_pathish = (
             r"(?:content|data|entry|pdf|image|video|audio|media)"
             r"\s+(?:from|of|for)\s+"
-            rf"{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?"
+            r"(?:[A-Za-z0-9_-]+\s+)*?"
+            rf"{_QUOTE_OPEN}?([A-Za-z0-9_/.-]*[/.][A-Za-z0-9_/.-]*)"
+            rf"{_QUOTE_OPEN}?"
         )
-        path_match = safe_regex_search(binary_pattern, query, re.IGNORECASE)
+        path_match = safe_regex_search(binary_pattern_pathish, query, re.IGNORECASE)
+        if not path_match:
+            binary_pattern = (
+                r"(?:content|data|entry|pdf|image|video|audio|media)"
+                r"\s+(?:from|of|for)\s+"
+                r"(?:(?:the|a|an)\s+)*"
+                rf"{_QUOTE_OPEN}?([A-Za-z0-9_/.-]+){_QUOTE_OPEN}?"
+            )
+            path_match = safe_regex_search(binary_pattern, query, re.IGNORECASE)
         if not path_match:
             # No connector form: ``extract pdf I/document.pdf``,
             # ``retrieve image logo.png`` — anchor directly on the media word.
@@ -469,8 +518,14 @@ def _extract_search(query: str, params: Dict[str, Any]) -> None:
     # never reach the backend. ``_QUOTE_NOT`` inside the pair is safe here
     # because BOTH delimiters are mandatory — a possessive apostrophe has no
     # partner immediately after the verb, so this branch simply misses.
+    # ``query`` is in the search INTENT_PATTERN's verb set, so it must be
+    # stripped here like its siblings — otherwise ``query solar eclipse``
+    # searched for the literal terms ``query solar eclipse``. Unlike them it
+    # is anchored to the front (``_SEARCH_VERB``): ``query`` is overwhelmingly
+    # a NOUN mid-sentence, and an unanchored strip silently discarded the
+    # terms before it (``SQL query optimization`` -> ``optimization``).
     quoted = safe_regex_search(
-        rf"(?:search|find|look)\s+(?:for\s+)?{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}",
+        rf"{_SEARCH_VERB}\s+(?:for\s+)?" rf"{_QUOTE_OPEN}({_QUOTE_NOT}+){_QUOTE_OPEN}",
         query,
         re.IGNORECASE,
     )
@@ -489,7 +544,7 @@ def _extract_search(query: str, params: Dict[str, Any]) -> None:
     # merely begins and ends with a quote char (``search for "Berlin" or
     # "Paris"`` -> ``berlin" or "paris``).
     search_match = safe_regex_search(
-        r"(?:search|find|look)\s+(?:for\s+)?(\S[\s\S]*)",
+        rf"{_SEARCH_VERB}\s+(?:for\s+)?(\S[\s\S]*)",
         query,
         re.IGNORECASE,
     )

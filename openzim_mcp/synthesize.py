@@ -36,7 +36,7 @@ from openzim_mcp.title_promotion import (
     find_title_match,
     has_apostrophe_possessive,
     is_single_token_tail_match,
-    is_strong_title_match,
+    is_strong_canonical_title_match,
     iter_query_tails,
     passes_z4,
 )
@@ -971,15 +971,27 @@ def _do_per_archive_search(
             )
         archives_searched.append(archive_name)
         archive_by_name[archive_name] = (archive, validated_path)
-        per_archive_hits.append(
-            _per_archive_search(
+        # Failure isolation: one bad archive (no fulltext index, corrupt
+        # clusters, transient I/O) must not take the whole multi-archive
+        # synthesize down — degrade it to zero hits and keep the rest.
+        try:
+            hits = _per_archive_search(
                 archive,
                 search_handler=search_handler,
                 query=query,
                 k=k,
                 validated_path=str(validated_path),
             )
-        )
+        except Exception as e:
+            logger.warning(
+                "synthesize: search failed for archive %s (%s): %s — "
+                "continuing without it",
+                archive_name,
+                validated_path,
+                e,
+            )
+            hits = []
+        per_archive_hits.append(hits)
     return per_archive_hits, archives_searched, archive_by_name
 
 
@@ -1110,7 +1122,11 @@ def _promote_title_match(
         # Use the path as the title proxy — Wikipedia exports preserve the
         # title in the path (``Berlin`` ↔ ``Berlin``) so the token-match
         # comparison works without a second archive read.
-        if is_strong_title_match(query, top_path, top_path.replace("_", " ")):
+        # Sweep follow-up: the canonical variant refuses a
+        # ``Foo_(disambiguation)`` twin at rank 1 — it strong-matches the
+        # bare topic, so the plain check skipped promotion and the
+        # disambiguation page led the synthesized answer.
+        if is_strong_canonical_title_match(query, top_path, top_path.replace("_", " ")):
             return top_hits
 
     # Post-b4 D3: mirror the ``_promote_topic_via_title_index`` pass-0

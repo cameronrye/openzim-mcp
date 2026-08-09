@@ -64,23 +64,24 @@ zim_search(
 )
 ```
 
-Response (truncated):
+Response (truncated — `zim_search` returns a JSON `SearchResponse`):
 
-```plain
-Found 51 matches for "biology", showing 1-3:
-
-## 1. Taxonomy (biology)
-Path: Taxonomy_(biology)
-Snippet: #  Taxonomy (biology) Part of a series on
-Evolutionary biology ...
-
-## 2. Protein
-Path: Protein
-Snippet: #  Protein A representation of the 3D structure of the protein myoglobin ...
-
-## 3. Ant
-Path: Ant
-Snippet: #  Ant Ants — Temporal range: Late Aptian – Present ...
+```json
+{
+  "query": "biology",
+  "results": [
+    { "path": "Taxonomy_(biology)", "title": "Taxonomy (biology)",
+      "snippet": "#  Taxonomy (biology) Part of a series on Evolutionary biology ..." },
+    { "path": "Protein", "title": "Protein",
+      "snippet": "#  Protein A representation of the 3D structure of the protein myoglobin ..." },
+    { "path": "Ant", "title": "Ant",
+      "snippet": "#  Ant Ants — Temporal range: Late Aptian – Present ..." }
+  ],
+  "total": 51,
+  "next_cursor": null,
+  "done": false,
+  "page_info": { "offset": 0, "limit": 3 }
+}
 ```
 
 The top hit, `Taxonomy_(biology)`, is the canonical disambiguated article. The snippet confirms it's part of an evolutionary-biology series, which is what we want. Fetch the article:
@@ -102,7 +103,7 @@ If you had guessed `entry_path="Taxonomy (biology)"` (with a literal space inste
 
 **Research goal:** answer "what is a protein?" with an LLM-friendly progressive disclosure (one-paragraph summary → outline → focused section).
 
-`zim_get` defaults to `view="content"`, which returns the rendered article body truncated to the per-entry content cap (100,000 chars; first 1,500 returned by default).
+`zim_get` defaults to `view="full"`, which returns the rendered article body up to the per-entry content cap (`max_content_length`, default 100,000 chars — pass a smaller value plus `content_offset` to page through long articles).
 
 ```python
 zim_get(
@@ -129,7 +130,7 @@ This protein was the first to have its structure solved by X-ray crystallography
 of amino acid residues. Proteins perform a vast array of functions within organisms, including
 catalysing metabolic reactions, DNA replication, responding to stimuli ...
 
-... [Content truncated, total of 56,202 characters, only showing first 1,500 characters] ...
+... [Content truncated, total of 156,202 chars, only showing first 100,000] ...
 ```
 
 For an LLM-sized summary instead of the full body, switch to `view="summary"`:
@@ -139,7 +140,6 @@ zim_get(
     zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
     entry_path="C/Protein",
     view="summary",
-    max_words=100,
 )
 ```
 
@@ -173,10 +173,10 @@ Response:
   "title": "Protein",
   "path": "C/Protein",
   "toc": [
-    { "level": 1, "text": "Protein", "id": "protein", "children": [
-      { "level": 2, "text": "Biochemistry", "id": "biochemistry", "children": [] },
-      { "level": 2, "text": "Synthesis", "id": "synthesis", "children": [] },
-      { "level": 2, "text": "Cellular functions", "id": "cellular-functions", "children": [] }
+    { "level": 1, "text": "Protein", "section_id": "protein", "children": [
+      { "level": 2, "text": "Biochemistry", "section_id": "biochemistry", "children": [] },
+      { "level": 2, "text": "Synthesis", "section_id": "synthesis", "children": [] },
+      { "level": 2, "text": "Cellular functions", "section_id": "cellular-functions", "children": [] }
     ]}
   ],
   "heading_count": 15,
@@ -194,7 +194,7 @@ zim_get_section(
 )
 ```
 
-**Takeaway:** `zim_get` is one tool, four views — `content`, `summary`, `toc`, `structure`. Pair with `zim_get_section` to read one section without pulling the whole article.
+**Takeaway:** `zim_get` is one tool, four views — `full`, `summary`, `toc`, `structure`. Pair with `zim_get_section` to read one section without pulling the whole article.
 
 ---
 
@@ -223,21 +223,24 @@ zim_links(
 )
 ```
 
-Response (truncated):
+Response (truncated — one `kind` per call, `"internal"` by default):
 
 ```json
 {
-  "outbound_links": [
-    { "target": "C/Taxonomy_(biology)", "anchor": "Scientific classification" },
-    { "target": "C/Animal", "anchor": "Animalia" },
-    { "target": "C/Arthropod", "anchor": "Arthropoda" },
-    { "target": "C/Insect", "anchor": "Insecta" }
+  "results": [
+    { "url": "C/Taxonomy_(biology)", "text": "Scientific classification", "type": "internal" },
+    { "url": "C/Animal", "text": "Animalia", "type": "internal" },
+    { "url": "C/Arthropod", "text": "Arthropoda", "type": "internal" },
+    { "url": "C/Insect", "text": "Insecta", "type": "internal" }
   ],
-  "internal_count": 187,
-  "external_count": 23,
-  "media_count": 12
+  "kind": "internal",
+  "category_totals": { "internal": 187, "external": 23, "media": 12 },
+  "next_cursor": null,
+  "done": true
 }
 ```
+
+Pass `kind="external"` or `kind="media"` to fetch the other buckets; `category_totals` counts all three either way.
 
 For semantically related articles (not just inline links), flip the direction:
 
@@ -254,19 +257,19 @@ Response:
 
 ```json
 {
-  "related": [
-    { "path": "C/Bee", "title": "Bee", "score": 0.91 },
-    { "path": "C/Wasp", "title": "Wasp", "score": 0.88 },
-    { "path": "C/Hymenoptera", "title": "Hymenoptera", "score": 0.85 },
-    { "path": "C/Eusociality", "title": "Eusociality", "score": 0.78 },
-    { "path": "C/Termite", "title": "Termite", "score": 0.74 }
+  "results": [
+    { "path": "C/Bee", "title": "Bee", "mention_count": 4 },
+    { "path": "C/Wasp", "title": "Wasp", "mention_count": 3 },
+    { "path": "C/Hymenoptera", "title": "Hymenoptera", "mention_count": 3 },
+    { "path": "C/Eusociality", "title": "Eusociality", "mention_count": 2 },
+    { "path": "C/Termite", "title": "Termite" }
   ]
 }
 ```
 
-`direction="related"` carries a rate-limit cost of 2 (vs 1 for `direction="outbound"`) because it runs a search-based similarity pass under the hood. Use `outbound` when you only need the inline link list.
+Both `direction="outbound"` and `direction="related"` carry a rate-limit cost of 2 (inbound costs 1); `related` additionally deduplicates and ranks the link-graph neighbors. Use `outbound` when you need the raw inline link list.
 
-**Takeaway:** `zim_links` does both inline link extraction and semantic related-article surfacing in one tool. Cheap mode is the default; opt in to the expensive mode when you actually need it.
+**Takeaway:** `zim_links` does both inline link extraction and related-article surfacing in one tool — pick the direction that matches the question.
 
 ---
 
@@ -287,21 +290,22 @@ zim_search(
 
 Response (truncated):
 
-```plain
-Found 39 matches for "computer", showing 1-2:
-
-## 1. Video game
-Path: Video_game
-Snippet: #  Video game First-generation _Pong_ console at the Computerspielemuseum Berlin
----
-Platforms
-
-## 2. Protein
-Path: Protein
-Snippet: #  Protein A representation of the 3D structure of the protein myoglobin ...
+```json
+{
+  "query": "computer",
+  "results": [
+    { "path": "Video_game", "title": "Video game",
+      "snippet": "#  Video game First-generation _Pong_ console at the Computerspielemuseum Berlin ..." },
+    { "path": "Protein", "title": "Protein",
+      "snippet": "#  Protein A representation of the 3D structure of the protein myoglobin ..." }
+  ],
+  "total": 39,
+  "next_cursor": null,
+  "done": false
+}
 ```
 
-"Video game" is the top hit for "computer" — the article opens with a museum exhibit photo of an early console. Fetch the article with a larger content cap to read past the truncation that defaults at 1,500 chars:
+"Video game" is the top hit for "computer" — the article opens with a museum exhibit photo of an early console. Fetch the article with a small content cap when you want to keep the response token-friendly (the default cap is 100,000 chars):
 
 ```python
 zim_get(
@@ -316,7 +320,7 @@ To narrow further, use `zim_search` with `mode="suggest"` for typeahead-style co
 ```python
 zim_search(
     zim_file_path="C:\\zim\\wikipedia_en_100_2025-08.zim",
-    partial_query="vide",
+    query="vide",
     mode="suggest",
     limit=5,
 )
@@ -327,16 +331,17 @@ Response:
 ```json
 {
   "partial_query": "vide",
-  "suggestions": [
+  "results": [
     { "text": "Video game", "path": "C/Video_game", "type": "title_start_match" },
     { "text": "Video", "path": "C/Video", "type": "title_start_match" },
     { "text": "Video camera", "path": "C/Video_camera", "type": "title_start_match" }
   ],
-  "count": 3
+  "total": 3,
+  "done": true
 }
 ```
 
-**Takeaway:** `zim_search` is one tool, four modes — `fulltext`, `title`, `suggest`, `keyword`. Pair `fulltext` for discovery with `suggest` for disambiguation.
+**Takeaway:** `zim_search` is one tool, three modes — `fulltext`, `title`, `suggest`. Pair `fulltext` for discovery with `suggest` for disambiguation.
 
 ---
 
@@ -352,26 +357,30 @@ zim_metadata(
 )
 ```
 
-Response:
+Response (truncated):
 
 ```json
 {
-  "entry_count": 100000,
-  "all_entry_count": 120000,
-  "article_count": 80000,
-  "media_count": 20000,
-  "metadata_entries": {
+  "metadata": {
     "Title": "Wikipedia (English)",
     "Description": "Wikipedia articles in English",
     "Language": "eng",
     "Creator": "Kiwix",
     "Date": "2025-08-15"
   },
-  "namespaces": ["C", "A", "M", "W", "X"]
+  "namespaces": [
+    { "letter": "C", "total": 80000, "is_authoritative": true },
+    { "letter": "M", "total": 22, "is_authoritative": true },
+    { "letter": "W", "total": 3, "is_authoritative": true },
+    { "letter": "X", "total": 5, "is_authoritative": true }
+  ],
+  "archive_identity": { "uuid": "8e9f...", "is_multipart": false },
+  "index_capabilities": { "has_fulltext_index": true, "has_title_index": true },
+  "counter_breakdown": { "text/html": 80000, "image/webp": 19500 }
 }
 ```
 
-`zim_metadata` returns both the archive's metadata records and the discovered namespace list in one call.
+`zim_metadata` returns the archive's metadata records, the namespace inventory with counts, the libzim archive identity, index capabilities, and the `M/Counter` mimetype breakdown in one call.
 
 Browse the `C` (content) namespace to see what's there:
 
@@ -385,24 +394,23 @@ zim_browse(
 )
 ```
 
-Response:
+Response (truncated):
 
 ```json
 {
   "namespace": "C",
-  "total_in_namespace": 80000,
-  "offset": 0,
-  "limit": 5,
-  "returned_count": 5,
-  "has_more": true,
-  "entries": [
+  "results": [
     {
       "path": "C/Biology",
       "title": "Biology",
       "content_type": "text/html",
       "preview": "Biology is the scientific study of life..."
     }
-  ]
+  ],
+  "total": 80000,
+  "next_cursor": null,
+  "done": false,
+  "page_info": { "offset": 0, "limit": 5 }
 }
 ```
 
@@ -417,7 +425,7 @@ zim_browse(
 )
 ```
 
-Returns `{ entries, next_cursor, done }`. Pass `next_cursor` on the next call until `done=True`.
+Returns the same paginated envelope (`results`, `next_cursor`, `done`, …). Pass `next_cursor` on the next call until `done=True`.
 
 Now filter a full-text search to that namespace and content type — keeps results focused on rendered HTML articles (vs media or redirects):
 
@@ -510,10 +518,10 @@ The resolved path is cached for subsequent calls within the same archive, so the
 Every case study above can be expressed as a single `zim_query` call in simple mode — the natural-language intent parser routes to the right advanced operation:
 
 ```python
-zim_query(request="summarize the Protein article")
-zim_query(request="find articles about computers in the wikipedia archive")
-zim_query(request="show me the table of contents for Evolution")
-zim_query(request="what articles are related to Ant?")
+zim_query(query="summarize the Protein article")
+zim_query(query="find articles about computers in the wikipedia archive")
+zim_query(query="show me the table of contents for Evolution")
+zim_query(query="what articles are related to Ant?")
 ```
 
 Simple mode is the default (one tool exposed) and is the right choice when your host LLM struggles with large tool catalogues. Switch to advanced mode with `OPENZIM_MCP_TOOL_MODE=advanced` for fine-grained control over the 8-tool surface. See [LLM integration patterns](/openzim-mcp/docs/llm-integration-patterns/) for the trade-off in more depth.
@@ -526,4 +534,4 @@ Simple mode is the default (one tool exposed) and is the right choice when your 
 - **[Smart retrieval](/openzim-mcp/docs/smart-retrieval/)** — the four-step fallback inside `zim_get`.
 - **[LLM integration patterns](/openzim-mcp/docs/llm-integration-patterns/)** — simple vs advanced mode, progressive discovery, batching, error handling.
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

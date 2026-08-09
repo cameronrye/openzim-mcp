@@ -36,7 +36,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_BUNDLE_KEY_PREFIX = "bundle:v2c"
+# v2d: SectionMeta grew ``heading_start`` — cached v2c bundles lack the
+# field, so the narrow-slice fix would silently keep serving the child
+# heading until TTL expiry without the key bump.
+_BUNDLE_KEY_PREFIX = "bundle:v2d"
 
 
 def archive_stat_token(validated_path: Any) -> str:
@@ -178,6 +181,43 @@ def _build_link_buckets(links_dict: Dict[str, Any]) -> LinkBuckets:
     )
 
 
+# Markdown link / image syntax emitted by html2text inside heading lines
+# (``## [Linked](X) part``). The relaxed character-class pattern in
+# ``_compute_section_offsets`` can't tolerate the brackets/URL, so headings
+# containing an inline link were dropped from the bundle entirely.
+_MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+
+
+def _strip_md_inline_decorations(line: str) -> str:
+    """Reduce an html2text heading line to its visible text.
+
+    Unwraps ``[text](url)`` / ``![alt](url)`` (repeatedly, for multiple
+    links), drops emphasis/code markers, unescapes backslash-escaped
+    punctuation, and collapses whitespace — the same visible text
+    ``_heading_visible_text`` produces from the soup side.
+    """
+    prev = None
+    while prev != line:
+        prev = line
+        line = _MD_LINK_RE.sub(r"\1", line)
+    line = line.replace("*", "").replace("`", "")
+    line = re.sub(r"\\(.)", r"\1", line)
+    return " ".join(line.split())
+
+
+def _match_decorated_heading_line(
+    rendered_markdown: str, level: int, text: str, cursor: int
+) -> Optional[re.Match]:
+    """Last-resort heading locator: scan ``#`` lines of the right level and
+    compare their link-stripped visible text against the heading text."""
+    wanted = " ".join(text.split())
+    line_re = re.compile(rf"^{'#' * level} (.+?)\s*$", re.MULTILINE)
+    for m in line_re.finditer(rendered_markdown, cursor):
+        if _strip_md_inline_decorations(m.group(1)) == wanted:
+            return m
+    return None
+
+
 def _compute_section_offsets(
     rendered_markdown: str,
     headings: list[dict],
@@ -238,6 +278,12 @@ def _compute_section_offsets(
             )
             match = relaxed.search(rendered_markdown, cursor)
         if match is None:
+            # Inline links in the heading (``## [Linked](X) part``) carry
+            # brackets and a URL the relaxed character class can't cover.
+            match = _match_decorated_heading_line(
+                rendered_markdown, level, text, cursor
+            )
+        if match is None:
             logger.warning(
                 "Bundle: could not locate heading %r (level %d) in rendered markdown",
                 text,
@@ -262,7 +308,7 @@ def _compute_section_offsets(
     for i, (
         level,
         text,
-        _heading_start,
+        heading_start,
         char_start,
         section_id,
         id_source,
@@ -297,6 +343,7 @@ def _compute_section_offsets(
                     "id": section_id,
                     "title": text,
                     "level": level,
+                    "heading_start": heading_start,
                     "char_start": char_start,
                     "char_end": char_end,
                     "parent_id": parent_id,

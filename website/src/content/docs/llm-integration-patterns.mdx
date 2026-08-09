@@ -7,7 +7,7 @@ sidebar_order: 1
 
 Best practices and patterns for integrating OpenZIM MCP with large language models.
 
-> **Notation:** examples on this page use Python pseudo-call syntax (`zim_query(request="...")`, `zim_search(query="...", ...)`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. The argument names and types match the 8-tool advanced surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
+> **Notation:** examples on this page use Python pseudo-call syntax (`zim_query(query="...")`, `zim_search(query="...", ...)`). The MCP wire format is JSON-RPC `{"name": "...", "arguments": {...}}` — your MCP client handles the framing. The argument names and types match the 8-tool advanced surface (`zim_query`, `zim_search`, `zim_get`, `zim_get_section`, `zim_browse`, `zim_metadata`, `zim_links`, `zim_health`).
 
 ## Overview
 
@@ -25,7 +25,7 @@ Start broad, then narrow down based on results.
 User: "Tell me about evolution"
 
 LLM strategy (simple mode):
-1. zim_query(request="summarize Evolution")
+1. zim_query(query="summarize Evolution")
 
 LLM strategy (advanced mode):
 1. zim_search(query="evolution", ...)                  → broad search
@@ -65,19 +65,19 @@ In simple mode the server exposes one tool. Phrase the request in natural langua
 
 ```python
 # Summarize an article
-zim_query(request="summarize Photosynthesis")
+zim_query(query="summarize Photosynthesis")
 
 # Search across all loaded archives
-zim_query(request="search every ZIM for climate change")
+zim_query(query="search every ZIM for climate change")
 
-# Server health and cache performance
-zim_query(request="what's the server health and cache performance?")
+# List the available archives
+zim_query(query="list available ZIM files")
 
 # Walk a namespace
-zim_query(request="walk namespace M in wikipedia.zim")
+zim_query(query="walk namespace M in wikipedia.zim")
 ```
 
-The intent parser recognises summarise / search / get / browse / structure / TOC / health / list-files / related-articles / find-by-title phrasings. If parsing is ambiguous, the response includes a `routed_to` field describing which underlying operation the parser picked — useful for diagnosing surprises.
+The intent parser recognises summarise / search / get / browse / structure / TOC / list-files / related-articles / find-by-title phrasings (server health and cache stats require the advanced-mode `zim_health` tool). The response text ends with a telemetry comment — `<!-- intent=<operation> cert=<confidence> -->` — describing which underlying operation the parser picked, useful for diagnosing surprises.
 
 For everything that follows on this page, switch to advanced mode for fine-grained control.
 
@@ -127,8 +127,8 @@ suggestions = zim_search(
 )
 
 # Use suggestions to refine search
-for suggestion in suggestions.suggestions:
-    refined = zim_search(query=suggestion, zim_file_path=zim_path)
+for suggestion in suggestions.results:
+    refined = zim_search(query=suggestion.text, zim_file_path=zim_path)
 ```
 
 ### Title-first lookup (skip search overhead)
@@ -154,7 +154,7 @@ Use `cross_file=True` instead of looping over files — `zim_search` queries eve
 ```python
 # One round-trip across every ZIM file in the allowed dirs
 results = zim_search(query="climate change", cross_file=True, limit=5)
-# results.per_file_results groups hits by file
+# results.results holds one row per file; each row's .result is that file's SearchResponse
 ```
 
 ## Content retrieval patterns (advanced mode)
@@ -199,7 +199,8 @@ summary = zim_get(zim_file_path=zim_path, entry_path=entry_path, view="summary")
 ### Link-based exploration
 
 ```python
-# All outbound links (internal + external + media)
+# Outbound links of one kind (default kind="internal";
+# pass kind="external" or kind="media" for the other buckets)
 links = zim_links(
     zim_file_path=zim_path,
     entry_path="C/Biology",
@@ -332,7 +333,7 @@ def create_lesson_plan(topic):
     return {
         "overview": overview,
         "structure": structure,
-        "related_topics": links.outbound_links,
+        "related_topics": links.results,
     }
 ```
 
@@ -357,7 +358,7 @@ def research_topic(topic, depth="medium"):
 
         results.append({
             "content": content,
-            "related": related.related,
+            "related": related.results,
         })
 
     return results
@@ -385,7 +386,7 @@ def summarize_topic(topic):
         zim_get_section(
             zim_file_path=zim_path,
             entry_path=main_path,
-            section_id=s.id,
+            section_id=s.section_id,
         )
         for s in key_sections
     ]
@@ -532,7 +533,7 @@ while True:
         cursor=cursor,
         limit=200,
     )
-    process(page.entries)
+    process(page.results)
     if page.done:
         break
     cursor = page.next_cursor
@@ -540,7 +541,7 @@ while True:
 
 ### MCP prompts
 
-Three pre-built workflow prompts are always available regardless of mode (simple or advanced):
+Three pre-built workflow prompts are available in advanced mode (`--mode advanced` / `OPENZIM_MCP_TOOL_MODE=advanced`):
 
 - `/research <topic>` — `zim_search(cross_file=True)` then `zim_get(view="summary")` on top hits, then ask which thread to pursue.
 - `/summarize <zim_file_path> <entry_path>` — `zim_get(view="toc")` + `zim_get(view="summary")` + `zim_links(direction="outbound")` combined.
@@ -550,7 +551,7 @@ If your client supports MCP prompts, surface these as slash commands rather than
 
 ### MCP resources
 
-Three URI templates also always available:
+Three URI templates, also available in advanced mode:
 
 - `zim://files` — JSON list of every ZIM file.
 - `zim://{name}` — overview of one ZIM (metadata, namespace summary, main-page preview).
@@ -589,4 +590,4 @@ def create_comprehensive_answer(zim_path, entry_path):
 - **[Performance optimization](/openzim-mcp/docs/performance-optimization/)** — cache tuning, rate limiting, batching.
 - **[Smart retrieval](/openzim-mcp/docs/smart-retrieval/)** — how the search-fallback path resolution works.
 
-*v1.x is in maintenance through 2026-11-27. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*
+*The v1.x maintenance window closed when v2.5.0 shipped (2026-06-18); the 2.x line is the only supported series. See [CHANGELOG](https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md) for the v1 → v2 migration table.*

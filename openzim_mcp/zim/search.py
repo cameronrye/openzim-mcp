@@ -53,6 +53,12 @@ logger = logging.getLogger(__name__)
 _FILTERED_BATCH_SIZE = 500
 _FILTERED_MAX_SCAN = 10000
 
+# Fixed rank-decay window for suggestion scores. Dividing by the
+# returned-row count made a suggestion's score depend on the caller's
+# ``limit``; a fixed window keeps the same (query, article, rank) at the
+# same score whatever was requested.
+_SUGGESTION_SCORE_DECAY_WINDOW = 10
+
 
 def canonical_result_path(path: str) -> str:
     """Strip the query string and fragment from a result path.
@@ -746,7 +752,12 @@ class _SearchMixin:
 
         returned_count = len(results)
         last_index = offset + returned_count
-        done = last_index >= total_results
+        # ``total_results`` is Xapian's ESTIMATE and can exceed the real hit
+        # count. When ``getResults`` hands back fewer entries than requested,
+        # the real stream is exhausted — treating the estimate as authoritative
+        # here re-minted the same cursor forever (empty page, done=False,
+        # offset unchanged: a livelock for contract-following clients).
+        done = last_index >= total_results or returned_count < result_count
         next_cursor: Optional[str] = None
         if not done:
             # Post-a20 P1-D1 / post-a21 P1-D5 contract: any tool whose
@@ -2628,6 +2639,11 @@ class _SearchMixin:
     # variant count by ~50× without proportional recall improvement.
     _TYPO_ALPHABET = tuple("abcdefghijklmnopqrstuvwxyz")
 
+    # Longest title the typo prober will expand. Generous for real article
+    # titles (Wikipedia's longest are ~120 chars) while bounding the ~52
+    # variants-per-char blowup on arbitrary front-door input.
+    _TYPO_MAX_TITLE_LENGTH = 128
+
     @staticmethod
     def _typo_variants(title: str) -> List[str]:
         """Yield single-edit variants of ``title`` for typo-tolerant lookup.
@@ -2650,6 +2666,14 @@ class _SearchMixin:
         strictly than deletion because they each multiply the search
         space by 26.
         """
+        # Upper length gate: variant generation is ~52 strings per input
+        # char, each a full copy of the title — an unbounded caller-supplied
+        # title (the front door allows 4096 chars) ballooned to hundreds of
+        # MB of variants and tens of thousands of index probes. No real
+        # article title a typo probe can rescue is anywhere near this long.
+        if len(title) > _SearchMixin._TYPO_MAX_TITLE_LENGTH:
+            return []
+
         seen: set = {title}
         variants: List[str] = []
 
@@ -3095,7 +3119,16 @@ class _SearchMixin:
                             # case-insensitive title match is promoted to
                             # 1.0 (and flips fast_path_hit) so callers can
                             # recognise the strongest possible match.
-                            n = max(len(paths), 1)
+                            #
+                            # Sweep follow-up: decay against the FIXED
+                            # window below, not ``len(paths)`` — dividing
+                            # by the returned-row count made a row's score
+                            # depend on the caller's ``limit`` (rank 1
+                            # scored 0.6333 at limit=10 but 0.475 at
+                            # limit=2 for the same suggestion), skewing
+                            # cross-archive merges. Rank 0 still scores
+                            # 0.95, so the 0.95/0.8 top-row promotion
+                            # gates are unaffected.
                             for idx, path in enumerate(paths):
                                 try:
                                     entry = archive.get_entry_by_path(path)
@@ -3131,8 +3164,20 @@ class _SearchMixin:
                                 else:
                                     # Linearly decaying rank-score in (0, 0.95].
                                     # Capped below 1.0 so an exact match always
-                                    # outranks any prefix/partial.
-                                    score = round(0.95 * (1.0 - idx / n), 4)
+                                    # outranks any prefix/partial; floored so
+                                    # ranks past the window keep a positive
+                                    # score.
+                                    score = round(
+                                        max(
+                                            0.95
+                                            * (
+                                                1.0
+                                                - idx / _SUGGESTION_SCORE_DECAY_WINDOW
+                                            ),
+                                            0.05,
+                                        ),
+                                        4,
+                                    )
                                     match_type = (
                                         "redirect"
                                         if redirect_walked

@@ -5,6 +5,30 @@ import SiteFooter from '../components/SiteFooter.astro';
 const title = "OpenZIM MCP — Knowledge that works offline";
 const description = "OpenZIM MCP gives any AI model structured, secure access to ZIM archives — Wikipedia, MedlinePlus, the Stack Exchange dumps — without an internet connection.";
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const version = "2.6.2"; // x-release-please-version
+const softwareSchema = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "OpenZIM MCP",
+  "alternateName": "OpenZIM MCP Server",
+  "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
+  "url": "https://cameronrye.github.io/openzim-mcp/",
+  "softwareVersion": version,
+  "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
+  "applicationCategory": "DeveloperApplication",
+  "applicationSubCategory": "AI Tools",
+  "operatingSystem": "Linux, macOS, Windows",
+  "programmingLanguage": { "@type": "ComputerLanguage", "name": "Python", "version": "3.12+" },
+  "license": "https://opensource.org/licenses/MIT",
+  "downloadUrl": "https://pypi.org/project/openzim-mcp/",
+  "installUrl": "https://pypi.org/project/openzim-mcp/",
+  "codeRepository": "https://github.com/cameronrye/openzim-mcp",
+  "softwareHelp": "https://github.com/cameronrye/openzim-mcp#readme",
+  "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+  "creator": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+  "maintainer": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+};
 ---
 <LandingLayout title={title} description={description}>
   <Fragment slot="head">
@@ -30,7 +54,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <meta property="og:image:height" content="630">
     <meta property="og:locale" content="en_US">
     <meta property="article:author" content="Cameron Rye">
-    <meta property="article:modified_time" content="2026-06-22T00:00:00Z">
+    <meta property="article:modified_time" content="2026-08-06T00:00:00Z"> <!-- x-release-please-date -->
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
@@ -67,31 +91,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       })();
     </script>
 
-    <script type="application/ld+json" is:inline>
-    {
-      "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      "name": "OpenZIM MCP",
-      "alternateName": "OpenZIM MCP Server",
-      "description": "A modern, secure MCP server that enables AI models to access and search ZIM format knowledge bases offline with intelligent, structured access patterns",
-      "url": "https://cameronrye.github.io/openzim-mcp/",
-      "softwareVersion": "2.5.1",
-      "releaseNotes": "https://github.com/cameronrye/openzim-mcp/blob/main/CHANGELOG.md",
-      "applicationCategory": "DeveloperApplication",
-      "applicationSubCategory": "AI Tools",
-      "operatingSystem": "Linux, macOS, Windows",
-      "programmingLanguage": { "@type": "ComputerLanguage", "name": "Python", "version": "3.12+" },
-      "license": "https://opensource.org/licenses/MIT",
-      "downloadUrl": "https://pypi.org/project/openzim-mcp/",
-      "installUrl": "https://pypi.org/project/openzim-mcp/",
-      "codeRepository": "https://github.com/cameronrye/openzim-mcp",
-      "softwareHelp": "https://github.com/cameronrye/openzim-mcp#readme",
-      "author": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
-      "creator": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
-      "maintainer": { "@type": "Person", "name": "Cameron Rye", "url": "https://rye.dev" },
-      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
-    }
-    </script>
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(softwareSchema)}></script>
     <script type="application/ld+json" is:inline>
     { "@context": "https://schema.org", "@type": "Organization", "name": "OpenZIM MCP",
       "url": "https://cameronrye.github.io/openzim-mcp/",
@@ -169,7 +169,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
             </button>
           </div>
           <ul class="hero__stats">
-            <li><span class="hero__stat-num">v2.5.1</span><span class="hero__stat-label">Latest release</span></li>
+            <li><span class="hero__stat-num">v{version}</span><span class="hero__stat-label">Latest release</span></li>
             <li><span class="hero__stat-num">1 + 8</span><span class="hero__stat-label">Simple / advanced tools</span></li>
             <li><span class="hero__stat-num">80%+</span><span class="hero__stat-label">Test coverage</span></li>
             <li><span class="hero__stat-num">MIT</span><span class="hero__stat-label">License</span></li>
@@ -360,7 +360,7 @@ tests/test_phase_f_gate_decision_consistency.py</code></pre>
                 <pre><code>uv tool install openzim-mcp</code></pre>
               </div>
               <div class="tabs__panel" id="install-docker" role="tabpanel" aria-labelledby="tab-install-docker" hidden>
-                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:2.5.1</code></pre>
+                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:2.6.2</code></pre> <!-- x-release-please-version -->
               </div>
               <div class="tabs__panel" id="install-source" role="tabpanel" aria-labelledby="tab-install-source" hidden>
                 <pre><code>git clone https://github.com/cameronrye/openzim-mcp.git
@@ -440,17 +440,21 @@ Calvin cycle (light-independent reactions).</code></pre>
                 </div>
                 <div>
                   <h4>Response</h4>
-                  <pre><code>Found 42 matches, showing 1-5:
-
-## 1. Artificial Intelligence
-Path: C/Artificial_intelligence
-Snippet: Artificial intelligence (AI) is
-intelligence demonstrated by machines...
-
-## 2. Machine Learning
-Path: C/Machine_learning
-Snippet: Machine learning is a subset of
-artificial intelligence...</code></pre>
+                  <pre><code>{`{
+  "results": [
+    { "path": "C/Artificial_intelligence",
+      "title": "Artificial Intelligence",
+      "snippet": "Artificial intelligence (AI)
+       is intelligence demonstrated
+       by machines..." },
+    { "path": "C/Machine_learning",
+      "title": "Machine Learning",
+      "snippet": "Machine learning is a subset
+       of artificial intelligence..." }
+  ],
+  "total": 42,
+  "done": false
+}`}</code></pre>
                 </div>
               </div>
             </div>
@@ -472,15 +476,15 @@ artificial intelligence...</code></pre>
                   <h4>Response</h4>
                   <pre><code>{`{
   "namespace": "C",
-  "total_in_namespace": 80000,
-  "returned_count": 10,
-  "has_more": true,
-  "entries": [
+  "results": [
     { "path": "C/Biology",
       "title": "Biology",
       "preview": "Biology is the scientific
                   study of life..." }
-  ]
+  ],
+  "total": 80000,
+  "next_cursor": null,
+  "done": false
 }`}</code></pre>
                 </div>
               </div>
