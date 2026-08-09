@@ -123,6 +123,43 @@ def test_doc_version_annotations_are_current() -> None:
         )
 
 
+# Versions these docs mention as HISTORY (support-window prose, "since
+# vX.Y.Z" notes, superseded image tags) rather than as "the current
+# release". Every other ``vX.Y.Z`` literal in an annotated doc must be the
+# current version — otherwise it is an unannotated current-version claim,
+# which is exactly the drift these annotations exist to prevent. The hero
+# "Latest release" stat on the landing page sat at v2.5.1 through four
+# releases because nothing checked this.
+_HISTORICAL_VERSIONS = {"1.0.0", "1.2.0", "2.0.0", "2.5.0", "2.6.0"}
+
+# ``v`` immediately followed by a semver, not preceded by a word char or dot
+# (so SVG path data like ``a4 4 0 0 0-2.526 5.77`` can't match).
+_V_SEMVER_RE = re.compile(r"(?<![\w.])v(\d+\.\d+\.\d+)\b")
+
+
+def test_no_unannotated_current_version_claims() -> None:
+    """A hardcoded version that is neither stamped nor declared historical."""
+    offenders = []
+    for rel_path in _VERSION_ANNOTATED_DOCS:
+        for lineno, line in enumerate(
+            (REPO / rel_path).read_text(encoding="utf-8").splitlines(), 1
+        ):
+            if "x-release-please" in line:
+                continue
+            for found in _V_SEMVER_RE.findall(line):
+                if found == __version__ or found in _HISTORICAL_VERSIONS:
+                    continue
+                offenders.append(f"{rel_path}:{lineno}: v{found}")
+    assert not offenders, (
+        "unannotated version strings that are neither the current version "
+        f"({__version__}) nor a declared historical reference: {offenders}. "
+        "Either annotate the line with x-release-please-version (and register "
+        "the file in release-please-config.json), derive it from an already-"
+        "annotated constant, or add the version to _HISTORICAL_VERSIONS if it "
+        "is deliberately referring to a past release."
+    )
+
+
 def test_annotated_docs_registered_with_release_please() -> None:
     """An annotation only works if the file is listed in extra-files."""
     config = json.loads(
