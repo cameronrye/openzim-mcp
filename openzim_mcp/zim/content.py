@@ -91,7 +91,7 @@ _TEXT_MIME_PREFIX = "text/"
 # the HTML body), so a heading-token slice can never match; and no mwoffliner
 # wiktionary archive was available to pin a gloss token. Re-add their entries
 # here (and to SummaryStyle + data/presets.toml) once a real archive validates
-# the selector. See docs/superpowers/plans/2026-06-15-v2.5-remaining-work.md.
+# the selector. See the deferred items in docs/roadmap.md.
 _ANSWER_HEADING_TOKENS = ("answer",)
 
 _STYLE_HEADING_TOKENS: Dict[str, Tuple[str, ...]] = {
