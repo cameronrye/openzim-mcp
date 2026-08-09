@@ -971,15 +971,27 @@ def _do_per_archive_search(
             )
         archives_searched.append(archive_name)
         archive_by_name[archive_name] = (archive, validated_path)
-        per_archive_hits.append(
-            _per_archive_search(
+        # Failure isolation: one bad archive (no fulltext index, corrupt
+        # clusters, transient I/O) must not take the whole multi-archive
+        # synthesize down — degrade it to zero hits and keep the rest.
+        try:
+            hits = _per_archive_search(
                 archive,
                 search_handler=search_handler,
                 query=query,
                 k=k,
                 validated_path=str(validated_path),
             )
-        )
+        except Exception as e:
+            logger.warning(
+                "synthesize: search failed for archive %s (%s): %s — "
+                "continuing without it",
+                archive_name,
+                validated_path,
+                e,
+            )
+            hits = []
+        per_archive_hits.append(hits)
     return per_archive_hits, archives_searched, archive_by_name
 
 

@@ -574,6 +574,35 @@ def select_main_content(soup: BeautifulSoup) -> BeautifulSoup:
     return soup
 
 
+def _heading_visible_text(heading: Tag) -> str:
+    """Heading text as the rendered markdown will show it.
+
+    ``_render_soup_to_text`` strips ``UNWANTED_HTML_SELECTORS`` before
+    rendering, but heading collection runs on the unstripped tree — so a
+    heading like ``History<span class="mw-editsection">[edit]</span>`` or
+    ``Etymology<sup class="reference">[1]</sup>`` got text the rendered
+    markdown never contains, and its section silently vanished from the
+    bundle (the preceding section's slice absorbed it). Exclude those
+    subtrees here, without mutating the tree (link extraction still runs
+    on the same soup afterwards).
+    """
+    unwanted_ids: set = set()
+    for selector in UNWANTED_HTML_SELECTORS:
+        try:
+            for el in heading.select(selector):
+                unwanted_ids.add(id(el))
+        except Exception:  # pragma: no cover - selector engine quirks
+            continue
+    if not unwanted_ids:
+        return str(heading.get_text()).strip()
+    parts: List[str] = []
+    for s in heading.find_all(string=True):
+        if any(id(parent) in unwanted_ids for parent in s.parents):
+            continue
+        parts.append(str(s))
+    return "".join(parts).strip()
+
+
 def _build_headings(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     """Collect headings (h1-h6) in document order with disambiguated anchors.
 
@@ -593,7 +622,7 @@ def _build_headings(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
         if not (isinstance(heading, Tag) and heading.name):
             continue
-        text = heading.get_text().strip()
+        text = _heading_visible_text(heading)
         if not text:
             continue
         anchor_id, id_source = resolve_heading_id(heading)

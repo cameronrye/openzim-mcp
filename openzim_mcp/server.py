@@ -59,9 +59,24 @@ def _build_transport_allowed_hosts(configured_hosts: list[str]) -> list[str]:
     allowed_hosts = list(_LOOPBACK_TRANSPORT_HOSTS)
     for host in configured_hosts:
         allowed_hosts.append(host)
-        if ":" not in host:
+        if not _has_port_or_wildcard(host):
             allowed_hosts.append(f"{host}:*")
     return allowed_hosts
+
+
+def _has_port_or_wildcard(host: str) -> bool:
+    """True when ``host`` already carries a ``:port`` / ``:*`` suffix.
+
+    A bare ``":" in host`` test misclassified bracketed IPv6 literals:
+    ``[2001:db8::1]`` contains colons but no port, so it never got its
+    ``:*`` variant and a proxied ``Host: [2001:db8::1]:443`` was 421'd
+    (the hand-built loopback list shows both forms are required). For
+    bracketed literals the port can only follow the closing bracket.
+    """
+    if host.startswith("["):
+        bracket_end = host.rfind("]")
+        return bracket_end != -1 and ":" in host[bracket_end:]
+    return ":" in host
 
 
 # Bind-all sentinels: a server bound here has no single client-facing Host to

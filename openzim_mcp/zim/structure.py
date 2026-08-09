@@ -1208,11 +1208,14 @@ class _StructureMixin:
         # (e.g. ``iep.utm.edu/a/``). normpath strips trailing slashes, so
         # remember the URL's slash-ness and restore it after normalization.
         had_trailing_slash = url.endswith("/")
-        base_dir = dirname(source_entry_path)
-        if base_dir:
-            joined = f"{base_dir}/{url}"
-        else:
+        if url.startswith("/"):
+            # Root-absolute href: posix semantics say it ignores the base.
+            # Joining it onto the source's directory produced non-existent
+            # targets like ``C/foo/A/Berlin`` for ``/A/Berlin``.
             joined = url
+        else:
+            base_dir = dirname(source_entry_path)
+            joined = f"{base_dir}/{url}" if base_dir else url
         # normpath collapses "..", "./", and double slashes.
         resolved = normpath(joined).lstrip("/")
         # Drop any leading "./" or empty segments.
