@@ -75,10 +75,14 @@ POST /mcp HTTP/1.1
 Host: openzim-mcp.example
 Authorization: Bearer <YOUR_TOKEN>
 Content-Type: application/json
-Mcp-Session-Id: <session-id-if-resuming>
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
 
-{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ```
+
+2026-07-28 requests are stateless: there is no `initialize` handshake, no `Mcp-Session-Id` (the server issues none), and `Mcp-Method` must name the same method as the body — `tools/call` additionally needs `Mcp-Name` matching the tool name. A client that sends no `MCP-Protocol-Version`, or one naming a 2025 revision, gets the handshake-era path instead: `initialize` first, then a server-issued `Mcp-Session-Id` echoed on every later request.
 
 Failures return `401 {"error":"unauthorized"}` with `WWW-Authenticate: Bearer`.
 
@@ -93,9 +97,9 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com","https://other.examp
 ```
 
 - Wildcard `"*"` is **rejected at startup** — including whitespace-padded variants like `" * "`. There is no opt-out. Wildcard CORS combined with bearer-token auth is the canonical recipe for token theft via a malicious site.
-- `Mcp-Session-Id` is in `allow_headers` and `expose_headers` so streamable-HTTP clients can resume sessions across CORS preflight.
+- The allowed headers cover both protocol eras the endpoint serves. `Mcp-Session-Id` and `Last-Event-ID` are there for browser clients still on the `initialize` handshake, which hold a session and resume dropped streams; `Mcp-Method` and `Mcp-Name` are the headers a 2026-07-28 client must send on every POST. `Mcp-Session-Id` is also in `expose_headers` so a handshake-era browser client can read the id the server issued.
 - CORS is the *outer* middleware layer (LIFO add order) so a 401 from auth still carries `Access-Control-Allow-Origin` headers — browsers see "401 unauthorized" instead of an opaque CORS error.
-- Allowed methods: `GET`, `POST`, `OPTIONS`, `DELETE` (`DELETE` is the streamable-HTTP session-termination method).
+- Allowed methods: `GET`, `POST`, `OPTIONS`, `DELETE` (`DELETE` is the handshake-era session-termination method; a 2026-07-28 client only POSTs).
 
 If no browser client connects (you're hitting the endpoint from another server, a CLI client, or a desktop MCP client), leave this unset.
 
@@ -145,11 +149,12 @@ curl -fsS http://localhost:8000/readyz
 
 ## Resource subscriptions over HTTP
 
-The polling watcher (`MtimeWatcher`) is started via a wrapped lifespan handler so it works under streamable HTTP (FastMCP supplies its own lifespan; `add_event_handler('startup', …)` is silently a no-op).
+The polling watcher (`MtimeWatcher`) is started via a wrapped lifespan handler so it works under streamable HTTP (the SDK's `streamable_http_app()` supplies its own lifespan; `add_event_handler('startup', …)` is silently a no-op).
 
-- `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the watcher entirely.
+- Clients opt in with one long-lived `subscriptions/listen` request. A `.zim` appearing or disappearing publishes `notifications/resources/list_changed`; one replaced in place publishes `notifications/resources/updated` for `zim://{name}`.
+- `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the watcher entirely; listen requests still succeed, they just never receive anything.
 - `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1–60) controls poll cadence.
-- A subscriber that doesn't respond within 5 seconds is treated as dead and evicted from the registry — the fan-out is concurrent, so one hung subscriber doesn't delay others.
+- Delivery is the SDK's: each listen stream is buffered independently, concurrent streams and per-stream backlog are both capped, and a stream whose client stops reading is ended. There is no replay — a client that loses its stream re-listens and re-reads.
 
 See [Resources, prompts and subscriptions](/openzim-mcp/docs/resources-prompts-subscriptions/) for client-side examples.
 
@@ -327,7 +332,7 @@ Common failure modes:
 - **Clients get 401 Unauthorized.** Token mismatch. Verify with `curl -H "Authorization: Bearer $TOKEN" http://host/mcp/...`. Don't paste the token into chat or tickets.
 - **Browser clients get 403 / CORS errors.** Either `OPENZIM_MCP_CORS_ORIGINS` is unset (and a browser is calling) or the client's origin isn't in the allow-list. The browser console shows the offending origin; add it.
 - **`/readyz` returns 503.** None of the configured ZIM directories are readable from inside the container. (With multiple allowed directories, one bad mount is fine — readiness flips only when *all* of them fail.) Check the volume mount path (host side and `/data` side) and that the mount isn't empty. Permissions: the in-container user is UID 10001; the host directory needs to be world-readable or owned by UID 10001.
-- **Subscriptions stop firing.** Confirm `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` isn't set to `false`. If a client claims it subscribed but never gets updates, check that the subscribe call actually returned a successful response — clients silently treating a failed subscription as success is a known footgun.
+- **Subscriptions stop firing.** Confirm `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` isn't set to `false`. A `subscriptions/listen` request is acknowledged even when the watcher is off, so "the subscription succeeded" proves nothing on its own. Check the acknowledgement's echoed filter: a client that asked for `zim://files` under `resourceSubscriptions` gets an ack and silence, because directory-membership changes are published as `notifications/resources/list_changed` (opt in with `resourcesListChanged`).
 
 ---
 
@@ -591,11 +596,13 @@ Pinning is deliberate: `:latest` makes upgrades a surprise, and the release note
 docker compose logs -f openzim-mcp
 ```
 
-A clean startup logs the bind host/port and the configured allowed directory. An auth failure logs the route, status, and client IP — *not* the attempted token. Subscription updates are delivered silently; a subscriber that fails to receive a notification is logged as a warning when its session is evicted.
+A clean startup logs the bind host/port and the configured allowed directory. An auth failure logs the route, status, and client IP — *not* the attempted token. Subscription updates are delivered silently; the SDK logs a warning when it ends a listen stream whose client stopped reading and overran its event backlog.
 
 #### Scaling considerations
 
-Each replica has its own in-memory cache; persistent cache on shared storage isn't recommended (see the Kubernetes section above). Horizontal scaling works — add replicas, front them with any L7 load balancer that supports HTTP/1.1 keep-alive and forwards `Authorization` + `Mcp-Session-Id` unchanged — but session-stickiness **is** required: streamable-HTTP session state lives in the process that created the session, and a replica that doesn't recognize the presented `Mcp-Session-Id` returns `404 Session not found`. Use cookie- or header-based affinity (e.g. hash on `Mcp-Session-Id`), or run one replica.
+Each replica has its own in-memory cache; persistent cache on shared storage isn't recommended (see the Kubernetes section above). Horizontal scaling works — add replicas and front them with any L7 load balancer that supports HTTP/1.1 keep-alive and forwards `Authorization` unchanged. A 2026-07-28 client is stateless, so any replica can answer any request; a long-lived `subscriptions/listen` stream is naturally pinned to the replica holding it, and each replica runs its own watcher over the same directories, so it publishes to its own listeners.
+
+Handshake-era clients still need session-stickiness: their session state lives in the process that issued it, and a replica that doesn't recognize the presented `Mcp-Session-Id` returns `404 Session not found`. If any of your clients still use `initialize`, forward `Mcp-Session-Id` unchanged and use cookie- or header-based affinity (e.g. hash on `Mcp-Session-Id`), or run one replica.
 
 ---
 

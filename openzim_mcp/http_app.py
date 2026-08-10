@@ -400,10 +400,12 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
         allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
         # MCP-Protocol-Version is sent by legacy clients post-initialize; the
         # 2026-07-28 revision also defines it as the header form of the
-        # per-request protocol version. Mcp-Method / Mcp-Name are that
-        # revision's new required POST headers — allow-listed ahead of use,
-        # since mcp 2.0.0 does not send or enforce them yet and a browser
-        # client would otherwise fail preflight the moment it does.
+        # per-request protocol version. Mcp-Method and Mcp-Name are that
+        # revision's required POST headers, and the SDK enforces them today: a
+        # modern POST whose Mcp-Method disagrees with the body's method is
+        # rejected with -32020, and tools/call additionally requires Mcp-Name.
+        # Both are therefore load-bearing here, not forward-compatibility —
+        # omitting them fails browser preflight for every 2026-era client.
         allow_headers=[
             "Authorization",
             "Content-Type",

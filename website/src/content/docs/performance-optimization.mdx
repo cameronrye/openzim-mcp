@@ -195,7 +195,20 @@ Both endpoints are auth-exempt and CORS-friendly; safe to wire into Kubernetes p
 
 ### Calling `zim_health` from outside an MCP client
 
-You can hit the JSON-RPC endpoint directly, but the streamable-HTTP transport is stateful: session ids are issued by the server in the `initialize` response header, not chosen by the client — a made-up `Mcp-Session-Id` gets `404 Session not found`. The full handshake (replace `$TOKEN` with `OPENZIM_MCP_AUTH_TOKEN`):
+You can hit the JSON-RPC endpoint directly. Under the 2026-07-28 revision that is a single stateless POST — no handshake, no session id — but the request envelope is strict: `Mcp-Method` must name the same method as the body, `tools/call` also needs `Mcp-Name` matching the tool, and `params._meta` must carry the protocol version and client capabilities. Replace `$TOKEN` with `OPENZIM_MCP_AUTH_TOKEN`:
+
+```bash
+curl -sS -X POST http://localhost:8000/mcp \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -H "MCP-Protocol-Version: 2026-07-28" \
+    -H "Mcp-Method: tools/call" \
+    -H "Mcp-Name: zim_health" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"zim_health","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+The endpoint still serves the deprecated handshake era for clients that haven't moved: omit `MCP-Protocol-Version` (or name a 2025 revision) and the transport becomes stateful — session ids are issued by the server in the `initialize` response header, not chosen by the client, so a made-up `Mcp-Session-Id` gets `404 Session not found`. The full handshake:
 
 ```bash
 # 1. Initialize; capture the server-issued session id from the response headers

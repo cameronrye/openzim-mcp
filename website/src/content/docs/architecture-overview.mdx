@@ -111,7 +111,7 @@ openzim_mcp/
 ├── main.py                  # CLI entry — reads --mode/--transport/--host/--port
 ├── server.py                # OpenZimMcpServer + DI wiring + tool registration
 ├── http_app.py              # Streamable-HTTP / SSE Starlette app, auth, CORS, /healthz, /readyz
-├── subscriptions.py         # MtimeWatcher + SubscriberRegistry (resource subscriptions)
+├── subscriptions.py         # MtimeWatcher + publish_change onto the SDK's SubscriptionBus
 ├── simple_tools.py          # zim_query NL handler (Simple mode)
 ├── intent_parser.py         # NL intent → underlying-tool routing
 ├── config.py                # OpenZimMcpConfig (pydantic-settings)
@@ -169,7 +169,7 @@ content_processor → ContentProcessor(config.content)
 zim_operations    → ZimOperations(config, path_validator, cache, content_processor)
 async_zim_ops     → AsyncZimOperations(zim_operations)
 rate_limiter      → RateLimiter(config.rate_limit)
-subscriber_reg    → SubscriberRegistry()  (only when subscriptions_enabled)
+subscription_bus  → InMemorySubscriptionBus()  (only when subscriptions_enabled and transport='http')
 simple_tools_h    → SimpleToolsHandler(zim_operations, async_zim_operations)
 ```
 
@@ -181,21 +181,21 @@ Owns streamable-HTTP and legacy-SSE concerns so `server.py` stays focused on MCP
 
 - **Starlette app** with `/healthz` (liveness — always 200) and `/readyz` (returns 503 if no allowed directory is readable).
 - **`BearerTokenAuthMiddleware`** — timing-safe `hmac.compare_digest`; never logs the attempted token; `OPTIONS` is *not* exempt; `/healthz`/`/readyz` are.
-- **CORS** — explicit allow-list via `apply_cors_middleware`; wildcard `*` rejected at config-load time. `Mcp-Session-Id` is in `allow_headers` and `expose_headers` so browser clients can resume sessions.
+- **CORS** — explicit allow-list via `apply_cors_middleware`; wildcard `*` rejected at config-load time. The header allow-list is the union of both protocol eras the endpoint serves: `Mcp-Session-Id` and `Last-Event-ID` are kept for browser-based handshake-era clients (2026-07-28 removed sessions and stream resumption), while `Mcp-Method` and `Mcp-Name` are what a 2026-07-28 client must send on every POST.
 - **`check_safe_startup`** — refuses to bind a non-loopback host without an auth token (HTTP) or any non-loopback host (SSE has no auth middleware).
-- **Lifespan wrapping** — the subscription watcher is started/stopped via a wrapper around FastMCP's own lifespan context (FastMCP's `streamable_http_app()` supplies its own custom lifespan, which means `add_event_handler('startup', …)` is silently a no-op).
+- **Lifespan wrapping** — the subscription watcher is started/stopped via a wrapper around the SDK's own lifespan context (`streamable_http_app()` supplies its own custom lifespan, which means `add_event_handler('startup', …)` is silently a no-op).
 
 See [HTTP and Docker deployment](/openzim-mcp/docs/http-and-docker-deployment/) for operator-level guidance.
 
 ### Subscriptions (`subscriptions.py`)
 
-Polling-based mtime watcher:
+Polling-based mtime watcher, plus the mapping from its change kinds onto MCP notifications. Delivery belongs to the SDK: clients opt in with `subscriptions/listen`, and the SDK's `ListenHandler` owns the listener registry, per-stream filtering, backpressure, and teardown.
 
-- **`MtimeWatcher`** — periodically scans every allowed directory; emits change events on file add/remove and on `.zim` mtime **or size** change (catches same-size replacement via mtime, and same-mtime rewrites via size).
-- **`SubscriberRegistry`** — maps subscribed URI → set of subscriber callbacks. Fan-out is concurrent (`asyncio.gather`); per-subscriber send is bounded by `TIMEOUTS.SUBSCRIPTION_SEND_SECONDS` so one hung subscriber doesn't block others.
+- **`MtimeWatcher`** — periodically scans every allowed directory (recursively); emits change events on file add/remove and on `.zim` mtime **or size** change (catches same-size replacement via mtime, and same-mtime rewrites via size).
+- **`publish_change`** — maps the two change kinds onto *different* notifications: an add/remove changes the membership of `zim://files`, so it publishes `ResourcesListChanged` (`notifications/resources/list_changed`); an in-place replacement invalidates one resource, so it publishes `ResourceUpdated` for `zim://{name}` (`notifications/resources/updated`).
 - Tunable via `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1-60); disable with `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false`.
-- Subscription support is HTTP-only: the watcher runs under the HTTP lifespan, and the subscribe/unsubscribe handlers are registered only for that transport.
-- Implementation note: handler registration uses a private FastMCP attribute (`_mcp_server`) — FastMCP exposes no public subscribe-handler API.
+- Publishing is HTTP-only: `server.py` builds an `InMemorySubscriptionBus` only for `transport='http'`, and the watcher runs under the HTTP lifespan. `subscriptions/listen` is still served on stdio and SSE — the SDK registers that handler unconditionally, falling back to a bus of its own — it just never receives anything.
+- Admission control lives in the SDK too: `ListenHandler` caps concurrent listen streams and per-stream buffered events, ending a stream that outruns its consumer.
 
 ### Security layer (`security.py`)
 
@@ -316,7 +316,7 @@ client → CORS middleware → BearerTokenAuthMiddleware → FastMCP MCP routes
 
 Why CORS-outer-than-auth: a 401 from auth must still carry `Access-Control-Allow-Origin` headers, otherwise browsers see an opaque CORS error instead of "401 unauthorized".
 
-The subscription watcher is started on app startup via a `lifespan_context` wrapper (FastMCP supplies its own lifespan, so `add_event_handler('startup', …)` is silently a no-op).
+The subscription watcher is started on app startup via a `lifespan_context` wrapper (the SDK's `streamable_http_app()` supplies its own lifespan, so `add_event_handler('startup', …)` is silently a no-op).
 
 ## What was removed before v2.0.0
 

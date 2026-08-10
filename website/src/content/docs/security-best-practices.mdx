@@ -117,7 +117,7 @@ export OPENZIM_MCP_CORS_ORIGINS='["https://app.example.com"]'
 
 Wildcard `"*"` is **rejected at startup** — including whitespace-padded variants like `" * "`. There is no opt-out; the wildcard footgun is closed.
 
-`Mcp-Session-Id` is in `allow_headers` and `expose_headers` so browser clients can resume sessions across CORS preflight.
+The allow-list covers both protocol eras the endpoint serves: `Mcp-Session-Id` (also in `expose_headers`) and `Last-Event-ID` for browser clients still on the `initialize` handshake, and `Mcp-Method` / `Mcp-Name` for 2026-07-28 clients, which are stateless and send no session id at all.
 
 ### Health endpoints
 
@@ -193,7 +193,8 @@ Real defaults (verify against [openzim_mcp/defaults.py](https://github.com/camer
 | Rate limit burst cap | 1000 | `RateLimitConfig.burst_size.le` |
 | Path input cap | 1000 chars | `INPUT_LIMITS.FILE_PATH` |
 | Query input cap | 500 chars | `INPUT_LIMITS.QUERY` |
-| Subscription send timeout | 5 sec | `TimeoutDefaults.SUBSCRIPTION_SEND_SECONDS` |
+| Concurrent `subscriptions/listen` streams | 1024 | SDK `ListenHandler.max_subscriptions` |
+| Buffered events per listen stream | 1024 | SDK `ListenHandler.max_buffered_events` |
 
 ## Reporting vulnerabilities
 

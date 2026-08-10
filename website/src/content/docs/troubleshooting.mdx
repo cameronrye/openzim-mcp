@@ -345,7 +345,7 @@ Bearer token missing or wrong. Note `OPTIONS /mcp` is **not** exempt from auth (
 
 ### Browser CORS errors when resuming sessions
 
-`Mcp-Session-Id` is in the server's `allow_headers` and `expose_headers` since v1.0. If you have a reverse proxy in front that strips this header, sessions can't resume.
+`Mcp-Session-Id` is in the server's `allow_headers` and `expose_headers` since v1.0, and stays there for clients on the `initialize` handshake. If you have a reverse proxy in front that strips this header, their sessions can't resume. A 2026-07-28 client has no session to resume — it needs `MCP-Protocol-Version`, `Mcp-Method`, and (for `tools/call`) `Mcp-Name` to survive the proxy instead; all three are in `allow_headers`.
 
 ### `OPENZIM_MCP_CORS_ORIGINS` rejected at startup
 
@@ -380,10 +380,13 @@ A literal slash will fail to route. Other RFC 3986 reserved characters in the pa
 
 ### Subscriptions never fire
 
-- Check `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` — set to `false` disables the watcher entirely.
+- Check `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` — set to `false` disables the watcher entirely. The `subscriptions/listen` request is still acknowledged, so a successful subscription is not evidence the watcher is running.
+- Notifications are published only under the HTTP transport (`--transport http`). On stdio and SSE a listen stream is acknowledged and stays silent.
+- Check what your client asked for. A `.zim` appearing or disappearing publishes `notifications/resources/list_changed` (opt in with `resourcesListChanged: true`); only an in-place replacement publishes `notifications/resources/updated`, and only for that archive's own `zim://{name}` URI. Listing `zim://files` under `resourceSubscriptions` never fires.
 - Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5, range 1-60). Slower poll = longer detection latency.
-- Detection is mtime-based — same-size archive replacement is detected via mtime change.
-- A subscriber that doesn't respond within 5 seconds is treated as dead and evicted from the registry; if your client is slow, increase its response timeout or process notifications asynchronously.
+- Detection compares mtime **and** size — same-size archive replacement is caught via the mtime change, same-mtime rewrites via the size change.
+- A client that stops reading its stream overruns the SDK's per-stream event backlog and has the stream ended; process notifications asynchronously and re-listen if the stream closes. There is no replay, so re-read the resource after re-listening.
+- `resources/subscribe` was removed by the 2026-07-28 revision and is not served on this build — it answers `-32601 Method not found`. A client that only speaks the `initialize` handshake cannot receive change notifications at all.
 
 ## Configuration errors
 

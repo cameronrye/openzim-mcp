@@ -494,15 +494,18 @@ Calvin cycle (light-independent reactions).</code></pre>
                 <div>
                   <h4>Subscribe</h4>
                   <pre><code>{`{
-  "method": "resources/subscribe",
-  "params": { "uri": "zim://files" }
+  "method": "subscriptions/listen",
+  "params": { "notifications": {
+    "resourcesListChanged": true,
+    "resourceSubscriptions": ["zim://wikipedia_en"]
+  } }
 }`}</code></pre>
                 </div>
                 <div>
-                  <h4>Notification (when archive changes)</h4>
+                  <h4>Notification (when an archive is replaced)</h4>
                   <pre><code>{`{
   "method": "notifications/resources/updated",
-  "params": { "uri": "zim://files" }
+  "params": { "uri": "zim://wikipedia_en" }
 }`}</code></pre>
                 </div>
               </div>

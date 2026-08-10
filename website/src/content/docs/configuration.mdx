@@ -73,14 +73,14 @@ For full HTTP deployment guidance see [HTTP and Docker Deployment](/openzim-mcp/
 
 ## Resource subscriptions
 
-Polling-based mtime watcher that emits `notifications/resources/updated` to subscribed clients when allowed directories change or `.zim` files are replaced.
+Polling-based mtime watcher. A `.zim` appearing in or disappearing from an allowed directory publishes `notifications/resources/list_changed`; a `.zim` replaced in place publishes `notifications/resources/updated` for that archive's `zim://{name}`. Both reach clients that opted in via `subscriptions/listen`, and only under the HTTP transport.
 
 ```bash
 export OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=true        # default true
 export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=5          # default 5, range 1-60
 ```
 
-Setting `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the polling task entirely; subscribe calls succeed but never fire updates. Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` upward for low-priority watching, downward for sub-second freshness.
+Setting `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the polling task entirely; `subscriptions/listen` still succeeds and is acknowledged, but never fires. Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` upward for low-priority watching, downward (to a floor of 1s) for faster detection.
 
 ## Cache
 

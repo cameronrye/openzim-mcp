@@ -11,7 +11,7 @@ OpenZIM MCP exposes three kinds of MCP surfaces:
 |---------|------------------------|---------------|
 | **Tools** (callable functions) | 8 | only `zim_query` exposed in Simple mode |
 | **Prompts** (slash-command workflows) | 3 | Advanced mode only |
-| **Resources** (URI-addressable data) | 3 templates + subscriptions | Advanced mode only (subscriptions additionally require the HTTP transport) |
+| **Resources** (URI-addressable data) | 3 templates + subscriptions | Advanced mode only (change notifications additionally require the HTTP transport) |
 
 In **Simple mode** (the default) only the `zim_query` natural-language tool is exposed. Pass `--mode advanced` (or set `OPENZIM_MCP_TOOL_MODE=advanced`) to expose all 8 specialized tools below.
 
@@ -403,12 +403,12 @@ A literal slash will fail to route. See the [Resources, prompts & subscriptions 
 
 ## Resource subscriptions
 
-Under the HTTP transport (`--transport http`), clients can subscribe to `zim://files` or `zim://{name}` and receive `notifications/resources/updated` whenever:
+Clients open one long-lived `subscriptions/listen` stream naming the notification kinds they want (`resources/subscribe` was removed by the 2026-07-28 revision). Under the HTTP transport (`--transport http`) the server then publishes:
 
-- A `.zim` file is added to or removed from an allowed directory (`zim://files`)
-- A specific `.zim` file's mtime or size changes (`zim://{name}`)
+- `notifications/resources/list_changed` when a `.zim` file is added to or removed from an allowed directory — request it with `resourcesListChanged: true`
+- `notifications/resources/updated` for `zim://{name}` when that `.zim` file's mtime or size changes — request it with `resourceSubscriptions: ["zim://{name}"]`
 
-On stdio and SSE the subscribe handlers are not registered and the capability is not advertised.
+`subscriptions/listen` is served on stdio and SSE too, but only the HTTP transport runs the file watcher, so on those transports the stream is acknowledged and stays silent.
 
 Configuration:
 

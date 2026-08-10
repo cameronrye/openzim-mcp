@@ -106,7 +106,7 @@ openzim-mcp/
 │   ├── content_processor.py    # HTML→text, heading-id, link extraction
 │   ├── async_operations.py     # asyncio helpers and timeouts
 │   ├── timeout_utils.py        # Timeout primitives
-│   ├── subscriptions.py        # MtimeWatcher and SubscriberRegistry
+│   ├── subscriptions.py        # MtimeWatcher and publish_change (SDK subscription bus)
 │   ├── simple_tools.py         # Simple-mode `zim_query` tool
 │   ├── intent_parser.py        # Natural-language intent parsing
 │   ├── tool_schemas.py         # Per-tool response TypedDicts
