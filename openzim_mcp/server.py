@@ -30,6 +30,11 @@ from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
 
+# TTL for results derived purely from the startup registration tables. One hour
+# is a cache-lifetime choice, not a claim about the process: the tables cannot
+# change without a restart, and a restart gives clients a new connection.
+_STATIC_LIST_TTL_MS = 60 * 60 * 1000
+
 # Loopback entries always present in the Host allow-list so localhost-direct
 # access keeps working alongside any proxied hostname. Both the bare host and
 # its ``:*`` wildcard-port form are listed: the SDK matcher treats a portless
@@ -88,6 +93,47 @@ _BIND_ALL_HOSTS = frozenset({"0.0.0.0", "::", "[::]"})  # nosec B104
 def _is_loopback_literal(host: str) -> bool:
     """Best-effort check that a configured bind host is a loopback literal."""
     return host.strip().lower() in {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def _cache_hints(config: OpenZimMcpConfig) -> dict:
+    """Freshness hints for the 2026-07-28 ``CacheableResult`` fields.
+
+    Clients cache a result for ``ttlMs`` and may re-serve it without asking
+    again, so each value is a promise about how stale an answer may get.
+
+    The list endpoints and ``server/discover`` describe the *registration*
+    tables, which are built once at startup from ``tool_mode`` and never change
+    while the process runs — nothing short of a restart can invalidate them, so
+    they get a long TTL. That is also what makes them worth caching: a stable
+    tool block is what earns a client's prompt-cache hits.
+
+    ``resources/read`` is capped at the watcher's polling interval instead.
+    Most of what it serves is immutable — a ZIM archive is a sealed file, so an
+    entry body for a given (archive, path) can never change — and would justify
+    hours. But the hint is per *method*, not per URI, and the same method also
+    serves ``zim://files``, a live directory scan. The floor therefore belongs
+    to the mutable member: bounding it by the poll interval means a cached read
+    is never staler than the server's own detection latency. Per-URI hints need
+    the handler to construct the result (the SDK fills only fields a handler
+    left unset), which the resource layer does not currently do.
+
+    ``cacheScope`` is ``private`` throughout: these payloads embed
+    server-local absolute paths and configuration, so a shared intermediary
+    must not serve one tenant's response to another.
+    """
+    from mcp.server import CacheHint
+
+    static_hint = CacheHint(ttl_ms=_STATIC_LIST_TTL_MS, scope="private")
+    return {
+        "server/discover": static_hint,
+        "tools/list": static_hint,
+        "prompts/list": static_hint,
+        "resources/list": static_hint,
+        "resources/templates/list": static_hint,
+        "resources/read": CacheHint(
+            ttl_ms=config.watch_interval_seconds * 1000, scope="private"
+        ),
+    }
 
 
 def _build_transport_security(
@@ -276,6 +322,7 @@ class OpenZimMcpServer:
             instructions=instructions_for(config.tool_mode),
             version=__version__,
             subscriptions=self.subscription_bus,
+            cache_hints=_cache_hints(config),
         )
         self._register_tools()
 

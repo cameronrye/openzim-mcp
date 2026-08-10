@@ -273,3 +273,90 @@ async def test_simple_mode_flags_rejected_arguments(tmp_path: Path) -> None:
 
     assert result.is_error is True
     assert json.loads(_text(result))["operation"] == "invalid_limit"
+
+
+@asynccontextmanager
+async def _modern_client(tmp_path: Path, **config_kwargs: Any) -> AsyncIterator[Any]:
+    """A client that opens with ``server/discover`` instead of ``initialize``.
+
+    ``_connected_client`` drives the legacy handshake, which is what most of
+    this file asserts against. The 2026-07-28 era has no handshake at all: a
+    client may call ``server/discover`` up front and otherwise just sends
+    requests. Cache hints are era-gated (see the tests below), so telling the
+    two apart needs a client that opens the modern way.
+    """
+    config = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)], tool_mode="advanced", **config_kwargs
+    )
+    server = OpenZimMcpServer(config)
+    low = server.mcp._lowlevel_server
+    async with create_client_server_memory_streams() as (
+        client_streams,
+        server_streams,
+    ):
+        client_read, client_write = client_streams
+        server_read, server_write = server_streams
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(
+                low.run,
+                server_read,
+                server_write,
+                low.create_initialization_options(),
+                True,
+            )
+            async with ClientSession(client_read, client_write) as session:
+                await session.discover()
+                yield session
+            task_group.cancel_scope.cancel()
+
+
+@pytest.mark.asyncio
+async def test_cache_hints_are_served_to_modern_clients(tmp_path: Path) -> None:
+    """List results carry the TTL that lets a client cache them.
+
+    A wrong or missing ``ttlMs`` is invisible in ordinary use — the server
+    still answers every request correctly, it just never gets to skip one — so
+    nothing else in the suite would notice the hints silently not applying.
+    """
+    async with _modern_client(tmp_path, watch_interval_seconds=5) as session:
+        tools = await session.list_tools()
+        resources = await session.list_resources()
+        prompts = await session.list_prompts()
+        read = await session.read_resource("zim://files")
+
+    # Registration tables cannot change without a restart.
+    one_hour_ms = 60 * 60 * 1000
+    assert tools.ttl_ms == one_hour_ms
+    assert resources.ttl_ms == one_hour_ms
+    assert prompts.ttl_ms == one_hour_ms
+
+    # A read is bounded by how fast the watcher could notice a change, so a
+    # cached copy is never staler than the server's own view.
+    assert read.ttl_ms == 5 * 1000
+
+    # Every payload embeds server-local paths and config: never shared-cacheable.
+    for result in (tools, resources, prompts, read):
+        assert result.cache_scope == "private"
+
+
+@pytest.mark.asyncio
+async def test_read_ttl_tracks_the_watch_interval(tmp_path: Path) -> None:
+    """The read TTL is derived from config, not a hardcoded constant."""
+    async with _modern_client(tmp_path, watch_interval_seconds=30) as session:
+        read = await session.read_resource("zim://files")
+
+    assert read.ttl_ms == 30 * 1000
+
+
+@pytest.mark.asyncio
+async def test_legacy_clients_are_not_served_cache_hints(tmp_path: Path) -> None:
+    """A 2025-era session gets no ``ttlMs`` — the field postdates its revision.
+
+    Pinned because it is the SDK doing era-appropriate framing on our behalf,
+    not something this server implements: if that ever regressed, we would be
+    sending a legacy client a field its protocol has no meaning for.
+    """
+    async with session_for(tmp_path, "advanced") as session:
+        tools = await session.list_tools()
+
+    assert tools.ttl_ms == 0
