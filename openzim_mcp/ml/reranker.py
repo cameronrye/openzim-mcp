@@ -214,10 +214,24 @@ class BGEReranker:
         result_q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
 
         def _worker() -> None:
+            # Every exit path has to leave exactly one item in the queue: a
+            # worker that dies without posting strands the caller on the full
+            # timeout for a load that already failed. A raised ``Exception``
+            # is relayed verbatim so the caller re-raises the real cause; the
+            # ``finally`` covers the BaseException exits (a SystemExit from
+            # deep inside the ML stack, an injected KeyboardInterrupt), which
+            # must NOT be re-raised in the caller's thread as though the
+            # caller itself had been interrupted.
+            outcome: "tuple[str, Any]" = (
+                "err",
+                RuntimeError("reranker model load thread terminated abnormally"),
+            )
             try:
-                result_q.put(("ok", _load_model(cfg.model_id, cfg.cache_dir)))
-            except BaseException as exc:  # noqa: BLE001 — relayed to caller
-                result_q.put(("err", exc))
+                outcome = ("ok", _load_model(cfg.model_id, cfg.cache_dir))
+            except Exception as exc:  # noqa: BLE001 — relayed to caller
+                outcome = ("err", exc)
+            finally:
+                result_q.put(outcome)
 
         threading.Thread(
             target=_worker, name="openzim-reranker-load", daemon=True
