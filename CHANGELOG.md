@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.4](https://github.com/cameronrye/openzim-mcp/compare/v2.6.3...v2.6.4) (2026-08-10)
+
+
+### Fixed
+
+* close the nanoid advisory and both open code-scanning alerts ([#354](https://github.com/cameronrye/openzim-mcp/issues/354)) ([45cb85e](https://github.com/cameronrye/openzim-mcp/commit/45cb85e544427356e793826fa7ab5dd26cd92135))
+
 ## [2.6.3](https://github.com/cameronrye/openzim-mcp/compare/v2.6.2...v2.6.3) (2026-08-09)
 
 
