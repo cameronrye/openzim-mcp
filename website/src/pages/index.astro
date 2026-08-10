@@ -5,7 +5,7 @@ import SiteFooter from '../components/SiteFooter.astro';
 const title = "OpenZIM MCP — Knowledge that works offline";
 const description = "OpenZIM MCP gives any AI model structured, secure access to ZIM archives — Wikipedia, MedlinePlus, the Stack Exchange dumps — without an internet connection.";
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
-const version = "2.6.3"; // x-release-please-version
+const version = "2.6.4"; // x-release-please-version
 const softwareSchema = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
@@ -54,7 +54,7 @@ const softwareSchema = {
     <meta property="og:image:height" content="630">
     <meta property="og:locale" content="en_US">
     <meta property="article:author" content="Cameron Rye">
-    <meta property="article:modified_time" content="2026-08-09T00:00:00Z"> <!-- x-release-please-date -->
+    <meta property="article:modified_time" content="2026-08-10T00:00:00Z"> <!-- x-release-please-date -->
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
@@ -360,7 +360,7 @@ tests/test_phase_f_gate_decision_consistency.py</code></pre>
                 <pre><code>uv tool install openzim-mcp</code></pre>
               </div>
               <div class="tabs__panel" id="install-docker" role="tabpanel" aria-labelledby="tab-install-docker" hidden>
-                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:2.6.3</code></pre> <!-- x-release-please-version -->
+                <pre><code>docker pull ghcr.io/cameronrye/openzim-mcp:2.6.4</code></pre> <!-- x-release-please-version -->
               </div>
               <div class="tabs__panel" id="install-source" role="tabpanel" aria-labelledby="tab-install-source" hidden>
                 <pre><code>git clone https://github.com/cameronrye/openzim-mcp.git
