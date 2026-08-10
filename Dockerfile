@@ -1,4 +1,10 @@
-# syntax=docker/dockerfile:1.6
+# No `# syntax=` directive on purpose. This file uses no BuildKit-only
+# features, so pinning a frontend buys nothing — it only makes every
+# BuildKit-based builder resolve and pull docker/dockerfile:1.6 before the
+# first step runs. Registry builders that mirror or firewall Docker Hub fail
+# there, before any of our layers are even attempted. Keep this file
+# classic-builder clean (verify with `DOCKER_BUILDKIT=0 docker build .`) and
+# do not re-add the directive without adding a feature that needs it.
 
 # ---- builder stage ----
 FROM python:3.13-slim AS builder
