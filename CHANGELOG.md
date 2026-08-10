@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.5](https://github.com/cameronrye/openzim-mcp/compare/v2.6.4...v2.6.5) (2026-08-10)
+
+
+### Fixed
+
+* **docker:** drop the BuildKit frontend directive from the Dockerfile ([#358](https://github.com/cameronrye/openzim-mcp/issues/358)) ([59dee10](https://github.com/cameronrye/openzim-mcp/commit/59dee10a9efee749d31e34e5bd76f8bb2c21d76c))
+
 ## [2.6.4](https://github.com/cameronrye/openzim-mcp/compare/v2.6.3...v2.6.4) (2026-08-10)
 
 
