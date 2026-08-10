@@ -230,7 +230,7 @@ jobs:
           uv run bandit -c pyproject.toml -r openzim_mcp --exit-zero -f sarif -o bandit-report.sarif
 
       - name: Upload Bandit SARIF results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4.37.4
+        uses: github/codeql-action/upload-sarif@v4.37.6
         if: always() && hashFiles('bandit-report.sarif') != ''
         continue-on-error: true
         with:
