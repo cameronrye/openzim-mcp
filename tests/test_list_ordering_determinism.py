@@ -29,6 +29,7 @@ Scope note: *membership* (which tools exist in each mode) is already covered by
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -158,16 +159,19 @@ asyncio.run(main())
 
 def _tool_order_in_fresh_process(hash_seed: str) -> List[str]:
     """Return ``tools/list`` order from a new interpreter at ``hash_seed``."""
-    # Fixed argv, no shell, no caller-supplied input. The environment is
-    # replaced rather than extended so an ambient PYTHONHASHSEED in the
-    # developer's or CI's shell cannot mask the very variation being probed;
-    # sys.executable is this venv's interpreter, so imports still resolve.
+    # Fixed argv, no shell, no caller-supplied input. Inherit the environment
+    # and override PYTHONHASHSEED, so an ambient value in the developer's or
+    # CI's shell cannot mask the variation being probed. Inheriting rather than
+    # replacing keeps this portable: a stripped environment breaks the child on
+    # Windows, which needs SYSTEMROOT and friends to start Python at all.
+    env = {**os.environ, "PYTHONHASHSEED": hash_seed}
+
     proc = subprocess.run(
         [sys.executable, "-c", _ORDER_PROBE],
         capture_output=True,
         text=True,
         timeout=120,
-        env={"PATH": "/usr/bin:/bin", "PYTHONHASHSEED": hash_seed},
+        env=env,
     )
 
     assert proc.returncode == 0, (
