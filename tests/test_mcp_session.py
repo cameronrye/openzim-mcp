@@ -3,7 +3,7 @@
 Every other test in this suite calls a tool's ``*_data`` function directly or
 goes through ``server.mcp.call_tool()``, which returns the tool's *return
 value* — not the ``CallToolResult`` envelope the client actually receives. The
-envelope fields (``isError``, ``structuredContent``) and the server's
+envelope fields (``is_error``, ``structured_content``) and the server's
 ``instructions`` are therefore invisible to all of them.
 
 These tests drive a real client session over an in-memory transport so the
@@ -15,10 +15,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+import anyio
 import pydantic_core
 import pytest
-from mcp.shared.memory import create_connected_server_and_client_session
-from mcp.types import TextContent
+from mcp import ClientSession
+from mcp.shared.memory import create_client_server_memory_streams
+from mcp_types import TextContent
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.server import OpenZimMcpServer
@@ -44,10 +46,39 @@ async def session_for(tmp_path: Path, tool_mode: str) -> AsyncIterator[Any]:
         tool_mode=tool_mode,
     )
     server = OpenZimMcpServer(config)
-    async with create_connected_server_and_client_session(
-        server.mcp._mcp_server
-    ) as session:
+    async with _connected_client(server) as session:
         yield session
+
+
+@asynccontextmanager
+async def _connected_client(server: OpenZimMcpServer) -> AsyncIterator[Any]:
+    """A ``ClientSession`` wired to ``server`` over in-memory streams.
+
+    The 1.x SDK shipped ``create_connected_server_and_client_session``; v2
+    exposes only the stream pair, so the wiring lives here. ``initialize()``
+    exercises the *legacy* handshake, which the v2 server still answers — the
+    dual-era behavior that lets 2025-era clients keep working against this
+    build (see ``test_serves_both_protocol_eras``).
+    """
+    low = server.mcp._lowlevel_server
+    async with create_client_server_memory_streams() as (
+        client_streams,
+        server_streams,
+    ):
+        client_read, client_write = client_streams
+        server_read, server_write = server_streams
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(
+                low.run,
+                server_read,
+                server_write,
+                low.create_initialization_options(),
+                True,  # raise_exceptions - surface server faults in tests
+            )
+            async with ClientSession(client_read, client_write) as session:
+                await session.initialize()
+                yield session
+            task_group.cancel_scope.cancel()
 
 
 def advanced_session(tmp_path: Path) -> Any:
@@ -86,17 +117,17 @@ def _text(result: Any) -> str:
 async def test_tool_originated_errors_set_is_error(
     tmp_path: Path, arguments: dict, expected_operation: str
 ) -> None:
-    """A failed tool call must set ``isError``.
+    """A failed tool call must set ``is_error``.
 
-    Agent frameworks branch on ``isError`` to decide whether to surface, retry
-    or stop. Returning the error envelope with ``isError=False`` makes every
+    Agent frameworks branch on ``is_error`` to decide whether to surface, retry
+    or stop. Returning the error envelope with ``is_error=False`` makes every
     failure read as a successful call whose payload happens to say otherwise.
     """
     async with advanced_session(tmp_path) as session:
         result = await session.call_tool("zim_search", arguments)
 
-    assert result.isError is True, (
-        f"{expected_operation} returned isError={result.isError}; "
+    assert result.is_error is True, (
+        f"{expected_operation} returned is_error={result.is_error}; "
         "a client cannot distinguish this failure from a success"
     )
     payload = json.loads(_text(result))
@@ -117,7 +148,7 @@ async def test_tool_originated_errors_set_is_error(
 async def test_error_body_keeps_the_structured_envelope(
     tmp_path: Path, query: str
 ) -> None:
-    """Setting ``isError`` must not reshape the body.
+    """Setting ``is_error`` must not reshape the body.
 
     The JSON error envelope is a documented contract (``error`` / ``operation``
     / ``message``, optional ``context``). Flipping the flag is a protocol fix;
@@ -150,7 +181,7 @@ async def test_successful_call_does_not_set_is_error(tmp_path: Path) -> None:
     async with advanced_session(tmp_path) as session:
         result = await session.call_tool("zim_health", {})
 
-    assert result.isError is False
+    assert result.is_error is False
     assert _text(result)
 
 
@@ -182,7 +213,7 @@ async def test_advanced_surface_stays_under_the_mcp_tax_band(
 async def test_no_tool_advertises_an_output_schema_it_does_not_honor(
     tmp_path: Path,
 ) -> None:
-    """``outputSchema`` is a promise to deliver ``structuredContent``.
+    """``output_schema`` is a promise to deliver ``structured_content``.
 
     ``zim_query`` returned markdown wrapped as ``{"result": "<str>"}`` — a
     schema that cost 4.7KB of the surface budget and told clients nothing. The
@@ -192,9 +223,9 @@ async def test_no_tool_advertises_an_output_schema_it_does_not_honor(
     async with advanced_session(tmp_path) as session:
         tools = (await session.list_tools()).tools
 
-    advertising = [t.name for t in tools if t.outputSchema is not None]
+    advertising = [t.name for t in tools if t.output_schema is not None]
     assert advertising == [], (
-        f"{advertising} advertise an outputSchema; "
+        f"{advertising} advertise an output_schema; "
         "either deliver conforming structuredContent or drop it"
     )
 
@@ -240,5 +271,5 @@ async def test_simple_mode_flags_rejected_arguments(tmp_path: Path) -> None:
     async with session_for(tmp_path, "simple") as session:
         result = await session.call_tool("zim_query", {"query": "x", "limit": 10_000})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert json.loads(_text(result))["operation"] == "invalid_limit"

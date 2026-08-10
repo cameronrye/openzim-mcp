@@ -23,12 +23,11 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from urllib.parse import unquote
 
-from mcp.server.fastmcp.resources.base import Resource
-from mcp.server.fastmcp.resources.templates import ResourceTemplate
-from pydantic import AnyUrl, ConfigDict, Field
+from mcp.server.mcpserver.resources import Resource, ResourceTemplate
+from pydantic import ConfigDict, Field
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH
 from ..exceptions import OpenZimMcpArchiveError
@@ -234,7 +233,8 @@ class ZimEntryTemplate(ResourceTemplate):
         # reach libzim, which has no defense against embedded NULs.
         decoded_path = sanitize_input(decoded_path, INPUT_LIMIT_ENTRY_PATH)
         return ZimEntryResource(
-            uri=AnyUrl(uri),
+            # v2's Resource.uri is a plain ``str`` (it was ``AnyUrl`` in 1.x).
+            uri=uri,
             name=self.name,
             title=self.title,
             description=self.description,
@@ -346,34 +346,37 @@ def register_resources(server: "OpenZimMcpServer") -> None:
 
     # Register the per-entry template directly on the resource manager so
     # ZimEntryResource controls its own MIME type at read time.
-    template = ZimEntryTemplate(
-        uri_template=_ZIM_ENTRY_URI_TEMPLATE,
-        name="zim_entry",
-        title="ZIM entry (raw, native MIME)",
-        description=(
-            "Raw content of a single ZIM entry, served with its native MIME "
-            "type. HTML/text entries return text/html (or text/plain) with "
-            "the unprocessed body; binary entries (images, PDFs, etc.) "
-            "return the appropriate MIME with base64-encoded body. "
-            "IMPORTANT: clients MUST URL-encode '/' as '%2F' in {path} "
-            "(other RFC 3986 reserved characters too). Example: "
-            "zim://wikipedia_en/entry/C%2FClimate_change. "
-            "Use the zim_get tool for processed/truncated text output."
+    # Built through ``from_function`` rather than by direct construction: the
+    # v2 SDK's ResourceTemplate carries a pre-parsed RFC 6570 template and a
+    # ResourceSecurity policy, both required and neither trivially
+    # hand-buildable. ``from_function`` is a classmethod that instantiates
+    # ``cls``, so it returns this subclass with those fields populated
+    # correctly. The ``fn`` is still a never-called sentinel — ``parameters``
+    # is derived from its signature, and ``create_resource`` is overridden — but
+    # it now also feeds the template's security parameter checks.
+    # ``from_function`` instantiates ``cls`` but is annotated as returning the
+    # base ``ResourceTemplate``, so the subclass identity needs asserting.
+    template = cast(
+        ZimEntryTemplate,
+        ZimEntryTemplate.from_function(
+            fn=lambda name, path: None,  # noqa: ARG005 — sentinel
+            uri_template=_ZIM_ENTRY_URI_TEMPLATE,
+            name="zim_entry",
+            title="ZIM entry (raw, native MIME)",
+            description=(
+                "Raw content of a single ZIM entry, served with its native MIME "
+                "type. HTML/text entries return text/html (or text/plain) with "
+                "the unprocessed body; binary entries (images, PDFs, etc.) "
+                "return the appropriate MIME with base64-encoded body. "
+                "IMPORTANT: clients MUST URL-encode '/' as '%2F' in {path} "
+                "(other RFC 3986 reserved characters too). Example: "
+                "zim://wikipedia_en/entry/C%2FClimate_change. "
+                "Use the zim_get tool for processed/truncated text output."
+            ),
+            # Placeholder; the per-call MIME is set on each ZimEntryResource.
+            mime_type=DEFAULT_BINARY_MIME,
+            context_kwarg=None,
         ),
-        # Placeholder; the per-call MIME is set on each ZimEntryResource.
-        mime_type=DEFAULT_BINARY_MIME,
-        # ResourceTemplate requires `fn` and `parameters`; we never call fn
-        # because we override create_resource(), but the fields are required.
-        fn=lambda name, path: None,  # noqa: ARG005 — sentinel
-        parameters={
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "path": {"type": "string"},
-            },
-            "required": ["name", "path"],
-        },
-        context_kwarg=None,
-        server_ref=server,
     )
+    template.server_ref = server
     server.mcp._resource_manager._templates[_ZIM_ENTRY_URI_TEMPLATE] = template

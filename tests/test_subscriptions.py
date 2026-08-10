@@ -1,130 +1,28 @@
-"""Tests for SubscriberRegistry and the polling watcher."""
+"""Tests for the polling watcher and its bridge onto the SDK subscription bus.
+
+Under the 2026-07-28 revision the server no longer owns any delivery
+machinery: ``resources/subscribe`` and protocol sessions are gone, clients
+opt in via ``subscriptions/listen``, and the SDK's ``SubscriptionBus`` owns
+the listener registry, per-stream filtering, backpressure and teardown. What
+remains ours is *detecting* that a ZIM file changed (``MtimeWatcher``) and
+*naming* the change as an MCP notification (``publish_change``) — so those
+are what this module covers.
+"""
 
 import asyncio
-from typing import Any
+from pathlib import Path
 
 import pytest
+from mcp.server.subscriptions import (
+    InMemorySubscriptionBus,
+    ResourcesListChanged,
+    ResourceUpdated,
+    ServerEvent,
+)
 
 
 @pytest.mark.asyncio
-async def test_subscribe_then_lookup():
-    """Subscribing a session for a URI makes it appear in sessions_for()."""
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    reg = SubscriberRegistry()
-    await reg.subscribe("zim://files", "session1")
-    sessions = await reg.sessions_for("zim://files")
-    assert sessions == ["session1"]
-
-
-@pytest.mark.asyncio
-async def test_subscribe_is_idempotent():
-    """Re-subscribing the same session for the same URI is a no-op."""
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    reg = SubscriberRegistry()
-    await reg.subscribe("zim://files", "session1")
-    await reg.subscribe("zim://files", "session1")
-    sessions = await reg.sessions_for("zim://files")
-    assert sessions == ["session1"]
-
-
-@pytest.mark.asyncio
-async def test_unsubscribe_removes_session():
-    """Unsubscribing drops only the matching (uri, session) pair."""
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    reg = SubscriberRegistry()
-    await reg.subscribe("zim://files", "session1")
-    await reg.unsubscribe("zim://files", "session1")
-    sessions = await reg.sessions_for("zim://files")
-    assert sessions == []
-
-
-@pytest.mark.asyncio
-async def test_clear_session_drops_all():
-    """Clearing a session drops it from every URI it subscribed to."""
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    reg = SubscriberRegistry()
-    await reg.subscribe("zim://files", "session1")
-    await reg.subscribe("zim://archive1", "session1")
-    await reg.subscribe("zim://files", "session2")
-    await reg.clear_session("session1")
-    assert await reg.sessions_for("zim://files") == ["session2"]
-    assert await reg.sessions_for("zim://archive1") == []
-
-
-@pytest.mark.asyncio
-async def test_unsubscribe_unknown_is_silent():
-    """Unsubscribing a session that wasn't subscribed is a no-op."""
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    reg = SubscriberRegistry()
-    await reg.unsubscribe("zim://files", "session1")  # no error
-
-
-@pytest.mark.asyncio
-async def test_concurrent_subscribe_unsubscribe():
-    """Many concurrent subscribe/unsubscribe calls don't corrupt state."""
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    reg = SubscriberRegistry()
-    tasks = []
-    for i in range(50):
-        tasks.append(reg.subscribe("zim://files", f"s{i}"))
-    await asyncio.gather(*tasks)
-    sessions = await reg.sessions_for("zim://files")
-    assert len(sessions) == 50
-
-
-@pytest.mark.asyncio
-async def test_registry_uses_set_backed_storage_for_o1_membership():
-    """Backing store must be a set so subscribe/unsubscribe are O(1)."""
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    registry = SubscriberRegistry()
-    sessions = [f"session-{i}" for i in range(10000)]
-    for s in sessions:
-        await registry.subscribe("zim://x", s)
-    # Re-subscribe all — must remain idempotent and not double-count.
-    for s in sessions:
-        await registry.subscribe("zim://x", s)
-
-    # M16: non-weak-referenceable (str) sessions live in the strong set.
-    backing = registry._strong_by_uri["zim://x"]
-    assert isinstance(backing, set), f"expected set, got {type(backing).__name__}"
-    assert len(backing) == 10000
-
-
-@pytest.mark.asyncio
-async def test_weak_session_auto_pruned_on_gc():
-    """M16: a weak-referenceable session is dropped automatically once it is
-    garbage-collected (e.g. the client disconnected) — even with no broadcast
-    ever firing — so dead sessions can't accumulate without bound.
-    """
-    import gc
-
-    from openzim_mcp.subscriptions import SubscriberRegistry
-
-    registry = SubscriberRegistry()
-
-    class _Session:  # weak-referenceable stand-in for a ServerSession
-        pass
-
-    sess = _Session()
-    await registry.subscribe("zim://files", sess)
-    assert await registry.sessions_for("zim://files") == [sess]
-
-    # Client disconnects: drop the only strong ref and collect.
-    del sess
-    gc.collect()
-
-    assert await registry.sessions_for("zim://files") == []
-
-
-@pytest.mark.asyncio
-async def test_watcher_detects_new_zim_file(tmp_path):
+async def test_watcher_detects_new_zim_file(tmp_path: Path) -> None:
     """Polling watcher fires zim://files when a .zim is added."""
     from openzim_mcp.subscriptions import MtimeWatcher
 
@@ -149,7 +47,7 @@ async def test_watcher_detects_new_zim_file(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_watcher_detects_file_replacement(tmp_path):
+async def test_watcher_detects_file_replacement(tmp_path: Path) -> None:
     """Replacing a .zim with different size fires zim://{name}."""
     from openzim_mcp.subscriptions import MtimeWatcher
 
@@ -180,7 +78,7 @@ async def test_watcher_detects_file_replacement(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_watcher_detects_same_size_replacement(tmp_path):
+async def test_watcher_detects_same_size_replacement(tmp_path: Path) -> None:
     """Same-size replacement with different mtime must trigger notification.
 
     Real ZIM replacements can have identical size (small stub fixtures,
@@ -218,7 +116,7 @@ async def test_watcher_detects_same_size_replacement(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_watcher_triggers_on_mtime_only_change(tmp_path):
+async def test_watcher_triggers_on_mtime_only_change(tmp_path: Path) -> None:
     """An mtime-only bump now triggers (false positive accepted by design).
 
     Previously the watcher ignored mtime-only changes to suppress
@@ -253,7 +151,7 @@ async def test_watcher_triggers_on_mtime_only_change(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_watcher_stop_is_idempotent(tmp_path):
+async def test_watcher_stop_is_idempotent(tmp_path: Path) -> None:
     """Calling stop() twice doesn't blow up."""
     from openzim_mcp.subscriptions import MtimeWatcher
 
@@ -267,246 +165,100 @@ async def test_watcher_stop_is_idempotent(tmp_path):
     await watcher.stop()  # second call is fine
 
 
-@pytest.mark.asyncio
-async def test_broadcast_calls_send_for_each_subscriber():
-    """broadcast_resource_updated emits one notification per subscriber."""
-    from openzim_mcp.subscriptions import (
-        SubscriberRegistry,
-        broadcast_resource_updated,
-    )
+class _RecordingBus:
+    """Minimal ``SubscriptionBus`` stand-in that records published events.
 
-    sent: list[tuple[Any, str]] = []
+    ``publish_change`` only ever calls ``publish``; using a stub keeps the
+    mapping assertions independent of the SDK bus's fan-out machinery, which
+    has its own tests upstream. ``publish`` is async to match the protocol —
+    the bus interface is async so an out-of-process backend can do network
+    I/O — which also means a stub that forgot to await would be caught here.
+    """
 
-    class FakeSession:
-        def __init__(self, label: str):
-            self.label = label
+    def __init__(self) -> None:
+        """Start with an empty event log."""
+        self.events: list[ServerEvent] = []
 
-        async def send_resource_updated(self, uri):
-            sent.append((self.label, str(uri)))
-
-        def __hash__(self):
-            return hash(self.label)
-
-        def __eq__(self, other):
-            return isinstance(other, FakeSession) and self.label == other.label
-
-    reg = SubscriberRegistry()
-    s1, s2 = FakeSession("s1"), FakeSession("s2")
-    await reg.subscribe("zim://files", s1)
-    await reg.subscribe("zim://files", s2)
-
-    await broadcast_resource_updated(reg, "zim://files")
-    assert sorted(sent) == [("s1", "zim://files"), ("s2", "zim://files")]
+    async def publish(self, event: ServerEvent) -> None:
+        """Record one published event."""
+        self.events.append(event)
 
 
 @pytest.mark.asyncio
-async def test_broadcast_drops_failed_sessions():
-    """A session whose send_resource_updated raises is evicted from the registry."""
-    from openzim_mcp.subscriptions import (
-        SubscriberRegistry,
-        broadcast_resource_updated,
-    )
+async def test_publish_change_maps_list_changed_to_resources_list_changed() -> None:
+    """A file appearing/disappearing changes the membership of ``zim://files``.
 
-    class DeadSession:
-        async def send_resource_updated(self, uri):
-            raise RuntimeError("session closed")
+    That is a ``notifications/resources/list_changed``, not an ``updated``.
+    The 1.x implementation could not express the distinction — ``resources/
+    subscribe`` gave clients no way to ask for list-membership changes, so
+    both watcher change kinds went out as an ``updated`` for ``zim://files``.
+    This mapping is therefore new behavior in the 2.0 port.
+    """
+    from openzim_mcp.subscriptions import publish_change
 
-        def __hash__(self):
-            return id(self)
+    bus = _RecordingBus()
+    await publish_change(bus, "zim://files", "list_changed")
 
-        def __eq__(self, other):
-            return self is other
-
-    class LiveSession:
-        def __init__(self):
-            self.calls = []
-
-        async def send_resource_updated(self, uri):
-            self.calls.append(str(uri))
-
-        def __hash__(self):
-            return id(self)
-
-        def __eq__(self, other):
-            return self is other
-
-    reg = SubscriberRegistry()
-    dead = DeadSession()
-    live = LiveSession()
-    await reg.subscribe("zim://files", dead)
-    await reg.subscribe("zim://files", live)
-
-    await broadcast_resource_updated(reg, "zim://files")
-
-    remaining = await reg.sessions_for("zim://files")
-    assert dead not in remaining
-    assert live in remaining
-    assert live.calls == ["zim://files"]
+    assert bus.events == [ResourcesListChanged()]
 
 
 @pytest.mark.asyncio
-async def test_broadcast_does_not_serialize_on_slow_subscriber():
-    """Slow subscribers must not delay other subscribers — fan-out is concurrent."""
-    import time
+async def test_publish_change_maps_replaced_to_resource_updated() -> None:
+    """A file replaced in place leaves the list intact and invalidates one
+    resource, so it must become an ``updated`` carrying that file's URI —
+    not a list_changed, which would make every client re-list needlessly.
+    """
+    from openzim_mcp.subscriptions import publish_change
 
-    from openzim_mcp.subscriptions import (
-        SubscriberRegistry,
-        broadcast_resource_updated,
-    )
+    bus = _RecordingBus()
+    await publish_change(bus, "zim://wikipedia_en", "replaced")
 
-    fast_calls: list[str] = []
-    slow_calls: list[str] = []
-
-    class Slow:
-        async def send_resource_updated(self, uri):
-            await asyncio.sleep(0.5)
-            slow_calls.append(str(uri))
-
-        def __hash__(self):
-            return id(self)
-
-        def __eq__(self, other):
-            return self is other
-
-    class Fast:
-        async def send_resource_updated(self, uri):
-            fast_calls.append(str(uri))
-
-        def __hash__(self):
-            return id(self)
-
-        def __eq__(self, other):
-            return self is other
-
-    reg = SubscriberRegistry()
-    fast, slow = Fast(), Slow()
-    await reg.subscribe("zim://x", fast)
-    await reg.subscribe("zim://x", slow)
-
-    start = time.monotonic()
-    await broadcast_resource_updated(reg, "zim://x")
-    elapsed = time.monotonic() - start
-
-    # Both subscribers received the notification; total wall time is bounded
-    # by the single slow sleep (~0.5s) regardless of order. The stronger
-    # concurrency proof lives in the next test (N slow subscribers).
-    assert fast_calls == ["zim://x"]
-    assert slow_calls == ["zim://x"]
-    assert elapsed < 0.9, f"broadcast took unexpectedly long: {elapsed:.3f}s"
+    assert bus.events == [ResourceUpdated(uri="zim://wikipedia_en")]
 
 
 @pytest.mark.asyncio
-async def test_broadcast_fans_out_concurrently_many_slow_subscribers():
-    """Multiple slow subscribers complete in ~one sleep, not N sleeps."""
-    import time
+async def test_publish_change_reaches_real_bus_listeners() -> None:
+    """The two kinds must survive a real ``InMemorySubscriptionBus`` round
+    trip, pinning that ``publish_change`` emits event objects the SDK bus
+    actually accepts (rather than only satisfying our stub's duck type).
+    """
+    from openzim_mcp.subscriptions import publish_change
 
-    from openzim_mcp.subscriptions import (
-        SubscriberRegistry,
-        broadcast_resource_updated,
-    )
+    bus = InMemorySubscriptionBus()
+    seen: list[ServerEvent] = []
+    unsubscribe = bus.subscribe(seen.append)
+    try:
+        await publish_change(bus, "zim://files", "list_changed")
+        await publish_change(bus, "zim://archive", "replaced")
+    finally:
+        unsubscribe()
 
-    SLEEP = 0.3
-    N = 5
-
-    class Slow:
-        def __init__(self):
-            self.called = False
-
-        async def send_resource_updated(self, uri):
-            await asyncio.sleep(SLEEP)
-            self.called = True
-
-        def __hash__(self):
-            return id(self)
-
-        def __eq__(self, other):
-            return self is other
-
-    reg = SubscriberRegistry()
-    subs = [Slow() for _ in range(N)]
-    for s in subs:
-        await reg.subscribe("zim://x", s)
-
-    start = time.monotonic()
-    await broadcast_resource_updated(reg, "zim://x")
-    elapsed = time.monotonic() - start
-
-    # Serial: N * SLEEP = 1.5s. Concurrent: ~SLEEP = 0.3s.
-    # Allow generous slack for CI scheduler jitter.
-    assert elapsed < (SLEEP * N) / 2, (
-        f"broadcast was serial (or near-serial): {elapsed:.3f}s for "
-        f"{N} subscribers @ {SLEEP}s each"
-    )
-    assert all(s.called for s in subs)
+    assert seen == [ResourcesListChanged(), ResourceUpdated(uri="zim://archive")]
 
 
 @pytest.mark.asyncio
-async def test_broadcast_drops_session_after_timeout(monkeypatch):
-    """A session whose send_resource_updated hangs is dropped after the timeout."""
-    from openzim_mcp import subscriptions as subs_mod
-    from openzim_mcp.subscriptions import (
-        SubscriberRegistry,
-        broadcast_resource_updated,
-    )
+async def test_watcher_changes_reach_the_bus_end_to_end(tmp_path: Path) -> None:
+    """The watcher and the bus bridge compose the way ``http_app`` wires them.
 
-    # Shrink the per-send timeout so the test runs quickly.
-    monkeypatch.setattr(subs_mod, "SEND_TIMEOUT_SECONDS", 0.1)
+    ``MtimeWatcher`` is deliberately bus-agnostic (it takes a plain
+    ``on_change`` callback), so nothing else pins that a detected change
+    turns into the right notification kind on the wire.
+    """
+    from openzim_mcp.subscriptions import MtimeWatcher, publish_change
 
-    class Hanging:
-        async def send_resource_updated(self, uri):
-            await asyncio.sleep(60)  # never returns within test
+    bus = InMemorySubscriptionBus()
+    seen: list[ServerEvent] = []
+    unsubscribe = bus.subscribe(seen.append)
 
-        def __hash__(self):
-            return id(self)
+    async def on_change(uri: str, change_type: str) -> None:
+        await publish_change(bus, uri, change_type)
 
-        def __eq__(self, other):
-            return self is other
+    watcher = MtimeWatcher([str(tmp_path)], interval=0.05, on_change=on_change)
+    watcher._snapshot = watcher._scan()
+    try:
+        (tmp_path / "archive.zim").write_bytes(b"v1")
+        await watcher._tick()
+    finally:
+        unsubscribe()
 
-    reg = SubscriberRegistry()
-    hung = Hanging()
-    await reg.subscribe("zim://x", hung)
-
-    await broadcast_resource_updated(reg, "zim://x")
-
-    remaining = await reg.sessions_for("zim://x")
-    assert hung not in remaining
-
-
-def test_capability_patch_flips_subscribe_to_true():
-    """The capability patch makes get_capabilities() advertise subscribe=True."""
-    from mcp.server.fastmcp import FastMCP
-
-    from openzim_mcp.subscriptions import patch_capabilities_to_advertise_subscribe
-
-    mcp = FastMCP("test")
-    # Sanity: before patch, the SDK hardcodes False (this is the spike's
-    # pinned assumption — if it ever flips upstream, this test catches it).
-    init = mcp._mcp_server.create_initialization_options()
-    assert init.capabilities.resources is None or (
-        init.capabilities.resources.subscribe is False
-    )
-
-    patch_capabilities_to_advertise_subscribe(mcp)
-
-    init = mcp._mcp_server.create_initialization_options()
-    assert init.capabilities.resources is not None
-    assert init.capabilities.resources.subscribe is True
-
-
-def test_register_subscription_handlers_installs_entries():
-    """register_subscription_handlers adds Subscribe/Unsubscribe to request_handlers."""
-    import mcp.types as t
-    from mcp.server.fastmcp import FastMCP
-
-    from openzim_mcp.subscriptions import (
-        SubscriberRegistry,
-        register_subscription_handlers,
-    )
-
-    mcp = FastMCP("test")
-    reg = SubscriberRegistry()
-    register_subscription_handlers(mcp, reg)
-
-    handlers = mcp._mcp_server.request_handlers
-    assert t.SubscribeRequest in handlers
-    assert t.UnsubscribeRequest in handlers
+    assert seen == [ResourcesListChanged()]

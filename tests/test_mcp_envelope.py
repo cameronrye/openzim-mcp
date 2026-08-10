@@ -9,7 +9,7 @@ false positive flags a working call as an error. These tests pin both edges.
 import json
 
 import pytest
-from mcp.types import TextContent
+from mcp_types import TextContent
 
 from openzim_mcp.config import OpenZimMcpConfig
 from openzim_mcp.instructions import (
@@ -93,8 +93,8 @@ def test_error_result_preserves_the_envelope_verbatim():
 
     result = error_result(payload)
 
-    assert result.isError is True
-    assert result.structuredContent is None
+    assert result.is_error is True
+    assert result.structured_content is None
     assert isinstance(result.content[0], TextContent)
     assert json.loads(result.content[0].text) == payload
 
@@ -136,7 +136,7 @@ def _register_probe_tools(mcp):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool_name", ["markdown_tool", "dict_tool", "typed_dict_tool"])
 async def test_override_leaves_success_returns_byte_identical(tool_name):
-    """The success path must produce exactly what stock FastMCP produces.
+    """The success path must produce exactly what a stock MCPServer produces.
 
     ``call_tool`` is overridden to inspect the raw return value before
     conversion, so it also owns re-converting it. That detour must be
@@ -144,12 +144,12 @@ async def test_override_leaves_success_returns_byte_identical(tool_name):
     conversion rules (typed non-dict returns get wrapped and gain an output
     schema), and getting any of them wrong would silently reshape the wire.
     """
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
-    from openzim_mcp.mcp_envelope import EnvelopeAwareFastMCP
+    from openzim_mcp.mcp_envelope import EnvelopeAwareMCPServer
 
-    baseline = FastMCP("test")
-    overridden = EnvelopeAwareFastMCP("test")
+    baseline = MCPServer("test")
+    overridden = EnvelopeAwareMCPServer("test")
     _register_probe_tools(baseline)
     _register_probe_tools(overridden)
 
@@ -161,9 +161,9 @@ async def test_override_leaves_success_returns_byte_identical(tool_name):
 
 @pytest.mark.asyncio
 async def test_override_flags_a_returned_envelope():
-    from openzim_mcp.mcp_envelope import EnvelopeAwareFastMCP
+    from openzim_mcp.mcp_envelope import EnvelopeAwareMCPServer
 
-    mcp = EnvelopeAwareFastMCP("test")
+    mcp = EnvelopeAwareMCPServer("test")
 
     @mcp.tool(description="fails")
     async def failing_tool():
@@ -171,5 +171,5 @@ async def test_override_flags_a_returned_envelope():
 
     result = await mcp.call_tool("failing_tool", {})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert json.loads(result.content[0].text)["operation"] == "failing_tool"

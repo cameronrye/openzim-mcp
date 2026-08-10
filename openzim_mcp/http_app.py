@@ -389,22 +389,29 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(origins),
-        # DELETE is the MCP streamable-HTTP method for explicit session
-        # termination (per the spec; see also the SDK handler in
-        # streamable_http.py: "Allow: GET, POST, DELETE"). Without it,
-        # browser preflight blocks clean session shutdown.
+        # The SDK serves both protocol eras on this one endpoint, so the
+        # allow-list is the union of what each needs rather than just the
+        # 2026-07-28 set. A 2025-era client still opens a session (GET stream,
+        # DELETE to terminate, Mcp-Session-Id on every subsequent request,
+        # Last-Event-ID to resume a dropped stream); a 2026-era client is
+        # stateless and uses none of them. Dropping the legacy entries here
+        # would break browser-based legacy clients while the deprecation
+        # window is still open.
         allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
-        # Mcp-Session-Id is sent by streamable-HTTP clients on every request
-        # after initialization to resume a session; Last-Event-ID is used to
-        # resume interrupted streams; MCP-Protocol-Version is sent on every
-        # post-init request per the MCP spec. Without allowing these, browser
-        # CORS preflight rejects session-resume requests.
+        # MCP-Protocol-Version is sent by legacy clients post-initialize; the
+        # 2026-07-28 revision also defines it as the header form of the
+        # per-request protocol version. Mcp-Method / Mcp-Name are that
+        # revision's new required POST headers — allow-listed ahead of use,
+        # since mcp 2.0.0 does not send or enforce them yet and a browser
+        # client would otherwise fail preflight the moment it does.
         allow_headers=[
             "Authorization",
             "Content-Type",
             "Mcp-Session-Id",
             "Last-Event-ID",
             "MCP-Protocol-Version",
+            "Mcp-Method",
+            "Mcp-Name",
         ],
         expose_headers=["Mcp-Session-Id"],
     )
@@ -448,22 +455,17 @@ def serve_streamable_http(
     """
     check_safe_startup(server.config)
 
-    # Register health routes on the FastMCP-built app via its public-ish
-    # custom-routes list (looked at SDK source — this is the documented hook).
-    server.mcp._custom_starlette_routes.extend(
-        [
-            Route(HEALTHZ_PATH, healthz),
-            Route(READYZ_PATH, _make_readyz(server)),
-        ]
+    # Register health routes through the SDK's public custom-route hook.
+    server.mcp.custom_route(HEALTHZ_PATH, methods=["GET"])(healthz)
+    server.mcp.custom_route(READYZ_PATH, methods=["GET"])(_make_readyz(server))
+
+    # Transport configuration is an argument to the app builder on the v2 SDK
+    # (there is no ``settings`` object to mutate). ``host`` feeds the SDK's
+    # DNS-rebinding Host allow-list; we still run uvicorn ourselves below.
+    app = server.mcp.streamable_http_app(
+        host=server.config.host,
+        transport_security=server._transport_security,
     )
-
-    # Tell FastMCP what host/port to advertise (settings are read by the SDK
-    # in run_streamable_http_async; we still set them for consistency even
-    # though we run uvicorn ourselves below).
-    server.mcp.settings.host = server.config.host
-    server.mcp.settings.port = server.config.port
-
-    app = server.mcp.streamable_http_app()
     # Order matters. Starlette's add_middleware is LIFO: the LAST-added
     # middleware becomes the OUTERMOST layer. We want CORS as the outer
     # layer so 401 responses from the inner auth middleware still carry
@@ -472,29 +474,25 @@ def serve_streamable_http(
     app.add_middleware(BearerTokenAuthMiddleware, config=server.config)
     apply_cors_middleware(app, server.config)
 
-    # Wire the resource-subscription watcher when both the registry exists
-    # (subscriptions enabled) and we have allowed dirs to watch.
+    # Wire the resource-change watcher when subscriptions are enabled (the bus
+    # exists) and there are allowed dirs to watch.
     #
     # Why we wrap lifespan_context instead of using add_event_handler:
-    # FastMCP's streamable_http_app() supplies a custom Starlette lifespan
-    # (session_manager.run()), so Starlette's _DefaultLifespan — the only
-    # path that iterates on_startup/on_shutdown — is never installed and
+    # streamable_http_app() supplies its own Starlette lifespan, so
+    # Starlette's _DefaultLifespan — the only path that iterates
+    # on_startup/on_shutdown — is never installed and
     # add_event_handler('startup', ...) silently does nothing.
-    registry = server.subscriber_registry
-    if registry is not None and server.config.allowed_directories:
+    bus = server.subscription_bus
+    if bus is not None and server.config.allowed_directories:
         from . import subscriptions as _subs
 
         async def _on_change(uri: str, change_type: str) -> None:
-            await _subs.broadcast_resource_updated(registry, uri)
+            await _subs.publish_change(bus, uri, change_type)
 
         watcher = _subs.MtimeWatcher(
             server.config.allowed_directories,
             server.config.watch_interval_seconds,
             on_change=_on_change,
-            # The watcher tick doubles as the registry's sweep: per-URI
-            # containers left behind by disconnected sessions are otherwise
-            # never reclaimed (see SubscriberRegistry.prune).
-            registry=registry,
         )
 
         inner_lifespan = app.router.lifespan_context

@@ -206,14 +206,15 @@ def test_l3_watcher_started_and_stopped_by_lifespan(tmp_path, monkeypatch):
         subscriptions_enabled=True,
     )
     server = OpenZimMcpServer(cfg)
-    assert server.subscriber_registry is not None
+    # The bus is what gates the watcher wiring now: subscriptions/listen
+    # delivery is owned by the SDK, so an enabled HTTP server carries an
+    # InMemorySubscriptionBus where it used to carry a SubscriberRegistry.
+    assert server.subscription_bus is not None
 
-    # Swap FastMCP's streamable app for a plain Starlette app with a trivial
+    # Swap the SDK's streamable app for a plain Starlette app with a trivial
     # lifespan so the test exercises the watcher wrapper, not the session
     # manager. serve_streamable_http wraps this inner lifespan with the watcher.
     server.mcp.streamable_http_app = MagicMock(return_value=Starlette())
-    server.mcp._custom_starlette_routes = []
-    server.mcp.settings = MagicMock()
 
     captured: dict = {}
     http_app.serve_streamable_http(

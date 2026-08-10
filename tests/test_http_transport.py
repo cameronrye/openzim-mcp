@@ -183,8 +183,8 @@ def test_build_transport_allowed_hosts_port_expands_bare_hosts():
     assert (_LOOPBACK_HOSTS | _BARE_LOOPBACK_HOSTS) <= result
 
 
-def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
-    """allowed_hosts plumbs through to FastMCP as TransportSecuritySettings.
+def test_server_resolves_transport_security_when_hosts_configured(tmp_path) -> None:
+    """allowed_hosts resolves into TransportSecuritySettings at construction.
 
     Loopback values are always present in the resulting allow-list so that
     direct localhost access keeps working alongside the proxied hostname.
@@ -201,12 +201,14 @@ def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
     )
     server = OpenZimMcpServer(cfg)
 
-    # FastMCP stores transport_security on its settings object. We assert
-    # via set-superset rather than per-element ``in`` so neither (a) future
-    # SDK additions to the loopback defaults nor (b) order changes break
-    # the test, and so static analyzers don't mistake list-membership for
-    # URL substring matching.
-    sec: TransportSecuritySettings = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    # Transport security is no longer a constructor kwarg with a home on a
+    # settings object — the server resolves it eagerly into
+    # ``_transport_security`` and hands it to ``streamable_http_app()`` at
+    # serve time. We assert via set-superset rather than per-element ``in``
+    # so neither (a) future SDK additions to the loopback defaults nor (b)
+    # order changes break the test, and so static analyzers don't mistake
+    # list-membership for URL substring matching.
+    sec: TransportSecuritySettings = server._transport_security
     assert sec is not None
     hosts = set(sec.allowed_hosts)
     # Bare ``mcp.example.com`` is port-expanded so a proxied ``Host: …:443``
@@ -219,7 +221,7 @@ def test_fastmcp_receives_transport_security_when_hosts_configured(tmp_path):
     assert hosts.isdisjoint({"alt.example.com:*:*"})
 
 
-def test_fastmcp_uses_sdk_default_when_hosts_unset(tmp_path):
+def test_transport_security_loopback_only_when_hosts_unset(tmp_path) -> None:
     """Loopback bind + empty allowed_hosts ⇒ loopback-only Host allow-list.
 
     For a loopback bind (the default host 127.0.0.1) we now always construct
@@ -235,14 +237,16 @@ def test_fastmcp_uses_sdk_default_when_hosts_unset(tmp_path):
         transport="http",
     )
     server = OpenZimMcpServer(cfg)
-    sec = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    sec = server._transport_security
     assert sec is not None
     hosts = set(sec.allowed_hosts)
     assert hosts >= _LOOPBACK_HOSTS
     assert hosts.isdisjoint({"mcp.example.com"})
 
 
-def test_fastmcp_mirrors_cors_origins_into_transport_allowed_origins(tmp_path):
+def test_transport_security_mirrors_cors_origins_into_allowed_origins(
+    tmp_path,
+) -> None:
     """``cors_origins`` is mirrored into the SDK's ``allowed_origins``.
 
     The SDK's transport security validates the Origin header (separate from
@@ -266,13 +270,13 @@ def test_fastmcp_mirrors_cors_origins_into_transport_allowed_origins(tmp_path):
     )
     server = OpenZimMcpServer(cfg)
 
-    sec: TransportSecuritySettings = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    sec: TransportSecuritySettings = server._transport_security
     assert sec is not None
     origins = set(sec.allowed_origins)
     assert origins == {"https://app.example.com", "https://chat.example.com"}
 
 
-def test_fastmcp_allowed_origins_empty_when_cors_unset(tmp_path):
+def test_transport_security_allowed_origins_empty_when_cors_unset(tmp_path) -> None:
     """No cors_origins ⇒ empty SDK allowed_origins.
 
     Non-browser MCP clients send no Origin header and bypass the SDK's
@@ -291,13 +295,18 @@ def test_fastmcp_allowed_origins_empty_when_cors_unset(tmp_path):
     )
     server = OpenZimMcpServer(cfg)
 
-    sec: TransportSecuritySettings = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    sec: TransportSecuritySettings = server._transport_security
     assert sec is not None
     assert list(sec.allowed_origins) == []
 
 
-def test_fastmcp_ignores_allowed_hosts_when_transport_stdio(tmp_path):
-    """allowed_hosts is HTTP-only; stdio transport doesn't surface a Host header."""
+def test_transport_security_unresolved_when_transport_stdio(tmp_path) -> None:
+    """allowed_hosts is HTTP-only; stdio transport doesn't surface a Host header.
+
+    On stdio there is no ASGI app to hand settings to, so the server leaves
+    ``_transport_security`` unresolved rather than building an allow-list that
+    nothing would ever consult.
+    """
     from openzim_mcp.config import OpenZimMcpConfig
     from openzim_mcp.server import OpenZimMcpServer
 
@@ -307,13 +316,12 @@ def test_fastmcp_ignores_allowed_hosts_when_transport_stdio(tmp_path):
         allowed_hosts=["mcp.example.com"],
     )
     server = OpenZimMcpServer(cfg)
-    sec = server.mcp.settings.transport_security  # type: ignore[union-attr]
-    # Custom host NOT applied — SDK default in effect (loopback-only).
-    if sec is not None:
-        assert set(sec.allowed_hosts).isdisjoint({"mcp.example.com"})
+    assert server._transport_security is None
 
 
-def test_serve_streamable_http_runs_safe_check_and_serves(monkeypatch, tmp_path):
+def test_serve_streamable_http_runs_safe_check_and_serves(
+    monkeypatch, tmp_path
+) -> None:
     """serve_streamable_http calls check_safe_startup, builds app, runs uvicorn."""
     from openzim_mcp.http_app import serve_streamable_http
 
@@ -323,11 +331,14 @@ def test_serve_streamable_http_runs_safe_check_and_serves(monkeypatch, tmp_path)
     server.config.transport = "http"
     server.config.auth_token = None
     server.config.cors_origins = []
-    # Stub the FastMCP-like surface
-    server.mcp._custom_starlette_routes = []
+    # Stub the MCPServer-like surface. ``subscription_bus`` is pinned to None
+    # so the watcher-wiring branch stays out of this test's way (it has its
+    # own coverage); a bare MagicMock attribute would read as "enabled".
+    sentinel_security = object()
+    server._transport_security = sentinel_security
+    server.subscription_bus = None
     fake_app = MagicMock()
     server.mcp.streamable_http_app.return_value = fake_app
-    server.mcp.settings = MagicMock()
 
     safe_calls = []
     runner_calls = []
@@ -343,9 +354,23 @@ def test_serve_streamable_http_runs_safe_check_and_serves(monkeypatch, tmp_path)
     assert safe_calls == [server.config]
     assert len(runner_calls) == 1
     assert runner_calls[0][1:] == ("127.0.0.1", 8001)
-    # Health routes were appended to the FastMCP custom routes list
-    assert len(server.mcp._custom_starlette_routes) == 2
-    paths = {r.path for r in server.mcp._custom_starlette_routes}
-    assert paths == {"/healthz", "/readyz"}
+    # Health routes are registered through the SDK's public custom_route
+    # decorator now (the private _custom_starlette_routes list it used to
+    # append to is no longer part of the contract). Each call returns the
+    # decorator, which is then applied to the handler — so assert both the
+    # registration arguments and that a handler was actually decorated.
+    registered = {
+        call.args[0]: call.kwargs["methods"]
+        for call in server.mcp.custom_route.call_args_list
+    }
+    assert registered == {"/healthz": ["GET"], "/readyz": ["GET"]}
+    decorated = server.mcp.custom_route.return_value.call_args_list
+    assert len(decorated) == 2
+    assert all(callable(call.args[0]) for call in decorated)
+    # Transport config reaches the app builder as arguments (there is no
+    # settings object to mutate ahead of the call).
+    server.mcp.streamable_http_app.assert_called_once_with(
+        host="127.0.0.1", transport_security=sentinel_security
+    )
     # Auth + CORS middleware get added (auth always; CORS only if origins set)
     assert fake_app.add_middleware.called

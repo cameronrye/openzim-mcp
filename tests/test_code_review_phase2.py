@@ -137,8 +137,14 @@ def test_bind_all_with_allowed_hosts_keeps_validation(tmp_path):
     assert warning is None
 
 
-def test_fastmcp_bind_all_server_constructs(tmp_path):
-    """A 0.0.0.0-bound http server builds without raising and disables protection."""
+def test_bind_all_server_constructs(tmp_path):
+    """A 0.0.0.0-bound http server builds without raising and disables protection.
+
+    The settings land on the server itself now (``_transport_security``) rather
+    than on an MCP settings object, because the SDK takes them at serve time —
+    but resolving them during ``__init__`` is what keeps this a construction-time
+    check.
+    """
     from openzim_mcp.server import OpenZimMcpServer
 
     cfg = OpenZimMcpConfig(
@@ -148,7 +154,7 @@ def test_fastmcp_bind_all_server_constructs(tmp_path):
         auth_token="s3cret",
     )
     server = OpenZimMcpServer(cfg)
-    sec = server.mcp.settings.transport_security  # type: ignore[union-attr]
+    sec = server._transport_security
     assert sec is not None
     assert sec.enable_dns_rebinding_protection is False
 

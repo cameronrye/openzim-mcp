@@ -17,7 +17,7 @@ from .error_messages import (
 )
 from .exceptions import OpenZimMcpConfigurationError
 from .instructions import instructions_for
-from .mcp_envelope import EnvelopeAwareFastMCP
+from .mcp_envelope import EnvelopeAwareMCPServer
 from .rate_limiter import RateLimiter
 from .security import (
     PathValidator,
@@ -222,10 +222,9 @@ class OpenZimMcpServer:
         # unconditionally.
         self.simple_tools_handler = SimpleToolsHandler(self.zim_operations)
 
-        # Initialize MCP server. FastMCP itself doesn't accept a version
-        # kwarg, but the underlying lowlevel Server does — set it after
-        # construction so MCP `serverInfo.version` advertises openzim-mcp's
-        # version rather than the SDK's default.
+        # Initialize MCP server. ``version`` is a constructor kwarg on the v2
+        # SDK, so `serverInfo.version` advertises openzim-mcp's version rather
+        # than the SDK default (which is the empty string).
         #
         # When sitting behind a reverse proxy or Tailscale serve, the
         # public hostname differs from the bind interface and the SDK's
@@ -243,34 +242,42 @@ class OpenZimMcpServer:
         # SDK's ``allowed_origins`` because they encode the same trust
         # decision: an origin we let into CORS is one we let past the
         # rebinding check.
-        # ``instructions`` rides in the initialize response — once per session,
-        # not once per tools/list — so cross-tool routing guidance lives there
-        # instead of being duplicated across the tool descriptions.
-        fastmcp_kwargs: dict = {"instructions": instructions_for(config.tool_mode)}
+        # ``instructions`` is advertised through ``server/discover`` (the
+        # stateless protocol's replacement for the initialize handshake), so
+        # cross-tool routing guidance lives there instead of being duplicated
+        # across the tool descriptions.
+        #
+        # Transport security is no longer a constructor kwarg on the v2 SDK —
+        # it is passed to the ASGI app builder at serve time. Resolve it here
+        # anyway so a misconfigured allow-list is reported during startup
+        # rather than on the first request.
+        self._transport_security: Any = None
         if config.transport == "http":
-            transport_security, host_warning = _build_transport_security(config)
-            fastmcp_kwargs["transport_security"] = transport_security
+            self._transport_security, host_warning = _build_transport_security(config)
             if host_warning:
                 logger.warning(host_warning)
-        self.mcp = EnvelopeAwareFastMCP(config.server_name, **fastmcp_kwargs)
-        self.mcp._mcp_server.version = __version__
-        self._register_tools()
 
         # Subscription support is HTTP-only: the MtimeWatcher that emits
         # update notifications only runs under the HTTP lifespan (see
-        # http_app.serve_streamable_http). Wiring handlers in stdio mode
-        # would advertise a capability we silently can't honor.
-        self.subscriber_registry = None
+        # http_app.serve_streamable_http). Handing the server a bus in stdio
+        # mode would advertise a capability we silently can't honor.
+        #
+        # The bus is the SDK's own fan-out for `subscriptions/listen`: it owns
+        # the listener registry and the per-connection delivery that this
+        # project previously hand-rolled against ServerSession internals.
+        self.subscription_bus = None
         if config.subscriptions_enabled and config.transport == "http":
-            from .subscriptions import (
-                SubscriberRegistry,
-                patch_capabilities_to_advertise_subscribe,
-                register_subscription_handlers,
-            )
+            from mcp.server.subscriptions import InMemorySubscriptionBus
 
-            self.subscriber_registry = SubscriberRegistry()
-            register_subscription_handlers(self.mcp, self.subscriber_registry)
-            patch_capabilities_to_advertise_subscribe(self.mcp)
+            self.subscription_bus = InMemorySubscriptionBus()
+
+        self.mcp = EnvelopeAwareMCPServer(
+            config.server_name,
+            instructions=instructions_for(config.tool_mode),
+            version=__version__,
+            subscriptions=self.subscription_bus,
+        )
+        self._register_tools()
 
         logger.info(
             f"OpenZIM MCP server initialized successfully in {config.tool_mode} mode"
@@ -411,15 +418,23 @@ class OpenZimMcpServer:
 
                 http_app.serve_streamable_http(self)
             else:
+                run_kwargs: dict[str, Any] = {}
                 if transport == "sse":
                     from . import http_app
 
                     http_app.check_safe_startup(self.config)
-                    # FastMCP's SSE path reads host/port from settings; mirror
-                    # them from config so --host/--port take effect.
-                    self.mcp.settings.host = self.config.host
-                    self.mcp.settings.port = self.config.port
-                self.mcp.run(transport=transport)
+                    # The v2 SDK has no settings object: the SSE path takes
+                    # host/port (and transport security) as run() kwargs, which
+                    # it forwards to run_sse_async. HTTP+SSE is deprecated by
+                    # the 2026-07-28 revision but still served by the SDK, so
+                    # it keeps working here rather than being dropped as a
+                    # side effect of the SDK upgrade.
+                    run_kwargs = {
+                        "host": self.config.host,
+                        "port": self.config.port,
+                        "transport_security": self._transport_security,
+                    }
+                self.mcp.run(transport=transport, **run_kwargs)
         except KeyboardInterrupt:
             logger.info("Server shutdown requested")
         except Exception as e:
