@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import html2text
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+from soupsieve import SelectorSyntaxError
 
 from .constants import (
     DEFAULT_SNIPPET_LENGTH,
@@ -591,7 +592,15 @@ def _heading_visible_text(heading: Tag) -> str:
         try:
             for el in heading.select(selector):
                 unwanted_ids.add(id(el))
-        except Exception:  # pragma: no cover - selector engine quirks
+        except (SelectorSyntaxError, NotImplementedError) as exc:
+            # The only two failures soupsieve raises from ``select``: a
+            # malformed selector, and a pseudo-class the installed engine
+            # does not implement. One unusable selector must not cost the
+            # heading its whole cleanup, but the previous bare ``except
+            # Exception: continue`` also swallowed the diagnostic — a typo
+            # in UNWANTED_HTML_SELECTORS looked exactly like a selector
+            # that legitimately matched nothing.
+            logger.debug("heading cleanup skipped selector %r: %s", selector, exc)
             continue
     if not unwanted_ids:
         return str(heading.get_text()).strip()
