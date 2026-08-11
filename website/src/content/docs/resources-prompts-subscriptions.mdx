@@ -271,8 +271,24 @@ The watcher runs under the HTTP transport (`--transport http`) only, so that is 
 |---------|---------|-------|-------|
 | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | bool | master switch — `false` skips the watcher entirely; `subscriptions/listen` still succeeds and is acknowledged, but no notification is ever published to it |
 | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1-60 | polling interval; the watcher rescans allowed directories on this cadence |
+| `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` | `3600` | 0-86400 | how long a client may reuse a cached read of `zim://{name}` or `zim://{name}/entry/{path}`; `0` disables the override and puts them back on the watcher-bounded TTL |
 
 For production HTTP services with low-priority watching, increase to `15-30s` to reduce I/O churn. For interactive desktop use, the default is fine.
+
+### Read caching and freshness
+
+Every result carries the 2026-07-28 `ttlMs`/`cacheScope` fields, so a client knows how long it may reuse an answer rather than re-asking. Reads split in two:
+
+| URI | TTL | Why |
+|-----|-----|-----|
+| `zim://{name}`, `zim://{name}/entry/{path}` | `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` (default 1h) | a ZIM file is sealed — content changes only when the file is replaced |
+| `zim://files` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s) | a live directory scan; never staler than the server's own detection latency |
+
+`cacheScope` is `private` throughout: these payloads embed server-local absolute paths and configuration, so a shared intermediary must not serve one caller's response to another.
+
+The long TTL and subscriptions are designed to work together. A client on an open `subscriptions/listen` stream hears about a replacement immediately and re-reads, so the TTL never costs it freshness. A client that is not subscribed — anything on stdio, or an HTTP client that never opened a stream — can serve stale content for up to the TTL after a replacement. Lower it, or set `0`, if you swap archives in place and cannot rely on subscribers.
+
+Legacy clients see none of these fields: the SDK stamps them only for sessions opened on the 2026-07-28 revision, since `ttlMs` has no meaning in the era that preceded it.
 
 ### Lifespan integration
 

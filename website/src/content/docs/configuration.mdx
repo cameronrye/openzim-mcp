@@ -78,9 +78,18 @@ Polling-based mtime watcher. A `.zim` appearing in or disappearing from an allow
 ```bash
 export OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=true        # default true
 export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=5          # default 5, range 1-60
+export OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS=3600   # default 3600, range 0-86400
 ```
 
 Setting `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the polling task entirely; `subscriptions/listen` still succeeds and is acknowledged, but never fires. Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` upward for low-priority watching, downward (to a floor of 1s) for faster detection.
+
+### Read caching
+
+Results carry the 2026-07-28 `ttlMs`/`cacheScope` hints, which tell a client how long it may reuse an answer instead of asking again. `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` sets that window for the archive-backed resources — `zim://{name}` and `zim://{name}/entry/{path}` — where it pays off most: a ZIM file is sealed, so its content changes only when the file itself is replaced, and an overview read costs three blocking archive opens.
+
+`zim://files` is deliberately excluded. It is a live scan of the allowed directories, so it stays bounded by `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` and a cached copy is never staler than the server's own detection latency.
+
+The trade-off is staleness after a replacement. A client on an open `subscriptions/listen` stream is told immediately and re-reads, so the TTL costs it nothing. A client that is *not* subscribed — anything on stdio, or an HTTP client that never opened a stream — can keep serving the old content for up to the TTL. If you hot-swap archives in place and cannot rely on subscribers, lower it, or set `0` to turn the override off entirely and put archive reads back on the same watcher-bounded TTL as `zim://files`.
 
 ## Cache
 
@@ -223,6 +232,7 @@ Sorted alphabetically by field name within each grouping.
 | `rate_limit.enabled` | `OPENZIM_MCP_RATE_LIMIT__ENABLED` | `true` | bool |
 | `rate_limit.per_operation_limits` | `OPENZIM_MCP_RATE_LIMIT__PER_OPERATION_LIMITS` | `{}` | nested JSON dict |
 | `rate_limit.requests_per_second` | `OPENZIM_MCP_RATE_LIMIT__REQUESTS_PER_SECOND` | `20.0` | positive float (work units/s) |
+| `resource_cache_ttl_seconds` | `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` | `3600` | 0-86400; `0` disables |
 | `server_name` | `OPENZIM_MCP_SERVER_NAME` | `openzim-mcp` | reported in serverInfo |
 | `subscriptions_enabled` | `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | watcher master switch |
 | `tool_mode` | `OPENZIM_MCP_TOOL_MODE` | `simple` | `simple` or `advanced` |

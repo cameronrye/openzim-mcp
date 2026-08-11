@@ -137,6 +137,7 @@ If you're running behind `--transport http`:
 - **Auth overhead is negligible** — bearer-token comparison is `hmac.compare_digest`.
 - **Health probes** — use `/healthz` for liveness (auth-exempt, returns 200 OK), `/readyz` for readiness (auth-exempt, returns 503 if no allowed dir is readable). Don't probe `/mcp` from your platform's health checker; that requires a token and a JSON-RPC body.
 - **Subscription watcher cost** — `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5) controls poll cadence. Increase to 30+ if you don't need sub-minute freshness; set `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` to skip watching entirely.
+- **Let clients skip the read entirely** — reads of `zim://{name}` and `zim://{name}/entry/{path}` advertise a one-hour `ttlMs`, so a 2026-07-28 client re-serves them from its own cache instead of asking again. That matters most for the archive overview, which costs three blocking archive opens per read. Tune with `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS`; see [Read caching and freshness](/openzim-mcp/docs/resources-prompts-subscriptions/#read-caching-and-freshness) for the staleness trade-off if you replace archives in place.
 
 ## Monitoring
 

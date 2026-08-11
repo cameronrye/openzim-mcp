@@ -401,6 +401,24 @@ class OpenZimMcpConfig(BaseSettings):
         le=60,
         description="Polling interval for resource subscriptions (seconds).",
     )
+    resource_cache_ttl_seconds: int = Field(
+        default=3600,
+        ge=0,
+        le=86400,
+        description=(
+            "How long (seconds) a client may reuse a cached read of an "
+            "archive resource — `zim://{name}` and `zim://{name}/entry/"
+            "{path}` — before asking again. A ZIM file is sealed, so its "
+            "content changes only when the file itself is replaced, which "
+            "subscribed clients hear about immediately as a "
+            "`resources/updated` notification. A client that is not "
+            "subscribed (stdio, or HTTP without an open "
+            "`subscriptions/listen` stream) can serve stale content for up "
+            "to this long after a replacement. Set to 0 to turn the "
+            "override off, which puts archive reads back on the same "
+            "watcher-bounded TTL as `zim://files`."
+        ),
+    )
     subscriptions_enabled: bool = Field(
         default=True,
         description=(
@@ -550,6 +568,7 @@ class OpenZimMcpConfig(BaseSettings):
             "cors_origins": sorted(self.cors_origins),
             "allowed_hosts": sorted(self.allowed_hosts),
             "watch_interval_seconds": self.watch_interval_seconds,
+            "resource_cache_ttl_seconds": self.resource_cache_ttl_seconds,
             "subscriptions_enabled": self.subscriptions_enabled,
             "rate_limit_enabled": self.rate_limit.enabled,
             "rate_limit_rps": self.rate_limit.requests_per_second,

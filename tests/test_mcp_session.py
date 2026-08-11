@@ -276,7 +276,9 @@ async def test_simple_mode_flags_rejected_arguments(tmp_path: Path) -> None:
 
 
 @asynccontextmanager
-async def _modern_client(tmp_path: Path, **config_kwargs: Any) -> AsyncIterator[Any]:
+async def _modern_client(
+    tmp_path: Path, stub_read: bool = False, **config_kwargs: Any
+) -> AsyncIterator[Any]:
     """A client that opens with ``server/discover`` instead of ``initialize``.
 
     ``_connected_client`` drives the legacy handshake, which is what most of
@@ -284,11 +286,25 @@ async def _modern_client(tmp_path: Path, **config_kwargs: Any) -> AsyncIterator[
     client may call ``server/discover`` up front and otherwise just sends
     requests. Cache hints are era-gated (see the tests below), so telling the
     two apart needs a client that opens the modern way.
+
+    ``stub_read`` replaces the archive read with a fixed body. The per-URI TTL
+    tests need a *successful* read of a ``zim://{name}`` URI, which otherwise
+    requires a real ZIM file on disk; the archive layer is not what those tests
+    are about. Everything the assertion depends on — URI routing, the TTL the
+    handler stamps, the SDK's hint application, and the wire encoding — is the
+    real code path.
     """
     config = OpenZimMcpConfig(
         allowed_directories=[str(tmp_path)], tool_mode="advanced", **config_kwargs
     )
     server = OpenZimMcpServer(config)
+    if stub_read:
+        from mcp.server.lowlevel.helper_types import ReadResourceContents
+
+        async def _stub(uri: Any, context: Any = None) -> Any:
+            return [ReadResourceContents(content="stub", mime_type="text/plain")]
+
+        server.mcp.read_resource = _stub  # type: ignore[method-assign]
     low = server.mcp._lowlevel_server
     async with create_client_server_memory_streams() as (
         client_streams,
@@ -349,6 +365,74 @@ async def test_read_ttl_tracks_the_watch_interval(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_archive_overview_reads_carry_the_long_ttl(tmp_path: Path) -> None:
+    """A ``zim://{name}`` read is cacheable for far longer than a poll interval.
+
+    The method-wide hint bounds every read by the watcher interval because the
+    same method also serves ``zim://files``. An archive URI has no such
+    constraint — the file behind it is sealed — so it carries its own TTL.
+    """
+    async with _modern_client(
+        tmp_path,
+        stub_read=True,
+        watch_interval_seconds=5,
+        resource_cache_ttl_seconds=7200,
+    ) as session:
+        read = await session.read_resource("zim://wiki")
+
+    assert read.ttl_ms == 7200 * 1000
+    # Still server-local paths and config: the scope must survive the override.
+    assert read.cache_scope == "private"
+
+
+@pytest.mark.asyncio
+async def test_entry_reads_carry_the_long_ttl(tmp_path: Path) -> None:
+    """A per-entry read is immutable for the same reason the overview is."""
+    async with _modern_client(
+        tmp_path,
+        stub_read=True,
+        watch_interval_seconds=5,
+        resource_cache_ttl_seconds=7200,
+    ) as session:
+        read = await session.read_resource("zim://wiki/entry/A%2FArticle")
+
+    assert read.ttl_ms == 7200 * 1000
+
+
+@pytest.mark.asyncio
+async def test_files_listing_keeps_the_watcher_bounded_ttl(tmp_path: Path) -> None:
+    """``zim://files`` is a live directory scan and must not take the long TTL.
+
+    This is the whole reason the hint could not simply be raised method-wide.
+    """
+    async with _modern_client(
+        tmp_path, watch_interval_seconds=5, resource_cache_ttl_seconds=7200
+    ) as session:
+        read = await session.read_resource("zim://files")
+
+    assert read.ttl_ms == 5 * 1000
+
+
+@pytest.mark.asyncio
+async def test_zero_ttl_falls_back_to_the_watcher_bound(tmp_path: Path) -> None:
+    """``0`` turns the override off rather than making reads uncacheable.
+
+    An operator who hot-swaps archives wants the conservative behavior back,
+    not a stricter one: the watcher's own detection latency is already the
+    tightest bound the server can honestly promise.
+    """
+    async with _modern_client(
+        tmp_path,
+        stub_read=True,
+        watch_interval_seconds=5,
+        resource_cache_ttl_seconds=0,
+    ) as session:
+        read = await session.read_resource("zim://wiki")
+
+    assert read.ttl_ms == 5 * 1000
+
+
+@pytest.mark.asyncio
 async def test_legacy_clients_are_not_served_cache_hints(tmp_path: Path) -> None:
     """A 2025-era session gets no ``ttlMs`` — the field postdates its revision.
 
@@ -360,3 +444,32 @@ async def test_legacy_clients_are_not_served_cache_hints(tmp_path: Path) -> None
         tools = await session.list_tools()
 
     assert tools.ttl_ms == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_clients_are_not_served_the_per_uri_ttl(tmp_path: Path) -> None:
+    """The per-URI stamp must not leak a 2026-only field into a legacy session.
+
+    The method-wide hints are applied by the SDK, which does the era gating; an
+    explicit ``ttl_ms`` set by our own handler bypasses that decision point, so
+    the gating is worth pinning on this path specifically rather than assuming
+    it from the list-endpoint test above.
+    """
+    config = OpenZimMcpConfig(
+        allowed_directories=[str(tmp_path)],
+        tool_mode="advanced",
+        resource_cache_ttl_seconds=7200,
+    )
+    server = OpenZimMcpServer(config)
+
+    from mcp.server.lowlevel.helper_types import ReadResourceContents
+
+    async def _stub(uri: Any, context: Any = None) -> Any:
+        return [ReadResourceContents(content="stub", mime_type="text/plain")]
+
+    server.mcp.read_resource = _stub  # type: ignore[method-assign]
+
+    async with _connected_client(server) as session:
+        read = await session.read_resource("zim://wiki")
+
+    assert read.ttl_ms == 0

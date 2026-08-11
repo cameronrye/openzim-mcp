@@ -107,15 +107,18 @@ def _cache_hints(config: OpenZimMcpConfig) -> dict:
     they get a long TTL. That is also what makes them worth caching: a stable
     tool block is what earns a client's prompt-cache hits.
 
-    ``resources/read`` is capped at the watcher's polling interval instead.
-    Most of what it serves is immutable — a ZIM archive is a sealed file, so an
-    entry body for a given (archive, path) can never change — and would justify
-    hours. But the hint is per *method*, not per URI, and the same method also
-    serves ``zim://files``, a live directory scan. The floor therefore belongs
-    to the mutable member: bounding it by the poll interval means a cached read
-    is never staler than the server's own detection latency. Per-URI hints need
-    the handler to construct the result (the SDK fills only fields a handler
-    left unset), which the resource layer does not currently do.
+    ``resources/read`` is capped at the watcher's polling interval instead,
+    because this hint is per *method* and that one method serves both a sealed
+    archive and ``zim://files``, a live directory scan. The floor belongs to
+    the mutable member: bounding it by the poll interval means a cached read is
+    never staler than the server's own detection latency.
+
+    That floor is the *fallback*, not the whole story. Archive-backed URIs are
+    fixed by a sealed file and carry a much longer TTL, stamped per URI by
+    ``EnvelopeAwareMCPServer._handle_read_resource`` — the SDK fills only
+    fields a handler left unset, so a handler's explicit ``ttl_ms`` wins over
+    the value here. Reads of ``zim://files`` are left alone and land on this
+    one.
 
     ``cacheScope`` is ``private`` throughout: these payloads embed
     server-local absolute paths and configuration, so a shared intermediary
@@ -323,6 +326,7 @@ class OpenZimMcpServer:
             version=__version__,
             subscriptions=self.subscription_bus,
             cache_hints=_cache_hints(config),
+            archive_read_ttl_ms=config.resource_cache_ttl_seconds * 1000,
         )
         self._register_tools()
 

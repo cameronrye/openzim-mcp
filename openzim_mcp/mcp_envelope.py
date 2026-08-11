@@ -18,6 +18,13 @@ before the SDK converts it, and when the value is an error envelope it emits a
 ``CallToolResult`` with ``is_error=True`` whose ``content`` is byte-identical to
 what the plain dict return produced. Clients that parse the body keep working;
 clients that check the flag start working.
+
+The same class also stamps the per-URI half of the 2026-07-28 cache hints. The
+server-wide ``cache_hints`` map is keyed by *method*, so one TTL has to cover
+every ``resources/read`` — and because that method serves both sealed archives
+and a live directory scan, the honest method-wide value is the short one. Only
+a handler can tell the two apart, which is what :meth:`_handle_read_resource`
+does here.
 """
 
 from __future__ import annotations
@@ -26,9 +33,19 @@ from typing import Any
 
 import pydantic_core
 from mcp.server.mcpserver import Context, MCPServer
-from mcp_types import CallToolResult, InputRequiredResult, TextContent
+from mcp_types import (
+    CallToolResult,
+    InputRequiredResult,
+    ReadResourceResult,
+    TextContent,
+)
 
 __all__ = ["EnvelopeAwareMCPServer", "is_tool_error_envelope"]
+
+# The one ``zim://`` URI whose content is not fixed by a sealed archive file:
+# it is a live scan of the allowed directories, so it must keep the
+# watcher-bounded TTL that the method-wide hint supplies.
+_LIVE_SCAN_URI = "zim://files"
 
 # The exact keys ``responses.tool_error`` always sets. Matching all three (and
 # ``error is True`` by identity, not truthiness) keeps an ordinary payload that
@@ -80,7 +97,38 @@ class EnvelopeAwareMCPServer(MCPServer):
     The override is at ``call_tool`` — the single point where every tool's
     return value passes through — so tools keep returning plain dicts and no
     registration site has to know about the protocol envelope.
+
+    Args:
+        archive_read_ttl_ms: TTL stamped on reads of archive-backed ``zim://``
+            URIs. ``0`` leaves the result alone, so those reads fall back to
+            the server-wide ``resources/read`` hint.
     """
+
+    def __init__(self, *args: Any, archive_read_ttl_ms: int = 0, **kwargs: Any) -> None:
+        """Capture the archive TTL, then defer to the SDK constructor."""
+        super().__init__(*args, **kwargs)
+        self._archive_read_ttl_ms = archive_read_ttl_ms
+
+    async def _handle_read_resource(
+        self, ctx: Any, params: Any
+    ) -> ReadResourceResult | InputRequiredResult:
+        """Stamp the long TTL on reads whose content a sealed archive fixes.
+
+        ``apply_cache_hint`` fills only fields a handler left unset, so setting
+        ``ttl_ms`` here wins over the method-wide hint for exactly these URIs
+        while ``cache_scope`` still comes from the server-wide value. The
+        result is built with ``model_copy(update=...)``, which records the
+        field in ``model_fields_set`` — the flag the SDK keys that precedence
+        on.
+        """
+        result = await super()._handle_read_resource(ctx, params)
+        if (
+            self._archive_read_ttl_ms <= 0
+            or isinstance(result, InputRequiredResult)
+            or str(params.uri) == _LIVE_SCAN_URI
+        ):
+            return result
+        return result.model_copy(update={"ttl_ms": self._archive_read_ttl_ms})
 
     async def call_tool(
         self,
