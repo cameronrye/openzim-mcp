@@ -49,6 +49,30 @@ READYZ_PATH = "/readyz"
 # Health endpoints exempt from auth.
 AUTH_EXEMPT_PATHS = {HEALTHZ_PATH, READYZ_PATH}
 
+# Request headers a browser client may send to the MCP endpoint. A module
+# constant rather than an inline literal so the policy is inspectable — see
+# ``test_header_bearing_tool_params_are_cors_allowed``, which holds the one
+# entry a future change could silently need.
+#
+# No ``Mcp-Param-*`` entry is listed, which is the decision on the 2026-07-28
+# custom-header passthrough rather than an oversight. That revision lets a tool
+# annotate an input property with ``x-mcp-header``, and a modern client then
+# sends that argument as an ``Mcp-Param-<token>`` request header instead of in
+# the JSON body. No tool here annotates one, so no such header is ever sent and
+# allowing them would only widen what a browser may put on the wire. The
+# coupling is the trap: adding the annotation to a tool schema breaks browser
+# clients at preflight with nothing in the request itself to explain why, so
+# the guard test fails until the header is listed here.
+CORS_ALLOW_HEADERS = (
+    "Authorization",
+    "Content-Type",
+    "Mcp-Session-Id",
+    "Last-Event-ID",
+    "MCP-Protocol-Version",
+    "Mcp-Method",
+    "Mcp-Name",
+)
+
 # Upper bound on the /readyz allowed-directory stat probe. A hung network mount
 # returns a fast 503 after this instead of stalling the event loop.
 READYZ_PROBE_TIMEOUT_SECONDS = 5.0
@@ -406,15 +430,7 @@ def apply_cors_middleware(app: Starlette, config: object) -> None:
         # rejected with -32020, and tools/call additionally requires Mcp-Name.
         # Both are therefore load-bearing here, not forward-compatibility —
         # omitting them fails browser preflight for every 2026-era client.
-        allow_headers=[
-            "Authorization",
-            "Content-Type",
-            "Mcp-Session-Id",
-            "Last-Event-ID",
-            "MCP-Protocol-Version",
-            "Mcp-Method",
-            "Mcp-Name",
-        ],
+        allow_headers=list(CORS_ALLOW_HEADERS),
         expose_headers=["Mcp-Session-Id"],
     )
 
