@@ -120,6 +120,21 @@ class EnvelopeAwareMCPServer(MCPServer):
         result is built with ``model_copy(update=...)``, which records the
         field in ``model_fields_set`` — the flag the SDK keys that precedence
         on.
+
+        This overrides a private SDK method, which the v2 port otherwise moved
+        away from. It is the extension point the caching design implies: the
+        SDK's own docs say a per-result hint is set "by returning a result with
+        explicit ``ttl_ms``", and on this layer the only code that returns a
+        ``ReadResourceResult`` is this handler — ``MCPServer`` binds it as
+        ``on_read_resource`` at construction, so a subclass override is what
+        the lowlevel server ends up calling. If a future SDK stops routing
+        through it, the per-URI TTL tests fail rather than the hint silently
+        reverting to the method-wide value.
+
+        Which URIs qualify is stated as an exception rather than a match
+        because every registered resource except ``zim://files`` is
+        archive-backed. ``test_every_registered_resource_has_a_deliberate_ttl``
+        fails if that stops being true.
         """
         result = await super()._handle_read_resource(ctx, params)
         if (

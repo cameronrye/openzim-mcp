@@ -446,6 +446,29 @@ async def test_legacy_clients_are_not_served_cache_hints(tmp_path: Path) -> None
     assert tools.ttl_ms == 0
 
 
+def test_every_registered_resource_has_a_deliberate_ttl(tmp_path: Path) -> None:
+    """Guards the one assumption the per-URI TTL rests on.
+
+    ``_handle_read_resource`` states the policy as an exception: everything
+    except ``zim://files`` is backed by a sealed archive and may be cached for
+    an hour. That is true of the current registrations and silently wrong for
+    any future resource that is computed rather than read from a ZIM — it
+    would inherit the long TTL without anyone deciding it should. Registering
+    one fails here, which is the prompt to classify it.
+    """
+    from openzim_mcp.mcp_envelope import _LIVE_SCAN_URI
+
+    config = OpenZimMcpConfig(allowed_directories=[str(tmp_path)], tool_mode="advanced")
+    server = OpenZimMcpServer(config)
+    manager = server.mcp._resource_manager
+
+    assert set(manager._resources) == {_LIVE_SCAN_URI}
+    assert set(manager._templates) == {
+        "zim://{name}",
+        "zim://{name}/entry/{path}",
+    }
+
+
 @pytest.mark.asyncio
 async def test_legacy_clients_are_not_served_the_per_uri_ttl(tmp_path: Path) -> None:
     """The per-URI stamp must not leak a 2026-only field into a legacy session.
