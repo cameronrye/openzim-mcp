@@ -160,11 +160,11 @@ class MtimeWatcher:
         }
         # Directory listing changes → zim://files
         if added or removed:
-            await self._on_change("zim://files", "list_changed")
+            await self._on_change("zim://files", CHANGE_LIST_CHANGED)
         # Per-file content replacements (or mtime bumps) → zim://{name}
         for path in changed:
             name = Path(path).stem
-            await self._on_change(f"zim://{name}", "replaced")
+            await self._on_change(f"zim://{name}", CHANGE_REPLACED)
         self._snapshot = new_snap
 
     async def _loop(self) -> None:
