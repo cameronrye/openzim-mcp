@@ -4,6 +4,8 @@ import ipaddress
 import logging
 from typing import Any, Literal, Optional
 
+from mcp.types import Icon
+
 from . import __version__
 from .async_operations import AsyncZimOperations
 from .cache import OpenZimMcpCache
@@ -29,6 +31,13 @@ from .tools import register_phase_f_tools
 from .zim_operations import ZimOperations
 
 logger = logging.getLogger(__name__)
+
+# Identity advertised in ``serverInfo``. The docs site is the project's public
+# face — a client that surfaces a "learn more" link should land users on
+# documentation rather than the raw repository — and the icon is served from
+# the same origin, so both live or die together with the published site.
+PROJECT_WEBSITE_URL = "https://cameronrye.github.io/openzim-mcp/"
+PROJECT_ICON_URL = "https://cameronrye.github.io/openzim-mcp/assets/logo.svg"
 
 # Loopback entries always present in the Host allow-list so localhost-direct
 # access keeps working alongside any proxied hostname. Both the bare host and
@@ -246,7 +255,16 @@ class OpenZimMcpServer:
         # ``instructions`` rides in the initialize response — once per session,
         # not once per tools/list — so cross-tool routing guidance lives there
         # instead of being duplicated across the tool descriptions.
-        fastmcp_kwargs: dict = {"instructions": instructions_for(config.tool_mode)}
+        # ``website_url`` and ``icons`` ride in ``serverInfo``. Without them a
+        # registry listing or client UI has nothing to show beyond a bare name
+        # string. Both are served over https from the published docs site: an
+        # icon fetched over plain http would be blocked as mixed content in any
+        # browser-based client.
+        fastmcp_kwargs: dict = {
+            "instructions": instructions_for(config.tool_mode),
+            "website_url": PROJECT_WEBSITE_URL,
+            "icons": [Icon(src=PROJECT_ICON_URL, mimeType="image/svg+xml")],
+        }
         if config.transport == "http":
             transport_security, host_warning = _build_transport_security(config)
             fastmcp_kwargs["transport_security"] = transport_security

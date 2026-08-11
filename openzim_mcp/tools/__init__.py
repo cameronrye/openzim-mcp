@@ -48,6 +48,7 @@ def register_phase_f_tools(server: "OpenZimMcpServer") -> None:
         zim_metadata,
         zim_search,
     )
+    from .completions import register_completions
     from .prompts import register_prompts
     from .resource_tools import register_resources
 
@@ -67,3 +68,6 @@ def register_phase_f_tools(server: "OpenZimMcpServer") -> None:
     # shape" only.
     register_resources(server)
     register_prompts(server)
+    # Completions serve the prompt and resource-template arguments registered
+    # just above, so this has to follow them.
+    register_completions(server)
