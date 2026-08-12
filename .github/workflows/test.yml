@@ -291,10 +291,18 @@ jobs:
   test-comprehensive:
     name: Comprehensive Testing
     runs-on: ubuntu-latest
-    # Heaviest job (downloads the ZIM testing suite + full + slow suites);
-    # cap it so a hung ZIM-data fetch can't ride the 6h default either.
+    # Downloads the ZIM testing suite and runs the full + slow suites; cap it
+    # so a hung ZIM-data fetch can't ride GitHub's 6h default.
     timeout-minutes: 45
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Runs on pull requests too. This is the only job that fetches the corpus,
+    # so gating it to main-only meant the ~54 tests that need a real archive
+    # skipped themselves silently on every PR and were first exercised after
+    # merge — the reads, the per-entry resource, the search paths. A PR could
+    # go green having never opened a ZIM file.
+    #
+    # It was gated as "the heaviest job", which measurement does not support:
+    # the corpus is 14MB and the whole job takes ~2.5 minutes, against ~5 for
+    # the Windows matrix entries it runs beside.
     permissions:
       contents: read
     steps:
