@@ -227,6 +227,49 @@ async def test_completion_reflects_archives_added_after_startup(
     assert after.completion.values == ["first", "second"]
 
 
+@pytest.mark.asyncio
+async def test_completion_scan_runs_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The archive scan behind completions must not run on the loop thread.
+
+    ``list_zim_files_data`` re-walks every allowed directory on each call
+    (glob + stat — the scan result is its own cache key, so even a warm cache
+    scans first). Run inline in the async handler, one completion request
+    against a hung network mount would wedge the event loop and with it every
+    session; every comparable call site (resource templates, ``/readyz``)
+    already offloads for exactly this reason.
+    """
+    import threading
+
+    from openzim_mcp.zim.archive import ZimOperations
+
+    _make_zim(tmp_path, "wikipedia_en")
+
+    loop_thread = threading.current_thread()
+    seen_threads: list[threading.Thread] = []
+    original = ZimOperations.list_zim_files_data
+
+    def recording(self: ZimOperations, *args: Any, **kwargs: Any) -> Any:
+        seen_threads.append(threading.current_thread())
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(ZimOperations, "list_zim_files_data", recording)
+
+    async with _session(tmp_path) as session:
+        result = await session.complete(
+            ref=ResourceTemplateReference(type="ref/resource", uri="zim://{name}"),
+            argument={"name": "name", "value": ""},
+        )
+
+    assert result.completion.values == ["wikipedia_en"]
+    assert seen_threads, "completion never consulted the archive listing"
+    assert all(thread is not loop_thread for thread in seen_threads), (
+        "the archive scan ran on the event-loop thread; it must be offloaded "
+        "via asyncio.to_thread"
+    )
+
+
 def test_docs_url_matches_the_published_site() -> None:
     """The advertised website must be the one the project actually publishes."""
     readme = Path(__file__).parent.parent / "README.md"

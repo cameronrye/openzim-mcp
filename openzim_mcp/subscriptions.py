@@ -35,6 +35,7 @@ import contextlib
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, Optional
+from urllib.parse import quote
 
 if TYPE_CHECKING:
     from mcp.server.subscriptions import SubscriptionBus
@@ -57,7 +58,8 @@ class MtimeWatcher:
     Events emitted:
       * ``zim://files`` — directory contents changed (file added/removed).
       * ``zim://{name}`` — a specific file's mtime changed (replacement).
-        ``{name}`` is the bare basename without the ``.zim`` extension.
+        ``{name}`` is the basename without the ``.zim`` extension,
+        percent-encoded as the ``zim://{name}`` template expands it.
 
     The watcher runs as a single asyncio task. Calling ``stop()`` cancels
     the task and waits for it to unwind. ``stop()`` is idempotent.
@@ -161,9 +163,14 @@ class MtimeWatcher:
         # Directory listing changes → zim://files
         if added or removed:
             await self._on_change("zim://files", CHANGE_LIST_CHANGED)
-        # Per-file content replacements (or mtime bumps) → zim://{name}
+        # Per-file content replacements (or mtime bumps) → zim://{name}.
+        # The stem is percent-encoded exactly as RFC 6570 expansion of the
+        # advertised ``zim://{name}`` template would produce it (``quote``
+        # with ``safe=""`` keeps the same unreserved set), because the SDK
+        # delivers events by exact string match against the URIs the client
+        # subscribed with — a raw non-ASCII or spaced stem would never match.
         for path in changed:
-            name = Path(path).stem
+            name = quote(Path(path).stem, safe="")
             await self._on_change(f"zim://{name}", CHANGE_REPLACED)
         self._snapshot = new_snap
 

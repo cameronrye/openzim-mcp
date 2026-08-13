@@ -351,6 +351,18 @@ class OpenZimMcpServer:
             cache_hints=_cache_hints(config),
             archive_read_ttl_ms=config.resource_cache_ttl_seconds * 1000,
         )
+        if self.subscription_bus is None:
+            # Withholding the bus is not enough to withhold the capability:
+            # the SDK substitutes its own private bus for ``None`` and
+            # registers ``subscriptions/listen`` unconditionally, and the
+            # modern capability derivation reports ``resources.subscribe``
+            # and every ``listChanged`` flag purely from that handler's
+            # presence. Drop the handler so the advertisement stays honest
+            # and a listen request fails fast with method-not-found instead
+            # of acking a stream that nothing will ever publish to.
+            self.mcp._lowlevel_server._request_handlers.pop(
+                "subscriptions/listen", None
+            )
         self._register_tools()
 
         logger.info(

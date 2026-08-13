@@ -406,16 +406,18 @@ class OpenZimMcpConfig(BaseSettings):
         ge=0,
         le=86400,
         description=(
-            "How long (seconds) a client may reuse a cached read of an "
-            "archive resource — `zim://{name}` and `zim://{name}/entry/"
-            "{path}` — before asking again. A ZIM file is sealed, so its "
-            "content changes only when the file itself is replaced, which "
-            "subscribed clients hear about immediately as a "
-            "`resources/updated` notification. A client that is not "
-            "subscribed (stdio, or HTTP without an open "
-            "`subscriptions/listen` stream) can serve stale content for up "
-            "to this long after a replacement. Set to 0 to turn the "
-            "override off, which puts archive reads back on the same "
+            "How long (seconds) a client may reuse a cached read of a "
+            "`zim://{name}` overview before asking again. A ZIM file is "
+            "sealed, so the overview changes only when the file itself is "
+            "replaced, which subscribed clients hear about immediately as a "
+            "`resources/updated` notification for that URI. A client that "
+            "is not subscribed (stdio, or HTTP without an open "
+            "`subscriptions/listen` stream) can serve a stale overview for "
+            "up to this long after a replacement. Per-entry reads "
+            "(`zim://{name}/entry/{path}`) stay on the watcher-bounded TTL: "
+            "no notification is ever published for an entry URI, so a "
+            "longer promise could not be invalidated. Set to 0 to turn the "
+            "override off, which puts overview reads back on the same "
             "watcher-bounded TTL as `zim://files`."
         ),
     )

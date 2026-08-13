@@ -29,6 +29,7 @@ does here.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pydantic_core
@@ -38,6 +39,7 @@ from mcp_types import (
     InputRequiredResult,
     ReadResourceResult,
     TextContent,
+    TextResourceContents,
 )
 
 __all__ = ["EnvelopeAwareMCPServer", "is_tool_error_envelope"]
@@ -46,6 +48,14 @@ __all__ = ["EnvelopeAwareMCPServer", "is_tool_error_envelope"]
 # it is a live scan of the allowed directories, so it must keep the
 # watcher-bounded TTL that the method-wide hint supplies.
 _LIVE_SCAN_URI = "zim://files"
+
+# Per-entry URIs (``zim://{name}/entry/{path}``) are archive-backed too, but
+# the long TTL would be dishonest on them: a replacement publishes
+# ``resources/updated`` only for the overview URI, and both SDK delivery and
+# client-side eviction are exact-URI, so nothing could ever invalidate a
+# cached entry read before the TTL ran out. They stay on the watcher-bounded
+# method-wide hint instead.
+_ENTRY_URI_MARKER = "/entry/"
 
 # The exact keys ``responses.tool_error`` always sets. Matching all three (and
 # ``error is True`` by identity, not truthiness) keeps an ordinary payload that
@@ -64,6 +74,31 @@ def is_tool_error_envelope(value: Any) -> bool:
         for key in _ENVELOPE_REQUIRED_KEYS
         if key != "error"
     )
+
+
+def _is_overview_error_body(result: ReadResourceResult) -> bool:
+    """True when a ``zim://{name}`` overview reported failure inside its body.
+
+    The overview resource deliberately returns errors as *successful* JSON
+    bodies — ``{"error": ...}`` for a missing archive, ``*_error`` keys for
+    partial section failures (a contract pinned in ``test_resources.py``).
+    Those bodies describe a moment, not the sealed archive, so they must not
+    be stamped with the hour-long TTL: a cached not-found error would outlive
+    the operator dropping the archive into place, and nothing ever publishes
+    a ``resources/updated`` that could evict it.
+    """
+    if len(result.contents) != 1:
+        return False
+    sole = result.contents[0]
+    if not isinstance(sole, TextResourceContents):
+        return False
+    try:
+        payload = json.loads(sole.text)
+    except ValueError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return "error" in payload or any(key.endswith("_error") for key in payload)
 
 
 def _serialize_envelope(payload: dict) -> str:
@@ -134,13 +169,19 @@ class EnvelopeAwareMCPServer(MCPServer):
         Which URIs qualify is stated as an exception rather than a match
         because every registered resource except ``zim://files`` is
         archive-backed. ``test_every_registered_resource_has_a_deliberate_ttl``
-        fails if that stops being true.
+        fails if that stops being true. Two further carve-outs keep the long
+        TTL honest: per-entry reads (see ``_ENTRY_URI_MARKER``) and overview
+        reads whose JSON body reports an error (see
+        ``_is_overview_error_body``) have no invalidation story, so they stay
+        on the watcher-bounded method-wide hint.
         """
         result = await super()._handle_read_resource(ctx, params)
         if (
             self._archive_read_ttl_ms <= 0
             or isinstance(result, InputRequiredResult)
             or str(params.uri) == _LIVE_SCAN_URI
+            or _ENTRY_URI_MARKER in str(params.uri)
+            or _is_overview_error_body(result)
         ):
             return result
         return result.model_copy(update={"ttl_ms": self._archive_read_ttl_ms})

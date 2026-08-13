@@ -262,3 +262,99 @@ async def test_watcher_changes_reach_the_bus_end_to_end(tmp_path: Path) -> None:
         unsubscribe()
 
     assert seen == [ResourcesListChanged()]
+
+
+@pytest.mark.asyncio
+async def test_watcher_replacement_uri_matches_template_expansion(
+    tmp_path: Path,
+) -> None:
+    """Stems outside RFC 6570's unreserved set are percent-encoded in events.
+
+    SDK delivery (``event_matches``) compares the event URI against the
+    client's subscribed URIs as exact strings, and a conformant client derives
+    those strings by expanding the advertised ``zim://{name}`` template —
+    which percent-encodes everything outside ALPHA / DIGIT / ``-._~``. A
+    watcher that publishes the raw stem would never match such a
+    subscription, silently dropping every replacement notification for
+    archives with spaces or non-ASCII in their names.
+    """
+    from mcp.shared.uri_template import UriTemplate
+
+    from openzim_mcp.subscriptions import MtimeWatcher
+
+    stem = "wikipedia_es_niños"
+    target = tmp_path / f"{stem}.zim"
+    target.write_bytes(b"v1")
+
+    events: list[tuple[str, str]] = []
+
+    async def emit(uri: str, change_type: str) -> None:
+        events.append((uri, change_type))
+
+    watcher = MtimeWatcher([str(tmp_path)], interval=100, on_change=emit)
+    await watcher.start()
+    try:
+        target.write_bytes(b"v2-with-different-length")
+        await watcher._tick()
+    finally:
+        await watcher.stop()
+
+    expected = UriTemplate.parse("zim://{name}").expand({"name": stem})
+    assert (expected, "replaced") in events
+
+
+class TestSubscriptionCapabilityGate:
+    """The wire advertisement must track the subscriptions gate.
+
+    ``OpenZimMcpServer`` withholds the subscription bus outside
+    HTTP-with-subscriptions-enabled, but SDK v2 substitutes its own private
+    bus for ``None`` and registers ``subscriptions/listen`` regardless — and
+    the modern capability derivation reports ``resources.subscribe`` and every
+    ``listChanged`` flag purely from that handler's presence. Unless the
+    handler is dropped too, a stdio (default) deployment advertises a
+    capability whose events can never fire: the MtimeWatcher only runs under
+    the HTTP lifespan, so an acked listen stream stays silent forever.
+    """
+
+    @staticmethod
+    def _server(tmp_path: Path, **kwargs):
+        from openzim_mcp.config import OpenZimMcpConfig
+        from openzim_mcp.server import OpenZimMcpServer
+
+        config = OpenZimMcpConfig(
+            allowed_directories=[str(tmp_path)], tool_mode="advanced", **kwargs
+        )
+        return OpenZimMcpServer(config)
+
+    @staticmethod
+    def _modern_caps(server):
+        return server.mcp._lowlevel_server.get_capabilities(
+            protocol_version="2026-07-28"
+        )
+
+    def _assert_not_advertised(self, server) -> None:
+        assert server.subscription_bus is None
+        low = server.mcp._lowlevel_server
+        assert "subscriptions/listen" not in low._request_handlers
+        caps = self._modern_caps(server)
+        assert not caps.resources.subscribe
+        assert not caps.resources.list_changed
+        assert not caps.tools.list_changed
+        assert not caps.prompts.list_changed
+
+    def test_stdio_server_does_not_advertise_subscriptions(self, tmp_path: Path):
+        self._assert_not_advertised(self._server(tmp_path))
+
+    def test_http_with_subscriptions_disabled_does_not_advertise(self, tmp_path: Path):
+        self._assert_not_advertised(
+            self._server(tmp_path, transport="http", subscriptions_enabled=False)
+        )
+
+    def test_http_with_subscriptions_enabled_advertises(self, tmp_path: Path):
+        server = self._server(tmp_path, transport="http")
+        assert server.subscription_bus is not None
+        low = server.mcp._lowlevel_server
+        assert "subscriptions/listen" in low._request_handlers
+        caps = self._modern_caps(server)
+        assert caps.resources.subscribe
+        assert caps.resources.list_changed

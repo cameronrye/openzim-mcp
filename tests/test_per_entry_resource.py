@@ -116,6 +116,51 @@ class TestPerEntryResource:
         archive.get_entry_by_path.assert_called_once_with("A/Article")
 
     @pytest.mark.asyncio
+    async def test_entry_path_is_not_double_decoded(
+        self, server, ctx: Context, monkeypatch
+    ):
+        """A stored path containing a literal ``%`` survives the round-trip.
+
+        The v2 SDK's ``UriTemplate.match`` already percent-decodes captured
+        parameters, so a request for ``page%2520name`` hands the template
+        ``page%20name`` — the verbatim stored path (zimit/web-archive ZIMs
+        keep percent-escapes in entry paths). A second decode would corrupt
+        it to ``page name`` and miss the entry.
+        """
+        from openzim_mcp.tools import resource_tools
+
+        server.zim_operations.list_zim_files_data = MagicMock(
+            return_value=[{"path": "/zim/wiki.zim", "name": "wiki.zim"}]
+        )
+        server.path_validator.validate_path = MagicMock(return_value="/zim/wiki.zim")
+        server.path_validator.validate_zim_file = MagicMock(
+            return_value="/zim/wiki.zim"
+        )
+
+        archive = MagicMock()
+        item = MagicMock()
+        item.mimetype = "text/plain"
+        item.content = b"body"
+        entry = MagicMock()
+        entry.is_redirect = False
+        entry.get_item.return_value = item
+        archive.get_entry_by_path.return_value = entry
+
+        class FakeCtx:
+            def __enter__(self_inner):
+                return archive
+
+            def __exit__(self_inner, *exc):
+                return False
+
+        monkeypatch.setattr(resource_tools, "zim_archive", lambda *a, **k: FakeCtx())
+
+        rm = server.mcp._resource_manager
+        resource = await rm.get_resource("zim://wiki/entry/page%2520name", ctx)
+        await resource.read()
+        archive.get_entry_by_path.assert_called_once_with("page%20name")
+
+    @pytest.mark.asyncio
     async def test_binary_returns_bytes(self, server, ctx: Context, monkeypatch):
         """An image entry comes back as raw bytes (the SDK base64-wraps)."""
         from openzim_mcp.tools import resource_tools
@@ -156,10 +201,17 @@ class TestPerEntryResource:
 
     @pytest.mark.asyncio
     async def test_unknown_zim_file_raises(self, server, ctx: Context):
-        """Requesting a name that isn't in list_zim_files_data raises ValueError."""
+        """An unknown name raises ResourceNotFoundError, not a bare ValueError.
+
+        The type matters on the wire: the SDK maps ResourceNotFoundError to
+        ``-32602`` invalid params carrying the descriptive message, while an
+        unmapped ValueError escapes as a generic ``-32603`` "Internal server
+        error" — turning a routine client typo into what looks like a
+        retryable server fault.
+        """
         server.zim_operations.list_zim_files_data = MagicMock(return_value=[])
         rm = server.mcp._resource_manager
-        with pytest.raises(ValueError, match="not found"):
+        with pytest.raises(ResourceNotFoundError, match="not found"):
             await rm.get_resource("zim://nonexistent/entry/A%2FMissing", ctx)
 
     @pytest.mark.asyncio
@@ -441,8 +493,14 @@ class TestPerEntryResource:
     async def test_redirect_cycle_raises_archive_error(
         self, server, ctx: Context, monkeypatch
     ):
-        """A redirect cycle (A → A) raises OpenZimMcpArchiveError."""
-        from openzim_mcp.exceptions import OpenZimMcpArchiveError
+        """A redirect cycle (A → A) raises MCPError with the diagnostic intact.
+
+        ``MCPError`` is the one exception type SDK v2's ``read_resource``
+        re-raises verbatim; anything else is swallowed into a generic
+        "Error reading resource <uri>" that tells the client nothing.
+        """
+        from mcp.shared.exceptions import MCPError
+
         from openzim_mcp.tools import resource_tools
 
         server.zim_operations.list_zim_files_data = MagicMock(
@@ -473,15 +531,16 @@ class TestPerEntryResource:
 
         rm = server.mcp._resource_manager
         resource = await rm.get_resource("zim://wiki/entry/A%2FLoop", ctx)
-        with pytest.raises(OpenZimMcpArchiveError, match="Redirect cycle"):
+        with pytest.raises(MCPError, match="Redirect cycle"):
             await resource.read()
 
     @pytest.mark.asyncio
     async def test_redirect_chain_too_deep_raises_archive_error(
         self, server, ctx: Context, monkeypatch
     ):
-        """A redirect chain longer than MAX_REDIRECT_DEPTH raises."""
-        from openzim_mcp.exceptions import OpenZimMcpArchiveError
+        """A chain longer than MAX_REDIRECT_DEPTH raises MCPError (see above)."""
+        from mcp.shared.exceptions import MCPError
+
         from openzim_mcp.tools import resource_tools
         from openzim_mcp.zim_operations import MAX_REDIRECT_DEPTH
 
@@ -522,7 +581,7 @@ class TestPerEntryResource:
 
         rm = server.mcp._resource_manager
         resource = await rm.get_resource("zim://wiki/entry/A%2FHop0", ctx)
-        with pytest.raises(OpenZimMcpArchiveError, match="Redirect chain too deep"):
+        with pytest.raises(MCPError, match="Redirect chain too deep"):
             await resource.read()
 
     @pytest.mark.asyncio

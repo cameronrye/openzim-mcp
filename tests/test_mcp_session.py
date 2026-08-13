@@ -386,8 +386,15 @@ async def test_archive_overview_reads_carry_the_long_ttl(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_entry_reads_carry_the_long_ttl(tmp_path: Path) -> None:
-    """A per-entry read is immutable for the same reason the overview is."""
+async def test_entry_reads_keep_the_watcher_bounded_ttl(tmp_path: Path) -> None:
+    """A per-entry read must NOT take the long TTL: nothing can invalidate it.
+
+    The hour-long hint on ``zim://{name}`` is honest because a replacement
+    publishes ``resources/updated`` for exactly that URI. Entry URIs have no
+    such story: the watcher never publishes them, and both SDK delivery and
+    client-side cache eviction are exact-URI, so a long-TTL entry read would
+    simply sit stale for the full TTL after an archive replacement.
+    """
     async with _modern_client(
         tmp_path,
         stub_read=True,
@@ -396,7 +403,30 @@ async def test_entry_reads_carry_the_long_ttl(tmp_path: Path) -> None:
     ) as session:
         read = await session.read_resource("zim://wiki/entry/A%2FArticle")
 
-    assert read.ttl_ms == 7200 * 1000
+    assert read.ttl_ms == 5 * 1000
+
+
+@pytest.mark.asyncio
+async def test_overview_error_bodies_keep_the_watcher_bounded_ttl(
+    tmp_path: Path,
+) -> None:
+    """A ``zim://{name}`` read that failed inside its body gets the short TTL.
+
+    The overview deliberately reports failure as a *successful* JSON body
+    (``{"error": ...}`` — a contract pinned in ``test_resources.py``), so the
+    long-TTL stamp cannot key on the result status alone. A cached "ZIM file
+    not found" body must not outlive the moment the operator drops the
+    archive into place: membership changes publish only
+    ``resources/list_changed``, which never evicts a cached read of this URI.
+    """
+    async with _modern_client(
+        tmp_path, watch_interval_seconds=5, resource_cache_ttl_seconds=7200
+    ) as session:
+        read = await session.read_resource("zim://does_not_exist")
+
+    body = json.loads(read.contents[0].text)
+    assert "error" in body  # precondition: the error-body contract held
+    assert read.ttl_ms == 5 * 1000
 
 
 @pytest.mark.asyncio

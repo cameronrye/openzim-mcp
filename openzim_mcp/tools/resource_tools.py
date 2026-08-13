@@ -24,9 +24,11 @@ import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
-from urllib.parse import unquote
 
+from mcp.server.mcpserver.exceptions import ResourceNotFoundError
 from mcp.server.mcpserver.resources import Resource, ResourceTemplate
+from mcp.shared.exceptions import MCPError
+from mcp_types import INTERNAL_ERROR
 from pydantic import ConfigDict, Field
 
 from ..constants import INPUT_LIMIT_ENTRY_PATH
@@ -150,7 +152,15 @@ class ZimEntryResource(Resource):
 
         # libzim and PathValidator do filesystem I/O; offload so concurrent
         # HTTP/SSE clients don't stall on each other.
-        mime, raw = await asyncio.to_thread(_sync_read)
+        try:
+            mime, raw = await asyncio.to_thread(_sync_read)
+        except OpenZimMcpArchiveError as exc:
+            # SDK v2's ``read_resource`` forwards only ``MCPError`` verbatim;
+            # every other exception type is replaced by a generic "Error
+            # reading resource <uri>". Redirect-cycle/depth diagnostics tell
+            # the caller what actually went wrong, so convert them at the
+            # boundary instead of letting the SDK discard them.
+            raise MCPError(code=INTERNAL_ERROR, message=str(exc)) from exc
 
         # Mutate so FastMCP's read_resource picks up the detected MIME.
         # Resource has no validate_assignment, so this is a plain attribute set.
@@ -183,6 +193,8 @@ class ZimEntryResource(Resource):
         # so refuse oversize binaries with an actionable error pointing at
         # ``get_binary_entry``, which exposes ``max_size_bytes`` so callers
         # can opt in to large fetches and get a ``truncated`` flag back.
+        # Raised as ``MCPError`` — the one type the SDK forwards verbatim —
+        # so the guidance actually reaches the client.
         if len(raw) > DEFAULT_RESOURCE_MAX_BYTES:
             logger.info(
                 "Resource %s rejected: binary %d bytes exceeds %d byte cap",
@@ -190,12 +202,16 @@ class ZimEntryResource(Resource):
                 len(raw),
                 DEFAULT_RESOURCE_MAX_BYTES,
             )
-            raise OpenZimMcpArchiveError(
-                f"Binary resource {self.entry_path!r} is "
-                f"{len(raw):,} bytes — over the {DEFAULT_RESOURCE_MAX_BYTES:,} "
-                f"byte resource cap. Use `zim_get(binary=True)` with "
-                f"`max_content_length` to fetch large media (PDFs, video, etc.) "
-                f"safely; the tool returns a truncated flag and pages by size."
+            raise MCPError(
+                code=INTERNAL_ERROR,
+                message=(
+                    f"Binary resource {self.entry_path!r} is "
+                    f"{len(raw):,} bytes — over the "
+                    f"{DEFAULT_RESOURCE_MAX_BYTES:,} byte resource cap. Use "
+                    f"`zim_get(binary=True)` with `max_content_length` to "
+                    f"fetch large media (PDFs, video, etc.) safely; the tool "
+                    f"returns a truncated flag and pages by size."
+                ),
             )
         return raw
 
@@ -225,13 +241,17 @@ class ZimEntryTemplate(ResourceTemplate):
         # directory scan runs.
         target_path = await asyncio.to_thread(_resolve_zim_name, self.server_ref, name)
         if not target_path:
-            raise ValueError(f"ZIM file '{name}' not found")
+            # ResourceNotFoundError reaches the client as ``-32602`` invalid
+            # params with this message; a bare ValueError would escape the
+            # SDK's error mapping as a generic "Internal server error".
+            raise ResourceNotFoundError(f"ZIM file '{name}' not found")
 
-        # FastMCP captures `%2F` literally; restore to `/` for libzim.
-        decoded_path = unquote(params["path"])
+        # ``UriTemplate.match`` has already percent-decoded the captured
+        # parameter (``%2F`` arrives as ``/``), so the value is used as-is —
+        # decoding again would corrupt entry paths containing a literal ``%``.
         # Strip control characters (e.g. NUL bytes from %00) before they
         # reach libzim, which has no defense against embedded NULs.
-        decoded_path = sanitize_input(decoded_path, INPUT_LIMIT_ENTRY_PATH)
+        decoded_path = sanitize_input(params["path"], INPUT_LIMIT_ENTRY_PATH)
         return ZimEntryResource(
             # v2's Resource.uri is a plain ``str`` (it was ``AnyUrl`` in 1.x).
             uri=uri,
