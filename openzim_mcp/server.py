@@ -4,6 +4,8 @@ import ipaddress
 import logging
 from typing import Any, Literal, Optional
 
+from mcp.types import Icon
+
 from . import __version__
 from .async_operations import AsyncZimOperations
 from .cache import OpenZimMcpCache
@@ -34,6 +36,13 @@ logger = logging.getLogger(__name__)
 # is a cache-lifetime choice, not a claim about the process: the tables cannot
 # change without a restart, and a restart gives clients a new connection.
 _STATIC_LIST_TTL_MS = 60 * 60 * 1000
+
+# Identity advertised in ``serverInfo``. The docs site is the project's public
+# face — a client that surfaces a "learn more" link should land users on
+# documentation rather than the raw repository — and the icon is served from
+# the same origin, so both live or die together with the published site.
+PROJECT_WEBSITE_URL = "https://cameronrye.github.io/openzim-mcp/"
+PROJECT_ICON_URL = "https://cameronrye.github.io/openzim-mcp/assets/logo.svg"
 
 # Loopback entries always present in the Host allow-list so localhost-direct
 # access keeps working alongside any proxied hostname. Both the bare host and
@@ -320,8 +329,22 @@ class OpenZimMcpServer:
 
             self.subscription_bus = InMemorySubscriptionBus()
 
+        # ``website_url`` and ``icons`` ride in ``serverInfo``. Without them a
+        # registry listing or client UI has nothing to show beyond a bare name
+        # string. Both are served over https from the published docs site: an
+        # icon fetched over plain http would be blocked as mixed content in any
+        # browser-based client. ``title`` and ``description`` are the v2-only
+        # remainder of the same identity surface — the display name a client
+        # shows instead of the machine ``name``, and the one-liner next to it.
         self.mcp = EnvelopeAwareMCPServer(
             config.server_name,
+            title="OpenZIM MCP",
+            description=(
+                "Enables AI models to access and search ZIM format "
+                "knowledge bases offline"
+            ),
+            website_url=PROJECT_WEBSITE_URL,
+            icons=[Icon(src=PROJECT_ICON_URL, mime_type="image/svg+xml")],
             instructions=instructions_for(config.tool_mode),
             version=__version__,
             subscriptions=self.subscription_bus,

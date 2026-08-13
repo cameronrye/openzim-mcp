@@ -244,6 +244,19 @@ Produces a compact briefing of what the archive is, what it covers, and what typ
 
 If your client supports MCP prompts, prefer them — they save the LLM from having to remember the orchestration. If you're building your own client or your host doesn't surface prompts, the same workflows are easy to call directly with the underlying tools.
 
+### Argument completion
+
+The server answers `completion/complete`, so a client that supports it offers real choices instead of a free-text box for the arguments that name an archive:
+
+| What you're filling in | What you get offered |
+|---|---|
+| `zim_file_path` on `/summarize` or `/explore` | full paths of the archives in your allowed directories |
+| `{name}` in the `zim://{name}` resource URI | bare basenames, without the `.zim` extension |
+
+The two are deliberately different strings — a path in a `zim://{name}` URI would not resolve. Suggestions filter as you type, matching either the whole path or just the filename, so typing `wikipedia` finds `/srv/zim/wikipedia_en.zim`. The listing is read fresh on each request, so an archive you just dropped into a watched directory shows up immediately.
+
+Anything with an unbounded answer returns nothing rather than guessing: a `/research` topic is free text, and an entry path inside an archive can run to millions of rows. Responses are capped at the protocol's 100-value page, with the true count in `total`.
+
 ---
 
 ## Subscriptions
