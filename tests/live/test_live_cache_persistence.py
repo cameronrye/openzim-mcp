@@ -98,12 +98,12 @@ def _call_tool(
 
 
 def _server_health(proc: subprocess.Popen, msg_id: int) -> Dict[str, Any]:
-    resp = _call_tool(proc, msg_id, "get_server_health", {})
+    resp = _call_tool(proc, msg_id, "zim_health", {})
     text = resp["result"]["content"][0]["text"]
-    # The health tool wraps its JSON in a "result" string field.
-    parsed_outer = json.loads(text)
-    inner = parsed_outer.get("result", text)
-    return json.loads(inner) if isinstance(inner, str) else inner
+    # ``zim_health`` (no args) returns the combined ServerHealthResponse as
+    # JSON; the legacy health payload (with ``cache_performance``) is its
+    # ``health`` key.
+    return json.loads(text)["health"]
 
 
 def _shutdown_stdio(proc: subprocess.Popen, *, graceful: bool) -> None:
@@ -156,15 +156,18 @@ def test_cache_persistence_survives_restart(zim_dir: Path, tmp_path: Path) -> No
     proc1 = _spawn_stdio(zim_dir, env)
     try:
         _initialize(proc1)
-        # A few real, cacheable tool calls.
-        _call_tool(proc1, 1, "list_namespaces", {"zim_file_path": target})
+        # A few real, cacheable tool calls (Phase F names — the legacy
+        # ``list_namespaces``/``search_zim_file``/``get_zim_metadata`` tools
+        # this test originally drove no longer exist, and an unknown tool
+        # would silently populate nothing).
+        _call_tool(proc1, 1, "zim_browse", {"zim_file_path": target, "namespace": "C"})
         _call_tool(
             proc1,
             2,
-            "search_zim_file",
+            "zim_search",
             {"zim_file_path": target, "query": "philosophy", "limit": 3},
         )
-        _call_tool(proc1, 3, "get_zim_metadata", {"zim_file_path": target})
+        _call_tool(proc1, 3, "zim_metadata", {"zim_file_path": target})
         health1 = _server_health(proc1, 4)
         cache1 = health1["cache_performance"]
         assert cache1["enabled"] is True
