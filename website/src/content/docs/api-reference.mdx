@@ -408,7 +408,7 @@ Clients open one long-lived `subscriptions/listen` stream naming the notificatio
 - `notifications/resources/list_changed` when a `.zim` file is added to or removed from an allowed directory — request it with `resourcesListChanged: true`
 - `notifications/resources/updated` for `zim://{name}` when that `.zim` file's mtime or size changes — request it with `resourceSubscriptions: ["zim://{name}"]`
 
-`subscriptions/listen` is served on stdio and SSE too, but only the HTTP transport runs the file watcher, so on those transports the stream is acknowledged and stays silent.
+`subscriptions/listen` is served only where the file watcher can run — the HTTP transport with subscriptions enabled. On stdio and SSE the capability is not advertised and a listen request fails with method-not-found instead of acknowledging a stream that would stay silent.
 
 Configuration:
 

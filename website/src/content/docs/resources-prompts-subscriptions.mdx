@@ -9,7 +9,7 @@ OpenZIM MCP exposes three MCP "resources" (URI-addressable data), three slash-co
 
 > **Source of truth:** [openzim_mcp/tools/resource_tools.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/resource_tools.py), [openzim_mcp/tools/prompts.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/tools/prompts.py), [openzim_mcp/subscriptions.py](https://github.com/cameronrye/openzim-mcp/blob/main/openzim_mcp/subscriptions.py).
 
-Resources and prompts are registered only in **Advanced mode** (`--mode advanced` / `OPENZIM_MCP_TOOL_MODE=advanced`) — Simple mode exposes just the `zim_query` tool. Change notifications additionally require the **HTTP transport** (`--transport http`), the only transport that runs the file watcher; on stdio and SSE a `subscriptions/listen` request is still accepted and acknowledged, but nothing is ever published to it.
+Resources and prompts are registered only in **Advanced mode** (`--mode advanced` / `OPENZIM_MCP_TOOL_MODE=advanced`) — Simple mode exposes just the `zim_query` tool. Change notifications additionally require the **HTTP transport** (`--transport http`), the only transport that runs the file watcher; on stdio and SSE the capability is not advertised and a `subscriptions/listen` request fails with method-not-found rather than acknowledging a stream nothing would ever publish to.
 
 > **Notation:** code samples on this page use MCP JSON-RPC tool-call framing (`{"name": "...", "arguments": {...}}`). Your MCP client handles the wire framing; you supply the tool name and argument shape.
 
@@ -263,7 +263,7 @@ Anything with an unbounded answer returns nothing rather than guessing: a `/rese
 
 The 2026-07-28 protocol revision removed `resources/subscribe`. A client now opts in with one long-lived `subscriptions/listen` request naming the notification kinds it wants, and the response *is* the stream. The SDK owns the listener registry, per-stream filtering, backpressure, and teardown; OpenZIM MCP only decides *when* a ZIM file changed and publishes it.
 
-The watcher runs under the HTTP transport (`--transport http`) only, so that is the only transport on which anything is published. `subscriptions/listen` itself is served on every transport — the SDK registers that handler unconditionally — so on stdio and SSE a listen request is acknowledged and then stays silent forever. The same applies to capabilities: at 2026-07-28 there is no `initialize` handshake, `server/discover` reports capabilities instead, and `resources.subscribe` plus the `listChanged` flags derive from `subscriptions/listen` being served — so they read `true` regardless of transport or of `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED`. What varies is whether anything is ever published.
+The watcher runs under the HTTP transport (`--transport http`) only, so that is the only transport on which anything is published — and the advertisement follows the same gate. At 2026-07-28 there is no `initialize` handshake: `server/discover` reports capabilities instead, and `resources.subscribe` plus the `listChanged` flags derive from `subscriptions/listen` being served. The SDK registers that handler unconditionally, so the server deregisters it outside HTTP-with-subscriptions-enabled: on stdio and SSE (and with `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false`) the flags read `false` and a listen request fails with method-not-found, rather than being acknowledged and staying silent forever. The capability is only ever advertised where events can actually fire.
 
 ### What the server publishes
 
@@ -282,9 +282,9 @@ The watcher runs under the HTTP transport (`--transport http`) only, so that is 
 
 | Env var | Default | Range | Notes |
 |---------|---------|-------|-------|
-| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | bool | master switch — `false` skips the watcher entirely; `subscriptions/listen` still succeeds and is acknowledged, but no notification is ever published to it |
+| `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED` | `true` | bool | master switch — `false` skips the watcher, withholds the `subscribe`/`listChanged` capability flags, and makes `subscriptions/listen` fail with method-not-found |
 | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` | `5` | 1-60 | polling interval; the watcher rescans allowed directories on this cadence |
-| `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` | `3600` | 0-86400 | how long a client may reuse a cached read of `zim://{name}` or `zim://{name}/entry/{path}`; `0` disables the override and puts them back on the watcher-bounded TTL |
+| `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` | `3600` | 0-86400 | how long a client may reuse a cached read of a `zim://{name}` overview; `0` disables the override and puts it back on the watcher-bounded TTL (entry reads always stay there) |
 
 For production HTTP services with low-priority watching, increase to `15-30s` to reduce I/O churn. For interactive desktop use, the default is fine.
 
@@ -294,12 +294,13 @@ Every result carries the 2026-07-28 `ttlMs`/`cacheScope` fields, so a client kno
 
 | URI | TTL | Why |
 |-----|-----|-----|
-| `zim://{name}`, `zim://{name}/entry/{path}` | `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` (default 1h) | a ZIM file is sealed — content changes only when the file is replaced |
+| `zim://{name}` | `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` (default 1h) | a ZIM file is sealed — a replacement publishes `resources/updated` for exactly this URI, so subscribed clients never go stale |
+| `zim://{name}/entry/{path}` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s) | no `resources/updated` is ever published for an entry URI, so a longer promise could not be invalidated |
 | `zim://files` | `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` (default 5s) | a live directory scan; never staler than the server's own detection latency |
 
 `cacheScope` is `private` throughout: these payloads embed server-local absolute paths and configuration, so a shared intermediary must not serve one caller's response to another.
 
-The long TTL and subscriptions are designed to work together. A client on an open `subscriptions/listen` stream hears about a replacement immediately and re-reads, so the TTL never costs it freshness. A client that is not subscribed — anything on stdio, or an HTTP client that never opened a stream — can serve stale content for up to the TTL after a replacement. Lower it, or set `0`, if you swap archives in place and cannot rely on subscribers.
+The long TTL and subscriptions are designed to work together. A client on an open `subscriptions/listen` stream hears about a replacement immediately and re-reads, so the TTL never costs it freshness. A client that is not subscribed — anything on stdio, or an HTTP client that never opened a stream — can serve a stale overview for up to the TTL after a replacement. Lower it, or set `0`, if you swap archives in place and cannot rely on subscribers.
 
 Legacy clients see none of these fields: the SDK stamps them only for sessions opened on the 2026-07-28 revision, since `ttlMs` has no meaning in the era that preceded it.
 

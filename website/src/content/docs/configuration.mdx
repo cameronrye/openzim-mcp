@@ -81,15 +81,15 @@ export OPENZIM_MCP_WATCH_INTERVAL_SECONDS=5          # default 5, range 1-60
 export OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS=3600   # default 3600, range 0-86400
 ```
 
-Setting `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the polling task entirely; `subscriptions/listen` still succeeds and is acknowledged, but never fires. Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` upward for low-priority watching, downward (to a floor of 1s) for faster detection.
+Setting `OPENZIM_MCP_SUBSCRIPTIONS_ENABLED=false` skips the polling task and withholds the capability: `resources.subscribe` and the `listChanged` flags read `false`, and `subscriptions/listen` fails with method-not-found instead of acknowledging a stream that would never fire. Tune `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` upward for low-priority watching, downward (to a floor of 1s) for faster detection.
 
 ### Read caching
 
-Results carry the 2026-07-28 `ttlMs`/`cacheScope` hints, which tell a client how long it may reuse an answer instead of asking again. `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` sets that window for the archive-backed resources — `zim://{name}` and `zim://{name}/entry/{path}` — where it pays off most: a ZIM file is sealed, so its content changes only when the file itself is replaced, and an overview read costs three blocking archive opens.
+Results carry the 2026-07-28 `ttlMs`/`cacheScope` hints, which tell a client how long it may reuse an answer instead of asking again. `OPENZIM_MCP_RESOURCE_CACHE_TTL_SECONDS` sets that window for the `zim://{name}` overview, where it pays off most: a ZIM file is sealed, so the overview changes only when the file itself is replaced, and each read costs three blocking archive opens. Per-entry reads (`zim://{name}/entry/{path}`) stay on the watcher-bounded TTL — no `resources/updated` is ever published for an entry URI, so a longer promise could not be invalidated.
 
 `zim://files` is deliberately excluded. It is a live scan of the allowed directories, so it stays bounded by `OPENZIM_MCP_WATCH_INTERVAL_SECONDS` and a cached copy is never staler than the server's own detection latency.
 
-The trade-off is staleness after a replacement. A client on an open `subscriptions/listen` stream is told immediately and re-reads, so the TTL costs it nothing. A client that is *not* subscribed — anything on stdio, or an HTTP client that never opened a stream — can keep serving the old content for up to the TTL. If you hot-swap archives in place and cannot rely on subscribers, lower it, or set `0` to turn the override off entirely and put archive reads back on the same watcher-bounded TTL as `zim://files`.
+The trade-off is staleness after a replacement. A client on an open `subscriptions/listen` stream is told immediately and re-reads, so the TTL costs it nothing. A client that is *not* subscribed — anything on stdio, or an HTTP client that never opened a stream — can keep serving the old overview for up to the TTL. If you hot-swap archives in place and cannot rely on subscribers, lower it, or set `0` to turn the override off entirely and put overview reads back on the same watcher-bounded TTL as `zim://files`.
 
 ## Cache
 
